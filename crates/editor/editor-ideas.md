@@ -37,6 +37,7 @@ Nice collection of research on innovative editors, [link](https://futureofcoding
 ### Good error messages
 
 - [https://twitter.com/firstdrafthell/status/1427364851593224197/photo/1] very clean error message layout
+- [how to write good error message](https://twitter.com/vitalyf/status/1582270207229251585?s=20&t=MorLGshEbEVdRFJ10d2I4A)
 - If the user explicitly allows it, we can keep record of which errors take a long time to fix. This way we know where to focus our efforts for improving error messages.
 
 ### Debugging
@@ -64,6 +65,11 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Turn an error listed in the console into editable section of code for easy quick fixing.
 - Clickable backtrace of functions, user defined functions should be made extra visible.
 - VR debugging: render massive curved screen with rectangle showing code (and expression values) for every function in call stack.
+- Node and wire diagram of all modules(and functions?) used by a specific test. This will be much more digestible than a node and wire diagram of the whole project.
+- Ability to generate project(folder) with code used by test and all else removed. Speedy build times and no distractions.
+- After encountering an error with a stacktrace: highlight all lines in code editor that occurred in the stacktrace.
+- [Nice visualization of intermediate values](https://twitter.com/ryrobes/status/1582968511713792000?s=20&t=WVj2tP5YwW6_MR5ndU_F4g)
+- [Property probes](https://roc.zulipchat.com/#narrow/stream/257722-editor/topic/Property.20probes/near/305671704)
 
 ### Testing
 
@@ -96,6 +102,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - [Unisonweb](https://www.unisonweb.org), definition based [editor](https://twitter.com/shojberg/status/1364666092598288385) as opposed to file based.
 - [Utopia](https://utopia.app/) integrated design and development environment for React. Design and code update each other, in real time.
 - [Paredit](https://calva.io/paredit/) structural clojure editing, navigation and selection. [Another overview](http://danmidwood.com/content/2014/11/21/animated-paredit.html)
+- [tylr](https://tylr.fun/) projectional editor ux that helps you make it easier to do edits that are typically difficult with projectional editors but are easy with classic editors. 
 
 ### Project exploration
 
@@ -105,6 +112,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 - [Github Next](https://next.github.com/projects/repo-visualization) each file and folder is visualised as a circle: the circle’s color is the type of file, and the circle’s size represents the size of the file. Sidenote, a cool addition to this might be to use heatmap colors for the circles; circles for files that have had lots of commits could be more red, files with few commits would be blue.
 - [AppMap](https://appland.com/docs/appmap-overview.html) records code execution traces, collecting information about how your code works and what it does. Then it presents this information as interactive diagrams that you can search and navigate. In the diagrams, you can see exactly how functions, web services, data stores, security, I/O, and dependent services all work together when application code runs.
+- [Discussion on flow based ( nodes and wires) programming](https://marianoguerra.github.io/future-of-coding-weekly/history/weekly/2022/08/W1/thinking-together.html#2022-07-25T00:47:49.408Z) if the wires are a mess, is your program a mess?
 
 ### Voice Interaction Related
 
@@ -152,6 +160,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Mozilla DeepSpeech model runs fast, works pretty well for actions but would need additional training for code input.
     Possible to reuse [Mozilla common voice](https://github.com/common-voice/common-voice) for creating more "spoken code" data.
 - [Voice Attack](https://voiceattack.com/) voice recognition for apps and games.
+- [OpenAI whisper](https://github.com/openai/whisper) excellent open source voice recognition model.
 
 ### Beginner-focused Features
 
@@ -159,6 +168,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Plugin that translates short pieces of code from another programming language to Roc. [Relevant research](https://www.youtube.com/watch?v=xTzFJIknh7E). Someone who only knows the R language could get started with Roc with less friction if they could quickly define a list R style (`lst <- c(1,2,3)`) and get it translated to Roc.
 - Being able to asses or ask the user for the amount of experience they have with Roc would be a valuable feature for recommending plugins, editor tips, recommending tutorials, automated error search (e.g searching common beginner errors first), ... .
 - Adjust UI based on beginner/novice/expert?
+- Click to explain type annotation
 
 ### Productivity features
 
@@ -216,6 +226,19 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - For quick navigation and good overview: whole file should be shown as folded tree showing only top level defs. Hovering with mouse should allow you to show and traverse the branches, with a click to keep this view. See also ginkowriter.
 - clicking on any output should take you to the place in the code where that output was printed and/or calculated.
 - ability to edit printed output in such a way that the appropriate changes are made in the code that produced it. Example: edit json key in output-> code is changed to print this new key.
+- Idea for the free/legacy editing mode: ability to turn any node into a text buffer node as opposed to the whole file. If we can parse the updated text, it will be converted back into an AST node.
+- Similar to predicting next file that will be accessed; put recently accessed folders/files (that are not in a tab) in a subwindow of tree file viewer.
+- Automatically keep private local database of terminal output(errors that happened) and actions that were required to solve them. So we can show this to the user if this error pops up again.
+- Similarly; errors file in special dir where people can add errors and some text. The editor will check this dir if errors pop up so that this text can be shown. That way developers know what to do when they see an error that someone else has seen before. The text could be something like: "you need to change this setting to prevent this error".
+- When user is implementing something that is available in the stdlib; show a notification with the relevant stdlib function.
+- Custom commands/aliases for a specific project. For example for navigation; e.g. go to "cli tests"(alias) which is defined to go to `crates/cli/tests/somefile.roc`
+- Tool that changes code with duplications to use single source of truth. The reverse operation would also be nice, when changes need to be made for a single case.
+- Ability to search all values of expressions of a run. Search would take you to the line of code that produced the value.
+- Ability to link to other comments to prevent from having to repeat identical comments or having to update all of them when a change is necessary.
+- In the file explorer, auto-close subtree after unused for certain time.
+- Ability to right click error message > "create github issue".
+- Record (locally) all steps performed by editor + logs and make them searchable for user. The user should be able to scrub through these steps.
+
 
 #### Autocomplete
 
@@ -228,6 +251,8 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Current autocomplete lacks flow, moving through suggestions with arrows is slow. Being able to code by weaving together autocomplete suggestions laid out in rows using eye tracking, that could flow.
 - It's possible that with strong static types, pure functions and a good search algorithm we can develop a more reliable autocomplete than one with machine learning.
 - When ranking autocomplete suggestions, take into account how new a function is. Newly created functions are likely to be used soon.
+- Ability to autocomplete file paths based on folders inside project workspace.
+- Allow custom message to be shown when function is autocompleted; e.g. when using sinRadians: "sinTurns is better for high performance."
 
 #### Productivity Inspiration
 
@@ -238,12 +263,16 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - [Aroma](https://ai.facebook.com/blog/aroma-ml-for-code-recommendation) showing examples similar to current code.
 - [MISM](https://arxiv.org/abs/2006.05265) neural network based code similarity scoring.
 - [Inquisitive code editor](https://web.eecs.utk.edu/~azh/blog/inquisitivecodeeditor.html) Interactive bug detection with doc+test generation.
-- [NextJournal](https://nextjournal.com/joe-loco/command-bar?token=DpU6ewNQnLhYtVkwhs9GeX) Discoverable commands and shortcuts.
+- [NextJournal](https://nextjournal.com/blog/command-bar) Discoverable commands and shortcuts.
 - [Code Ribbon](https://web.eecs.utk.edu/~azh/blog/coderibbon.html) fast navigation between files. Feature suggestion: top and down are filled with suggested files, whereas left and right are manually filled.
 - [Automatic data transformation based on examples](https://youtu.be/Ej91F1fpmEw). Feature suggestion: use in combination with voice commands: e.g. "only keep time from list of datetimes".
 - [Codesee](https://www.codesee.io/) code base visualization.
 - [Loopy](https://dl.acm.org/doi/10.1145/3485530?sid=SCITRUS) interactive program synthesis.
 - [bracket guides](https://mobile.twitter.com/elyktrix/status/1461380028609048576)
+- [Frugel](https://github.com/cdfa/frugel) error-tolerant live programming
+- [Barliman](https://www.youtube.com/watch?v=er_lLvkklsk) a smart editor capable of program synthesis: given part of a program and a set of tests to pass, Barliman attempts to complete the program for you.
+- [UI fuzzer](https://www.fuzzmap.io/?welcome=1) fuzzes UI actions and builds a beautiful state machine like visual.
+- [flowistry](https://github.com/willcrichton/flowistry) show relevant code based on current selection and fade out everything else.
 
 ### Non-Code Related Inspiration
 
@@ -267,6 +296,11 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Detect deviation of best practices, example case: alert developer when they are defining a color inline (rgb(30,30,30)) while all colors have been previously imported from a single file. See also [Codota](https://www.codota.com).
 - It would be valuable to record the user's interactions with the editor when debugging as well as the AST. On enough data we could train a model to perform a bunch of debugging steps and show values of the most important variables in relation to the bug. Having assistance in finding the exact code that causes the problem could be super valuable. There could be sensitive data, so it should only be recorded and or shared for open source codebases with permissive licenses and with explicit user permission.
 - To allow for more privacy; data gathering can be kept only local or only shared within a team/company. Say we offer the ability to save the changes made after an error occurred. Another developer in the company who encounters this error could be notified someone has previously encountered this error along with their changes made after the error. Optionally, the first developer's name can be shown (only within team/company) so the second developer can quickly ask for help.
+- Smart assistant that attempts to "place debug prints"/"show relevant info" based on the error message.
+- To get training data for machine learning model: ability to enter a text description for every code edit.
+- Chatbot that can answer questions about the code base.
+- Smart navigation assistant to help you navigate with fuzzy text: take me to the false-interpreter's platform.
+- select some code (x='a'\ny='b') > Open transform command window > Type: concat chars > AI adds line: `concatenated = Char.concat 'a' 'b'`
 
 ## Testing
 
@@ -318,8 +352,10 @@ If we make an integrated terminal, we can automatically add executed commands to
 ### Inspiration
 
 - [Boop](https://github.com/IvanMathy/Boop) scriptable scratchpad for developers. Contains collection of useful conversions: json formatting, url encoding, encode to base64...
-- [processing](processing.org) Interactive editor, dragging left or right with mouse to change values. Instant results.
+- [processing](https://processing.org) Interactive editor, dragging left or right with mouse to change values. Instant results.
 - [flowistry](https://github.com/willcrichton/flowistry) easily track all named values in a certain expression throughout your program.
+- Match blocks of assembly with lines of code: [link](https://twitter.com/dgryski/status/1547952259828330498).
+- [livelits](https://hazel.org/build/livelits/) inline interactive plugin blocks
 
 ## High performance
 
@@ -349,18 +385,15 @@ If we make an integrated terminal, we can automatically add executed commands to
 - Log plugin actions that require a permission.
 - Show plugin that is currently using a permission, e.g. roc-core is reading from folder /gitrepos/hello in status bar and with a scrollable log.
 
-## General Thoughts/Ideas
+## Accessibility
 
-Thoughts and ideas possibly taken from above inspirations or separate.
-
-- ACCESSIBILITY === EMPATHY
   - Visual Imapirments
       No Animation is most benign form of cognitive disabity but really important base line of people with tense nerve system.
       Insensitivity to certain or all colors.
       Need of highcontrast
       Or Everything Magnified for me with no glasses.
       Or Total blindness where we need to trough sound to communicate to the user
-      Screen readers read trees of labeled elements. Each platform has different apis, but I think they are horrible. Just close your eyes and imagine listening to screen reader all day while you are using this majectic machines called computers.
+      Screen readers read trees of labeled elements. Each OS has different apis, but I think they are horrible. Just close your eyes and imagine listening to screen reader all day while you are using this majectic machines called computers.
       But blind people walk with a tool and they can react much better to sound/space relations than full on visal majority does. They are acute to sound as a spatial hint. And a hand for most of them is a very sensitive tool that can make sounds in space.
       Imagine if everytime for the user doesnt want to rely on shining rendered pixels on the screen for a feedback from machine, we make a acoustic room simulation, where with moving the "stick", either with mouse or with key arrows, we bump into one of the objects and that produces certain contextually appropriate sound (clean)*ding*
 
@@ -376,6 +409,29 @@ Thoughts and ideas possibly taken from above inspirations or separate.
       If we employ *some* voice recognition functions we could make same interface as we could do for consoles where 4+2 buttons and directional pad would suffice.
       That is 10 phrases that need to be pulled trough as many possible translations so people don't have to pretend that they are from Maine or Texas so they get voice recognition to work. Believe me I was there with Apple's Siri :D That is why we have 10 phrases for movement and management and most basic syntax.
   - Builtin fonts that can be read more easily by those with dyslexia.
+  - [Cross-platform UI accessibility WIP](UI accessibility infrastructure across platforms and programming languages https://github.com/AccessKit/accesskit)
+  - beware of eye strain for eye tracking features
+
+## UX testing
+
+- knowledge gap exercise: walk through the process of someone using your product for the first time, and imagine that you're sat next to them as they do it.
+What do you feel the need to say to them? Which knowledge gaps are you filling with your voice? Most of these will feel intuitive—write them down.
+
+## Builtin docutorial
+
+- interactive code examples
+- [Notebook](https://jupyter.org/try-jupyter/retro/notebooks/?path=notebooks/Intro.ipynb) like format? Could support images, svg, sound, math... .
+- Should support those new to programming and experienced individuals. Probably need custom version for new programmers (need to go deep into simple things).
+- Support ability to explore both broadly (many topics) and deeply (extensive detail).
+- Write three versions of every "page" for "never programmed before", novice and pro?
+- Should be completely navigable with the keyboard:
+  - Down arrow to go deeper into topic. It may start with a simple overview and examples; it then expands with further detailed information such as links to reference material, explanations, examples, and quizzes.
+  - Right arrow to go to next topic.
+- Sort topics in order of importance to know.
+- Docutorial should educate users about roc and about using the editor.
+- At least some of this content should be bundled in the nightly so that it easily works offline.
+
+## General Thoughts/Ideas
 
 - Nice backtraces that highlight important information
 - Ability to show import connection within project visually
@@ -396,3 +452,4 @@ Thoughts and ideas possibly taken from above inspirations or separate.
 - Live code view with wasm editor. This saves bandwidth when pairing.
 - [Gingkowriter](https://gingkowriter.com/) structured writing app.
 - Performance improvement recommendation: show if code is eligible for tail call optimization or can do in place mutation.
+- very small error squiggles should be made more visible

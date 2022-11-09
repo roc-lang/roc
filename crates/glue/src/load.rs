@@ -12,8 +12,20 @@ use std::process;
 use strum::IntoEnumIterator;
 use target_lexicon::Triple;
 
+pub struct IgnoreErrors {
+    pub can: bool,
+}
+
+impl IgnoreErrors {
+    const NONE: Self = IgnoreErrors { can: false };
+}
+
 pub fn generate(input_path: &Path, output_path: &Path) -> io::Result<i32> {
-    match load_types(input_path.to_path_buf(), Threading::AllAvailable) {
+    match load_types(
+        input_path.to_path_buf(),
+        Threading::AllAvailable,
+        IgnoreErrors::NONE,
+    ) {
         Ok(types_and_targets) => {
             let mut file = File::create(output_path).unwrap_or_else(|err| {
                 eprintln!(
@@ -67,6 +79,7 @@ pub fn generate(input_path: &Path, output_path: &Path) -> io::Result<i32> {
 pub fn load_types(
     full_file_path: PathBuf,
     threading: Threading,
+    ignore_errors: IgnoreErrors,
 ) -> Result<Vec<(Types, TargetInfo)>, io::Error> {
     let target_info = (&Triple::host()).into();
 
@@ -108,7 +121,7 @@ pub fn load_types(
     let can_problems = can_problems.remove(&home).unwrap_or_default();
     let type_problems = type_problems.remove(&home).unwrap_or_default();
 
-    if !can_problems.is_empty() || !type_problems.is_empty() {
+    if (!ignore_errors.can && !can_problems.is_empty()) || !type_problems.is_empty() {
         todo!(
             "Gracefully report compilation problems during glue generation: {:?}, {:?}",
             can_problems,

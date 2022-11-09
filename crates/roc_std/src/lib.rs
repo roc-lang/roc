@@ -1,3 +1,4 @@
+//! Provides Rust representations of Roc data structures.
 #![no_std]
 #![crate_type = "lib"]
 
@@ -19,9 +20,9 @@ mod storage;
 
 pub use roc_box::RocBox;
 pub use roc_dict::RocDict;
-pub use roc_list::RocList;
+pub use roc_list::{RocList, SendSafeRocList};
 pub use roc_set::RocSet;
-pub use roc_str::{InteriorNulError, RocStr};
+pub use roc_str::{InteriorNulError, RocStr, SendSafeRocStr};
 pub use storage::Storage;
 
 // A list of C functions that are being imported

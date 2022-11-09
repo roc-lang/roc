@@ -49,10 +49,9 @@ You can now try this out in Ruby's REPL (`irb`), like so:
 ```sh
 $ irb
 irb(main):001:0> require_relative 'demo'
-Ruby just required Roc. Let's get READY TO ROC.
 => true
-irb(main):002:0> RocStuff::hello 'Hello, World'
-=> "Hello, World, OH YEAH!!! 🤘🤘"
+irb(main):002:0> RocApp::call_roc 42
+=> "The number was 42, OH YEAH!!! 🤘🤘"
 ```
 
 ## Rebuilding after Changes

@@ -1,3 +1,4 @@
+//! Provides types to describe problems that can occur during solving.
 use roc_can::expected::{Expected, PExpected};
 use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_problem::can::CycleEntry;
@@ -11,7 +12,6 @@ pub enum TypeError {
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
     CircularType(Region, Symbol, ErrorType),
     CircularDef(Vec<CycleEntry>),
-    BadType(roc_types::types::Problem),
     UnexposedLookup(Symbol),
     UnfulfilledAbility(Unfulfilled),
     BadExprMissingAbility(Region, Category, ErrorType, Vec<Unfulfilled>),
@@ -67,9 +67,15 @@ pub enum NotDerivableContext {
     UnboundVar,
     Opaque(Symbol),
     Decode(NotDerivableDecode),
+    Eq(NotDerivableEq),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum NotDerivableDecode {
     OptionalRecordField(Lowercase),
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum NotDerivableEq {
+    FloatingPoint,
 }

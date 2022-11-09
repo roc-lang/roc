@@ -163,6 +163,7 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
 pub enum LlvmBackendMode {
     /// Assumes primitives (roc_alloc, roc_panic, etc) are provided by the host
     Binary,
+    BinaryDev,
     /// Creates a test wrapper around the main roc function to catch and report panics.
     /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
     GenTest,
@@ -174,6 +175,7 @@ impl LlvmBackendMode {
     pub(crate) fn has_host(self) -> bool {
         match self {
             LlvmBackendMode::Binary => true,
+            LlvmBackendMode::BinaryDev => true,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => true,
             LlvmBackendMode::CliTest => false,
@@ -184,6 +186,7 @@ impl LlvmBackendMode {
     fn returns_roc_result(self) -> bool {
         match self {
             LlvmBackendMode::Binary => false,
+            LlvmBackendMode::BinaryDev => false,
             LlvmBackendMode::GenTest => true,
             LlvmBackendMode::WasmGenTest => true,
             LlvmBackendMode::CliTest => true,
@@ -193,6 +196,7 @@ impl LlvmBackendMode {
     fn runs_expects(self) -> bool {
         match self {
             LlvmBackendMode::Binary => false,
+            LlvmBackendMode::BinaryDev => true,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => false,
             LlvmBackendMode::CliTest => true,
@@ -714,7 +718,7 @@ pub fn construct_optimization_passes<'a>(
         OptLevel::Optimize => {
             pmb.set_optimization_level(OptimizationLevel::Aggressive);
             // this threshold seems to do what we want
-            pmb.set_inliner_with_threshold(275);
+            pmb.set_inliner_with_threshold(750);
         }
     }
 
@@ -973,7 +977,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                     _ => unreachable!("incorrect small_str_bytes"),
                 }
             } else {
-                let ptr = define_global_str_literal_ptr(env, *str_literal);
+                let ptr = define_global_str_literal_ptr(env, str_literal);
                 let number_of_elements = env.ptr_int().const_int(str_literal.len() as u64, false);
 
                 let alloca =
@@ -2432,6 +2436,15 @@ pub fn store_roc_value<'a, 'ctx, 'env>(
                 .unwrap();
         }
     } else {
+        let destination_type = destination
+            .get_type()
+            .get_element_type()
+            .try_into()
+            .unwrap();
+
+        let value =
+            cast_if_necessary_for_opaque_recursive_pointers(env.builder, value, destination_type);
+
         env.builder.build_store(destination, value);
     }
 }
@@ -2714,14 +2727,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let layout = *layout;
 
                     if layout.contains_refcounted(env.layout_interner) {
-                        increment_refcount_layout(
-                            env,
-                            parent,
-                            layout_ids,
-                            *inc_amount,
-                            value,
-                            &layout,
-                        );
+                        increment_refcount_layout(env, layout_ids, *inc_amount, value, &layout);
                     }
 
                     build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
@@ -2730,7 +2736,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
                     if layout.contains_refcounted(env.layout_interner) {
-                        decrement_refcount_layout(env, parent, layout_ids, value, layout);
+                        decrement_refcount_layout(env, layout_ids, value, layout);
                     }
 
                     build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
@@ -2821,6 +2827,10 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             *region,
                             lookups,
                         );
+
+                        if let LlvmBackendMode::BinaryDev = env.mode {
+                            crate::llvm::expect::finalize(env);
+                        }
 
                         bd.build_unconditional_branch(then_block);
                     }
@@ -2947,6 +2957,29 @@ pub fn load_symbol_and_lambda_set<'a, 'ctx, 'b>(
         Some((Layout::LambdaSet(lambda_set), ptr)) => (*ptr, *lambda_set),
         Some((other, ptr)) => panic!("Not a lambda set: {:?}, {:?}", other, ptr),
         None => panic!("There was no entry for {:?} in scope {:?}", symbol, scope),
+    }
+}
+
+/// Cast a value to another value of the same size, but only if their types are not equivalent.
+/// This is needed to allow us to interoperate between recursive pointers in unions that are
+/// opaque, and well-typed.
+///
+/// This will no longer be necessary and should be removed after we employ opaque pointers from
+/// LLVM.
+pub fn cast_if_necessary_for_opaque_recursive_pointers<'ctx>(
+    builder: &Builder<'ctx>,
+    from_value: BasicValueEnum<'ctx>,
+    to_type: BasicTypeEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    if from_value.get_type() != to_type {
+        complex_bitcast(
+            builder,
+            from_value,
+            to_type,
+            "bitcast_for_opaque_recursive_pointer",
+        )
+    } else {
+        from_value
     }
 }
 
@@ -3815,12 +3848,9 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                             arg_type.into_pointer_type().get_element_type(),
                         );
                         // C return pointer goes at the beginning of params, and we must skip it if it exists.
-                        let param_index = (i
-                            + (if matches!(cc_return, CCReturn::ByPointer) {
-                                1
-                            } else {
-                                0
-                            })) as u32;
+                        let returns_pointer = matches!(cc_return, CCReturn::ByPointer);
+                        let param_index = i as u32 + returns_pointer as u32;
+
                         c_function.add_attribute(AttributeLoc::Param(param_index), byval);
                         c_function.add_attribute(AttributeLoc::Param(param_index), nonnull);
                     }
@@ -3903,7 +3933,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
             )
         }
 
-        LlvmBackendMode::Binary => {}
+        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev => {}
     }
 
     // a generic version that writes the result into a passed *u8 pointer
@@ -3954,7 +3984,9 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
             roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
         }
 
-        LlvmBackendMode::Binary => basic_type_from_layout(env, &return_layout),
+        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev => {
+            basic_type_from_layout(env, &return_layout)
+        }
     };
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
@@ -3964,7 +3996,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 }
 
 pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
-    // The size of jump_buf is platform-dependent.
+    // The size of jump_buf is target-dependent.
     //   - AArch64 needs 3 machine-sized words
     //   - LLVM says the following about the SJLJ intrinsic:
     //
@@ -4522,7 +4554,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
                 fn_val.print_to_stderr();
 
                 if let Some(app_ll_file) = debug_output_file {
-                    env.module.print_to_file(&app_ll_file).unwrap();
+                    env.module.print_to_file(app_ll_file).unwrap();
 
                     panic!(
                         r"😱 LLVM errors when defining function {:?}; I wrote the full LLVM IR to {:?}",
@@ -4926,7 +4958,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                 GenTest | WasmGenTest | CliTest => {
                     /* no host, or exposing types is not supported */
                 }
-                Binary => {
+                Binary | BinaryDev => {
                     for (alias_name, (generated_function, top_level, layout)) in aliases.iter() {
                         expose_alias_to_host(
                             env,
@@ -5895,7 +5927,7 @@ fn run_low_level<'a, 'ctx, 'env>(
                         bitcode::STR_GET_SCALAR_UNSAFE,
                     );
 
-                    // on 32-bit platforms, zig bitpacks the struct
+                    // on 32-bit targets, zig bitpacks the struct
                     match env.target_info.ptr_width() {
                         PtrWidth::Bytes8 => result,
                         PtrWidth::Bytes4 => {
@@ -6001,6 +6033,34 @@ fn run_low_level<'a, 'ctx, 'env>(
                 &[],
                 BitcodeReturns::Str,
                 bitcode::STR_TRIM_RIGHT,
+            )
+        }
+        StrWithCapacity => {
+            // Str.withCapacity : Nat -> Str
+            debug_assert_eq!(args.len(), 1);
+
+            let str_len = load_symbol(scope, &args[0]);
+
+            call_str_bitcode_fn(
+                env,
+                &[],
+                &[str_len],
+                BitcodeReturns::Str,
+                bitcode::STR_WITH_CAPACITY,
+            )
+        }
+        StrGraphemes => {
+            // Str.graphemes : Str -> List Str
+            debug_assert_eq!(args.len(), 1);
+
+            let string = load_symbol(scope, &args[0]);
+
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::List,
+                bitcode::STR_GRAPHEMES,
             )
         }
         ListLen => {
@@ -6125,7 +6185,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             list_prepend(env, original_wrapper, elem, elem_layout)
         }
         StrGetUnsafe => {
-            // List.getUnsafe : Str, Nat -> u8
+            // Str.getUnsafe : Str, Nat -> u8
             debug_assert_eq!(args.len(), 2);
 
             let wrapper_struct = load_symbol(scope, &args[0]);
@@ -6149,14 +6209,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let element_layout = list_element_layout!(list_layout);
 
-            list_get_unsafe(
-                env,
-                layout_ids,
-                parent,
-                element_layout,
-                elem_index,
-                wrapper_struct,
-            )
+            list_get_unsafe(env, layout_ids, element_layout, elem_index, wrapper_struct)
         }
         ListReplaceUnsafe => {
             let list = load_symbol(scope, &args[0]);
@@ -6416,8 +6469,22 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
             let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            debug_assert_eq!(lhs_layout, rhs_layout);
             let int_width = intwidth_from_layout(*lhs_layout);
+
+            debug_assert_eq!(rhs_layout, &Layout::Builtin(Builtin::Int(IntWidth::U8)));
+            let rhs_arg = if rhs_layout != lhs_layout {
+                // LLVM shift intrinsics expect the left and right sides to have the same type, so
+                // here we cast up `rhs` to the lhs type. Since the rhs was checked to be a U8,
+                // this cast isn't lossy.
+                let rhs_arg = env.builder.build_int_cast(
+                    rhs_arg.into_int_value(),
+                    lhs_arg.get_type().into_int_type(),
+                    "cast_for_shift",
+                );
+                rhs_arg.into()
+            } else {
+                rhs_arg
+            };
 
             build_int_binop(
                 env,
@@ -6607,7 +6674,7 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum RocReturn {
     /// Return as normal
     Return,
@@ -6790,7 +6857,7 @@ pub fn to_cc_return<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, layout: &Layout<'
             return_size >= 2 * env.target_info.ptr_width() as u32
         }
         roc_target::OperatingSystem::Unix => return_size > 2 * env.target_info.ptr_width() as u32,
-        roc_target::OperatingSystem::Wasi => unreachable!(),
+        roc_target::OperatingSystem::Wasi => return_size > 2 * env.target_info.ptr_width() as u32,
     };
 
     if return_size == 0 {
@@ -6951,7 +7018,16 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                         builder.build_return(Some(&return_value));
                     }
                     RocReturn::ByPointer => {
-                        debug_assert!(matches!(cc_return, CCReturn::ByPointer));
+                        match cc_return {
+                            CCReturn::Return => {
+                                let result = call.try_as_basic_value().left().unwrap();
+                                env.builder.build_store(return_pointer, result);
+                            }
+
+                            CCReturn::ByPointer | CCReturn::Void => {
+                                // the return value (if any) is already written to the return pointer
+                            }
+                        }
 
                         builder.build_return(None);
                     }
@@ -7880,11 +7956,10 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
     //         (xor arg shifted) - shifted
 
     let bd = env.builder;
-    let ctx = env.context;
     let shifted_name = "abs_shift_right";
     let shifted_alloca = {
         let bits_to_shift = int_type.get_bit_width() as u64 - 1;
-        let shift_val = ctx.i64_type().const_int(bits_to_shift, false);
+        let shift_val = int_type.const_int(bits_to_shift, false);
         let shifted = bd.build_right_shift(arg, shift_val, true, shifted_name);
         let alloca = bd.build_alloca(int_type, "#int_abs_help");
 

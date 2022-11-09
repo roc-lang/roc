@@ -328,7 +328,7 @@ fn add_single_tag_struct(
             false,
         );
 
-        let mut body = format!("#[repr(C)]\n{derive}\npub struct {name} ");
+        let mut body = format!("#[repr(transparent)]\n{derive}\npub struct {name} ");
 
         if payload_fields.is_empty() {
             // A single tag with no payload is a zero-sized unit type, so

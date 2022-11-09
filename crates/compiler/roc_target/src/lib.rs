@@ -1,3 +1,4 @@
+//! Provides types and helpers for compiler targets such as `default_x86_64`.
 #![warn(clippy::dbg_macro)]
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant)]

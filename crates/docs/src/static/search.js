@@ -44,4 +44,25 @@
   searchBox.addEventListener("input", search);
 
   search();
+
+  // Capture '/' keypress for quick search
+  window.addEventListener("keyup", (e) => {
+    if (e.key === "s" && document.activeElement !== searchBox) {
+      e.preventDefault;
+      searchBox.focus();
+      searchBox.value = "";
+    }
+
+    if (e.key === "Escape" && document.activeElement === searchBox) {
+      e.preventDefault;
+
+      // De-focus input box
+      searchBox.blur();
+
+      // Reset sidebar state
+      search();
+
+    }
+  });
+
 })();

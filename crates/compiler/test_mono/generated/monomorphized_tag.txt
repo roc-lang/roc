@@ -1,9 +1,8 @@
 procedure Test.2 (Test.4, Test.5):
-    let Test.8 : U8 = 18i64;
-    ret Test.8;
+    let Test.7 : U8 = 18i64;
+    ret Test.7;
 
 procedure Test.0 ():
-    let Test.7 : U8 = 0u8;
     let Test.1 : Int1 = false;
-    let Test.6 : U8 = CallByName Test.2 Test.1 Test.7;
+    let Test.6 : U8 = CallByName Test.2 Test.1 Test.1;
     ret Test.6;

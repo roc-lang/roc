@@ -166,8 +166,8 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 
             Wildcard | Inferred | BoundVariable(_) | Malformed(_) => false,
             Function(args, result) => {
-                (&result.value).is_multiline()
-                    || args.iter().any(|loc_arg| (&loc_arg.value).is_multiline())
+                result.value.is_multiline()
+                    || args.iter().any(|loc_arg| loc_arg.value.is_multiline())
             }
             Apply(_, _, args) => args.iter().any(|loc_arg| loc_arg.value.is_multiline()),
             As(lhs, _, _) => lhs.value.is_multiline(),
@@ -206,7 +206,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
         use roc_parse::ast::TypeAnnotation::*;
 
         match self {
-            Function(arguments, result) => {
+            Function(args, ret) => {
                 let needs_parens = parens != Parens::NotNeeded;
 
                 buf.indent(indent);
@@ -215,7 +215,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                     buf.push('(')
                 }
 
-                let mut it = arguments.iter().enumerate().peekable();
+                let mut it = args.iter().enumerate().peekable();
                 let should_add_newlines = newlines == Newlines::Yes;
 
                 while let Some((index, argument)) = it.next() {
@@ -226,7 +226,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                         buf.newline();
                     }
 
-                    (&argument.value).format_with_options(
+                    argument.value.format_with_options(
                         buf,
                         Parens::InFunctionType,
                         Newlines::No,
@@ -251,12 +251,8 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 buf.push_str("->");
                 buf.spaces(1);
 
-                (&result.value).format_with_options(
-                    buf,
-                    Parens::InFunctionType,
-                    Newlines::No,
-                    indent,
-                );
+                ret.value
+                    .format_with_options(buf, Parens::InFunctionType, Newlines::No, indent);
 
                 if needs_parens {
                     buf.push(')')
@@ -280,12 +276,9 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 
                 for argument in *arguments {
                     buf.spaces(1);
-                    (&argument.value).format_with_options(
-                        buf,
-                        Parens::InApply,
-                        Newlines::No,
-                        indent,
-                    );
+                    argument
+                        .value
+                        .format_with_options(buf, Parens::InApply, Newlines::No, indent);
                 }
 
                 if write_parens {
@@ -345,8 +338,10 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                     Newlines::No
                 };
 
-                buf.newline();
-                buf.indent(indent);
+                if !buf.ends_with_newline() {
+                    buf.newline();
+                    buf.indent(indent);
+                }
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
                 ann.format_with_options(buf, parens, next_newlines, indent)
             }
@@ -374,12 +369,12 @@ impl<'a> Formattable for AssignedField<'a, TypeAnnotation<'a>> {
     fn format_with_options<'buf>(
         &self,
         buf: &mut Buf<'buf>,
-        parens: Parens,
+        _parens: Parens,
         newlines: Newlines,
         indent: u16,
     ) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_assigned_field_help(self, buf, parens, indent, 1, newlines == Newlines::Yes);
+        format_assigned_field_help(self, buf, indent, 1, newlines == Newlines::Yes);
     }
 }
 
@@ -391,12 +386,12 @@ impl<'a> Formattable for AssignedField<'a, Expr<'a>> {
     fn format_with_options<'buf>(
         &self,
         buf: &mut Buf<'buf>,
-        parens: Parens,
+        _parens: Parens,
         newlines: Newlines,
         indent: u16,
     ) {
         // we abuse the `Newlines` type to decide between multiline or single-line layout
-        format_assigned_field_help(self, buf, parens, indent, 0, newlines == Newlines::Yes);
+        format_assigned_field_help(self, buf, indent, 0, newlines == Newlines::Yes);
     }
 }
 
@@ -416,7 +411,6 @@ fn is_multiline_assigned_field_help<T: Formattable>(afield: &AssignedField<'_, T
 fn format_assigned_field_help<'a, 'buf, T>(
     zelf: &AssignedField<'a, T>,
     buf: &mut Buf<'buf>,
-    parens: Parens,
     indent: u16,
     separator_spaces: usize,
     is_multiline: bool,
@@ -439,7 +433,7 @@ fn format_assigned_field_help<'a, 'buf, T>(
             }
 
             buf.spaces(separator_spaces);
-            buf.push_str(":");
+            buf.push(':');
             buf.spaces(1);
             ann.value.format(buf, indent);
         }
@@ -469,24 +463,10 @@ fn format_assigned_field_help<'a, 'buf, T>(
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-            format_assigned_field_help(
-                sub_field,
-                buf,
-                parens,
-                indent,
-                separator_spaces,
-                is_multiline,
-            );
+            format_assigned_field_help(sub_field, buf, indent, separator_spaces, is_multiline);
         }
         AssignedField::SpaceAfter(sub_field, spaces) => {
-            format_assigned_field_help(
-                sub_field,
-                buf,
-                parens,
-                indent,
-                separator_spaces,
-                is_multiline,
-            );
+            format_assigned_field_help(sub_field, buf, indent, separator_spaces, is_multiline);
             fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
         }
         Malformed(raw) => {
@@ -500,7 +480,7 @@ impl<'a> Formattable for Tag<'a> {
         use self::Tag::*;
 
         match self {
-            Apply { args, .. } => args.iter().any(|arg| (&arg.value).is_multiline()),
+            Apply { args, .. } => args.iter().any(|arg| arg.value.is_multiline()),
             Tag::SpaceBefore(_, _) | Tag::SpaceAfter(_, _) => true,
             Malformed(text) => text.chars().any(|c| c == '\n'),
         }
@@ -524,7 +504,12 @@ impl<'a> Formattable for Tag<'a> {
 
                     for arg in *args {
                         buf.newline();
-                        arg.format_with_options(buf, Parens::InApply, Newlines::No, arg_indent);
+                        arg.value.format_with_options(
+                            buf,
+                            Parens::InApply,
+                            Newlines::No,
+                            arg_indent,
+                        );
                     }
                 } else {
                     for arg in *args {
@@ -544,7 +529,8 @@ impl<'a> Formattable for Tag<'a> {
 
 impl<'a> Formattable for HasClause<'a> {
     fn is_multiline(&self) -> bool {
-        self.var.value.is_multiline() || self.ability.is_multiline()
+        // No, always put abilities in a "has" clause on one line
+        false
     }
 
     fn format_with_options<'buf>(
@@ -558,8 +544,15 @@ impl<'a> Formattable for HasClause<'a> {
         buf.spaces(1);
         buf.push_str("has");
         buf.spaces(1);
-        self.ability
-            .format_with_options(buf, parens, newlines, indent);
+
+        for (i, ab) in self.abilities.iter().enumerate() {
+            if i > 0 {
+                buf.spaces(1);
+                buf.push('&');
+                buf.spaces(1);
+            }
+            ab.format_with_options(buf, parens, newlines, indent);
+        }
     }
 }
 

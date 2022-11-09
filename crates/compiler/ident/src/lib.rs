@@ -1,3 +1,4 @@
+//! Implements data structures used for efficiently representing small strings, like identifiers.
 #![warn(clippy::dbg_macro)]
 
 use core::cmp::Ordering;

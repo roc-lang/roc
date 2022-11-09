@@ -3,7 +3,7 @@ use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarId, Variable};
-use roc_types::types::{AliasKind, Problem, RecordField};
+use roc_types::types::{AliasKind, RecordField};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -44,7 +44,7 @@ pub enum SolvedType {
     EmptyTagUnion,
     /// A type from an Invalid module
     #[allow(unused)]
-    Erroneous(Problem),
+    Erroneous,
 
     Alias(
         Symbol,

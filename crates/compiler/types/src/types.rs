@@ -4,11 +4,13 @@ use crate::subs::{
     GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
+use roc_collections::soa::{Index, Slice};
+use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
-use roc_module::ident::{ForeignSymbol, Ident, Lowercase, TagName};
+use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_module::symbol::{Interns, Symbol};
 use roc_region::all::{Loc, Region};
 use std::fmt;
 use std::fmt::Write;
@@ -27,10 +29,12 @@ const GREEK_LETTERS: &[char] = &[
 ///
 /// - Demanded: only introduced by pattern matches, e.g. { x } ->
 ///     Cannot unify with an Optional field, but can unify with a Required field
-/// - Required: introduced by record literals and type annotations.
+/// - Required: introduced by record literals
 ///     Can unify with Optional and Demanded
 /// - Optional: introduced by pattern matches, e.g. { x ? "" } ->
 ///     Can unify with Required, but not with Demanded
+/// - RigidRequired: introduced by annotations, e.g. { x : Str}
+///     Can only unify with Required and Demanded, to prevent an optional field being typed as Required
 /// - RigidOptional: introduced by annotations, e.g. { x ? Str}
 ///     Can only unify with Optional, to prevent a required field being typed as Optional
 #[derive(PartialEq, Eq, Clone, Hash)]
@@ -38,6 +42,7 @@ pub enum RecordField<T> {
     Demanded(T),
     Required(T),
     Optional(T),
+    RigidRequired(T),
     RigidOptional(T),
 }
 
@@ -51,6 +56,7 @@ impl<T: fmt::Debug> fmt::Debug for RecordField<T> {
             Optional(typ) => write!(f, "Optional({:?})", typ),
             Required(typ) => write!(f, "Required({:?})", typ),
             Demanded(typ) => write!(f, "Demanded({:?})", typ),
+            RigidRequired(typ) => write!(f, "RigidRequired({:?})", typ),
             RigidOptional(typ) => write!(f, "RigidOptional({:?})", typ),
         }
     }
@@ -64,6 +70,7 @@ impl<T> RecordField<T> {
             Optional(t) => t,
             Required(t) => t,
             Demanded(t) => t,
+            RigidRequired(t) => t,
             RigidOptional(t) => t,
         }
     }
@@ -75,6 +82,7 @@ impl<T> RecordField<T> {
             Optional(t) => t,
             Required(t) => t,
             Demanded(t) => t,
+            RigidRequired(t) => t,
             RigidOptional(t) => t,
         }
     }
@@ -86,20 +94,40 @@ impl<T> RecordField<T> {
             Optional(t) => t,
             Required(t) => t,
             Demanded(t) => t,
+            RigidRequired(t) => t,
             RigidOptional(t) => t,
         }
     }
 
-    pub fn map<F, U>(&self, mut f: F) -> RecordField<U>
+    pub fn map<F, U>(&self, f: F) -> RecordField<U>
     where
-        F: FnMut(&T) -> U,
+        F: FnOnce(&T) -> U,
+    {
+        self.replace(f(self.as_inner()))
+    }
+
+    pub fn map_owned<F, U>(self, f: F) -> RecordField<U>
+    where
+        F: FnOnce(T) -> U,
     {
         use RecordField::*;
         match self {
             Optional(t) => Optional(f(t)),
             Required(t) => Required(f(t)),
             Demanded(t) => Demanded(f(t)),
+            RigidRequired(t) => RigidRequired(f(t)),
             RigidOptional(t) => RigidOptional(f(t)),
+        }
+    }
+
+    pub fn replace<U>(&self, u: U) -> RecordField<U> {
+        use RecordField::*;
+        match self {
+            Optional(_) => Optional(u),
+            Required(_) => Required(u),
+            Demanded(_) => Demanded(u),
+            RigidRequired(_) => RigidRequired(u),
+            RigidOptional(_) => RigidOptional(u),
         }
     }
 
@@ -119,6 +147,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.substitute(substitutions),
             Required(typ) => typ.substitute(substitutions),
             Demanded(typ) => typ.substitute(substitutions),
+            RigidRequired(typ) => typ.substitute(substitutions),
             RigidOptional(typ) => typ.substitute(substitutions),
         }
     }
@@ -135,6 +164,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
             Required(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
             Demanded(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
+            RigidRequired(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
             RigidOptional(typ) => typ.substitute_alias(rep_symbol, rep_args, actual),
         }
     }
@@ -144,18 +174,18 @@ impl RecordField<Type> {
         region: Region,
         aliases: &'a F,
         var_store: &mut VarStore,
-        introduced: &mut ImSet<Variable>,
+        new_lambda_sets: &mut ImSet<Variable>,
+        new_infer_ext_vars: &mut ImSet<Variable>,
     ) where
         F: Fn(Symbol) -> Option<&'a Alias>,
     {
-        use RecordField::*;
-
-        match self {
-            Optional(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
-            Required(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
-            Demanded(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
-            RigidOptional(typ) => typ.instantiate_aliases(region, aliases, var_store, introduced),
-        }
+        self.as_inner_mut().instantiate_aliases(
+            region,
+            aliases,
+            var_store,
+            new_lambda_sets,
+            new_infer_ext_vars,
+        )
     }
 
     pub fn contains_symbol(&self, rep_symbol: Symbol) -> bool {
@@ -165,6 +195,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.contains_symbol(rep_symbol),
             Required(typ) => typ.contains_symbol(rep_symbol),
             Demanded(typ) => typ.contains_symbol(rep_symbol),
+            RigidRequired(typ) => typ.contains_symbol(rep_symbol),
             RigidOptional(typ) => typ.contains_symbol(rep_symbol),
         }
     }
@@ -175,6 +206,7 @@ impl RecordField<Type> {
             Optional(typ) => typ.contains_variable(rep_variable),
             Required(typ) => typ.contains_variable(rep_variable),
             Demanded(typ) => typ.contains_variable(rep_variable),
+            RigidRequired(typ) => typ.contains_variable(rep_variable),
             RigidOptional(typ) => typ.contains_variable(rep_variable),
         }
     }
@@ -197,33 +229,103 @@ impl LambdaSet {
         region: Region,
         aliases: &'a F,
         var_store: &mut VarStore,
-        introduced: &mut ImSet<Variable>,
+        new_lambda_sets: &mut ImSet<Variable>,
+        new_infer_ext_vars: &mut ImSet<Variable>,
     ) where
         F: Fn(Symbol) -> Option<&'a Alias>,
     {
-        self.0
-            .instantiate_aliases(region, aliases, var_store, introduced)
+        self.0.instantiate_aliases(
+            region,
+            aliases,
+            var_store,
+            new_lambda_sets,
+            new_infer_ext_vars,
+        )
     }
 }
 
 #[derive(PartialEq, Eq, Clone)]
 pub struct AliasCommon {
     pub symbol: Symbol,
-    pub type_arguments: Vec<Type>,
+    pub type_arguments: Vec<Loc<OptAbleType>>,
     pub lambda_set_variables: Vec<LambdaSet>,
+    pub infer_ext_in_output_types: Vec<Type>,
 }
 
-#[derive(Clone, Copy, Debug)]
+/// Represents a collection of abilities bound to a type variable.
+///
+/// Enforces the invariants
+///   - There are no duplicate abilities (like a [VecSet][roc_collections::VecSet])
+///   - Inserted abilities are in sorted order; they can be extracted with
+///     [AbilitySet::into_sorted_iter]
+///
+/// This is useful for inserting into [Subs][crate::subs::Subs], so that the set need not be
+/// re-sorted.
+///
+/// In the future we might want to do some small-vec optimizations, though that may be trivialized
+/// away with a SoA representation of canonicalized types.
+#[derive(Clone, Debug, Default, PartialEq, PartialOrd, Eq, Ord, Hash)]
+pub struct AbilitySet(Vec<Symbol>);
+
+impl AbilitySet {
+    pub fn with_capacity(cap: usize) -> Self {
+        Self(Vec::with_capacity(cap))
+    }
+
+    pub fn singleton(ability: Symbol) -> Self {
+        Self(vec![ability])
+    }
+
+    pub fn insert(&mut self, ability: Symbol) -> bool {
+        match self.0.binary_search(&ability) {
+            Ok(_) => true,
+            Err(insert_index) => {
+                self.0.insert(insert_index, ability);
+                false
+            }
+        }
+    }
+
+    pub fn contains(&self, ability: &Symbol) -> bool {
+        self.0.contains(ability)
+    }
+
+    pub fn sorted_iter(&self) -> impl ExactSizeIterator<Item = &Symbol> {
+        self.0.iter()
+    }
+
+    pub fn into_sorted_iter(self) -> impl ExactSizeIterator<Item = Symbol> {
+        self.0.into_iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl FromIterator<Symbol> for AbilitySet {
+    fn from_iter<T: IntoIterator<Item = Symbol>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+        let (lo, hi) = iter.size_hint();
+        let mut this = Self::with_capacity(hi.unwrap_or(lo));
+        for item in iter {
+            this.insert(item);
+        }
+        this
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct OptAbleVar {
     pub var: Variable,
-    pub opt_ability: Option<Symbol>,
+    pub opt_abilities: Option<AbilitySet>,
 }
 
 impl OptAbleVar {
     pub fn unbound(var: Variable) -> Self {
         Self {
             var,
-            opt_ability: None,
+            opt_abilities: None,
         }
     }
 }
@@ -231,15 +333,944 @@ impl OptAbleVar {
 #[derive(PartialEq, Eq, Debug)]
 pub struct OptAbleType {
     pub typ: Type,
-    pub opt_ability: Option<Symbol>,
+    pub opt_abilities: Option<AbilitySet>,
 }
 
 impl OptAbleType {
     pub fn unbound(typ: Type) -> Self {
         Self {
             typ,
-            opt_ability: None,
+            opt_abilities: None,
         }
+    }
+}
+
+/// Polarity of a type, or roughly, what side of an arrow it appears on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Polarity {
+    /// A type that appears in negative/input position
+    Neg,
+    /// A type that appears in positive/output position
+    Pos,
+}
+
+impl std::ops::Neg for Polarity {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        match self {
+            Polarity::Neg => todo!(),
+            Polarity::Pos => todo!(),
+        }
+    }
+}
+
+pub struct AliasShared {
+    pub symbol: Symbol,
+    pub type_argument_abilities: Slice<AbilitySet>,
+    pub type_argument_regions: Slice<Region>,
+    pub lambda_set_variables: Slice<TypeTag>,
+    pub infer_ext_in_output_variables: Slice<TypeTag>,
+}
+
+#[derive(Debug, Clone)]
+pub enum TypeTag {
+    EmptyRecord,
+    EmptyTagUnion,
+    /// The arguments are implicit
+    Function(
+        /// lambda set
+        Index<TypeTag>,
+        /// return type
+        Index<TypeTag>,
+    ),
+    /// Closure arguments are implicit
+    ClosureTag {
+        name: Symbol,
+        ambient_function: Variable,
+    },
+    // type extension is implicit
+    // tag name is in the `single_tag_union_tag_names` map
+    FunctionOrTagUnion(Symbol),
+    UnspecializedLambdaSet {
+        unspecialized: Uls,
+    },
+    DelayedAlias {
+        shared: Index<AliasShared>,
+    },
+    StructuralAlias {
+        shared: Index<AliasShared>,
+        actual: Index<TypeTag>,
+    },
+    OpaqueAlias {
+        shared: Index<AliasShared>,
+        actual: Index<TypeTag>,
+    },
+    HostExposedAlias {
+        shared: Index<AliasShared>,
+        actual_type: Index<TypeTag>,
+        actual_variable: Variable,
+    },
+
+    Apply {
+        symbol: Symbol,
+        // type_argument_types: Slice<TypeTag>, implicit
+        type_argument_regions: Slice<Region>,
+        region: Region, // IDEA: make implicit, final element of `type_argument_regions`
+    },
+    Variable(Variable),
+    RangedNumber(NumericRange),
+    /// A type error, which will code gen to a runtime error
+    /// The problem is at the index of the type tag
+    Error,
+
+    // TypeExtension is implicit in the type slice
+    // it is length zero for closed, length 1 for open
+    TagUnion(UnionTags),
+    RecursiveTagUnion(Variable, UnionTags),
+    Record(RecordFields),
+}
+
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+pub struct AsideTypeSlice(Slice<TypeTag>);
+
+impl AsideTypeSlice {
+    pub fn into_iter(&self) -> impl Iterator<Item = Index<TypeTag>> {
+        self.0.into_iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+pub struct Types {
+    // main storage. Each type is represented by a tag, which is identified by its index.
+    // `tags_slices` is a parallel array (so these two vectors always have the same size), that
+    // allows storing a slice of types. This is used for storing the function argument types, or
+    // the extension parameter of tag unions/records.
+    tags: Vec<TypeTag>,
+    tags_slices: Vec<Slice<TypeTag>>,
+
+    // used to store other slices of types that are not the "main" arguments of a type stored in
+    // `tags_slices`.
+    aside_types_slices: Vec<Slice<TypeTag>>,
+
+    // region info where appropriate (retained for generating error messages)
+    regions: Vec<Region>,
+
+    // tag unions
+    tag_names: Vec<TagName>,
+
+    // records
+    field_types: Vec<RecordField<()>>,
+    field_names: Vec<Lowercase>,
+
+    // aliases
+    type_arg_abilities: Vec<AbilitySet>, // TODO: structural sharing for `AbilitySet`s themselves
+    aliases: Vec<AliasShared>,
+
+    // these tag types are relatively rare, and so we store them in a way that reduces space, at
+    // the cost of slightly higher lookup time
+    single_tag_union_tag_names: VecMap<Index<TypeTag>, TagName>,
+}
+
+impl Default for Types {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Types {
+    pub fn new() -> Self {
+        Self {
+            // tags.len() == tags_slices.len()
+            tags: vec![TypeTag::EmptyRecord, TypeTag::EmptyTagUnion],
+            tags_slices: vec![Default::default(), Default::default()],
+
+            aside_types_slices: Default::default(),
+
+            regions: Default::default(),
+            tag_names: Default::default(),
+            field_types: Default::default(),
+            field_names: Default::default(),
+            type_arg_abilities: Default::default(),
+            aliases: Default::default(),
+            single_tag_union_tag_names: Default::default(),
+        }
+    }
+
+    pub fn get_type_arguments(&self, tag: Index<TypeTag>) -> Slice<TypeTag> {
+        self.tags_slices[tag.index()]
+    }
+
+    #[track_caller]
+    pub fn get_tag_name(&self, typ: &Index<TypeTag>) -> &TagName {
+        self.single_tag_union_tag_names
+            .get(typ)
+            .expect("typ is not a single tag union")
+    }
+
+    pub fn record_fields_slices(
+        &self,
+        fields: RecordFields,
+    ) -> (Slice<Lowercase>, Slice<RecordField<()>>, Slice<TypeTag>) {
+        let RecordFields {
+            length,
+            field_names_start,
+            variables_start,
+            field_types_start,
+        } = fields;
+
+        let names = Slice::new(field_names_start, length);
+        let fields = Slice::new(field_types_start, length);
+        let tys = Slice::new(variables_start, length);
+
+        (names, fields, tys)
+    }
+
+    pub fn union_tag_slices(&self, union: UnionTags) -> (Slice<TagName>, Slice<AsideTypeSlice>) {
+        let UnionTags {
+            length,
+            labels_start,
+            values_start,
+            _marker,
+        } = union;
+
+        let tags = Slice::new(labels_start, length);
+        let payload_slices = Slice::new(values_start, length);
+
+        (tags, payload_slices)
+    }
+
+    fn reserve_type_tags(&mut self, length: usize) -> Slice<TypeTag> {
+        use std::iter::repeat;
+
+        debug_assert_eq!(self.tags.len(), self.tags_slices.len());
+
+        self.tags_slices
+            .extend(repeat(Slice::default()).take(length));
+
+        Slice::extend_new(&mut self.tags, repeat(TypeTag::EmptyRecord).take(length))
+    }
+
+    fn reserve_type_tag(&mut self) -> Index<TypeTag> {
+        debug_assert_eq!(self.tags.len(), self.tags_slices.len());
+
+        self.tags_slices.push(Slice::default());
+
+        Index::push_new(&mut self.tags, TypeTag::EmptyRecord)
+    }
+
+    fn set_type_tag(&mut self, index: Index<TypeTag>, tag: TypeTag, type_slice: Slice<TypeTag>) {
+        debug_assert_eq!(self.tags.len(), self.tags_slices.len());
+
+        self.tags[index.index()] = tag;
+        self.tags_slices[index.index()] = type_slice;
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    fn from_old_type_slice(&mut self, old: &[Type]) -> Slice<TypeTag> {
+        let slice = self.reserve_type_tags(old.len());
+
+        for (index, argument) in slice.into_iter().zip(old) {
+            self.from_old_type_at(index, argument);
+        }
+
+        slice
+    }
+
+    fn tag_union_help(
+        &mut self,
+        tags: &[(TagName, Vec<Type>)],
+        extension: &TypeExtension,
+    ) -> (UnionTags, Slice<TypeTag>) {
+        let tag_names_slice =
+            Slice::extend_new(&mut self.tag_names, tags.iter().map(|(n, _)| n.clone()));
+
+        // Store the payload slices in the aside buffer
+        let type_slices = Slice::extend_new(
+            &mut self.aside_types_slices,
+            std::iter::repeat(Slice::default()).take(tags.len()),
+        );
+
+        for (slice_index, (_, types)) in type_slices.indices().zip(tags) {
+            self.aside_types_slices[slice_index] = self.from_old_type_slice(types);
+        }
+
+        let union_tags = UnionTags {
+            length: tags.len() as u16,
+            labels_start: tag_names_slice.start() as u32,
+            values_start: type_slices.start() as u32,
+            _marker: std::marker::PhantomData,
+        };
+
+        let type_slice = match extension {
+            TypeExtension::Open(ext) => self.from_old_type(ext).as_slice(),
+            TypeExtension::Closed => Slice::default(),
+        };
+
+        (union_tags, type_slice)
+    }
+
+    fn alias_shared_help(
+        &mut self,
+        symbol: Symbol,
+        type_arguments: &[OptAbleType],
+        lambda_set_variables: &[LambdaSet],
+        infer_ext_in_output_types: &[Type],
+    ) -> AliasShared {
+        let lambda_set_slice = {
+            let slice = self.reserve_type_tags(lambda_set_variables.len());
+
+            for (index, argument) in slice.into_iter().zip(lambda_set_variables) {
+                self.from_old_type_at(index, &argument.0);
+            }
+
+            Slice::new(slice.start() as _, slice.len() as _)
+        };
+
+        let infer_ext_in_output_slice = {
+            let slice = self.reserve_type_tags(infer_ext_in_output_types.len());
+
+            for (index, ty) in slice.into_iter().zip(infer_ext_in_output_types) {
+                self.from_old_type_at(index, ty);
+            }
+
+            Slice::new(slice.start() as _, slice.len() as _)
+        };
+
+        let type_argument_abilities = Slice::extend_new(
+            &mut self.type_arg_abilities,
+            type_arguments
+                .iter()
+                .map(|a| a.opt_abilities.as_ref().cloned().unwrap_or_default()),
+        );
+
+        // TODO: populate correctly
+        let type_argument_regions = Slice::extend_new(
+            &mut self.regions,
+            std::iter::repeat(Region::zero()).take(type_arguments.len()),
+        );
+
+        AliasShared {
+            symbol,
+            type_argument_abilities,
+            type_argument_regions,
+            lambda_set_variables: lambda_set_slice,
+            infer_ext_in_output_variables: infer_ext_in_output_slice,
+        }
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_old_type(&mut self, old: &Type) -> Index<TypeTag> {
+        let index = self.reserve_type_tag();
+        self.from_old_type_at(index, old);
+        index
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    fn from_old_type_at(&mut self, index: Index<TypeTag>, old: &Type) {
+        match old {
+            Type::EmptyRec => self.set_type_tag(index, TypeTag::EmptyRecord, Slice::default()),
+            Type::EmptyTagUnion => {
+                self.set_type_tag(index, TypeTag::EmptyTagUnion, Slice::default())
+            }
+            Type::Function(arguments, lambda_set, return_type) => {
+                let argument_slice = self.from_old_type_slice(arguments);
+
+                let tag = TypeTag::Function(
+                    self.from_old_type(lambda_set),
+                    self.from_old_type(return_type),
+                );
+
+                self.set_type_tag(index, tag, argument_slice)
+            }
+            Type::Apply(symbol, arguments, region) => {
+                let type_argument_regions =
+                    Slice::extend_new(&mut self.regions, arguments.iter().map(|t| t.region));
+
+                let type_slice = {
+                    let slice = self.reserve_type_tags(arguments.len());
+
+                    for (index, argument) in slice.into_iter().zip(arguments) {
+                        self.from_old_type_at(index, &argument.value);
+                    }
+
+                    slice
+                };
+
+                self.set_type_tag(
+                    index,
+                    TypeTag::Apply {
+                        symbol: *symbol,
+                        type_argument_regions,
+                        region: *region,
+                    },
+                    type_slice,
+                )
+            }
+            Type::TagUnion(tags, extension) => {
+                let (union_tags, type_slice) = self.tag_union_help(tags, extension);
+
+                self.set_type_tag(index, TypeTag::TagUnion(union_tags), type_slice)
+            }
+            Type::RecursiveTagUnion(rec_var, tags, extension) => {
+                let (union_tags, type_slice) = self.tag_union_help(tags, extension);
+                let tag = TypeTag::RecursiveTagUnion(*rec_var, union_tags);
+
+                self.set_type_tag(index, tag, type_slice)
+            }
+            Type::FunctionOrTagUnion(tag_name, symbol, extension) => {
+                let type_slice = match extension {
+                    TypeExtension::Open(ext) => self.from_old_type(ext).as_slice(),
+                    TypeExtension::Closed => Slice::default(),
+                };
+
+                self.single_tag_union_tag_names
+                    .insert(index, tag_name.clone());
+
+                let tag = TypeTag::FunctionOrTagUnion(*symbol);
+                self.set_type_tag(index, tag, type_slice)
+            }
+            Type::UnspecializedLambdaSet { unspecialized } => {
+                let tag = TypeTag::UnspecializedLambdaSet {
+                    unspecialized: *unspecialized,
+                };
+                self.set_type_tag(index, tag, Slice::default())
+            }
+            Type::Record(fields, extension) => {
+                let type_slice = match extension {
+                    TypeExtension::Open(ext) => self.from_old_type(ext).as_slice(),
+                    TypeExtension::Closed => Slice::default(),
+                };
+
+                // should we sort at this point?
+                let field_type_slice = {
+                    let slice = self.reserve_type_tags(fields.len());
+
+                    for (index, argument) in slice.into_iter().zip(fields.values()) {
+                        self.from_old_type_at(index, argument.as_inner());
+                    }
+
+                    slice
+                };
+
+                let field_types = Slice::extend_new(
+                    &mut self.field_types,
+                    fields.values().map(|f| f.map(|_| ())),
+                );
+
+                let field_names = Slice::extend_new(&mut self.field_names, fields.keys().cloned());
+
+                let record_fields = RecordFields {
+                    length: fields.len() as u16,
+                    field_names_start: field_names.start() as u32,
+                    variables_start: field_type_slice.start() as u32,
+                    field_types_start: field_types.start() as u32,
+                };
+
+                let tag = TypeTag::Record(record_fields);
+                self.set_type_tag(index, tag, type_slice)
+            }
+            Type::ClosureTag {
+                name,
+                captures,
+                ambient_function,
+            } => {
+                let type_slice = self.from_old_type_slice(captures);
+
+                let tag = TypeTag::ClosureTag {
+                    name: *name,
+                    ambient_function: *ambient_function,
+                };
+                self.set_type_tag(index, tag, type_slice)
+            }
+
+            Type::DelayedAlias(AliasCommon {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+                infer_ext_in_output_types,
+            }) => {
+                let type_argument_regions =
+                    Slice::extend_new(&mut self.regions, type_arguments.iter().map(|t| t.region));
+
+                let type_arguments_slice = {
+                    let slice = self.reserve_type_tags(type_arguments.len());
+
+                    for (index, argument) in slice.into_iter().zip(type_arguments) {
+                        self.from_old_type_at(index, &argument.value.typ);
+                    }
+
+                    slice
+                };
+
+                let lambda_set_slice = {
+                    let slice = self.reserve_type_tags(lambda_set_variables.len());
+
+                    let it = slice.into_iter().zip(lambda_set_variables);
+                    for (index, argument) in it {
+                        self.from_old_type_at(index, &argument.0);
+                    }
+
+                    Slice::new(slice.start() as _, slice.len() as _)
+                };
+
+                let infer_ext_in_output_slice = {
+                    let slice = self.reserve_type_tags(infer_ext_in_output_types.len());
+
+                    let it = slice.into_iter().zip(infer_ext_in_output_types);
+                    for (index, argument) in it {
+                        self.from_old_type_at(index, argument);
+                    }
+
+                    Slice::new(slice.start() as _, slice.len() as _)
+                };
+
+                let type_argument_abilities = Slice::extend_new(
+                    &mut self.type_arg_abilities,
+                    type_arguments
+                        .iter()
+                        .map(|a| a.value.opt_abilities.as_ref().cloned().unwrap_or_default()),
+                );
+
+                let alias_shared = AliasShared {
+                    symbol: *symbol,
+                    type_argument_abilities,
+                    type_argument_regions,
+                    lambda_set_variables: lambda_set_slice,
+                    infer_ext_in_output_variables: infer_ext_in_output_slice,
+                };
+
+                let shared = Index::push_new(&mut self.aliases, alias_shared);
+
+                let tag = TypeTag::DelayedAlias { shared };
+
+                self.set_type_tag(index, tag, type_arguments_slice)
+            }
+            Type::Alias {
+                symbol,
+                type_arguments,
+                lambda_set_variables,
+                infer_ext_in_output_types,
+                actual,
+                kind,
+            } => {
+                let type_arguments_slice = {
+                    let slice = self.reserve_type_tags(type_arguments.len());
+
+                    for (index, argument) in slice.into_iter().zip(type_arguments) {
+                        self.from_old_type_at(index, &argument.typ);
+                    }
+
+                    slice
+                };
+
+                let alias_shared = self.alias_shared_help(
+                    *symbol,
+                    type_arguments,
+                    lambda_set_variables,
+                    infer_ext_in_output_types,
+                );
+
+                let shared = Index::push_new(&mut self.aliases, alias_shared);
+                let actual = self.from_old_type(actual);
+
+                let tag = match kind {
+                    AliasKind::Structural => TypeTag::StructuralAlias { shared, actual },
+                    AliasKind::Opaque => TypeTag::OpaqueAlias { shared, actual },
+                };
+
+                self.set_type_tag(index, tag, type_arguments_slice)
+            }
+
+            Type::HostExposedAlias {
+                name,
+                type_arguments,
+                lambda_set_variables,
+                actual_var,
+                actual,
+            } => {
+                let type_arguments_slice = self.from_old_type_slice(type_arguments);
+
+                let lambda_set_slice = {
+                    let slice = self.reserve_type_tags(lambda_set_variables.len());
+
+                    for (index, argument) in slice.into_iter().zip(lambda_set_variables) {
+                        self.from_old_type_at(index, &argument.0);
+                    }
+
+                    Slice::new(slice.start() as _, slice.len() as _)
+                };
+
+                let alias_shared = AliasShared {
+                    symbol: *name,
+                    type_argument_abilities: Slice::default(),
+                    type_argument_regions: Slice::default(),
+                    lambda_set_variables: lambda_set_slice,
+                    infer_ext_in_output_variables: Slice::default(),
+                };
+
+                let tag = TypeTag::HostExposedAlias {
+                    shared: Index::push_new(&mut self.aliases, alias_shared),
+                    actual_type: self.from_old_type(actual),
+                    actual_variable: *actual_var,
+                };
+
+                self.set_type_tag(index, tag, type_arguments_slice)
+            }
+            Type::Variable(var) => {
+                self.set_type_tag(index, TypeTag::Variable(*var), Slice::default())
+            }
+            Type::RangedNumber(range) => {
+                self.set_type_tag(index, TypeTag::RangedNumber(*range), Slice::default())
+            }
+            Type::Error => self.set_type_tag(index, TypeTag::Error, Slice::default()),
+        }
+    }
+
+    /// Creates a deep clone of a type with substituted variables.
+    pub fn clone_with_variable_substitutions(
+        &mut self,
+        typ: Index<TypeTag>,
+        subs: &MutMap<Variable, Variable>,
+    ) -> Index<TypeTag> {
+        let cloned = self.reserve_type_tag();
+
+        let mut stack = vec![(cloned, typ)];
+
+        macro_rules! defer {
+            ($type_index:expr) => {{
+                let cloned_index = self.reserve_type_tag();
+                stack.push((cloned_index, $type_index));
+                cloned_index
+            }};
+        }
+
+        macro_rules! defer_slice {
+            ($type_slice:expr) => {{
+                let cloned_indices = self.reserve_type_tags($type_slice.len());
+                debug_assert_eq!(cloned_indices.len(), $type_slice.len());
+                stack.extend(cloned_indices.into_iter().zip($type_slice.into_iter()));
+                cloned_indices
+            }};
+        }
+
+        macro_rules! subst {
+            ($var:expr) => {{
+                subs.get(&$var).copied().unwrap_or($var)
+            }};
+        }
+
+        macro_rules! do_shared {
+            ($shared:expr) => {{
+                let AliasShared {
+                    symbol,
+                    type_argument_abilities,
+                    type_argument_regions,
+                    lambda_set_variables,
+                    infer_ext_in_output_variables,
+                } = self[$shared];
+
+                let new_lambda_set_variables = defer_slice!(lambda_set_variables);
+                let new_infer_ext_in_output_variables = defer_slice!(infer_ext_in_output_variables);
+
+                let new_shared = AliasShared {
+                    symbol,
+                    type_argument_abilities,
+                    type_argument_regions,
+                    lambda_set_variables: new_lambda_set_variables,
+                    infer_ext_in_output_variables: new_infer_ext_in_output_variables,
+                };
+                Index::push_new(&mut self.aliases, new_shared)
+            }};
+        }
+
+        macro_rules! do_union_tags {
+            ($union_tags:expr) => {{
+                let (tags, payload_slices) = self.union_tag_slices($union_tags);
+
+                let new_payload_slices = Slice::extend_new(
+                    &mut self.aside_types_slices,
+                    std::iter::repeat(Slice::default()).take(payload_slices.len()),
+                );
+                for (new_payload_slice_index, payload_slice_index) in
+                    (new_payload_slices.indices()).zip(payload_slices.into_iter())
+                {
+                    let payload_slice = self[payload_slice_index];
+                    let new_payload_slice = defer_slice!(payload_slice);
+                    self.aside_types_slices[new_payload_slice_index] = new_payload_slice;
+                }
+
+                UnionTags {
+                    length: tags.len() as _,
+                    labels_start: tags.start() as _,
+                    values_start: new_payload_slices.start() as _,
+                    _marker: Default::default(),
+                }
+            }};
+        }
+
+        while let Some((dest_index, typ)) = stack.pop() {
+            use TypeTag::*;
+
+            let (tag, args) = match self[typ] {
+                Variable(v) => (Variable(subst!(v)), Default::default()),
+                EmptyRecord => (EmptyRecord, Default::default()),
+                EmptyTagUnion => (EmptyTagUnion, Default::default()),
+                Function(clos, ret) => {
+                    let args = self.get_type_arguments(typ);
+
+                    let new_args = defer_slice!(args);
+                    let new_clos = defer!(clos);
+                    let new_ret = defer!(ret);
+
+                    (Function(new_clos, new_ret), new_args)
+                }
+                ClosureTag {
+                    name,
+                    ambient_function,
+                } => {
+                    let captures = self.get_type_arguments(typ);
+
+                    let new_captures = defer_slice!(captures);
+                    let new_ambient_function = subst!(ambient_function);
+
+                    (
+                        ClosureTag {
+                            name,
+                            ambient_function: new_ambient_function,
+                        },
+                        new_captures,
+                    )
+                }
+                FunctionOrTagUnion(symbol) => {
+                    let ext = self.get_type_arguments(typ);
+
+                    let new_ext = defer_slice!(ext);
+                    self.single_tag_union_tag_names
+                        .insert(dest_index, self.get_tag_name(&typ).clone());
+
+                    (FunctionOrTagUnion(symbol), new_ext)
+                }
+                UnspecializedLambdaSet {
+                    unspecialized: Uls(var, sym, region),
+                } => {
+                    let new_var = subst!(var);
+
+                    (
+                        UnspecializedLambdaSet {
+                            unspecialized: Uls(new_var, sym, region),
+                        },
+                        Default::default(),
+                    )
+                }
+                DelayedAlias { shared } => {
+                    let type_arguments = self.get_type_arguments(typ);
+
+                    let new_type_arguments = defer_slice!(type_arguments);
+                    let new_shared = do_shared!(shared);
+
+                    (DelayedAlias { shared: new_shared }, new_type_arguments)
+                }
+                StructuralAlias { shared, actual } => {
+                    let type_arguments = self.get_type_arguments(typ);
+
+                    let new_type_arguments = defer_slice!(type_arguments);
+                    let new_shared = do_shared!(shared);
+                    let new_actual = defer!(actual);
+
+                    (
+                        StructuralAlias {
+                            shared: new_shared,
+                            actual: new_actual,
+                        },
+                        new_type_arguments,
+                    )
+                }
+                OpaqueAlias { shared, actual } => {
+                    let type_arguments = self.get_type_arguments(typ);
+
+                    let new_type_arguments = defer_slice!(type_arguments);
+                    let new_shared = do_shared!(shared);
+                    let new_actual = defer!(actual);
+
+                    (
+                        OpaqueAlias {
+                            shared: new_shared,
+                            actual: new_actual,
+                        },
+                        new_type_arguments,
+                    )
+                }
+                HostExposedAlias {
+                    shared,
+                    actual_type,
+                    actual_variable,
+                } => {
+                    let type_arguments = self.get_type_arguments(typ);
+
+                    let new_type_arguments = defer_slice!(type_arguments);
+                    let new_shared = do_shared!(shared);
+                    let new_actual_type = defer!(actual_type);
+                    let new_actual_variable = subst!(actual_variable);
+
+                    (
+                        HostExposedAlias {
+                            shared: new_shared,
+                            actual_type: new_actual_type,
+                            actual_variable: new_actual_variable,
+                        },
+                        new_type_arguments,
+                    )
+                }
+                Apply {
+                    symbol,
+                    type_argument_regions,
+                    region,
+                } => {
+                    let type_arguments = self.get_type_arguments(typ);
+
+                    let new_type_arguments = defer_slice!(type_arguments);
+
+                    (
+                        Apply {
+                            symbol,
+                            type_argument_regions,
+                            region,
+                        },
+                        new_type_arguments,
+                    )
+                }
+                TagUnion(union_tags) => {
+                    let ext_slice = self.get_type_arguments(typ);
+
+                    let new_ext_slice = defer_slice!(ext_slice);
+                    let new_union_tags = do_union_tags!(union_tags);
+
+                    (TagUnion(new_union_tags), new_ext_slice)
+                }
+                RecursiveTagUnion(rec_var, union_tags) => {
+                    let ext_slice = self.get_type_arguments(typ);
+
+                    let new_rec_var = subst!(rec_var);
+                    let new_ext_slice = defer_slice!(ext_slice);
+                    let new_union_tags = do_union_tags!(union_tags);
+
+                    (
+                        RecursiveTagUnion(new_rec_var, new_union_tags),
+                        new_ext_slice,
+                    )
+                }
+                Record(fields) => {
+                    let ext_slice = self.get_type_arguments(typ);
+                    let (names, fields, tys) = self.record_fields_slices(fields);
+
+                    debug_assert_eq!(names.len(), fields.len());
+                    debug_assert_eq!(names.len(), tys.len());
+
+                    let new_tys = defer_slice!(tys);
+                    let new_ext_slice = defer_slice!(ext_slice);
+
+                    let new_record_fields = RecordFields {
+                        length: names.len() as _,
+                        field_names_start: names.start() as _,
+                        variables_start: new_tys.start() as _,
+                        field_types_start: fields.start() as _,
+                    };
+
+                    (Record(new_record_fields), new_ext_slice)
+                }
+                RangedNumber(range) => (RangedNumber(range), Default::default()),
+                Error => (Error, Default::default()),
+            };
+
+            self.set_type_tag(dest_index, tag, args);
+        }
+
+        cloned
+    }
+}
+
+impl Polarity {
+    pub const OF_VALUE: Polarity = Polarity::Pos;
+
+    pub const OF_PATTERN: Polarity = Polarity::Neg;
+
+    pub fn is_neg(&self) -> bool {
+        matches!(self, Self::Neg)
+    }
+
+    pub fn is_pos(&self) -> bool {
+        matches!(self, Self::Pos)
+    }
+}
+
+macro_rules! impl_types_index {
+    ($($field:ident, $ty:ty)*) => {$(
+        impl std::ops::Index<Index<$ty>> for Types {
+            type Output = $ty;
+
+            fn index(&self, index: Index<$ty>) -> &Self::Output {
+                // Validate that the types line up, so you can't accidentally
+                // index into the wrong array.
+                let _: &Vec<$ty> = &self.$field;
+
+                &self.$field[index.index()]
+            }
+        }
+    )*}
+}
+
+macro_rules! impl_types_index_slice {
+    ($($field:ident, $ty:ty)*) => {$(
+        impl std::ops::Index<Slice<$ty>> for Types {
+            type Output = [$ty];
+
+            fn index(&self, slice: Slice<$ty>) -> &Self::Output {
+                // Validate that the types line up, so you can't accidentally
+                // index into the wrong array.
+                let _: &Vec<$ty> = &self.$field;
+
+                &self.$field[slice.indices()]
+            }
+        }
+    )*}
+}
+
+impl_types_index! {
+    tags, TypeTag
+    aliases, AliasShared
+    type_arg_abilities, AbilitySet
+    regions, Region
+    tag_names, TagName
+    field_types, RecordField<()>
+    field_names, Lowercase
+}
+
+impl_types_index_slice! {
+    tag_names, TagName
+}
+
+impl std::ops::Index<Index<AsideTypeSlice>> for Types {
+    type Output = Slice<TypeTag>;
+
+    fn index(&self, slice: Index<AsideTypeSlice>) -> &Self::Output {
+        &self.aside_types_slices[slice.index()]
+    }
+}
+
+impl std::ops::Index<Slice<AsideTypeSlice>> for Types {
+    type Output = [Slice<TypeTag>];
+
+    fn index(&self, slice: Slice<AsideTypeSlice>) -> &Self::Output {
+        &self.aside_types_slices[slice.indices()]
     }
 }
 
@@ -270,6 +1301,7 @@ pub enum Type {
         symbol: Symbol,
         type_arguments: Vec<OptAbleType>,
         lambda_set_variables: Vec<LambdaSet>,
+        infer_ext_in_output_types: Vec<Type>,
         actual: Box<Type>,
         kind: AliasKind,
     },
@@ -282,11 +1314,11 @@ pub enum Type {
     },
     RecursiveTagUnion(Variable, Vec<(TagName, Vec<Type>)>, TypeExtension),
     /// Applying a type to some arguments (e.g. Dict.Dict String Int)
-    Apply(Symbol, Vec<Type>, Region),
+    Apply(Symbol, Vec<Loc<Type>>, Region),
     Variable(Variable),
     RangedNumber(NumericRange),
     /// A type error, which will code gen to a runtime error
-    Erroneous(Problem),
+    Error,
 }
 
 /// A lambda set under an arrow in a ability member signature. For example, in
@@ -352,12 +1384,14 @@ impl Clone for Type {
                 symbol,
                 type_arguments,
                 lambda_set_variables,
+                infer_ext_in_output_types: infer_ext_in_output_variables,
                 actual,
                 kind,
             } => Self::Alias {
                 symbol: *symbol,
                 type_arguments: type_arguments.clone(),
                 lambda_set_variables: lambda_set_variables.clone(),
+                infer_ext_in_output_types: infer_ext_in_output_variables.clone(),
                 actual: actual.clone(),
                 kind: *kind,
             },
@@ -380,7 +1414,7 @@ impl Clone for Type {
             Self::Apply(arg0, arg1, arg2) => Self::Apply(*arg0, arg1.clone(), *arg2),
             Self::Variable(arg0) => Self::Variable(*arg0),
             Self::RangedNumber(arg1) => Self::RangedNumber(*arg1),
-            Self::Erroneous(arg0) => Self::Erroneous(arg0.clone()),
+            Self::Error => Self::Error,
         }
     }
 }
@@ -390,7 +1424,7 @@ impl Clone for OptAbleType {
         // This passes through `Type`, so defer to that to bump the clone counter.
         Self {
             typ: self.typ.clone(),
-            opt_ability: self.opt_ability,
+            opt_abilities: self.opt_abilities.clone(),
         }
     }
 }
@@ -496,17 +1530,12 @@ impl fmt::Debug for Type {
 
                 write!(f, ")")
             }
-            Type::Erroneous(problem) => {
-                write!(f, "Erroneous(")?;
-
-                problem.fmt(f)?;
-
-                write!(f, ")")
-            }
+            Type::Error => write!(f, "Erroneous"),
             Type::DelayedAlias(AliasCommon {
                 symbol,
                 type_arguments,
                 lambda_set_variables,
+                infer_ext_in_output_types,
             }) => {
                 write!(f, "(DelayedAlias {:?}", symbol)?;
 
@@ -518,6 +1547,10 @@ impl fmt::Debug for Type {
                     lambda_set_variables.iter().zip(GREEK_LETTERS.iter())
                 {
                     write!(f, " {}@{:?}", greek_letter, lambda_set.0)?;
+                }
+
+                for (i, infer_ext) in infer_ext_in_output_types.iter().enumerate() {
+                    write!(f, " `{}@{:?}", i, infer_ext)?;
                 }
 
                 write!(f, ")")?;
@@ -536,8 +1569,8 @@ impl fmt::Debug for Type {
 
                 for arg in type_arguments {
                     write!(f, " {:?}", &arg.typ)?;
-                    if let Some(ab) = arg.opt_ability {
-                        write!(f, ":{:?}", ab)?;
+                    if let Some(abs) = &arg.opt_abilities {
+                        write!(f, ":{:?}", abs)?;
                     }
                 }
 
@@ -581,11 +1614,13 @@ impl fmt::Debug for Type {
 
                 for (label, field_type) in fields {
                     match field_type {
-                        RecordField::Optional(_) => write!(f, "{:?} ? {:?}", label, field_type)?,
-                        RecordField::Required(_) => write!(f, "{:?} : {:?}", label, field_type)?,
-                        RecordField::Demanded(_) => write!(f, "{:?} : {:?}", label, field_type)?,
-                        RecordField::RigidOptional(_) => {
+                        RecordField::Optional(_) | RecordField::RigidOptional(_) => {
                             write!(f, "{:?} ? {:?}", label, field_type)?
+                        }
+                        RecordField::Required(_)
+                        | RecordField::Demanded(_)
+                        | RecordField::RigidRequired(_) => {
+                            write!(f, "{:?} : {:?}", label, field_type)?
                         }
                     }
 
@@ -790,19 +1825,25 @@ impl Type {
                 Type::DelayedAlias(AliasCommon {
                     type_arguments,
                     lambda_set_variables,
+                    infer_ext_in_output_types,
                     ..
                 }) => {
                     for value in type_arguments.iter_mut() {
-                        stack.push(value);
+                        stack.push(&mut value.value.typ);
                     }
 
                     for lambda_set in lambda_set_variables.iter_mut() {
                         stack.push(lambda_set.as_inner_mut());
                     }
+
+                    for infer_ext in infer_ext_in_output_types.iter_mut() {
+                        stack.push(infer_ext);
+                    }
                 }
                 Alias {
                     type_arguments,
                     lambda_set_variables,
+                    infer_ext_in_output_types: infer_ext_in_output_variables,
                     actual,
                     ..
                 } => {
@@ -812,6 +1853,10 @@ impl Type {
 
                     for lambda_set in lambda_set_variables.iter_mut() {
                         stack.push(lambda_set.as_inner_mut());
+                    }
+
+                    for infer_ext in infer_ext_in_output_variables.iter_mut() {
+                        stack.push(infer_ext);
                     }
 
                     stack.push(actual);
@@ -833,7 +1878,7 @@ impl Type {
                     stack.push(actual_type);
                 }
                 Apply(_, args, _) => {
-                    stack.extend(args);
+                    stack.extend(args.iter_mut().map(|t| &mut t.value));
                 }
                 RangedNumber(_) => {}
                 UnspecializedLambdaSet {
@@ -845,7 +1890,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Erroneous(_) => {}
+                EmptyRec | EmptyTagUnion | Error => {}
             }
         }
     }
@@ -912,19 +1957,25 @@ impl Type {
                 Type::DelayedAlias(AliasCommon {
                     type_arguments,
                     lambda_set_variables,
+                    infer_ext_in_output_types,
                     ..
                 }) => {
                     for value in type_arguments.iter_mut() {
-                        stack.push(value);
+                        stack.push(&mut value.value.typ);
                     }
 
                     for lambda_set in lambda_set_variables.iter_mut() {
                         stack.push(lambda_set.as_inner_mut());
                     }
+
+                    for typ in infer_ext_in_output_types.iter_mut() {
+                        stack.push(typ);
+                    }
                 }
                 Alias {
                     type_arguments,
                     lambda_set_variables,
+                    infer_ext_in_output_types,
                     actual,
                     ..
                 } => {
@@ -933,6 +1984,9 @@ impl Type {
                     }
                     for lambda_set in lambda_set_variables.iter_mut() {
                         stack.push(lambda_set.as_inner_mut());
+                    }
+                    for typ in infer_ext_in_output_types.iter_mut() {
+                        stack.push(typ);
                     }
 
                     stack.push(actual);
@@ -954,7 +2008,7 @@ impl Type {
                     stack.push(actual_type);
                 }
                 Apply(_, args, _) => {
-                    stack.extend(args);
+                    stack.extend(args.iter_mut().map(|t| &mut t.value));
                 }
                 RangedNumber(_) => {}
                 UnspecializedLambdaSet {
@@ -966,7 +2020,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Erroneous(_) => {}
+                EmptyRec | EmptyTagUnion | Error => {}
             }
         }
     }
@@ -1018,10 +2072,13 @@ impl Type {
             DelayedAlias(AliasCommon {
                 type_arguments,
                 lambda_set_variables: _no_aliases_in_lambda_sets,
+                infer_ext_in_output_types: _no_aliases_in_infer_ext_types,
                 ..
             }) => {
                 for ta in type_arguments {
-                    ta.substitute_alias(rep_symbol, rep_args, actual)?;
+                    ta.value
+                        .typ
+                        .substitute_alias(rep_symbol, rep_args, actual)?;
                 }
 
                 Ok(())
@@ -1042,13 +2099,16 @@ impl Type {
             } => actual_type.substitute_alias(rep_symbol, rep_args, actual),
             Apply(symbol, args, region) if *symbol == rep_symbol => {
                 if args.len() == rep_args.len()
-                    && args.iter().zip(rep_args.iter()).all(|(t1, t2)| t1 == t2)
+                    && args
+                        .iter()
+                        .zip(rep_args.iter())
+                        .all(|(t1, t2)| &t1.value == t2)
                 {
                     *self = actual.clone();
 
                     if let Apply(_, args, _) = self {
                         for arg in args {
-                            arg.substitute_alias(rep_symbol, rep_args, actual)?;
+                            arg.value.substitute_alias(rep_symbol, rep_args, actual)?;
                         }
                     }
                     return Ok(());
@@ -1057,13 +2117,13 @@ impl Type {
             }
             Apply(_, args, _) => {
                 for arg in args {
-                    arg.substitute_alias(rep_symbol, rep_args, actual)?;
+                    arg.value.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
                 Ok(())
             }
             RangedNumber(_) => Ok(()),
             UnspecializedLambdaSet { .. } => Ok(()),
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => Ok(()),
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => Ok(()),
         }
     }
 
@@ -1100,10 +2160,13 @@ impl Type {
                 symbol,
                 type_arguments,
                 lambda_set_variables,
+                infer_ext_in_output_types: _,
                 ..
             }) => {
                 symbol == &rep_symbol
-                    || type_arguments.iter().any(|v| v.contains_symbol(rep_symbol))
+                    || type_arguments
+                        .iter()
+                        .any(|v| v.value.typ.contains_symbol(rep_symbol))
                     || lambda_set_variables
                         .iter()
                         .any(|v| v.0.contains_symbol(rep_symbol))
@@ -1117,12 +2180,12 @@ impl Type {
                 name == &rep_symbol || actual.contains_symbol(rep_symbol)
             }
             Apply(symbol, _, _) if *symbol == rep_symbol => true,
-            Apply(_, args, _) => args.iter().any(|arg| arg.contains_symbol(rep_symbol)),
+            Apply(_, args, _) => args.iter().any(|arg| arg.value.contains_symbol(rep_symbol)),
             RangedNumber(_) => false,
             UnspecializedLambdaSet {
                 unspecialized: Uls(_, sym, _),
             } => *sym == rep_symbol,
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => false,
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => false,
         }
     }
 
@@ -1174,9 +2237,11 @@ impl Type {
                 ..
             } => actual_type.contains_variable(rep_variable),
             HostExposedAlias { actual, .. } => actual.contains_variable(rep_variable),
-            Apply(_, args, _) => args.iter().any(|arg| arg.contains_variable(rep_variable)),
+            Apply(_, args, _) => args
+                .iter()
+                .any(|arg| arg.value.contains_variable(rep_variable)),
             RangedNumber(_) => false,
-            EmptyRec | EmptyTagUnion | Erroneous(_) => false,
+            EmptyRec | EmptyTagUnion | Error => false,
         }
     }
 
@@ -1212,6 +2277,7 @@ impl Type {
         aliases: &'a F,
         var_store: &mut VarStore,
         new_lambda_set_variables: &mut ImSet<Variable>,
+        new_infer_ext_vars: &mut ImSet<Variable>,
     ) where
         F: Fn(Symbol) -> Option<&'a Alias>,
     {
@@ -1220,46 +2286,104 @@ impl Type {
         match self {
             Function(args, closure, ret) => {
                 for arg in args {
-                    arg.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                    arg.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                        new_infer_ext_vars,
+                    );
                 }
-                closure.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
-                ret.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                closure.instantiate_aliases(
+                    region,
+                    aliases,
+                    var_store,
+                    new_lambda_set_variables,
+                    new_infer_ext_vars,
+                );
+                ret.instantiate_aliases(
+                    region,
+                    aliases,
+                    var_store,
+                    new_lambda_set_variables,
+                    new_infer_ext_vars,
+                );
             }
             FunctionOrTagUnion(_, _, ext) => {
                 if let TypeExtension::Open(ext) = ext {
-                    ext.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                    ext.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                        new_infer_ext_vars,
+                    );
                 }
             }
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
                 for (_, args) in tags {
                     for x in args {
-                        x.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                        x.instantiate_aliases(
+                            region,
+                            aliases,
+                            var_store,
+                            new_lambda_set_variables,
+                            new_infer_ext_vars,
+                        );
                     }
                 }
 
                 if let TypeExtension::Open(ext) = ext {
-                    ext.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                    ext.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                        new_infer_ext_vars,
+                    );
                 }
             }
             Record(fields, ext) => {
                 for (_, x) in fields.iter_mut() {
-                    x.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                    x.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                        new_infer_ext_vars,
+                    );
                 }
 
                 if let TypeExtension::Open(ext) = ext {
-                    ext.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                    ext.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                        new_infer_ext_vars,
+                    );
                 }
             }
             DelayedAlias(AliasCommon {
                 type_arguments,
                 lambda_set_variables,
+                infer_ext_in_output_types,
                 symbol: _,
             }) => {
                 debug_assert!(lambda_set_variables
                     .iter()
                     .all(|lambda_set| matches!(lambda_set.0, Type::Variable(..))));
+                debug_assert!(infer_ext_in_output_types
+                    .iter()
+                    .all(|t| matches!(t, Type::Variable(..) | Type::EmptyTagUnion)));
                 type_arguments.iter_mut().for_each(|t| {
-                    t.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables)
+                    t.value.typ.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                        new_infer_ext_vars,
+                    )
                 });
             }
             HostExposedAlias {
@@ -1269,11 +2393,23 @@ impl Type {
                 ..
             } => {
                 for arg in type_args {
-                    arg.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                    arg.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                        new_infer_ext_vars,
+                    );
                 }
 
                 for arg in lambda_set_variables {
-                    arg.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                    arg.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                        new_infer_ext_vars,
+                    );
                 }
 
                 actual_type.instantiate_aliases(
@@ -1281,6 +2417,7 @@ impl Type {
                     aliases,
                     var_store,
                     new_lambda_set_variables,
+                    new_infer_ext_vars,
                 );
             }
             Alias {
@@ -1295,11 +2432,18 @@ impl Type {
                         aliases,
                         var_store,
                         new_lambda_set_variables,
+                        new_infer_ext_vars,
                     );
                 }
 
                 for arg in lambda_set_variables {
-                    arg.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                    arg.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                        new_infer_ext_vars,
+                    );
                 }
 
                 actual_type.instantiate_aliases(
@@ -1307,17 +2451,25 @@ impl Type {
                     aliases,
                     var_store,
                     new_lambda_set_variables,
+                    new_infer_ext_vars,
                 );
             }
             Apply(symbol, args, _) => {
                 if let Some(alias) = aliases(*symbol) {
                     // TODO switch to this, but we still need to check for recursion with the
-                    // `else` branch
+                    // `else` branch.
+                    // We would also need to determine polarity correct.
                     if false {
                         let mut type_var_to_arg = Vec::new();
 
-                        for (_, arg_ann) in alias.type_variables.iter().zip(args) {
-                            type_var_to_arg.push(arg_ann.clone());
+                        for (alias_var, arg_ann) in alias.type_variables.iter().zip(args) {
+                            type_var_to_arg.push(Loc::at(
+                                arg_ann.region,
+                                OptAbleType {
+                                    typ: arg_ann.value.clone(),
+                                    opt_abilities: alias_var.value.opt_bound_abilities.clone(),
+                                },
+                            ));
                         }
 
                         let mut lambda_set_variables =
@@ -1331,22 +2483,27 @@ impl Type {
                             lambda_set_variables.push(LambdaSet(Type::Variable(lvar)));
                         }
 
+                        let mut infer_ext_in_output_types =
+                            Vec::with_capacity(alias.infer_ext_in_output_variables.len());
+
+                        for _ in 0..alias.infer_ext_in_output_variables.len() {
+                            let var = var_store.fresh();
+                            new_infer_ext_vars.insert(var);
+                            infer_ext_in_output_types.push(Type::Variable(var));
+                        }
+
                         let alias = Type::DelayedAlias(AliasCommon {
                             symbol: *symbol,
                             type_arguments: type_var_to_arg,
                             lambda_set_variables,
+                            infer_ext_in_output_types,
                         });
 
                         *self = alias;
                     } else {
                         if args.len() != alias.type_variables.len() {
-                            *self = Type::Erroneous(Problem::BadTypeArguments {
-                                symbol: *symbol,
-                                region,
-                                type_got: args.len() as u8,
-                                alias_needs: alias.type_variables.len() as u8,
-                                alias_kind: AliasKind::Structural,
-                            });
+                            // We will have already reported an error during canonicalization.
+                            *self = Type::Error;
                             return;
                         }
 
@@ -1361,7 +2518,7 @@ impl Type {
                                 value:
                                     AliasVar {
                                         var: placeholder,
-                                        opt_bound_ability,
+                                        opt_bound_abilities,
                                         ..
                                     },
                                 ..
@@ -1370,17 +2527,18 @@ impl Type {
                         ) in alias.type_variables.iter().zip(args.iter())
                         {
                             let mut filler = filler.clone();
-                            filler.instantiate_aliases(
+                            filler.value.instantiate_aliases(
                                 region,
                                 aliases,
                                 var_store,
                                 new_lambda_set_variables,
+                                new_infer_ext_vars,
                             );
                             named_args.push(OptAbleType {
-                                typ: filler.clone(),
-                                opt_ability: *opt_bound_ability,
+                                typ: filler.value.clone(),
+                                opt_abilities: opt_bound_abilities.clone(),
                             });
-                            substitution.insert(*placeholder, filler);
+                            substitution.insert(*placeholder, filler.value);
                         }
 
                         // make sure hidden variables are freshly instantiated
@@ -1396,12 +2554,21 @@ impl Type {
                                 unreachable!("at this point there should be only vars in there");
                             }
                         }
+                        let mut infer_ext_in_output_types =
+                            Vec::with_capacity(alias.infer_ext_in_output_variables.len());
+                        for var in alias.infer_ext_in_output_variables.iter() {
+                            let fresh = var_store.fresh();
+                            new_infer_ext_vars.insert(fresh);
+                            substitution.insert(*var, Type::Variable(fresh));
+                            infer_ext_in_output_types.push(Type::Variable(fresh));
+                        }
 
                         actual.instantiate_aliases(
                             region,
                             aliases,
                             var_store,
                             new_lambda_set_variables,
+                            new_infer_ext_vars,
                         );
 
                         actual.substitute(&substitution);
@@ -1426,6 +2593,7 @@ impl Type {
                             symbol: *symbol,
                             type_arguments: named_args,
                             lambda_set_variables,
+                            infer_ext_in_output_types,
                             actual: Box::new(actual),
                             kind: alias.kind,
                         };
@@ -1435,13 +2603,19 @@ impl Type {
                 } else {
                     // one of the special-cased Apply types.
                     for x in args {
-                        x.instantiate_aliases(region, aliases, var_store, new_lambda_set_variables);
+                        x.value.instantiate_aliases(
+                            region,
+                            aliases,
+                            var_store,
+                            new_lambda_set_variables,
+                            new_infer_ext_vars,
+                        );
                     }
                 }
             }
             RangedNumber(_) => {}
             UnspecializedLambdaSet { .. } => {}
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
         }
     }
 
@@ -1487,11 +2661,8 @@ impl Type {
     /// ```
     pub fn is_narrow(&self) -> bool {
         match self.shallow_dealias() {
-            Type::TagUnion(tags, ext) | Type::RecursiveTagUnion(_, tags, ext) => {
-                matches!(ext, TypeExtension::Closed)
-                    && tags.len() == 1
-                    && tags[0].1.len() == 1
-                    && tags[0].1[0].is_narrow()
+            Type::TagUnion(tags, _ext) | Type::RecursiveTagUnion(_, tags, _ext) => {
+                tags.len() == 1 && tags[0].1.len() == 1 && tags[0].1[0].is_narrow()
             }
             Type::Record(fields, ext) => match ext {
                 TypeExtension::Open(ext) => {
@@ -1552,7 +2723,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 ..
             }) => {
                 output.push(*symbol);
-                stack.extend(type_arguments);
+                stack.extend(type_arguments.iter().map(|ta| &ta.value.typ));
             }
             Alias {
                 symbol: alias_symbol,
@@ -1572,10 +2743,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
             }
             Apply(symbol, args, _) => {
                 output.push(*symbol);
-                stack.extend(args);
-            }
-            Erroneous(Problem::CyclicAlias(alias, _, _)) => {
-                output.push(*alias);
+                stack.extend(args.iter().map(|t| &t.value));
             }
             RangedNumber(_) => {}
             UnspecializedLambdaSet {
@@ -1583,7 +2751,7 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
             } => {
                 // ignore the member symbol because unspecialized lambda sets are internal-only
             }
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Erroneous(_) | Variable(_) => {}
+            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
         }
     }
 
@@ -1597,7 +2765,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
     use Type::*;
 
     match tipe {
-        EmptyRec | EmptyTagUnion | Erroneous(_) => (),
+        EmptyRec | EmptyTagUnion | Error => (),
 
         Variable(v) => {
             accum.insert(*v);
@@ -1611,15 +2779,8 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             variables_help(ret, accum);
         }
         Record(fields, ext) => {
-            use RecordField::*;
-
             for (_, field) in fields {
-                match field {
-                    Optional(x) => variables_help(x, accum),
-                    Required(x) => variables_help(x, accum),
-                    Demanded(x) => variables_help(x, accum),
-                    RigidOptional(x) => variables_help(x, accum),
-                };
+                variables_help(field.as_inner(), accum);
             }
 
             if let TypeExtension::Open(ext) = ext {
@@ -1679,7 +2840,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             ..
         }) => {
             for arg in type_arguments {
-                variables_help(arg, accum);
+                variables_help(&arg.value.typ, accum);
             }
 
             for lambda_set in lambda_set_variables {
@@ -1709,7 +2870,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
         RangedNumber(_) => {}
         Apply(_, args, _) => {
             for x in args {
-                variables_help(x, accum);
+                variables_help(&x.value, accum);
             }
         }
     }
@@ -1734,7 +2895,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     use Type::*;
 
     match tipe {
-        EmptyRec | EmptyTagUnion | Erroneous(_) => (),
+        EmptyRec | EmptyTagUnion | Error => (),
 
         Variable(v) => {
             accum.type_variables.insert(*v);
@@ -1753,15 +2914,8 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             variables_help_detailed(ret, accum);
         }
         Record(fields, ext) => {
-            use RecordField::*;
-
             for (_, field) in fields {
-                match field {
-                    Optional(x) => variables_help_detailed(x, accum),
-                    Required(x) => variables_help_detailed(x, accum),
-                    Demanded(x) => variables_help_detailed(x, accum),
-                    RigidOptional(x) => variables_help_detailed(x, accum),
-                };
+                variables_help_detailed(field.as_inner(), accum);
             }
 
             if let TypeExtension::Open(ext) = ext {
@@ -1820,10 +2974,11 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
         DelayedAlias(AliasCommon {
             type_arguments,
             lambda_set_variables,
+            infer_ext_in_output_types: _,
             ..
         }) => {
             for arg in type_arguments {
-                variables_help_detailed(arg, accum);
+                variables_help_detailed(&arg.value.typ, accum);
             }
 
             for lambda_set in lambda_set_variables {
@@ -1837,6 +2992,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
         Alias {
             type_arguments,
             actual,
+            infer_ext_in_output_types: _,
             ..
         } => {
             for arg in type_arguments {
@@ -1857,7 +3013,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
         RangedNumber(_) => {}
         Apply(_, args, _) => {
             for x in args {
-                variables_help_detailed(x, accum);
+                variables_help_detailed(&x.value, accum);
             }
         }
     }
@@ -1891,6 +3047,7 @@ pub enum PReason {
         tag_name: TagName,
         index: HumanIndex,
     },
+    ListElem,
     PatternGuard,
     OptionalField,
 }
@@ -2027,6 +3184,7 @@ pub enum Category {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatternCategory {
     Record,
+    List,
     EmptyRecord,
     PatternGuard,
     PatternDefault,
@@ -2067,8 +3225,8 @@ impl AliasKind {
 pub struct AliasVar {
     pub name: Lowercase,
     pub var: Variable,
-    /// `Some` if this variable is bound to an ability; `None` otherwise.
-    pub opt_bound_ability: Option<Symbol>,
+    /// `Some` if this variable is bound to abilities; `None` otherwise.
+    pub opt_bound_abilities: Option<AbilitySet>,
 }
 
 impl AliasVar {
@@ -2076,7 +3234,7 @@ impl AliasVar {
         Self {
             name,
             var,
-            opt_bound_ability: None,
+            opt_bound_abilities: None,
         }
     }
 }
@@ -2085,7 +3243,7 @@ impl From<&AliasVar> for OptAbleVar {
     fn from(av: &AliasVar) -> OptAbleVar {
         OptAbleVar {
             var: av.var,
-            opt_ability: av.opt_bound_ability,
+            opt_abilities: av.opt_bound_abilities.clone(),
         }
     }
 }
@@ -2095,8 +3253,6 @@ pub enum MemberImpl {
     /// The implementation is claimed to be at the given symbol.
     /// During solving we validate that the impl is really there.
     Impl(Symbol),
-    /// The implementation should be derived.
-    Derived,
     /// The implementation is not present or does not match the expected member type.
     Error,
 }
@@ -2109,6 +3265,10 @@ pub struct Alias {
     /// lambda set variables, e.g. the one annotating the arrow in
     /// a |c|-> b
     pub lambda_set_variables: Vec<LambdaSet>,
+
+    /// Extension variables that should be inferred in output positions, and closed in input
+    /// positions.
+    pub infer_ext_in_output_variables: Vec<Variable>,
 
     pub recursion_variables: MutSet<Variable>,
 
@@ -2125,25 +3285,6 @@ impl Alias {
                 .chain(self.type_variables.iter().map(|tv| &tv.region)),
         )
     }
-}
-
-#[derive(PartialEq, Eq, Debug, Clone, Hash)]
-pub enum Problem {
-    CanonicalizationProblem,
-    CircularType(Symbol, Box<ErrorType>, Region),
-    CyclicAlias(Symbol, Region, Vec<Symbol>),
-    UnrecognizedIdent(Ident),
-    Shadowed(Region, Loc<Ident>),
-    BadTypeArguments {
-        symbol: Symbol,
-        region: Region,
-        type_got: u8,
-        alias_needs: u8,
-        alias_kind: AliasKind,
-    },
-    InvalidModule,
-    SolvedTypeError,
-    HasClauseIsNotAbility(Region),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -2163,13 +3304,20 @@ pub type DoesNotImplementAbility = Vec<(ErrorType, Symbol)>;
 pub enum ErrorType {
     Infinite,
     Type(Symbol, Vec<ErrorType>),
+    /// If the name was auto-generated, it will start with a `#`.
     FlexVar(Lowercase),
     RigidVar(Lowercase),
-    FlexAbleVar(Lowercase, Symbol),
-    RigidAbleVar(Lowercase, Symbol),
+    /// If the name was auto-generated, it will start with a `#`.
+    FlexAbleVar(Lowercase, AbilitySet),
+    RigidAbleVar(Lowercase, AbilitySet),
     Record(SendMap<Lowercase, RecordField<ErrorType>>, TypeExt),
-    TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt),
-    RecursiveTagUnion(Box<ErrorType>, SendMap<TagName, Vec<ErrorType>>, TypeExt),
+    TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt, Polarity),
+    RecursiveTagUnion(
+        Box<ErrorType>,
+        SendMap<TagName, Vec<ErrorType>>,
+        TypeExt,
+        Polarity,
+    ),
     Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
     Alias(Symbol, Vec<ErrorType>, Box<ErrorType>, AliasKind),
     Range(Vec<ErrorType>),
@@ -2206,12 +3354,12 @@ impl ErrorType {
                     .for_each(|(_, t)| t.as_inner().add_names(taken));
                 ext.add_names(taken);
             }
-            TagUnion(tags, ext) => {
+            TagUnion(tags, ext, _) => {
                 tags.iter()
                     .for_each(|(_, ts)| ts.iter().for_each(|t| t.add_names(taken)));
                 ext.add_names(taken);
             }
-            RecursiveTagUnion(t, tags, ext) => {
+            RecursiveTagUnion(t, tags, ext, _) => {
                 t.add_names(taken);
                 tags.iter()
                     .for_each(|(_, ts)| ts.iter().for_each(|t| t.add_names(taken)));
@@ -2238,15 +3386,14 @@ impl ErrorType {
     }
 }
 
-pub fn write_error_type(home: ModuleId, interns: &Interns, error_type: ErrorType) -> String {
+pub fn write_error_type(interns: &Interns, error_type: ErrorType) -> String {
     let mut buf = String::new();
-    write_error_type_help(home, interns, error_type, &mut buf, Parens::Unnecessary);
+    write_error_type_help(interns, error_type, &mut buf, Parens::Unnecessary);
 
     buf
 }
 
 fn write_error_type_help(
-    home: ModuleId,
     interns: &Interns,
     error_type: ErrorType,
     buf: &mut String,
@@ -2270,7 +3417,7 @@ fn write_error_type_help(
             for arg in arguments {
                 buf.push(' ');
 
-                write_error_type_help(home, interns, arg, buf, Parens::InTypeParam);
+                write_error_type_help(interns, arg, buf, Parens::InTypeParam);
             }
 
             if write_parens {
@@ -2296,7 +3443,7 @@ fn write_error_type_help(
                         buf.push('(');
                     }
                     buf.push_str("Num ");
-                    write_error_type_help(home, interns, other, buf, Parens::InTypeParam);
+                    write_error_type_help(interns, other, buf, Parens::InTypeParam);
 
                     if write_parens {
                         buf.push(')');
@@ -2314,7 +3461,7 @@ fn write_error_type_help(
             let mut it = arguments.into_iter().peekable();
 
             while let Some(arg) = it.next() {
-                write_error_type_help(home, interns, arg, buf, Parens::InFn);
+                write_error_type_help(interns, arg, buf, Parens::InFn);
                 if it.peek().is_some() {
                     buf.push_str(", ");
                 }
@@ -2322,7 +3469,7 @@ fn write_error_type_help(
 
             buf.push_str(" -> ");
 
-            write_error_type_help(home, interns, *result, buf, Parens::InFn);
+            write_error_type_help(interns, *result, buf, Parens::InFn);
 
             if write_parens {
                 buf.push(')');
@@ -2341,17 +3488,13 @@ fn write_error_type_help(
                         buf.push_str(" ? ");
                         content
                     }
-                    Required(content) => {
-                        buf.push_str(" : ");
-                        content
-                    }
-                    Demanded(content) => {
+                    Required(content) | Demanded(content) | RigidRequired(content) => {
                         buf.push_str(" : ");
                         content
                     }
                 };
 
-                write_error_type_help(home, interns, content, buf, Parens::Unnecessary);
+                write_error_type_help(interns, content, buf, Parens::Unnecessary);
             }
 
             buf.push('}');
@@ -2495,11 +3638,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                         buf.push_str(" ? ");
                         content
                     }
-                    Required(content) => {
-                        buf.push_str(" : ");
-                        content
-                    }
-                    Demanded(content) => {
+                    Required(content) | Demanded(content) | RigidRequired(content) => {
                         buf.push_str(" : ");
                         content
                     }
@@ -2511,7 +3650,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             buf.push('}');
             write_type_ext(ext, buf);
         }
-        TagUnion(tags, ext) => {
+        TagUnion(tags, ext, _pol) => {
             buf.push('[');
 
             let mut it = tags.into_iter().peekable();
@@ -2531,7 +3670,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             buf.push(']');
             write_type_ext(ext, buf);
         }
-        RecursiveTagUnion(rec, tags, ext) => {
+        RecursiveTagUnion(rec, tags, ext, _pol) => {
             buf.push('[');
 
             let mut it = tags.into_iter().peekable();
@@ -2923,17 +4062,19 @@ fn instantiate_lambda_sets_as_unspecialized(
                 symbol: _,
                 type_arguments,
                 lambda_set_variables,
+                infer_ext_in_output_types: _, // these are irrelevant for ULS instantiation, since they're inferred or closed
             }) => {
                 for lambda_set in lambda_set_variables.iter_mut() {
                     debug_assert!(matches!(lambda_set.0, Type::Variable(_)));
                     lambda_set.0 = new_uls();
                 }
-                stack.extend(type_arguments.iter_mut().rev());
+                stack.extend(type_arguments.iter_mut().rev().map(|ta| &mut ta.value.typ));
             }
             Type::Alias {
                 symbol: _,
                 type_arguments,
                 lambda_set_variables,
+                infer_ext_in_output_types: _, // these are irrelevant for ULS instantiation, since they're inferred
                 actual,
                 kind: _,
             } => {
@@ -2959,11 +4100,11 @@ fn instantiate_lambda_sets_as_unspecialized(
                 stack.extend(type_arguments.iter_mut().rev());
             }
             Type::Apply(_sym, args, _region) => {
-                stack.extend(args.iter_mut().rev());
+                stack.extend(args.iter_mut().rev().map(|t| &mut t.value));
             }
             Type::Variable(_) => {}
             Type::RangedNumber(_) => {}
-            Type::Erroneous(_) => {}
+            Type::Error => {}
         }
     }
 }

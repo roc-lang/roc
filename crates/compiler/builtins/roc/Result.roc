@@ -6,23 +6,23 @@ interface Result
 ## okay, or else there was an error of some sort.
 Result ok err : [Ok ok, Err err]
 
-## Return True if the result indicates a success, else return False
+## Return `Bool.true` if the result indicates a success, else return `Bool.false`
 ##
 ## >>> Result.isOk (Ok 5)
 isOk : Result ok err -> Bool
 isOk = \result ->
     when result is
-        Ok _ -> True
-        Err _ -> False
+        Ok _ -> Bool.true
+        Err _ -> Bool.false
 
-## Return True if the result indicates a failure, else return False
+## Return `Bool.true` if the result indicates a failure, else return `Bool.false`
 ##
 ## >>> Result.isErr (Err "uh oh")
 isErr : Result ok err -> Bool
 isErr = \result ->
     when result is
-        Ok _ -> False
-        Err _ -> True
+        Ok _ -> Bool.false
+        Err _ -> Bool.true
 
 ## If the result is `Ok`, return the value it holds. Otherwise, return
 ## the given default value.

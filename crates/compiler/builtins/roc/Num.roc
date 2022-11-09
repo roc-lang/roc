@@ -145,6 +145,7 @@ interface Num
     ]
     imports [
         Bool.{ Bool },
+        Result.{ Result },
     ]
 
 ## Represents a number that could be either an [Int] or a [Frac].
@@ -346,14 +347,14 @@ Int range : Num (Integer range)
 ##
 ##     wasItPrecise = 0.1 + 0.2 == 0.3
 ##
-## The value of `wasItPrecise` here will be `True`, because Roc uses [Dec]
+## The value of `wasItPrecise` here will be `Bool.true`, because Roc uses [Dec]
 ## by default when there are no types specified.
 ##
 ## In contrast, suppose we use `f32` or `f64` for one of these numbers:
 ##
 ##     wasItPrecise = 0.1f64 + 0.2 == 0.3
 ##
-## Here, `wasItPrecise` will be `False` because the entire calculation will have
+## Here, `wasItPrecise` will be `Bool.false` because the entire calculation will have
 ## been done in a base-2 floating point calculation, which causes noticeable
 ## precision loss in this case.
 ##
@@ -534,47 +535,46 @@ bytesToU32 = \bytes, index ->
 
 compare : Num a, Num a -> [LT, EQ, GT]
 
-## Returns `True` if the first number is less than the second.
+## Returns `Bool.true` if the first number is less than the second.
 ##
 ## `a < b` is shorthand for `Num.isLt a b`.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 ##
 ## >>> 5
 ## >>>     |> Num.isLt 6
 isLt : Num a, Num a -> Bool
 
-## Returns `True` if the first number is greater than the second.
+## Returns `Bool.true` if the first number is greater than the second.
 ##
 ## `a > b` is shorthand for `Num.isGt a b`.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 ##
 ## >>> 6
 ## >>>     |> Num.isGt 5
 isGt : Num a, Num a -> Bool
 
-## Returns `True` if the first number is less than or equal to the second.
+## Returns `Bool.true` if the first number is less than or equal to the second.
 ##
 ## `a <= b` is shorthand for `Num.isLte a b`.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 isLte : Num a, Num a -> Bool
 
-## Returns `True` if the first number is greater than or equal to the second.
+## Returns `Bool.true` if the first number is greater than or equal to the second.
 ##
 ## `a >= b` is shorthand for `Num.isGte a b`.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 isGte : Num a, Num a -> Bool
 
-## Returns `True` if the number is `0`, and `False` otherwise.
+## Returns `Bool.true` if the number is `0`, and `Bool.false` otherwise.
 isZero : Num a -> Bool
-isZero = \x -> x == 0
 
 ## A number is even if dividing it by 2 gives a remainder of 0.
 ##
@@ -743,7 +743,7 @@ atan : Frac a -> Frac a
 ## >>> Num.sqrt -4.0f64
 sqrt : Frac a -> Frac a
 
-sqrtChecked : Frac a -> Result (Frac a) [SqrtOfNegative]*
+sqrtChecked : Frac a -> Result (Frac a) [SqrtOfNegative]
 sqrtChecked = \x ->
     if x < 0.0 then
         Err SqrtOfNegative
@@ -752,7 +752,7 @@ sqrtChecked = \x ->
 
 log : Frac a -> Frac a
 
-logChecked : Frac a -> Result (Frac a) [LogNeedsPositive]*
+logChecked : Frac a -> Result (Frac a) [LogNeedsPositive]
 logChecked = \x ->
     if x <= 0.0 then
         Err LogNeedsPositive
@@ -791,18 +791,18 @@ logChecked = \x ->
 ## >>>     |> Num.div 2.0
 div : Frac a, Frac a -> Frac a
 
-divChecked : Frac a, Frac a -> Result (Frac a) [DivByZero]*
+divChecked : Frac a, Frac a -> Result (Frac a) [DivByZero]
 divChecked = \a, b ->
-    if b == 0 then
+    if Num.isZero b then
         Err DivByZero
     else
         Ok (Num.div a b)
 
 divCeil : Int a, Int a -> Int a
 
-divCeilChecked : Int a, Int a -> Result (Int a) [DivByZero]*
+divCeilChecked : Int a, Int a -> Result (Int a) [DivByZero]
 divCeilChecked = \a, b ->
-    if b == 0 then
+    if Num.isZero b then
         Err DivByZero
     else
         Ok (Num.divCeil a b)
@@ -825,9 +825,9 @@ divCeilChecked = \a, b ->
 ##
 divTrunc : Int a, Int a -> Int a
 
-divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]*
+divTruncChecked : Int a, Int a -> Result (Int a) [DivByZero]
 divTruncChecked = \a, b ->
-    if b == 0 then
+    if Num.isZero b then
         Err DivByZero
     else
         Ok (Num.divTrunc a b)
@@ -845,9 +845,9 @@ divTruncChecked = \a, b ->
 ## >>> Num.rem -8 -3
 rem : Int a, Int a -> Int a
 
-remChecked : Int a, Int a -> Result (Int a) [DivByZero]*
+remChecked : Int a, Int a -> Result (Int a) [DivByZero]
 remChecked = \a, b ->
-    if b == 0 then
+    if Num.isZero b then
         Err DivByZero
     else
         Ok (Num.rem a b)
@@ -868,7 +868,7 @@ bitwiseOr : Int a, Int a -> Int a
 ## >>> 0b0000_0101 |> shiftLeftBy 2 == 0b0000_1100
 ##
 ## In some languages `shiftLeftBy` is implemented as a binary operator `<<`.
-shiftLeftBy : Int a, Int a -> Int a
+shiftLeftBy : Int a, U8 -> Int a
 
 ## Bitwise arithmetic shift of a number by another
 ##
@@ -881,7 +881,7 @@ shiftLeftBy : Int a, Int a -> Int a
 ## >>> 0b1001_0000 |> shiftRightBy 2 == 0b1110_0100
 ##
 ## In some languages `shiftRightBy` is implemented as a binary operator `>>>`.
-shiftRightBy : Int a, Int a -> Int a
+shiftRightBy : Int a, U8 -> Int a
 
 ## Bitwise logical right shift of a number by another
 ##
@@ -895,7 +895,7 @@ shiftRightBy : Int a, Int a -> Int a
 ## >>> 0b1001_0000 |> shiftRightBy 2 == 0b0010_0100
 ##
 ## In some languages `shiftRightBy` is implemented as a binary operator `>>`.
-shiftRightZfBy : Int a, Int a -> Int a
+shiftRightZfBy : Int a, U8 -> Int a
 
 ## Round off the given fraction to the nearest integer.
 round : Frac * -> Int *
@@ -944,7 +944,7 @@ addSaturated : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.add] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-addChecked : Num a, Num a -> Result (Num a) [Overflow]*
+addChecked : Num a, Num a -> Result (Num a) [Overflow]
 addChecked = \a, b ->
     result = addCheckedLowlevel a b
 
@@ -970,7 +970,7 @@ subSaturated : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.sub] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-subChecked : Num a, Num a -> Result (Num a) [Overflow]*
+subChecked : Num a, Num a -> Result (Num a) [Overflow]
 subChecked = \a, b ->
     result = subCheckedLowlevel a b
 
@@ -994,7 +994,7 @@ mulSaturated : Num a, Num a -> Num a
 ##
 ## This is the same as [Num.mul] except if the operation overflows, instead of
 ## panicking or returning ∞ or -∞, it will return `Err Overflow`.
-mulChecked : Num a, Num a -> Result (Num a) [Overflow]*
+mulChecked : Num a, Num a -> Result (Num a) [Overflow]
 mulChecked = \a, b ->
     result = mulCheckedLowlevel a b
 
@@ -1223,19 +1223,19 @@ toU64 : Int * -> U64
 toU128 : Int * -> U128
 
 ## Convert an [Int] to a [Nat]. If the given number doesn't fit in [Nat], it will be truncated.
-## Since #Nat has a different maximum number depending on the system you're building
+## Since [Nat] has a different maximum number depending on the system you're building
 ## for, this may give a different answer on different systems.
 ##
-## For example, on a 32-bit system, #Num.maxNat will return the same answer as
-## [Num.maxU32]. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
-## system will return [Num.maxU32] instead of 9 billion, because 9 billion is
-## higher than [Num.maxU32] and will not fit in a [Nat] on a 32-bit system.
+## For example, on a 32-bit system, `Num.maxNat` will return the same answer as
+## `Num.maxU32`. This means that calling `Num.toNat 9_000_000_000` on a 32-bit
+## system will return `Num.maxU32` instead of 9 billion, because 9 billion is
+## higher than `Num.maxU32` and will not fit in a [Nat] on a 32-bit system.
 ##
 ## However, calling `Num.toNat 9_000_000_000` on a 64-bit system will return
-## the #Nat value of 9_000_000_000. This is because on a 64-bit system, [Nat] can
-## hold up to [Num.maxU64], and 9_000_000_000 is lower than [Num.maxU64].
+## the [Nat] value of 9_000_000_000. This is because on a 64-bit system, [Nat] can
+## hold up to `Num.maxU64`, and 9_000_000_000 is lower than `Num.maxU64`.
 ##
-## To convert a [Frac] to a [Nat], first call either #Num.round, #Num.ceil, or [Num.floor]
+## To convert a [Frac] to a [Nat], first call either `Num.round`, `Num.ceil`, or `Num.floor`
 ## on it, then call this on the resulting [Int].
 toNat : Int * -> Nat
 
@@ -1250,49 +1250,49 @@ toF64 : Num * -> F64
 ## Converts a [Int] to an [I8].
 ## If the given integer can't be precisely represented in an [I8], returns
 ## `Err OutOfBounds`.
-toI8Checked : Int * -> Result I8 [OutOfBounds]*
-toI16Checked : Int * -> Result I16 [OutOfBounds]*
-toI32Checked : Int * -> Result I32 [OutOfBounds]*
-toI64Checked : Int * -> Result I64 [OutOfBounds]*
-toI128Checked : Int * -> Result I128 [OutOfBounds]*
-toU8Checked : Int * -> Result U8 [OutOfBounds]*
-toU16Checked : Int * -> Result U16 [OutOfBounds]*
-toU32Checked : Int * -> Result U32 [OutOfBounds]*
-toU64Checked : Int * -> Result U64 [OutOfBounds]*
-toU128Checked : Int * -> Result U128 [OutOfBounds]*
-toNatChecked : Int * -> Result Nat [OutOfBounds]*
-toF32Checked : Num * -> Result F32 [OutOfBounds]*
-toF64Checked : Num * -> Result F64 [OutOfBounds]*
+toI8Checked : Int * -> Result I8 [OutOfBounds]
+toI16Checked : Int * -> Result I16 [OutOfBounds]
+toI32Checked : Int * -> Result I32 [OutOfBounds]
+toI64Checked : Int * -> Result I64 [OutOfBounds]
+toI128Checked : Int * -> Result I128 [OutOfBounds]
+toU8Checked : Int * -> Result U8 [OutOfBounds]
+toU16Checked : Int * -> Result U16 [OutOfBounds]
+toU32Checked : Int * -> Result U32 [OutOfBounds]
+toU64Checked : Int * -> Result U64 [OutOfBounds]
+toU128Checked : Int * -> Result U128 [OutOfBounds]
+toNatChecked : Int * -> Result Nat [OutOfBounds]
+toF32Checked : Num * -> Result F32 [OutOfBounds]
+toF64Checked : Num * -> Result F64 [OutOfBounds]
 
 # Special Floating-Point operations
-## When given a [F64] or [F32] value, returns `False` if that value is
-## [*NaN*](Num.isNaN), ∞ or -∞, and `True` otherwise.
+## When given a [F64] or [F32] value, returns `Bool.false` if that value is
+## [*NaN*](Num.isNaN), ∞ or -∞, and `Bool.true` otherwise.
 ##
-## Always returns `True` when given a [Dec].
+## Always returns `Bool.true` when given a [Dec].
 ##
 ## This is the opposite of #isInfinite, except when given [*NaN*](Num.isNaN). Both
-## #isFinite and #isInfinite return `False` for [*NaN*](Num.isNaN).
+## #isFinite and #isInfinite return `Bool.false` for [*NaN*](Num.isNaN).
 # isFinite : Frac * -> Bool
-## When given a [F64] or [F32] value, returns `True` if that value is either
-## ∞ or -∞, and `False` otherwise.
+## When given a [F64] or [F32] value, returns `Bool.true` if that value is either
+## ∞ or -∞, and `Bool.false` otherwise.
 ##
-## Always returns `False` when given a [Dec].
+## Always returns `Bool.false` when given a [Dec].
 ##
 ## This is the opposite of #isFinite, except when given [*NaN*](Num.isNaN). Both
-## #isFinite and #isInfinite return `False` for [*NaN*](Num.isNaN).
+## #isFinite and #isInfinite return `Bool.false` for [*NaN*](Num.isNaN).
 # isInfinite : Frac * -> Bool
-## When given a [F64] or [F32] value, returns `True` if that value is
-## *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN)), and `False` otherwise.
+## When given a [F64] or [F32] value, returns `Bool.true` if that value is
+## *NaN* ([not a number](https://en.wikipedia.org/wiki/NaN)), and `Bool.false` otherwise.
 ##
-## Always returns `False` when given a [Dec].
+## Always returns `Bool.false` when given a [Dec].
 ##
 ## >>> Num.isNaN 12.3
 ##
 ## >>> Num.isNaN (Num.pow -1 0.5)
 ##
 ## *NaN* is unusual from other numberic values in that:
-## * *NaN* is not equal to any other number, even itself. [Bool.isEq] always returns `False` if either argument is *NaN*.
-## * *NaN* has no ordering, so [isLt], [isLte], [isGt], and [isGte] always return `False` if either argument is *NaN*.
+## * *NaN* is not equal to any other number, even itself. [Bool.isEq] always returns `Bool.false` if either argument is *NaN*.
+## * *NaN* has no ordering, so [isLt], [isLte], [isGt], and [isGte] always return `Bool.false` if either argument is *NaN*.
 ##
 ## These rules come from the [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754)
 ## floating point standard. Because almost all modern processors are built to
@@ -1306,12 +1306,12 @@ toF64Checked : Num * -> Result F64 [OutOfBounds]*
 # isNaN : Frac * -> Bool
 ## Returns the higher of two numbers.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 # max : Num a, Num a -> Num a
 ## Returns the lower of two numbers.
 ##
-## If either argument is [*NaN*](Num.isNaN), returns `False` no matter what. (*NaN*
+## If either argument is [*NaN*](Num.isNaN), returns `Bool.false` no matter what. (*NaN*
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 # min : Num a, Num a -> Num a
 # Branchless implementation that works for all numeric types:

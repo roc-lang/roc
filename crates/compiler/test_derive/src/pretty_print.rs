@@ -6,6 +6,7 @@ use roc_can::expr::{ClosureData, OpaqueWrapFunctionData, WhenBranch};
 use roc_can::pattern::{Pattern, RecordDestruct};
 
 use roc_module::symbol::Interns;
+
 use ven_pretty::{Arena, DocAllocator, DocBuilder};
 
 pub struct Ctx<'a> {
@@ -58,7 +59,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
     match e {
         Num(_, n, _, _) | Int(_, _, n, _, _) | Float(_, _, n, _, _) => f.text(&**n),
         Str(s) => f.text(format!(r#""{}""#, s)),
-        SingleQuote(c) => f.text(format!("'{}'", c)),
+        SingleQuote(_, _, c, _) => f.text(format!("'{}'", c)),
         List {
             elem_var: _,
             loc_elems,
@@ -86,7 +87,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
                     .append("]")
                     .group(),
             ),
-        Var(sym) | AbilityMember(sym, _, _) => f.text(format!(
+        Var(sym, _) | AbilityMember(sym, _, _) => f.text(format!(
             "{}.{}",
             sym.module_string(c.interns),
             sym.as_str(c.interns),
@@ -100,8 +101,12 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
                 .append(expr(c, Free, f, &loc_cond.value))
                 .append(f.text(" is"))
                 .append(
-                    f.concat(branches.iter().map(|b| f.line().append(branch(c, f, b))))
-                        .group(),
+                    f.concat(
+                        branches
+                            .iter()
+                            .map(|b| f.hardline().append(branch(c, f, b)))
+                    )
+                    .group(),
                 )
                 .nest(2)
                 .group()
@@ -134,7 +139,10 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
             )
             .group(),
         LetRec(_, _, _) => todo!(),
-        LetNonRec(_, _) => todo!(),
+        LetNonRec(loc_def, body) => def(c, f, loc_def)
+            .append(f.hardline())
+            .append(expr(c, Free, f, &body.value))
+            .group(),
         Call(fun, args, _) => {
             let (_, fun, _, _) = &**fun;
             maybe_paren!(
@@ -154,7 +162,24 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
                     .nest(2)
             )
         }
-        RunLowLevel { .. } => todo!(),
+        RunLowLevel { args, .. } => {
+            let op = "LowLevel";
+
+            maybe_paren!(
+                Free,
+                p,
+                f.reflow(op)
+                    .append(
+                        f.concat(
+                            args.iter()
+                                .map(|le| f.line().append(expr(c, AppArg, f, &le.1)))
+                        )
+                        .group()
+                    )
+                    .group()
+                    .nest(2)
+            )
+        }
         ForeignCall { .. } => todo!(),
         Closure(ClosureData {
             arguments,
@@ -362,11 +387,12 @@ fn pattern<'a>(
             )
             .append(f.text("}"))
             .group(),
+        List { .. } => todo!(),
         NumLiteral(_, n, _, _) | IntLiteral(_, _, n, _, _) | FloatLiteral(_, _, n, _, _) => {
             f.text(&**n)
         }
         StrLiteral(s) => f.text(format!(r#""{}""#, s)),
-        SingleQuote(c) => f.text(format!("'{}'", c)),
+        SingleQuote(_, _, c, _) => f.text(format!("'{}'", c)),
         Underscore => f.text("_"),
 
         Shadowed(_, _, _) => todo!(),

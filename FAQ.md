@@ -1,3 +1,5 @@
+Click the ☰ button in the top left to see and search the table of contents.
+
 # Frequently Asked Questions
 
 ## Where did the name Roc come from?
@@ -44,6 +46,16 @@ Editor the best possible chance at kickstarting a virtuous cycle of plugin autho
 This is an unusual approach, but there are more details in [this 2021 interview](https://youtu.be/ITrDd6-PbvY?t=212).
 
 In the meantime, using CoffeeScript syntax highlighting for .roc files turns out to work surprisingly well!
+
+## Why won't the editor be able to edit non-roc files like .md, .gitignore, .yml, ... ?
+
+The downside of having the Roc editor support files other than .roc is that it seems extremely difficult to avoid scope creep if we allow it. For example, it starts with just editing json as plaintext but then it's annoying that there's no syntax highlighting, so maybe we add the capability to do syntax highlighting for json but of course then some people want it for toml, .md, etc, so we need to add a way to specify custom syntax highlighting rules for all of those.
+
+Then of course people don't want to be copy/pasting syntax highlighting rules from online, so maybe someone develops a third party "plugin manager" for the editor to distribute these syntax highlighting definitions.
+So maybe we add sharing syntax highlighting as a first-class thing, so people don't have to download a separate tool to use their editor normally but then some people who are using it for .json and .yaml start using it for .css too. Syntax highlighting is okay but it's annoying that they don't get error reporting when they mess up syntax or type an invalid selector or import and pretty soon there's demand for the Roc editor to do all the hardest parts of VS code.
+
+We have to draw the line somewhere in there...but where to draw it?
+It seems like drawing a bright line at .roc files is the most straightforward. It means the roc editor is the absolute best at editing .roc files and it isn't a weak editor for anything else because it doesn't try to be an editor for anything else and it means the scope is very clear.
 
 ## Why is there no way to specify "import everything this module exposes" in `imports`?
 
@@ -95,20 +107,20 @@ the function might give different answers.
 
 Both of these would make revising code riskier across the entire language, which is very undesirable.
 
-Another option would be to define that function equality always returns `False`. So both of these would evaluate
-to `False`:
+Another option would be to define that function equality always returns `false`. So both of these would evaluate
+to `false`:
 
 - `(\x -> x + 1) == (\x -> 1 + x)`
 - `(\x -> x + 1) == (\x -> x + 1)`
 
 This makes function equality effectively useless, while still technically allowing it. It has some other downsides:
 
-- Now if you put a function inside a record, using `==` on that record will still type-check, but it will then return `False`. This could lead to bugs if you didn't realize you had accidentally put a function in there - for example, because you were actually storing a different type (e.g. an opaque type) and didn't realize it had a function inside it.
+- Now if you put a function inside a record, using `==` on that record will still type-check, but it will then return `false`. This could lead to bugs if you didn't realize you had accidentally put a function in there - for example, because you were actually storing a different type (e.g. an opaque type) and didn't realize it had a function inside it.
 - If you put a function (or a value containing a function) into a `Dict` or `Set`, you'll never be able to get it out again. This is a common problem with [NaN](https://en.wikipedia.org/wiki/NaN), which is also defined not to be equal to itself.
 
-The first of these problems could be addressed by having function equality always return `True` instead of `False` (since that way it would not affect other fields' equality checks in a record), but that design has its own problems:
+The first of these problems could be addressed by having function equality always return true instead of false (since that way it would not affect other fields' equality checks in a record), but that design has its own problems:
 
-- Although function equality is still useless, `(\x -> x + 1) == (\x -> x)` returns `True`. Even if it didn't lead to bugs in practice, this would certainly be surprising and confusing to beginners.
+- Although function equality is still useless, `(\x -> x + 1) == (\x -> x)` returns `Bool.true`. Even if it didn't lead to bugs in practice, this would certainly be surprising and confusing to beginners.
 - Now if you put several different functions into a `Dict` or `Set`, only one of them will be kept; the others will be discarded or overwritten. This could cause bugs if a value stored a function internally, and then other functions relied on that internal function for correctness.
 
 Each of these designs makes Roc a language that's some combination of more error-prone, more confusing, and more
@@ -309,56 +321,83 @@ Here are some more details about the downsides as I see them.
 
 ### Currying and the `|>` operator
 
-In Roc, this code produces `"Hello, World!"`
+In Roc, both of these expressions evaluate to `"Hello, World!"`
 
-```elm
-"Hello, World"
-    |> Str.concat "!"
+```elixir
+Str.concat "Hello, " "World!"
 ```
 
-This is because Roc's `|>` operator uses the expression before the `|>` as the _first_ argument to the function
-after it. For functions where both arguments have the same type, but it's obvious which argument goes where (e.g.
-`Str.concat "Hello, " "World!"`, `List.concat [1, 2] [3, 4]`), this works out well. Another example would
-be `|> Num.sub 1`, which subtracts 1 from whatever came before the `|>`.
+```elixir
+"Hello, "
+|> Str.concat "World!"
+```
 
-For this reason, "pipeline-friendliness" in Roc means that the first argument to each function is typically
-the one that's most likely to be built up using a pipeline. For example, `List.map`:
+In curried languages with a `|>` operator, the first expression still returns `"Hello, World!"` but the second one returns `"World!Hello, "`. This is because Roc's `|>` operator uses the expression before the `|>` as the _first_ argument, whereas in curried languages, `|>` uses it as the _last_ argument.
 
-```elm
+(For example, this is how `|>` works in both [F#](https://docs.microsoft.com/en-us/dotnet/fsharp/language-reference/symbol-and-operator-reference/#function-symbols-and-operators) and in [Elm](https://package.elm-lang.org/packages/elm/core/1.0.5/Basics#|%3E), both of which are curried languages. In contrast, Roc's `|>` design uses the same argument ordering as [Elixir](https://hexdocs.pm/elixir/1.14.0/Kernel.html#%7C%3E/2) and [Gleam](https://gleam.run/book/tour/functions.html#pipe-operator), neither of which is a curried language.)
+
+This comes up in other situations as well. For example, consider subtraction and division:
+
+```elixir
+someNumber
+|> Num.div 2
+```
+
+```elixir
+someNumber
+|> Num.sub 1
+```
+
+What do you expect these expressions to do?
+
+In Roc, the first  divides `someNumber` by 2 and the second one subtracts 1 from `someNumber`.  In languages where `|>` uses the other argument ordering, the first example instead takes 2 and divides it by `someNumber`, while the second takes 1 and subtracts `someNumber` from it. This was a pain point I ran into with curried languages, and I was pleasantly surprised that changing the argument ordering in `|>` addressed the pain point.
+
+This style has a second benefit when it comes to higher-order functions. Consider these two examples:
+
+```elixir
+answer = List.map numbers \num ->
+    someFunction
+        "some argument"
+        anotherArg
+        someOtherArg
+```
+
+```elixir
 numbers
-    |> List.map Num.abs
+|> List.map Num.abs
 ```
 
-This argument ordering convention also often makes it possible to pass anonymous functions to higher-order
-functions without needing parentheses, like so:
+In Roc, `List.map` takes a list and then a function. Because of the way `|>` works in Roc, `numbers |> List.map Num.abs` passes `numbers` as the first argument to `List.map`, and `Num.abs` as the second argument. So both of these examples work fine.
 
-```elm
-List.map numbers \num -> Num.abs (num - 1)
+In a curried language, these two examples couldn't both be valid. In order for `|> List.map Num.abs` to work in a curried language (where `|>` works the other way), `List.map` would have to take its arguments in the opposite order: the function first and the list second.
+
+This means the first example would have to change from this...
+
+```elixir
+answer = List.map numbers \num ->
+    someFunction
+        "some argument"
+        anotherArg
+        someOtherArg
 ```
 
-(If the arguments were reversed, this would be `List.map (\num -> Num.abs (num - 1)) numbers` and the
-extra parentheses would be required.)
+...to this:
 
-Neither of these benefits is compatible with the argument ordering currying encourages. Currying encourages
-`List.map` to take the `List` as its second argument instead of the first, so that you can partially apply it
-like `(List.map Num.abs)`; if Roc introduced currying but kept the order of `List.map` the same way it is today,
-then partially applying `List.map` (e.g. `(List.map numbers)`) would be much less useful than if the arguments
-were swapped - but that in turn would make it less useful with `|>` and would require parentheses when passing
-it an anonymous function.
+```elixir
+answer =
+    List.map
+        (\num ->
+            someFunction
+                "some argument"
+                anotherArg
+                someOtherArg
+        )
+        numbers
+```
 
-This is a fundamental design tension. One argument order works well with `|>` (at least the way it works in Roc
-today) and with passing anonymous functions to higher-order functions, and the other works well with currying.
-It's impossible to have both.
+This was also a pain point I'd encountered in curried languages. I prefer the way the former example reads, but that style doesn't work with the argument order that currying encourages for higher-order functions like `List.map`. (Prior to using curried languages, I'd used [CoffeeScript](https://coffeescript.org/) in a functional style with [`_.map`](https://underscorejs.org/#map), and was disappointed to realize that I could no longer use the enjoyable style of `answer = _.map numbers (num) -> …` as I had before. In Roc, this style works.)
 
-Of note, one possible design is to have currying while also having `|>` pass the _last_ argument instead of the first.
-This is what Elm does, and it makes pipeline-friendliness and curry-friendliness the same thing. However, it also
-means that either `|> Str.concat "!"` would add the `"!"` to the front of the string, or else `Str.concat`'s
-arguments would have to be flipped - meaning that `Str.concat "Hello, World" "!"` would evaluate to `"!Hello, World"`.
-
-The only way to have `Str.concat` work the way it does in Roc today (where both pipelines and non-pipeline calling
-do what you'd want them to) is to order function arguments in a way that is not conducive to currying. This design
-tension only exists if there's currying in the language; without it, you can order arguments for pipeline-friendliness
-without concern.
+As a historical note, these stylistic benefits (of `|> Num.sub 1` working as expected, and being able to write `List.map numbers \num ->`) were not among the original reasons Roc did not have currying. These benefits were discovered after the decision had already been made that Roc would not be a curried language, and they served to reinforce after the fact that the decision was the right one for Roc given the language's goals.
 
 ### Currying and learning curve
 
@@ -406,9 +445,10 @@ reverseSort = \list -> List.reverse (List.sort list)
 
 I've consistently found that I can more quickly and accurately understand function definitions that use
 named arguments, even though the code is longer. I suspect this is because I'm faster at reading than I am at
-desugaring, and whenever I read the top version I end up needing to mentally desugar it into the bottom version.
+eta-expanding ( e.g. converting `List.sort` into `\l -> List.sort l` ). Whenever I read
+the top version I end up needing to mentally eta-expand it into the bottom version.
 In more complex examples (this is among the tamest pointfree function composition examples I've seen), I make
-a mistake in my mental desugaring, and misunderstand what the function is doing - which can cause bugs.
+a mistake in my mental eta-expansion, and misunderstand what the function is doing - which can cause bugs.
 
 I assumed I would get faster and more accurate at this over time. However, by now it's been about a decade
 since I first learned about the technique, and I'm still slower and less accurate at reading code that uses

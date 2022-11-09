@@ -1,3 +1,4 @@
+//! Provides testing utility functions for use throughout the Rust code base.
 use std::path::PathBuf;
 
 #[doc(hidden)]
@@ -31,7 +32,7 @@ impl TmpDir {
         let path = std::path::Path::new(dir);
         // ensure_empty_dir will fail if the dir doesn't already exist
         std::fs::create_dir_all(path).unwrap();
-        remove_dir_all::ensure_empty_dir(&path).unwrap();
+        remove_dir_all::ensure_empty_dir(path).unwrap();
 
         let mut pathbuf = std::path::PathBuf::new();
         pathbuf.push(path);

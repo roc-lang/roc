@@ -168,7 +168,7 @@ impl IntLitWidth {
             I32 => (Signed, 32),
             I64 => (Signed, 64),
             I128 => (Signed, 128),
-            // TODO: Nat is platform specific!
+            // TODO: Nat is target specific!
             Nat => (Unsigned, 64),
             F32 => (Signed, 24),
             F64 => (Signed, 53),
@@ -213,7 +213,7 @@ impl IntLitWidth {
             I32 => i32::MAX as u128,
             I64 => i64::MAX as u128,
             I128 => i128::MAX as u128,
-            // TODO: this is platform specific!
+            // TODO: this is target specific!
             Nat => u64::MAX as u128,
             // Max int value without losing precision: 2^24
             F32 => 16_777_216,
@@ -328,6 +328,26 @@ pub enum NumBound {
     },
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SingleQuoteBound {
+    AtLeast { width: IntLitWidth },
+}
+
+impl SingleQuoteBound {
+    pub fn from_char(c: char) -> Self {
+        let n = c as u32;
+        let width = if n > u16::MAX as _ {
+            IntLitWidth::U32
+        } else if n > u8::MAX as _ {
+            IntLitWidth::U16
+        } else {
+            IntLitWidth::U8
+        };
+
+        Self::AtLeast { width }
+    }
+}
+
 pub const fn int_lit_width_to_variable(w: IntLitWidth) -> Variable {
     match w {
         IntLitWidth::U8 => Variable::U8,
@@ -365,7 +385,7 @@ const ALL_INT_OR_FLOAT_VARIABLES: &[Variable] = &[
     Variable::U32,
     Variable::F64,
     Variable::I64,
-    Variable::NAT, // FIXME: Nat's order here depends on the platform
+    Variable::NAT, // FIXME: Nat's order here depends on the target
     Variable::U64,
     Variable::I128,
     Variable::DEC,
@@ -391,7 +411,7 @@ const ALL_INT_VARIABLES: &[Variable] = &[
     Variable::I32,
     Variable::U32,
     Variable::I64,
-    Variable::NAT, // FIXME: Nat's order here depends on the platform
+    Variable::NAT, // FIXME: Nat's order here depends on the target
     Variable::U64,
     Variable::I128,
     Variable::U128,

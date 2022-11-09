@@ -1,15 +1,13 @@
 use bumpalo::Bump;
 use roc_build::{
     link::{link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy},
-    program::{self, Problems},
+    program::{self, CodeGenOptions, Problems},
 };
 use roc_builtins::bitcode;
-use roc_collections::VecMap;
 use roc_load::{
-    EntryPoint, ExecutionMode, Expectations, LoadConfig, LoadMonomorphizedError, LoadedModule,
+    EntryPoint, ExecutionMode, ExpectMetadata, LoadConfig, LoadMonomorphizedError, LoadedModule,
     LoadingProblem, Threading,
 };
-use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_reporting::report::RenderTarget;
 use roc_target::TargetInfo;
@@ -30,12 +28,11 @@ fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     .unwrap()
 }
 
-pub struct BuiltFile {
+pub struct BuiltFile<'a> {
     pub binary_path: PathBuf,
     pub problems: Problems,
     pub total_time: Duration,
-    pub expectations: VecMap<ModuleId, Expectations>,
-    pub interns: Interns,
+    pub expect_metadata: ExpectMetadata<'a>,
 }
 
 pub enum BuildOrdering {
@@ -60,16 +57,15 @@ pub fn build_file<'a>(
     arena: &'a Bump,
     target: &Triple,
     app_module_path: PathBuf,
-    opt_level: OptLevel,
-    emit_debug_info: bool,
+    code_gen_options: CodeGenOptions,
     emit_timings: bool,
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
-    precompiled: bool,
+    prebuilt: bool,
     threading: Threading,
     wasm_dev_stack_bytes: Option<u32>,
     order: BuildOrdering,
-) -> Result<BuiltFile, BuildFileError<'a>> {
+) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let compilation_start = Instant::now();
     let target_info = TargetInfo::from(target);
 
@@ -121,7 +117,7 @@ pub fn build_file<'a>(
 
         match roc_target::OperatingSystem::from(target.operating_system) {
             Wasi => {
-                if matches!(opt_level, OptLevel::Development) {
+                if matches!(code_gen_options.opt_level, OptLevel::Development) {
                     ("wasm", "wasm", Some("wasm"))
                 } else {
                     ("zig", "bc", Some("wasm"))
@@ -151,7 +147,7 @@ pub fn build_file<'a>(
     // TODO this should probably be moved before load_and_monomorphize.
     // To do this we will need to preprocess files just for their exported symbols.
     // Also, we should no longer need to do this once we have platforms on
-    // a package repository, as we can then get precompiled hosts from there.
+    // a package repository, as we can then get prebuilt platforms from there.
 
     let exposed_values = loaded
         .exposed_to_host
@@ -180,9 +176,9 @@ pub fn build_file<'a>(
     };
 
     let rebuild_thread = spawn_rebuild_thread(
-        opt_level,
+        code_gen_options.opt_level,
         linking_strategy,
-        precompiled,
+        prebuilt,
         host_input_path.clone(),
         preprocessed_host_path.clone(),
         binary_path.clone(),
@@ -191,14 +187,6 @@ pub fn build_file<'a>(
         exposed_closure_types,
     );
 
-    // TODO try to move as much of this linking as possible to the precompiled
-    // host, to minimize the amount of host-application linking required.
-    let app_o_file = Builder::new()
-        .prefix("roc_app")
-        .suffix(&format!(".{}", app_extension))
-        .tempfile()
-        .map_err(|err| todo!("TODO Gracefully handle tempfile creation error {:?}", err))?;
-    let app_o_file = app_o_file.path();
     let buf = &mut String::with_capacity(1024);
 
     let mut it = loaded.timings.iter().peekable();
@@ -249,10 +237,7 @@ pub fn build_file<'a>(
     // inside a nested scope without causing a borrow error!
     let mut loaded = loaded;
     let problems = program::report_problems_monomorphized(&mut loaded);
-    let expectations = std::mem::take(&mut loaded.expectations);
     let loaded = loaded;
-
-    let interns = loaded.interns.clone();
 
     enum HostRebuildTiming {
         BeforeApp(u128),
@@ -260,10 +245,12 @@ pub fn build_file<'a>(
     }
 
     let rebuild_timing = if linking_strategy == LinkingStrategy::Additive {
-        let rebuild_duration = rebuild_thread.join().unwrap();
-        if emit_timings && !precompiled {
+        let rebuild_duration = rebuild_thread
+            .join()
+            .expect("Failed to (re)build platform.");
+        if emit_timings && !prebuilt {
             println!(
-                "Finished rebuilding and preprocessing the host in {} ms\n",
+                "Finished rebuilding the platform in {} ms\n",
                 rebuild_duration
             );
         }
@@ -272,14 +259,12 @@ pub fn build_file<'a>(
         HostRebuildTiming::ConcurrentWithApp(rebuild_thread)
     };
 
-    let code_gen_timing = program::gen_from_mono_module(
+    let (roc_app_bytes, code_gen_timing, expect_metadata) = program::gen_from_mono_module(
         arena,
         loaded,
         &app_module_path,
         target,
-        app_o_file,
-        opt_level,
-        emit_debug_info,
+        code_gen_options,
         &preprocessed_host_path,
         wasm_dev_stack_bytes,
     );
@@ -294,18 +279,10 @@ pub fn build_file<'a>(
         "Generate Assembly from Mono IR",
         code_gen_timing.code_gen,
     );
-    report_timing(buf, "Emit .o file", code_gen_timing.emit_o_file);
 
     let compilation_end = compilation_start.elapsed();
 
-    let size = std::fs::metadata(&app_o_file)
-        .unwrap_or_else(|err| {
-            panic!(
-                "Could not open {:?} - which was supposed to have been generated. Error: {:?}",
-                app_o_file, err
-            );
-        })
-        .len();
+    let size = roc_app_bytes.len();
 
     if emit_timings {
         println!(
@@ -321,29 +298,44 @@ pub fn build_file<'a>(
     }
 
     if let HostRebuildTiming::ConcurrentWithApp(thread) = rebuild_timing {
-        let rebuild_duration = thread.join().unwrap();
-        if emit_timings && !precompiled {
+        let rebuild_duration = thread.join().expect("Failed to (re)build platform.");
+        if emit_timings && !prebuilt {
             println!(
-                "Finished rebuilding and preprocessing the host in {} ms\n",
+                "Finished rebuilding the platform in {} ms\n",
                 rebuild_duration
             );
         }
     }
 
-    // Step 2: link the precompiled host and compiled app
+    // Step 2: link the prebuilt platform and compiled app
     let link_start = Instant::now();
     let problems = match (linking_strategy, link_type) {
         (LinkingStrategy::Surgical, _) => {
-            roc_linker::link_preprocessed_host(target, &host_input_path, app_o_file, &binary_path);
+            roc_linker::link_preprocessed_host(
+                target,
+                &host_input_path,
+                &roc_app_bytes,
+                &binary_path,
+            );
+
             problems
         }
         (LinkingStrategy::Additive, _) | (LinkingStrategy::Legacy, LinkType::None) => {
             // Just copy the object file to the output folder.
             binary_path.set_extension(app_extension);
-            std::fs::copy(app_o_file, &binary_path).unwrap();
+            std::fs::write(&binary_path, &*roc_app_bytes).unwrap();
             problems
         }
         (LinkingStrategy::Legacy, _) => {
+            let app_o_file = Builder::new()
+                .prefix("roc_app")
+                .suffix(&format!(".{}", app_extension))
+                .tempfile()
+                .map_err(|err| todo!("TODO Gracefully handle tempfile creation error {:?}", err))?;
+            let app_o_file = app_o_file.path();
+
+            std::fs::write(app_o_file, &*roc_app_bytes).unwrap();
+
             let mut inputs = vec![
                 host_input_path.as_path().to_str().unwrap(),
                 app_o_file.to_str().unwrap(),
@@ -351,7 +343,7 @@ pub fn build_file<'a>(
 
             let str_host_obj_path = bitcode::get_builtins_host_obj_path();
 
-            if matches!(opt_level, OptLevel::Development) {
+            if matches!(code_gen_options.backend, program::CodeGenBackend::Assembly) {
                 inputs.push(&str_host_obj_path);
             }
 
@@ -388,8 +380,7 @@ pub fn build_file<'a>(
         binary_path,
         problems,
         total_time,
-        interns,
-        expectations,
+        expect_metadata,
     })
 }
 
@@ -397,7 +388,7 @@ pub fn build_file<'a>(
 fn spawn_rebuild_thread(
     opt_level: OptLevel,
     linking_strategy: LinkingStrategy,
-    precompiled: bool,
+    prebuilt: bool,
     host_input_path: PathBuf,
     preprocessed_host_path: PathBuf,
     binary_path: PathBuf,
@@ -407,13 +398,16 @@ fn spawn_rebuild_thread(
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
-        if !precompiled {
-            println!("🔨 Rebuilding host...");
+        if !prebuilt {
+            // Printing to stderr because we want stdout to contain only the output of the roc program.
+            // We are aware of the trade-offs.
+            // `cargo run` follows the same approach
+            eprintln!("🔨 Rebuilding platform...");
         }
 
         let rebuild_host_start = Instant::now();
 
-        if !precompiled {
+        if !prebuilt {
             match linking_strategy {
                 LinkingStrategy::Additive => {
                     let host_dest = rebuild_host(

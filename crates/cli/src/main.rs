@@ -1,10 +1,11 @@
+//! The `roc` binary that brings together all functionality in the Roc toolset.
 use roc_build::link::LinkType;
 use roc_cli::build::check_file;
 use roc_cli::{
     build_app, format, test, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DEV,
-    CMD_DOCS, CMD_EDIT, CMD_FORMAT, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST, CMD_VERSION,
-    DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME, GLUE_FILE,
-    ROC_FILE,
+    CMD_DOCS, CMD_EDIT, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST,
+    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME,
+    GLUE_FILE, ROC_FILE,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
@@ -93,6 +94,12 @@ fn main() -> io::Result<()> {
                 Ok(1)
             }
         }
+        Some((CMD_GEN_STUB_LIB, matches)) => {
+            let input_path = Path::new(matches.value_of_os(ROC_FILE).unwrap());
+            let target: Target = matches.value_of_t(FLAG_TARGET).unwrap_or_default();
+
+            roc_linker::generate_stub_lib(input_path, &target.to_triple())
+        }
         Some((CMD_BUILD, matches)) => {
             let target: Target = matches.value_of_t(FLAG_TARGET).unwrap_or_default();
 
@@ -171,14 +178,7 @@ fn main() -> io::Result<()> {
                 }
             }
         }
-        Some((CMD_REPL, _)) => {
-            {
-                roc_repl_cli::main()?;
-
-                // Exit 0 if the repl exited normally
-                Ok(0)
-            }
-        }
+        Some((CMD_REPL, _)) => Ok(roc_repl_cli::main()),
         Some((CMD_EDIT, matches)) => {
             match matches
                 .values_of_os(DIRECTORY_OR_FILES)

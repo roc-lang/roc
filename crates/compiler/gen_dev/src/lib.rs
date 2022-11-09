@@ -1,3 +1,6 @@
+//! Provides the compiler backend to generate Roc binaries fast, for a nice
+//! developer experience. See [README.md](./compiler/gen_dev/README.md) for
+//! more information.
 #![warn(clippy::dbg_macro)]
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
@@ -156,7 +159,7 @@ trait Backend<'a> {
                     let module_id = env.module_id;
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
-                    rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, *following)
+                    rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, following)
                 };
 
                 for spec in new_specializations.into_iter() {
@@ -727,6 +730,16 @@ trait Backend<'a> {
                 // Now that the arguments are needed, load them if they are literals.
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
+            }
+            Symbol::BOOL_TRUE => {
+                let bool_layout = Layout::Builtin(Builtin::Bool);
+                self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(true));
+                self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
+            }
+            Symbol::BOOL_FALSE => {
+                let bool_layout = Layout::Builtin(Builtin::Bool);
+                self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(false));
+                self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
             }
             _ => todo!("the function, {:?}", func_sym),
         }

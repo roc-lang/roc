@@ -65,32 +65,55 @@ export fn roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     std.process.exit(0);
 }
 
+extern fn kill(pid: c_int, sig: c_int) c_int;
+extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
+extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
+extern fn getppid() c_int;
+
+fn roc_getppid() callconv(.C) c_int {
+    return getppid();
+}
+
+fn roc_send_signal(pid: c_int, sig: c_int) callconv(.C) c_int {
+    return kill(pid, sig);
+}
+fn roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) callconv(.C) c_int {
+    return shm_open(name, oflag, mode);
+}
+fn roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) callconv(.C) *anyopaque {
+    return mmap(addr, length, prot, flags, fd, offset);
+}
+
+comptime {
+    if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
+        @export(roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
+        @export(roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
+        @export(roc_send_signal, .{ .name = "roc_send_signal", .linkage = .Strong });
+        @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
+    }
+}
+
 const Unit = extern struct {};
 
 pub export fn main() i32 {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
 
-    // start time
-    var ts1: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts1) catch unreachable;
+    var timer = std.time.Timer.start() catch unreachable;
 
     // actually call roc to populate the callresult
     var callresult = RocStr.empty();
     roc__mainForHost_1_exposed_generic(&callresult);
 
-    // end time
-    var ts2: std.os.timespec = undefined;
-    std.os.clock_gettime(std.os.CLOCK.REALTIME, &ts2) catch unreachable;
+    const nanos = timer.read();
+    const seconds = (@intToFloat(f64, nanos) / 1_000_000_000.0);
 
     // stdout the result
     stdout.print("{s}\n", .{callresult.asSlice()}) catch unreachable;
 
     callresult.deinit();
 
-    const delta = to_seconds(ts2) - to_seconds(ts1);
-
-    stderr.print("runtime: {d:.3}ms\n", .{delta * 1000}) catch unreachable;
+    stderr.print("runtime: {d:.3}ms\n", .{seconds * 1000}) catch unreachable;
 
     return 0;
 }

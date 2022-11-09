@@ -1,4 +1,5 @@
 use crate::ir::Parens;
+use bitvec::vec::BitVec;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -11,7 +12,7 @@ use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
-    self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs, UnionTags,
+    self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs,
     UnsortedUnionLabels, Variable,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
@@ -878,15 +879,8 @@ impl<'a> UnionLayout<'a> {
         }
     }
 
-    pub fn tag_id_layout(&self) -> Layout<'a> {
-        // TODO is it beneficial to return a more specific layout?
-        // e.g. Layout::bool() and Layout::VOID
-        match self.discriminant() {
-            Discriminant::U0 => Layout::u8(),
-            Discriminant::U1 => Layout::u8(),
-            Discriminant::U8 => Layout::u8(),
-            Discriminant::U16 => Layout::u16(),
-        }
+    pub fn tag_id_layout(&self) -> Layout<'static> {
+        self.discriminant().layout()
     }
 
     fn stores_tag_id_in_pointer_bits(tags: &[&[Layout<'a>]], target_info: TargetInfo) -> bool {
@@ -1136,6 +1130,17 @@ impl Discriminant {
 
     pub const fn alignment_bytes(&self) -> u32 {
         self.stack_size()
+    }
+
+    pub const fn layout(&self) -> Layout<'static> {
+        // TODO is it beneficial to return a more specific layout?
+        // e.g. Layout::bool() and Layout::VOID
+        match self {
+            Discriminant::U0 => Layout::u8(),
+            Discriminant::U1 => Layout::u8(),
+            Discriminant::U8 => Layout::u8(),
+            Discriminant::U16 => Layout::u16(),
+        }
     }
 }
 
@@ -1974,7 +1979,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                     }
                     stack.push((*ext, depth_any + 1, depth_lset));
                 }
-                FlatType::Erroneous(_) | FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
+                FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
             },
             Content::FlexVar(_)
             | Content::RigidVar(_)
@@ -2177,11 +2182,11 @@ pub fn is_unresolved_var(subs: &Subs, var: Variable) -> bool {
 
 #[inline(always)]
 pub fn is_any_float_range(subs: &Subs, var: Variable) -> bool {
-    use {roc_types::num::IntLitWidth::*, Content::*, NumericRange::*};
+    use {Content::*, NumericRange::*};
     let content = subs.get_content_without_compacting(var);
     matches!(
         content,
-        RangedNumber(NumAtLeastEitherSign(I8) | NumAtLeastSigned(I8)),
+        RangedNumber(NumAtLeastEitherSign(..) | NumAtLeastSigned(..)),
     )
 }
 
@@ -2209,7 +2214,16 @@ impl<'a> Layout<'a> {
                 // completely, but for now we represent it with the empty tag union
                 cacheable(Ok(Layout::VOID))
             }
-            FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
+            FlexAbleVar(_, _) | RigidAbleVar(_, _) => {
+                roc_debug_flags::dbg_do!(roc_debug_flags::ROC_NO_UNBOUND_LAYOUT, {
+                    todo_abilities!("Able var is unbound!");
+                });
+
+                // If we encounter an unbound type var (e.g. `*` or `a`)
+                // then it's zero-sized; In the future we may drop this argument
+                // completely, but for now we represent it with the empty tag union
+                cacheable(Ok(Layout::VOID))
+            }
             RecursionVar { structure, .. } => {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
@@ -2712,7 +2726,7 @@ impl<'a> Layout<'a> {
         Layout::Builtin(Builtin::Int(IntWidth::U8))
     }
 
-    pub fn u16() -> Layout<'a> {
+    pub const fn u16() -> Layout<'a> {
         Layout::Builtin(Builtin::Int(IntWidth::U16))
     }
 
@@ -3103,7 +3117,9 @@ fn layout_from_flat_type<'a>(
 
             for (label, field) in it {
                 match field {
-                    RecordField::Required(field_var) | RecordField::Demanded(field_var) => {
+                    RecordField::Required(field_var)
+                    | RecordField::Demanded(field_var)
+                    | RecordField::RigidRequired(field_var) => {
                         sortables
                             .push((label, cached!(Layout::from_var(env, field_var), criteria)));
                     }
@@ -3151,16 +3167,18 @@ fn layout_from_flat_type<'a>(
 
             layout_from_non_recursive_union(env, &tags).map(Ok)
         }
-        FunctionOrTagUnion(tag_name, _, ext_var) => {
+        FunctionOrTagUnion(tag_names, _, ext_var) => {
             debug_assert!(
                 ext_var_is_empty_tag_union(subs, ext_var),
                 "If ext_var wasn't empty, this wouldn't be a FunctionOrTagUnion!"
             );
 
-            let union_tags = UnionTags::from_tag_name_index(tag_name);
-            let (tags, _) = union_tags.unsorted_tags_and_ext(subs, ext_var);
+            let tag_names = subs.get_subs_slice(tag_names);
+            let unsorted_tags = UnsortedUnionLabels {
+                tags: tag_names.iter().map(|t| (t, &[] as &[Variable])).collect(),
+            };
 
-            layout_from_non_recursive_union(env, &tags).map(Ok)
+            layout_from_non_recursive_union(env, &unsorted_tags).map(Ok)
         }
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             let (tags, ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
@@ -3170,7 +3188,6 @@ fn layout_from_flat_type<'a>(
             layout_from_recursive_union(env, rec_var, &tags)
         }
         EmptyTagUnion => cacheable(Ok(Layout::VOID)),
-        Erroneous(_) => cacheable(Err(LayoutProblem::Erroneous)),
         EmptyRecord => cacheable(Ok(Layout::UNIT)),
     }
 }
@@ -3204,7 +3221,7 @@ fn sort_record_fields_help<'a>(
 
     for (label, field) in fields_map {
         match field {
-            RecordField::Demanded(v) | RecordField::Required(v) => {
+            RecordField::Demanded(v) | RecordField::Required(v) | RecordField::RigidRequired(v) => {
                 let Cacheable(layout, _) = Layout::from_var(env, v);
                 sorted_fields.push((label, v, Ok(layout?)));
             }
@@ -3270,7 +3287,6 @@ impl From<Symbol> for TagOrClosure {
 pub enum UnionVariant<'a> {
     Never,
     Unit,
-    UnitWithArguments,
     BoolUnion {
         ttrue: TagOrClosure,
         ffalse: TagOrClosure,
@@ -3279,6 +3295,11 @@ pub enum UnionVariant<'a> {
     Newtype {
         tag_name: TagOrClosure,
         arguments: Vec<'a, Layout<'a>>,
+    },
+    NewtypeByVoid {
+        data_tag_name: TagOrClosure,
+        data_tag_id: TagIdIntType,
+        data_tag_arguments: Vec<'a, Layout<'a>>,
     },
     Wrapped(WrappedVariant<'a>),
 }
@@ -3526,6 +3547,8 @@ where
                 Vec::with_capacity_in(tags_list.len(), env.arena);
             let mut has_any_arguments = false;
 
+            let mut inhabited_tag_ids = BitVec::<usize>::repeat(true, num_tags);
+
             for &(tag_name, arguments) in tags_list.into_iter() {
                 let mut arg_layouts = Vec::with_capacity_in(arguments.len() + 1, env.arena);
 
@@ -3537,6 +3560,10 @@ where
                             has_any_arguments = true;
 
                             arg_layouts.push(layout);
+
+                            if layout == Layout::VOID {
+                                inhabited_tag_ids.set(answer.len(), false);
+                            }
                         }
                         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                             // If we encounter an unbound type var (e.g. `Ok *`)
@@ -3559,6 +3586,18 @@ where
                 });
 
                 answer.push((tag_name.clone().into(), arg_layouts.into_bump_slice()));
+            }
+
+            if inhabited_tag_ids.count_ones() == 1 {
+                let kept_tag_id = inhabited_tag_ids.first_one().unwrap();
+                let kept = answer.get(kept_tag_id).unwrap();
+
+                let variant = UnionVariant::NewtypeByVoid {
+                    data_tag_name: kept.0.clone(),
+                    data_tag_id: kept_tag_id as _,
+                    data_tag_arguments: Vec::from_iter_in(kept.1.iter().copied(), env.arena),
+                };
+                return Cacheable(variant, cache_criteria);
             }
 
             match num_tags {
@@ -3628,19 +3667,13 @@ where
 
             // just one tag in the union (but with arguments) can be a struct
             let mut layouts = Vec::with_capacity_in(tags_vec.len(), env.arena);
-            let mut contains_zero_sized = false;
 
             for var in arguments {
                 let Cacheable(result, criteria) = Layout::from_var(env, var);
                 cache_criteria.and(criteria);
                 match result {
                     Ok(layout) => {
-                        // Drop any zero-sized arguments like {}
-                        if !layout.is_dropped_because_empty() {
-                            layouts.push(layout);
-                        } else {
-                            contains_zero_sized = true;
-                        }
+                        layouts.push(layout);
                     }
                     Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                         // If we encounter an unbound type var (e.g. `Ok *`)
@@ -3663,11 +3696,7 @@ where
             });
 
             if layouts.is_empty() {
-                if contains_zero_sized {
-                    Cacheable(UnionVariant::UnitWithArguments, cache_criteria)
-                } else {
-                    Cacheable(UnionVariant::Unit, cache_criteria)
-                }
+                Cacheable(UnionVariant::Unit, cache_criteria)
             } else if let Some(rec_var) = opt_rec_var {
                 let variant = UnionVariant::Wrapped(WrappedVariant::NonNullableUnwrapped {
                     tag_name: tag_name.into(),
@@ -3691,6 +3720,7 @@ where
             let mut has_any_arguments = false;
 
             let mut nullable = None;
+            let mut inhabited_tag_ids = BitVec::<usize>::repeat(true, num_tags);
 
             // only recursive tag unions can be nullable
             let is_recursive = opt_rec_var.is_some();
@@ -3732,6 +3762,10 @@ where
                             } else {
                                 arg_layouts.push(layout);
                             }
+
+                            if layout == Layout::VOID {
+                                inhabited_tag_ids.set(answer.len(), false);
+                            }
                         }
                         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                             // If we encounter an unbound type var (e.g. `Ok *`)
@@ -3755,6 +3789,18 @@ where
                 });
 
                 answer.push((tag_name.into(), arg_layouts.into_bump_slice()));
+            }
+
+            if inhabited_tag_ids.count_ones() == 1 && !is_recursive {
+                let kept_tag_id = inhabited_tag_ids.first_one().unwrap();
+                let kept = answer.get(kept_tag_id).unwrap();
+
+                let variant = UnionVariant::NewtypeByVoid {
+                    data_tag_name: kept.0.clone(),
+                    data_tag_id: kept_tag_id as _,
+                    data_tag_arguments: Vec::from_iter_in(kept.1.iter().copied(), env.arena),
+                };
+                return Cacheable(variant, cache_criteria);
             }
 
             match num_tags {
@@ -3866,7 +3912,7 @@ where
 
     let result = match variant {
         Never => Layout::VOID,
-        Unit | UnitWithArguments => Layout::UNIT,
+        Unit => Layout::UNIT,
         BoolUnion { .. } => Layout::bool(),
         ByteUnion(_) => Layout::u8(),
         Newtype {
@@ -3880,6 +3926,15 @@ where
             };
 
             answer1
+        }
+        NewtypeByVoid {
+            data_tag_arguments, ..
+        } => {
+            if data_tag_arguments.len() == 1 {
+                data_tag_arguments[0]
+            } else {
+                Layout::struct_no_name_order(data_tag_arguments.into_bump_slice())
+            }
         }
         Wrapped(variant) => {
             use WrappedVariant::*;

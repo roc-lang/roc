@@ -1,6 +1,7 @@
 use std::hint::unreachable_unchecked;
 
 use crate::subs::{Content, Descriptor, Mark, OptVariable, Rank, Variable, VariableSubsSlice};
+use roc_serialize::bytes;
 
 #[derive(Clone, Default)]
 pub struct UnificationTable {
@@ -376,9 +377,7 @@ impl UnificationTable {
         writer: &mut impl std::io::Write,
         mut written: usize,
     ) -> std::io::Result<usize> {
-        use crate::subs::Subs;
-
-        written = Subs::serialize_slice(&self.contents, writer, written)?;
+        written = bytes::serialize_slice(&self.contents, writer, written)?;
 
         let mut ranks = Vec::new();
         let mut marks = Vec::new();
@@ -406,22 +405,20 @@ impl UnificationTable {
             }
         }
 
-        written = Subs::serialize_slice(&ranks, writer, written)?;
-        written = Subs::serialize_slice(&marks, writer, written)?;
-        written = Subs::serialize_slice(&copies, writer, written)?;
-        written = Subs::serialize_slice(&redirects, writer, written)?;
+        written = bytes::serialize_slice(&ranks, writer, written)?;
+        written = bytes::serialize_slice(&marks, writer, written)?;
+        written = bytes::serialize_slice(&copies, writer, written)?;
+        written = bytes::serialize_slice(&redirects, writer, written)?;
 
         Ok(written)
     }
 
     pub(crate) fn deserialize(bytes: &[u8], length: usize, offset: usize) -> (Self, usize) {
-        use crate::subs::Subs;
-
-        let (contents, offset) = Subs::deserialize_slice::<Content>(bytes, length, offset);
-        let (ranks, offset) = Subs::deserialize_slice::<Rank>(bytes, length, offset);
-        let (marks, offset) = Subs::deserialize_slice::<Mark>(bytes, length, offset);
-        let (copies, offset) = Subs::deserialize_slice::<OptVariable>(bytes, length, offset);
-        let (redirects, offset) = Subs::deserialize_slice::<OptVariable>(bytes, length, offset);
+        let (contents, offset) = bytes::deserialize_slice::<Content>(bytes, length, offset);
+        let (ranks, offset) = bytes::deserialize_slice::<Rank>(bytes, length, offset);
+        let (marks, offset) = bytes::deserialize_slice::<Mark>(bytes, length, offset);
+        let (copies, offset) = bytes::deserialize_slice::<OptVariable>(bytes, length, offset);
+        let (redirects, offset) = bytes::deserialize_slice::<OptVariable>(bytes, length, offset);
 
         let mut metadata = Vec::with_capacity(ranks.len());
 

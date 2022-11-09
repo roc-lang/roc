@@ -26,12 +26,18 @@ jobs:
 
       - name: zig fmt check, zig tests
         run: cd crates/compiler/builtins/bitcode && ./run-tests.sh
+        
+      - name: roc format check on builtins
+        run: cargo run --locked --release format --check crates/compiler/builtins/roc
 
       - name: zig wasm tests
         run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
 
       - name: regular rust tests
         run: cargo test --locked --release --features with_sound serde --workspace && sccache --show-stats
+
+      - name: test launching the editor
+        run: cargo test --release --locked editor_launch_test::launch -- --ignored # `--ignored` to run this test that is ignored for "normal" runs
 
       - name: test the dev backend # these tests require an explicit feature flag
         run: cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
@@ -41,6 +47,9 @@ jobs:
 
       - name: run `roc test` on Str builtins
         run: cargo run --locked --release -- test crates/compiler/builtins/roc/Str.roc && sccache --show-stats
+
+      - name: run `roc test` on Dict builtins
+        run: cargo run --locked --release -- test crates/compiler/builtins/roc/Dict.roc && sccache --show-stats
 
       #TODO pass --locked into the script here as well, this avoids rebuilding dependencies unnecessarily
       - name: wasm repl test

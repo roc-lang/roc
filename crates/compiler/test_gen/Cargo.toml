@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Contains all of Roc's code generation tests."
 
 [[test]]
 name = "test_gen"
@@ -11,6 +12,7 @@ path = "src/tests.rs"
 
 [build-dependencies]
 roc_builtins = { path = "../builtins" }
+roc_utils = { path = "../../utils" }
 wasi_libc_sys = { path = "../../wasi-libc-sys" }
 
 [dev-dependencies]
@@ -25,6 +27,7 @@ roc_types = { path = "../types" }
 roc_builtins = { path = "../builtins" }
 roc_constrain = { path = "../constrain" }
 roc_unify = { path = "../unify" }
+roc_utils = { path = "../../utils" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 roc_reporting = { path = "../../reporting" }
@@ -36,8 +39,8 @@ roc_target = { path = "../roc_target" }
 roc_error_macros = { path = "../../error_macros" }
 roc_std = { path = "../../roc_std"  }
 roc_debug_flags = {path="../debug_flags"}
-bumpalo = { version = "3.8.0", features = ["collections"] }
-libc = "0.2.132"
+bumpalo = { version = "3.11.0", features = ["collections"] }
+libc = "0.2.135"
 inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.3"
 libloading = "0.7.1"
