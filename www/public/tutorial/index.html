@@ -34,7 +34,7 @@
             <li><a href="#strings-and-numbers">Strings and Numbers</a></li>
             <li><a href="#building-an-application">Building an Application</a></li>
             <li><a href="#defining-functions">Defining Functions</a></li>
-            <li><a href="#if-then-else">if/then/else</a></li>
+            <li><a href="#if-then-else">if-then-else</a></li>
             <li><a href="#records">Records</a></li>
             <li><a href="#tags">Tags &amp; Pattern Matching</a></li>
             <li><a href="#booleans">Booleans</a></li>
@@ -81,7 +81,7 @@ short. Run this in a terminal:</p>
 </section>
 <section><h3 id="hello-world"><a href="#hello-world">Hello, World!</a></h3>
 <p>Try typing this at the REPL prompt and pressing Enter:</p>
-<samp class="repl-prompt">Hello, World!"</samp>
+<samp class="repl-prompt">"Hello, World!"</samp>
 <p>The REPL should cheerfully display the following:</p>
 <samp>"Hello, World!" <span class="ann">:</span> Str                <span class="autovar"># val1</span></samp>
 <p>Congratulations! You've just written your first Roc code.</p>
@@ -172,18 +172,17 @@ to use them for more than that.</p>
 
 <section><h2 id="building-an-application"><a href="#building-an-application">Building an Application</a></h2>
 <p>Let's move out of the REPL and create our first Roc application!</p>
-<p>Make a file named <code>hello.roc</code> and put this in it:</p>
+<p>Make a file named <code>main.roc</code> and put this in it:</p>
 <samp><span class="kw">app</span> <span class="str">"hello"</span>
     <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://roc-lang.org/basic-cli/1.0.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz.rp1"</span> <span class="brace">}</span>
-    <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout, pf.Program<span class="brace">]</span>
+    <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
     <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 
 main <span class="kw">=</span>
     Stdout.line <span class="str">"I'm a Roc application!"</span>
-    <span class="kw">|&gt;</span> Program.quick
 </samp>
 <p>Try running this with:</p>
-<samp>roc dev Hello.roc</samp>
+<samp>roc dev</samp>
 <p>You should see this printed to the terminal:</p>
 <samp>I'm a Roc application!</samp>
 <p>Congratulations - you've written your first Roc application! We'll go over what the parts of
@@ -200,9 +199,9 @@ main <span class="kw">=</span>
     Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
     <span class="kw">|&gt;</span> Program.quick
 </samp>
-<p>Now if you run <code>roc dev Hello.roc</code>, you should see this:</p>
+<p>Now if you run <code>roc dev</code>, you should see this:</p>
 <samp>There are 5 animals.</samp>
-<p><code>Hello.roc</code> now has four definitions—<em>defs</em> for
+<p><code>main.roc</code> now has four definitions—<em>defs</em> for
 short—<code>birds</code>, <code>iguanas</code>, <code>total</code>, and <code>main</code>.</p>
 <p>A definition names an expression.</p>
 <ul>
@@ -245,7 +244,7 @@ syntax defines a function's arguments, and the expression
 after the <code class="kw">-&gt;</code> is the body of the function—<code>Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span></code>
 in this case. When a function runs, its body expression gets evaluated and returned.</p>
 </section>
-<section><h2 id="if-then-else"><a href="#if-then-else">if/then/else</a></h2>
+<section><h2 id="if-then-else"><a href="#if-then-else">if-then-else</a></h2>
 <p>Let's modify this function to return an empty string if the numbers add to zero.</p>
 <samp>addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span>
     sum <span class="kw">=</span> num1 <span class="kw">+</span> num2
@@ -258,7 +257,7 @@ in this case. When a function runs, its body expression gets evaluated and retur
 <p>We did two things here:</p>
 <ul>
     <li>We introduced a <i>local def</i> named <code>sum</code>, and set it equal to <code>num1 <span class="op">+</span> num2</code>. Because we defined <code>sum</code> inside <code>addAndStringify</code>, it will not be accessible outside that function.</li>
-    <li>We added an <code>if</code> / <code>then</code> / <code>else</code> conditional to return either <code>""</code> or <code>Num.toStr sum</code> depending on whether <code>sum == 0</code>.</li>
+    <li>We added an <code>if</code>-<code>then</code>-<code>else</code> conditional to return either <code>""</code> or <code>Num.toStr sum</code> depending on whether <code>sum == 0</code>.</li>
 </ul>
 <p>Every <code>if</code> must be accompanied by both <code>then</code> and also <code>else</code>.
 Having an <code>if</code> without an <code>else</code> is an error, because <code>if</code> is an
@@ -295,91 +294,90 @@ the <code>else</code> branch contains another <code>if</code>/<code>else</code>.
 on the same line, although the convention is to use the original version's style.
 </p>
 </section>
-<!--<section><h2 id="records">Records</h2>
+<section><h2 id="records"><a href="#records">Records</a></h2>
 <p>Currently our <code>addAndStringify</code> function takes two arguments. We can instead make
 it take one argument like so:</p>
-<pre><code class="lang-coffee">total = <span class="hljs-keyword">addAndStringify </span>{ <span class="hljs-keyword">birds: </span><span class="hljs-number">5</span>, iguanas: <span class="hljs-number">7</span> }
+<samp>total <span class="kw">=</span> addAndStringify <span class="brace">{</span> birds: 5<span class="comma">,</span> iguanas: 7 <span class="brace">}</span>
 
-<span class="hljs-keyword">addAndStringify </span>= \<span class="hljs-keyword">counts </span>-&gt;
-    Num.toStr (<span class="hljs-keyword">counts.birds </span>+ <span class="hljs-keyword">counts.iguanas)</span>
-</code></pre>
-<p>The function now takes a <em>record</em>, which is a group of values that travel together.
+addAndStringify <span class="kw">=</span> <span class="kw">\</span>counts <span class="kw">-></span>
+    Num.toStr <span class="paren">(</span>counts.birds <span class="op">+</span> counts.iguanas<span class="paren">)</span>
+</samp>
+<p>The function now takes a <i>record</i>, which is a group of values that travel together.
 Records are not objects; they don't have methods or inheritance, they just store values.</p>
-<p>We create the record when we write <code>{ birds: 5, iguanas: 7 }</code>. This defines
-a record with two <em>fields</em> - namely, the <code>birds</code> field and the <code>iguanas</code> field -
+<p>We create the record when we write <code><span class="brace">{</span> birds: 5<span class="comma">,</span> iguanas: 7 <span class="brace">}</span></code>.
+This defines a record with two <i>fields</i>—namely, the <code>birds</code> field and the <code>iguanas</code> field -
 and then assigns the number <code>5</code> to the <code>birds</code> field and the number <code>7</code> to the
 <code>iguanas</code> field. Order doesn't matter with record fields; we could have also specified
 <code>iguanas</code> first and <code>birds</code> second, and Roc would consider it the exact same record.</p>
 <p>When we write <code>counts.birds</code>, it accesses the <code>birds</code> field of the <code>counts</code> record,
-and when we write <code>counts.iguanas</code> it accesses the <code>iguanas</code> field. When we use <code>==</code>
-on records, it compares all the fields in both records with <code>==</code>, and only returns true
-if all fields on both records return true for their <code>==</code> comparisons. If one record has
-more fields than the other, or if the types associated with a given field are different
-between one field and the other, the Roc compiler will give an error at build time.</p>
-<blockquote>
-<p><strong>Note:</strong> Some other languages have a concept of "identity equality" that's separate from
+and when we write <code>counts.iguanas</code> it accesses the <code>iguanas</code> field.</p>
+<p>When we use <a href="/builtins/Bool#isEq"><code class="kw">==</code></a> on records, it compares all the fields in both records
+with <a href="/builtins/Bool#isEq"><code class="kw">==</code></a>, and only considers the two records equal if all of their fields
+are equal. If one record has more fields than the other, or if the types associated with a given
+field are different between one field and the other, the Roc compiler will give an error at build time.</p>
+<aside>
+<b>Note:</b> Some other languages have a concept of "identity equality" that's separate from
 the "structural equality" we just described. Roc does not have a concept of identity equality;
-this is the only way equality works!</p>
-</blockquote>
+this is the only way equality works!
+</aside>
+<h3 id="accepting-extra-fields"><a href="#accepting-extra-fields">Accepting extra fields</a></h3>
 <p>The <code>addAndStringify</code> function will accept any record with at least the fields <code>birds</code> and
 <code>iguanas</code>, but it will also accept records with more fields. For example:</p>
-<pre><code class="lang-coffee">total = <span class="hljs-keyword">addAndStringify </span>{ <span class="hljs-keyword">birds: </span><span class="hljs-number">5</span>, iguanas: <span class="hljs-number">7</span> }
+<samp><span class="dim">total <span class="kw">=</span> addAndStringify <span class="brace">{</span> birds: 5<span class="comma">,</span> iguanas: 7 <span class="brace">}</span>
+</span>
+<span class="comment"># The `name` field is unused by addAndStringify</span>
+totalWithNote <span class="kw">=</span> addAndStringify <span class="brace">{</span> birds: 4<span class="comma">,</span> iguanas: 3<span class="comma">,</span> name: <span class="str">"Whee!"</span> <span class="brace">}</span>
 
-totalWithNote = <span class="hljs-keyword">addAndStringify </span>{ <span class="hljs-keyword">birds: </span><span class="hljs-number">4</span>, iguanas: <span class="hljs-number">3</span>, note: <span class="hljs-string">"Whee!"</span> }
-
-<span class="hljs-keyword">addAndStringify </span>= \<span class="hljs-keyword">counts </span>-&gt;
-    Num.toStr (<span class="hljs-keyword">counts.birds </span>+ <span class="hljs-keyword">counts.iguanas)</span>
-</code></pre>
+<span class="dim">addAndStringify <span class="kw">=</span> <span class="kw">\</span>counts <span class="kw">-></span>
+    Num.toStr <span class="paren">(</span>counts.birds <span class="op">+</span> counts.iguanas<span class="paren">)</span></span></samp>
 <p>This works because <code>addAndStringify</code> only uses <code>counts.birds</code> and <code>counts.iguanas</code>.
 If we were to use <code>counts.note</code> inside <code>addAndStringify</code>, then we would get an error
 because <code>total</code> is calling <code>addAndStringify</code> passing a record that doesn't have a <code>note</code> field.</p>
-<p>Record fields can have any combination of types we want. <code>totalWithNote</code> uses a record that
-has a mixture of numbers and strings, but we can also have record fields with other types of
-values - including other records, or even functions!</p>
-<pre><code class="lang-coffee">{ <span class="hljs-attribute">birds</span>: <span class="hljs-number">4</span>, nestedRecord: { someFunction: (\arg -&gt; arg + <span class="hljs-number">1</span>), name: <span class="hljs-string">"Sam"</span> } }
-</code></pre>
-<h3 id="record-shorthands">Record shorthands</h3>
+<h3 id="comments"><a href="#comments">Comments</a></h3>
+<p>By the way, this is a comment in Roc:</p>
+<samp class="comment"># The `name` field is unused by addAndStringify</samp>
+<p>Whenever you write <span class="comment">#</span> it means that the rest of the line is a comment,
+and will have no effect on the program.</p>
+<h3 id="record-shorthands"><a href="#record-shorthands">Record shorthands</a></h3>
 <p>Roc has a couple of shorthands you can use to express some record-related operations more concisely.</p>
 <p>Instead of writing <code>\record -&gt; record.x</code> we can write <code>.x</code> and it will evaluate to the same thing:
 a function that takes a record and returns its <code>x</code> field. You can do this with any field you want.
 For example:</p>
-<pre><code class="lang-elm"><span class="hljs-built_in">return</span>Foo = .foo
+<samp><span class="comment"># returnFoo is a function that takes a record</span>
+<span class="comment"># and returns the `foo` field of that record.</span>
+returnFoo <span class="kw">=</span> .foo
 
-<span class="hljs-built_in">return</span>Foo { foo: <span class="hljs-string">"hi!"</span>, bar: <span class="hljs-string">"blah"</span> }
-<span class="hljs-comment"># returns "hi!"</span>
-</code></pre>
-<p>Whenever we're setting a field to be a def that has the same name as the field -
-for example, <code>{ x: x }</code> - we can shorten it to just writing the name of the def alone -
-for example, <code>{ x }</code>. We can do this with as many fields as we like, e.g.
+returnFoo <span class="brace">{</span> foo: <span class="str">"hi!"</span><span class="comma">,</span> bar: <span class="str">"blah"</span> <span class="brace"></span>}</span>
+<span class="comment"># returns "hi!"</span>
+</samp>
+<p>Whenever we're setting a field to be equal to a def that has the same name as the field—for example, <code>{ x: x }</code>—we can shorten it to just writing the name of the def alone—for example, <code>{ x }</code>. We can do this with as many fields as we like, e.g.
 <code>{ x: x, y: y }</code> can alternately be written <code>{ x, y }</code>, <code>{ x: x, y }</code>, or <code>{ x, y: y }</code>.</p>
-<h3 id="record-destructuring">Record destructuring</h3>
+<h3 id="record-destructuring"><a href="#record-destructuring">Record destructuring</a></h3>
 <p>We can use <em>destructuring</em> to avoid naming a record in a function argument, instead
 giving names to its individual fields:</p>
-<pre><code class="lang-coffee"><span class="hljs-keyword">addAndStringify </span>= \{ <span class="hljs-keyword">birds, </span>iguanas } -&gt;
-    Num.toStr (<span class="hljs-keyword">birds </span>+ iguanas)
-</code></pre>
+
+<samp>addAndStringify <span class="kw">=</span> <span class="kw">\</span><span class="brace">{</span> birds<span class="comma">,</span> iguanas <span class="brace">}</span><span class="kw"> -></span>
+    Num.toStr <span class="paren">(</span>birds <span class="op">+</span> iguanas<span class="paren">)</span></samp>
 <p>Here, we've <em>destructured</em> the record to create a <code>birds</code> def that's assigned to its <code>birds</code>
 field, and an <code>iguanas</code> def that's assigned to its <code>iguanas</code> field. We can customize this if we
 like:</p>
-<pre><code class="lang-coffee"><span class="hljs-keyword">addAndStringify </span>= \{ <span class="hljs-keyword">birds, </span>iguanas: lizards } -&gt;
-    Num.toStr (<span class="hljs-keyword">birds </span>+ lizards)
-</code></pre>
+<samp>addAndStringify <span class="kw">=</span> <span class="kw">\</span><span class="brace">{</span> birds<span class="comma">,</span> iguanas: lizards <span class="brace">}</span><span class="kw"> -></span>
+    Num.toStr <span class="paren">(</span>birds <span class="op">+</span> lizards<span class="paren">)</span></samp>
 <p>In this version, we created a <code>lizards</code> def that's assigned to the record's <code>iguanas</code> field.
 (We could also do something similar with the <code>birds</code> field if we like.)</p>
 <p>Finally, destructuring can be used in defs too:</p>
-<pre><code class="lang-coffee"><span class="xml"></span><span class="hljs-template-variable">{ x, y }</span><span class="xml"> = </span><span class="hljs-template-variable">{ x: 5, y: 10 }</span><span class="xml"></span>
-</code></pre>
-<h3 id="building-records-from-other-records">Building records from other records</h3>
+<samp><span class="brace">{</span> x<span class="comma">,</span> y <span class="brace">}</span> <span class="kw">=</span> <span class="brace">{</span> x: 5<span class="comma">,</span> y: 10 <span class="brace">}</span></samp>
+<h3 id="making-records-from-other-records"><a href="#making-records-from-other-records">Making records from other records</a></h3>
 <p>So far we've only constructed records from scratch, by specifying all of their fields. We can
 also construct new records by using another record to use as a starting point, and then
 specifying only the fields we want to be different. For example, here are two ways to
 get the same record:</p>
-<pre><code class="lang-coffee">original = { <span class="hljs-string">birds:</span> <span class="hljs-number">5</span>, <span class="hljs-string">iguanas:</span> <span class="hljs-number">7</span>, <span class="hljs-string">zebras:</span> <span class="hljs-number">2</span>, <span class="hljs-string">goats:</span> <span class="hljs-number">1</span> }
+<samp>original <span class="kw">=</span> <span class="brace">{</span> birds: 5<span class="comma">,</span> zebras: 2<span class="comma">,</span> iguanas: 7<span class="comma">,</span> goats: 1 <span class="brace">}</span>
 
-fromScratch = { <span class="hljs-string">birds:</span> <span class="hljs-number">4</span>, <span class="hljs-string">iguanas:</span> <span class="hljs-number">3</span>, <span class="hljs-string">zebras:</span> <span class="hljs-number">2</span>, <span class="hljs-string">goats:</span> <span class="hljs-number">1</span> }
-fromOriginal = { original &amp; <span class="hljs-string">birds:</span> <span class="hljs-number">4</span>, <span class="hljs-string">iguanas:</span> <span class="hljs-number">3</span> }
-</code></pre>
-<p>The <code>fromScratch</code> and <code>fromOriginal</code> records are equal, although they're assembled in
+fromScratch <span class="kw">=</span> <span class="brace">{</span> birds: 4<span class="comma">,</span> zebras: 2<span class="comma">,</span> iguanas: 3<span class="comma">,</span> goats: 1 <span class="brace">}</span>
+fromOriginal <span class="kw">=</span> <span class="brace">{</span> original <span class="kw">&amp;</span> birds: 4<span class="comma">,</span> iguanas: 3<span class="comma"> <span class="brace">}</span>
+</samp>
+<p>The <code>fromScratch</code> and <code>fromOriginal</code> records are equal, although they're defined in
 different ways.</p>
 <ul>
 <li><code>fromScratch</code> was built using the same record syntax we've been using up to this point.</li>
@@ -387,7 +385,8 @@ different ways.</p>
 </ul>
 <p>Note that when we do this, the fields you're overriding must all be present on the original record,
 and their values must have the same type as the corresponding values in the original record.</p>
-<h2 id="tags">Tags</h2>
+</section>
+<!--<section><h2 id="tags">Tags</h2>
 <p>Sometimes we want to represent that something can have one of several values. For example:</p>
 <pre><code class="lang-coffee"><span class="hljs-attr">stoplightColor</span> =
     <span class="hljs-keyword">if</span> something &gt; <span class="hljs-number">0</span> <span class="hljs-keyword">then</span>
@@ -1095,7 +1094,7 @@ Roc compiler. That's why they're called "builtins!"</p>
 <li>All their types are imported unqualified automatically. So you never need to write <code>Num.Nat</code>, because it's as if the <code>Num</code> module was imported using <code>imports [Num.{ Nat }]</code> (and the same for all the other types in the <code>Num</code> module).</li>
 </ul>
 <h2 id="the-app-module-header">The app module header</h2>
-<p>Let's take a closer look at the part of <code>Hello.roc</code> above <code>main</code>:</p>
+<p>Let's take a closer look at the part of <code>main.roc</code> above the <code>main</code> def:</p>
 <pre><code class="lang-coffee"><span class="hljs-selector-tag">app</span> "<span class="hljs-selector-tag">hello</span>"
     <span class="hljs-selector-tag">packages</span> { <span class="hljs-attribute">pf</span>: <span class="hljs-string">"examples/cli/cli-platform/main.roc"</span> }
     <span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program]</span>
@@ -1106,9 +1105,9 @@ are different types of modules. We know this particular one is an <em>applicatio
 (or <em>app module</em> for short) because it begins with the <code>app</code> keyword.</p>
 <p>The line <code>app "hello"</code> states that this module defines a Roc application, and
 that building this application should produce an executable named <code>hello</code>. This
-means when you run <code>roc Hello.roc</code>, the Roc compiler will build an executable
+means when you run <code>roc dev</code>, the Roc compiler will build an executable
 named <code>hello</code> (or <code>hello.exe</code> on Windows) and run it. You can also build the executable
-without running it by running <code>roc build Hello.roc</code>.</p>
+without running it by running <code>roc build</code>.</p>
 <p>The remaining lines all involve the <em>platform</em> this application is built on:</p>
 <pre><code class="lang-coffee"><span class="hljs-selector-tag">packages</span> { <span class="hljs-attribute">pf</span>: <span class="hljs-string">"examples/cli/cli-platform/main.roc"</span> }
 <span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program]</span>
