@@ -18,7 +18,8 @@ hosted Effect
         removeProperty,
         setListener,
         removeListener,
-        runInVdomArena,
+        enableVdomAllocator,
+        disableVdomAllocator,
     ]
     imports []
     generates Effect with [after, always, map]
@@ -79,10 +80,3 @@ enableVdomAllocator : Bool -> Effect {}
 # allocator that is safe to use with long-lived values.
 # At the same time, drop the entire "old" virtual DOM arena.
 disableVdomAllocator : Effect {}
-
-runInVdomArena : Bool, ({} -> Effect a) -> Effect a
-runInVdomArena = \useOddArena, run ->
-    _ <- Effect.enableVdomAllocator useOddArena |> Effect.after
-    returnVal <- run {} |> Effect.after
-    _ <- Effect.disableVdomAllocator |> Effect.after
-    Effect.always returnVal

@@ -1,5 +1,5 @@
-platform "static-site-gen"
-    requires {} { main : App state initData }
+platform "server-side"
+    requires {} { app : App state initData }
     exposes []
     packages {}
     imports [
@@ -7,14 +7,14 @@ platform "static-site-gen"
         Html.{ renderStatic },
         Json,
     ]
-    provides [mainForHost]
+    provides [main]
 
-mainForHost : Str -> Result Str Str
-mainForHost = \initJson ->
+main : Str -> Result Str Str
+main = \initJson ->
     initJson
     |> Str.toUtf8
     |> Decode.fromBytes Json.fromUtf8
-    |> Result.try \initData -> initServerApp initData main
+    |> Result.try \initData -> initServerApp initData app
     |> Result.map renderStatic
     |> Result.mapErr \err ->
         when err is
@@ -26,6 +26,3 @@ mainForHost = \initJson ->
 
             InvalidDocument ->
                 "The HTML document must be an <html> tag containing a <body>"
-
-            MissingHtmlIds _ ->
-                "Some dynamic views have no corresponding HTML IDs in the static document"

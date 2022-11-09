@@ -1,5 +1,6 @@
 interface Html
     exposes [
+        App,
         Html,
         Attribute,
         renderStatic,
@@ -123,6 +124,7 @@ interface Html
     ]
     imports [Html.Internal]
 
+App state initData : Html.Internal.App state initData
 Html state : Html.Internal.Html state
 Attribute state : Html.Internal.Attribute state
 

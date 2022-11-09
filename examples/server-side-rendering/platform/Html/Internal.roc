@@ -305,7 +305,7 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
             # Any values created in the arena will all be freed on the next update
             isOddArena = !wasOddArena
 
-            Effect.runInVdomArena isOddArena \_ ->
+            runInVdomArena isOddArena \_ ->
                 newViewUnindexed = app.render newState
                 emptyHandlers = List.repeat (Err NoHandler) (List.len handlers)
 
@@ -323,6 +323,13 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
         # TODO: Roc compiler tells me I need a `_` pattern but I think I should just need `None`
         _ ->
             Effect.always (Box.box { platformState: boxedPlatformState, stopPropagation, preventDefault })
+
+runInVdomArena : Bool, ({} -> Effect a) -> Effect a
+runInVdomArena = \useOddArena, run ->
+    _ <- Effect.enableVdomAllocator useOddArena |> Effect.after
+    returnVal <- run {} |> Effect.after
+    _ <- Effect.disableVdomAllocator |> Effect.after
+    Effect.always returnVal
 
 insertHandler : List (Result (Handler state) [NoHandler]), Handler state -> { index : Nat, handlers : List (Result (Handler state) [NoHandler]) }
 insertHandler = \handlers, newHandler ->
@@ -551,6 +558,7 @@ createSubTree = \previousEffects, node ->
             # { newHandlers: newHandlersKids, renderedNodes: renderedNodesKids } <-
             #     List.walk children { newHandlers: newHandlersAttrs, renderedNodes: [] } createSubTree |> Effect.after
             { newHandlers: newHandlersKids, renderedNodes: renderedNodesKids } = { newHandlers: newHandlersAttrs, renderedNodes: [] } # TODO: remove
+
             Effect.always {
                 newHandlers: newHandlersKids,
                 renderedNodes: List.append renderedNodes (Element name jsIndex size renderedAttrs renderedNodesKids),
@@ -605,4 +613,3 @@ addAttribute = \{ nodeIndex, style, newHandlers, renderedAttrs, effects }, attr 
             newStyle = "\(style) \(k):\(v);"
 
             { nodeIndex, style: newStyle, newHandlers, renderedAttrs: List.append renderedAttrs (Style k v), effects }
-

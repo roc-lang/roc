@@ -45,13 +45,13 @@ const ResultStrStr = extern struct {
     isOk: bool,
 };
 
-extern fn roc__mainForHost_1_exposed(RocStr) callconv(.C) ResultStrStr;
+extern fn roc__main_1_exposed(RocStr) callconv(.C) ResultStrStr;
 
 pub fn main() u8 {
-    const json = RocStr.fromSlice("{ value: 123 }");
+    const json = RocStr.fromSlice("42");
     defer json.deinit();
 
-    const result = roc__mainForHost_1_exposed(json);
+    const result = roc__main_1_exposed(json);
     defer result.payload.deinit();
 
     const writer = if (result.isOk)
