@@ -1651,22 +1651,22 @@ mod test {
         std::fs::write(dir.join("libapp.dll"), dylib_bytes).unwrap();
 
         // now we can compile the host (it uses libapp.dll, hence the order here)
-        let output = std::process::Command::new(&zig)
-            .current_dir(dir)
-            .args([
-                "build-exe",
-                "libapp.dll",
-                "host.zig",
-                "-lc",
-                "-target",
-                "x86_64-windows-gnu",
-                "-rdynamic",
-                "--strip",
-                "-rdynamic",
-                "-OReleaseFast",
-            ])
-            .output()
-            .unwrap();
+        let mut command = std::process::Command::new(&zig);
+        command.current_dir(dir).args([
+            "build-exe",
+            "libapp.dll",
+            "host.zig",
+            "-lc",
+            "-target",
+            "x86_64-windows-gnu",
+            "-rdynamic",
+            "--strip",
+            "-rdynamic",
+            "-OReleaseFast",
+        ]);
+
+        let command_str = format!("{:?}", &command);
+        let output = command.output().unwrap();
 
         if !output.status.success() {
             use std::io::Write;
@@ -1674,7 +1674,7 @@ mod test {
             std::io::stdout().write_all(&output.stdout).unwrap();
             std::io::stderr().write_all(&output.stderr).unwrap();
 
-            panic!("zig build-exe failed");
+            panic!("zig build-exe failed: {}", command_str);
         }
 
         preprocess_windows(
@@ -1867,20 +1867,20 @@ mod test {
 
         std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
 
-        let output = std::process::Command::new(&zig)
-            .current_dir(dir)
-            .args([
-                "build-exe",
-                "host.zig",
-                "-lc",
-                "-target",
-                "x86_64-windows-gnu",
-                "-rdynamic",
-                "--strip",
-                "-OReleaseFast",
-            ])
-            .output()
-            .unwrap();
+        let mut command = std::process::Command::new(&zig);
+        command.current_dir(dir).args([
+            "build-exe",
+            "host.zig",
+            "-lc",
+            "-target",
+            "x86_64-windows-gnu",
+            "-rdynamic",
+            "--strip",
+            "-OReleaseFast",
+        ]);
+
+        let command_str = format!("{:?}", &command);
+        let output = command.output().unwrap();
 
         if !output.status.success() {
             use std::io::Write;
@@ -1888,7 +1888,7 @@ mod test {
             std::io::stdout().write_all(&output.stdout).unwrap();
             std::io::stderr().write_all(&output.stderr).unwrap();
 
-            panic!("zig build-exe failed");
+            panic!("zig build-exe failed: {}", command_str);
         }
 
         let host_bytes = std::fs::read(dir.join("host.exe")).unwrap();
