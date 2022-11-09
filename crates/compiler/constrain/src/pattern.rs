@@ -435,9 +435,7 @@ pub fn constrain_pattern(
             } in destructs
             {
                 let pat_type = Type::Variable(*var);
-                let pat_type_index =
-                    // TODO(types-soa) use variable here instead
-                    { let typ = types.from_old_type(&pat_type.clone()); constraints.push_type(types, typ) };
+                let pat_type_index = constraints.push_variable(*var);
                 let expected =
                     constraints.push_pat_expected_type(PExpected::NoExpectation(pat_type_index));
 
