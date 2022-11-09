@@ -1,4 +1,6 @@
 
+const SCREEN_DRAW_RATE_MS: u64 = 50;
+
 pub fn run_event_loop(title: &str) {
     
     crossterm::terminal::enable_raw_mode().expect("TODO handle enabling Raw mode on terminal");
@@ -10,7 +12,7 @@ pub fn run_event_loop(title: &str) {
     ).expect("TODO handle entering alternate screen and enabling mouse capture on terminal");
     let backend = tui::backend::CrosstermBackend::new(stdout);
     let mut terminal = tui::Terminal::new(backend).expect("TODO handle unable to create crossterm backend");
-    let tick_rate = std::time::Duration::from_millis(200);
+    let tick_rate = std::time::Duration::from_millis(SCREEN_DRAW_RATE_MS);
     let events = Events::new(tick_rate);
     let size = terminal.size().expect("TODO unable to get frame size");
     let window_bounds = crate::glue::Bounds{
@@ -24,14 +26,8 @@ pub fn run_event_loop(title: &str) {
     loop {
 
         let mut appReturn = false;
+        let mut appRedraw = false;
         
-        // Draw the widgets
-        terminal.draw(|f| {
-            for elem in &elems {
-                renderWidget(f, f.size(), &elem)
-            }
-        }).expect("Err: Unable to draw to terminal.");
-
         // Handle any events
         let result = match events.next().expect("TODO handle unable to spawn event thread") {
             InputEvent::KeyPressed(key) => {
@@ -41,21 +37,21 @@ pub fn run_event_loop(title: &str) {
                 } else {
                     let keyCode = getKeyCode(key.code);
                     let event = crate::glue::Event::KeyPressed(keyCode);
-                    (model, elems) = crate::roc::update_and_render(model, event);
+                    model = crate::roc::update(model, event);
                 }
             },
             InputEvent::FocusGained => {
                 let event = crate::glue::Event::FocusGained;
-                (model, elems) = crate::roc::update_and_render(model, event);
+                model = crate::roc::update(model, event);
             },
             InputEvent::FocusLost => {
                 let event = crate::glue::Event::FocusLost;
-                (model, elems) = crate::roc::update_and_render(model, event);
+                model = crate::roc::update(model, event);
             },
             InputEvent::Paste(contents) => {
                 let roc_string = roc_std::RocStr::from(&contents[..]); 
                 let event = crate::glue::Event::Paste(roc_string);
-                (model, elems) = crate::roc::update_and_render(model, event);
+                model = crate::roc::update(model, event);
             },
             InputEvent::Resize(column, row) => {
                 let window_bounds = crate::glue::Bounds{
@@ -63,13 +59,28 @@ pub fn run_event_loop(title: &str) {
                     width : row,
                 };
                 let event = crate::glue::Event::Resize(window_bounds);
-                (model, elems) = crate::roc::update_and_render(model, event);
+                model = crate::roc::update(model, event);
             },
-            InputEvent::Tick => {}, // TODO add ticks? What are these needed for? 
+            InputEvent::Tick => {
+                // TODO add ticks? 
+                // Are these needed in the app?? 
+                appRedraw = true;   
+            }, 
         };
 
         if appReturn {
             break;
+        }
+
+        if appRedraw {
+            elems = crate::roc::render(model);
+
+            // Draw the widgets
+            terminal.draw(|f| {
+                for elem in &elems {
+                    renderWidget(f, f.size(), &elem)
+                }
+            }).expect("Err: Unable to draw to terminal.");
         }
     }
 
@@ -229,15 +240,15 @@ fn getStyle(rocStyle : &crate::glue::Styles) -> tui::style::Style {
     let mut modifiers = tui::style::Modifier::empty();
     for modifier in &rocStyle.modifiers {
         match modifier {
-            crate::glue::TextModifier::BOLD => {modifiers.insert(tui::style::Modifier::BOLD);},
-            crate::glue::TextModifier::CROSSEDOUT => {modifiers.insert(tui::style::Modifier::CROSSED_OUT);},
-            crate::glue::TextModifier::DIM => {modifiers.insert(tui::style::Modifier::DIM);},
-            crate::glue::TextModifier::HIDDEN => {modifiers.insert(tui::style::Modifier::HIDDEN);},
-            crate::glue::TextModifier::ITALIC => {modifiers.insert(tui::style::Modifier::ITALIC);},
-            crate::glue::TextModifier::RAPIDBLINK => {modifiers.insert(tui::style::Modifier::RAPID_BLINK);},
-            crate::glue::TextModifier::REVERSED => {modifiers.insert(tui::style::Modifier::REVERSED);},
-            crate::glue::TextModifier::SLOWBLINK => {modifiers.insert(tui::style::Modifier::SLOW_BLINK);},
-            crate::glue::TextModifier::UNDERLINED => {modifiers.insert(tui::style::Modifier::UNDERLINED);},
+            crate::glue::TextModifier::Bold => {modifiers.insert(tui::style::Modifier::BOLD);},
+            crate::glue::TextModifier::CrossedOut => {modifiers.insert(tui::style::Modifier::CROSSED_OUT);},
+            crate::glue::TextModifier::Dim => {modifiers.insert(tui::style::Modifier::DIM);},
+            crate::glue::TextModifier::Hidden => {modifiers.insert(tui::style::Modifier::HIDDEN);},
+            crate::glue::TextModifier::Italic => {modifiers.insert(tui::style::Modifier::ITALIC);},
+            crate::glue::TextModifier::RapidBlink => {modifiers.insert(tui::style::Modifier::RAPID_BLINK);},
+            crate::glue::TextModifier::Reversed => {modifiers.insert(tui::style::Modifier::REVERSED);},
+            crate::glue::TextModifier::SlowBlink => {modifiers.insert(tui::style::Modifier::SLOW_BLINK);},
+            crate::glue::TextModifier::Underlined => {modifiers.insert(tui::style::Modifier::UNDERLINED);},
         }
     }
     style = style.add_modifier(modifiers);
@@ -288,12 +299,12 @@ fn getBorders(rocBorders : &roc_std::RocList<crate::glue::BorderModifier>) -> tu
     let mut borders = tui::widgets::Borders::empty();
     for border in rocBorders {
         match border {
-            crate::glue::BorderModifier::ALL => borders.insert(tui::widgets::Borders::ALL),
-            crate::glue::BorderModifier::BOTTOM => borders.insert(tui::widgets::Borders::BOTTOM),
-            crate::glue::BorderModifier::LEFT => borders.insert(tui::widgets::Borders::LEFT),
-            crate::glue::BorderModifier::NONE => borders.insert(tui::widgets::Borders::NONE),
-            crate::glue::BorderModifier::RIGHT => borders.insert(tui::widgets::Borders::RIGHT),
-            crate::glue::BorderModifier::TOP => borders.insert(tui::widgets::Borders::TOP),
+            crate::glue::BorderModifier::All => borders.insert(tui::widgets::Borders::ALL),
+            crate::glue::BorderModifier::Bottom => borders.insert(tui::widgets::Borders::BOTTOM),
+            crate::glue::BorderModifier::Left => borders.insert(tui::widgets::Borders::LEFT),
+            crate::glue::BorderModifier::None => borders.insert(tui::widgets::Borders::NONE),
+            crate::glue::BorderModifier::Right => borders.insert(tui::widgets::Borders::RIGHT),
+            crate::glue::BorderModifier::Top => borders.insert(tui::widgets::Borders::TOP),
         }
     }
     borders
@@ -337,75 +348,77 @@ fn getLayoutDirection(direction : crate::glue::LayoutDirection) -> tui::layout::
 
 fn getKeyCode(event: crossterm::event::KeyCode) -> crate::glue::KeyCode {
     match event {
-        crossterm::event::KeyCode::BackTab => crate::glue::KeyCode::KeyBackTab,
-        crossterm::event::KeyCode::Backspace => crate::glue::KeyCode::KeyBackspace,
-        crossterm::event::KeyCode::CapsLock => crate::glue::KeyCode::KeyCapsLock,
-        crossterm::event::KeyCode::Delete => crate::glue::KeyCode::KeyDelete,
-        crossterm::event::KeyCode::Down => crate::glue::KeyCode::KeyDown,
-        crossterm::event::KeyCode::End => crate::glue::KeyCode::KeyEnd,
-        crossterm::event::KeyCode::Enter => crate::glue::KeyCode::KeyEnter,
-        crossterm::event::KeyCode::Esc => crate::glue::KeyCode::KeyEsc,
-        crossterm::event::KeyCode::F(number) => crate::glue::KeyCode::KeyFunction(number),
-        crossterm::event::KeyCode::Home => crate::glue::KeyCode::KeyHome,
-        crossterm::event::KeyCode::Insert => crate::glue::KeyCode::KeyInsert,
-        crossterm::event::KeyCode::KeypadBegin => crate::glue::KeyCode::KeyKeypadBegin,
-        crossterm::event::KeyCode::Left => crate::glue::KeyCode::KeyLeft,
+        crossterm::event::KeyCode::BackTab => crate::glue::KeyCode::BackTab,
+        crossterm::event::KeyCode::Backspace => crate::glue::KeyCode::Backspace,
+        crossterm::event::KeyCode::CapsLock => crate::glue::KeyCode::CapsLock,
+        crossterm::event::KeyCode::Delete => crate::glue::KeyCode::Delete,
+        crossterm::event::KeyCode::Down => crate::glue::KeyCode::Down,
+        crossterm::event::KeyCode::End => crate::glue::KeyCode::End,
+        crossterm::event::KeyCode::Enter => crate::glue::KeyCode::Enter,
+        crossterm::event::KeyCode::Esc => crate::glue::KeyCode::Esc,
+        crossterm::event::KeyCode::F(number) => crate::glue::KeyCode::Function(number),
+        crossterm::event::KeyCode::Home => crate::glue::KeyCode::Home,
+        crossterm::event::KeyCode::Insert => crate::glue::KeyCode::Insert,
+        crossterm::event::KeyCode::KeypadBegin => crate::glue::KeyCode::KeypadBegin,
+        crossterm::event::KeyCode::Left => crate::glue::KeyCode::Left,
         crossterm::event::KeyCode::Media(mediaKey) => {
-            crate::glue::KeyCode::KeyMedia(getKeyMedia(mediaKey))
+            crate::glue::KeyCode::Media(getKeyMedia(mediaKey))
         },
-        crossterm::event::KeyCode::Menu => crate::glue::KeyCode::KeyMenu,
+        crossterm::event::KeyCode::Menu => crate::glue::KeyCode::Menu,
         crossterm::event::KeyCode::Modifier(keyMod) => {
-            crate::glue::KeyCode::KeyModifier(getKeyModifier(keyMod))
+            crate::glue::KeyCode::Modifier(getKeyModifier(keyMod))
         },
-        crossterm::event::KeyCode::Null => crate::glue::KeyCode::KeyNull,
-        crossterm::event::KeyCode::NumLock => crate::glue::KeyCode::KeyNumLock,
-        crossterm::event::KeyCode::PageDown => crate::glue::KeyCode::KeyPageDown,
-        crossterm::event::KeyCode::PageUp => crate::glue::KeyCode::KeyPageUp,
-        crossterm::event::KeyCode::Pause => crate::glue::KeyCode::KeyPause,
-        crossterm::event::KeyCode::PrintScreen => crate::glue::KeyCode::KeyPrintScreen,
-        crossterm::event::KeyCode::Right => crate::glue::KeyCode::KeyRight,
+        crossterm::event::KeyCode::Null => crate::glue::KeyCode::Null,
+        crossterm::event::KeyCode::NumLock => crate::glue::KeyCode::NumLock,
+        crossterm::event::KeyCode::PageDown => crate::glue::KeyCode::PageDown,
+        crossterm::event::KeyCode::PageUp => crate::glue::KeyCode::PageUp,
+        crossterm::event::KeyCode::Pause => crate::glue::KeyCode::Pause,
+        crossterm::event::KeyCode::PrintScreen => crate::glue::KeyCode::PrintScreen,
+        crossterm::event::KeyCode::Right => crate::glue::KeyCode::Right,
         crossterm::event::KeyCode::Char(ch) => {
-            crate::glue::KeyCode::KeyScalar(char::to_digit(ch, 10u32).expect("TODO handle error converting char to scalar"))
+            let string = String::from(ch);
+            let roc_string = roc_std::RocStr::from(&string[..]);
+            crate::glue::KeyCode::Scalar(roc_string)
         },
-        crossterm::event::KeyCode::ScrollLock => crate::glue::KeyCode::KeyScrollLock,
-        crossterm::event::KeyCode::Tab => crate::glue::KeyCode::KeyTab,
-        crossterm::event::KeyCode::Up => crate::glue::KeyCode::KeyUp,
+        crossterm::event::KeyCode::ScrollLock => crate::glue::KeyCode::ScrollLock,
+        crossterm::event::KeyCode::Tab => crate::glue::KeyCode::Tab,
+        crossterm::event::KeyCode::Up => crate::glue::KeyCode::Up,
     }
 }
 
 fn getKeyModifier(keyMod: crossterm::event::ModifierKeyCode) -> crate::glue::ModifierKeyCode {
     match keyMod {
-        crossterm::event::ModifierKeyCode::IsoLevel3Shift => crate::glue::ModifierKeyCode::KeyIsoLevel3Shift,
-        crossterm::event::ModifierKeyCode::IsoLevel5Shift => crate::glue::ModifierKeyCode::KeyIsoLevel5Shift,
-        crossterm::event::ModifierKeyCode::LeftAlt => crate::glue::ModifierKeyCode::KeyLeftAlt,
-        crossterm::event::ModifierKeyCode::LeftControl => crate::glue::ModifierKeyCode::KeyLeftControl,
-        crossterm::event::ModifierKeyCode::LeftHyper => crate::glue::ModifierKeyCode::KeyLeftHyper,
-        crossterm::event::ModifierKeyCode::LeftMeta => crate::glue::ModifierKeyCode::KeyLeftMeta,
-        crossterm::event::ModifierKeyCode::LeftShift => crate::glue::ModifierKeyCode::KeyLeftShift,
-        crossterm::event::ModifierKeyCode::LeftSuper => crate::glue::ModifierKeyCode::KeyLeftSuper,
-        crossterm::event::ModifierKeyCode::RightAlt => crate::glue::ModifierKeyCode::KeyRightAlt,
-        crossterm::event::ModifierKeyCode::RightControl => crate::glue::ModifierKeyCode::KeyRightControl,
-        crossterm::event::ModifierKeyCode::RightHyper => crate::glue::ModifierKeyCode::KeyRightHyper,
-        crossterm::event::ModifierKeyCode::RightMeta => crate::glue::ModifierKeyCode::KeyRightMeta,
-        crossterm::event::ModifierKeyCode::RightShift => crate::glue::ModifierKeyCode::KeyRightShift,
-        crossterm::event::ModifierKeyCode::RightSuper => crate::glue::ModifierKeyCode::KeyRightSuper,
+        crossterm::event::ModifierKeyCode::IsoLevel3Shift => crate::glue::ModifierKeyCode::IsoLevel3Shift,
+        crossterm::event::ModifierKeyCode::IsoLevel5Shift => crate::glue::ModifierKeyCode::IsoLevel5Shift,
+        crossterm::event::ModifierKeyCode::LeftAlt => crate::glue::ModifierKeyCode::LeftAlt,
+        crossterm::event::ModifierKeyCode::LeftControl => crate::glue::ModifierKeyCode::LeftControl,
+        crossterm::event::ModifierKeyCode::LeftHyper => crate::glue::ModifierKeyCode::LeftHyper,
+        crossterm::event::ModifierKeyCode::LeftMeta => crate::glue::ModifierKeyCode::LeftMeta,
+        crossterm::event::ModifierKeyCode::LeftShift => crate::glue::ModifierKeyCode::LeftShift,
+        crossterm::event::ModifierKeyCode::LeftSuper => crate::glue::ModifierKeyCode::LeftSuper,
+        crossterm::event::ModifierKeyCode::RightAlt => crate::glue::ModifierKeyCode::RightAlt,
+        crossterm::event::ModifierKeyCode::RightControl => crate::glue::ModifierKeyCode::RightControl,
+        crossterm::event::ModifierKeyCode::RightHyper => crate::glue::ModifierKeyCode::RightHyper,
+        crossterm::event::ModifierKeyCode::RightMeta => crate::glue::ModifierKeyCode::RightMeta,
+        crossterm::event::ModifierKeyCode::RightShift => crate::glue::ModifierKeyCode::RightShift,
+        crossterm::event::ModifierKeyCode::RightSuper => crate::glue::ModifierKeyCode::RightSuper,
     }
 }
 
 fn getKeyMedia(mediaKey: crossterm::event::MediaKeyCode) -> crate::glue::MediaKeyCode {
     match mediaKey {
-        crossterm::event::MediaKeyCode::Play => crate::glue::MediaKeyCode::KeyPlay,
-        crossterm::event::MediaKeyCode::Pause => crate::glue::MediaKeyCode::KeyPause,
-        crossterm::event::MediaKeyCode::PlayPause => crate::glue::MediaKeyCode::KeyPlayPause,
-        crossterm::event::MediaKeyCode::Reverse => crate::glue::MediaKeyCode::KeyReverse,
-        crossterm::event::MediaKeyCode::Stop => crate::glue::MediaKeyCode::KeyStop,
-        crossterm::event::MediaKeyCode::FastForward => crate::glue::MediaKeyCode::KeyFastForward,
-        crossterm::event::MediaKeyCode::Rewind => crate::glue::MediaKeyCode::KeyRewind,
-        crossterm::event::MediaKeyCode::TrackNext => crate::glue::MediaKeyCode::KeyTrackNext,
-        crossterm::event::MediaKeyCode::TrackPrevious => crate::glue::MediaKeyCode::KeyTrackPrevious,
-        crossterm::event::MediaKeyCode::Record => crate::glue::MediaKeyCode::KeyRecord,
-        crossterm::event::MediaKeyCode::LowerVolume => crate::glue::MediaKeyCode::KeyLowerVolume,
-        crossterm::event::MediaKeyCode::RaiseVolume => crate::glue::MediaKeyCode::KeyRaiseVolume,
-        crossterm::event::MediaKeyCode::MuteVolume => crate::glue::MediaKeyCode::KeyMuteVolume,
+        crossterm::event::MediaKeyCode::Play => crate::glue::MediaKeyCode::Play,
+        crossterm::event::MediaKeyCode::Pause => crate::glue::MediaKeyCode::Pause,
+        crossterm::event::MediaKeyCode::PlayPause => crate::glue::MediaKeyCode::PlayPause,
+        crossterm::event::MediaKeyCode::Reverse => crate::glue::MediaKeyCode::Reverse,
+        crossterm::event::MediaKeyCode::Stop => crate::glue::MediaKeyCode::Stop,
+        crossterm::event::MediaKeyCode::FastForward => crate::glue::MediaKeyCode::FastForward,
+        crossterm::event::MediaKeyCode::Rewind => crate::glue::MediaKeyCode::Rewind,
+        crossterm::event::MediaKeyCode::TrackNext => crate::glue::MediaKeyCode::TrackNext,
+        crossterm::event::MediaKeyCode::TrackPrevious => crate::glue::MediaKeyCode::TrackPrevious,
+        crossterm::event::MediaKeyCode::Record => crate::glue::MediaKeyCode::Record,
+        crossterm::event::MediaKeyCode::LowerVolume => crate::glue::MediaKeyCode::LowerVolume,
+        crossterm::event::MediaKeyCode::RaiseVolume => crate::glue::MediaKeyCode::RaiseVolume,
+        crossterm::event::MediaKeyCode::MuteVolume => crate::glue::MediaKeyCode::MuteVolume,
     }
 }

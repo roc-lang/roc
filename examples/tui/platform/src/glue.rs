@@ -44,7 +44,7 @@ pub struct Elem {
 #[repr(C)]
 union UnionElem {
     Layout: core::mem::ManuallyDrop<ElemLayout>,
-    Paragraph: core::mem::ManuallyDrop<ElemParagraph>,
+    Paragraph: core::mem::ManuallyDrop<Elem_Paragraph>,
     _sizer: [u8; 4],
 }
 
@@ -71,7 +71,7 @@ pub struct Span {
 ))]
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
-pub enum DiscriminantEvent {
+pub enum discriminant_Event {
     FocusGained = 0,
     FocusLost = 1,
     KeyPressed = 2,
@@ -79,14 +79,14 @@ pub enum DiscriminantEvent {
     Resize = 4,
 }
 
-impl core::fmt::Debug for DiscriminantEvent {
+impl core::fmt::Debug for discriminant_Event {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::FocusGained => f.write_str("DiscriminantEvent::FocusGained"),
-            Self::FocusLost => f.write_str("DiscriminantEvent::FocusLost"),
-            Self::KeyPressed => f.write_str("DiscriminantEvent::KeyPressed"),
-            Self::Paste => f.write_str("DiscriminantEvent::Paste"),
-            Self::Resize => f.write_str("DiscriminantEvent::Resize"),
+            Self::FocusGained => f.write_str("discriminant_Event::FocusGained"),
+            Self::FocusLost => f.write_str("discriminant_Event::FocusLost"),
+            Self::KeyPressed => f.write_str("discriminant_Event::KeyPressed"),
+            Self::Paste => f.write_str("discriminant_Event::Paste"),
+            Self::Resize => f.write_str("discriminant_Event::Resize"),
         }
     }
 }
@@ -98,10 +98,10 @@ impl core::fmt::Debug for DiscriminantEvent {
 ))]
 #[repr(C)]
 pub union Event {
-    KeyPressed: KeyCode,
+    KeyPressed: core::mem::ManuallyDrop<KeyCode>,
     Paste: core::mem::ManuallyDrop<roc_std::RocStr>,
     Resize: Bounds,
-    _sizer: [u8; 16],
+    _sizer: [u8; 20],
 }
 
 #[cfg(any(
@@ -127,23 +127,23 @@ pub struct Model {
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum BorderModifier {
-    ALL = 0,
-    BOTTOM = 1,
-    LEFT = 2,
-    NONE = 3,
-    RIGHT = 4,
-    TOP = 5,
+    All = 0,
+    Bottom = 1,
+    Left = 2,
+    None = 3,
+    Right = 4,
+    Top = 5,
 }
 
 impl core::fmt::Debug for BorderModifier {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::ALL => f.write_str("BorderModifier::ALL"),
-            Self::BOTTOM => f.write_str("BorderModifier::BOTTOM"),
-            Self::LEFT => f.write_str("BorderModifier::LEFT"),
-            Self::NONE => f.write_str("BorderModifier::NONE"),
-            Self::RIGHT => f.write_str("BorderModifier::RIGHT"),
-            Self::TOP => f.write_str("BorderModifier::TOP"),
+            Self::All => f.write_str("BorderModifier::All"),
+            Self::Bottom => f.write_str("BorderModifier::Bottom"),
+            Self::Left => f.write_str("BorderModifier::Left"),
+            Self::None => f.write_str("BorderModifier::None"),
+            Self::Right => f.write_str("BorderModifier::Right"),
+            Self::Top => f.write_str("BorderModifier::Top"),
         }
     }
 }
@@ -158,29 +158,29 @@ impl core::fmt::Debug for BorderModifier {
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum TextModifier {
-    BOLD = 0,
-    CROSSEDOUT = 1,
-    DIM = 2,
-    HIDDEN = 3,
-    ITALIC = 4,
-    RAPIDBLINK = 5,
-    REVERSED = 6,
-    SLOWBLINK = 7,
-    UNDERLINED = 8,
+    Bold = 0,
+    CrossedOut = 1,
+    Dim = 2,
+    Hidden = 3,
+    Italic = 4,
+    RapidBlink = 5,
+    Reversed = 6,
+    SlowBlink = 7,
+    Underlined = 8,
 }
 
 impl core::fmt::Debug for TextModifier {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::BOLD => f.write_str("TextModifier::BOLD"),
-            Self::CROSSEDOUT => f.write_str("TextModifier::CROSSEDOUT"),
-            Self::DIM => f.write_str("TextModifier::DIM"),
-            Self::HIDDEN => f.write_str("TextModifier::HIDDEN"),
-            Self::ITALIC => f.write_str("TextModifier::ITALIC"),
-            Self::RAPIDBLINK => f.write_str("TextModifier::RAPIDBLINK"),
-            Self::REVERSED => f.write_str("TextModifier::REVERSED"),
-            Self::SLOWBLINK => f.write_str("TextModifier::SLOWBLINK"),
-            Self::UNDERLINED => f.write_str("TextModifier::UNDERLINED"),
+            Self::Bold => f.write_str("TextModifier::Bold"),
+            Self::CrossedOut => f.write_str("TextModifier::CrossedOut"),
+            Self::Dim => f.write_str("TextModifier::Dim"),
+            Self::Hidden => f.write_str("TextModifier::Hidden"),
+            Self::Italic => f.write_str("TextModifier::Italic"),
+            Self::RapidBlink => f.write_str("TextModifier::RapidBlink"),
+            Self::Reversed => f.write_str("TextModifier::Reversed"),
+            Self::SlowBlink => f.write_str("TextModifier::SlowBlink"),
+            Self::Underlined => f.write_str("TextModifier::Underlined"),
         }
     }
 }
@@ -270,83 +270,81 @@ pub struct R1 {
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum DiscriminantKeyCode {
-    KeyBackTab = 0,
-    KeyBackspace = 1,
-    KeyCapsLock = 2,
-    KeyDelete = 3,
-    KeyDown = 4,
-    KeyEnd = 5,
-    KeyEnter = 6,
-    KeyEsc = 7,
-    KeyFunction = 8,
-    KeyHome = 9,
-    KeyInsert = 10,
-    KeyKeypadBegin = 11,
-    KeyLeft = 12,
-    KeyMedia = 13,
-    KeyMenu = 14,
-    KeyModifier = 15,
-    KeyNull = 16,
-    KeyNumLock = 17,
-    KeyPageDown = 18,
-    KeyPageUp = 19,
-    KeyPause = 20,
-    KeyPrintScreen = 21,
-    KeyRight = 22,
-    KeyScalar = 23,
-    KeyScrollLock = 24,
-    KeyTab = 25,
-    KeyUp = 26,
+    BackTab = 0,
+    Backspace = 1,
+    CapsLock = 2,
+    Delete = 3,
+    Down = 4,
+    End = 5,
+    Enter = 6,
+    Esc = 7,
+    Function = 8,
+    Home = 9,
+    Insert = 10,
+    KeypadBegin = 11,
+    Left = 12,
+    Media = 13,
+    Menu = 14,
+    Modifier = 15,
+    Null = 16,
+    NumLock = 17,
+    PageDown = 18,
+    PageUp = 19,
+    Pause = 20,
+    PrintScreen = 21,
+    Right = 22,
+    Scalar = 23,
+    ScrollLock = 24,
+    Tab = 25,
+    Up = 26,
 }
 
 impl core::fmt::Debug for DiscriminantKeyCode {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::KeyBackTab => f.write_str("DiscriminantKeyCode::KeyBackTab"),
-            Self::KeyBackspace => f.write_str("DiscriminantKeyCode::KeyBackspace"),
-            Self::KeyCapsLock => f.write_str("DiscriminantKeyCode::KeyCapsLock"),
-            Self::KeyDelete => f.write_str("DiscriminantKeyCode::KeyDelete"),
-            Self::KeyDown => f.write_str("DiscriminantKeyCode::KeyDown"),
-            Self::KeyEnd => f.write_str("DiscriminantKeyCode::KeyEnd"),
-            Self::KeyEnter => f.write_str("DiscriminantKeyCode::KeyEnter"),
-            Self::KeyEsc => f.write_str("DiscriminantKeyCode::KeyEsc"),
-            Self::KeyFunction => f.write_str("DiscriminantKeyCode::KeyFunction"),
-            Self::KeyHome => f.write_str("DiscriminantKeyCode::KeyHome"),
-            Self::KeyInsert => f.write_str("DiscriminantKeyCode::KeyInsert"),
-            Self::KeyKeypadBegin => f.write_str("DiscriminantKeyCode::KeyKeypadBegin"),
-            Self::KeyLeft => f.write_str("DiscriminantKeyCode::KeyLeft"),
-            Self::KeyMedia => f.write_str("DiscriminantKeyCode::KeyMedia"),
-            Self::KeyMenu => f.write_str("DiscriminantKeyCode::KeyMenu"),
-            Self::KeyModifier => f.write_str("DiscriminantKeyCode::KeyModifier"),
-            Self::KeyNull => f.write_str("DiscriminantKeyCode::KeyNull"),
-            Self::KeyNumLock => f.write_str("DiscriminantKeyCode::KeyNumLock"),
-            Self::KeyPageDown => f.write_str("DiscriminantKeyCode::KeyPageDown"),
-            Self::KeyPageUp => f.write_str("DiscriminantKeyCode::KeyPageUp"),
-            Self::KeyPause => f.write_str("DiscriminantKeyCode::KeyPause"),
-            Self::KeyPrintScreen => f.write_str("DiscriminantKeyCode::KeyPrintScreen"),
-            Self::KeyRight => f.write_str("DiscriminantKeyCode::KeyRight"),
-            Self::KeyScalar => f.write_str("DiscriminantKeyCode::KeyScalar"),
-            Self::KeyScrollLock => f.write_str("DiscriminantKeyCode::KeyScrollLock"),
-            Self::KeyTab => f.write_str("DiscriminantKeyCode::KeyTab"),
-            Self::KeyUp => f.write_str("DiscriminantKeyCode::KeyUp"),
+            Self::BackTab => f.write_str("DiscriminantKeyCode::BackTab"),
+            Self::Backspace => f.write_str("DiscriminantKeyCode::Backspace"),
+            Self::CapsLock => f.write_str("DiscriminantKeyCode::CapsLock"),
+            Self::Delete => f.write_str("DiscriminantKeyCode::Delete"),
+            Self::Down => f.write_str("DiscriminantKeyCode::Down"),
+            Self::End => f.write_str("DiscriminantKeyCode::End"),
+            Self::Enter => f.write_str("DiscriminantKeyCode::Enter"),
+            Self::Esc => f.write_str("DiscriminantKeyCode::Esc"),
+            Self::Function => f.write_str("DiscriminantKeyCode::Function"),
+            Self::Home => f.write_str("DiscriminantKeyCode::Home"),
+            Self::Insert => f.write_str("DiscriminantKeyCode::Insert"),
+            Self::KeypadBegin => f.write_str("DiscriminantKeyCode::KeypadBegin"),
+            Self::Left => f.write_str("DiscriminantKeyCode::Left"),
+            Self::Media => f.write_str("DiscriminantKeyCode::Media"),
+            Self::Menu => f.write_str("DiscriminantKeyCode::Menu"),
+            Self::Modifier => f.write_str("DiscriminantKeyCode::Modifier"),
+            Self::Null => f.write_str("DiscriminantKeyCode::Null"),
+            Self::NumLock => f.write_str("DiscriminantKeyCode::NumLock"),
+            Self::PageDown => f.write_str("DiscriminantKeyCode::PageDown"),
+            Self::PageUp => f.write_str("DiscriminantKeyCode::PageUp"),
+            Self::Pause => f.write_str("DiscriminantKeyCode::Pause"),
+            Self::PrintScreen => f.write_str("DiscriminantKeyCode::PrintScreen"),
+            Self::Right => f.write_str("DiscriminantKeyCode::Right"),
+            Self::Scalar => f.write_str("DiscriminantKeyCode::Scalar"),
+            Self::ScrollLock => f.write_str("DiscriminantKeyCode::ScrollLock"),
+            Self::Tab => f.write_str("DiscriminantKeyCode::Tab"),
+            Self::Up => f.write_str("DiscriminantKeyCode::Up"),
         }
     }
 }
 
 #[cfg(any(
     target_arch = "arm",
-    target_arch = "aarch64",
     target_arch = "wasm32",
-    target_arch = "x86",
-    target_arch = "x86_64"
+    target_arch = "x86"
 ))]
 #[repr(C)]
 pub union KeyCode {
-    KeyFunction: u8,
-    KeyMedia: MediaKeyCode,
-    KeyModifier: ModifierKeyCode,
-    KeyScalar: u32,
-    _sizer: [u8; 8],
+    Function: u8,
+    Media: MediaKeyCode,
+    Modifier: ModifierKeyCode,
+    Scalar: core::mem::ManuallyDrop<roc_std::RocStr>,
+    _sizer: [u8; 16],
 }
 
 #[cfg(any(
@@ -359,39 +357,39 @@ pub union KeyCode {
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum ModifierKeyCode {
-    KeyIsoLevel3Shift = 0,
-    KeyIsoLevel5Shift = 1,
-    KeyLeftAlt = 2,
-    KeyLeftControl = 3,
-    KeyLeftHyper = 4,
-    KeyLeftMeta = 5,
-    KeyLeftShift = 6,
-    KeyLeftSuper = 7,
-    KeyRightAlt = 8,
-    KeyRightControl = 9,
-    KeyRightHyper = 10,
-    KeyRightMeta = 11,
-    KeyRightShift = 12,
-    KeyRightSuper = 13,
+    IsoLevel3Shift = 0,
+    IsoLevel5Shift = 1,
+    LeftAlt = 2,
+    LeftControl = 3,
+    LeftHyper = 4,
+    LeftMeta = 5,
+    LeftShift = 6,
+    LeftSuper = 7,
+    RightAlt = 8,
+    RightControl = 9,
+    RightHyper = 10,
+    RightMeta = 11,
+    RightShift = 12,
+    RightSuper = 13,
 }
 
 impl core::fmt::Debug for ModifierKeyCode {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::KeyIsoLevel3Shift => f.write_str("ModifierKeyCode::KeyIsoLevel3Shift"),
-            Self::KeyIsoLevel5Shift => f.write_str("ModifierKeyCode::KeyIsoLevel5Shift"),
-            Self::KeyLeftAlt => f.write_str("ModifierKeyCode::KeyLeftAlt"),
-            Self::KeyLeftControl => f.write_str("ModifierKeyCode::KeyLeftControl"),
-            Self::KeyLeftHyper => f.write_str("ModifierKeyCode::KeyLeftHyper"),
-            Self::KeyLeftMeta => f.write_str("ModifierKeyCode::KeyLeftMeta"),
-            Self::KeyLeftShift => f.write_str("ModifierKeyCode::KeyLeftShift"),
-            Self::KeyLeftSuper => f.write_str("ModifierKeyCode::KeyLeftSuper"),
-            Self::KeyRightAlt => f.write_str("ModifierKeyCode::KeyRightAlt"),
-            Self::KeyRightControl => f.write_str("ModifierKeyCode::KeyRightControl"),
-            Self::KeyRightHyper => f.write_str("ModifierKeyCode::KeyRightHyper"),
-            Self::KeyRightMeta => f.write_str("ModifierKeyCode::KeyRightMeta"),
-            Self::KeyRightShift => f.write_str("ModifierKeyCode::KeyRightShift"),
-            Self::KeyRightSuper => f.write_str("ModifierKeyCode::KeyRightSuper"),
+            Self::IsoLevel3Shift => f.write_str("ModifierKeyCode::IsoLevel3Shift"),
+            Self::IsoLevel5Shift => f.write_str("ModifierKeyCode::IsoLevel5Shift"),
+            Self::LeftAlt => f.write_str("ModifierKeyCode::LeftAlt"),
+            Self::LeftControl => f.write_str("ModifierKeyCode::LeftControl"),
+            Self::LeftHyper => f.write_str("ModifierKeyCode::LeftHyper"),
+            Self::LeftMeta => f.write_str("ModifierKeyCode::LeftMeta"),
+            Self::LeftShift => f.write_str("ModifierKeyCode::LeftShift"),
+            Self::LeftSuper => f.write_str("ModifierKeyCode::LeftSuper"),
+            Self::RightAlt => f.write_str("ModifierKeyCode::RightAlt"),
+            Self::RightControl => f.write_str("ModifierKeyCode::RightControl"),
+            Self::RightHyper => f.write_str("ModifierKeyCode::RightHyper"),
+            Self::RightMeta => f.write_str("ModifierKeyCode::RightMeta"),
+            Self::RightShift => f.write_str("ModifierKeyCode::RightShift"),
+            Self::RightSuper => f.write_str("ModifierKeyCode::RightSuper"),
         }
     }
 }
@@ -406,37 +404,37 @@ impl core::fmt::Debug for ModifierKeyCode {
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum MediaKeyCode {
-    KeyFastForward = 0,
-    KeyLowerVolume = 1,
-    KeyMuteVolume = 2,
-    KeyPause = 3,
-    KeyPlay = 4,
-    KeyPlayPause = 5,
-    KeyRaiseVolume = 6,
-    KeyRecord = 7,
-    KeyReverse = 8,
-    KeyRewind = 9,
-    KeyStop = 10,
-    KeyTrackNext = 11,
-    KeyTrackPrevious = 12,
+    FastForward = 0,
+    LowerVolume = 1,
+    MuteVolume = 2,
+    Pause = 3,
+    Play = 4,
+    PlayPause = 5,
+    RaiseVolume = 6,
+    Record = 7,
+    Reverse = 8,
+    Rewind = 9,
+    Stop = 10,
+    TrackNext = 11,
+    TrackPrevious = 12,
 }
 
 impl core::fmt::Debug for MediaKeyCode {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::KeyFastForward => f.write_str("MediaKeyCode::KeyFastForward"),
-            Self::KeyLowerVolume => f.write_str("MediaKeyCode::KeyLowerVolume"),
-            Self::KeyMuteVolume => f.write_str("MediaKeyCode::KeyMuteVolume"),
-            Self::KeyPause => f.write_str("MediaKeyCode::KeyPause"),
-            Self::KeyPlay => f.write_str("MediaKeyCode::KeyPlay"),
-            Self::KeyPlayPause => f.write_str("MediaKeyCode::KeyPlayPause"),
-            Self::KeyRaiseVolume => f.write_str("MediaKeyCode::KeyRaiseVolume"),
-            Self::KeyRecord => f.write_str("MediaKeyCode::KeyRecord"),
-            Self::KeyReverse => f.write_str("MediaKeyCode::KeyReverse"),
-            Self::KeyRewind => f.write_str("MediaKeyCode::KeyRewind"),
-            Self::KeyStop => f.write_str("MediaKeyCode::KeyStop"),
-            Self::KeyTrackNext => f.write_str("MediaKeyCode::KeyTrackNext"),
-            Self::KeyTrackPrevious => f.write_str("MediaKeyCode::KeyTrackPrevious"),
+            Self::FastForward => f.write_str("MediaKeyCode::FastForward"),
+            Self::LowerVolume => f.write_str("MediaKeyCode::LowerVolume"),
+            Self::MuteVolume => f.write_str("MediaKeyCode::MuteVolume"),
+            Self::Pause => f.write_str("MediaKeyCode::Pause"),
+            Self::Play => f.write_str("MediaKeyCode::Play"),
+            Self::PlayPause => f.write_str("MediaKeyCode::PlayPause"),
+            Self::RaiseVolume => f.write_str("MediaKeyCode::RaiseVolume"),
+            Self::Record => f.write_str("MediaKeyCode::Record"),
+            Self::Reverse => f.write_str("MediaKeyCode::Reverse"),
+            Self::Rewind => f.write_str("MediaKeyCode::Rewind"),
+            Self::Stop => f.write_str("MediaKeyCode::Stop"),
+            Self::TrackNext => f.write_str("MediaKeyCode::TrackNext"),
+            Self::TrackPrevious => f.write_str("MediaKeyCode::TrackPrevious"),
         }
     }
 }
@@ -450,7 +448,7 @@ impl core::fmt::Debug for MediaKeyCode {
 ))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
-struct ElemParagraph {
+struct Elem_Paragraph {
     pub f0: roc_std::RocList<roc_std::RocList<Span>>,
     pub f1: ParagraphConfig,
 }
@@ -681,7 +679,7 @@ struct ConstraintRatio {
 #[repr(C)]
 union UnionElem {
     Layout: core::mem::ManuallyDrop<ElemLayout>,
-    Paragraph: core::mem::ManuallyDrop<ElemParagraph>,
+    Paragraph: core::mem::ManuallyDrop<Elem_Paragraph>,
     _sizer: [u8; 8],
 }
 
@@ -691,9 +689,22 @@ union UnionElem {
 ))]
 #[repr(C)]
 pub union Event {
-    KeyPressed: KeyCode,
+    KeyPressed: core::mem::ManuallyDrop<KeyCode>,
     Paste: core::mem::ManuallyDrop<roc_std::RocStr>,
     Resize: Bounds,
+    _sizer: [u8; 40],
+}
+
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "x86_64"
+))]
+#[repr(C)]
+pub union KeyCode {
+    Function: u8,
+    Media: MediaKeyCode,
+    Modifier: ModifierKeyCode,
+    Scalar: core::mem::ManuallyDrop<roc_std::RocStr>,
     _sizer: [u8; 32],
 }
 
@@ -859,7 +870,7 @@ impl Elem {
                 let ptr = roc_std::roc_alloc_refcounted::<UnionElem>();
 
                 *ptr = UnionElem {
-                    Paragraph: core::mem::ManuallyDrop::new(ElemParagraph {
+                    Paragraph: core::mem::ManuallyDrop::new(Elem_Paragraph {
                     f0: arg0,
                     f1: arg1,
                 })
@@ -1243,11 +1254,11 @@ impl Event {
         target_arch = "x86"
     ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> DiscriminantEvent {
+    pub fn discriminant(&self) -> discriminant_Event {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, DiscriminantEvent>(*bytes.as_ptr().add(12))
+            core::mem::transmute::<u8, discriminant_Event>(*bytes.as_ptr().add(16))
         }
     }
 
@@ -1257,11 +1268,11 @@ impl Event {
         target_arch = "x86"
     ))]
     /// Internal helper
-    fn set_discriminant(&mut self, discriminant: DiscriminantEvent) {
-        let discriminant_ptr: *mut DiscriminantEvent = (self as *mut Event).cast();
+    fn set_discriminant(&mut self, discriminant: discriminant_Event) {
+        let discriminant_ptr: *mut discriminant_Event = (self as *mut Event).cast();
 
         unsafe {
-            *(discriminant_ptr.add(12)) = discriminant;
+            *(discriminant_ptr.add(16)) = discriminant;
         }
     }
 
@@ -1274,7 +1285,7 @@ impl Event {
     pub const FocusGained: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<Event>()];
 
-        bytes[12] = DiscriminantEvent::FocusGained as u8;
+        bytes[16] = discriminant_Event::FocusGained as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<Event>()], Event>(bytes)
     };
@@ -1314,7 +1325,7 @@ impl Event {
     pub const FocusLost: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<Event>()];
 
-        bytes[12] = DiscriminantEvent::FocusLost as u8;
+        bytes[16] = discriminant_Event::FocusLost as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<Event>()], Event>(bytes)
     };
@@ -1355,10 +1366,10 @@ impl Event {
     /// Construct a tag named `KeyPressed`, with the appropriate payload
     pub fn KeyPressed(arg: KeyCode) -> Self {
             let mut answer = Self {
-                KeyPressed: arg
+                KeyPressed: core::mem::ManuallyDrop::new(arg)
             };
 
-            answer.set_discriminant(DiscriminantEvent::KeyPressed);
+            answer.set_discriminant(discriminant_Event::KeyPressed);
 
             answer
     }
@@ -1373,9 +1384,21 @@ impl Event {
     /// Unsafely assume the given `Event` has a `.discriminant()` of `KeyPressed` and convert it to `KeyPressed`'s payload.
             /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
             /// Panics in debug builds if the `.discriminant()` doesn't return `KeyPressed`.
-            pub unsafe fn into_KeyPressed(self) -> KeyCode {
-                debug_assert_eq!(self.discriminant(), DiscriminantEvent::KeyPressed);
-        let payload = self.KeyPressed;
+            pub unsafe fn into_KeyPressed(mut self) -> KeyCode {
+                debug_assert_eq!(self.discriminant(), discriminant_Event::KeyPressed);
+        let payload = {
+            let mut uninitialized = core::mem::MaybeUninit::uninit();
+            let swapped = unsafe {
+                core::mem::replace(
+                    &mut self.KeyPressed,
+                    core::mem::ManuallyDrop::new(uninitialized.assume_init()),
+                )
+            };
+
+            core::mem::forget(self);
+
+            core::mem::ManuallyDrop::into_inner(swapped)
+        };
 
         payload
     }
@@ -1391,7 +1414,7 @@ impl Event {
             /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
             /// Panics in debug builds if the `.discriminant()` doesn't return `KeyPressed`.
             pub unsafe fn as_KeyPressed(&self) -> &KeyCode {
-                debug_assert_eq!(self.discriminant(), DiscriminantEvent::KeyPressed);
+                debug_assert_eq!(self.discriminant(), discriminant_Event::KeyPressed);
         let payload = &self.KeyPressed;
 
         &payload
@@ -1410,7 +1433,7 @@ impl Event {
                 Paste: core::mem::ManuallyDrop::new(arg)
             };
 
-            answer.set_discriminant(DiscriminantEvent::Paste);
+            answer.set_discriminant(discriminant_Event::Paste);
 
             answer
     }
@@ -1426,7 +1449,7 @@ impl Event {
             /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
             /// Panics in debug builds if the `.discriminant()` doesn't return `Paste`.
             pub unsafe fn into_Paste(mut self) -> roc_std::RocStr {
-                debug_assert_eq!(self.discriminant(), DiscriminantEvent::Paste);
+                debug_assert_eq!(self.discriminant(), discriminant_Event::Paste);
         let payload = {
             let mut uninitialized = core::mem::MaybeUninit::uninit();
             let swapped = unsafe {
@@ -1455,7 +1478,7 @@ impl Event {
             /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
             /// Panics in debug builds if the `.discriminant()` doesn't return `Paste`.
             pub unsafe fn as_Paste(&self) -> &roc_std::RocStr {
-                debug_assert_eq!(self.discriminant(), DiscriminantEvent::Paste);
+                debug_assert_eq!(self.discriminant(), discriminant_Event::Paste);
         let payload = &self.Paste;
 
         &payload
@@ -1474,7 +1497,7 @@ impl Event {
                 Resize: arg0
             };
 
-            answer.set_discriminant(DiscriminantEvent::Resize);
+            answer.set_discriminant(discriminant_Event::Resize);
 
             answer
     }
@@ -1490,7 +1513,7 @@ impl Event {
             /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
             /// Panics in debug builds if the `.discriminant()` doesn't return `Resize`.
             pub unsafe fn into_Resize(self) -> Bounds {
-                debug_assert_eq!(self.discriminant(), DiscriminantEvent::Resize);
+                debug_assert_eq!(self.discriminant(), discriminant_Event::Resize);
         let payload = self.Resize;
 
         
@@ -1508,7 +1531,7 @@ impl Event {
             /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
             /// Panics in debug builds if the `.discriminant()` doesn't return `Resize`.
             pub unsafe fn as_Resize(&self) -> &Bounds {
-                debug_assert_eq!(self.discriminant(), DiscriminantEvent::Resize);
+                debug_assert_eq!(self.discriminant(), discriminant_Event::Resize);
         let payload = &self.Resize;
 
         
@@ -1520,11 +1543,11 @@ impl Event {
         target_arch = "x86_64"
     ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
-    pub fn discriminant(&self) -> DiscriminantEvent {
+    pub fn discriminant(&self) -> discriminant_Event {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, DiscriminantEvent>(*bytes.as_ptr().add(24))
+            core::mem::transmute::<u8, discriminant_Event>(*bytes.as_ptr().add(32))
         }
     }
 
@@ -1533,11 +1556,11 @@ impl Event {
         target_arch = "x86_64"
     ))]
     /// Internal helper
-    fn set_discriminant(&mut self, discriminant: DiscriminantEvent) {
-        let discriminant_ptr: *mut DiscriminantEvent = (self as *mut Event).cast();
+    fn set_discriminant(&mut self, discriminant: discriminant_Event) {
+        let discriminant_ptr: *mut discriminant_Event = (self as *mut Event).cast();
 
         unsafe {
-            *(discriminant_ptr.add(24)) = discriminant;
+            *(discriminant_ptr.add(32)) = discriminant;
         }
     }
 
@@ -1549,7 +1572,7 @@ impl Event {
     pub const FocusGained: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<Event>()];
 
-        bytes[24] = DiscriminantEvent::FocusGained as u8;
+        bytes[32] = discriminant_Event::FocusGained as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<Event>()], Event>(bytes)
     };
@@ -1562,7 +1585,7 @@ impl Event {
     pub const FocusLost: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<Event>()];
 
-        bytes[24] = DiscriminantEvent::FocusLost as u8;
+        bytes[32] = discriminant_Event::FocusLost as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<Event>()], Event>(bytes)
     };
@@ -1579,11 +1602,11 @@ impl Drop for Event {
     fn drop(&mut self) {
         // Drop the payloads
                     match self.discriminant() {
-                DiscriminantEvent::FocusGained => {}
-                DiscriminantEvent::FocusLost => {}
-                DiscriminantEvent::KeyPressed => {}
-                DiscriminantEvent::Paste => unsafe { core::mem::ManuallyDrop::drop(&mut self.Paste) },
-                DiscriminantEvent::Resize => {}
+                discriminant_Event::FocusGained => {}
+                discriminant_Event::FocusLost => {}
+                discriminant_Event::KeyPressed => unsafe { core::mem::ManuallyDrop::drop(&mut self.KeyPressed) },
+                discriminant_Event::Paste => unsafe { core::mem::ManuallyDrop::drop(&mut self.Paste) },
+                discriminant_Event::Resize => {}
             }
 
     }
@@ -1606,11 +1629,11 @@ impl PartialEq for Event {
 
             unsafe {
             match self.discriminant() {
-                DiscriminantEvent::FocusGained => true,
-                DiscriminantEvent::FocusLost => true,
-                DiscriminantEvent::KeyPressed => self.KeyPressed == other.KeyPressed,
-                DiscriminantEvent::Paste => self.Paste == other.Paste,
-                DiscriminantEvent::Resize => self.Resize == other.Resize,
+                discriminant_Event::FocusGained => true,
+                discriminant_Event::FocusLost => true,
+                discriminant_Event::KeyPressed => self.KeyPressed == other.KeyPressed,
+                discriminant_Event::Paste => self.Paste == other.Paste,
+                discriminant_Event::Resize => self.Resize == other.Resize,
             }
         }
     }
@@ -1632,11 +1655,11 @@ impl PartialOrd for Event {
 
         unsafe {
             match self.discriminant() {
-                DiscriminantEvent::FocusGained => Some(core::cmp::Ordering::Equal),
-                DiscriminantEvent::FocusLost => Some(core::cmp::Ordering::Equal),
-                DiscriminantEvent::KeyPressed => self.KeyPressed.partial_cmp(&other.KeyPressed),
-                DiscriminantEvent::Paste => self.Paste.partial_cmp(&other.Paste),
-                DiscriminantEvent::Resize => self.Resize.partial_cmp(&other.Resize),
+                discriminant_Event::FocusGained => Some(core::cmp::Ordering::Equal),
+                discriminant_Event::FocusLost => Some(core::cmp::Ordering::Equal),
+                discriminant_Event::KeyPressed => self.KeyPressed.partial_cmp(&other.KeyPressed),
+                discriminant_Event::Paste => self.Paste.partial_cmp(&other.Paste),
+                discriminant_Event::Resize => self.Resize.partial_cmp(&other.Resize),
             }
         }
     }
@@ -1658,11 +1681,11 @@ impl Ord for Event {
 
             unsafe {
             match self.discriminant() {
-                DiscriminantEvent::FocusGained => core::cmp::Ordering::Equal,
-                DiscriminantEvent::FocusLost => core::cmp::Ordering::Equal,
-                DiscriminantEvent::KeyPressed => self.KeyPressed.cmp(&other.KeyPressed),
-                DiscriminantEvent::Paste => self.Paste.cmp(&other.Paste),
-                DiscriminantEvent::Resize => self.Resize.cmp(&other.Resize),
+                discriminant_Event::FocusGained => core::cmp::Ordering::Equal,
+                discriminant_Event::FocusLost => core::cmp::Ordering::Equal,
+                discriminant_Event::KeyPressed => self.KeyPressed.cmp(&other.KeyPressed),
+                discriminant_Event::Paste => self.Paste.cmp(&other.Paste),
+                discriminant_Event::Resize => self.Resize.cmp(&other.Resize),
             }
         }
     }
@@ -1679,21 +1702,21 @@ impl Clone for Event {
     fn clone(&self) -> Self {
         let mut answer = unsafe {
             match self.discriminant() {
-                DiscriminantEvent::FocusGained => core::mem::transmute::<
+                discriminant_Event::FocusGained => core::mem::transmute::<
                     core::mem::MaybeUninit<Event>,
                     Event,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantEvent::FocusLost => core::mem::transmute::<
+                discriminant_Event::FocusLost => core::mem::transmute::<
                     core::mem::MaybeUninit<Event>,
                     Event,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantEvent::KeyPressed => Self {
+                discriminant_Event::KeyPressed => Self {
                     KeyPressed: self.KeyPressed.clone(),
                 },
-                DiscriminantEvent::Paste => Self {
+                discriminant_Event::Paste => Self {
                     Paste: self.Paste.clone(),
                 },
-                DiscriminantEvent::Resize => Self {
+                discriminant_Event::Resize => Self {
                     Resize: self.Resize.clone(),
                 },
             }
@@ -1715,18 +1738,18 @@ impl core::hash::Hash for Event {
         target_arch = "x86_64"
     ))]
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {        match self.discriminant() {
-            DiscriminantEvent::FocusGained => DiscriminantEvent::FocusGained.hash(state),
-            DiscriminantEvent::FocusLost => DiscriminantEvent::FocusLost.hash(state),
-            DiscriminantEvent::KeyPressed => unsafe {
-                    DiscriminantEvent::KeyPressed.hash(state);
+            discriminant_Event::FocusGained => discriminant_Event::FocusGained.hash(state),
+            discriminant_Event::FocusLost => discriminant_Event::FocusLost.hash(state),
+            discriminant_Event::KeyPressed => unsafe {
+                    discriminant_Event::KeyPressed.hash(state);
                     self.KeyPressed.hash(state);
                 },
-            DiscriminantEvent::Paste => unsafe {
-                    DiscriminantEvent::Paste.hash(state);
+            discriminant_Event::Paste => unsafe {
+                    discriminant_Event::Paste.hash(state);
                     self.Paste.hash(state);
                 },
-            DiscriminantEvent::Resize => unsafe {
-                    DiscriminantEvent::Resize.hash(state);
+            discriminant_Event::Resize => unsafe {
+                    discriminant_Event::Resize.hash(state);
                     self.Resize.hash(state);
                 },
         }
@@ -1746,15 +1769,15 @@ impl core::fmt::Debug for Event {
 
         unsafe {
             match self.discriminant() {
-                DiscriminantEvent::FocusGained => f.write_str("FocusGained"),
-                DiscriminantEvent::FocusLost => f.write_str("FocusLost"),
-                DiscriminantEvent::KeyPressed => f.debug_tuple("KeyPressed")
-        .field(&self.KeyPressed)
+                discriminant_Event::FocusGained => f.write_str("FocusGained"),
+                discriminant_Event::FocusLost => f.write_str("FocusLost"),
+                discriminant_Event::KeyPressed => f.debug_tuple("KeyPressed")
+        .field(&*self.KeyPressed)
         .finish(),
-                DiscriminantEvent::Paste => f.debug_tuple("Paste")
+                discriminant_Event::Paste => f.debug_tuple("Paste")
         .field(&*self.Paste)
         .finish(),
-                DiscriminantEvent::Resize => f.debug_tuple("Resize")
+                discriminant_Event::Resize => f.debug_tuple("Resize")
         .field(&self.Resize)
         .finish(),
             }
@@ -2252,9 +2275,1174 @@ impl core::fmt::Debug for Constraint {
 impl KeyCode {
     #[cfg(any(
         target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// Returns which variant this tag union holds. Note that this never includes a payload!
+    pub fn discriminant(&self) -> DiscriminantKeyCode {
+        unsafe {
+            let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
+
+            core::mem::transmute::<u8, DiscriminantKeyCode>(*bytes.as_ptr().add(12))
+        }
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// Internal helper
+    fn set_discriminant(&mut self, discriminant: DiscriminantKeyCode) {
+        let discriminant_ptr: *mut DiscriminantKeyCode = (self as *mut KeyCode).cast();
+
+        unsafe {
+            *(discriminant_ptr.add(12)) = discriminant;
+        }
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named BackTab, which has no payload.
+    pub const BackTab: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::BackTab as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
         target_arch = "aarch64",
         target_arch = "wasm32",
         target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the BackTab tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_BackTab(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the BackTab tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_BackTab(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Backspace, which has no payload.
+    pub const Backspace: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Backspace as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Backspace tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Backspace(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Backspace tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Backspace(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named CapsLock, which has no payload.
+    pub const CapsLock: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::CapsLock as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the CapsLock tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_CapsLock(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the CapsLock tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_CapsLock(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Delete, which has no payload.
+    pub const Delete: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Delete as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Delete tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Delete(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Delete tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Delete(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Down, which has no payload.
+    pub const Down: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Down as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Down tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Down(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Down tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Down(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named End, which has no payload.
+    pub const End: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::End as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the End tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_End(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the End tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_End(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Enter, which has no payload.
+    pub const Enter: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Enter as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Enter tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Enter(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Enter tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Enter(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Esc, which has no payload.
+    pub const Esc: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Esc as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Esc tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Esc(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Esc tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Esc(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Construct a tag named `Function`, with the appropriate payload
+    pub fn Function(arg: u8) -> Self {
+            let mut answer = Self {
+                Function: arg
+            };
+
+            answer.set_discriminant(DiscriminantKeyCode::Function);
+
+            answer
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `Function` and convert it to `Function`'s payload.
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `Function`.
+            pub unsafe fn into_Function(self) -> u8 {
+                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::Function);
+        let payload = self.Function;
+
+        payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `Function` and return its payload.
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `Function`.
+            pub unsafe fn as_Function(&self) -> &u8 {
+                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::Function);
+        let payload = &self.Function;
+
+        &payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Home, which has no payload.
+    pub const Home: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Home as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Home tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Home(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Home tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Home(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Insert, which has no payload.
+    pub const Insert: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Insert as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Insert tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Insert(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Insert tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Insert(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named KeypadBegin, which has no payload.
+    pub const KeypadBegin: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::KeypadBegin as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the KeypadBegin tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_KeypadBegin(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the KeypadBegin tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_KeypadBegin(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Left, which has no payload.
+    pub const Left: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Left as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Left tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Left(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Left tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Left(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Construct a tag named `Media`, with the appropriate payload
+    pub fn Media(arg: MediaKeyCode) -> Self {
+            let mut answer = Self {
+                Media: arg
+            };
+
+            answer.set_discriminant(DiscriminantKeyCode::Media);
+
+            answer
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `Media` and convert it to `Media`'s payload.
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `Media`.
+            pub unsafe fn into_Media(self) -> MediaKeyCode {
+                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::Media);
+        let payload = self.Media;
+
+        payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `Media` and return its payload.
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `Media`.
+            pub unsafe fn as_Media(&self) -> &MediaKeyCode {
+                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::Media);
+        let payload = &self.Media;
+
+        &payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Menu, which has no payload.
+    pub const Menu: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Menu as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Menu tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Menu(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Menu tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Menu(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Construct a tag named `Modifier`, with the appropriate payload
+    pub fn Modifier(arg: ModifierKeyCode) -> Self {
+            let mut answer = Self {
+                Modifier: arg
+            };
+
+            answer.set_discriminant(DiscriminantKeyCode::Modifier);
+
+            answer
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `Modifier` and convert it to `Modifier`'s payload.
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `Modifier`.
+            pub unsafe fn into_Modifier(self) -> ModifierKeyCode {
+                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::Modifier);
+        let payload = self.Modifier;
+
+        payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `Modifier` and return its payload.
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `Modifier`.
+            pub unsafe fn as_Modifier(&self) -> &ModifierKeyCode {
+                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::Modifier);
+        let payload = &self.Modifier;
+
+        &payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Null, which has no payload.
+    pub const Null: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Null as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Null tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Null(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Null tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Null(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named NumLock, which has no payload.
+    pub const NumLock: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::NumLock as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the NumLock tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_NumLock(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the NumLock tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_NumLock(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named PageDown, which has no payload.
+    pub const PageDown: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::PageDown as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the PageDown tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_PageDown(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the PageDown tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_PageDown(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named PageUp, which has no payload.
+    pub const PageUp: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::PageUp as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the PageUp tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_PageUp(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the PageUp tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_PageUp(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Pause, which has no payload.
+    pub const Pause: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Pause as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Pause tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Pause(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Pause tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Pause(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named PrintScreen, which has no payload.
+    pub const PrintScreen: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::PrintScreen as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the PrintScreen tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_PrintScreen(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the PrintScreen tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_PrintScreen(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Right, which has no payload.
+    pub const Right: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Right as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Right tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Right(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Right tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Right(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Construct a tag named `Scalar`, with the appropriate payload
+    pub fn Scalar(arg: roc_std::RocStr) -> Self {
+            let mut answer = Self {
+                Scalar: core::mem::ManuallyDrop::new(arg)
+            };
+
+            answer.set_discriminant(DiscriminantKeyCode::Scalar);
+
+            answer
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `Scalar` and convert it to `Scalar`'s payload.
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `Scalar`.
+            pub unsafe fn into_Scalar(mut self) -> roc_std::RocStr {
+                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::Scalar);
+        let payload = {
+            let mut uninitialized = core::mem::MaybeUninit::uninit();
+            let swapped = unsafe {
+                core::mem::replace(
+                    &mut self.Scalar,
+                    core::mem::ManuallyDrop::new(uninitialized.assume_init()),
+                )
+            };
+
+            core::mem::forget(self);
+
+            core::mem::ManuallyDrop::into_inner(swapped)
+        };
+
+        payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `Scalar` and return its payload.
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `Scalar`.
+            pub unsafe fn as_Scalar(&self) -> &roc_std::RocStr {
+                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::Scalar);
+        let payload = &self.Scalar;
+
+        &payload
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named ScrollLock, which has no payload.
+    pub const ScrollLock: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::ScrollLock as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the ScrollLock tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_ScrollLock(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the ScrollLock tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_ScrollLock(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Tab, which has no payload.
+    pub const Tab: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Tab as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Tab tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Tab(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Tab tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Tab(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named Up, which has no payload.
+    pub const Up: Self = unsafe {
+        let mut bytes = [0; core::mem::size_of::<KeyCode>()];
+
+        bytes[12] = DiscriminantKeyCode::Up as u8;
+
+        core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
+    };
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `into_` methods return a payload, but since the Up tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn into_Up(self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    /// Other `as` methods return a payload, but since the Up tag
+    /// has no payload, this does nothing and is only here for completeness.
+    pub fn as_Up(&self) {
+        ()
+    }
+
+    #[cfg(any(
+        target_arch = "aarch64",
         target_arch = "x86_64"
     ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
@@ -2262,15 +3450,12 @@ impl KeyCode {
         unsafe {
             let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
 
-            core::mem::transmute::<u8, DiscriminantKeyCode>(*bytes.as_ptr().add(4))
+            core::mem::transmute::<u8, DiscriminantKeyCode>(*bytes.as_ptr().add(24))
         }
     }
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
     /// Internal helper
@@ -2278,1158 +3463,311 @@ impl KeyCode {
         let discriminant_ptr: *mut DiscriminantKeyCode = (self as *mut KeyCode).cast();
 
         unsafe {
-            *(discriminant_ptr.add(4)) = discriminant;
+            *(discriminant_ptr.add(24)) = discriminant;
         }
     }
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// A tag named KeyBackTab, which has no payload.
-    pub const KeyBackTab: Self = unsafe {
+    /// A tag named BackTab, which has no payload.
+    pub const BackTab: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyBackTab as u8;
+        bytes[24] = DiscriminantKeyCode::BackTab as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyBackTab tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyBackTab(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyBackTab tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyBackTab(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyBackspace, which has no payload.
-    pub const KeyBackspace: Self = unsafe {
+    /// A tag named Backspace, which has no payload.
+    pub const Backspace: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyBackspace as u8;
+        bytes[24] = DiscriminantKeyCode::Backspace as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyBackspace tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyBackspace(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyBackspace tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyBackspace(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyCapsLock, which has no payload.
-    pub const KeyCapsLock: Self = unsafe {
+    /// A tag named CapsLock, which has no payload.
+    pub const CapsLock: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyCapsLock as u8;
+        bytes[24] = DiscriminantKeyCode::CapsLock as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyCapsLock tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyCapsLock(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyCapsLock tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyCapsLock(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyDelete, which has no payload.
-    pub const KeyDelete: Self = unsafe {
+    /// A tag named Delete, which has no payload.
+    pub const Delete: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyDelete as u8;
+        bytes[24] = DiscriminantKeyCode::Delete as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyDelete tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyDelete(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyDelete tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyDelete(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyDown, which has no payload.
-    pub const KeyDown: Self = unsafe {
+    /// A tag named Down, which has no payload.
+    pub const Down: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyDown as u8;
+        bytes[24] = DiscriminantKeyCode::Down as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyDown tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyDown(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyDown tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyDown(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyEnd, which has no payload.
-    pub const KeyEnd: Self = unsafe {
+    /// A tag named End, which has no payload.
+    pub const End: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyEnd as u8;
+        bytes[24] = DiscriminantKeyCode::End as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyEnd tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyEnd(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyEnd tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyEnd(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyEnter, which has no payload.
-    pub const KeyEnter: Self = unsafe {
+    /// A tag named Enter, which has no payload.
+    pub const Enter: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyEnter as u8;
+        bytes[24] = DiscriminantKeyCode::Enter as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyEnter tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyEnter(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyEnter tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyEnter(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyEsc, which has no payload.
-    pub const KeyEsc: Self = unsafe {
+    /// A tag named Esc, which has no payload.
+    pub const Esc: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyEsc as u8;
+        bytes[24] = DiscriminantKeyCode::Esc as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyEsc tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyEsc(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyEsc tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyEsc(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Construct a tag named `KeyFunction`, with the appropriate payload
-    pub fn KeyFunction(arg: u8) -> Self {
-            let mut answer = Self {
-                KeyFunction: arg
-            };
-
-            answer.set_discriminant(DiscriminantKeyCode::KeyFunction);
-
-            answer
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `KeyFunction` and convert it to `KeyFunction`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `KeyFunction`.
-            pub unsafe fn into_KeyFunction(self) -> u8 {
-                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::KeyFunction);
-        let payload = self.KeyFunction;
-
-        payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `KeyFunction` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `KeyFunction`.
-            pub unsafe fn as_KeyFunction(&self) -> &u8 {
-                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::KeyFunction);
-        let payload = &self.KeyFunction;
-
-        &payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyHome, which has no payload.
-    pub const KeyHome: Self = unsafe {
+    /// A tag named Home, which has no payload.
+    pub const Home: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyHome as u8;
+        bytes[24] = DiscriminantKeyCode::Home as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyHome tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyHome(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyHome tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyHome(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyInsert, which has no payload.
-    pub const KeyInsert: Self = unsafe {
+    /// A tag named Insert, which has no payload.
+    pub const Insert: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyInsert as u8;
+        bytes[24] = DiscriminantKeyCode::Insert as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyInsert tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyInsert(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyInsert tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyInsert(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyKeypadBegin, which has no payload.
-    pub const KeyKeypadBegin: Self = unsafe {
+    /// A tag named KeypadBegin, which has no payload.
+    pub const KeypadBegin: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyKeypadBegin as u8;
+        bytes[24] = DiscriminantKeyCode::KeypadBegin as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyKeypadBegin tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyKeypadBegin(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyKeypadBegin tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyKeypadBegin(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyLeft, which has no payload.
-    pub const KeyLeft: Self = unsafe {
+    /// A tag named Left, which has no payload.
+    pub const Left: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyLeft as u8;
+        bytes[24] = DiscriminantKeyCode::Left as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyLeft tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyLeft(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyLeft tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyLeft(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Construct a tag named `KeyMedia`, with the appropriate payload
-    pub fn KeyMedia(arg: MediaKeyCode) -> Self {
-            let mut answer = Self {
-                KeyMedia: arg
-            };
-
-            answer.set_discriminant(DiscriminantKeyCode::KeyMedia);
-
-            answer
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `KeyMedia` and convert it to `KeyMedia`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `KeyMedia`.
-            pub unsafe fn into_KeyMedia(self) -> MediaKeyCode {
-                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::KeyMedia);
-        let payload = self.KeyMedia;
-
-        payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `KeyMedia` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `KeyMedia`.
-            pub unsafe fn as_KeyMedia(&self) -> &MediaKeyCode {
-                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::KeyMedia);
-        let payload = &self.KeyMedia;
-
-        &payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyMenu, which has no payload.
-    pub const KeyMenu: Self = unsafe {
+    /// A tag named Menu, which has no payload.
+    pub const Menu: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyMenu as u8;
+        bytes[24] = DiscriminantKeyCode::Menu as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyMenu tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyMenu(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyMenu tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyMenu(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Construct a tag named `KeyModifier`, with the appropriate payload
-    pub fn KeyModifier(arg: ModifierKeyCode) -> Self {
-            let mut answer = Self {
-                KeyModifier: arg
-            };
-
-            answer.set_discriminant(DiscriminantKeyCode::KeyModifier);
-
-            answer
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `KeyModifier` and convert it to `KeyModifier`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `KeyModifier`.
-            pub unsafe fn into_KeyModifier(self) -> ModifierKeyCode {
-                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::KeyModifier);
-        let payload = self.KeyModifier;
-
-        payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `KeyModifier` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `KeyModifier`.
-            pub unsafe fn as_KeyModifier(&self) -> &ModifierKeyCode {
-                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::KeyModifier);
-        let payload = &self.KeyModifier;
-
-        &payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyNull, which has no payload.
-    pub const KeyNull: Self = unsafe {
+    /// A tag named Null, which has no payload.
+    pub const Null: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyNull as u8;
+        bytes[24] = DiscriminantKeyCode::Null as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyNull tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyNull(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyNull tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyNull(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyNumLock, which has no payload.
-    pub const KeyNumLock: Self = unsafe {
+    /// A tag named NumLock, which has no payload.
+    pub const NumLock: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyNumLock as u8;
+        bytes[24] = DiscriminantKeyCode::NumLock as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyNumLock tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyNumLock(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyNumLock tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyNumLock(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyPageDown, which has no payload.
-    pub const KeyPageDown: Self = unsafe {
+    /// A tag named PageDown, which has no payload.
+    pub const PageDown: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyPageDown as u8;
+        bytes[24] = DiscriminantKeyCode::PageDown as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyPageDown tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyPageDown(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyPageDown tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyPageDown(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyPageUp, which has no payload.
-    pub const KeyPageUp: Self = unsafe {
+    /// A tag named PageUp, which has no payload.
+    pub const PageUp: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyPageUp as u8;
+        bytes[24] = DiscriminantKeyCode::PageUp as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyPageUp tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyPageUp(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyPageUp tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyPageUp(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyPause, which has no payload.
-    pub const KeyPause: Self = unsafe {
+    /// A tag named Pause, which has no payload.
+    pub const Pause: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyPause as u8;
+        bytes[24] = DiscriminantKeyCode::Pause as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyPause tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyPause(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyPause tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyPause(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyPrintScreen, which has no payload.
-    pub const KeyPrintScreen: Self = unsafe {
+    /// A tag named PrintScreen, which has no payload.
+    pub const PrintScreen: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyPrintScreen as u8;
+        bytes[24] = DiscriminantKeyCode::PrintScreen as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyPrintScreen tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyPrintScreen(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyPrintScreen tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyPrintScreen(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyRight, which has no payload.
-    pub const KeyRight: Self = unsafe {
+    /// A tag named Right, which has no payload.
+    pub const Right: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyRight as u8;
+        bytes[24] = DiscriminantKeyCode::Right as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyRight tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyRight(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyRight tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyRight(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Construct a tag named `KeyScalar`, with the appropriate payload
-    pub fn KeyScalar(arg: u32) -> Self {
-            let mut answer = Self {
-                KeyScalar: arg
-            };
-
-            answer.set_discriminant(DiscriminantKeyCode::KeyScalar);
-
-            answer
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `KeyScalar` and convert it to `KeyScalar`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `KeyScalar`.
-            pub unsafe fn into_KeyScalar(self) -> u32 {
-                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::KeyScalar);
-        let payload = self.KeyScalar;
-
-        payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Unsafely assume the given `KeyCode` has a `.discriminant()` of `KeyScalar` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `KeyScalar`.
-            pub unsafe fn as_KeyScalar(&self) -> &u32 {
-                debug_assert_eq!(self.discriminant(), DiscriminantKeyCode::KeyScalar);
-        let payload = &self.KeyScalar;
-
-        &payload
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyScrollLock, which has no payload.
-    pub const KeyScrollLock: Self = unsafe {
+    /// A tag named ScrollLock, which has no payload.
+    pub const ScrollLock: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyScrollLock as u8;
+        bytes[24] = DiscriminantKeyCode::ScrollLock as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyScrollLock tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyScrollLock(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyScrollLock tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyScrollLock(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyTab, which has no payload.
-    pub const KeyTab: Self = unsafe {
+    /// A tag named Tab, which has no payload.
+    pub const Tab: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyTab as u8;
+        bytes[24] = DiscriminantKeyCode::Tab as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
 
     #[cfg(any(
-        target_arch = "arm",
         target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyTab tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyTab(self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyTab tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyTab(&self) {
-        ()
-    }
-
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// A tag named KeyUp, which has no payload.
-    pub const KeyUp: Self = unsafe {
+    /// A tag named Up, which has no payload.
+    pub const Up: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<KeyCode>()];
 
-        bytes[4] = DiscriminantKeyCode::KeyUp as u8;
+        bytes[24] = DiscriminantKeyCode::Up as u8;
 
         core::mem::transmute::<[u8; core::mem::size_of::<KeyCode>()], KeyCode>(bytes)
     };
+}
 
+impl Drop for KeyCode {
     #[cfg(any(
         target_arch = "arm",
         target_arch = "aarch64",
@@ -3437,23 +3775,38 @@ impl KeyCode {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    /// Other `into_` methods return a payload, but since the KeyUp tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn into_KeyUp(self) {
-        ()
-    }
+    fn drop(&mut self) {
+        // Drop the payloads
+                    match self.discriminant() {
+                DiscriminantKeyCode::BackTab => {}
+                DiscriminantKeyCode::Backspace => {}
+                DiscriminantKeyCode::CapsLock => {}
+                DiscriminantKeyCode::Delete => {}
+                DiscriminantKeyCode::Down => {}
+                DiscriminantKeyCode::End => {}
+                DiscriminantKeyCode::Enter => {}
+                DiscriminantKeyCode::Esc => {}
+                DiscriminantKeyCode::Function => {}
+                DiscriminantKeyCode::Home => {}
+                DiscriminantKeyCode::Insert => {}
+                DiscriminantKeyCode::KeypadBegin => {}
+                DiscriminantKeyCode::Left => {}
+                DiscriminantKeyCode::Media => {}
+                DiscriminantKeyCode::Menu => {}
+                DiscriminantKeyCode::Modifier => {}
+                DiscriminantKeyCode::Null => {}
+                DiscriminantKeyCode::NumLock => {}
+                DiscriminantKeyCode::PageDown => {}
+                DiscriminantKeyCode::PageUp => {}
+                DiscriminantKeyCode::Pause => {}
+                DiscriminantKeyCode::PrintScreen => {}
+                DiscriminantKeyCode::Right => {}
+                DiscriminantKeyCode::Scalar => unsafe { core::mem::ManuallyDrop::drop(&mut self.Scalar) },
+                DiscriminantKeyCode::ScrollLock => {}
+                DiscriminantKeyCode::Tab => {}
+                DiscriminantKeyCode::Up => {}
+            }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "aarch64",
-        target_arch = "wasm32",
-        target_arch = "x86",
-        target_arch = "x86_64"
-    ))]
-    /// Other `as` methods return a payload, but since the KeyUp tag
-    /// has no payload, this does nothing and is only here for completeness.
-    pub fn as_KeyUp(&self) {
-        ()
     }
 }
 
@@ -3474,33 +3827,33 @@ impl PartialEq for KeyCode {
 
             unsafe {
             match self.discriminant() {
-                DiscriminantKeyCode::KeyBackTab => true,
-                DiscriminantKeyCode::KeyBackspace => true,
-                DiscriminantKeyCode::KeyCapsLock => true,
-                DiscriminantKeyCode::KeyDelete => true,
-                DiscriminantKeyCode::KeyDown => true,
-                DiscriminantKeyCode::KeyEnd => true,
-                DiscriminantKeyCode::KeyEnter => true,
-                DiscriminantKeyCode::KeyEsc => true,
-                DiscriminantKeyCode::KeyFunction => self.KeyFunction == other.KeyFunction,
-                DiscriminantKeyCode::KeyHome => true,
-                DiscriminantKeyCode::KeyInsert => true,
-                DiscriminantKeyCode::KeyKeypadBegin => true,
-                DiscriminantKeyCode::KeyLeft => true,
-                DiscriminantKeyCode::KeyMedia => self.KeyMedia == other.KeyMedia,
-                DiscriminantKeyCode::KeyMenu => true,
-                DiscriminantKeyCode::KeyModifier => self.KeyModifier == other.KeyModifier,
-                DiscriminantKeyCode::KeyNull => true,
-                DiscriminantKeyCode::KeyNumLock => true,
-                DiscriminantKeyCode::KeyPageDown => true,
-                DiscriminantKeyCode::KeyPageUp => true,
-                DiscriminantKeyCode::KeyPause => true,
-                DiscriminantKeyCode::KeyPrintScreen => true,
-                DiscriminantKeyCode::KeyRight => true,
-                DiscriminantKeyCode::KeyScalar => self.KeyScalar == other.KeyScalar,
-                DiscriminantKeyCode::KeyScrollLock => true,
-                DiscriminantKeyCode::KeyTab => true,
-                DiscriminantKeyCode::KeyUp => true,
+                DiscriminantKeyCode::BackTab => true,
+                DiscriminantKeyCode::Backspace => true,
+                DiscriminantKeyCode::CapsLock => true,
+                DiscriminantKeyCode::Delete => true,
+                DiscriminantKeyCode::Down => true,
+                DiscriminantKeyCode::End => true,
+                DiscriminantKeyCode::Enter => true,
+                DiscriminantKeyCode::Esc => true,
+                DiscriminantKeyCode::Function => self.Function == other.Function,
+                DiscriminantKeyCode::Home => true,
+                DiscriminantKeyCode::Insert => true,
+                DiscriminantKeyCode::KeypadBegin => true,
+                DiscriminantKeyCode::Left => true,
+                DiscriminantKeyCode::Media => self.Media == other.Media,
+                DiscriminantKeyCode::Menu => true,
+                DiscriminantKeyCode::Modifier => self.Modifier == other.Modifier,
+                DiscriminantKeyCode::Null => true,
+                DiscriminantKeyCode::NumLock => true,
+                DiscriminantKeyCode::PageDown => true,
+                DiscriminantKeyCode::PageUp => true,
+                DiscriminantKeyCode::Pause => true,
+                DiscriminantKeyCode::PrintScreen => true,
+                DiscriminantKeyCode::Right => true,
+                DiscriminantKeyCode::Scalar => self.Scalar == other.Scalar,
+                DiscriminantKeyCode::ScrollLock => true,
+                DiscriminantKeyCode::Tab => true,
+                DiscriminantKeyCode::Up => true,
             }
         }
     }
@@ -3522,33 +3875,33 @@ impl PartialOrd for KeyCode {
 
         unsafe {
             match self.discriminant() {
-                DiscriminantKeyCode::KeyBackTab => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyBackspace => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyCapsLock => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyDelete => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyDown => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyEnd => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyEnter => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyEsc => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyFunction => self.KeyFunction.partial_cmp(&other.KeyFunction),
-                DiscriminantKeyCode::KeyHome => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyInsert => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyKeypadBegin => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyLeft => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyMedia => self.KeyMedia.partial_cmp(&other.KeyMedia),
-                DiscriminantKeyCode::KeyMenu => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyModifier => self.KeyModifier.partial_cmp(&other.KeyModifier),
-                DiscriminantKeyCode::KeyNull => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyNumLock => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyPageDown => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyPageUp => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyPause => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyPrintScreen => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyRight => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyScalar => self.KeyScalar.partial_cmp(&other.KeyScalar),
-                DiscriminantKeyCode::KeyScrollLock => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyTab => Some(core::cmp::Ordering::Equal),
-                DiscriminantKeyCode::KeyUp => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::BackTab => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Backspace => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::CapsLock => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Delete => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Down => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::End => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Enter => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Esc => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Function => self.Function.partial_cmp(&other.Function),
+                DiscriminantKeyCode::Home => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Insert => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::KeypadBegin => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Left => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Media => self.Media.partial_cmp(&other.Media),
+                DiscriminantKeyCode::Menu => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Modifier => self.Modifier.partial_cmp(&other.Modifier),
+                DiscriminantKeyCode::Null => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::NumLock => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::PageDown => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::PageUp => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Pause => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::PrintScreen => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Right => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Scalar => self.Scalar.partial_cmp(&other.Scalar),
+                DiscriminantKeyCode::ScrollLock => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Tab => Some(core::cmp::Ordering::Equal),
+                DiscriminantKeyCode::Up => Some(core::cmp::Ordering::Equal),
             }
         }
     }
@@ -3570,39 +3923,37 @@ impl Ord for KeyCode {
 
             unsafe {
             match self.discriminant() {
-                DiscriminantKeyCode::KeyBackTab => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyBackspace => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyCapsLock => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyDelete => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyDown => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyEnd => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyEnter => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyEsc => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyFunction => self.KeyFunction.cmp(&other.KeyFunction),
-                DiscriminantKeyCode::KeyHome => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyInsert => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyKeypadBegin => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyLeft => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyMedia => self.KeyMedia.cmp(&other.KeyMedia),
-                DiscriminantKeyCode::KeyMenu => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyModifier => self.KeyModifier.cmp(&other.KeyModifier),
-                DiscriminantKeyCode::KeyNull => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyNumLock => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyPageDown => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyPageUp => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyPause => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyPrintScreen => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyRight => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyScalar => self.KeyScalar.cmp(&other.KeyScalar),
-                DiscriminantKeyCode::KeyScrollLock => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyTab => core::cmp::Ordering::Equal,
-                DiscriminantKeyCode::KeyUp => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::BackTab => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Backspace => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::CapsLock => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Delete => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Down => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::End => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Enter => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Esc => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Function => self.Function.cmp(&other.Function),
+                DiscriminantKeyCode::Home => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Insert => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::KeypadBegin => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Left => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Media => self.Media.cmp(&other.Media),
+                DiscriminantKeyCode::Menu => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Modifier => self.Modifier.cmp(&other.Modifier),
+                DiscriminantKeyCode::Null => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::NumLock => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::PageDown => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::PageUp => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Pause => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::PrintScreen => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Right => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Scalar => self.Scalar.cmp(&other.Scalar),
+                DiscriminantKeyCode::ScrollLock => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Tab => core::cmp::Ordering::Equal,
+                DiscriminantKeyCode::Up => core::cmp::Ordering::Equal,
             }
         }
     }
 }
-
-impl Copy for KeyCode {}
 
 impl Clone for KeyCode {
     #[cfg(any(
@@ -3615,107 +3966,107 @@ impl Clone for KeyCode {
     fn clone(&self) -> Self {
         let mut answer = unsafe {
             match self.discriminant() {
-                DiscriminantKeyCode::KeyBackTab => core::mem::transmute::<
+                DiscriminantKeyCode::BackTab => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyBackspace => core::mem::transmute::<
+                DiscriminantKeyCode::Backspace => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyCapsLock => core::mem::transmute::<
+                DiscriminantKeyCode::CapsLock => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyDelete => core::mem::transmute::<
+                DiscriminantKeyCode::Delete => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyDown => core::mem::transmute::<
+                DiscriminantKeyCode::Down => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyEnd => core::mem::transmute::<
+                DiscriminantKeyCode::End => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyEnter => core::mem::transmute::<
+                DiscriminantKeyCode::Enter => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyEsc => core::mem::transmute::<
+                DiscriminantKeyCode::Esc => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyFunction => Self {
-                    KeyFunction: self.KeyFunction.clone(),
+                DiscriminantKeyCode::Function => Self {
+                    Function: self.Function.clone(),
                 },
-                DiscriminantKeyCode::KeyHome => core::mem::transmute::<
+                DiscriminantKeyCode::Home => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyInsert => core::mem::transmute::<
+                DiscriminantKeyCode::Insert => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyKeypadBegin => core::mem::transmute::<
+                DiscriminantKeyCode::KeypadBegin => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyLeft => core::mem::transmute::<
+                DiscriminantKeyCode::Left => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyMedia => Self {
-                    KeyMedia: self.KeyMedia.clone(),
+                DiscriminantKeyCode::Media => Self {
+                    Media: self.Media.clone(),
                 },
-                DiscriminantKeyCode::KeyMenu => core::mem::transmute::<
+                DiscriminantKeyCode::Menu => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyModifier => Self {
-                    KeyModifier: self.KeyModifier.clone(),
+                DiscriminantKeyCode::Modifier => Self {
+                    Modifier: self.Modifier.clone(),
                 },
-                DiscriminantKeyCode::KeyNull => core::mem::transmute::<
+                DiscriminantKeyCode::Null => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyNumLock => core::mem::transmute::<
+                DiscriminantKeyCode::NumLock => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyPageDown => core::mem::transmute::<
+                DiscriminantKeyCode::PageDown => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyPageUp => core::mem::transmute::<
+                DiscriminantKeyCode::PageUp => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyPause => core::mem::transmute::<
+                DiscriminantKeyCode::Pause => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyPrintScreen => core::mem::transmute::<
+                DiscriminantKeyCode::PrintScreen => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyRight => core::mem::transmute::<
+                DiscriminantKeyCode::Right => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyScalar => Self {
-                    KeyScalar: self.KeyScalar.clone(),
+                DiscriminantKeyCode::Scalar => Self {
+                    Scalar: self.Scalar.clone(),
                 },
-                DiscriminantKeyCode::KeyScrollLock => core::mem::transmute::<
+                DiscriminantKeyCode::ScrollLock => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyTab => core::mem::transmute::<
+                DiscriminantKeyCode::Tab => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
-                DiscriminantKeyCode::KeyUp => core::mem::transmute::<
+                DiscriminantKeyCode::Up => core::mem::transmute::<
                     core::mem::MaybeUninit<KeyCode>,
                     KeyCode,
                 >(core::mem::MaybeUninit::uninit()),
@@ -3738,45 +4089,45 @@ impl core::hash::Hash for KeyCode {
         target_arch = "x86_64"
     ))]
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {        match self.discriminant() {
-            DiscriminantKeyCode::KeyBackTab => DiscriminantKeyCode::KeyBackTab.hash(state),
-            DiscriminantKeyCode::KeyBackspace => DiscriminantKeyCode::KeyBackspace.hash(state),
-            DiscriminantKeyCode::KeyCapsLock => DiscriminantKeyCode::KeyCapsLock.hash(state),
-            DiscriminantKeyCode::KeyDelete => DiscriminantKeyCode::KeyDelete.hash(state),
-            DiscriminantKeyCode::KeyDown => DiscriminantKeyCode::KeyDown.hash(state),
-            DiscriminantKeyCode::KeyEnd => DiscriminantKeyCode::KeyEnd.hash(state),
-            DiscriminantKeyCode::KeyEnter => DiscriminantKeyCode::KeyEnter.hash(state),
-            DiscriminantKeyCode::KeyEsc => DiscriminantKeyCode::KeyEsc.hash(state),
-            DiscriminantKeyCode::KeyFunction => unsafe {
-                    DiscriminantKeyCode::KeyFunction.hash(state);
-                    self.KeyFunction.hash(state);
+            DiscriminantKeyCode::BackTab => DiscriminantKeyCode::BackTab.hash(state),
+            DiscriminantKeyCode::Backspace => DiscriminantKeyCode::Backspace.hash(state),
+            DiscriminantKeyCode::CapsLock => DiscriminantKeyCode::CapsLock.hash(state),
+            DiscriminantKeyCode::Delete => DiscriminantKeyCode::Delete.hash(state),
+            DiscriminantKeyCode::Down => DiscriminantKeyCode::Down.hash(state),
+            DiscriminantKeyCode::End => DiscriminantKeyCode::End.hash(state),
+            DiscriminantKeyCode::Enter => DiscriminantKeyCode::Enter.hash(state),
+            DiscriminantKeyCode::Esc => DiscriminantKeyCode::Esc.hash(state),
+            DiscriminantKeyCode::Function => unsafe {
+                    DiscriminantKeyCode::Function.hash(state);
+                    self.Function.hash(state);
                 },
-            DiscriminantKeyCode::KeyHome => DiscriminantKeyCode::KeyHome.hash(state),
-            DiscriminantKeyCode::KeyInsert => DiscriminantKeyCode::KeyInsert.hash(state),
-            DiscriminantKeyCode::KeyKeypadBegin => DiscriminantKeyCode::KeyKeypadBegin.hash(state),
-            DiscriminantKeyCode::KeyLeft => DiscriminantKeyCode::KeyLeft.hash(state),
-            DiscriminantKeyCode::KeyMedia => unsafe {
-                    DiscriminantKeyCode::KeyMedia.hash(state);
-                    self.KeyMedia.hash(state);
+            DiscriminantKeyCode::Home => DiscriminantKeyCode::Home.hash(state),
+            DiscriminantKeyCode::Insert => DiscriminantKeyCode::Insert.hash(state),
+            DiscriminantKeyCode::KeypadBegin => DiscriminantKeyCode::KeypadBegin.hash(state),
+            DiscriminantKeyCode::Left => DiscriminantKeyCode::Left.hash(state),
+            DiscriminantKeyCode::Media => unsafe {
+                    DiscriminantKeyCode::Media.hash(state);
+                    self.Media.hash(state);
                 },
-            DiscriminantKeyCode::KeyMenu => DiscriminantKeyCode::KeyMenu.hash(state),
-            DiscriminantKeyCode::KeyModifier => unsafe {
-                    DiscriminantKeyCode::KeyModifier.hash(state);
-                    self.KeyModifier.hash(state);
+            DiscriminantKeyCode::Menu => DiscriminantKeyCode::Menu.hash(state),
+            DiscriminantKeyCode::Modifier => unsafe {
+                    DiscriminantKeyCode::Modifier.hash(state);
+                    self.Modifier.hash(state);
                 },
-            DiscriminantKeyCode::KeyNull => DiscriminantKeyCode::KeyNull.hash(state),
-            DiscriminantKeyCode::KeyNumLock => DiscriminantKeyCode::KeyNumLock.hash(state),
-            DiscriminantKeyCode::KeyPageDown => DiscriminantKeyCode::KeyPageDown.hash(state),
-            DiscriminantKeyCode::KeyPageUp => DiscriminantKeyCode::KeyPageUp.hash(state),
-            DiscriminantKeyCode::KeyPause => DiscriminantKeyCode::KeyPause.hash(state),
-            DiscriminantKeyCode::KeyPrintScreen => DiscriminantKeyCode::KeyPrintScreen.hash(state),
-            DiscriminantKeyCode::KeyRight => DiscriminantKeyCode::KeyRight.hash(state),
-            DiscriminantKeyCode::KeyScalar => unsafe {
-                    DiscriminantKeyCode::KeyScalar.hash(state);
-                    self.KeyScalar.hash(state);
+            DiscriminantKeyCode::Null => DiscriminantKeyCode::Null.hash(state),
+            DiscriminantKeyCode::NumLock => DiscriminantKeyCode::NumLock.hash(state),
+            DiscriminantKeyCode::PageDown => DiscriminantKeyCode::PageDown.hash(state),
+            DiscriminantKeyCode::PageUp => DiscriminantKeyCode::PageUp.hash(state),
+            DiscriminantKeyCode::Pause => DiscriminantKeyCode::Pause.hash(state),
+            DiscriminantKeyCode::PrintScreen => DiscriminantKeyCode::PrintScreen.hash(state),
+            DiscriminantKeyCode::Right => DiscriminantKeyCode::Right.hash(state),
+            DiscriminantKeyCode::Scalar => unsafe {
+                    DiscriminantKeyCode::Scalar.hash(state);
+                    self.Scalar.hash(state);
                 },
-            DiscriminantKeyCode::KeyScrollLock => DiscriminantKeyCode::KeyScrollLock.hash(state),
-            DiscriminantKeyCode::KeyTab => DiscriminantKeyCode::KeyTab.hash(state),
-            DiscriminantKeyCode::KeyUp => DiscriminantKeyCode::KeyUp.hash(state),
+            DiscriminantKeyCode::ScrollLock => DiscriminantKeyCode::ScrollLock.hash(state),
+            DiscriminantKeyCode::Tab => DiscriminantKeyCode::Tab.hash(state),
+            DiscriminantKeyCode::Up => DiscriminantKeyCode::Up.hash(state),
         }
     }
 }
@@ -3794,41 +4145,41 @@ impl core::fmt::Debug for KeyCode {
 
         unsafe {
             match self.discriminant() {
-                DiscriminantKeyCode::KeyBackTab => f.write_str("KeyBackTab"),
-                DiscriminantKeyCode::KeyBackspace => f.write_str("KeyBackspace"),
-                DiscriminantKeyCode::KeyCapsLock => f.write_str("KeyCapsLock"),
-                DiscriminantKeyCode::KeyDelete => f.write_str("KeyDelete"),
-                DiscriminantKeyCode::KeyDown => f.write_str("KeyDown"),
-                DiscriminantKeyCode::KeyEnd => f.write_str("KeyEnd"),
-                DiscriminantKeyCode::KeyEnter => f.write_str("KeyEnter"),
-                DiscriminantKeyCode::KeyEsc => f.write_str("KeyEsc"),
-                DiscriminantKeyCode::KeyFunction => f.debug_tuple("KeyFunction")
-        .field(&self.KeyFunction)
+                DiscriminantKeyCode::BackTab => f.write_str("BackTab"),
+                DiscriminantKeyCode::Backspace => f.write_str("Backspace"),
+                DiscriminantKeyCode::CapsLock => f.write_str("CapsLock"),
+                DiscriminantKeyCode::Delete => f.write_str("Delete"),
+                DiscriminantKeyCode::Down => f.write_str("Down"),
+                DiscriminantKeyCode::End => f.write_str("End"),
+                DiscriminantKeyCode::Enter => f.write_str("Enter"),
+                DiscriminantKeyCode::Esc => f.write_str("Esc"),
+                DiscriminantKeyCode::Function => f.debug_tuple("Function")
+        .field(&self.Function)
         .finish(),
-                DiscriminantKeyCode::KeyHome => f.write_str("KeyHome"),
-                DiscriminantKeyCode::KeyInsert => f.write_str("KeyInsert"),
-                DiscriminantKeyCode::KeyKeypadBegin => f.write_str("KeyKeypadBegin"),
-                DiscriminantKeyCode::KeyLeft => f.write_str("KeyLeft"),
-                DiscriminantKeyCode::KeyMedia => f.debug_tuple("KeyMedia")
-        .field(&self.KeyMedia)
+                DiscriminantKeyCode::Home => f.write_str("Home"),
+                DiscriminantKeyCode::Insert => f.write_str("Insert"),
+                DiscriminantKeyCode::KeypadBegin => f.write_str("KeypadBegin"),
+                DiscriminantKeyCode::Left => f.write_str("Left"),
+                DiscriminantKeyCode::Media => f.debug_tuple("Media")
+        .field(&self.Media)
         .finish(),
-                DiscriminantKeyCode::KeyMenu => f.write_str("KeyMenu"),
-                DiscriminantKeyCode::KeyModifier => f.debug_tuple("KeyModifier")
-        .field(&self.KeyModifier)
+                DiscriminantKeyCode::Menu => f.write_str("Menu"),
+                DiscriminantKeyCode::Modifier => f.debug_tuple("Modifier")
+        .field(&self.Modifier)
         .finish(),
-                DiscriminantKeyCode::KeyNull => f.write_str("KeyNull"),
-                DiscriminantKeyCode::KeyNumLock => f.write_str("KeyNumLock"),
-                DiscriminantKeyCode::KeyPageDown => f.write_str("KeyPageDown"),
-                DiscriminantKeyCode::KeyPageUp => f.write_str("KeyPageUp"),
-                DiscriminantKeyCode::KeyPause => f.write_str("KeyPause"),
-                DiscriminantKeyCode::KeyPrintScreen => f.write_str("KeyPrintScreen"),
-                DiscriminantKeyCode::KeyRight => f.write_str("KeyRight"),
-                DiscriminantKeyCode::KeyScalar => f.debug_tuple("KeyScalar")
-        .field(&self.KeyScalar)
+                DiscriminantKeyCode::Null => f.write_str("Null"),
+                DiscriminantKeyCode::NumLock => f.write_str("NumLock"),
+                DiscriminantKeyCode::PageDown => f.write_str("PageDown"),
+                DiscriminantKeyCode::PageUp => f.write_str("PageUp"),
+                DiscriminantKeyCode::Pause => f.write_str("Pause"),
+                DiscriminantKeyCode::PrintScreen => f.write_str("PrintScreen"),
+                DiscriminantKeyCode::Right => f.write_str("Right"),
+                DiscriminantKeyCode::Scalar => f.debug_tuple("Scalar")
+        .field(&*self.Scalar)
         .finish(),
-                DiscriminantKeyCode::KeyScrollLock => f.write_str("KeyScrollLock"),
-                DiscriminantKeyCode::KeyTab => f.write_str("KeyTab"),
-                DiscriminantKeyCode::KeyUp => f.write_str("KeyUp"),
+                DiscriminantKeyCode::ScrollLock => f.write_str("ScrollLock"),
+                DiscriminantKeyCode::Tab => f.write_str("Tab"),
+                DiscriminantKeyCode::Up => f.write_str("Up"),
             }
         }
     }

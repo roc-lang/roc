@@ -15,10 +15,11 @@ update = \model, event ->
     when event is 
         KeyPressed code ->
             when code is 
-                KeyLeft -> { text : "KeyLeft" }
-                KeyRight -> { text : "KeyRight" }
-                KeyUp -> { text : "KeyUp" }
-                KeyDown -> { text : "KeyDown" }
+                Left -> { text : "Left" }
+                Right -> { text : "Right" }
+                Up -> { text : "Up" }
+                Down -> { text : "Down" }
+                Scalar key -> {text : Str.concat model.text key}
                 _ -> model
 
         Resize bounds -> 
@@ -39,8 +40,8 @@ boundsToStr = \{height, width} ->
     w = Num.toStr width
     "H: \(h), W:\(w)"
 
-style1 = { bg: Blue, fg: Magenta, modifiers: [BOLD, ITALIC] }
-style2 = { bg: Black, fg: LightRed, modifiers: [SLOWBLINK, UNDERLINED] }
+style1 = { bg: Blue, fg: Magenta, modifiers: [Bold, Italic] }
+style2 = { bg: Black, fg: LightRed, modifiers: [SlowBlink, Underlined] }
 style3 = { bg: Cyan, fg: LightMagenta, modifiers: [] }
 style4 = { bg: None, fg: Yellow, modifiers: [] }
 style5 = { bg: None, fg: Red, modifiers: [] }
@@ -64,7 +65,7 @@ paragraph =\model ->
             titleStyle: style1,
             titleAlignment: Right,
             textAlignment: Center,
-            borders: [ALL],
+            borders: [All],
             borderStyle: style3,
             borderType: Plain,
             style: style4,

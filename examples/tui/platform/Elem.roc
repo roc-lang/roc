@@ -35,24 +35,24 @@ Color : [
 ]
 
 TextModifier : [
-    BOLD,
-    DIM,
-    ITALIC,
-    UNDERLINED,
-    SLOWBLINK,
-    RAPIDBLINK,
-    REVERSED,
-    HIDDEN,
-    CROSSEDOUT,
+    Bold,
+    Dim,
+    Italic,
+    Underlined,
+    SlowBlink,
+    RapidBlink,
+    Reversed,
+    Hidden,
+    CrossedOut,
 ]
 
 BorderModifier : [
-    NONE,
-    TOP,
-    RIGHT,
-    BOTTOM,
-    LEFT,
-    ALL,
+    None,
+    Top,
+    Right,
+    Bottom,
+    Left,
+    All,
 ]
 
 BorderType : [
