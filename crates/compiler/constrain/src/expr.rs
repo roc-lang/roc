@@ -3796,14 +3796,7 @@ fn rec_defs_help(
                         let mut vars = Vec::with_capacity(state.vars.capacity() + 1);
                         let ret_var = *ret_var;
                         let closure_var = *closure_var;
-                        let ret_type_index = {
-                            let typ = types
-                                .clone_with_variable_substitutions(ret_type, &Default::default());
-                            constraints.push_type(
-                                types, // TODO(types-soa) remove clone
-                                typ,
-                            )
-                        };
+                        let ret_type_index = constraints.push_type(types, ret_type);
 
                         vars.push(ret_var);
                         vars.push(closure_var);
