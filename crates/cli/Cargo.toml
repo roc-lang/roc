@@ -72,7 +72,7 @@ ven_pretty = { path = "../vendor/pretty" }
 target-lexicon = "0.12.3"
 tempfile = "3.2.0"
 wasmer-wasi = { version = "2.2.1", optional = true }
-
+strum = { version = "0.24.1", features = ["derive"] }
 libloading = "0.7.1"
 roc_gen_llvm = {path = "../compiler/gen_llvm"}
 inkwell = {path = "../vendor/inkwell"}
