@@ -667,7 +667,6 @@ pub fn constrain_pattern(
         } => {
             // Suppose we are constraining the pattern \@Id who, where Id n := [Id U64 n]
             let (arg_pattern_var, loc_arg_pattern) = &**argument;
-            let arg_pattern_type = Type::Variable(*arg_pattern_var);
             let arg_pattern_type_index = constraints.push_variable(*arg_pattern_var);
 
             let opaque_type = {
@@ -682,7 +681,7 @@ pub fn constrain_pattern(
                         .collect(),
                     lambda_set_variables: lambda_set_variables.clone(),
                     infer_ext_in_output_types: vec![],
-                    actual: Box::new(arg_pattern_type.clone()),
+                    actual: Box::new(Type::Variable(*arg_pattern_var)),
                     kind: AliasKind::Opaque,
                 });
                 constraints.push_type(types, typ)
