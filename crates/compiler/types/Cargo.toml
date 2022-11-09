@@ -15,3 +15,4 @@ roc_debug_flags = {path="../debug_flags"}
 roc_serialize = {path="../serialize"}
 bumpalo = { version = "3.11.0", features = ["collections"] }
 static_assertions = "1.1.0"
+ven_pretty = { path = "../../vendor/pretty" }
