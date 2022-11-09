@@ -358,11 +358,7 @@ pub fn constrain_pattern(
         }
 
         StrLiteral(_) => {
-            // TODO(types-soa) use Types::STR
-            let str_type = {
-                let typ = types.from_old_type(&builtins::str_type());
-                constraints.push_type(types, typ)
-            };
+            let str_type = constraints.push_type(types, Types::STR);
             state.constraints.push(constraints.equal_pattern_types(
                 str_type,
                 expected,

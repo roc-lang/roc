@@ -268,11 +268,6 @@ pub fn list_type(typ: Type) -> Type {
 }
 
 #[cfg_attr(not(debug_assertions), inline(always))]
-pub fn str_type() -> Type {
-    builtin_type(Symbol::STR_STR, Vec::new())
-}
-
-#[cfg_attr(not(debug_assertions), inline(always))]
 fn builtin_num_alias(
     symbol: Symbol,
     type_arguments: Vec<OptAbleType>,
