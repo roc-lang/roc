@@ -5521,13 +5521,44 @@ fn run_low_level<'a, 'ctx, 'env>(
 
     debug_assert!(!op.is_higher_order());
 
+    macro_rules! arguments {
+        () => {};
+        ($($x:ident),+ $(,)?) => {
+            // look at that, a usage for if let ... else
+            let [$($x),+] = match &args {
+                [$($x),+] => {
+                    [ $(load_symbol(scope, $x)),+ ]
+                }
+                _ => {
+                    // we could get fancier with reporting here, but this macro is used a bunch
+                    // so I want to keep the expansion small (for now)
+                    internal_error!("lowlevel operation has incorrect number of arguments!")
+                }
+            };
+        };
+    }
+
+    macro_rules! arguments_with_layouts {
+        () => {};
+        ($(($x:ident, $y:ident)),+ $(,)?) => {
+            // look at that, a usage for if let ... else
+            let [$(($x, $y)),+] = match &args {
+                [$($x),+] => {
+                    [ $(load_symbol_and_layout(scope, $x)),+ ]
+                }
+                _ => {
+                    // we could get fancier with reporting here, but this macro is used a bunch
+                    // so I want to keep the expansion small (for now)
+                    internal_error!("lowlevel operation has incorrect number of arguments!")
+                }
+            };
+        };
+    }
+
     match op {
         StrConcat => {
             // Str.concat : Str, Str -> Str
-            debug_assert_eq!(args.len(), 2);
-
-            let string1 = load_symbol(scope, &args[0]);
-            let string2 = load_symbol(scope, &args[1]);
+            arguments!(string1, string2);
 
             call_str_bitcode_fn(
                 env,
@@ -5539,10 +5570,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrJoinWith => {
             // Str.joinWith : List Str, Str -> Str
-            debug_assert_eq!(args.len(), 2);
-
-            let list = load_symbol(scope, &args[0]);
-            let string = load_symbol(scope, &args[1]);
+            arguments!(list, string);
 
             match env.target_info.ptr_width() {
                 PtrWidth::Bytes4 => {
@@ -5570,9 +5598,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrToScalars => {
             // Str.toScalars : Str -> List U32
-            debug_assert_eq!(args.len(), 1);
-
-            let string = load_symbol(scope, &args[0]);
+            arguments!(string);
 
             call_str_bitcode_fn(
                 env,
@@ -5584,10 +5610,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrStartsWith => {
             // Str.startsWith : Str, Str -> Bool
-            debug_assert_eq!(args.len(), 2);
-
-            let string = load_symbol(scope, &args[0]);
-            let prefix = load_symbol(scope, &args[1]);
+            arguments!(string, prefix);
 
             call_str_bitcode_fn(
                 env,
@@ -5599,10 +5622,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrStartsWithScalar => {
             // Str.startsWithScalar : Str, U32 -> Bool
-            debug_assert_eq!(args.len(), 2);
-
-            let string = load_symbol(scope, &args[0]);
-            let prefix = load_symbol(scope, &args[1]);
+            arguments!(string, prefix);
 
             call_str_bitcode_fn(
                 env,
@@ -5614,10 +5634,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrEndsWith => {
             // Str.startsWith : Str, Str -> Bool
-            debug_assert_eq!(args.len(), 2);
-
-            let string = load_symbol(scope, &args[0]);
-            let prefix = load_symbol(scope, &args[1]);
+            arguments!(string, prefix);
 
             call_str_bitcode_fn(
                 env,
@@ -5629,7 +5646,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrToNum => {
             // Str.toNum : Str -> Result (Num *) {}
-            debug_assert_eq!(args.len(), 1);
+            arguments!(string);
 
             let number_layout = match layout {
                 Layout::Struct { field_layouts, .. } => field_layouts[0], // TODO: why is it sometimes a struct?
@@ -5643,8 +5660,6 @@ fn run_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
                 _ => unreachable!(),
             };
-
-            let string = load_symbol(scope, &args[0]);
 
             let result = match env.target_info.ptr_width() {
                 PtrWidth::Bytes4 => {
@@ -5746,12 +5761,6 @@ fn run_low_level<'a, 'ctx, 'env>(
             )
         }
         StrFromUtf8Range => {
-            debug_assert_eq!(args.len(), 3);
-
-            let list = args[0];
-            let start = load_symbol(scope, &args[1]);
-            let count = load_symbol(scope, &args[2]);
-
             let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
             let result_ptr = env
                 .builder
@@ -5759,8 +5768,8 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             match env.target_info.ptr_width() {
                 PtrWidth::Bytes4 => {
-                    let list = load_symbol(scope, &list).into_struct_value();
-                    let (a, b) = pass_list_or_string_to_zig_32bit(env, list);
+                    arguments!(list, start, count);
+                    let (a, b) = pass_list_or_string_to_zig_32bit(env, list.into_struct_value());
 
                     call_void_bitcode_fn(
                         env,
@@ -5776,7 +5785,10 @@ fn run_low_level<'a, 'ctx, 'env>(
                     );
                 }
                 PtrWidth::Bytes8 => {
-                    //
+                    arguments!(_list, start, count);
+
+                    // we use the symbol here instead
+                    let list = args[0];
 
                     call_void_bitcode_fn(
                         env,
@@ -5796,9 +5808,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrToUtf8 => {
             // Str.fromInt : Str -> List U8
-            debug_assert_eq!(args.len(), 1);
-
-            let string = load_symbol(scope, &args[0]);
+            arguments!(string);
 
             call_str_bitcode_fn(
                 env,
@@ -5810,10 +5820,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrRepeat => {
             // Str.repeat : Str, Nat -> Str
-            debug_assert_eq!(args.len(), 2);
-
-            let string = load_symbol(scope, &args[0]);
-            let count = load_symbol(scope, &args[1]);
+            arguments!(string, count);
 
             call_str_bitcode_fn(
                 env,
@@ -5825,10 +5832,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrSplit => {
             // Str.split : Str, Str -> List Str
-            debug_assert_eq!(args.len(), 2);
-
-            let string = load_symbol(scope, &args[0]);
-            let delimiter = load_symbol(scope, &args[1]);
+            arguments!(string, delimiter);
 
             call_str_bitcode_fn(
                 env,
@@ -5840,10 +5844,9 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrIsEmpty => {
             // Str.isEmpty : Str -> Str
-            debug_assert_eq!(args.len(), 1);
+            arguments!(string);
 
             // the builtin will always return an u64
-            let string = load_symbol(scope, &args[0]);
             let length = call_str_bitcode_fn(
                 env,
                 &[string],
@@ -5868,9 +5871,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrCountGraphemes => {
             // Str.countGraphemes : Str -> Nat
-            debug_assert_eq!(args.len(), 1);
+            arguments!(string);
 
-            let string = load_symbol(scope, &args[0]);
             call_str_bitcode_fn(
                 env,
                 &[string],
@@ -5881,13 +5883,9 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrGetScalarUnsafe => {
             // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
-            debug_assert_eq!(args.len(), 2);
+            arguments!(string, index);
 
             use roc_target::OperatingSystem::*;
-
-            let string = load_symbol(scope, &args[0]);
-            let index = load_symbol(scope, &args[1]);
-
             match env.target_info.operating_system {
                 Windows => {
                     // we have to go digging to find the return type
@@ -5941,9 +5939,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrCountUtf8Bytes => {
             // Str.countUtf8Bytes : Str -> Nat
-            debug_assert_eq!(args.len(), 1);
+            arguments!(string);
 
-            let string = load_symbol(scope, &args[0]);
             call_str_bitcode_fn(
                 env,
                 &[string],
@@ -5954,18 +5951,14 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrGetCapacity => {
             // Str.capacity : Str -> Nat
-            debug_assert_eq!(args.len(), 1);
+            arguments!(string);
 
-            let string = load_symbol(scope, &args[0]);
             call_bitcode_fn(env, &[string], bitcode::STR_CAPACITY)
         }
         StrSubstringUnsafe => {
             // Str.substringUnsafe : Str, Nat, Nat -> Str
-            debug_assert_eq!(args.len(), 3);
+            arguments!(string, start, length);
 
-            let string = load_symbol(scope, &args[0]);
-            let start = load_symbol(scope, &args[1]);
-            let length = load_symbol(scope, &args[2]);
             call_str_bitcode_fn(
                 env,
                 &[string],
@@ -5976,10 +5969,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrReserve => {
             // Str.reserve : Str, Nat -> Str
-            debug_assert_eq!(args.len(), 2);
+            arguments!(string, capacity);
 
-            let string = load_symbol(scope, &args[0]);
-            let capacity = load_symbol(scope, &args[1]);
             call_str_bitcode_fn(
                 env,
                 &[string],
@@ -5990,10 +5981,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrAppendScalar => {
             // Str.appendScalar : Str, U32 -> Str
-            debug_assert_eq!(args.len(), 2);
+            arguments!(string, capacity);
 
-            let string = load_symbol(scope, &args[0]);
-            let capacity = load_symbol(scope, &args[1]);
             call_str_bitcode_fn(
                 env,
                 &[string],
@@ -6004,16 +5993,14 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrTrim => {
             // Str.trim : Str -> Str
-            debug_assert_eq!(args.len(), 1);
+            arguments!(string);
 
-            let string = load_symbol(scope, &args[0]);
             call_str_bitcode_fn(env, &[string], &[], BitcodeReturns::Str, bitcode::STR_TRIM)
         }
         StrTrimLeft => {
             // Str.trim : Str -> Str
-            debug_assert_eq!(args.len(), 1);
+            arguments!(string);
 
-            let string = load_symbol(scope, &args[0]);
             call_str_bitcode_fn(
                 env,
                 &[string],
@@ -6024,9 +6011,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrTrimRight => {
             // Str.trim : Str -> Str
-            debug_assert_eq!(args.len(), 1);
+            arguments!(string);
 
-            let string = load_symbol(scope, &args[0]);
             call_str_bitcode_fn(
                 env,
                 &[string],
@@ -6037,9 +6023,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrWithCapacity => {
             // Str.withCapacity : Nat -> Str
-            debug_assert_eq!(args.len(), 1);
-
-            let str_len = load_symbol(scope, &args[0]);
+            arguments!(str_len);
 
             call_str_bitcode_fn(
                 env,
@@ -6051,9 +6035,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         StrGraphemes => {
             // Str.graphemes : Str -> List Str
-            debug_assert_eq!(args.len(), 1);
-
-            let string = load_symbol(scope, &args[0]);
+            arguments!(string);
 
             call_str_bitcode_fn(
                 env,
@@ -6065,28 +6047,26 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         ListLen => {
             // List.len : List * -> Nat
-            debug_assert_eq!(args.len(), 1);
+            arguments!(list);
 
-            let arg = load_symbol(scope, &args[0]);
-
-            list_len(env.builder, arg.into_struct_value()).into()
+            list_len(env.builder, list.into_struct_value()).into()
         }
         ListGetCapacity => {
             // List.capacity : List * -> Nat
-            debug_assert_eq!(args.len(), 1);
+            arguments!(list);
 
-            let arg = load_symbol(scope, &args[0]);
-
-            list_capacity(env.builder, arg.into_struct_value()).into()
+            list_capacity(env.builder, list.into_struct_value()).into()
         }
         ListWithCapacity => {
             // List.withCapacity : Nat -> List a
-            debug_assert_eq!(args.len(), 1);
+            arguments!(list_len);
 
-            let list_len = load_symbol(scope, &args[0]).into_int_value();
             let result_layout = *layout;
-
-            list_with_capacity(env, list_len, &list_element_layout!(result_layout))
+            list_with_capacity(
+                env,
+                list_len.into_int_value(),
+                &list_element_layout!(result_layout),
+            )
         }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
@@ -6107,6 +6087,15 @@ fn run_low_level<'a, 'ctx, 'env>(
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
             list_append_unsafe(env, original_wrapper, elem, elem_layout)
+        }
+        ListPrepend => {
+            // List.prepend : List elem, elem -> List elem
+            debug_assert_eq!(args.len(), 2);
+
+            let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
+            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
+
+            list_prepend(env, original_wrapper, elem, elem_layout)
         }
         ListReserve => {
             // List.reserve : List elem, Nat -> List elem
@@ -6175,21 +6164,9 @@ fn run_low_level<'a, 'ctx, 'env>(
                 element_layout,
             )
         }
-        ListPrepend => {
-            // List.prepend : List elem, elem -> List elem
-            debug_assert_eq!(args.len(), 2);
-
-            let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
-            let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
-
-            list_prepend(env, original_wrapper, elem, elem_layout)
-        }
         StrGetUnsafe => {
             // Str.getUnsafe : Str, Nat -> u8
-            debug_assert_eq!(args.len(), 2);
-
-            let wrapper_struct = load_symbol(scope, &args[0]);
-            let elem_index = load_symbol(scope, &args[1]);
+            arguments!(wrapper_struct, elem_index);
 
             call_str_bitcode_fn(
                 env,
@@ -6201,20 +6178,18 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         ListGetUnsafe => {
             // List.getUnsafe : List elem, Nat -> elem
-            debug_assert_eq!(args.len(), 2);
+            arguments_with_layouts!((wrapper_struct, list_layout), (element_index, _l));
 
-            let (wrapper_struct, list_layout) = load_symbol_and_layout(scope, &args[0]);
-            let wrapper_struct = wrapper_struct.into_struct_value();
-            let elem_index = load_symbol(scope, &args[1]).into_int_value();
-
-            let element_layout = list_element_layout!(list_layout);
-
-            list_get_unsafe(env, layout_ids, element_layout, elem_index, wrapper_struct)
+            list_get_unsafe(
+                env,
+                layout_ids,
+                list_element_layout!(list_layout),
+                element_index.into_int_value(),
+                wrapper_struct.into_struct_value(),
+            )
         }
         ListReplaceUnsafe => {
-            let list = load_symbol(scope, &args[0]);
-            let index = load_symbol(scope, &args[1]);
-            let (element, element_layout) = load_symbol_and_layout(scope, &args[2]);
+            arguments_with_layouts!((list, _l1), (index, _l2), (element, element_layout));
 
             list_replace_unsafe(
                 env,
@@ -6228,13 +6203,11 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         ListIsUnique => {
             // List.isUnique : List a -> Bool
-            debug_assert_eq!(args.len(), 1);
-
-            let list = load_symbol(scope, &args[0]).into_struct_value();
+            arguments!(list);
 
             call_list_bitcode_fn(
                 env,
-                &[list],
+                &[list.into_struct_value()],
                 &[],
                 BitcodeReturns::Basic,
                 bitcode::LIST_IS_UNIQUE,
@@ -6242,9 +6215,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         NumToStr => {
             // Num.toStr : Num a -> Str
-            debug_assert_eq!(args.len(), 1);
-
-            let (num, num_layout) = load_symbol_and_layout(scope, &args[0]);
+            arguments_with_layouts!((num, num_layout));
 
             match num_layout {
                 Layout::Builtin(Builtin::Int(int_width)) => {
@@ -6281,9 +6252,7 @@ fn run_low_level<'a, 'ctx, 'env>(
         NumAbs | NumNeg | NumRound | NumSqrtUnchecked | NumLogUnchecked | NumSin | NumCos
         | NumCeiling | NumFloor | NumToFrac | NumIsFinite | NumAtan | NumAcos | NumAsin
         | NumToIntChecked => {
-            debug_assert_eq!(args.len(), 1);
-
-            let (arg, arg_layout) = load_symbol_and_layout(scope, &args[0]);
+            arguments_with_layouts!((arg, arg_layout));
 
             match arg_layout {
                 Layout::Builtin(arg_builtin) => {
@@ -6323,37 +6292,31 @@ fn run_low_level<'a, 'ctx, 'env>(
             }
         }
         NumBytesToU16 => {
-            debug_assert_eq!(args.len(), 2);
-            let list = load_symbol(scope, &args[0]).into_struct_value();
-            let position = load_symbol(scope, &args[1]);
+            arguments!(list, position);
+
             call_list_bitcode_fn(
                 env,
-                &[list],
+                &[list.into_struct_value()],
                 &[position],
                 BitcodeReturns::Basic,
                 bitcode::NUM_BYTES_TO_U16,
             )
         }
         NumBytesToU32 => {
-            debug_assert_eq!(args.len(), 2);
-            let list = load_symbol(scope, &args[0]).into_struct_value();
-            let position = load_symbol(scope, &args[1]);
+            arguments!(list, position);
+
             call_list_bitcode_fn(
                 env,
-                &[list],
+                &[list.into_struct_value()],
                 &[position],
                 BitcodeReturns::Basic,
                 bitcode::NUM_BYTES_TO_U32,
             )
         }
         NumCompare => {
+            arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
+
             use inkwell::FloatPredicate;
-
-            debug_assert_eq!(args.len(), 2);
-
-            let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
-
             match (lhs_layout, rhs_layout) {
                 (Layout::Builtin(lhs_builtin), Layout::Builtin(rhs_builtin))
                     if lhs_builtin == rhs_builtin =>
@@ -6438,18 +6401,12 @@ fn run_low_level<'a, 'ctx, 'env>(
         | NumIsMultipleOf | NumAddWrap | NumAddChecked | NumAddSaturated | NumDivFrac
         | NumDivTruncUnchecked | NumDivCeilUnchecked | NumPow | NumPowInt | NumSubWrap
         | NumSubChecked | NumSubSaturated | NumMulWrap | NumMulSaturated | NumMulChecked => {
-            debug_assert_eq!(args.len(), 2);
-
-            let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
+            arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 
             build_num_binop(env, parent, lhs_arg, lhs_layout, rhs_arg, rhs_layout, op)
         }
         NumBitwiseAnd | NumBitwiseOr | NumBitwiseXor => {
-            debug_assert_eq!(args.len(), 2);
-
-            let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
+            arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 
             debug_assert_eq!(lhs_layout, rhs_layout);
             let int_width = intwidth_from_layout(*lhs_layout);
@@ -6464,10 +6421,7 @@ fn run_low_level<'a, 'ctx, 'env>(
             )
         }
         NumShiftLeftBy | NumShiftRightBy | NumShiftRightZfBy => {
-            debug_assert_eq!(args.len(), 2);
-
-            let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
+            arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 
             let int_width = intwidth_from_layout(*lhs_layout);
 
@@ -6496,21 +6450,17 @@ fn run_low_level<'a, 'ctx, 'env>(
             )
         }
         NumIntCast => {
-            debug_assert_eq!(args.len(), 1);
-
-            let arg = load_symbol(scope, &args[0]).into_int_value();
+            arguments!(arg);
 
             let to = basic_type_from_layout(env, layout).into_int_type();
             let to_signed = intwidth_from_layout(*layout).is_signed();
 
             env.builder
-                .build_int_cast_sign_flag(arg, to, to_signed, "inc_cast")
+                .build_int_cast_sign_flag(arg.into_int_value(), to, to_signed, "inc_cast")
                 .into()
         }
         NumToFloatCast => {
-            debug_assert_eq!(args.len(), 1);
-
-            let (arg, arg_layout) = load_symbol_and_layout(scope, &args[0]);
+            arguments_with_layouts!((arg, arg_layout));
 
             match arg_layout {
                 Layout::Builtin(Builtin::Int(width)) => {
@@ -6550,27 +6500,19 @@ fn run_low_level<'a, 'ctx, 'env>(
             todo!("implement checked float conversion");
         }
         Eq => {
-            debug_assert_eq!(args.len(), 2);
-
-            let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
+            arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 
             generic_eq(env, layout_ids, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
         }
         NotEq => {
-            debug_assert_eq!(args.len(), 2);
-
-            let (lhs_arg, lhs_layout) = load_symbol_and_layout(scope, &args[0]);
-            let (rhs_arg, rhs_layout) = load_symbol_and_layout(scope, &args[1]);
+            arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 
             generic_neq(env, layout_ids, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
         }
         And => {
             // The (&&) operator
-            debug_assert_eq!(args.len(), 2);
+            arguments!(lhs_arg, rhs_arg);
 
-            let lhs_arg = load_symbol(scope, &args[0]);
-            let rhs_arg = load_symbol(scope, &args[1]);
             let bool_val = env.builder.build_and(
                 lhs_arg.into_int_value(),
                 rhs_arg.into_int_value(),
@@ -6581,10 +6523,8 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         Or => {
             // The (||) operator
-            debug_assert_eq!(args.len(), 2);
+            arguments!(lhs_arg, rhs_arg);
 
-            let lhs_arg = load_symbol(scope, &args[0]);
-            let rhs_arg = load_symbol(scope, &args[1]);
             let bool_val = env.builder.build_or(
                 lhs_arg.into_int_value(),
                 rhs_arg.into_int_value(),
@@ -6595,11 +6535,9 @@ fn run_low_level<'a, 'ctx, 'env>(
         }
         Not => {
             // The (!) operator
-            debug_assert_eq!(args.len(), 1);
+            arguments!(arg);
 
-            let arg = load_symbol(scope, &args[0]);
             let bool_val = env.builder.build_not(arg.into_int_value(), "bool_not");
-
             BasicValueEnum::IntValue(bool_val)
         }
         Hash => {
