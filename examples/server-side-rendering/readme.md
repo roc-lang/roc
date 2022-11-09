@@ -1,6 +1,10 @@
-# Use Roc for interactive web UIs using WebAssembly
+# Server-side rendering
 
-This platform builds on the ideas in [Action-State in Roc (v5)](https://docs.google.com/document/d/16qY4NGVOHu8mvInVD-ddTajZYSsFvFBvQON_hmyHGfo/edit) about how UI frameworks in general should work in Roc.
+**NOT READY YET! WORK IN PROGRESS!**
+
+The aim is to develop an example of a virtual DOM platform in Roc, with server-side rendering. The virtual DOM rendering is not working yet though!
+
+This builds on the ideas in [Action-State in Roc (v5)](https://docs.google.com/document/d/16qY4NGVOHu8mvInVD-ddTajZYSsFvFBvQON_hmyHGfo/edit) about how UI frameworks in general should work in Roc.
 
 > As with many aspects of Roc, this is a design that's both inspired by and similar to - but not quite the same as - [how Elm does it](https://guide.elm-lang.org/architecture/).
 
