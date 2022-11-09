@@ -2480,11 +2480,7 @@ fn constrain_typed_def(
         rigids: ftv,
     };
 
-    let signature_index = {
-        // TODO(types-soa) get rid of clone
-        let typ = types.clone_with_variable_substitutions(signature, &Default::default());
-        constraints.push_type(types, typ)
-    };
+    let signature_index = constraints.push_type(types, signature);
 
     let annotation_expected = constraints.push_expected_type(FromAnnotation(
         def.loc_pattern.clone(),
