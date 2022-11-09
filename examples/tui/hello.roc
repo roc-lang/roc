@@ -1,8 +1,8 @@
 app "hello"
     packages { pf: "platform/main.roc" }
     imports [
-        pf.Api.{ Event, Bounds },
         pf.Model.{ Model },
+        pf.Event.{ Event, Bounds },
         pf.Elem.{ Elem },
     ]
     provides [program] {} to pf

@@ -1,8 +1,6 @@
 
-pub fn run_event_loop(title: &str, window_bounds: crate::glue::Bounds) {
+pub fn run_event_loop(title: &str) {
     
-    let (mut model, mut elems) = crate::roc::init_and_render(window_bounds);
-
     crossterm::terminal::enable_raw_mode().unwrap();
     let mut stdout = std::io::stdout();
     crossterm::execute!(
@@ -12,25 +10,40 @@ pub fn run_event_loop(title: &str, window_bounds: crate::glue::Bounds) {
     ).unwrap();
     let backend = tui::backend::CrosstermBackend::new(stdout);
     let mut terminal = tui::Terminal::new(backend).unwrap();
-
     let tick_rate = std::time::Duration::from_millis(200);
     let events = Events::new(tick_rate);
+    let size = terminal.size().unwrap();
+    let window_bounds = crate::glue::Bounds{
+        height: size.height,
+        width : size.width,
+    };
+
+    // Initialise Roc app
+    let (mut model, mut elems) = crate::roc::init_and_render(window_bounds);
     
     loop {
+
         let mut appReturn = false;
         
+        // Draw the widgets
         terminal.draw(|f| {
             for elem in &elems {
                 renderWidget(f, f.size(), &elem)
             }
         }).unwrap();
 
+        // Handle any events
         let result = match events.next().unwrap() {
-            InputEvent::Input(key) => {
+            InputEvent::KeyPressed(key) => {
                 appReturn = true;
             },
+            InputEvent::FocusGained => {},
+            InputEvent::FocusLost => {},
+            InputEvent::Paste(contents) => {},
+            InputEvent::Resize(column, row) => {},
             InputEvent::Tick => {},
         };
+
         if appReturn {
             break;
         }
@@ -48,7 +61,12 @@ pub fn run_event_loop(title: &str, window_bounds: crate::glue::Bounds) {
 }
 
 pub enum InputEvent {
-    Input(crossterm::event::KeyEvent),
+    KeyPressed(crossterm::event::KeyEvent),
+    FocusGained,
+    FocusLost,
+    // TODO Mouse(MouseEvent),
+    Paste(String),
+    Resize(u16, u16), // column, row
     Tick,
 }
 
@@ -66,9 +84,26 @@ impl Events {
             loop {
                 // poll for tick rate duration, if no event, sent tick event.
                 if crossterm::event::poll(tick_rate).unwrap() {
-                    if let crossterm::event::Event::Key(key) = crossterm::event::read().unwrap() {
-                        let key = crossterm::event::KeyEvent::from(key);
-                        event_tx.send(InputEvent::Input(key)).unwrap();
+                    match crossterm::event::read().unwrap() {
+                        crossterm::event::Event::Key(key) => {
+                            let key = crossterm::event::KeyEvent::from(key);
+                            event_tx.send(InputEvent::KeyPressed(key)).unwrap();
+                        },
+                        crossterm::event::Event::FocusGained => {
+                            event_tx.send(InputEvent::FocusGained).unwrap();
+                        },
+                        crossterm::event::Event::FocusLost => {
+                            event_tx.send(InputEvent::FocusLost).unwrap();
+                        },
+                        crossterm::event::Event::Mouse(_) => {
+                            // TODO support mouse stuff
+                        },
+                        crossterm::event::Event::Paste(contents) => {
+                            event_tx.send(InputEvent::Paste(contents)).unwrap();
+                        },
+                        crossterm::event::Event::Resize(column, row) => {
+                            event_tx.send(InputEvent::Resize(column, row)).unwrap();
+                        },
                     }
                 }
                 event_tx.send(InputEvent::Tick).unwrap();

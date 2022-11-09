@@ -8,9 +8,11 @@ interface Elem
         Alignment,
         Styles,
         ParagraphConfig,
+        LayoutConfig,
+        LayoutDirection,
+        Constraint,
     ]
     imports []
-
 
 Color : [
     None,
