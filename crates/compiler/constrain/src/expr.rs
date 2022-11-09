@@ -3748,14 +3748,7 @@ fn rec_defs_help(
 
                 hybrid_and_flex_info.vars.extend(new_infer_variables);
 
-                let signature_index = {
-                    let typ =
-                        types.clone_with_variable_substitutions(signature, &Default::default());
-                    constraints.push_type(
-                        types, // TODO(types-soa) remove clone
-                        typ,
-                    )
-                };
+                let signature_index = constraints.push_type(types, signature);
 
                 let annotation_expected = FromAnnotation(
                     def.loc_pattern.clone(),
