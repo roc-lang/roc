@@ -2679,11 +2679,7 @@ fn constrain_typed_function_arguments(
     let it = arguments.iter().zip(arg_types.into_iter()).enumerate();
     for (index, ((pattern_var, annotated_mark, loc_pattern), ann)) in it {
         let pattern_var_index = constraints.push_variable(*pattern_var);
-        let ann_index = {
-            // TODO(types-soa) remove clone
-            let typ = types.clone_with_variable_substitutions(ann, &Default::default());
-            constraints.push_type(types, typ)
-        };
+        let ann_index = constraints.push_type(types, ann);
 
         if loc_pattern.value.surely_exhaustive() {
             // OPT: we don't need to perform any type-level exhaustiveness checking.
