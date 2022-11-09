@@ -1,10 +1,10 @@
+use super::expr2::{Expr2, ExprId};
 use crate::{
     lang::core::{expr::record_field::RecordField, val_def::value_def_to_string},
     mem_pool::pool::Pool,
 };
-
-use super::expr2::{Expr2, ExprId};
 use roc_types::subs::Variable;
+use std::fmt::Write as _; // import without risk of name clashing
 
 pub fn expr2_to_string(node_id: ExprId, pool: &Pool) -> String {
     let mut full_string = String::new();
@@ -31,14 +31,11 @@ fn expr2_to_string_helper(
     out_string.push_str(&get_spacing(indent_level));
 
     match expr2 {
-        Expr2::SmallStr(arr_string) => out_string.push_str(&format!(
-            "{}{}{}",
-            "SmallStr(\"",
-            arr_string.as_str(),
-            "\")",
-        )),
+        Expr2::SmallStr(arr_string) => {
+            let _ = write!(out_string, "SmallStr(\"{}\")", arr_string.as_str());
+        }
         Expr2::Str(pool_str) => {
-            out_string.push_str(&format!("{}{}{}", "Str(\"", pool_str.as_str(pool), "\")",))
+            let _ = write!(out_string, "Str(\"{}\")", pool_str.as_str(pool));
         }
         Expr2::Blank => out_string.push_str("Blank"),
         Expr2::EmptyRecord => out_string.push_str("EmptyRecord"),
@@ -46,7 +43,7 @@ fn expr2_to_string_helper(
             out_string.push_str("Record:\n");
             out_string.push_str(&var_to_string(record_var, indent_level + 1));
 
-            out_string.push_str(&format!("{}fields: [\n", get_spacing(indent_level + 1)));
+            let _ = writeln!(out_string, "{}fields: [", get_spacing(indent_level + 1));
 
             let mut first_child = true;
 
@@ -59,43 +56,46 @@ fn expr2_to_string_helper(
 
                 match field {
                     RecordField::InvalidLabelOnly(pool_str, var) => {
-                        out_string.push_str(&format!(
+                        let _ = write!(
+                            out_string,
                             "{}({}, Var({:?})",
                             get_spacing(indent_level + 2),
                             pool_str.as_str(pool),
                             var,
-                        ));
+                        );
                     }
                     RecordField::LabelOnly(pool_str, var, symbol) => {
-                        out_string.push_str(&format!(
+                        let _ = write!(
+                            out_string,
                             "{}({}, Var({:?}), Symbol({:?})",
                             get_spacing(indent_level + 2),
                             pool_str.as_str(pool),
                             var,
                             symbol
-                        ));
+                        );
                     }
                     RecordField::LabeledValue(pool_str, var, val_node_id) => {
-                        out_string.push_str(&format!(
-                            "{}({}, Var({:?}), Expr2(\n",
+                        let _ = writeln!(
+                            out_string,
+                            "{}({}, Var({:?}), Expr2(",
                             get_spacing(indent_level + 2),
                             pool_str.as_str(pool),
                             var,
-                        ));
+                        );
 
                         let val_expr2 = pool.get(*val_node_id);
                         expr2_to_string_helper(val_expr2, indent_level + 3, pool, out_string);
-                        out_string.push_str(&format!("{})\n", get_spacing(indent_level + 2)));
+                        let _ = writeln!(out_string, "{})", get_spacing(indent_level + 2));
                     }
                 }
             }
 
-            out_string.push_str(&format!("{}]\n", get_spacing(indent_level + 1)));
+            let _ = writeln!(out_string, "{}]", get_spacing(indent_level + 1));
         }
         Expr2::List { elem_var, elems } => {
             out_string.push_str("List:\n");
             out_string.push_str(&var_to_string(elem_var, indent_level + 1));
-            out_string.push_str(&format!("{}elems: [\n", get_spacing(indent_level + 1)));
+            let _ = writeln!(out_string, "{}elems: [\n", get_spacing(indent_level + 1));
 
             let mut first_elt = true;
 
@@ -111,42 +111,44 @@ fn expr2_to_string_helper(
                 expr2_to_string_helper(elem_expr2, indent_level + 2, pool, out_string)
             }
 
-            out_string.push_str(&format!("{}]\n", get_spacing(indent_level + 1)));
+            let _ = writeln!(out_string, "{}]", get_spacing(indent_level + 1));
         }
         Expr2::InvalidLookup(pool_str) => {
-            out_string.push_str(&format!("InvalidLookup({})", pool_str.as_str(pool)));
+            let _ = write!(out_string, "InvalidLookup({})", pool_str.as_str(pool));
         }
         Expr2::SmallInt { text, .. } => {
-            out_string.push_str(&format!("SmallInt({})", text.as_str(pool)));
+            let _ = write!(out_string, "SmallInt({})", text.as_str(pool));
         }
         Expr2::LetValue {
             def_id, body_id, ..
         } => {
-            out_string.push_str(&format!(
+            let _ = write!(
+                out_string,
                 "LetValue(def_id: >>{:?}), body_id: >>{:?})",
                 value_def_to_string(pool.get(*def_id), pool),
                 pool.get(*body_id)
-            ));
+            );
         }
         Expr2::Call { .. } => {
-            out_string.push_str(&format!("Call({:?})", expr2,));
+            let _ = write!(out_string, "Call({:?})", expr2);
         }
         Expr2::Closure { args, .. } => {
             out_string.push_str("Closure:\n");
-            out_string.push_str(&format!("{}args: [\n", get_spacing(indent_level + 1)));
+            let _ = writeln!(out_string, "{}args: [", get_spacing(indent_level + 1));
 
             for (_, pattern_id) in args.iter(pool) {
                 let arg_pattern2 = pool.get(*pattern_id);
 
-                out_string.push_str(&format!(
-                    "{}{:?}\n",
+                let _ = writeln!(
+                    out_string,
+                    "{}{:?}",
                     get_spacing(indent_level + 2),
                     arg_pattern2
-                ));
+                );
             }
         }
         &Expr2::Var { .. } => {
-            out_string.push_str(&format!("{:?}", expr2,));
+            let _ = write!(out_string, "{:?}", expr2);
         }
         Expr2::RuntimeError { .. } => {
             out_string.push_str("RuntimeError\n");

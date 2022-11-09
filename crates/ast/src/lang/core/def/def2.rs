@@ -1,4 +1,5 @@
 use roc_module::symbol::IdentId;
+use std::fmt::Write as _; // import without risk of name clashing
 
 use crate::{
     lang::core::expr::{expr2::Expr2, expr2_to_string::expr2_to_string},
@@ -35,11 +36,12 @@ pub fn def2_to_string(node_id: DefId, pool: &Pool) -> String {
             identifier_id,
             expr_id,
         } => {
-            full_string.push_str(&format!(
+            let _ = write!(
+                full_string,
                 "Def2::ValueDef(identifier_id: >>{:?}), expr_id: >>{:?})",
                 identifier_id,
                 expr2_to_string(*expr_id, pool)
-            ));
+            );
         }
         Def2::Blank => {
             full_string.push_str("Def2::Blank");

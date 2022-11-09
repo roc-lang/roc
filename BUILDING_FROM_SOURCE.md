@@ -164,8 +164,6 @@ To use the `repl` subcommand, execute `cargo run repl`.
 
 ### LLVM installation on Linux
 
-For a current list of all dependency versions and their names in apt, see the Earthfile.
-
 On some Linux systems we've seen the error "failed to run custom build command for x11".
 On Ubuntu, running `sudo apt install pkg-config cmake libx11-dev` fixed this.
 
