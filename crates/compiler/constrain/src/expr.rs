@@ -1804,14 +1804,8 @@ fn constrain_function_def(
             let defs_constraint = constraints.and_constraint(argument_pattern_state.constraints);
 
             let signature_closure_type = {
-                let signature_closure_type_index = {
-                    // TODO(types-soa) get rid of clone
-                    let typ = types.clone_with_variable_substitutions(
-                        signature_closure_type,
-                        &Default::default(),
-                    );
-                    constraints.push_type(types, typ)
-                };
+                let signature_closure_type_index =
+                    constraints.push_type(types, signature_closure_type);
                 constraints.push_expected_type(Expected::FromAnnotation(
                     loc_pattern,
                     arity,
