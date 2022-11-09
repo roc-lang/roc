@@ -620,8 +620,9 @@ impl Types {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_old_type_slice<'a, B>(
+    pub fn from_old_type_slice<B>(
         &mut self,
+        // evil, but allows us to emulate reference-polymorphism
         old: impl ExactSizeIterator<Item = B>,
     ) -> Slice<TypeTag>
     where
