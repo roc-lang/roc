@@ -14,4 +14,3 @@ set -euxo pipefail
 
 cp -f public/tutorial/index.html build/tutorial/index.html
 cp -f public/*.css build/
-cp -f public/*.svg build/
