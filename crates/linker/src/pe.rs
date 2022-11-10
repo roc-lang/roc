@@ -364,6 +364,7 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                 } = app_relocation;
 
                 if let Some(destination) = md.exports.get(name) {
+                    dbg!(&name);
                     match relocation.kind() {
                         object::RelocationKind::Relative => {
                             // we implicitly only do 32-bit relocations
@@ -382,6 +383,8 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                 } else if let Some(destination) = inter_app_relocations.get(name) {
                     // we implicitly only do 32-bit relocations
                     debug_assert_eq!(relocation.size(), 32);
+
+                    dbg!(&name);
 
                     let delta =
                         destination - section_virtual_address as i64 - *offset_in_section as i64
@@ -410,6 +413,8 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                             name
                         );
                     }
+
+                    dbg!(&name);
 
                     match relocation.kind() {
                         object::RelocationKind::Relative => {
