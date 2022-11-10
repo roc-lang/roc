@@ -364,16 +364,24 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                 } = app_relocation;
 
                 if let Some(destination) = md.exports.get(name) {
-                    dbg!(&name);
                     match relocation.kind() {
                         object::RelocationKind::Relative => {
                             // we implicitly only do 32-bit relocations
                             debug_assert_eq!(relocation.size(), 32);
 
+                            let implicit = if relocation.has_implicit_addend() {
+                                let slice =
+                                    &executable[offset + *offset_in_section as usize..][..4];
+                                u32::from_le_bytes(slice.try_into().unwrap())
+                            } else {
+                                0
+                            };
+
                             let delta = destination
                                 - section_virtual_address as i64
                                 - *offset_in_section as i64
-                                + relocation.addend();
+                                + relocation.addend()
+                                + implicit as i64;
 
                             executable[offset + *offset_in_section as usize..][..4]
                                 .copy_from_slice(&(delta as i32).to_le_bytes());
@@ -384,11 +392,17 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     // we implicitly only do 32-bit relocations
                     debug_assert_eq!(relocation.size(), 32);
 
-                    dbg!(&name);
+                    let implicit = if relocation.has_implicit_addend() {
+                        let slice = &executable[offset + *offset_in_section as usize..][..4];
+                        u32::from_le_bytes(slice.try_into().unwrap())
+                    } else {
+                        0
+                    };
 
                     let delta =
                         destination - section_virtual_address as i64 - *offset_in_section as i64
-                            + relocation.addend();
+                            + relocation.addend()
+                            + implicit as i64;
 
                     executable[offset + *offset_in_section as usize..][..4]
                         .copy_from_slice(&(delta as i32).to_le_bytes());
