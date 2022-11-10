@@ -155,6 +155,9 @@ mod cli_run {
 
         let cli_commands = if test_many_cli_commands {
             vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc]
+        } else if cfg!(windows) {
+            // TODO: expects don't currently work on windows
+            vec![CliMode::RocRun]
         } else {
             vec![CliMode::Roc]
         };
@@ -238,10 +241,6 @@ mod cli_run {
                     if !extra_env.is_empty() {
                         // TODO: `roc` and `roc dev` are currently buggy for `env.roc`
                         continue;
-                    }
-
-                    if cfg!(windows) {
-                        // TODO: `roc dev` does not currently work on windows
                     }
 
                     run_roc_on(file, flags.clone(), stdin, roc_app_args, extra_env)
