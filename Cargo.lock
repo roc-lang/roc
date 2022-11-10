@@ -4134,6 +4134,7 @@ dependencies = [
  "roc_region",
  "roc_serialize",
  "static_assertions",
+ "ven_pretty",
 ]
 
 [[package]]
