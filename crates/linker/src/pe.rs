@@ -428,8 +428,6 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                         );
                     }
 
-                    dbg!(&name);
-
                     match relocation.kind() {
                         object::RelocationKind::Relative => {
                             // we implicitly only do 32-bit relocations
@@ -1933,5 +1931,14 @@ mod test {
     #[ignore]
     fn preprocessing_wine() {
         assert_eq!("Hello there\n", wine_test(preprocessing_help))
+    }
+
+    #[test]
+    fn rust_app_data() {
+        let data = include_bytes!("/tmp/roc/echo.obj");
+
+        AppSections::from_data(data);
+
+        panic!();
     }
 }
