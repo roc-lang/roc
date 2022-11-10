@@ -90,6 +90,10 @@ fn roc_getppid() callconv(.C) c_int {
     return getppid();
 }
 
+fn roc_getppid_windows_stub() callconv(.C) c_int {
+    return 0;
+}
+
 fn roc_send_signal(pid: c_int, sig: c_int) callconv(.C) c_int {
     return kill(pid, sig);
 }

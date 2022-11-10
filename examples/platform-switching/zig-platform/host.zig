@@ -84,6 +84,10 @@ fn roc_getppid() callconv(.C) c_int {
     return getppid();
 }
 
+fn roc_getppid_windows_stub() callconv(.C) c_int {
+    return 0;
+}
+
 fn roc_send_signal(pid: c_int, sig: c_int) callconv(.C) c_int {
     return kill(pid, sig);
 }
@@ -100,6 +104,10 @@ comptime {
         @export(roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
         @export(roc_send_signal, .{ .name = "roc_send_signal", .linkage = .Strong });
         @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
+    }
+
+    if (builtin.os.tag == .windows) {
+        @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .Strong });
     }
 }
 
