@@ -646,7 +646,12 @@ pub fn rebuild_host(
         }
 
         let source_file = if shared_lib_path.is_some() {
-            cargo_cmd.env("RUSTFLAGS", "-C link-dead-code");
+            let rust_flags = if cfg!(windows) {
+                "-Z export-executable-symbols"
+            } else {
+                "-C link-dead-code"
+            };
+            cargo_cmd.env("RUSTFLAGS", rust_flags);
             cargo_cmd.args(["--bin", "host"]);
             "src/main.rs"
         } else {
