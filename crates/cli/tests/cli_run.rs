@@ -239,6 +239,11 @@ mod cli_run {
                         // TODO: `roc` and `roc dev` are currently buggy for `env.roc`
                         continue;
                     }
+
+                    if cfg!(windows) {
+                        // TODO: `roc dev` does not currently work on windows
+                    }
+
                     run_roc_on(file, flags.clone(), stdin, roc_app_args, extra_env)
                 }
                 CliMode::RocRun => run_roc_on(

@@ -111,6 +111,10 @@ comptime {
         @export(roc_send_signal, .{ .name = "roc_send_signal", .linkage = .Strong });
         @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
     }
+
+    if (builtin.os.tag == .windows) {
+        @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .Strong });
+    }
 }
 
 pub export fn main() u8 {
