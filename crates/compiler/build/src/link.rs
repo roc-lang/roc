@@ -416,7 +416,7 @@ pub fn build_c_host_native(
                 return build_zig_host_native(
                     env_path,
                     env_home,
-                    &format!("-femit-bin={}", dest),
+                    dest,
                     sources[0],
                     find_zig_str_path().to_str().unwrap(),
                     "x86_64-windows-gnu",
