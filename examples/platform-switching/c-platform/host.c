@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/shm.h> // shm_open
+#include <sys/mman.h> // for mmap
+#include <signal.h> // for kill
 
 void* roc_alloc(size_t size, unsigned int alignment) { return malloc(size); }
 
