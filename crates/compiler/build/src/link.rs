@@ -3,8 +3,8 @@ use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
-use roc_utils::get_lib_path;
 use roc_utils::{cargo, clang, zig};
+use roc_utils::{get_lib_path, rustup};
 use std::collections::HashMap;
 use std::env;
 use std::io;
@@ -632,11 +632,11 @@ pub fn rebuild_host(
             },
         );
 
-        let mut cargo_cmd = cargo();
+        let mut cargo_cmd = if cfg!(windows) { rustup() } else { cargo() };
 
         if cfg!(windows) {
             // on windows, we need the `+nightly` toolchain so we can use `-Z export-executable-symbols`
-            cargo_cmd.arg("+nightly");
+            cargo_cmd.args(["run", "nightly", "cargo"]);
         }
 
         cargo_cmd.arg("build").current_dir(cargo_dir);
