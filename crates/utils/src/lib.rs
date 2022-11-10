@@ -126,7 +126,14 @@ pub fn get_lib_path() -> Option<PathBuf> {
 /// Gives a friendly error if cargo is not installed.
 /// Also makes it easy to track where we use cargo in the codebase.
 pub fn cargo() -> Command {
-    let command_str = "cargo";
+    let command_str = if cfg!(windows) {
+        // on windows, we need the version of cargo installed by rustup. The meaning of `cargo` is
+        // different within a process that runs rust. So we need to explicitly refer to where
+        // rustup put the binary
+        r"%HOMEPATH%\.cargo\bin\cargo.exe"
+    } else {
+        "cargo"
+    };
 
     if check_command_available(command_str) {
         Command::new(command_str)

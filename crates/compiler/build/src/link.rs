@@ -633,6 +633,12 @@ pub fn rebuild_host(
         );
 
         let mut cargo_cmd = cargo();
+
+        if cfg!(windows) {
+            // on windows, we need the `+nightly` toolchain so we can use `-Z export-executable-symbols`
+            cargo_cmd.arg("+nightly");
+        }
+
         cargo_cmd.arg("build").current_dir(cargo_dir);
         // Rust doesn't expose size without editing the cargo.toml. Instead just use release.
         if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
