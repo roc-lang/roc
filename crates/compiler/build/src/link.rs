@@ -200,7 +200,7 @@ pub fn build_zig_host_native(
             &bitcode::get_builtins_windows_obj_path(),
         ]);
     } else {
-        zig_cmd.args(&["build-obj", "-fPIC"]);
+        zig_cmd.args(&["build-obj"]);
     }
 
     zig_cmd.args(&[
@@ -295,7 +295,7 @@ pub fn build_zig_host_native(
             &bitcode::get_builtins_host_obj_path(),
         ]);
     } else {
-        zig_cmd.args(&["build-obj", "-fPIC"]);
+        zig_cmd.args(&["build-obj"]);
     }
     zig_cmd.args(&[
         zig_host_src,

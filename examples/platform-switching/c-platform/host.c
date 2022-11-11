@@ -7,8 +7,7 @@
 
 void* roc_alloc(size_t size, unsigned int alignment) { return malloc(size); }
 
-void* roc_realloc(void* ptr, size_t new_size, size_t old_size,
-                  unsigned int alignment) {
+void* roc_realloc(void* ptr, size_t new_size, size_t old_size, unsigned int alignment) {
   return realloc(ptr, new_size);
 }
 
@@ -31,7 +30,13 @@ void* roc_memset(void* str, int c, size_t n) { return memset(str, c, n); }
 int roc_send_signal(int pid, int sig) { return kill(pid, sig); }
 int roc_shm_open(char* name, int oflag, int mode) { return shm_open(name, oflag, mode); }
 void* roc_mmap(void* addr, int length, int prot, int flags, int fd, int offset) { return mmap(addr, length, prot, flags, fd, offset); }
-int roc_getppid() { return getppid(); }
+int roc_getppid() {
+#ifdef _WIN32
+    return getppid();
+#else
+    return 0;
+#endif
+}
 
 struct RocStr {
   char* bytes;
