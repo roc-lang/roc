@@ -527,6 +527,7 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
     #[serial(cli_platform)]
     fn cli_args() {
         test_roc_app(
@@ -580,6 +581,7 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "overflows the stack on windows")]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",

@@ -341,7 +341,6 @@ pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
 
 #[cfg(not(windows))]
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
-    panic!();
     use roc_gen_llvm::llvm::build::LlvmBackendMode;
     use roc_load::{ExecutionMode, LoadConfig};
     use roc_target::TargetInfo;
