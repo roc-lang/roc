@@ -2979,33 +2979,21 @@ fn finish_specialization<'a>(
                 };
 
                 let platform_path = Path::new(path_to_platform).into();
-                let symbol = match platform_data {
+                let provides = match platform_data {
                     None => {
                         debug_assert_eq!(exposed_to_host.values.len(), 1);
+
                         *exposed_to_host.values.iter().next().unwrap().0
                     }
                     Some(PlatformData { provides, .. }) => provides,
                 };
 
-                match procedures.keys().find(|(s, _)| *s == symbol) {
-                    Some((_, layout)) => EntryPoint::Executable {
-                        layout: *layout,
-                        symbol,
-                        platform_path,
-                    },
-                    None => {
-                        // the entry point is not specialized. This can happen if the repl output
-                        // is a function value
-                        EntryPoint::Executable {
-                            layout: roc_mono::ir::ProcLayout {
-                                arguments: &[],
-                                result: Layout::struct_no_name_order(&[]),
-                                captures_niche: CapturesNiche::no_niche(),
-                            },
-                            symbol,
-                            platform_path,
-                        }
-                    }
+                let layout = get_exe_entry_point(provides, &procedures);
+
+                EntryPoint::Executable {
+                    layout,
+                    symbol: provides,
+                    platform_path,
                 }
             }
             ExecutionMode::Check => unreachable!(),
@@ -3060,6 +3048,25 @@ fn finish_specialization<'a>(
             getters: glue_getters,
         },
     })
+}
+
+pub fn get_exe_entry_point<'a>(
+    provides: Symbol,
+    procedures: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+) -> ProcLayout<'a> {
+    match procedures.keys().find(|(s, _)| *s == provides) {
+        Some((_, layout)) => *layout,
+        None =>
+        // the entry point is not specialized. This can happen if the repl output
+        // is a function value
+        {
+            ProcLayout {
+                arguments: &[],
+                result: Layout::struct_no_name_order(&[]),
+                captures_niche: CapturesNiche::no_niche(),
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

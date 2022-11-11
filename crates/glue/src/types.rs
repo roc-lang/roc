@@ -42,6 +42,8 @@ pub struct Types {
     sizes: Vec<u32>,
     aligns: Vec<u32>,
 
+    entry_points: Vec<(String, TypeId)>,
+
     // Needed to check for duplicates
     types_by_name: FnvHashMap<String, TypeId>,
 
@@ -58,6 +60,7 @@ impl Types {
             target: target_info,
             types: Vec::with_capacity(cap),
             types_by_name: FnvHashMap::with_capacity_and_hasher(10, Default::default()),
+            entry_points: Vec::new(),
             sizes: Vec::new(),
             aligns: Vec::new(),
             deps: VecMap::with_capacity(cap),
@@ -75,6 +78,14 @@ impl Types {
         let mut env = Env::new(arena, subs, interns, layout_interner, target);
 
         env.vars_to_types(variables)
+    }
+
+    pub(crate) fn add_entry_point(&mut self, name: String, type_id: TypeId) {
+        self.entry_points.push((name, type_id));
+    }
+
+    pub fn entry_points(&self) -> &[(String, TypeId)] {
+        self.entry_points.as_slice()
     }
 
     pub fn is_equivalent(&self, a: &RocType, b: &RocType) -> bool {
@@ -134,6 +145,18 @@ impl Types {
                             payload_fields: payload_fields_b,
                         },
                     ) => tag_name_a == tag_name_b && payload_fields_a == payload_fields_b,
+                    (
+                        SingleTagStruct {
+                            name: _,
+                            tag_name: tag_name_a,
+                            payload_field_getters: payload_getters_a,
+                        },
+                        SingleTagStruct {
+                            name: _,
+                            tag_name: tag_name_b,
+                            payload_field_getters: payload_getters_b,
+                        },
+                    ) => tag_name_a == tag_name_b && payload_getters_a == payload_getters_b,
                     (
                         NonNullableUnwrapped {
                             name: _,
@@ -250,6 +273,8 @@ impl Types {
                     // These are all listed explicitly so that if we ever add a new variant,
                     // we'll get an exhaustiveness error here.
                     (SingleTagStruct { .. }, _)
+                    | (_, SingleTagStruct { .. })
+                    | (SingleTagStruct { .. }, _)
                     | (_, SingleTagStruct { .. })
                     | (NonNullableUnwrapped { .. }, _)
                     | (_, NonNullableUnwrapped { .. })
@@ -511,6 +536,17 @@ enum RocTypeOrPending<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RocStructFields {
+    HasNoClosure {
+        fields: Vec<(String, TypeId)>,
+    },
+    HasClosure {
+        field_getters: Vec<(String, RocFn)>,
+        // TODO field_setters
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RocFn {
     pub name: String,
     pub args: Vec<TypeId>,
@@ -531,7 +567,7 @@ pub enum RocType {
     EmptyTagUnion,
     Struct {
         name: String,
-        fields: Vec<(String, TypeId)>,
+        fields: RocStructFields,
     },
     TagUnionPayload {
         name: String,
@@ -608,6 +644,34 @@ impl From<IntWidth> for RocNum {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum RocTags {
+    /// If at least one payload field contains a closure, we have to provide
+    /// field getters and setters because the size and order of those fields can vary based on the
+    /// application's implementation, so those sizes and order are not knowable at host build time.
+    HasClosure {
+        tag_getters: Vec<(String, Option<RocFn>)>,
+        discriminant_getter: RocFn,
+    },
+    HasNoClosures {
+        tags: Vec<(String, Option<TypeId>)>,
+        discriminant_offset: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum RocSingleTagPayload {
+    /// If at least one payload field contains a closure, we have to provide
+    /// field getters and setters because the size and order of those fields can vary based on the
+    /// application's implementation, so those sizes and order are not knowable at host build time.
+    HasClosure {
+        payload_getters: Vec<RocFn>,
+    },
+    HasNoClosures {
+        payloads: Vec<TypeId>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RocTagUnion {
     Enumeration {
         name: String,
@@ -618,17 +682,15 @@ pub enum RocTagUnion {
     /// e.g. `Result a e : [Ok a, Err e]`
     NonRecursive {
         name: String,
-        tags: Vec<(String, Option<TypeId>)>,
+        tags: RocTags,
         discriminant_size: u32,
-        discriminant_offset: u32,
     },
     /// A recursive tag union (general case)
     /// e.g. `Expr : [Sym Str, Add Expr Expr]`
     Recursive {
         name: String,
-        tags: Vec<(String, Option<TypeId>)>,
+        tags: RocTags,
         discriminant_size: u32,
-        discriminant_offset: u32,
     },
     /// Optimization: No need to store a tag ID (the payload is "unwrapped")
     /// e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
@@ -639,10 +701,13 @@ pub enum RocTagUnion {
     },
     /// Optimization: No need to store a tag ID (the payload is "unwrapped")
     /// e.g. `[Foo Str Bool]`
+    /// Just like a normal struct, if one of the payload fields is a closure, we have to provide
+    /// field getters and setters because the size and order of those fields can vary based on the
+    /// application's implementation, so those sizes and order are not knowable at host build time.
     SingleTagStruct {
         name: String,
         tag_name: String,
-        payload_fields: Vec<TypeId>,
+        payload: RocSingleTagPayload,
     },
     /// A recursive tag union that has an empty variant
     /// Optimization: Represent the empty variant as null pointer => no memory usage & fast comparison
@@ -651,12 +716,13 @@ pub enum RocTagUnion {
     /// see also: https://youtu.be/ip92VMpf_-A?t=164
     NullableWrapped {
         name: String,
+        /// Which of the tags in .tags is the null pointer.
+        /// Note that this index is *not necessarily* the same as the offset of that tag
+        /// at runtime, which can move around if any of the payloads contain closures!
         index_of_null_tag: u16,
-        tags: Vec<(String, Option<TypeId>)>,
+        tags: RocTags,
         discriminant_size: u32,
-        discriminant_offset: u32,
     },
-
     /// A recursive tag union with only two variants, where one is empty.
     /// Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
     /// e.g. `ConsList a : [Nil, Cons a (ConsList a)]`
@@ -1536,6 +1602,7 @@ fn single_tag_payload_fields<'a, 'b>(
     env: &mut Env<'a>,
     types: &mut Types,
 ) -> (&'b str, Vec<TypeId>) {
+    todo!("TODO take closures into account and return one or the other");
     let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
 
     let payload_fields: Vec<TypeId> = payload_vars
