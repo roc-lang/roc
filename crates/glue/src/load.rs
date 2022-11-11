@@ -1,5 +1,5 @@
 use crate::rust_glue;
-use crate::types::{Env, Types};
+use crate::types::Types;
 use bumpalo::Bump;
 use roc_intern::GlobalInterner;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
@@ -165,11 +165,14 @@ pub fn load_types(
             operating_system: OperatingSystem::Unix,
         };
 
-        let types = {
-            let mut env = Env::new(arena, subs, &interns, layout_interner.fork(), target_info);
-
-            env.vars_to_types(variables.clone())
-        };
+        let types = Types::new(
+            arena,
+            subs,
+            variables.clone(),
+            &interns,
+            layout_interner.fork(),
+            target_info,
+        );
 
         types_and_targets.push((types, target_info));
     }

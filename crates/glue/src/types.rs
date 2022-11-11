@@ -64,6 +64,19 @@ impl Types {
         }
     }
 
+    pub(crate) fn new<'a, I: Iterator<Item = Variable>>(
+        arena: &'a Bump,
+        subs: &'a Subs,
+        variables: I,
+        interns: &'a Interns,
+        layout_interner: LayoutInterner<'a>,
+        target: TargetInfo,
+    ) -> Self {
+        let mut env = Env::new(arena, subs, interns, layout_interner, target);
+
+        env.vars_to_types(variables)
+    }
+
     pub fn is_equivalent(&self, a: &RocType, b: &RocType) -> bool {
         self.is_equivalent_help(RocTypeOrPending::Type(a), RocTypeOrPending::Type(b))
     }
@@ -659,7 +672,7 @@ pub enum RocTagUnion {
     },
 }
 
-pub struct Env<'a> {
+struct Env<'a> {
     arena: &'a Bump,
     subs: &'a Subs,
     layout_cache: LayoutCache<'a>,
