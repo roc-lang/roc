@@ -248,6 +248,43 @@ fn remove_dummy_dll_import_table_entry(executable: &mut [u8], md: &PeMetadata) {
     }
 }
 
+fn relocate_to(
+    executable: &mut [u8],
+    file_offset: usize,
+    destination_in_file: i64,
+    relocation: &object::Relocation,
+) {
+    match relocation.size() {
+        32 => {
+            let slice = &mut executable[file_offset..][..4];
+            let implicit = if relocation.has_implicit_addend() {
+                i32::from_le_bytes(slice.try_into().unwrap())
+            } else {
+                0
+            };
+
+            let delta = destination_in_file + relocation.addend() + implicit as i64;
+
+            slice.copy_from_slice(&(delta as i32).to_le_bytes());
+        }
+
+        64 => {
+            let slice = &mut executable[file_offset..][..8];
+            let implicit = if relocation.has_implicit_addend() {
+                i64::from_le_bytes(slice.try_into().unwrap())
+            } else {
+                0
+            };
+
+            let delta = destination_in_file + relocation.addend() + implicit;
+
+            slice.copy_from_slice(&delta.to_le_bytes());
+        }
+
+        other => unimplemented!("relocations of {other} bits are not supported"),
+    }
+}
+
 pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
     let md = PeMetadata::read_from_file(metadata_path);
 
@@ -366,46 +403,24 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                 if let Some(destination) = md.exports.get(name) {
                     match relocation.kind() {
                         object::RelocationKind::Relative => {
-                            // we implicitly only do 32-bit relocations
-                            debug_assert_eq!(relocation.size(), 32);
-
-                            let implicit = if relocation.has_implicit_addend() {
-                                let slice =
-                                    &executable[offset + *offset_in_section as usize..][..4];
-                                u32::from_le_bytes(slice.try_into().unwrap())
-                            } else {
-                                0
-                            };
-
-                            let delta = destination
-                                - section_virtual_address as i64
-                                - *offset_in_section as i64
-                                + relocation.addend()
-                                + implicit as i64;
-
-                            executable[offset + *offset_in_section as usize..][..4]
-                                .copy_from_slice(&(delta as i32).to_le_bytes());
+                            relocate_to(
+                                executable,
+                                offset + *offset_in_section as usize,
+                                destination
+                                    - section_virtual_address as i64
+                                    - *offset_in_section as i64,
+                                relocation,
+                            );
                         }
                         _ => todo!(),
                     }
                 } else if let Some(destination) = inter_app_relocations.get(name) {
-                    // we implicitly only do 32-bit relocations
-                    debug_assert_eq!(relocation.size(), 32);
-
-                    let implicit = if relocation.has_implicit_addend() {
-                        let slice = &executable[offset + *offset_in_section as usize..][..4];
-                        u32::from_le_bytes(slice.try_into().unwrap())
-                    } else {
-                        0
-                    };
-
-                    let delta =
-                        destination - section_virtual_address as i64 - *offset_in_section as i64
-                            + relocation.addend()
-                            + implicit as i64;
-
-                    executable[offset + *offset_in_section as usize..][..4]
-                        .copy_from_slice(&(delta as i32).to_le_bytes());
+                    relocate_to(
+                        executable,
+                        offset + *offset_in_section as usize,
+                        destination - section_virtual_address as i64 - *offset_in_section as i64,
+                        relocation,
+                    );
                 } else if name == "___chkstk_ms" {
                     // this is a stack probe that is inserted when a function uses more than 2
                     // pages of stack space. The source of this function is not linked in, so we
@@ -415,11 +430,12 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     // This relies on the ___CHKSTK_MS section being the last text section in the list of sections
                     let destination = length - ___CHKSTK_MS.len();
 
-                    let delta =
-                        destination as i64 - *offset_in_section as i64 + relocation.addend();
-
-                    executable[offset + *offset_in_section as usize..][..4]
-                        .copy_from_slice(&(delta as i32).to_le_bytes());
+                    relocate_to(
+                        executable,
+                        offset + *offset_in_section as usize,
+                        destination as i64 - *offset_in_section as i64,
+                        relocation,
+                    );
                 } else {
                     if *address == 0 && !name.starts_with("roc") {
                         eprintln!(
@@ -430,14 +446,12 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
 
                     match relocation.kind() {
                         object::RelocationKind::Relative => {
-                            // we implicitly only do 32-bit relocations
-                            debug_assert_eq!(relocation.size(), 32);
-
-                            let delta =
-                                *address as i64 - *offset_in_section as i64 + relocation.addend();
-
-                            executable[offset + *offset_in_section as usize..][..4]
-                                .copy_from_slice(&(delta as i32).to_le_bytes());
+                            relocate_to(
+                                executable,
+                                offset + *offset_in_section as usize,
+                                *address as i64 - *offset_in_section as i64,
+                                relocation,
+                            );
                         }
                         _ => todo!(),
                     }
@@ -1931,14 +1945,5 @@ mod test {
     #[ignore]
     fn preprocessing_wine() {
         assert_eq!("Hello there\n", wine_test(preprocessing_help))
-    }
-
-    #[test]
-    fn rust_app_data() {
-        let data = include_bytes!("/tmp/roc/echo.obj");
-
-        AppSections::from_data(data);
-
-        panic!();
     }
 }
