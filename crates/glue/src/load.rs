@@ -131,29 +131,13 @@ pub fn load_types(
     }
 
     // Get the variables for all the exposed_to_host symbols
-    let mut variables = Vec::with_capacity(exposed_to_host.len());
-
-    for index in 0..decls.len() {
-        use roc_can::expr::DeclarationTag::*;
-
+    let variables = (0..decls.len()).filter_map(|index| {
         if exposed_to_host.contains_key(&decls.symbols[index].value) {
-            match decls.declarations[index] {
-                Value | Function(_) | Recursive(_) | TailRecursive(_) => {
-                    variables.push(decls.variables[index]);
-                }
-                Destructure(_) => {
-                    // figure out if we need to export non-identifier defs - when would that
-                    // happen?
-                }
-                MutualRecursion { .. } => {
-                    // handled by future iterations
-                }
-                Expectation | ExpectationFx => {
-                    // not publicly visible
-                }
-            }
+            Some(decls.variables[index])
+        } else {
+            None
         }
-    }
+    });
 
     let layout_interner = GlobalInterner::with_capacity(128);
 
@@ -168,7 +152,7 @@ pub fn load_types(
         let types = Types::new(
             arena,
             subs,
-            variables.iter().copied(),
+            variables.clone(),
             &interns,
             layout_interner.fork(),
             target_info,
