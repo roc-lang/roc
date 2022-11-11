@@ -131,12 +131,12 @@ pub fn load_types(
     }
 
     // Get the variables for all the exposed_to_host symbols
-    let mut variables: Vec<Variable> = Vec::with_capacity(exposed_to_host.len());
+    let mut variables = Vec::with_capacity(exposed_to_host.len());
 
     for index in 0..decls.len() {
         use roc_can::expr::DeclarationTag::*;
 
-        if exposed_to_host.contains_key(decls.symbols[index].value) {
+        if exposed_to_host.contains_key(&decls.symbols[index].value) {
             match decls.declarations[index] {
                 Value | Function(_) | Recursive(_) | TailRecursive(_) => {
                     variables.push(decls.variables[index]);
@@ -168,7 +168,7 @@ pub fn load_types(
         let types = Types::new(
             arena,
             subs,
-            variables.clone(),
+            variables.iter().copied(),
             &interns,
             layout_interner.fork(),
             target_info,
