@@ -3,8 +3,8 @@ use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
-use roc_utils::get_lib_path;
 use roc_utils::{cargo, clang, zig};
+use roc_utils::{get_lib_path, rustup};
 use std::collections::HashMap;
 use std::env;
 use std::io;
@@ -200,7 +200,7 @@ pub fn build_zig_host_native(
             &bitcode::get_builtins_windows_obj_path(),
         ]);
     } else {
-        zig_cmd.args(&["build-obj", "-fPIC"]);
+        zig_cmd.args(&["build-obj"]);
     }
 
     zig_cmd.args(&[
@@ -295,7 +295,7 @@ pub fn build_zig_host_native(
             &bitcode::get_builtins_host_obj_path(),
         ]);
     } else {
-        zig_cmd.args(&["build-obj", "-fPIC"]);
+        zig_cmd.args(&["build-obj"]);
     }
     zig_cmd.args(&[
         zig_host_src,
@@ -416,7 +416,7 @@ pub fn build_c_host_native(
                 return build_zig_host_native(
                     env_path,
                     env_home,
-                    &format!("-femit-bin={}", dest),
+                    dest,
                     sources[0],
                     find_zig_str_path().to_str().unwrap(),
                     "x86_64-windows-gnu",
@@ -632,7 +632,17 @@ pub fn rebuild_host(
             },
         );
 
-        let mut cargo_cmd = cargo();
+        let mut cargo_cmd = if cfg!(windows) {
+            // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
+            // using `+nightly` only works when running cargo through rustup
+            let mut cmd = rustup();
+            cmd.args(["run", "nightly", "cargo"]);
+
+            cmd
+        } else {
+            cargo()
+        };
+
         cargo_cmd.arg("build").current_dir(cargo_dir);
         // Rust doesn't expose size without editing the cargo.toml. Instead just use release.
         if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
@@ -640,7 +650,12 @@ pub fn rebuild_host(
         }
 
         let source_file = if shared_lib_path.is_some() {
-            cargo_cmd.env("RUSTFLAGS", "-C link-dead-code");
+            let rust_flags = if cfg!(windows) {
+                "-Z export-executable-symbols"
+            } else {
+                "-C link-dead-code"
+            };
+            cargo_cmd.env("RUSTFLAGS", rust_flags);
             cargo_cmd.args(["--bin", "host"]);
             "src/main.rs"
         } else {

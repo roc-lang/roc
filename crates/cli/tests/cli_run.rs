@@ -144,6 +144,9 @@ mod cli_run {
 
         let cli_commands = if test_many_cli_commands {
             vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc]
+        } else if cfg!(windows) {
+            // TODO: expects don't currently work on windows
+            vec![CliMode::RocRun]
         } else {
             vec![CliMode::Roc]
         };
@@ -228,6 +231,7 @@ mod cli_run {
                         // TODO: `roc` and `roc dev` are currently buggy for `env.roc`
                         continue;
                     }
+
                     run_roc_on(file, flags.clone(), stdin, roc_app_args, extra_env)
                 }
                 CliMode::RocRun => run_roc_on(
@@ -512,6 +516,7 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
     #[serial(cli_platform)]
     fn cli_args() {
         test_roc_app(
@@ -565,6 +570,7 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "overflows the stack on windows")]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",
