@@ -297,16 +297,16 @@ impl Types {
                 }
             }
             (
-                Function {
+                Function(RocFn {
                     name: name_a,
                     args: args_a,
                     ret: ret_a,
-                },
-                Function {
+                }),
+                Function(RocFn {
                     name: name_b,
                     args: args_b,
                     ret: ret_b,
-                },
+                }),
             ) => {
                 // for functions, the name is actually important because two functions
                 // with the same type could have completely different implementations!
@@ -498,6 +498,13 @@ enum RocTypeOrPending<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RocFn {
+    pub name: String,
+    pub args: Vec<TypeId>,
+    pub ret: TypeId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RocType {
     RocStr,
     Bool,
@@ -521,11 +528,7 @@ pub enum RocType {
     /// this would be the field of Cons containing the (recursive) StrConsList type,
     /// and the TypeId is the TypeId of StrConsList itself.
     RecursivePointer(TypeId),
-    Function {
-        name: String,
-        args: Vec<TypeId>,
-        ret: TypeId,
-    },
+    Function(RocFn),
     /// A zero-sized type, such as an empty record or a single-tag union with no payload
     Unit,
 }
@@ -847,11 +850,11 @@ fn add_type_help<'a>(
             let fn_type_id = types.add_named(
                 &env.layout_cache.interner,
                 name.clone(),
-                RocType::Function {
+                RocType::Function(RocFn {
                     name,
                     args: arg_type_ids.clone(),
                     ret: ret_type_id,
-                },
+                }),
                 layout,
             );
 
