@@ -85,6 +85,7 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
         Default::default(),
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
+        roc_reporting::report::DEFAULT_PALETTE,
         Threading::AllAvailable,
     );
 
