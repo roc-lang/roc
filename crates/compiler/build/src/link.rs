@@ -1208,12 +1208,18 @@ fn link_wasm32(
             // include wasi libc
             // using `-lc` is broken in zig 8 (and early 9) in combination with ReleaseSmall
             wasi_libc_path.to_str().unwrap(),
-            &format!("-femit-bin={}", output_path.to_str().unwrap()),
+            &format!(
+                "-femit-bin={}",
+                output_path.display().to_string().trim_start_matches(r"\\?")
+            ),
             "-target",
             "wasm32-wasi-musl",
             "--pkg-begin",
             "str",
-            zig_str_path.to_str().unwrap(),
+            zig_str_path
+                .display()
+                .to_string()
+                .trim_start_matches(r"\\?"),
             "--pkg-end",
             "--strip",
             "-O",
