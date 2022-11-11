@@ -1,0 +1,31 @@
+on: [pull_request]
+
+name: Nix macOS x86_64 cargo test
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  nix-macos-x86-64:
+    name: nix-macos-x86-64
+    runs-on: [macos-12]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          clean: "true"
+
+      - uses: cachix/install-nix-action@v15
+
+      # to cache nix packages
+      - uses: cachix/cachix-action@v10 
+        with:
+          name: enigmaticsunrise
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+      - name: execute cli_run tests only, the full tests take too long but are run nightly
+        run: nix develop -c cargo test --locked --release -p roc_cli
