@@ -28,9 +28,9 @@ you need to install one or more of these platform language compilers, too.
 1. Install the Zig compiler, for apps with Zig-based platforms:
 
     ```sh
-    wget https://ziglang.org/download/0.9.1/zig-linux-x86_64-0.9.1.tar.xz
-    tar -xf zig-linux-x86_64-0.9.1.tar.xz
-    sudo ln -s  $(pwd)/zig-linux-x86_64-0.9.1/zig /usr/local/bin/zig
+    wget https://ziglang.org/download/0.10.0/zig-linux-x86_64-0.10.0.tar.xz
+    tar -xf zig-linux-x86_64-0.10.0.tar.xz
+    sudo ln -s  $(pwd)/zig-linux-x86_64-0.10.0/zig /usr/local/bin/zig
     ```
 
 1. Install a C compiler, for apps with C-based platforms:

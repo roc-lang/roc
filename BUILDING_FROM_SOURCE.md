@@ -109,7 +109,7 @@ sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
 ### Zig
 
-**version: 0.9.1**
+**version: 0.10.0**
 
 For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage zig installations.
 

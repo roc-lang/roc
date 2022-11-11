@@ -5,8 +5,8 @@ on:
 name: Nightly Release macOS x86_64
 
 env:
-  ZIG_VERSION: 0.9.1
-  LLVM_SYS_130_PREFIX: /usr/local/opt/llvm@13
+  ZIG_VERSION: 0.10.0
+  LLVM_SYS_150_PREFIX: /usr/local/opt/llvm@14
 
 jobs:
   test-build-upload:
