@@ -72,9 +72,16 @@ impl Types {
         layout_interner: LayoutInterner<'a>,
         target: TargetInfo,
     ) -> Self {
+        let mut types = Self::with_capacity(variables.size_hint().0, target);
         let mut env = Env::new(arena, subs, interns, layout_interner, target);
 
-        env.vars_to_types(variables)
+        for var in variables {
+            env.add_type(var, &mut types);
+        }
+
+        env.resolve_pending_recursive_types(&mut types);
+
+        types
     }
 
     pub fn is_equivalent(&self, a: &RocType, b: &RocType) -> bool {
@@ -703,21 +710,6 @@ impl<'a> Env<'a> {
             layout_cache: LayoutCache::new(layout_interner, target),
             target,
         }
-    }
-
-    pub fn vars_to_types<I>(&mut self, variables: I) -> Types
-    where
-        I: Iterator<Item = Variable>,
-    {
-        let mut types = Types::with_capacity(variables.size_hint().0, self.target);
-
-        for var in variables {
-            self.add_type(var, &mut types);
-        }
-
-        self.resolve_pending_recursive_types(&mut types);
-
-        types
     }
 
     fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
