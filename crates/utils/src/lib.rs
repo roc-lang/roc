@@ -107,6 +107,9 @@ pub fn get_lib_path() -> Option<PathBuf> {
     let exe_relative_str_path_opt = std::env::current_exe().ok();
 
     if let Some(exe_relative_str_path) = exe_relative_str_path_opt {
+        let strip_windows_prefix = exe_relative_str_path.display().to_string();
+        let exe_relative_str_path =
+            std::path::Path::new(strip_windows_prefix.trim_start_matches(r"\\?\"));
         let mut curr_parent_opt = exe_relative_str_path.parent();
 
         // this differs for regular build and nix releases, so we check in multiple spots.
