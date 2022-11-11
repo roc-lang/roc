@@ -632,12 +632,16 @@ pub fn rebuild_host(
             },
         );
 
-        let mut cargo_cmd = if cfg!(windows) { rustup() } else { cargo() };
+        let mut cargo_cmd = if cfg!(windows) {
+            // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
+            // using `+nightly` only works when running cargo through rustup
+            let mut cmd = rustup();
+            cmd.args(["run", "nightly", "cargo"]);
 
-        if cfg!(windows) {
-            // on windows, we need the `+nightly` toolchain so we can use `-Z export-executable-symbols`
-            cargo_cmd.args(["run", "nightly", "cargo"]);
-        }
+            cmd
+        } else {
+            cargo()
+        };
 
         cargo_cmd.arg("build").current_dir(cargo_dir);
         // Rust doesn't expose size without editing the cargo.toml. Instead just use release.

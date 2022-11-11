@@ -126,11 +126,7 @@ pub fn get_lib_path() -> Option<PathBuf> {
 /// Gives a friendly error if cargo is not installed.
 /// Also makes it easy to track where we use cargo in the codebase.
 pub fn cargo() -> Command {
-    let command_str = if cfg!(windows) {
-        r"%HOMEPATH%\.cargo\bin\cargo.exe"
-    } else {
-        "cargo"
-    };
+    let command_str = "cargo";
 
     if check_command_available(command_str) {
         Command::new(command_str)
