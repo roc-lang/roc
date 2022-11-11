@@ -27,3 +27,14 @@ render = \state ->
             div [] [text "Your number is \(num)"],
         ],
     ]
+
+# This test should simply fail, but instead it actually panics!
+#
+# ── EXPECT PANICKED ───────────── examples/server-side-rendering/app-server.roc ─
+# This expectation crashed while running:
+# 31│  expect (Html.renderStatic (render 42)) == ""
+#      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+# The crash reported this message:
+# Hit an erroneous type when creating a layout for `#UserApp.render`
+# 1 failed and 0 passed in 1177 ms.
+expect (Html.renderStatic (render 42)) == ""
