@@ -98,7 +98,7 @@ fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>
             if elements.len() > 1 {
                 Ok((
                     MadeProgress,
-                    Loc::at(region, Expr::List(elements.ptrify_items(arena))),
+                    Loc::at(region, Expr::Tuple(elements.ptrify_items(arena))),
                     state,
                 ))
             } else if elements.is_empty() {

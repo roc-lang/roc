@@ -180,7 +180,7 @@ pub enum Expr<'a> {
 
     Record(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
 
-    Tuple(Collection<'a, Loc<Expr<'a>>>),
+    Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
 
     // Lookups
     Var {
