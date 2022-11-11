@@ -234,9 +234,6 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn {
     if (builtin.is_test) {
         std.debug.print("{s}: {?}", .{ message, stacktrace });
-    } else {
-        _ = message;
-        _ = stacktrace;
     }
 
     unreachable;
