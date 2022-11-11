@@ -109,7 +109,7 @@ impl<'a> Buf<'a> {
         if self.spaces_to_flush > 0 {
             self.flush_spaces();
             self.newline();
-        } else if !self.text.ends_with('\n') {
+        } else if !self.text.ends_with('\n') && !self.text.is_empty() {
             self.newline()
         }
     }
