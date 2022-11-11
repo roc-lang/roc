@@ -125,15 +125,15 @@ If you want to install it manually, you can also download Zig directly [here](ht
 
 ### LLVM
 
-**version: 13.0.x**
+**version: 15.0.x**
 
-For macOS, you can install LLVM 13 using `brew install llvm@13` and then adding
-`$(brew --prefix llvm@13)/bin` to your `PATH`. You can confirm this worked by
-running `llc --version` - it should mention "LLVM version 13.0.1" at the top.
+For macOS, you can install LLVM 15 using `brew install llvm@15` and then adding
+`$(brew --prefix llvm@15)/bin` to your `PATH`. You can confirm this worked by
+running `llc --version` - it should mention "LLVM version 15.0.1" at the top.
 You may also need to manually specify a prefix env var like so:
 
 ```sh
-export LLVM_SYS_130_PREFIX=/usr/local/opt/llvm@13
+export LLVM_SYS_150_PREFIX=/usr/local/opt/llvm@15
 ```
 
 For Ubuntu and Debian:
@@ -142,14 +142,14 @@ For Ubuntu and Debian:
 sudo apt -y install lsb-release software-properties-common gnupg
 wget https://apt.llvm.org/llvm.sh
 chmod +x llvm.sh
-./llvm.sh 13
+./llvm.sh 15
 ```
 
 If you use this script, you'll need to add `clang` to your `PATH`.
-By default, the script installs it as `clang-13`. You can address this with symlinks like so:
+By default, the script installs it as `clang-15`. You can address this with symlinks like so:
 
 ```sh
-sudo ln -s /usr/bin/clang-13 /usr/bin/clang
+sudo ln -s /usr/bin/clang-15 /usr/bin/clang
 ```
 
 There are also alternative installation options at <http://releases.llvm.org/download.html>
@@ -173,10 +173,10 @@ If you encounter:
 
 ```text
 error: No suitable version of LLVM was found system-wide or pointed
-       to by LLVM_SYS_130_PREFIX.
+       to by LLVM_SYS_150_PREFIX.
 ```
 
-Add `export LLVM_SYS_130_PREFIX=/usr/lib/llvm-13` to your `~/.bashrc` or equivalent file for your shell.
+Add `export LLVM_SYS_150_PREFIX=/usr/lib/llvm-15` to your `~/.bashrc` or equivalent file for your shell.
 
 ### LLVM installation on macOS
 
@@ -194,14 +194,14 @@ export CPPFLAGS="-I/usr/local/opt/llvm/include"
 **Warning** While `cargo build` works on windows, linking roc programs does not yet, see issue #2608. This also means the repl, the editor and many tests will not work on windows.
 The official LLVM pre-built binaries for Windows lack features that roc needs. Instead:
 
-1. Download the custom LLVM 7z archive [here](https://github.com/roc-lang/llvm-package-windows/releases/download/v13.0.1/LLVM-13.0.1-win64.7z).
+1. Download the custom LLVM 7z archive [here](https://github.com/roc-lang/llvm-package-windows/releases/download/v15.0.1/LLVM-15.0.1-win64.7z).
 1. [Download 7-zip](https://www.7-zip.org/) to be able to extract this archive.
 1. Extract the 7z file to where you want to permanently keep the folder. We recommend you pick a path without any spaces in it.
-1. In powershell, set the `LLVM_SYS_130_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-environment-variables-with-the-system-control-panel) to make this a permanent environment variable):
+1. In powershell, set the `LLVM_SYS_150_PREFIX` environment variable (check [here](https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-7.2#saving-environment-variables-with-the-system-control-panel) to make this a permanent environment variable):
 
 ```text
 <# ! Replace YOUR_USERNAME ! #>
-$env:LLVM_SYS_130_PREFIX = 'C:\Users\YOUR_USERNAME\Downloads\LLVM-13.0.1-win64'
+$env:LLVM_SYS_150_PREFIX = 'C:\Users\YOUR_USERNAME\Downloads\LLVM-15.0.1-win64'
 ```
 
 Once all that was done, `cargo build` ran successfully for Roc!
@@ -229,8 +229,8 @@ Create `~/.cargo/config.toml` if it does not exist and add this to it:
 rustflags = ["-C", "link-arg=-fuse-ld=lld", "-C", "target-cpu=native"]
 ```
 
-Then install `lld` version 13 (e.g. with `$ sudo apt-get install lld-13`)
+Then install `lld` version 15 (e.g. with `$ sudo apt-get install lld-15`)
 and add make sure there's a `ld.lld` executable on your `PATH` which
-is symlinked to `lld-13`.
+is symlinked to `lld-15`.
 
 That's it! Enjoy the faster builds.
