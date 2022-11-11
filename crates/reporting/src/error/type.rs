@@ -6,9 +6,9 @@ use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_exhaustive::{CtorName, ListArity};
 use roc_module::called_via::{BinOp, CalledVia};
-use roc_module::ident::{Ident, IdentStr, Lowercase, TagName};
+use roc_module::ident::{IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_region::all::{LineInfo, Loc, Region};
+use roc_region::all::{LineInfo, Region};
 use roc_solve_problem::{
     NotDerivableContext, NotDerivableDecode, NotDerivableEq, TypeError, UnderivableReason,
     Unfulfilled,
@@ -22,7 +22,6 @@ use roc_types::types::{
 use std::path::PathBuf;
 use ven_pretty::DocAllocator;
 
-const DUPLICATE_NAME: &str = "DUPLICATE NAME";
 const ADD_ANNOTATIONS: &str = r#"Can more type annotations be added? Type annotations always help me give more specific messages, and I think they could help a lot in this case"#;
 
 const OPAQUE_NUM_SYMBOLS: &[Symbol] = &[
@@ -74,66 +73,6 @@ pub fn type_problem<'b>(
                 .append(alloc.reflow("."));
 
             report(title, doc, filename)
-        }
-        BadType(type_problem) => {
-            use roc_types::types::Problem::*;
-            match type_problem {
-                BadTypeArguments {
-                    symbol,
-                    region,
-                    type_got,
-                    alias_needs,
-                    alias_kind,
-                } => {
-                    let needed_arguments = if alias_needs == 1 {
-                        alloc.reflow("1 type argument")
-                    } else {
-                        alloc
-                            .text(alias_needs.to_string())
-                            .append(alloc.reflow(" type arguments"))
-                    };
-
-                    let found_arguments = alloc.text(type_got.to_string());
-
-                    let doc = alloc.stack([
-                        alloc.concat([
-                            alloc.reflow("The "),
-                            alloc.symbol_unqualified(symbol),
-                            alloc.reflow(" "),
-                            alloc.reflow(alias_kind.as_str()),
-                            alloc.reflow(" expects "),
-                            needed_arguments,
-                            alloc.reflow(", but it got "),
-                            found_arguments,
-                            alloc.reflow(" instead:"),
-                        ]),
-                        alloc.region(lines.convert_region(region)),
-                        alloc.reflow("Are there missing parentheses?"),
-                    ]);
-
-                    let title = if type_got > alias_needs {
-                        "TOO MANY TYPE ARGUMENTS".to_string()
-                    } else {
-                        "TOO FEW TYPE ARGUMENTS".to_string()
-                    };
-
-                    report(title, doc, filename)
-                }
-                Shadowed(original_region, shadow) => {
-                    let doc = report_shadowing(alloc, lines, original_region, shadow);
-                    let title = DUPLICATE_NAME.to_string();
-
-                    report(title, doc, filename)
-                }
-
-                SolvedTypeError => None, // Don't re-report cascading errors - see https://github.com/roc-lang/roc/pull/1711
-
-                // We'll also report these as a canonicalization problem, no need to re-report them.
-                CyclicAlias(..) => None,
-                UnrecognizedIdent(..) => None,
-
-                other => panic!("unhandled bad type: {:?}", other),
-            }
         }
         UnfulfilledAbility(incomplete) => {
             let title = "INCOMPLETE ABILITY IMPLEMENTATION".to_string();
@@ -453,26 +392,6 @@ fn underivable_hint<'b>(
             }
         },
     }
-}
-
-fn report_shadowing<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    lines: &LineInfo,
-    original_region: Region,
-    shadow: Loc<Ident>,
-) -> RocDocBuilder<'b> {
-    let line = r#"Since these types have the same name, it's easy to use the wrong one on accident. Give one of them a new name."#;
-
-    alloc.stack([
-        alloc
-            .text("The ")
-            .append(alloc.ident(shadow.value))
-            .append(alloc.reflow(" name is first defined here:")),
-        alloc.region(lines.convert_region(original_region)),
-        alloc.reflow("But then it's defined a second time here:"),
-        alloc.region(lines.convert_region(shadow.region)),
-        alloc.reflow(line),
-    ])
 }
 
 pub fn cyclic_alias<'b>(

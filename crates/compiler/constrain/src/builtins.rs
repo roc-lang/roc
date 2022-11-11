@@ -1,5 +1,5 @@
 use arrayvec::ArrayVec;
-use roc_can::constraint::{Constraint, Constraints, TypeOrVar};
+use roc_can::constraint::{Constraint, Constraints, ExpectedTypeIndex};
 use roc_can::expected::Expected::{self, *};
 use roc_can::num::{FloatBound, FloatWidth, IntBound, IntLitWidth, NumBound, SignDemand};
 use roc_module::symbol::Symbol;
@@ -71,7 +71,7 @@ pub fn int_literal(
     constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
-    expected: Expected<TypeOrVar>,
+    expected: ExpectedTypeIndex,
     region: Region,
     bound: IntBound,
 ) -> Constraint {
@@ -97,10 +97,7 @@ pub fn int_literal(
 
     constrs.extend([
         constraints.equal_types(num_type_index, expect_precision_var, Category::Int, region),
-        {
-            let expected_index = constraints.push_expected_type(expected);
-            constraints.equal_types(num_type_index, expected_index, Category::Int, region)
-        },
+        constraints.equal_types(num_type_index, expected, Category::Int, region),
     ]);
 
     // TODO the precision_var is not part of the exists here; for float it is. Which is correct?
@@ -112,7 +109,7 @@ pub fn single_quote_literal(
     constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
-    expected: Expected<TypeOrVar>,
+    expected: ExpectedTypeIndex,
     region: Region,
     bound: SingleQuoteBound,
 ) -> Constraint {
@@ -143,10 +140,7 @@ pub fn single_quote_literal(
             Category::Character,
             region,
         ),
-        {
-            let expected_index = constraints.push_expected_type(expected);
-            constraints.equal_types(num_type_index, expected_index, Category::Character, region)
-        },
+        constraints.equal_types(num_type_index, expected, Category::Character, region),
     ]);
 
     let and_constraint = constraints.and_constraint(constrs);
@@ -158,7 +152,7 @@ pub fn float_literal(
     constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
-    expected: Expected<TypeOrVar>,
+    expected: ExpectedTypeIndex,
     region: Region,
     bound: FloatBound,
 ) -> Constraint {
@@ -183,10 +177,7 @@ pub fn float_literal(
 
     constrs.extend([
         constraints.equal_types(num_type_index, expect_precision_var, Category::Frac, region),
-        {
-            let expected_index = constraints.push_expected_type(expected);
-            constraints.equal_types(num_type_index, expected_index, Category::Frac, region)
-        },
+        constraints.equal_types(num_type_index, expected, Category::Frac, region),
     ]);
 
     let and_constraint = constraints.and_constraint(constrs);
@@ -197,7 +188,7 @@ pub fn float_literal(
 pub fn num_literal(
     constraints: &mut Constraints,
     num_var: Variable,
-    expected: Expected<TypeOrVar>,
+    expected: ExpectedTypeIndex,
     region: Region,
     bound: NumBound,
 ) -> Constraint {
@@ -213,8 +204,7 @@ pub fn num_literal(
     );
 
     let type_index = constraints.push_type(num_type);
-    let expected_index = constraints.push_expected_type(expected);
-    constrs.extend([constraints.equal_types(type_index, expected_index, Category::Num, region)]);
+    constrs.extend([constraints.equal_types(type_index, expected, Category::Num, region)]);
 
     let and_constraint = constraints.and_constraint(constrs);
     constraints.exists([num_var], and_constraint)

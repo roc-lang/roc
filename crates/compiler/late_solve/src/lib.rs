@@ -401,6 +401,6 @@ pub fn unify(
 
             Ok(extra_metadata.changed)
         }
-        Unified::Failure(..) | Unified::BadType(..) => Err(UnificationFailed),
+        Unified::Failure(..) => Err(UnificationFailed),
     }
 }

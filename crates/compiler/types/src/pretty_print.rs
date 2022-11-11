@@ -10,7 +10,6 @@ use crate::types::{
 use roc_collections::all::MutMap;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use std::fmt::Write;
 
 pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
@@ -408,7 +407,7 @@ fn find_names_needed(
                 find_under_alias,
             );
         }
-        Error | Structure(Erroneous(_)) | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
+        Error | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
             // Errors and empty records don't need names.
         }
     }
@@ -1284,7 +1283,6 @@ fn write_flat_type<'a>(
                 )
             })
         }
-        Erroneous(problem) => write!(buf, "<Type Mismatch: {:?}>", problem).unwrap(),
     }
 }
 

@@ -162,8 +162,6 @@ impl FunctionLayout {
         subs: &Subs,
         flat_type: &FlatType,
     ) -> Result<Self, LayoutError> {
-        use LayoutError::*;
-
         match flat_type {
             FlatType::Func(arguments, lambda_set, result) => {
                 let slice = Slice::reserve(layouts, arguments.len() + 1);
@@ -188,8 +186,6 @@ impl FunctionLayout {
                     lambda_set: lambda_set_index,
                 })
             }
-
-            FlatType::Erroneous(_) => Err(TypeError(())),
 
             _ => todo!(),
         }
@@ -742,8 +738,6 @@ impl Layout {
         subs: &Subs,
         flat_type: &FlatType,
     ) -> Result<Layout, LayoutError> {
-        use LayoutError::*;
-
         match flat_type {
             FlatType::Apply(Symbol::LIST_LIST, arguments) => {
                 debug_assert_eq!(arguments.len(), 1);
@@ -867,7 +861,6 @@ impl Layout {
 
                 Ok(Layout::UnionRecursive(slices))
             }
-            FlatType::Erroneous(_) => Err(TypeError(())),
             FlatType::EmptyRecord => Ok(Layout::UNIT),
             FlatType::EmptyTagUnion => Ok(Layout::VOID),
         }

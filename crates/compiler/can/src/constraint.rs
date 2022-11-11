@@ -676,6 +676,22 @@ impl Constraints {
 roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
 roc_error_macros::assert_sizeof_aarch64!(Constraint, 3 * 8);
 
+impl std::ops::Index<ExpectedTypeIndex> for Constraints {
+    type Output = Expected<TypeOrVar>;
+
+    fn index(&self, index: ExpectedTypeIndex) -> &Self::Output {
+        &self.expectations[index.index()]
+    }
+}
+
+impl std::ops::Index<PExpectedTypeIndex> for Constraints {
+    type Output = PExpected<TypeOrVar>;
+
+    fn index(&self, index: PExpectedTypeIndex) -> &Self::Output {
+        &self.pattern_expectations[index.index()]
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Eq(
     pub TypeOrVar,
