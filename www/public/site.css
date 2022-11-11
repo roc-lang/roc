@@ -140,39 +140,47 @@ code.snippet, samp {
     color: #ff5f5f;
 }
 
-.ann {
+samp .ann {
     /* type annotation - purple in the repl */
     color: #f384fd;
 }
 
-.autovar {
+samp .autovar {
     /* automatic variable names in the repl, e.g. # val1 */
     color: #3dbd0f;
 }
 
-.kw, .op {
+samp .kw, samp .op {
     /* language keywords, e.g. `if`, or operators, e.g. `+` */
     color: #3474db;
 }
 
-.paren, .brace, .comma {
+samp .paren, samp .brace, samp .comma {
     /* square braces, parens, commas */
     color: #3474db;
 }
 
-.str {
+samp .str {
     /* string literals */
     color: #158086;
 }
 
-.str-esc {
+samp .str-esc {
     /* escapes inside string literals, e.g. \t */
     color: #3474db;
 }
 
-.str-interp {
+samp .str-interp {
     /* interpolated variables inside string literals */
     color: var(--text-color);
+}
+
+samp .dim {
+    opacity: 0.55;
+}
+
+samp .comment {
+    color: green;
 }
 
 #tutorial-start {
@@ -265,13 +273,6 @@ h1 a, h2 a, h3 a, h4 a, h5 a {
     color: var(--header-link-color);
 }
 
-.dim {
-    opacity: 0.55;
-}
-
-.comment {
-    color: green;
-}
 
 h1 a:hover, h2 a:hover, h3 a:hover, h4 a:hover, h5 a:hover {
     text-decoration: none;
@@ -409,17 +410,17 @@ h4 {
         scrollbar-color: #444444 #2f2f2f;
     }
 
-    .paren, .brace, .comma {
+    samp .paren, samp .brace, samp .comma {
         /* square braces, parens, commas */
         color: #67a0fb;
     }
 
-    .kw, .op {
+    samp .kw, samp .op {
         /* language keywords, e.g. `if`, or operators, e.g. `+` */
         color: #67a0fb;
     }
 
-    .str {
+    samp .str {
         /* string literals */
         color: #26b2b9;
     }
