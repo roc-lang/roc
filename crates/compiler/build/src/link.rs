@@ -3,8 +3,8 @@ use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
-use roc_utils::get_lib_path;
 use roc_utils::{cargo, clang, zig};
+use roc_utils::{get_lib_path, rustup};
 use std::collections::HashMap;
 use std::env;
 use std::io;
@@ -200,7 +200,7 @@ pub fn build_zig_host_native(
             &bitcode::get_builtins_windows_obj_path(),
         ]);
     } else {
-        zig_cmd.args(&["build-obj", "-fPIC"]);
+        zig_cmd.args(&["build-obj"]);
     }
 
     zig_cmd.args(&[
@@ -295,7 +295,7 @@ pub fn build_zig_host_native(
             &bitcode::get_builtins_host_obj_path(),
         ]);
     } else {
-        zig_cmd.args(&["build-obj", "-fPIC"]);
+        zig_cmd.args(&["build-obj"]);
     }
     zig_cmd.args(&[
         zig_host_src,
@@ -416,7 +416,7 @@ pub fn build_c_host_native(
                 return build_zig_host_native(
                     env_path,
                     env_home,
-                    &format!("-femit-bin={}", dest),
+                    dest,
                     sources[0],
                     find_zig_str_path().to_str().unwrap(),
                     "x86_64-windows-gnu",
@@ -619,7 +619,7 @@ pub fn rebuild_host(
             _ => internal_error!("Unsupported architecture {:?}", target.architecture),
         };
 
-        run_build_command(zig_cmd, "host.zig")
+        run_build_command(zig_cmd, "host.zig", 0)
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
@@ -632,7 +632,17 @@ pub fn rebuild_host(
             },
         );
 
-        let mut cargo_cmd = cargo();
+        let mut cargo_cmd = if cfg!(windows) {
+            // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
+            // using `+nightly` only works when running cargo through rustup
+            let mut cmd = rustup();
+            cmd.args(["run", "nightly", "cargo"]);
+
+            cmd
+        } else {
+            cargo()
+        };
+
         cargo_cmd.arg("build").current_dir(cargo_dir);
         // Rust doesn't expose size without editing the cargo.toml. Instead just use release.
         if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
@@ -640,7 +650,12 @@ pub fn rebuild_host(
         }
 
         let source_file = if shared_lib_path.is_some() {
-            cargo_cmd.env("RUSTFLAGS", "-C link-dead-code");
+            let rust_flags = if cfg!(windows) {
+                "-Z export-executable-symbols"
+            } else {
+                "-C link-dead-code"
+            };
+            cargo_cmd.env("RUSTFLAGS", rust_flags);
             cargo_cmd.args(["--bin", "host"]);
             "src/main.rs"
         } else {
@@ -648,7 +663,7 @@ pub fn rebuild_host(
             "src/lib.rs"
         };
 
-        run_build_command(cargo_cmd, source_file);
+        run_build_command(cargo_cmd, source_file, 0);
 
         if shared_lib_path.is_some() {
             // For surgical linking, just copy the dynamically linked rust app.
@@ -669,7 +684,7 @@ pub fn rebuild_host(
                 shared_lib_path,
             );
 
-            run_build_command(clang_cmd, "host.c");
+            run_build_command(clang_cmd, "host.c", 0);
 
             let mut ld_cmd = Command::new("ld");
 
@@ -683,7 +698,7 @@ pub fn rebuild_host(
                 host_dest.to_str().unwrap(),
             ]);
 
-            run_build_command(ld_cmd, "c_host.o");
+            run_build_command(ld_cmd, "c_host.o", 0);
 
             // Clean up c_host.o
             if c_host_dest.exists() {
@@ -704,7 +719,7 @@ pub fn rebuild_host(
             rustc_cmd.arg("-C opt-level=s");
         }
 
-        run_build_command(rustc_cmd, "host.rs");
+        run_build_command(rustc_cmd, "host.rs", 0);
 
         // Rust hosts depend on a c wrapper for the api. Compile host.c as well.
         if shared_lib_path.is_some() {
@@ -722,7 +737,7 @@ pub fn rebuild_host(
                 opt_level,
                 shared_lib_path,
             );
-            run_build_command(clang_cmd, "host.c");
+            run_build_command(clang_cmd, "host.c", 0);
         } else {
             let clang_cmd = build_c_host_native(
                 target,
@@ -735,7 +750,7 @@ pub fn rebuild_host(
                 shared_lib_path,
             );
 
-            run_build_command(clang_cmd, "host.c");
+            run_build_command(clang_cmd, "host.c", 0);
 
             let mut ld_cmd = Command::new("ld");
 
@@ -747,7 +762,7 @@ pub fn rebuild_host(
                 host_dest.to_str().unwrap(),
             ]);
 
-            run_build_command(ld_cmd, "rust_host.o");
+            run_build_command(ld_cmd, "rust_host.o", 0);
         }
 
         // Clean up rust_host.o and c_host.o
@@ -770,7 +785,7 @@ pub fn rebuild_host(
             shared_lib_path,
         );
 
-        run_build_command(clang_cmd, "host.c");
+        run_build_command(clang_cmd, "host.c", 0);
     } else if swift_host_src.exists() {
         // Compile host.swift, if it exists
         let swiftc_cmd = build_swift_host_native(
@@ -786,7 +801,7 @@ pub fn rebuild_host(
             target.architecture,
         );
 
-        run_build_command(swiftc_cmd, "host.swift");
+        run_build_command(swiftc_cmd, "host.swift", 0);
     }
 
     host_dest
@@ -1351,21 +1366,37 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
     // println!("\npreprocess_host_wasm32");
     // println!("zig {}\n", args.join(" "));
 
-    run_build_command(zig_cmd, output_file)
+    run_build_command(zig_cmd, output_file, 0)
 }
 
-fn run_build_command(mut command: Command, file_to_build: &str) {
+fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_counter: usize) {
     let cmd_str = format!("{:?}", &command);
     let cmd_output = command.output().unwrap();
+    let max_flaky_fail_count = 10;
 
     if !cmd_output.status.success() {
         match std::str::from_utf8(&cmd_output.stderr) {
-            Ok(stderr) => internal_error!(
-                "Error:\n    Failed to rebuild {}:\n        The executed command was:\n            {}\n        stderr of that command:\n            {}",
-                file_to_build,
-                cmd_str,
-                stderr
-            ),
+            Ok(stderr) => {
+                // flaky error seen on macos 12 apple silicon, related to https://github.com/ziglang/zig/issues/9711
+                if stderr.contains("unable to save cached ZIR code") && flaky_fail_counter < max_flaky_fail_count {
+                    run_build_command(command, file_to_build, flaky_fail_counter + 1)
+                } else {
+                    internal_error!(
+                        "Error:\n    Failed to rebuild {} {} times, this is not a flaky failure:\n        The executed command was:\n            {}\n        stderr of that command:\n            {}",
+                        file_to_build,
+                        max_flaky_fail_count,
+                        cmd_str,
+                        stderr
+                    )
+                }
+
+                internal_error!(
+                    "Error:\n    Failed to rebuild {}:\n        The executed command was:\n            {}\n        stderr of that command:\n            {}",
+                    file_to_build,
+                    cmd_str,
+                    stderr
+                )
+            },
             Err(utf8_err) => internal_error!(
                 "Error:\n    Failed to rebuild {}:\n        The executed command was:\n            {}\n        stderr of that command could not be parsed as valid utf8:\n            {}",
                 file_to_build,

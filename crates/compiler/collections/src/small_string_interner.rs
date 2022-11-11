@@ -69,6 +69,14 @@ impl std::fmt::Debug for SmallStringInterner {
 }
 
 impl SmallStringInterner {
+    pub const fn new() -> Self {
+        Self {
+            buffer: Vec::new(),
+            lengths: Vec::new(),
+            offsets: Vec::new(),
+        }
+    }
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             // guess: the average symbol length is 5

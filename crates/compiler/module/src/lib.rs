@@ -9,6 +9,3 @@ pub mod ident;
 pub mod low_level;
 pub mod module_err;
 pub mod symbol;
-
-#[macro_use]
-extern crate lazy_static;

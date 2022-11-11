@@ -23,8 +23,9 @@ thread_local! {
 // Even if Cargo uses many threads, these tests won't go any faster. But that's fine, they're quick.
 lazy_static! {
     static ref COMPILER: Instance = init_compiler();
-    static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
 }
+
+static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 /// Load the compiler .wasm file and get it ready to execute
 /// THIS FUNCTION TAKES 4 SECONDS TO RUN

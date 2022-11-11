@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/shm.h> // shm_open
+#include <sys/mman.h> // for mmap
+#include <signal.h> // for kill
 
 //#define ROC_PLATFORM_DEBUG
 
@@ -95,10 +98,36 @@ void *roc_memset(void *str, int c, size_t n) {
   return memset(str, c, n);
 }
 
-int roc_send_signal(int pid, int sig) { return kill(pid, sig); }
-int roc_shm_open(char* name, int oflag, int mode) { return shm_open(name, oflag, mode); }
-void* roc_mmap(void* addr, int length, int prot, int flags, int fd, int offset) { return mmap(addr, length, prot, flags, fd, offset); }
-int roc_getppid() { return getppid(); }
+int roc_send_signal(int pid, int sig) { 
+#ifdef _WIN32
+    return 0;
+#else
+    return kill(pid, sig); 
+#endif
+}
+
+int roc_shm_open(char* name, int oflag, int mode) { 
+#ifdef _WIN32
+    return 0;
+#else
+    return shm_open(name, oflag, mode); 
+#endif
+}
+void* roc_mmap(void* addr, int length, int prot, int flags, int fd, int offset) { 
+#ifdef _WIN32
+    return addr;
+#else
+    return mmap(addr, length, prot, flags, fd, offset); 
+#endif
+}
+
+int roc_getppid() {
+#ifdef _WIN32
+    return 0;
+#else
+    return getppid();
+#endif
+}
 
 struct RocStr {
   char *bytes;

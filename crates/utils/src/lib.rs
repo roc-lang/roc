@@ -164,6 +164,21 @@ pub fn cargo() -> Command {
     }
 }
 
+/// Gives a friendly error if rustup is not installed.
+/// Also makes it easy to track where we use rustup in the codebase.
+pub fn rustup() -> Command {
+    // on windows, we need the version of cargo installed by rustup. The meaning of `cargo` is
+    // different within a process that runs rust. So we need to explicitly refer to where
+    // rustup put the binary
+    let command_str = "rustup";
+
+    if check_command_available(command_str) {
+        Command::new(command_str)
+    } else {
+        panic!("I could not find the rustup command.\nVisit https://rustup.rs/ to install rustup.",)
+    }
+}
+
 /// Gives a friendly error if clang is not installed.
 /// Also makes it easy to track where we use clang in the codebase.
 pub fn clang() -> Command {
