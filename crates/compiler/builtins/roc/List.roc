@@ -8,7 +8,6 @@ interface List
         map,
         len,
         withCapacity,
-        iterate,
         walkBackwards,
         concat,
         first,
@@ -369,30 +368,26 @@ contains = \list, needle ->
 ## You can use it in a pipeline:
 ##
 ##     [2, 4, 8]
-##         |> List.walk { start: 0, step: Num.add }
+##         |> List.walk 0 Num.add
 ##
 ## This returns 14 because:
-## * `state` starts at 0 (because of `start: 0`)
+## * `state` starts at 0
 ## * Each `step` runs `Num.add state elem`, and the return value becomes the new `state`.
 ##
 ## Here is a table of how `state` changes as [List.walk] walks over the elements
-## `[2, 4, 8]` using #Num.add as its `step` function to determine the next `state`.
+## `[2, 4, 8]` using [Num.add] as its `step` function to determine the next `state`.
 ##
-## `state` | `elem` | `step state elem` (`Num.add state elem`)
-## --------+--------+-----------------------------------------
-## 0       |        |
-## 0       | 2      | 2
-## 2       | 4      | 6
-## 6       | 8      | 14
+## state | elem  | Num.add state elem
+## :---: | :---: | :----------------:
+## 0     |       |
+## 0     | 2     | 2
+## 2     | 4     | 6
+## 6     | 8     | 14
 ##
-## So `state` goes through these changes:
-## 1. `0` (because of `start: 0`)
-## 2. `1` (because of `Num.add state elem` with `state` = 0 and `elem` = 1
+## The following returns -6:
 ##
 ##     [1, 2, 3]
-##         |> List.walk { start: 0, step: Num.sub }
-##
-## This returns -6 because
+##         |> List.walk 0 Num.sub
 ##
 ## Note that in other languages, `walk` is sometimes called `reduce`,
 ## `fold`, `foldLeft`, or `foldl`.

@@ -126,7 +126,7 @@ impl<'ctx> Iterator for FunctionIterator<'ctx> {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, BasicValueEnum<'ctx>)>,
     pub top_level_thunks: ImMap<Symbol, (ProcLayout<'a>, FunctionValue<'ctx>)>,
@@ -163,6 +163,7 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
 pub enum LlvmBackendMode {
     /// Assumes primitives (roc_alloc, roc_panic, etc) are provided by the host
     Binary,
+    BinaryDev,
     /// Creates a test wrapper around the main roc function to catch and report panics.
     /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
     GenTest,
@@ -174,6 +175,7 @@ impl LlvmBackendMode {
     pub(crate) fn has_host(self) -> bool {
         match self {
             LlvmBackendMode::Binary => true,
+            LlvmBackendMode::BinaryDev => true,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => true,
             LlvmBackendMode::CliTest => false,
@@ -184,6 +186,7 @@ impl LlvmBackendMode {
     fn returns_roc_result(self) -> bool {
         match self {
             LlvmBackendMode::Binary => false,
+            LlvmBackendMode::BinaryDev => false,
             LlvmBackendMode::GenTest => true,
             LlvmBackendMode::WasmGenTest => true,
             LlvmBackendMode::CliTest => true,
@@ -193,6 +196,7 @@ impl LlvmBackendMode {
     fn runs_expects(self) -> bool {
         match self {
             LlvmBackendMode::Binary => false,
+            LlvmBackendMode::BinaryDev => true,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => false,
             LlvmBackendMode::CliTest => true,
@@ -973,7 +977,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
                     _ => unreachable!("incorrect small_str_bytes"),
                 }
             } else {
-                let ptr = define_global_str_literal_ptr(env, *str_literal);
+                let ptr = define_global_str_literal_ptr(env, str_literal);
                 let number_of_elements = env.ptr_int().const_int(str_literal.len() as u64, false);
 
                 let alloca =
@@ -2723,14 +2727,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let layout = *layout;
 
                     if layout.contains_refcounted(env.layout_interner) {
-                        increment_refcount_layout(
-                            env,
-                            parent,
-                            layout_ids,
-                            *inc_amount,
-                            value,
-                            &layout,
-                        );
+                        increment_refcount_layout(env, layout_ids, *inc_amount, value, &layout);
                     }
 
                     build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
@@ -2739,7 +2736,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     let (value, layout) = load_symbol_and_layout(scope, symbol);
 
                     if layout.contains_refcounted(env.layout_interner) {
-                        decrement_refcount_layout(env, parent, layout_ids, value, layout);
+                        decrement_refcount_layout(env, layout_ids, value, layout);
                     }
 
                     build_exp_stmt(env, layout_ids, func_spec_solutions, scope, parent, cont)
@@ -2830,6 +2827,10 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             *region,
                             lookups,
                         );
+
+                        if let LlvmBackendMode::BinaryDev = env.mode {
+                            crate::llvm::expect::finalize(env);
+                        }
 
                         bd.build_unconditional_branch(then_block);
                     }
@@ -3847,12 +3848,9 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                             arg_type.into_pointer_type().get_element_type(),
                         );
                         // C return pointer goes at the beginning of params, and we must skip it if it exists.
-                        let param_index = (i
-                            + (if matches!(cc_return, CCReturn::ByPointer) {
-                                1
-                            } else {
-                                0
-                            })) as u32;
+                        let returns_pointer = matches!(cc_return, CCReturn::ByPointer);
+                        let param_index = i as u32 + returns_pointer as u32;
+
                         c_function.add_attribute(AttributeLoc::Param(param_index), byval);
                         c_function.add_attribute(AttributeLoc::Param(param_index), nonnull);
                     }
@@ -3935,7 +3933,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
             )
         }
 
-        LlvmBackendMode::Binary => {}
+        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev => {}
     }
 
     // a generic version that writes the result into a passed *u8 pointer
@@ -3986,7 +3984,9 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
             roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
         }
 
-        LlvmBackendMode::Binary => basic_type_from_layout(env, &return_layout),
+        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev => {
+            basic_type_from_layout(env, &return_layout)
+        }
     };
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
@@ -4600,7 +4600,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
                 fn_val.print_to_stderr();
 
                 if let Some(app_ll_file) = debug_output_file {
-                    env.module.print_to_file(&app_ll_file).unwrap();
+                    env.module.print_to_file(app_ll_file).unwrap();
 
                     panic!(
                         r"😱 LLVM errors when defining function {:?}; I wrote the full LLVM IR to {:?}",
@@ -5004,7 +5004,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                 GenTest | WasmGenTest | CliTest => {
                     /* no host, or exposing types is not supported */
                 }
-                Binary => {
+                Binary | BinaryDev => {
                     for (alias_name, (generated_function, top_level, layout)) in aliases.iter() {
                         expose_alias_to_host(
                             env,
@@ -6255,14 +6255,7 @@ fn run_low_level<'a, 'ctx, 'env>(
 
             let element_layout = list_element_layout!(list_layout);
 
-            list_get_unsafe(
-                env,
-                layout_ids,
-                parent,
-                element_layout,
-                elem_index,
-                wrapper_struct,
-            )
+            list_get_unsafe(env, layout_ids, element_layout, elem_index, wrapper_struct)
         }
         ListReplaceUnsafe => {
             let list = load_symbol(scope, &args[0]);

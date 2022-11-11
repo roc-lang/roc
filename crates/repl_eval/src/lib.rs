@@ -1,3 +1,4 @@
+//! Provides the functionality for the REPL to evaluate Roc expressions.
 use roc_parse::ast::Expr;
 use roc_std::RocDec;
 use roc_target::TargetInfo;

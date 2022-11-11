@@ -83,7 +83,7 @@ impl<'a> Renderer<'a> {
                 .zip(variables)
                 .zip(expressions)
                 .map(|((symbol, variable), expr)| {
-                    let (error_type, _) = subs.var_to_error_type(*variable, Polarity::OF_VALUE);
+                    let error_type = subs.var_to_error_type(*variable, Polarity::OF_VALUE);
                     self.render_lookup(*symbol, expr, error_type)
                 });
 

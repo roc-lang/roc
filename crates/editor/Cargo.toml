@@ -29,8 +29,8 @@ roc_module = { path = "../compiler/module" }
 roc_problem = { path = "../compiler/problem" }
 roc_types = { path = "../compiler/types" }
 roc_unify = { path = "../compiler/unify" }
+roc_utils = { path = "../utils"}
 roc_reporting = { path = "../reporting" }
-roc_utils = { path = "../utils" }
 roc_solve = { path = "../compiler/solve" }
 ven_graph = { path = "../vendor/pathfinding" }
 bumpalo = { version = "3.11.0", features = ["collections"] }

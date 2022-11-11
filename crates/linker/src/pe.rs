@@ -248,6 +248,43 @@ fn remove_dummy_dll_import_table_entry(executable: &mut [u8], md: &PeMetadata) {
     }
 }
 
+fn relocate_to(
+    executable: &mut [u8],
+    file_offset: usize,
+    destination_in_file: i64,
+    relocation: &object::Relocation,
+) {
+    match relocation.size() {
+        32 => {
+            let slice = &mut executable[file_offset..][..4];
+            let implicit = if relocation.has_implicit_addend() {
+                i32::from_le_bytes(slice.try_into().unwrap())
+            } else {
+                0
+            };
+
+            let delta = destination_in_file + relocation.addend() + implicit as i64;
+
+            slice.copy_from_slice(&(delta as i32).to_le_bytes());
+        }
+
+        64 => {
+            let slice = &mut executable[file_offset..][..8];
+            let implicit = if relocation.has_implicit_addend() {
+                i64::from_le_bytes(slice.try_into().unwrap())
+            } else {
+                0
+            };
+
+            let delta = destination_in_file + relocation.addend() + implicit;
+
+            slice.copy_from_slice(&delta.to_le_bytes());
+        }
+
+        other => unimplemented!("relocations of {other} bits are not supported"),
+    }
+}
+
 pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_bytes: &[u8]) {
     let md = PeMetadata::read_from_file(metadata_path);
 
@@ -366,29 +403,24 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                 if let Some(destination) = md.exports.get(name) {
                     match relocation.kind() {
                         object::RelocationKind::Relative => {
-                            // we implicitly only do 32-bit relocations
-                            debug_assert_eq!(relocation.size(), 32);
-
-                            let delta = destination
-                                - section_virtual_address as i64
-                                - *offset_in_section as i64
-                                + relocation.addend();
-
-                            executable[offset + *offset_in_section as usize..][..4]
-                                .copy_from_slice(&(delta as i32).to_le_bytes());
+                            relocate_to(
+                                executable,
+                                offset + *offset_in_section as usize,
+                                destination
+                                    - section_virtual_address as i64
+                                    - *offset_in_section as i64,
+                                relocation,
+                            );
                         }
                         _ => todo!(),
                     }
                 } else if let Some(destination) = inter_app_relocations.get(name) {
-                    // we implicitly only do 32-bit relocations
-                    debug_assert_eq!(relocation.size(), 32);
-
-                    let delta =
-                        destination - section_virtual_address as i64 - *offset_in_section as i64
-                            + relocation.addend();
-
-                    executable[offset + *offset_in_section as usize..][..4]
-                        .copy_from_slice(&(delta as i32).to_le_bytes());
+                    relocate_to(
+                        executable,
+                        offset + *offset_in_section as usize,
+                        destination - section_virtual_address as i64 - *offset_in_section as i64,
+                        relocation,
+                    );
                 } else if name == "___chkstk_ms" {
                     // this is a stack probe that is inserted when a function uses more than 2
                     // pages of stack space. The source of this function is not linked in, so we
@@ -398,11 +430,12 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     // This relies on the ___CHKSTK_MS section being the last text section in the list of sections
                     let destination = length - ___CHKSTK_MS.len();
 
-                    let delta =
-                        destination as i64 - *offset_in_section as i64 + relocation.addend();
-
-                    executable[offset + *offset_in_section as usize..][..4]
-                        .copy_from_slice(&(delta as i32).to_le_bytes());
+                    relocate_to(
+                        executable,
+                        offset + *offset_in_section as usize,
+                        destination as i64 - *offset_in_section as i64,
+                        relocation,
+                    );
                 } else {
                     if *address == 0 && !name.starts_with("roc") {
                         eprintln!(
@@ -413,14 +446,12 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
 
                     match relocation.kind() {
                         object::RelocationKind::Relative => {
-                            // we implicitly only do 32-bit relocations
-                            debug_assert_eq!(relocation.size(), 32);
-
-                            let delta =
-                                *address as i64 - *offset_in_section as i64 + relocation.addend();
-
-                            executable[offset + *offset_in_section as usize..][..4]
-                                .copy_from_slice(&(delta as i32).to_le_bytes());
+                            relocate_to(
+                                executable,
+                                offset + *offset_in_section as usize,
+                                *address as i64 - *offset_in_section as i64,
+                                relocation,
+                            );
                         }
                         _ => todo!(),
                     }
@@ -1617,7 +1648,7 @@ mod test {
         // we need to compile the app first
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
-            .args(&[
+            .args([
                 "build-obj",
                 "app.zig",
                 "-target",
@@ -1642,7 +1673,7 @@ mod test {
         let file = std::fs::File::open(dir.join("app.obj")).unwrap();
         let roc_app = unsafe { memmap2::Mmap::map(&file) }.unwrap();
 
-        let roc_app_sections = AppSections::from_data(&*roc_app);
+        let roc_app_sections = AppSections::from_data(&roc_app);
         let symbols = roc_app_sections.roc_symbols;
 
         // make the dummy dylib based on the app object
@@ -1651,22 +1682,22 @@ mod test {
         std::fs::write(dir.join("libapp.dll"), dylib_bytes).unwrap();
 
         // now we can compile the host (it uses libapp.dll, hence the order here)
-        let output = std::process::Command::new(&zig)
-            .current_dir(dir)
-            .args(&[
-                "build-exe",
-                "libapp.dll",
-                "host.zig",
-                "-lc",
-                "-target",
-                "x86_64-windows-gnu",
-                "-rdynamic",
-                "--strip",
-                "-rdynamic",
-                "-OReleaseFast",
-            ])
-            .output()
-            .unwrap();
+        let mut command = std::process::Command::new(&zig);
+        command.current_dir(dir).args([
+            "build-exe",
+            "libapp.dll",
+            "host.zig",
+            "-lc",
+            "-target",
+            "x86_64-windows-gnu",
+            "-rdynamic",
+            "--strip",
+            "-rdynamic",
+            "-OReleaseFast",
+        ]);
+
+        let command_str = format!("{:?}", &command);
+        let output = command.output().unwrap();
 
         if !output.status.success() {
             use std::io::Write;
@@ -1674,7 +1705,7 @@ mod test {
             std::io::stdout().write_all(&output.stdout).unwrap();
             std::io::stderr().write_all(&output.stderr).unwrap();
 
-            panic!("zig build-exe failed");
+            panic!("zig build-exe failed: {}", command_str);
         }
 
         preprocess_windows(
@@ -1689,7 +1720,7 @@ mod test {
 
         std::fs::copy(&dir.join("preprocessedhost"), &dir.join("app.exe")).unwrap();
 
-        surgery_pe(&dir.join("app.exe"), &dir.join("metadata"), &*roc_app);
+        surgery_pe(&dir.join("app.exe"), &dir.join("metadata"), &roc_app);
     }
 
     #[allow(dead_code)]
@@ -1731,7 +1762,7 @@ mod test {
 
         let output = std::process::Command::new("wine")
             .current_dir(dir)
-            .args(&["app.exe"])
+            .args(["app.exe"])
             .output()
             .unwrap();
 
@@ -1867,20 +1898,20 @@ mod test {
 
         std::fs::write(dir.join("host.zig"), host_zig.as_bytes()).unwrap();
 
-        let output = std::process::Command::new(&zig)
-            .current_dir(dir)
-            .args(&[
-                "build-exe",
-                "host.zig",
-                "-lc",
-                "-target",
-                "x86_64-windows-gnu",
-                "-rdynamic",
-                "--strip",
-                "-OReleaseFast",
-            ])
-            .output()
-            .unwrap();
+        let mut command = std::process::Command::new(&zig);
+        command.current_dir(dir).args([
+            "build-exe",
+            "host.zig",
+            "-lc",
+            "-target",
+            "x86_64-windows-gnu",
+            "-rdynamic",
+            "--strip",
+            "-OReleaseFast",
+        ]);
+
+        let command_str = format!("{:?}", &command);
+        let output = command.output().unwrap();
 
         if !output.status.success() {
             use std::io::Write;
@@ -1888,7 +1919,7 @@ mod test {
             std::io::stdout().write_all(&output.stdout).unwrap();
             std::io::stderr().write_all(&output.stderr).unwrap();
 
-            panic!("zig build-exe failed");
+            panic!("zig build-exe failed: {}", command_str);
         }
 
         let host_bytes = std::fs::read(dir.join("host.exe")).unwrap();

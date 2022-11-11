@@ -1,3 +1,5 @@
+//! Generates html documentation from Roc files. Used for
+//! [roc-lang.org/builtins/Num](https://www.roc-lang.org/builtins/Num).
 extern crate pulldown_cmark;
 extern crate roc_load;
 use bumpalo::Bump;
@@ -918,7 +920,7 @@ fn markdown_to_html(
         }
     };
 
-    let markdown_options = pulldown_cmark::Options::empty();
+    let markdown_options = pulldown_cmark::Options::ENABLE_TABLES;
 
     let mut expecting_code_block = false;
 

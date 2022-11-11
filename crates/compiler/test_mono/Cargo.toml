@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Tests Roc's generation of the mono intermediate representation."
 
 [[test]]
 name = "test_mono"
@@ -11,7 +12,7 @@ path = "src/tests.rs"
 
 [dev-dependencies]
 roc_collections = { path = "../collections" }
-roc_module = { path = "../module" }
+roc_module = { path = "../module", features = ["debug-symbols"] }
 roc_builtins = { path = "../builtins" }
 roc_load = { path = "../load" }
 roc_can = { path = "../can" }

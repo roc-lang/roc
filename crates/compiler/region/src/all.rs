@@ -133,7 +133,8 @@ impl Position {
 
 impl Debug for Position {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "@{}", self.offset)
+        write!(f, "@")?;
+        self.offset.fmt(f)
     }
 }
 

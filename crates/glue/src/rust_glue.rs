@@ -341,7 +341,8 @@ fn add_single_tag_struct(
                 let field_type = type_name(*field_id, types);
 
                 // These are all private fields, since this is a tag union.
-                body.push_str(&format!("{INDENT}f{index}: {field_type},\n"));
+                // ignore returned result, writeln can not fail as it is used here
+                let _ = writeln!(body, "{INDENT}f{index}: {field_type},");
             }
 
             body.push_str("}\n");
@@ -510,19 +511,22 @@ fn add_single_tag_struct(
             "fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {".to_string();
 
         if payload_fields.is_empty() {
-            buf.push_str(&format!("f.write_str(\"{name}::{tag_name}\")"));
+            // ignore returned result, write can not fail as it is used here
+            let _ = write!(buf, "f.write_str(\"{name}::{tag_name}\")");
         } else {
-            buf.push_str(&format!(
+            let _ = write!(
+                buf,
                 "\n{INDENT}{INDENT}{INDENT}f.debug_tuple(\"{name}::{tag_name}\")"
-            ));
+            );
 
             for (index, _) in payload_fields.iter().enumerate() {
-                buf.push_str(&format!(
+                let _ = write!(
+                    buf,
                     "{INDENT}{INDENT}{INDENT}{INDENT}.field(&self.f{index})"
-                ));
+                );
             }
 
-            buf.push_str(&format!("{INDENT}{INDENT}{INDENT}{INDENT}.finish()"));
+            let _ = write!(buf, "{INDENT}{INDENT}{INDENT}{INDENT}.finish()");
         }
 
         buf.push_str("    }\n");
@@ -1166,9 +1170,10 @@ pub struct {name} {{
 
             // There's only one tag, so there's no discriminant and no need to match;
             // just drop the pointer.
-            drop_payload.push_str(&format!(
+            let _ = write!(
+                drop_payload,
                 r#"unsafe {{ core::mem::ManuallyDrop::drop(&mut core::ptr::read(self.pointer).{tag_name}); }}"#
-            ));
+            );
         } else {
             write_impl_tags(
                 3,
@@ -1255,10 +1260,11 @@ pub struct {name} {{
 
             // There's only one tag, so there's no discriminant and no need to match;
             // just return whether my payload equals the other one.
-            buf.push_str(&format!(
+            let _ = write!(
+                buf,
                 r#"{INDENT}{INDENT}{INDENT}{INDENT}(*self.pointer).{tag_name} == (*other.pointer).{tag_name}
     "#
-            ));
+            );
         } else {
             write_impl_tags(
                 3,
@@ -1478,12 +1484,13 @@ pub struct {name} {{
 
             // There's only one tag, so there's no discriminant and no need to match;
             // just return whether my payload equals the other one.
-            buf.push_str(&format!(
+            let _ = write!(
+                buf,
                 r#"
         unsafe {{
             (*self.pointer).{tag_name}.hash(state)
         }}"#
-            ));
+            );
         } else {
             write_impl_tags(
                 2,
@@ -1529,11 +1536,12 @@ pub struct {name} {{
 
             // There's only one tag, so there's no discriminant and no need to match;
             // just return whether my payload equals the other one.
-            buf.push_str(&format!(
+            let _ = write!(
+                buf,
                 r#"f.debug_tuple("{tag_name}")
         .field(&(*self.pointer).{tag_name})
         .finish()"#,
-            ));
+            );
         } else {
             write_impl_tags(
                 3,

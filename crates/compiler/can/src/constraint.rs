@@ -13,13 +13,14 @@ use roc_types::types::{Category, PatternCategory, Type};
 pub struct Constraints {
     pub constraints: Vec<Constraint>,
     pub types: Vec<Cell<Type>>,
+    pub type_slices: Vec<TypeOrVar>,
     pub variables: Vec<Variable>,
     pub loc_symbols: Vec<(Symbol, Region)>,
     pub let_constraints: Vec<LetConstraint>,
     pub categories: Vec<Category>,
     pub pattern_categories: Vec<PatternCategory>,
-    pub expectations: Vec<Expected<Cell<Type>>>,
-    pub pattern_expectations: Vec<PExpected<Cell<Type>>>,
+    pub expectations: Vec<Expected<TypeOrVar>>,
+    pub pattern_expectations: Vec<PExpected<TypeOrVar>>,
     pub includes_tags: Vec<IncludesTag>,
     pub strings: Vec<&'static str>,
     pub sketched_rows: Vec<SketchedRows>,
@@ -33,6 +34,7 @@ impl std::fmt::Debug for Constraints {
         f.debug_struct("Constraints")
             .field("constraints", &self.constraints)
             .field("types", &"<types>")
+            .field("type_slices", &self.type_slices)
             .field("variables", &self.variables)
             .field("loc_symbols", &self.loc_symbols)
             .field("let_constraints", &self.let_constraints)
@@ -56,15 +58,15 @@ impl Default for Constraints {
     }
 }
 
-pub type TypeIndex = Index<Cell<Type>>;
-pub type ExpectedTypeIndex = Index<Expected<Cell<Type>>>;
-pub type PExpectedTypeIndex = Index<PExpected<Cell<Type>>>;
+pub type ExpectedTypeIndex = Index<Expected<TypeOrVar>>;
+pub type PExpectedTypeIndex = Index<PExpected<TypeOrVar>>;
 pub type TypeOrVar = EitherIndex<Cell<Type>, Variable>;
 
 impl Constraints {
     pub fn new() -> Self {
         let constraints = Vec::new();
         let mut types = Vec::new();
+        let type_slices = Vec::with_capacity(16);
         let variables = Vec::new();
         let loc_symbols = Vec::new();
         let let_constraints = Vec::new();
@@ -119,6 +121,7 @@ impl Constraints {
         Self {
             constraints,
             types,
+            type_slices,
             variables,
             loc_symbols,
             let_constraints,
@@ -211,12 +214,12 @@ impl Constraints {
         EitherIndex::from_right(index)
     }
 
-    pub fn push_expected_type(&mut self, expected: Expected<Type>) -> ExpectedTypeIndex {
-        Index::push_new(&mut self.expectations, expected.map(Cell::new))
+    pub fn push_expected_type(&mut self, expected: Expected<TypeOrVar>) -> ExpectedTypeIndex {
+        Index::push_new(&mut self.expectations, expected)
     }
 
-    pub fn push_pat_expected_type(&mut self, expected: PExpected<Type>) -> PExpectedTypeIndex {
-        Index::push_new(&mut self.pattern_expectations, expected.map(Cell::new))
+    pub fn push_pat_expected_type(&mut self, expected: PExpected<TypeOrVar>) -> PExpectedTypeIndex {
+        Index::push_new(&mut self.pattern_expectations, expected)
     }
 
     #[inline(always)]
@@ -372,24 +375,24 @@ impl Constraints {
 
     fn def_types_slice<I>(&mut self, it: I) -> DefTypes
     where
-        I: IntoIterator<Item = (Symbol, Loc<Type>)>,
+        I: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
         I::IntoIter: ExactSizeIterator,
     {
         let it = it.into_iter();
 
-        let types_start = self.types.len();
+        let types_start = self.type_slices.len();
         let loc_symbols_start = self.loc_symbols.len();
 
         // because we have an ExactSizeIterator, we can reserve space here
         let length = it.len();
 
-        self.types.reserve(length);
+        self.type_slices.reserve(length);
         self.loc_symbols.reserve(length);
 
         for (symbol, loc_type) in it {
             let Loc { region, value } = loc_type;
 
-            self.types.push(Cell::new(value));
+            self.type_slices.push(value);
             self.loc_symbols.push((symbol, region));
         }
 
@@ -460,7 +463,7 @@ impl Constraints {
     where
         I1: IntoIterator<Item = Variable>,
         I2: IntoIterator<Item = Variable>,
-        I3: IntoIterator<Item = (Symbol, Loc<Type>)>,
+        I3: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
         I3::IntoIter: ExactSizeIterator,
     {
         // defs and ret constraint are stored consequtively, so we only need to store one index
@@ -506,7 +509,7 @@ impl Constraints {
     ) -> Constraint
     where
         I1: IntoIterator<Item = Variable>,
-        I2: IntoIterator<Item = (Symbol, Loc<Type>)>,
+        I2: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
         I2::IntoIter: ExactSizeIterator,
     {
         // defs and ret constraint are stored consequtively, so we only need to store one index
@@ -615,8 +618,8 @@ impl Constraints {
         real_var: Variable,
         real_region: Region,
         category_and_expectation: Result<
-            (Category, Expected<Type>),
-            (PatternCategory, PExpected<Type>),
+            (Category, ExpectedTypeIndex),
+            (PatternCategory, PExpectedTypeIndex),
         >,
         sketched_rows: SketchedRows,
         context: ExhaustiveContext,
@@ -628,15 +631,12 @@ impl Constraints {
         let equality = match category_and_expectation {
             Ok((category, expected)) => {
                 let category = Index::push_new(&mut self.categories, category);
-                let expected = Index::push_new(&mut self.expectations, expected.map(Cell::new));
                 let equality = Eq(real_var, expected, category, real_region);
                 let equality = Index::push_new(&mut self.eq, equality);
                 Ok(equality)
             }
             Err((category, expected)) => {
                 let category = Index::push_new(&mut self.pattern_categories, category);
-                let expected =
-                    Index::push_new(&mut self.pattern_expectations, expected.map(Cell::new));
                 let equality = PatternEq(real_var, expected, category, real_region);
                 let equality = Index::push_new(&mut self.pattern_eq, equality);
                 Err(equality)
@@ -676,10 +676,26 @@ impl Constraints {
 roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
 roc_error_macros::assert_sizeof_aarch64!(Constraint, 3 * 8);
 
+impl std::ops::Index<ExpectedTypeIndex> for Constraints {
+    type Output = Expected<TypeOrVar>;
+
+    fn index(&self, index: ExpectedTypeIndex) -> &Self::Output {
+        &self.expectations[index.index()]
+    }
+}
+
+impl std::ops::Index<PExpectedTypeIndex> for Constraints {
+    type Output = PExpected<TypeOrVar>;
+
+    fn index(&self, index: PExpectedTypeIndex) -> &Self::Output {
+        &self.pattern_expectations[index.index()]
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Eq(
     pub TypeOrVar,
-    pub Index<Expected<Cell<Type>>>,
+    pub ExpectedTypeIndex,
     pub Index<Category>,
     pub Region,
 );
@@ -759,7 +775,7 @@ pub enum Constraint {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DefTypes {
-    pub types: Slice<Type>,
+    pub types: Slice<TypeOrVar>,
     pub loc_symbols: Slice<(Symbol, Region)>,
 }
 

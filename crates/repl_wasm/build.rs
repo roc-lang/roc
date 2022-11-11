@@ -20,7 +20,7 @@ fn main() {
     let platform_obj = build_wasm_platform(&out_dir, &source_path);
 
     let mut pre_linked_binary_path = PathBuf::from(std::env::var("OUT_DIR").unwrap());
-    pre_linked_binary_path.extend(&["pre_linked_binary"]);
+    pre_linked_binary_path.extend(["pre_linked_binary"]);
     pre_linked_binary_path.set_extension("o");
 
     let output = Command::new(&zig_executable())

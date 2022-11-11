@@ -109,7 +109,7 @@ pub enum StrSegment<'a> {
     Interpolated(Loc<&'a Expr<'a>>), // e.g. (name) in "Hi, \(name)!"
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EscapedChar {
     Newline,        // \n
     Tab,            // \t
@@ -581,7 +581,7 @@ pub enum AssignedField<'a, Val> {
     Malformed(&'a str),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),
@@ -613,6 +613,14 @@ impl<'a> CommentOrNewline<'a> {
             Newline => "\n".to_owned(),
             LineComment(comment_str) => format!("#{}", comment_str),
             DocComment(comment_str) => format!("##{}", comment_str),
+        }
+    }
+
+    pub fn comment_str(&'a self) -> Option<&'a str> {
+        match self {
+            CommentOrNewline::LineComment(s) => Some(*s),
+            CommentOrNewline::DocComment(s) => Some(*s),
+            _ => None,
         }
     }
 }
@@ -880,7 +888,7 @@ impl<'a, T> Collection<'a, T> {
 
     pub fn final_comments(&self) -> &'a [CommentOrNewline<'a>] {
         if let Some(final_comments) = self.final_comments {
-            *final_comments
+            final_comments
         } else {
             &[]
         }

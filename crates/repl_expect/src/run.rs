@@ -6,6 +6,7 @@ use inkwell::context::Context;
 use roc_build::link::llvm_module_to_dylib;
 use roc_can::expr::ExpectLookup;
 use roc_collections::{MutSet, VecMap};
+use roc_error_macros::internal_error;
 use roc_gen_llvm::{
     llvm::{build::LlvmBackendMode, externs::add_default_roc_externs},
     run_roc::RocCallResult,
@@ -21,7 +22,7 @@ use roc_target::TargetInfo;
 use roc_types::subs::{Subs, Variable};
 use target_lexicon::Triple;
 
-pub(crate) struct ExpectMemory<'a> {
+pub struct ExpectMemory<'a> {
     ptr: *mut u8,
     length: usize,
     shm_name: Option<std::ffi::CString>,
@@ -41,7 +42,7 @@ impl<'a> ExpectMemory<'a> {
         }
     }
 
-    fn create_or_reuse_mmap(shm_name: &str) -> Self {
+    pub fn create_or_reuse_mmap(shm_name: &str) -> Self {
         let cstring = std::ffi::CString::new(shm_name).unwrap();
         Self::mmap_help(cstring, libc::O_RDWR | libc::O_CREAT)
     }
@@ -54,18 +55,42 @@ impl<'a> ExpectMemory<'a> {
     fn mmap_help(cstring: std::ffi::CString, shm_flags: i32) -> Self {
         let ptr = unsafe {
             let shared_fd = libc::shm_open(cstring.as_ptr().cast(), shm_flags, 0o666);
+            if shared_fd == -1 {
+                internal_error!("failed to shm_open fd");
+            }
 
-            libc::ftruncate(shared_fd, Self::SHM_SIZE as _);
+            let mut stat: libc::stat = std::mem::zeroed();
+            if libc::fstat(shared_fd, &mut stat) == -1 {
+                internal_error!("failed to stat shared file, does it exist?");
+            }
+            if stat.st_size < Self::SHM_SIZE as _
+                && libc::ftruncate(shared_fd, Self::SHM_SIZE as _) == -1
+            {
+                internal_error!("failed to truncate shared file, are the permissions wrong?");
+            }
 
-            libc::mmap(
+            let ptr = libc::mmap(
                 std::ptr::null_mut(),
                 Self::SHM_SIZE,
                 libc::PROT_WRITE | libc::PROT_READ,
                 libc::MAP_SHARED,
                 shared_fd,
                 0,
-            )
+            );
+
+            if ptr as usize == usize::MAX {
+                // ptr = -1
+                roc_error_macros::internal_error!("failed to mmap shared pointer")
+            }
+
+            // fill the buffer with a fill pattern
+            libc::memset(ptr, 0xAA, Self::SHM_SIZE);
+
+            ptr
         };
+
+        // puts in the initial header
+        let _ = ExpectSequence::new(ptr as *mut u8);
 
         Self {
             ptr: ptr.cast(),
@@ -83,7 +108,34 @@ impl<'a> ExpectMemory<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_expects<'a, W: std::io::Write>(
+pub fn run_inline_expects<'a, W: std::io::Write>(
+    writer: &mut W,
+    render_target: RenderTarget,
+    arena: &'a Bump,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    lib: &libloading::Library,
+    expectations: &mut VecMap<ModuleId, Expectations>,
+    expects: ExpectFunctions<'_>,
+) -> std::io::Result<(usize, usize)> {
+    let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
+    let mut memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
+
+    run_expects_with_memory(
+        writer,
+        render_target,
+        arena,
+        interns,
+        layout_interner,
+        lib,
+        expectations,
+        expects,
+        &mut memory,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_toplevel_expects<'a, W: std::io::Write>(
     writer: &mut W,
     render_target: RenderTarget,
     arena: &'a Bump,
@@ -239,7 +291,7 @@ fn run_expect_fx<'a, W: std::io::Write>(
 ) -> std::io::Result<bool> {
     use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
 
-    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
+    let mut signals = Signals::new([SIGCHLD, SIGUSR1]).unwrap();
 
     match unsafe { libc::fork() } {
         0 => unsafe {
@@ -325,14 +377,16 @@ fn run_expect_fx<'a, W: std::io::Write>(
     }
 }
 
-pub fn roc_dev_expect<'a>(
+pub fn render_expects_in_memory<'a>(
     writer: &mut impl std::io::Write,
     arena: &'a Bump,
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
     layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
-    shared_ptr: *mut u8,
+    memory: &ExpectMemory,
 ) -> std::io::Result<usize> {
+    let shared_ptr = memory.ptr;
+
     let frame = ExpectFrame::at_offset(shared_ptr, ExpectSequence::START_OFFSET);
     let module_id = frame.module_id;
 
@@ -423,8 +477,7 @@ fn render_expect_failure<'a>(
         start,
         frame.start_offset,
         &variables,
-    )
-    .unwrap();
+    );
 
     renderer.render_failure(
         writer,

@@ -76,13 +76,23 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
 
         let address = sym.address() as u64;
 
-        // special exceptions for memcpy and memset.
-        if name == "roc_memcpy" {
-            vaddresses.insert("memcpy".to_string(), address);
-        } else if name == "roc_memset" {
-            vaddresses.insert("memset".to_string(), address);
-        } else if name == "roc_memmove" {
-            vaddresses.insert("memmove".to_string(), address);
+        // special exceptions for roc_ functions that map to libc symbols
+        let direct_mapping = match name {
+            "roc_memcpy" => Some("memcpy"),
+            "roc_memset" => Some("memset"),
+            "roc_memmove" => Some("memmove"),
+
+            // for expects
+            "roc_mmap" => Some("mmap"),
+            "roc_getppid" => Some("getppid"),
+            "roc_send_signal" => Some("kill"),
+            "roc_shm_open" => Some("shm_open"),
+
+            _ => None,
+        };
+
+        if let Some(libc_symbol) = direct_mapping {
+            vaddresses.insert(libc_symbol.to_string(), address);
         }
 
         vaddresses.insert(name.to_string(), address);
@@ -1597,7 +1607,7 @@ mod tests {
         // we need to compile the app first
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
-            .args(&[
+            .args([
                 "build-obj",
                 "app.zig",
                 "-fPIC",
@@ -1637,7 +1647,7 @@ mod tests {
         // now we can compile the host (it uses libapp.so, hence the order here)
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
-            .args(&[
+            .args([
                 "build-exe",
                 "libapp.so",
                 "host.zig",
@@ -1672,7 +1682,7 @@ mod tests {
         std::fs::copy(&dir.join("preprocessedhost"), &dir.join("final")).unwrap();
 
         surgery_elf(
-            &*roc_app,
+            &roc_app,
             &dir.join("metadata"),
             &dir.join("final"),
             false,

@@ -1,3 +1,8 @@
+//! Surgical linker that links platforms to Roc applications. We created our own
+//! linker for performance, since regular linkers add complexity that is not
+//! needed for linking Roc apps. Because we want `roc` to manage the build
+//! system and final linking of the executable, it is significantly less
+//! practical to use a regular linker.
 use memmap2::{Mmap, MmapMut};
 use object::Object;
 use roc_build::link::{rebuild_host, LinkType};
@@ -226,7 +231,7 @@ fn generate_import_library(stub_lib_path: &Path, custom_names: &[String]) {
     // > https://github.com/messense/implib-rs
     let output = std::process::Command::new(&zig)
         .current_dir(stub_lib_path.parent().unwrap())
-        .args(&[
+        .args([
             "dlltool",
             "-d",
             def_filename.to_str().unwrap(),

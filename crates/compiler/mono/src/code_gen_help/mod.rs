@@ -471,7 +471,7 @@ impl<'a> CodeGenHelp<'a> {
     ) -> (bool, Vec<'a, Option<usize>>) {
         use UnionLayout::*;
         match union {
-            NonRecursive(_) => return (false, bumpalo::vec![in self.arena]),
+            NonRecursive(_) => (false, bumpalo::vec![in self.arena]),
 
             Recursive(tags) => self.union_tail_recursion_fields_help(tags),
 

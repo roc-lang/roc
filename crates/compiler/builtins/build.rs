@@ -90,7 +90,7 @@ fn generate_object_file(bitcode_path: &Path, zig_object: &str, object_file_name:
         let mut zig_cmd = zig();
 
         zig_cmd
-            .current_dir(&bitcode_path)
+            .current_dir(bitcode_path)
             .args(["build", zig_object, "-Drelease=true"]);
 
         run_command(zig_cmd, 0);
@@ -126,7 +126,7 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
     let mut zig_cmd = zig();
 
     zig_cmd
-        .current_dir(&bitcode_path)
+        .current_dir(bitcode_path)
         .args(["build", zig_object, "-Drelease=true"]);
 
     run_command(zig_cmd, 0);
@@ -168,7 +168,7 @@ fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
 // recursively copy all the .zig files from this directory, but do *not* recurse into zig-cache/
 fn cp_unless_zig_cache(src_dir: &Path, target_dir: &Path) -> io::Result<()> {
     // Make sure the destination directory exists before we try to copy anything into it.
-    std::fs::create_dir_all(&target_dir).unwrap_or_else(|err| {
+    std::fs::create_dir_all(target_dir).unwrap_or_else(|err| {
         panic!(
             "Failed to create output library directory for zig bitcode {:?}: {:?}",
             target_dir, err
@@ -215,6 +215,7 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
                 // Flaky test errors that only occur sometimes on MacOS ci server.
                 if error_str.contains("FileNotFound")
                     || error_str.contains("unable to save cached ZIR code")
+                    || error_str.contains("LLVM failed to emit asm")
                 {
                     if flaky_fail_counter == 10 {
                         panic!("{} failed 10 times in a row. The following error is unlikely to be a flaky error: {}", command_str, error_str);

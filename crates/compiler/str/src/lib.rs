@@ -1,3 +1,8 @@
+//! Provides `Roc` styled collection [reference counting](https://en.wikipedia.org/wiki/Reference_counting). 
+//! This means the collection may or may not be safe to mutate in-place, may or 
+//! may not be reference counted, and may or may not need to be freed when no 
+//! longer in use. Whether each of these is true for a given collection can be 
+//! determined by inspecting that collection at runtime.
 #![crate_type = "lib"]
 #![no_std]
 

@@ -61,17 +61,6 @@ mod cli_run {
         PlainText(&'a str),
     }
 
-    #[derive(Debug, PartialEq, Eq)]
-    struct CliTest<'a> {
-        filename: &'a str,
-        executable_filename: &'a str,
-        stdin: &'a [&'a str],
-        arguments: &'a [Arg<'a>],
-        env: &'a [(&'a str, &'a str)],
-        expected_ending: &'a str,
-        use_valgrind: bool,
-    }
-
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
         let compile_out = run_roc(
             [CMD_CHECK, file.to_str().unwrap()].iter().chain(flags),
@@ -155,6 +144,9 @@ mod cli_run {
 
         let cli_commands = if test_many_cli_commands {
             vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc]
+        } else if cfg!(windows) {
+            // TODO: expects don't currently work on windows
+            vec![CliMode::RocRun]
         } else {
             vec![CliMode::Roc]
         };
@@ -192,7 +184,7 @@ mod cli_run {
                             run_with_valgrind(stdin.iter().copied(), &valgrind_args);
                         if valgrind_out.status.success() {
                             let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
-                                panic!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nvalgrind xml was: \"{}\"\n\nvalgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", err, raw_xml, valgrind_out.stdout, valgrind_out.stderr);
+                                panic!("failed to parse the `valgrind` xml output:\n\n  Error was:\n\n    {:?}\n\n  valgrind xml was:\n\n    \"{}\"\n\n  valgrind stdout was:\n\n    \"{}\"\n\n  valgrind stderr was:\n\n    \"{}\"", err, raw_xml, valgrind_out.stdout, valgrind_out.stderr);
                             });
 
                             if !memory_errors.is_empty() {
@@ -239,6 +231,7 @@ mod cli_run {
                         // TODO: `roc` and `roc dev` are currently buggy for `env.roc`
                         continue;
                     }
+
                     run_roc_on(file, flags.clone(), stdin, roc_app_args, extra_env)
                 }
                 CliMode::RocRun => run_roc_on(
@@ -301,8 +294,8 @@ mod cli_run {
         test_many_cli_commands: bool, // buildOnly, buildAndRun and buildAndRunIfNoErrors
     ) {
         let file_name = file_path_from_root(dir_name, roc_filename);
+        let mut roc_app_args: Vec<String> = Vec::new();
 
-        let mut roc_app_args: Vec<String> = vec![];
         for arg in args {
             match arg {
                 Arg::ExamplePath(file) => {
@@ -320,10 +313,10 @@ mod cli_run {
         }
 
         // workaround for surgical linker issue, see PR #3990
-        let mut custom_flags: Vec<&str> = vec![];
+        let mut custom_flags: Vec<&str> = Vec::new();
 
         match executable_filename {
-            "form" | "hello-gui" | "breakout" | "ruby" => {
+            "form" | "hello-gui" | "breakout" | "libhello" => {
                 // Since these require things the build system often doesn't have
                 // (e.g. GUIs open a window, Ruby needs ruby installed, WASM needs a browser)
                 // we do `roc build` on them but don't run them.
@@ -523,6 +516,7 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "missing __udivdi3 and some other symbols")]
     #[serial(cli_platform)]
     fn cli_args() {
         test_roc_app(
@@ -576,6 +570,7 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore = "overflows the stack on windows")]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",
@@ -1154,7 +1149,7 @@ fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
     //        .unwrap();
 
     let store = Store::default();
-    let module = Module::from_file(&store, &wasm_path).unwrap();
+    let module = Module::from_file(&store, wasm_path).unwrap();
 
     let mut fake_stdin = wasmer_wasi::Pipe::new();
     let fake_stdout = wasmer_wasi::Pipe::new();

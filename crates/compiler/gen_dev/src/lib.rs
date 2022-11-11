@@ -1,3 +1,6 @@
+//! Provides the compiler backend to generate Roc binaries fast, for a nice
+//! developer experience. See [README.md](./compiler/gen_dev/README.md) for
+//! more information.
 #![warn(clippy::dbg_macro)]
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
@@ -156,7 +159,7 @@ trait Backend<'a> {
                     let module_id = env.module_id;
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
-                    rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, *following)
+                    rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, following)
                 };
 
                 for spec in new_specializations.into_iter() {

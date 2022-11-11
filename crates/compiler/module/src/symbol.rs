@@ -44,7 +44,7 @@ const SYMBOL_HAS_NICHE: () =
 // register_debug_idents calls (which should be made in debug mode).
 // Set it to false if you want to see the raw ModuleId and IdentId ints,
 // but please set it back to true before checking in the result!
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "debug-symbols"))]
 const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
 
 pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] = &[
@@ -183,7 +183,7 @@ impl Symbol {
 ///
 /// `Foo.bar`
 impl fmt::Debug for Symbol {
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "debug-symbols"))]
     #[allow(clippy::print_in_format_impl)]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if PRETTY_PRINT_DEBUG_SYMBOLS {
@@ -216,7 +216,7 @@ impl fmt::Debug for Symbol {
         }
     }
 
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(any(debug_assertions, feature = "debug-symbols")))]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fallback_debug_fmt(*self, f)
     }
@@ -246,29 +246,13 @@ fn fallback_debug_fmt(symbol: Symbol, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "`{:?}.{:?}`", module_id, ident_id)
 }
 
-// TODO this is only here to prevent clippy from complaining about an unused
-// #[macro_use] on lazy_statc in --release builds, because as of January 2020,
-// we only use lazy_static in the debug configuration. If we ever start using
-// lazy_static in release builds, this do-nothing macro invocation will be safe to delete!
-//
-// There's probably also a way to get clippy to stop complaining about the unused
-// #[macro_use] but it didn't seem worth the effort since probably someday we'll
-// end up using it in release builds anyway. Right? ...Right?
-lazy_static! {}
-
-#[cfg(debug_assertions)]
-lazy_static! {
-    /// This is used in Debug builds only, to let us have a Debug instance
-    /// which displays not only the Module ID, but also the Module Name which
-    /// corresponds to that ID.
-    ///
-    static ref DEBUG_MODULE_ID_NAMES: std::sync::Mutex<roc_collections::SmallStringInterner> =
-        // This stores a u32 key instead of a ModuleId key so that if there's
-        // a problem with ModuleId's Debug implementation, logging this for diagnostic
-        // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
-        // this out.
-        std::sync::Mutex::new(roc_collections::SmallStringInterner::with_capacity(10));
-}
+/// This is used in Debug builds only, to let us have a Debug instance
+/// which displays not only the Module ID, but also the Module Name which
+/// corresponds to that ID.
+///
+#[cfg(any(debug_assertions, feature = "debug-symbols"))]
+static DEBUG_MODULE_ID_NAMES: std::sync::Mutex<roc_collections::SmallStringInterner> =
+    std::sync::Mutex::new(roc_collections::SmallStringInterner::new());
 
 #[derive(Debug, Default, Clone)]
 pub struct Interns {
@@ -338,18 +322,16 @@ pub fn get_module_ident_ids_mut<'a>(
         })
 }
 
+/// This is used in Debug builds only, to let us have a Debug instance
+/// which displays not only the Module ID, but also the Module Name which
+/// corresponds to that ID.
 #[cfg(any(debug_assertions, feature = "debug-symbols"))]
-lazy_static! {
-    /// This is used in Debug builds only, to let us have a Debug instance
-    /// which displays not only the Module ID, but also the Module Name which
-    /// corresponds to that ID.
-    static ref DEBUG_IDENT_IDS_BY_MODULE_ID: std::sync::Mutex<roc_collections::VecMap<u32, IdentIds>> =
-        // This stores a u32 key instead of a ModuleId key so that if there's
-        // a problem with ModuleId's Debug implementation, logging this for diagnostic
-        // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
-        // this out.
-        std::sync::Mutex::new(roc_collections::VecMap::default());
-}
+static DEBUG_IDENT_IDS_BY_MODULE_ID: std::sync::Mutex<roc_collections::VecMap<u32, IdentIds>> =
+    // This stores a u32 key instead of a ModuleId key so that if there's
+    // a problem with ModuleId's Debug implementation, logging this for diagnostic
+    // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
+    // this out.
+    std::sync::Mutex::new(roc_collections::VecMap::new());
 
 /// A globally unique ID that gets assigned to each module as it is loaded.
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -399,7 +381,7 @@ impl fmt::Debug for ModuleId {
     /// needs a global mutex, so we don't do this in release builds. This means
     /// the Debug impl in release builds only shows the number, not the name (which
     /// it does not have available, due to having never stored it in the mutexed intern table.)
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "debug-symbols"))]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // Originally, this printed both name and numeric ID, but the numeric ID
         // didn't seem to add anything useful. Feel free to temporarily re-add it
@@ -425,7 +407,7 @@ impl fmt::Debug for ModuleId {
     }
 
     /// In release builds, all we have access to is the number, so only display that.
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(any(debug_assertions, feature = "debug-symbols")))]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.0.fmt(f)
     }
@@ -470,7 +452,7 @@ impl<'a> PackageModuleIds<'a> {
         // didn't find it, so we'll add it
         let module_id = ModuleId::from_zero_indexed(self.by_id.len());
         self.by_id.push(module_name.clone());
-        if cfg!(debug_assertions) {
+        if cfg!(any(debug_assertions, feature = "debug-symbols")) {
             Self::insert_debug_name(module_id, module_name);
         }
 
@@ -487,7 +469,7 @@ impl<'a> PackageModuleIds<'a> {
         ModuleIds { by_id }
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "debug-symbols"))]
     fn insert_debug_name(module_id: ModuleId, module_name: &PQModuleName) {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
@@ -503,7 +485,7 @@ impl<'a> PackageModuleIds<'a> {
         }
     }
 
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(any(debug_assertions, feature = "debug-symbols")))]
     fn insert_debug_name(_module_id: ModuleId, _module_name: &PQModuleName) {
         // By design, this is a no-op in release builds!
     }
@@ -557,14 +539,14 @@ impl ModuleIds {
         // didn't find it, so we'll add it
         let module_id = ModuleId::from_zero_indexed(self.by_id.len());
         self.by_id.push(module_name.clone());
-        if cfg!(debug_assertions) {
+        if cfg!(any(debug_assertions, feature = "debug-symbols")) {
             Self::insert_debug_name(module_id, module_name);
         }
 
         module_id
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "debug-symbols"))]
     fn insert_debug_name(module_id: ModuleId, module_name: &ModuleName) {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
@@ -574,7 +556,7 @@ impl ModuleIds {
         }
     }
 
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(any(debug_assertions, feature = "debug-symbols")))]
     fn insert_debug_name(_module_id: ModuleId, _module_name: &ModuleName) {
         // By design, this is a no-op in release builds!
     }
@@ -868,7 +850,7 @@ macro_rules! define_builtins {
                         IdentIds{ interner }
                     };
 
-                    if cfg!(debug_assertions) {
+                    if cfg!(any(debug_assertions, feature = "debug-symbols")) {
                         let name = PQModuleName::Unqualified($module_name.into());
                         PackageModuleIds::insert_debug_name(module_id, &name);
                         module_id.register_debug_idents(&ident_ids);
@@ -910,7 +892,7 @@ macro_rules! define_builtins {
                 let mut insert_both = |id: ModuleId, name_str: &'static str| {
                     let name: ModuleName = name_str.into();
 
-                    if cfg!(debug_assertions) {
+                    if cfg!(any(debug_assertions, feature = "debug-symbols")) {
                         Self::insert_debug_name(id, &name);
                     }
 
@@ -936,7 +918,7 @@ macro_rules! define_builtins {
                     let raw_name: IdentStr = name_str.into();
                     let name = PQModuleName::Unqualified(raw_name.into());
 
-                    if cfg!(debug_assertions) {
+                    if cfg!(any(debug_assertions, feature = "debug-symbols")) {
                         Self::insert_debug_name(id, &name);
                     }
 

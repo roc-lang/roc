@@ -1,4 +1,4 @@
-//! the `roc` binary
+//! The `roc` binary that brings together all functionality in the Roc toolset.
 use roc_build::link::LinkType;
 use roc_cli::build::check_file;
 use roc_cli::{
@@ -178,14 +178,7 @@ fn main() -> io::Result<()> {
                 }
             }
         }
-        Some((CMD_REPL, _)) => {
-            {
-                roc_repl_cli::main()?;
-
-                // Exit 0 if the repl exited normally
-                Ok(0)
-            }
-        }
+        Some((CMD_REPL, _)) => Ok(roc_repl_cli::main()),
         Some((CMD_EDIT, matches)) => {
             match matches
                 .values_of_os(DIRECTORY_OR_FILES)

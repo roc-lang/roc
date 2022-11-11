@@ -3,8 +3,8 @@ use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
-use roc_utils::get_lib_path;
 use roc_utils::{cargo, clang, zig};
+use roc_utils::{get_lib_path, rustup};
 use std::collections::HashMap;
 use std::env;
 use std::io;
@@ -124,7 +124,7 @@ pub fn build_zig_host_native(
             bitcode::get_builtins_host_obj_path()
         };
 
-        zig_cmd.args(&[
+        zig_cmd.args([
             "build-exe",
             "-fPIE",
             "-rdynamic", // make sure roc_alloc and friends are exposed
@@ -132,10 +132,10 @@ pub fn build_zig_host_native(
             &builtins_obj,
         ]);
     } else {
-        zig_cmd.args(&["build-obj", "-fPIC"]);
+        zig_cmd.args(["build-obj", "-fPIC"]);
     }
 
-    zig_cmd.args(&[
+    zig_cmd.args([
         zig_host_src,
         &format!("-femit-bin={}", emit_bin),
         "--pkg-begin",
@@ -154,7 +154,7 @@ pub fn build_zig_host_native(
     // when we use zig 0.9. It looks like zig 0.10 is going to fix
     // this problem for us, so this is a temporary workaround
     if !target.contains("windows") {
-        zig_cmd.args(&[
+        zig_cmd.args([
             // include the zig runtime
             "-fcompiler-rt",
         ]);
@@ -162,13 +162,13 @@ pub fn build_zig_host_native(
 
     // valgrind does not yet support avx512 instructions, see #1963.
     if env::var("NO_AVX512").is_ok() {
-        zig_cmd.args(&["-mcpu", "x86_64"]);
+        zig_cmd.args(["-mcpu", "x86_64"]);
     }
 
     if matches!(opt_level, OptLevel::Optimize) {
-        zig_cmd.args(&["-O", "ReleaseSafe"]);
+        zig_cmd.args(["-O", "ReleaseSafe"]);
     } else if matches!(opt_level, OptLevel::Size) {
-        zig_cmd.args(&["-O", "ReleaseSmall"]);
+        zig_cmd.args(["-O", "ReleaseSmall"]);
     }
 
     zig_cmd
@@ -200,7 +200,7 @@ pub fn build_zig_host_native(
             &bitcode::get_builtins_windows_obj_path(),
         ]);
     } else {
-        zig_cmd.args(&["build-obj", "-fPIC"]);
+        zig_cmd.args(&["build-obj"]);
     }
 
     zig_cmd.args(&[
@@ -295,7 +295,7 @@ pub fn build_zig_host_native(
             &bitcode::get_builtins_host_obj_path(),
         ]);
     } else {
-        zig_cmd.args(&["build-obj", "-fPIC"]);
+        zig_cmd.args(&["build-obj"]);
     }
     zig_cmd.args(&[
         zig_host_src,
@@ -378,9 +378,9 @@ pub fn build_zig_host_wasm32(
         .args(args);
 
     if matches!(opt_level, OptLevel::Optimize) {
-        zig_cmd.args(&["-O", "ReleaseSafe"]);
+        zig_cmd.args(["-O", "ReleaseSafe"]);
     } else if matches!(opt_level, OptLevel::Size) {
-        zig_cmd.args(&["-O", "ReleaseSmall"]);
+        zig_cmd.args(["-O", "ReleaseSmall"]);
     }
 
     zig_cmd
@@ -400,11 +400,11 @@ pub fn build_c_host_native(
     let mut clang_cmd = clang();
     clang_cmd
         .env_clear()
-        .env("PATH", &env_path)
-        .env("CPATH", &env_cpath)
-        .env("HOME", &env_home)
+        .env("PATH", env_path)
+        .env("CPATH", env_cpath)
+        .env("HOME", env_home)
         .args(sources)
-        .args(&["-o", dest]);
+        .args(["-o", dest]);
     if let Some(shared_lib_path) = shared_lib_path {
         match target.operating_system {
             OperatingSystem::Windows => {
@@ -416,7 +416,7 @@ pub fn build_c_host_native(
                 return build_zig_host_native(
                     env_path,
                     env_home,
-                    &format!("-femit-bin={}", dest),
+                    dest,
                     sources[0],
                     find_zig_str_path().to_str().unwrap(),
                     "x86_64-windows-gnu",
@@ -425,7 +425,7 @@ pub fn build_c_host_native(
                 );
             }
             _ => {
-                clang_cmd.args(&[
+                clang_cmd.args([
                     shared_lib_path.to_str().unwrap(),
                     // This line is commented out because
                     // @bhansconnect: With the addition of Str.graphemes, always
@@ -444,7 +444,7 @@ pub fn build_c_host_native(
             }
         }
     } else {
-        clang_cmd.args(&["-fPIC", "-c"]);
+        clang_cmd.args(["-fPIC", "-c"]);
     }
     if matches!(opt_level, OptLevel::Optimize) {
         clang_cmd.arg("-O3");
@@ -473,8 +473,8 @@ pub fn build_swift_host_native(
     let mut command = Command::new("arch");
     command
         .env_clear()
-        .env("PATH", &env_path)
-        .env("HOME", &env_home);
+        .env("PATH", env_path)
+        .env("HOME", env_home);
 
     match arch {
         Architecture::Aarch64(_) => command.arg("-arm64"),
@@ -487,10 +487,10 @@ pub fn build_swift_host_native(
         .args(sources)
         .arg("-emit-object")
         .arg("-parse-as-library")
-        .args(&["-o", dest]);
+        .args(["-o", dest]);
 
     if let Some(objc_header) = objc_header_path {
-        command.args(&["-import-objc-header", objc_header]);
+        command.args(["-import-objc-header", objc_header]);
     }
 
     if matches!(opt_level, OptLevel::Optimize) {
@@ -619,7 +619,7 @@ pub fn rebuild_host(
             _ => internal_error!("Unsupported architecture {:?}", target.architecture),
         };
 
-        run_build_command(zig_cmd, "host.zig")
+        run_build_command(zig_cmd, "host.zig", 0)
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
@@ -632,7 +632,17 @@ pub fn rebuild_host(
             },
         );
 
-        let mut cargo_cmd = cargo();
+        let mut cargo_cmd = if cfg!(windows) {
+            // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
+            // using `+nightly` only works when running cargo through rustup
+            let mut cmd = rustup();
+            cmd.args(["run", "nightly", "cargo"]);
+
+            cmd
+        } else {
+            cargo()
+        };
+
         cargo_cmd.arg("build").current_dir(cargo_dir);
         // Rust doesn't expose size without editing the cargo.toml. Instead just use release.
         if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
@@ -640,15 +650,20 @@ pub fn rebuild_host(
         }
 
         let source_file = if shared_lib_path.is_some() {
-            cargo_cmd.env("RUSTFLAGS", "-C link-dead-code");
-            cargo_cmd.args(&["--bin", "host"]);
+            let rust_flags = if cfg!(windows) {
+                "-Z export-executable-symbols"
+            } else {
+                "-C link-dead-code"
+            };
+            cargo_cmd.env("RUSTFLAGS", rust_flags);
+            cargo_cmd.args(["--bin", "host"]);
             "src/main.rs"
         } else {
             cargo_cmd.arg("--lib");
             "src/lib.rs"
         };
 
-        run_build_command(cargo_cmd, source_file);
+        run_build_command(cargo_cmd, source_file, 0);
 
         if shared_lib_path.is_some() {
             // For surgical linking, just copy the dynamically linked rust app.
@@ -669,11 +684,11 @@ pub fn rebuild_host(
                 shared_lib_path,
             );
 
-            run_build_command(clang_cmd, "host.c");
+            run_build_command(clang_cmd, "host.c", 0);
 
             let mut ld_cmd = Command::new("ld");
 
-            ld_cmd.env_clear().env("PATH", &env_path).args(&[
+            ld_cmd.env_clear().env("PATH", &env_path).args([
                 "-r",
                 "-L",
                 cargo_out_dir.to_str().unwrap(),
@@ -683,7 +698,7 @@ pub fn rebuild_host(
                 host_dest.to_str().unwrap(),
             ]);
 
-            run_build_command(ld_cmd, "c_host.o");
+            run_build_command(ld_cmd, "c_host.o", 0);
 
             // Clean up c_host.o
             if c_host_dest.exists() {
@@ -693,7 +708,7 @@ pub fn rebuild_host(
     } else if rust_host_src.exists() {
         // Compile and link host.rs, if it exists
         let mut rustc_cmd = Command::new("rustc");
-        rustc_cmd.args(&[
+        rustc_cmd.args([
             rust_host_src.to_str().unwrap(),
             "-o",
             rust_host_dest.to_str().unwrap(),
@@ -704,7 +719,7 @@ pub fn rebuild_host(
             rustc_cmd.arg("-C opt-level=s");
         }
 
-        run_build_command(rustc_cmd, "host.rs");
+        run_build_command(rustc_cmd, "host.rs", 0);
 
         // Rust hosts depend on a c wrapper for the api. Compile host.c as well.
         if shared_lib_path.is_some() {
@@ -722,7 +737,7 @@ pub fn rebuild_host(
                 opt_level,
                 shared_lib_path,
             );
-            run_build_command(clang_cmd, "host.c");
+            run_build_command(clang_cmd, "host.c", 0);
         } else {
             let clang_cmd = build_c_host_native(
                 target,
@@ -735,11 +750,11 @@ pub fn rebuild_host(
                 shared_lib_path,
             );
 
-            run_build_command(clang_cmd, "host.c");
+            run_build_command(clang_cmd, "host.c", 0);
 
             let mut ld_cmd = Command::new("ld");
 
-            ld_cmd.env_clear().env("PATH", &env_path).args(&[
+            ld_cmd.env_clear().env("PATH", &env_path).args([
                 "-r",
                 c_host_dest.to_str().unwrap(),
                 rust_host_dest.to_str().unwrap(),
@@ -747,7 +762,7 @@ pub fn rebuild_host(
                 host_dest.to_str().unwrap(),
             ]);
 
-            run_build_command(ld_cmd, "rust_host.o");
+            run_build_command(ld_cmd, "rust_host.o", 0);
         }
 
         // Clean up rust_host.o and c_host.o
@@ -770,7 +785,7 @@ pub fn rebuild_host(
             shared_lib_path,
         );
 
-        run_build_command(clang_cmd, "host.c");
+        run_build_command(clang_cmd, "host.c", 0);
     } else if swift_host_src.exists() {
         // Compile host.swift, if it exists
         let swiftc_cmd = build_swift_host_native(
@@ -786,7 +801,7 @@ pub fn rebuild_host(
             target.architecture,
         );
 
-        run_build_command(swiftc_cmd, "host.swift");
+        run_build_command(swiftc_cmd, "host.swift", 0);
     }
 
     host_dest
@@ -856,9 +871,9 @@ fn link_linux(
     if let Architecture::X86_32(_) = target.architecture {
         return Ok((
             zig()
-                .args(&["build-exe"])
+                .args(["build-exe"])
                 .args(input_paths)
-                .args(&[
+                .args([
                     "-target",
                     "i386-linux-musl",
                     "-lc",
@@ -1011,7 +1026,7 @@ fn link_linux(
                 .filter(|&(ref k, _)| k.starts_with("NIX_"))
                 .collect::<HashMap<String, String>>(),
         )
-        .args(&[
+        .args([
             "--gc-sections",
             "--eh-frame-hdr",
             "-A",
@@ -1021,11 +1036,11 @@ fn link_linux(
             &*crtn_path.to_string_lossy(),
         ])
         .args(&base_args)
-        .args(&["-dynamic-linker", ld_linux])
+        .args(["-dynamic-linker", ld_linux])
         .args(input_paths)
         // ld.lld requires this argument, and does not accept --arch
         // .args(&["-L/usr/lib/x86_64-linux-gnu"])
-        .args(&[
+        .args([
             // Libraries - see https://github.com/roc-lang/roc/pull/554#discussion_r496365925
             // for discussion and further references
             "-lc",
@@ -1076,7 +1091,7 @@ fn link_macos(
         // The `-l` flags should go after the `.o` arguments
         // Don't allow LD_ env vars to affect this
         .env_clear()
-        .args(&[
+        .args([
             // NOTE: we don't do --gc-sections on macOS because the default
             // macOS linker doesn't support it, but it's a performance
             // optimization, so if we ever switch to a different linker,
@@ -1108,7 +1123,7 @@ fn link_macos(
         ld_command.arg(roc_link_flag);
     }
 
-    ld_command.args(&[
+    ld_command.args([
         // Libraries - see https://github.com/roc-lang/roc/pull/554#discussion_r496392274
         // for discussion and further references
         "-lSystem",
@@ -1148,7 +1163,7 @@ fn link_macos(
         Architecture::Aarch64(_) => {
             ld_child.wait()?;
             let codesign_child = Command::new("codesign")
-                .args(&["-s", "-", output_path.to_str().unwrap()])
+                .args(["-s", "-", output_path.to_str().unwrap()])
                 .spawn()?;
 
             Ok((codesign_child, output_path))
@@ -1187,7 +1202,7 @@ fn link_wasm32(
     let child = zig()
         // .env_clear()
         // .env("PATH", &env_path)
-        .args(&["build-exe"])
+        .args(["build-exe"])
         .args(input_paths)
         .args([
             // include wasi libc
@@ -1222,7 +1237,7 @@ fn link_windows(
     match link_type {
         LinkType::Dylib => {
             let child = zig()
-                .args(&["build-lib"])
+                .args(["build-lib"])
                 .args(input_paths)
                 .args([
                     "-lc",
@@ -1244,7 +1259,7 @@ fn link_windows(
         }
         LinkType::Executable => {
             let child = zig()
-                .args(&["build-exe"])
+                .args(["build-exe"])
                 .args(input_paths)
                 .args([
                     "-target",
@@ -1351,21 +1366,37 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
     // println!("\npreprocess_host_wasm32");
     // println!("zig {}\n", args.join(" "));
 
-    run_build_command(zig_cmd, output_file)
+    run_build_command(zig_cmd, output_file, 0)
 }
 
-fn run_build_command(mut command: Command, file_to_build: &str) {
+fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_counter: usize) {
     let cmd_str = format!("{:?}", &command);
     let cmd_output = command.output().unwrap();
+    let max_flaky_fail_count = 10;
 
     if !cmd_output.status.success() {
         match std::str::from_utf8(&cmd_output.stderr) {
-            Ok(stderr) => internal_error!(
-                "Error:\n    Failed to rebuild {}:\n        The executed command was:\n            {}\n        stderr of that command:\n            {}",
-                file_to_build,
-                cmd_str,
-                stderr
-            ),
+            Ok(stderr) => {
+                // flaky error seen on macos 12 apple silicon, related to https://github.com/ziglang/zig/issues/9711
+                if stderr.contains("unable to save cached ZIR code") && flaky_fail_counter < max_flaky_fail_count {
+                    run_build_command(command, file_to_build, flaky_fail_counter + 1)
+                } else {
+                    internal_error!(
+                        "Error:\n    Failed to rebuild {} {} times, this is not a flaky failure:\n        The executed command was:\n            {}\n        stderr of that command:\n            {}",
+                        file_to_build,
+                        max_flaky_fail_count,
+                        cmd_str,
+                        stderr
+                    )
+                }
+
+                internal_error!(
+                    "Error:\n    Failed to rebuild {}:\n        The executed command was:\n            {}\n        stderr of that command:\n            {}",
+                    file_to_build,
+                    cmd_str,
+                    stderr
+                )
+            },
             Err(utf8_err) => internal_error!(
                 "Error:\n    Failed to rebuild {}:\n        The executed command was:\n            {}\n        stderr of that command could not be parsed as valid utf8:\n            {}",
                 file_to_build,

@@ -1,5 +1,5 @@
 use crate::rust_glue;
-use crate::types::{Env, Types};
+use crate::types::Types;
 use bumpalo::Bump;
 use roc_intern::GlobalInterner;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
@@ -131,29 +131,13 @@ pub fn load_types(
     }
 
     // Get the variables for all the exposed_to_host symbols
-    let mut variables: Vec<Variable> = Vec::with_capacity(exposed_to_host.len());
-
-    for index in 0..decls.len() {
-        use roc_can::expr::DeclarationTag::*;
-
-        if exposed_to_host.contains_key(decls.symbols[index]) {
-            match decls.declarations[index] {
-                Value | Function(_) | Recursive(_) | TailRecursive(_) => {
-                    variables.push(decls.variables[index]);
-                }
-                Destructure(_) => {
-                    // figure out if we need to export non-identifier defs - when would that
-                    // happen?
-                }
-                MutualRecursion { .. } => {
-                    // handled by future iterations
-                }
-                Expectation | ExpectationFx => {
-                    // not publicly visible
-                }
-            }
+    let variables = (0..decls.len()).filter_map(|index| {
+        if exposed_to_host.contains_key(&decls.symbols[index].value) {
+            Some(decls.variables[index])
+        } else {
+            None
         }
-    }
+    });
 
     let layout_interner = GlobalInterner::with_capacity(128);
 

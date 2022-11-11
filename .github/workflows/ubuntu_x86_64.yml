@@ -36,6 +36,9 @@ jobs:
       - name: regular rust tests
         run: cargo test --locked --release --features with_sound serde --workspace && sccache --show-stats
 
+      - name: test launching the editor
+        run: cargo test --release --locked editor_launch_test::launch -- --ignored # `--ignored` to run this test that is ignored for "normal" runs
+
       - name: test the dev backend # these tests require an explicit feature flag
         run: cargo test --locked --release --package test_gen --no-default-features --features gen-dev && sccache --show-stats
 

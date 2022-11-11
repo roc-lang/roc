@@ -1,3 +1,4 @@
+//! Provides types to describe problems that can occur during solving.
 use roc_can::expected::{Expected, PExpected};
 use roc_module::{ident::Lowercase, symbol::Symbol};
 use roc_problem::can::CycleEntry;
@@ -11,7 +12,6 @@ pub enum TypeError {
     BadPattern(Region, PatternCategory, ErrorType, PExpected<ErrorType>),
     CircularType(Region, Symbol, ErrorType),
     CircularDef(Vec<CycleEntry>),
-    BadType(roc_types::types::Problem),
     UnexposedLookup(Symbol),
     UnfulfilledAbility(Unfulfilled),
     BadExprMissingAbility(Region, Category, ErrorType, Vec<Unfulfilled>),
@@ -31,7 +31,7 @@ pub enum TypeError {
     },
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Unfulfilled {
     /// No claimed implementation of an ability for an opaque type.
     OpaqueDoesNotImplement { typ: Symbol, ability: Symbol },
@@ -51,7 +51,7 @@ pub enum Unfulfilled {
     },
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum UnderivableReason {
     NotABuiltin,
     /// The surface type is not derivable
@@ -60,7 +60,7 @@ pub enum UnderivableReason {
     NestedNotDerivable(ErrorType, NotDerivableContext),
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum NotDerivableContext {
     NoContext,
     Function,
@@ -70,12 +70,12 @@ pub enum NotDerivableContext {
     Eq(NotDerivableEq),
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum NotDerivableDecode {
     OptionalRecordField(Lowercase),
 }
 
-#[derive(PartialEq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum NotDerivableEq {
     FloatingPoint,
 }

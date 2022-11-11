@@ -4,5 +4,6 @@ version = "0.0.1"
 edition = "2021"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
+description = "Environment variables that can be toggled to aid debugging of the compiler itself."
 
 [dependencies]

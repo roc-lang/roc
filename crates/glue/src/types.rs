@@ -67,7 +67,7 @@ impl Types {
         }
     }
 
-    pub(crate) fn new<I: Iterator<Item = Variable>>(
+    pub(crate) fn new<'a, I: Iterator<Item = Variable>>(
         arena: &'a Bump,
         subs: &'a Subs,
         variables: I,
@@ -75,9 +75,16 @@ impl Types {
         layout_interner: LayoutInterner<'a>,
         target: TargetInfo,
     ) -> Self {
+        let mut types = Self::with_capacity(variables.size_hint().0, target);
         let mut env = Env::new(arena, subs, interns, layout_interner, target);
 
-        env.vars_to_types(variables)
+        for var in variables {
+            env.add_type(var, &mut types);
+        }
+
+        env.resolve_pending_recursive_types(&mut types);
+
+        types
     }
 
     pub(crate) fn add_entry_point(&mut self, name: String, type_id: TypeId) {
@@ -774,21 +781,6 @@ impl<'a> Env<'a> {
         }
     }
 
-    pub fn vars_to_types<I>(&mut self, variables: I) -> Types
-    where
-        I: Iterator<Item = Variable>,
-    {
-        let mut types = Types::with_capacity(variables.size_hint().0, self.target);
-
-        for var in variables {
-            self.add_type(var, &mut types);
-        }
-
-        self.resolve_pending_recursive_types(&mut types);
-
-        types
-    }
-
     fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
         roc_tracing::debug!(content=?roc_types::subs::SubsFmtContent(self.subs.get_content_without_compacting(var), self.subs), "adding type");
 
@@ -948,7 +940,6 @@ fn add_type_help<'a>(
         Content::Structure(FlatType::FunctionOrTagUnion(_, _, _)) => {
             todo!()
         }
-        Content::Structure(FlatType::Erroneous(_)) => todo!(),
         Content::Structure(FlatType::EmptyRecord) => {
             types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
         }

@@ -542,7 +542,7 @@ fn fmt_binops<'a, 'buf>(
     indent: u16,
 ) {
     let is_multiline = part_of_multi_line_binops
-        || (&loc_right_side.value).is_multiline()
+        || loc_right_side.value.is_multiline()
         || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
     for (loc_left_side, loc_binop) in lefts {
@@ -1045,7 +1045,7 @@ fn fmt_closure<'a, 'buf>(
 
     buf.push_str("->");
 
-    let is_multiline = (&loc_ret.value).is_multiline();
+    let is_multiline = loc_ret.value.is_multiline();
 
     // If the body is multiline, go down a line and indent.
     let body_indent = if is_multiline {
@@ -1156,7 +1156,7 @@ fn fmt_backpassing<'a, 'buf>(
 
     buf.push_str("<-");
 
-    let is_multiline = (&loc_ret.value).is_multiline();
+    let is_multiline = loc_ret.value.is_multiline();
 
     // If the body is multiline, go down a line and indent.
     let body_indent = if is_multiline {
