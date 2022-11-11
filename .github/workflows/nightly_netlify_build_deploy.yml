@@ -1,0 +1,16 @@
+on:
+  schedule:
+    - cron:  '0 9 * * *'
+
+name: Nightly netlify build and deploy
+    
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: trigger netlify build and deploy
+        env:
+          HOOK: ${{ secrets.NETLIFY_BUILD_HOOK }}
+        run: |
+          curl -X POST -d {} https://api.netlify.com/build_hooks/${HOOK}

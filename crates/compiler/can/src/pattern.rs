@@ -6,12 +6,14 @@ use crate::num::{
     ParsedNumResult,
 };
 use crate::scope::{PendingAbilitiesInScope, Scope};
+use roc_exhaustive::ListArity;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
 use roc_parse::ast::{self, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
+use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{LambdaSet, OptAbleVar, PatternCategory, Type};
 
@@ -55,11 +57,16 @@ pub enum Pattern {
         ext_var: Variable,
         destructs: Vec<Loc<RecordDestruct>>,
     },
+    List {
+        list_var: Variable,
+        elem_var: Variable,
+        patterns: ListPatterns,
+    },
     NumLiteral(Variable, Box<str>, IntValue, NumBound),
     IntLiteral(Variable, Variable, Box<str>, IntValue, IntBound),
     FloatLiteral(Variable, Variable, Box<str>, f64, FloatBound),
     StrLiteral(Box<str>),
-    SingleQuote(char),
+    SingleQuote(Variable, Variable, char, SingleQuoteBound),
     Underscore,
 
     /// An identifier that marks a specialization of an ability member.
@@ -91,11 +98,15 @@ impl Pattern {
             AppliedTag { whole_var, .. } => Some(*whole_var),
             UnwrappedOpaque { whole_var, .. } => Some(*whole_var),
             RecordDestructure { whole_var, .. } => Some(*whole_var),
+            List {
+                list_var: whole_var,
+                ..
+            } => Some(*whole_var),
             NumLiteral(var, ..) => Some(*var),
             IntLiteral(var, ..) => Some(*var),
             FloatLiteral(var, ..) => Some(*var),
             StrLiteral(_) => None,
-            SingleQuote(_) => None,
+            SingleQuote(..) => None,
             Underscore => None,
 
             AbilityMemberSpecialization { .. } => None,
@@ -118,6 +129,7 @@ impl Pattern {
             | MalformedPattern(..)
             | AbilityMemberSpecialization { .. } => true,
             RecordDestructure { destructs, .. } => destructs.is_empty(),
+            List { patterns, .. } => patterns.surely_exhaustive(),
             AppliedTag { .. }
             | NumLiteral(..)
             | IntLiteral(..)
@@ -144,11 +156,12 @@ impl Pattern {
             UnwrappedOpaque { opaque, .. } => C::Opaque(*opaque),
             RecordDestructure { destructs, .. } if destructs.is_empty() => C::EmptyRecord,
             RecordDestructure { .. } => C::Record,
+            List { .. } => C::List,
             NumLiteral(..) => C::Num,
             IntLiteral(..) => C::Int,
             FloatLiteral(..) => C::Float,
             StrLiteral(_) => C::Str,
-            SingleQuote(_) => C::Character,
+            SingleQuote(..) => C::Character,
             Underscore => C::PatternDefault,
 
             AbilityMemberSpecialization { .. } => C::PatternDefault,
@@ -156,6 +169,36 @@ impl Pattern {
             Shadowed(..) | OpaqueNotInScope(..) | UnsupportedPattern(..) | MalformedPattern(..) => {
                 C::PatternDefault
             }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ListPatterns {
+    pub patterns: Vec<Loc<Pattern>>,
+    /// Where a rest pattern splits patterns before and after it, if it does at all.
+    /// If present, patterns at index >= the rest index appear after the rest pattern.
+    /// For example:
+    ///   [ .., A, B ] -> patterns = [A, B], rest = 0
+    ///   [ A, .., B ] -> patterns = [A, B], rest = 1
+    ///   [ A, B, .. ] -> patterns = [A, B], rest = 2
+    pub opt_rest: Option<usize>,
+}
+
+impl ListPatterns {
+    /// Is this list pattern the trivially-exhaustive pattern `[..]`?
+    fn surely_exhaustive(&self) -> bool {
+        self.patterns.is_empty() && matches!(self.opt_rest, Some(0))
+    }
+
+    pub fn arity(&self) -> ListArity {
+        match self.opt_rest {
+            Some(i) => {
+                let before = i;
+                let after = self.patterns.len() - before;
+                ListArity::Slice(before, after)
+            }
+            None => ListArity::Exact(self.patterns.len()),
         }
     }
 }
@@ -456,7 +499,12 @@ pub fn canonicalize_pattern<'a>(
             let mut it = string.chars().peekable();
             if let Some(char) = it.next() {
                 if it.peek().is_none() {
-                    Pattern::SingleQuote(char)
+                    Pattern::SingleQuote(
+                        var_store.fresh(),
+                        var_store.fresh(),
+                        char,
+                        SingleQuoteBound::from_char(char),
+                    )
                 } else {
                     // multiple chars is found
                     let problem = MalformedPatternProblem::MultipleCharsInSingleQuote;
@@ -615,6 +663,76 @@ pub fn canonicalize_pattern<'a>(
             unreachable!("should have been handled in RecordDestructure");
         }
 
+        List(patterns) => {
+            // We want to admit the following cases:
+            //
+            // []
+            // [..]
+            // [.., P_1,* P_n]
+            // [P_1,* P_n, ..]
+            // [P_1,* P_m, .., P_n,* P_q]
+            // [P_1,* P_n]
+            //
+            // So, a list-rest pattern can appear anywhere in a list pattern, but can appear at
+            // most once.
+            let elem_var = var_store.fresh();
+            let list_var = var_store.fresh();
+
+            let mut rest_index = None;
+            let mut can_pats = Vec::with_capacity(patterns.len());
+            let mut opt_erroneous = None;
+
+            for (i, loc_pattern) in patterns.iter().enumerate() {
+                match &loc_pattern.value {
+                    ListRest => match rest_index {
+                        None => {
+                            rest_index = Some(i);
+                        }
+                        Some(_) => {
+                            env.problem(Problem::MultipleListRestPattern {
+                                region: loc_pattern.region,
+                            });
+
+                            opt_erroneous = Some(Pattern::MalformedPattern(
+                                MalformedPatternProblem::DuplicateListRestPattern,
+                                loc_pattern.region,
+                            ));
+                        }
+                    },
+                    pattern => {
+                        let pat = canonicalize_pattern(
+                            env,
+                            var_store,
+                            scope,
+                            output,
+                            pattern_type,
+                            pattern,
+                            loc_pattern.region,
+                            permit_shadows,
+                        );
+                        can_pats.push(pat);
+                    }
+                }
+            }
+
+            // If we encountered an erroneous pattern (e.g. one with shadowing),
+            // use the resulting RuntimeError. Otherwise, return a successful record destructure.
+            opt_erroneous.unwrap_or(Pattern::List {
+                list_var,
+                elem_var,
+                patterns: ListPatterns {
+                    patterns: can_pats,
+                    opt_rest: rest_index,
+                },
+            })
+        }
+        ListRest => {
+            // Parsing should make sure these only appear in list patterns, where we will generate
+            // better contextual errors.
+            let problem = MalformedPatternProblem::Unknown;
+            malformed_pattern(env, problem, region)
+        }
+
         Malformed(_str) => {
             let problem = MalformedPatternProblem::Unknown;
             malformed_pattern(env, problem, region)
@@ -724,12 +842,15 @@ impl<'a> BindingsFromPattern<'a> {
                         | IntLiteral(..)
                         | FloatLiteral(..)
                         | StrLiteral(_)
-                        | SingleQuote(_)
+                        | SingleQuote(..)
                         | Underscore
                         | Shadowed(_, _, _)
                         | MalformedPattern(_, _)
                         | UnsupportedPattern(_)
                         | OpaqueNotInScope(..) => (),
+                        List { patterns, .. } => {
+                            stack.extend(patterns.patterns.iter().rev().map(Pattern));
+                        }
                     }
                 }
                 BindingsFromPatternWork::Destruct(loc_destruct) => {

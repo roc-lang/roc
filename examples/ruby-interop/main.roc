@@ -1,11 +1,13 @@
 app "libhello"
     packages { pf: "platform/main.roc" }
     imports []
-    provides [makeItRoc] to pf
+    provides [main] to pf
 
-makeItRoc : Str -> Str
-makeItRoc = \str ->
-    if Str.isEmpty str then
-        "I need a string here!"
+main : U64 -> Str
+main = \num ->
+    if num == 0 then
+        "I need a positive number here!"
     else
-        "\(str), OH YEAH!!! 🤘🤘"
+        str = Num.toStr num
+
+        "The number was \(str), OH YEAH!!! 🤘🤘"

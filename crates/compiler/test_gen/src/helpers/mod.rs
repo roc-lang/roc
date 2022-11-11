@@ -11,14 +11,6 @@ pub mod llvm;
 pub mod wasm;
 
 #[allow(dead_code)]
-pub fn zig_executable() -> String {
-    match std::env::var("ROC_ZIG") {
-        Ok(path) => path,
-        Err(_) => "zig".into(),
-    }
-}
-
-#[allow(dead_code)]
 pub(crate) fn src_hash(src: &str) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};

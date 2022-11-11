@@ -59,7 +59,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 
 #[cfg(test)]
 mod test_roc_std {
-    use roc_std::{RocBox, RocDec, RocList, RocResult, RocStr};
+    use roc_std::{RocBox, RocDec, RocList, RocResult, RocStr, SendSafeRocList, SendSafeRocStr};
 
     fn roc_str_byte_representation(string: &RocStr) -> [u8; RocStr::SIZE] {
         unsafe { core::mem::transmute_copy(string) }
@@ -126,7 +126,7 @@ mod test_roc_std {
 
         roc_str.reserve(42);
 
-        assert_eq!(roc_str.capacity(), 42);
+        assert_eq!(roc_str.capacity() >= 42, true);
     }
 
     #[test]
@@ -135,7 +135,7 @@ mod test_roc_std {
 
         roc_str.reserve(5000);
 
-        assert_eq!(roc_str.capacity(), 5000);
+        assert_eq!(roc_str.capacity() >= 5000, true);
     }
 
     #[test]
@@ -295,6 +295,80 @@ mod test_roc_std {
 
         let example = RocDec::from_str("1234.5678").unwrap();
         assert_eq!(format!("{}", example), "1234.5678");
+    }
+
+    #[test]
+    fn safe_send_no_copy() {
+        let x = RocStr::from("This is a long string but still unique. Yay!!!");
+        assert_eq!(x.is_unique(), true);
+
+        let safe_x = SendSafeRocStr::from(x);
+        let new_x = RocStr::from(safe_x);
+        assert_eq!(new_x.is_unique(), true);
+        assert_eq!(
+            new_x.as_str(),
+            "This is a long string but still unique. Yay!!!"
+        );
+    }
+
+    #[test]
+    fn safe_send_requires_copy() {
+        let x = RocStr::from("This is a long string but still unique. Yay!!!");
+        let y = x.clone();
+        let z = y.clone();
+        assert_eq!(x.is_unique(), false);
+        assert_eq!(y.is_unique(), false);
+        assert_eq!(z.is_unique(), false);
+
+        let safe_x = SendSafeRocStr::from(x);
+        let new_x = RocStr::from(safe_x);
+        assert_eq!(new_x.is_unique(), true);
+        assert_eq!(y.is_unique(), false);
+        assert_eq!(z.is_unique(), false);
+        assert_eq!(
+            new_x.as_str(),
+            "This is a long string but still unique. Yay!!!"
+        );
+    }
+
+    #[test]
+    fn safe_send_small_str() {
+        let x = RocStr::from("short");
+        let y = x.clone();
+        let z = y.clone();
+        assert_eq!(x.is_unique(), true);
+        assert_eq!(y.is_unique(), true);
+        assert_eq!(z.is_unique(), true);
+
+        let safe_x = SendSafeRocStr::from(x);
+        let new_x = RocStr::from(safe_x);
+        assert_eq!(new_x.is_unique(), true);
+        assert_eq!(y.is_unique(), true);
+        assert_eq!(z.is_unique(), true);
+        assert_eq!(new_x.as_str(), "short");
+    }
+
+    #[test]
+    fn empty_list_is_unique() {
+        let roc_list = RocList::<RocStr>::empty();
+        assert_eq!(roc_list.is_unique(), true);
+    }
+
+    #[test]
+    fn readonly_list_is_sendsafe() {
+        let x = RocList::from_slice(&[1, 2, 3, 4, 5]);
+        unsafe { x.set_readonly() };
+        assert_eq!(x.is_readonly(), true);
+
+        let y = x.clone();
+        let z = y.clone();
+
+        let safe_x = SendSafeRocList::from(x);
+        let new_x = RocList::from(safe_x);
+        assert_eq!(new_x.is_readonly(), true);
+        assert_eq!(y.is_readonly(), true);
+        assert_eq!(z.is_readonly(), true);
+        assert_eq!(new_x.as_slice(), &[1, 2, 3, 4, 5]);
     }
 }
 

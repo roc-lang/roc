@@ -1,9 +1,22 @@
 use std::usize;
 
-#[derive(PartialEq, Eq)]
 pub struct Index<T> {
     index: u32,
     _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> Eq for Index<T> {}
+
+impl<T> PartialEq for Index<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.index == other.index
+    }
+}
+
+impl<T> std::hash::Hash for Index<T> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.index.hash(state);
+    }
 }
 
 impl<T> Clone for Index<T> {

@@ -1,11 +1,14 @@
+use inkwell::memory_buffer::MemoryBuffer;
+use roc_error_macros::internal_error;
 pub use roc_gen_llvm::llvm::build::FunctionIterator;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
-use roc_load::{EntryPoint, LoadedModule, MonomorphizedModule};
+use roc_load::{EntryPoint, ExpectMetadata, LoadedModule, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
 use roc_solve_problem::TypeError;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -16,7 +19,6 @@ use roc_collections::all::MutSet;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CodeGenTiming {
     pub code_gen: Duration,
-    pub emit_o_file: Duration,
 }
 
 pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Problems {
@@ -156,51 +158,76 @@ fn report_problems_help(
     }
 }
 
+pub enum CodeObject {
+    MemoryBuffer(MemoryBuffer),
+    Vector(Vec<u8>),
+}
+
+impl Deref for CodeObject {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            CodeObject::MemoryBuffer(memory_buffer) => memory_buffer.as_slice(),
+            CodeObject::Vector(vector) => vector.as_slice(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CodeGenBackend {
+    Assembly,
+    Llvm,
+    Wasm,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CodeGenOptions {
+    pub backend: CodeGenBackend,
+    pub opt_level: OptLevel,
+    pub emit_debug_info: bool,
+}
+
+type GenFromMono<'a> = (CodeObject, CodeGenTiming, ExpectMetadata<'a>);
+
 #[allow(clippy::too_many_arguments)]
-pub fn gen_from_mono_module(
-    arena: &bumpalo::Bump,
-    loaded: MonomorphizedModule,
+pub fn gen_from_mono_module<'a>(
+    arena: &'a bumpalo::Bump,
+    loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
     target: &target_lexicon::Triple,
-    app_o_file: &Path,
-    opt_level: OptLevel,
-    emit_debug_info: bool,
+    code_gen_options: CodeGenOptions,
     preprocessed_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
-) -> CodeGenTiming {
-    match opt_level {
-        OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => gen_from_mono_module_llvm(
-            arena,
-            loaded,
-            roc_file_path,
-            target,
-            app_o_file,
-            opt_level,
-            emit_debug_info,
-        ),
-        OptLevel::Development => gen_from_mono_module_dev(
+) -> GenFromMono<'a> {
+    match code_gen_options.backend {
+        CodeGenBackend::Assembly => gen_from_mono_module_dev(
             arena,
             loaded,
             target,
-            app_o_file,
             preprocessed_host_path,
             wasm_dev_stack_bytes,
         ),
+        CodeGenBackend::Llvm => {
+            gen_from_mono_module_llvm(arena, loaded, roc_file_path, target, code_gen_options)
+        }
+        CodeGenBackend::Wasm => {
+            // emit wasm via the llvm backend
+            gen_from_mono_module_llvm(arena, loaded, roc_file_path, target, code_gen_options)
+        }
     }
 }
 
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
-pub fn gen_from_mono_module_llvm(
-    arena: &bumpalo::Bump,
-    loaded: MonomorphizedModule,
+fn gen_from_mono_module_llvm<'a>(
+    arena: &'a bumpalo::Bump,
+    loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
     target: &target_lexicon::Triple,
-    app_o_file: &Path,
-    opt_level: OptLevel,
-    emit_debug_info: bool,
-) -> CodeGenTiming {
+    code_gen_options: CodeGenOptions,
+) -> GenFromMono<'a> {
     use crate::target::{self, convert_opt_level};
     use inkwell::attributes::{Attribute, AttributeLoc};
     use inkwell::context::Context;
@@ -249,6 +276,12 @@ pub fn gen_from_mono_module_llvm(
         }
     }
 
+    let CodeGenOptions {
+        backend: _,
+        opt_level,
+        emit_debug_info,
+    } = code_gen_options;
+
     let builder = context.create_builder();
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
     let (mpm, _fpm) = roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
@@ -264,7 +297,11 @@ pub fn gen_from_mono_module_llvm(
         interns: loaded.interns,
         module,
         target_info,
-        mode: LlvmBackendMode::Binary,
+        mode: match opt_level {
+            OptLevel::Development => LlvmBackendMode::BinaryDev,
+            OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => LlvmBackendMode::Binary,
+        },
+
         exposed_to_host: loaded.exposed_to_host.values.keys().copied().collect(),
     };
 
@@ -302,7 +339,7 @@ pub fn gen_from_mono_module_llvm(
         // write the ll code to a file, so we can modify it
         env.module.print_to_file(&app_ll_file).unwrap();
 
-        panic!(
+        internal_error!(
             "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {}",
             app_ll_file,
             errors.to_string(),
@@ -312,12 +349,9 @@ pub fn gen_from_mono_module_llvm(
     // Uncomment this to see the module's optimized LLVM instruction output:
     // env.module.print_to_stderr();
 
-    let code_gen = code_gen_start.elapsed();
-    let emit_o_file_start = Instant::now();
-
     // annotate the LLVM IR output with debug info
     // so errors are reported with the line number of the LLVM source
-    if emit_debug_info {
+    let memory_buffer = if emit_debug_info {
         module.strip_debug_info();
 
         let mut app_ll_dbg_file = PathBuf::from(roc_file_path);
@@ -326,6 +360,9 @@ pub fn gen_from_mono_module_llvm(
         let mut app_bc_file = PathBuf::from(roc_file_path);
         app_bc_file.set_extension("bc");
 
+        let mut app_o_file = PathBuf::from(roc_file_path);
+        app_o_file.set_extension("o");
+
         use std::process::Command;
 
         // write the ll code to a file, so we can modify it
@@ -333,17 +370,17 @@ pub fn gen_from_mono_module_llvm(
 
         // run the debugir https://github.com/vaivaswatha/debugir tool
         match Command::new("debugir")
-            .args(&["-instnamer", app_ll_file.to_str().unwrap()])
+            .args(["-instnamer", app_ll_file.to_str().unwrap()])
             .output()
         {
             Ok(_) => {}
             Err(error) => {
                 use std::io::ErrorKind;
                 match error.kind() {
-                    ErrorKind::NotFound => panic!(
+                    ErrorKind::NotFound => internal_error!(
                         r"I could not find the `debugir` tool on the PATH, install it from https://github.com/vaivaswatha/debugir"
                     ),
-                    _ => panic!("{:?}", error),
+                    _ => internal_error!("{:?}", error),
                 }
             }
         }
@@ -355,7 +392,7 @@ pub fn gen_from_mono_module_llvm(
             | Architecture::Aarch64(_)
             | Architecture::Wasm32 => {
                 let ll_to_bc = Command::new("llvm-as")
-                    .args(&[
+                    .args([
                         app_ll_dbg_file.to_str().unwrap(),
                         "-o",
                         app_bc_file.to_str().unwrap(),
@@ -384,6 +421,8 @@ pub fn gen_from_mono_module_llvm(
             }
             _ => unreachable!(),
         }
+
+        MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
     } else {
         // Emit the .o file
         use target_lexicon::Architecture;
@@ -394,81 +433,83 @@ pub fn gen_from_mono_module_llvm(
                     target::target_machine(target, convert_opt_level(opt_level), reloc).unwrap();
 
                 target_machine
-                    .write_to_file(env.module, FileType::Object, app_o_file)
-                    .expect("Writing .o file failed");
+                    .write_to_memory_buffer(env.module, FileType::Object)
+                    .expect("Writing .o file failed")
             }
             Architecture::Wasm32 => {
                 // Useful for debugging
                 // module.print_to_file(app_ll_file);
-                module.write_bitcode_to_path(app_o_file);
+                module.write_bitcode_to_memory()
             }
-            _ => panic!(
+            _ => internal_error!(
                 "TODO gracefully handle unsupported architecture: {:?}",
                 target.architecture
             ),
         }
-    }
+    };
 
-    let emit_o_file = emit_o_file_start.elapsed();
+    let code_gen = code_gen_start.elapsed();
 
-    CodeGenTiming {
-        code_gen,
-        emit_o_file,
-    }
+    (
+        CodeObject::MemoryBuffer(memory_buffer),
+        CodeGenTiming { code_gen },
+        ExpectMetadata {
+            interns: env.interns,
+            layout_interner: loaded.layout_interner,
+            expectations: loaded.expectations,
+        },
+    )
 }
+
 #[cfg(feature = "target-wasm32")]
-pub fn gen_from_mono_module_dev(
-    arena: &bumpalo::Bump,
-    loaded: MonomorphizedModule,
+fn gen_from_mono_module_dev<'a>(
+    arena: &'a bumpalo::Bump,
+    loaded: MonomorphizedModule<'a>,
     target: &target_lexicon::Triple,
-    app_o_file: &Path,
     preprocessed_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
-) -> CodeGenTiming {
+) -> GenFromMono<'a> {
     use target_lexicon::Architecture;
 
     match target.architecture {
         Architecture::Wasm32 => gen_from_mono_module_dev_wasm32(
             arena,
             loaded,
-            app_o_file,
             preprocessed_host_path,
             wasm_dev_stack_bytes,
         ),
         Architecture::X86_64 | Architecture::Aarch64(_) => {
-            gen_from_mono_module_dev_assembly(arena, loaded, target, app_o_file)
+            gen_from_mono_module_dev_assembly(arena, loaded, target)
         }
         _ => todo!(),
     }
 }
 
 #[cfg(not(feature = "target-wasm32"))]
-pub fn gen_from_mono_module_dev(
-    arena: &bumpalo::Bump,
-    loaded: MonomorphizedModule,
+pub fn gen_from_mono_module_dev<'a>(
+    arena: &'a bumpalo::Bump,
+    loaded: MonomorphizedModule<'a>,
     target: &target_lexicon::Triple,
-    app_o_file: &Path,
     _host_input_path: &Path,
     _wasm_dev_stack_bytes: Option<u32>,
-) -> CodeGenTiming {
+) -> GenFromMono<'a> {
     use target_lexicon::Architecture;
 
     match target.architecture {
         Architecture::X86_64 | Architecture::Aarch64(_) => {
-            gen_from_mono_module_dev_assembly(arena, loaded, target, app_o_file)
+            gen_from_mono_module_dev_assembly(arena, loaded, target)
         }
         _ => todo!(),
     }
 }
 
 #[cfg(feature = "target-wasm32")]
-fn gen_from_mono_module_dev_wasm32(
-    arena: &bumpalo::Bump,
-    loaded: MonomorphizedModule,
-    app_o_file: &Path,
+fn gen_from_mono_module_dev_wasm32<'a>(
+    arena: &'a bumpalo::Bump,
+    loaded: MonomorphizedModule<'a>,
     preprocessed_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
-) -> CodeGenTiming {
+) -> GenFromMono<'a> {
     let code_gen_start = Instant::now();
     let MonomorphizedModule {
         module_id,
@@ -494,14 +535,14 @@ fn gen_from_mono_module_dev_wasm32(
     };
 
     let host_bytes = std::fs::read(preprocessed_host_path).unwrap_or_else(|_| {
-        panic!(
-            "Failed to read host object file {}! Try setting --precompiled-host=false",
+        internal_error!(
+            "Failed to read host object file {}! Try setting --prebuilt-platform=false",
             preprocessed_host_path.display()
         )
     });
 
     let host_module = roc_gen_wasm::parse_host(arena, &host_bytes).unwrap_or_else(|e| {
-        panic!(
+        internal_error!(
             "I ran into a problem with the host object file, {} at offset 0x{:x}:\n{}",
             preprocessed_host_path.display(),
             e.offset,
@@ -513,31 +554,23 @@ fn gen_from_mono_module_dev_wasm32(
         roc_gen_wasm::build_app_binary(&env, &mut interns, host_module, procedures);
 
     let code_gen = code_gen_start.elapsed();
-    let emit_o_file_start = Instant::now();
 
-    // The app_o_file is actually the final binary
-    std::fs::write(&app_o_file, &final_binary_bytes).unwrap_or_else(|e| {
-        panic!(
-            "I wasn't able to write to the output file {}\n{}",
-            app_o_file.display(),
-            e
-        )
-    });
-
-    let emit_o_file = emit_o_file_start.elapsed();
-
-    CodeGenTiming {
-        code_gen,
-        emit_o_file,
-    }
+    (
+        CodeObject::Vector(final_binary_bytes),
+        CodeGenTiming { code_gen },
+        ExpectMetadata {
+            interns,
+            layout_interner,
+            expectations: loaded.expectations,
+        },
+    )
 }
 
-fn gen_from_mono_module_dev_assembly(
-    arena: &bumpalo::Bump,
-    loaded: MonomorphizedModule,
+fn gen_from_mono_module_dev_assembly<'a>(
+    arena: &'a bumpalo::Bump,
+    loaded: MonomorphizedModule<'a>,
     target: &target_lexicon::Triple,
-    app_o_file: &Path,
-) -> CodeGenTiming {
+) -> GenFromMono<'a> {
     let code_gen_start = Instant::now();
 
     let lazy_literals = true;
@@ -564,17 +597,18 @@ fn gen_from_mono_module_dev_assembly(
     let module_object = roc_gen_dev::build_module(&env, &mut interns, target, procedures);
 
     let code_gen = code_gen_start.elapsed();
-    let emit_o_file_start = Instant::now();
 
     let module_out = module_object
         .write()
         .expect("failed to build output object");
-    std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
-    let emit_o_file = emit_o_file_start.elapsed();
-
-    CodeGenTiming {
-        code_gen,
-        emit_o_file,
-    }
+    (
+        CodeObject::Vector(module_out),
+        CodeGenTiming { code_gen },
+        ExpectMetadata {
+            interns,
+            layout_interner,
+            expectations: loaded.expectations,
+        },
+    )
 }

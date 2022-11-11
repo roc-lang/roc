@@ -20,7 +20,7 @@ use roc_types::{
         get_member_lambda_sets_at_region, Content, Descriptor, GetSubsSlice, LambdaSet, Mark,
         OptVariable, Rank, Subs, SubsSlice, UlsOfVar, Variable,
     },
-    types::{AliasKind, MemberImpl, Uls},
+    types::{AliasKind, MemberImpl, Polarity, Uls},
 };
 use roc_unify::unify::{unify, Env as UEnv, Mode, MustImplementConstraints};
 
@@ -584,6 +584,7 @@ fn compact_lambda_set<P: Phase>(
         t_f1,
         t_f2,
         Mode::LAMBDA_SET_SPECIALIZATION,
+        Polarity::Pos,
     )
     .expect_success("ambient functions don't unify");
     trace_compact!(3iter_end. subs, t_f1);
@@ -601,6 +602,7 @@ enum SpecializationTypeKey {
     Opaque(Symbol),
     Derived(DeriveKey),
     Immediate(Symbol),
+    SingleLambdaSetImmediate(Symbol),
 }
 
 enum SpecializeDecision {
@@ -637,7 +639,7 @@ fn make_specialization_decision<P: Phase>(
                             // Doesn't specialize; an error will already be reported for this.
                             SpecializeDecision::Drop
                         }
-                        Some(MemberImpl::Error | MemberImpl::Derived) => {
+                        Some(MemberImpl::Error) => {
                             // TODO: probably not right, we may want to choose a derive decision!
                             SpecializeDecision::Specialize(Opaque(*opaque))
                         }
@@ -654,7 +656,7 @@ fn make_specialization_decision<P: Phase>(
                 })
             }
         }
-        Structure(_) | Alias(_, _, _, _) => {
+        Structure(_) | Alias(_, _, _, _) | RecursionVar { .. } => {
             let builtin = match ability_member.try_into() {
                 Ok(builtin) => builtin,
                 Err(_) => return SpecializeDecision::Drop,
@@ -665,6 +667,9 @@ fn make_specialization_decision<P: Phase>(
                 Ok(derived) => match derived {
                     roc_derive_key::Derived::Immediate(imm) => {
                         SpecializeDecision::Specialize(Immediate(imm))
+                    }
+                    roc_derive_key::Derived::SingleLambdaSetImmediate(imm) => {
+                        SpecializeDecision::Specialize(SingleLambdaSetImmediate(imm))
                     }
                     roc_derive_key::Derived::Key(derive_key) => {
                         SpecializeDecision::Specialize(Derived(derive_key))
@@ -687,7 +692,6 @@ fn make_specialization_decision<P: Phase>(
         | RigidAbleVar(..)
         | FlexVar(..)
         | RigidVar(..)
-        | RecursionVar { .. }
         | LambdaSet(..)
         | RangedNumber(..) => {
             internal_error!("unexpected")
@@ -710,10 +714,11 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
             let opaque_home = opaque.module_id();
             let external_specialized_lset =
                 phase.with_module_abilities_store(opaque_home, |abilities_store| {
-            let impl_key = roc_can::abilities::ImplKey {
-                opaque,
-                ability_member,
-            };
+                    let impl_key = roc_can::abilities::ImplKey {
+                        opaque,
+                        ability_member,
+                    };
+
                     let opt_specialization =
                         abilities_store.get_implementation(impl_key);
                     match opt_specialization {
@@ -740,7 +745,6 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
                                     .expect("lambda set region not resolved");
                                 Ok(specialized_lambda_set)
                             }
-                            MemberImpl::Derived => todo_abilities!(),
                             MemberImpl::Error => todo_abilities!(),
                         },
                     }
@@ -780,10 +784,37 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
             //
             // THEORY: if something can become an immediate, it will always be available in the
             // local ability store, because the transformation is local (?)
+            //
+            // TODO: I actually think we can get what we need here by examining `derived_env.exposed_types`,
+            // since immediates can only refer to builtins - and in userspace, all builtin types
+            // are available in `exposed_types`.
             let immediate_lambda_set_at_region =
                 phase.get_and_copy_ability_member_ambient_function(imm, lset_region, subs);
 
             Ok(immediate_lambda_set_at_region)
+        }
+
+        SpecializationTypeKey::SingleLambdaSetImmediate(imm) => {
+            let module_id = imm.module_id();
+            debug_assert!(module_id.is_builtin());
+
+            let module_types = &derived_env
+                .exposed_types
+                .get(&module_id)
+                .unwrap()
+                .exposed_types_storage_subs;
+
+            // Since this immediate has only one lambda set, the region must be pointing to 1, and
+            // moreover the imported function type is the ambient function of the single lset.
+            debug_assert_eq!(lset_region, 1);
+            let storage_var = module_types.stored_vars_by_symbol.get(&imm).unwrap();
+            let imported = module_types
+                .storage_subs
+                .export_variable_to(subs, *storage_var);
+
+            roc_types::subs::instantiate_rigids(subs, imported.variable);
+
+            Ok(imported.variable)
         }
     }
 }

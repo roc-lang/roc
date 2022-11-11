@@ -84,7 +84,7 @@ impl<'a> Ident<'a> {
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
 pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>| match chomp_lowercase_part(state.bytes()) {
+    move |_, state: State<'a>, _min_indent: u32| match chomp_lowercase_part(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
@@ -98,7 +98,9 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 }
 
 pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |arena, state: State<'a>| uppercase_ident().parse(arena, state)
+    move |arena, state: State<'a>, min_indent: u32| {
+        uppercase_ident().parse(arena, state, min_indent)
+    }
 }
 
 /// This could be:
@@ -107,7 +109,7 @@ pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
 /// * A type name
 /// * A tag
 pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
-    move |_, state: State<'a>| match chomp_uppercase_part(state.bytes()) {
+    move |_, state: State<'a>, _min_indent: u32| match chomp_uppercase_part(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             let width = ident.len();
@@ -122,7 +124,7 @@ pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
 /// * A type name
 /// * A tag
 pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>| match chomp_uppercase_part(state.bytes()) {
+    move |_, state: State<'a>, _min_indent: u32| match chomp_uppercase_part(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             let width = ident.len();
@@ -132,7 +134,10 @@ pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 }
 
 pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>| match chomp_part(|c| c.is_alphabetic(), state.bytes()) {
+    move |_, state: State<'a>, _min_indent: u32| match chomp_part(
+        |c| c.is_alphabetic(),
+        state.bytes(),
+    ) {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
@@ -151,7 +156,11 @@ macro_rules! advance_state {
     };
 }
 
-pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
+pub fn parse_ident<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    _min_indent: u32,
+) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
     let initial = state.clone();
 
     match parse_ident_help(arena, state) {
@@ -456,7 +465,7 @@ fn chomp_module_chain(buffer: &[u8]) -> Result<u32, Progress> {
 }
 
 pub fn concrete_type<'a>() -> impl Parser<'a, (&'a str, &'a str), ()> {
-    move |_, state: State<'a>| match chomp_concrete_type(state.bytes()) {
+    move |_, state: State<'a>, _min_indent: u32| match chomp_concrete_type(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok((module_name, type_name, width)) => {
             Ok((MadeProgress, (module_name, type_name), state.advance(width)))

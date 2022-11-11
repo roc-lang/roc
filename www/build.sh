@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 
+# https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 set -euxo pipefail
 
 # cd into the directory where this script lives.
@@ -38,6 +39,9 @@ cargo run --bin roc-docs crates/compiler/builtins/roc/*.roc
 mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
 mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
 
+# Manually add this tip to all the builtin docs.
+find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div style="padding: 1em;font-style: italic;line-height: 1.3em;"><strong>Tip:</strong> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
+
 echo 'Generating CLI example platform docs...'
 # Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
 # "/examples/cli/" rather than "/builtins/"
@@ -45,7 +49,7 @@ export ROC_DOCS_URL_ROOT=/examples/cli
 
 # Until https://github.com/roc-lang/roc/issues/3280 is done,
 # manually exclude the Internal* modules and `main.roc`.
-ls examples/interactive/cli-platform/*.roc | grep -v Internal | grep -v main.roc | grep -v Effect.roc | xargs cargo run --bin roc-docs
+ls examples/cli/cli-platform/*.roc | grep -v Internal | grep -v main.roc | grep -v Effect.roc | xargs cargo run --bin roc-docs
 
 mkdir www/build/examples
 rm generated-docs/*.* # we already copied over the *.js and *.css files earlier, so just drop these.

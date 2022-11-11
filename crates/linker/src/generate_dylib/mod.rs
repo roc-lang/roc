@@ -1,12 +1,21 @@
 use target_lexicon::Triple;
 
 mod elf64;
+mod macho;
 mod pe;
+
+#[cfg(test)]
+pub(crate) use pe::synthetic_dll;
+
+#[cfg(test)]
+pub(crate) use elf64::create_dylib_elf64;
+
+pub(crate) use pe::APP_DLL;
 
 pub fn generate(target: &Triple, custom_names: &[String]) -> object::read::Result<Vec<u8>> {
     match target.binary_format {
         target_lexicon::BinaryFormat::Elf => elf64::create_dylib_elf64(custom_names),
-        target_lexicon::BinaryFormat::Macho => todo!("macho dylib creation"),
+        target_lexicon::BinaryFormat::Macho => macho::create_dylib_macho(custom_names, target),
         target_lexicon::BinaryFormat::Coff => Ok(pe::synthetic_dll(custom_names)),
         other => unimplemented!("dylib creation for {:?}", other),
     }
@@ -48,6 +57,24 @@ mod tests {
 
     #[test]
     fn check_exports_coff() {
+        // NOTE: this does not work
+        //
+        //        let target = target_lexicon::Triple {
+        //            architecture: target_lexicon::Architecture::X86_64,
+        //            operating_system: target_lexicon::OperatingSystem::Windows,
+        //            binary_format: target_lexicon::BinaryFormat::Coff,
+        //            ..target_lexicon::Triple::host()
+        //        };
+        //
+        //        check_exports(&target);
+        //
+        // Because our exports point back into the .edata section, they are considered "forward"
+        // exports: they aren't actually defined in this .dll and hence not considered exports by
+        // the `object` crate.
+    }
+
+    #[test]
+    fn check_exports_coff_manual() {
         let target = target_lexicon::Triple {
             architecture: target_lexicon::Architecture::X86_64,
             operating_system: target_lexicon::OperatingSystem::Windows,
@@ -55,6 +82,30 @@ mod tests {
             ..target_lexicon::Triple::host()
         };
 
-        check_exports(&target);
+        let custom_names = ["foo".to_string(), "bar".to_string()];
+
+        let bytes = generate(&target, &custom_names).unwrap();
+        let object = object::read::pe::PeFile64::parse(bytes.as_slice()).unwrap();
+
+        let exports = {
+            let mut exports = Vec::new();
+            if let Some(export_table) = object.export_table().unwrap() {
+                for (name_pointer, _address_index) in export_table.name_iter() {
+                    let name = export_table.name_from_pointer(name_pointer).unwrap();
+
+                    // here the standard `.exports()` checks for `if !export_table.is_forward(address)`
+                    exports.push(name)
+                }
+            }
+            exports
+        };
+
+        for custom in custom_names {
+            assert!(
+                exports.iter().any(|name| *name == custom.as_bytes()),
+                "missing {}",
+                &custom
+            );
+        }
     }
 }

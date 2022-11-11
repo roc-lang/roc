@@ -1,10 +1,10 @@
 use arrayvec::ArrayVec;
-use roc_can::constraint::{Constraint, Constraints};
+use roc_can::constraint::{Constraint, Constraints, ExpectedTypeIndex};
 use roc_can::expected::Expected::{self, *};
 use roc_can::num::{FloatBound, FloatWidth, IntBound, IntLitWidth, NumBound, SignDemand};
 use roc_module::symbol::Symbol;
-use roc_region::all::Region;
-use roc_types::num::NumericRange;
+use roc_region::all::{Loc, Region};
+use roc_types::num::{NumericRange, SingleQuoteBound};
 use roc_types::subs::Variable;
 use roc_types::types::Type::{self, *};
 use roc_types::types::{AliasKind, Category};
@@ -30,29 +30,34 @@ pub fn add_numeric_bound_constr(
             num_num(Variable(num_var))
         }
         NumericBound::FloatExact(width) => {
-            let actual_type = Variable(float_width_to_variable(width));
+            let actual_type = constraints.push_type(Variable(float_width_to_variable(width)));
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
+            let type_index = constraints.push_type(Variable(num_var));
+            let expected_index = constraints.push_expected_type(expected);
             let because_suffix =
-                constraints.equal_types(Variable(num_var), expected, category, region);
+                constraints.equal_types(type_index, expected_index, category, region);
 
             num_constraints.extend([because_suffix]);
 
             Variable(num_var)
         }
         NumericBound::IntExact(width) => {
-            let actual_type = Variable(int_lit_width_to_variable(width));
+            let actual_type = constraints.push_type(Variable(int_lit_width_to_variable(width)));
             let expected = Expected::ForReason(Reason::NumericLiteralSuffix, actual_type, region);
+            let type_index = constraints.push_type(Variable(num_var));
+            let expected_index = constraints.push_expected_type(expected);
             let because_suffix =
-                constraints.equal_types(Variable(num_var), expected, category, region);
+                constraints.equal_types(type_index, expected_index, category, region);
 
             num_constraints.extend([because_suffix]);
 
             Variable(num_var)
         }
         NumericBound::Range(range) => {
-            let actual_type = Variable(precision_var);
-            let expected = Expected::NoExpectation(RangedNumber(range));
-            let constr = constraints.equal_types(actual_type, expected, category, region);
+            let precision_type = constraints.push_type(Variable(precision_var));
+            let expected = Expected::NoExpectation(constraints.push_type(RangedNumber(range)));
+            let expected_index = constraints.push_expected_type(expected);
+            let constr = constraints.equal_types(precision_type, expected_index, category, region);
 
             num_constraints.extend([constr]);
 
@@ -66,7 +71,7 @@ pub fn int_literal(
     constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
-    expected: Expected<Type>,
+    expected: ExpectedTypeIndex,
     region: Region,
     bound: IntBound,
 ) -> Constraint {
@@ -84,17 +89,60 @@ pub fn int_literal(
         Category::Num,
     );
 
+    let num_type_index = constraints.push_type(num_type);
+    let int_precision_type = constraints.push_type(num_int(Type::Variable(precision_var)));
+
+    let expect_precision_var =
+        constraints.push_expected_type(ForReason(reason, int_precision_type, region));
+
     constrs.extend([
-        constraints.equal_types(
-            num_type.clone(),
-            ForReason(reason, num_int(Type::Variable(precision_var)), region),
-            Category::Int,
-            region,
-        ),
-        constraints.equal_types(num_type, expected, Category::Int, region),
+        constraints.equal_types(num_type_index, expect_precision_var, Category::Int, region),
+        constraints.equal_types(num_type_index, expected, Category::Int, region),
     ]);
 
     // TODO the precision_var is not part of the exists here; for float it is. Which is correct?
+    let and_constraint = constraints.and_constraint(constrs);
+    constraints.exists([num_var], and_constraint)
+}
+
+pub fn single_quote_literal(
+    constraints: &mut Constraints,
+    num_var: Variable,
+    precision_var: Variable,
+    expected: ExpectedTypeIndex,
+    region: Region,
+    bound: SingleQuoteBound,
+) -> Constraint {
+    let reason = Reason::IntLiteral;
+
+    // Always add the bound first; this improves the resolved type quality in case it's an alias like "U8".
+    let mut constrs = ArrayVec::<_, 3>::new();
+    let num_type = add_numeric_bound_constr(
+        constraints,
+        &mut constrs,
+        num_var,
+        precision_var,
+        bound,
+        region,
+        Category::Character,
+    );
+
+    let num_type_index = constraints.push_type(num_type);
+    let int_precision_type = constraints.push_type(num_int(Type::Variable(precision_var)));
+
+    let expect_precision_var =
+        constraints.push_expected_type(ForReason(reason, int_precision_type, region));
+
+    constrs.extend([
+        constraints.equal_types(
+            num_type_index,
+            expect_precision_var,
+            Category::Character,
+            region,
+        ),
+        constraints.equal_types(num_type_index, expected, Category::Character, region),
+    ]);
+
     let and_constraint = constraints.and_constraint(constrs);
     constraints.exists([num_var], and_constraint)
 }
@@ -104,7 +152,7 @@ pub fn float_literal(
     constraints: &mut Constraints,
     num_var: Variable,
     precision_var: Variable,
-    expected: Expected<Type>,
+    expected: ExpectedTypeIndex,
     region: Region,
     bound: FloatBound,
 ) -> Constraint {
@@ -121,14 +169,15 @@ pub fn float_literal(
         Category::Frac,
     );
 
+    let num_type_index = constraints.push_type(num_type);
+    let float_precision_type = constraints.push_type(num_float(Type::Variable(precision_var)));
+
+    let expect_precision_var =
+        constraints.push_expected_type(ForReason(reason, float_precision_type, region));
+
     constrs.extend([
-        constraints.equal_types(
-            num_type.clone(),
-            ForReason(reason, num_float(Type::Variable(precision_var)), region),
-            Category::Frac,
-            region,
-        ),
-        constraints.equal_types(num_type, expected, Category::Frac, region),
+        constraints.equal_types(num_type_index, expect_precision_var, Category::Frac, region),
+        constraints.equal_types(num_type_index, expected, Category::Frac, region),
     ]);
 
     let and_constraint = constraints.and_constraint(constrs);
@@ -139,7 +188,7 @@ pub fn float_literal(
 pub fn num_literal(
     constraints: &mut Constraints,
     num_var: Variable,
-    expected: Expected<Type>,
+    expected: ExpectedTypeIndex,
     region: Region,
     bound: NumBound,
 ) -> Constraint {
@@ -154,34 +203,42 @@ pub fn num_literal(
         Category::Num,
     );
 
-    constrs.extend([constraints.equal_types(num_type, expected, Category::Num, region)]);
+    let type_index = constraints.push_type(num_type);
+    constrs.extend([constraints.equal_types(type_index, expected, Category::Num, region)]);
 
     let and_constraint = constraints.and_constraint(constrs);
     constraints.exists([num_var], and_constraint)
 }
 
-#[inline(always)]
+// Try not to be too clever about inlining, at least in debug builds.
+// Inlining these tiny leaf functions can lead to death by a thousand cuts,
+// where we end up with huge stack frames in non-tail-recursive functions.
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn builtin_type(symbol: Symbol, args: Vec<Type>) -> Type {
-    Type::Apply(symbol, args, Region::zero())
+    Type::Apply(
+        symbol,
+        args.into_iter().map(Loc::at_zero).collect(),
+        Region::zero(),
+    )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn empty_list_type(var: Variable) -> Type {
     list_type(Type::Variable(var))
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn list_type(typ: Type) -> Type {
     builtin_type(Symbol::LIST_LIST, vec![typ])
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn str_type() -> Type {
     builtin_type(Symbol::STR_STR, Vec::new())
 }
 
-#[inline(always)]
-fn builtin_alias(
+#[cfg_attr(not(debug_assertions), inline(always))]
+fn builtin_num_alias(
     symbol: Symbol,
     type_arguments: Vec<OptAbleType>,
     actual: Box<Type>,
@@ -192,13 +249,14 @@ fn builtin_alias(
         type_arguments,
         actual,
         lambda_set_variables: vec![],
+        infer_ext_in_output_types: vec![],
         kind,
     }
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_float(range: Type) -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_FRAC,
         vec![OptAbleType::unbound(range.clone())],
         Box::new(num_num(num_floatingpoint(range))),
@@ -206,9 +264,9 @@ pub fn num_float(range: Type) -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_floatingpoint(range: Type) -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_FLOATINGPOINT,
         vec![OptAbleType::unbound(range.clone())],
         Box::new(range),
@@ -216,9 +274,9 @@ pub fn num_floatingpoint(range: Type) -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_u32() -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_U32,
         vec![],
         Box::new(num_int(num_unsigned32())),
@@ -226,9 +284,9 @@ pub fn num_u32() -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 fn num_unsigned32() -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_UNSIGNED32,
         vec![],
         Box::new(Type::EmptyTagUnion),
@@ -236,9 +294,9 @@ fn num_unsigned32() -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_binary64() -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_BINARY64,
         vec![],
         Box::new(Type::EmptyTagUnion),
@@ -246,9 +304,9 @@ pub fn num_binary64() -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_int(range: Type) -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_INT,
         vec![OptAbleType::unbound(range.clone())],
         Box::new(num_num(num_integer(range))),
@@ -256,9 +314,9 @@ pub fn num_int(range: Type) -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_signed64() -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_SIGNED64,
         vec![],
         Box::new(Type::EmptyTagUnion),
@@ -266,9 +324,9 @@ pub fn num_signed64() -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_integer(range: Type) -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_INTEGER,
         vec![OptAbleType::unbound(range.clone())],
         Box::new(range),
@@ -276,9 +334,9 @@ pub fn num_integer(range: Type) -> Type {
     )
 }
 
-#[inline(always)]
+#[cfg_attr(not(debug_assertions), inline(always))]
 pub fn num_num(typ: Type) -> Type {
-    builtin_alias(
+    builtin_num_alias(
         Symbol::NUM_NUM,
         vec![OptAbleType::unbound(typ.clone())],
         Box::new(typ),
@@ -328,6 +386,16 @@ impl TypedNumericBound for NumBound {
                 sign: SignDemand::Signed,
                 width,
             } => NumericBound::Range(NumericRange::NumAtLeastSigned(width)),
+        }
+    }
+}
+
+impl TypedNumericBound for SingleQuoteBound {
+    fn numeric_bound(&self) -> NumericBound {
+        match self {
+            &SingleQuoteBound::AtLeast { width } => {
+                NumericBound::Range(NumericRange::IntAtLeastEitherSign(width))
+            }
         }
     }
 }

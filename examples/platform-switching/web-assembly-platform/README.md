@@ -21,7 +21,7 @@ npm install -g http-server
 http-server
 ```
 
-Now open your browser at http://localhost:8080
+Now open your browser at <http://localhost:8080>
 
 ## Design Notes
 

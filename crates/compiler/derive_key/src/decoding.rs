@@ -72,7 +72,6 @@ impl FlatDecodable {
                     Err(Underivable) // yet
                 }
                 //
-                FlatType::Erroneous(_) => Err(Underivable),
                 FlatType::Func(..) => Err(Underivable),
             },
             Content::Alias(sym, _, real_var, _) => match sym {

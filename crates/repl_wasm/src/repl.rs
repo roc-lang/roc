@@ -7,7 +7,7 @@ use roc_load::MonomorphizedModule;
 use roc_parse::ast::Expr;
 use roc_repl_eval::{
     eval::jit_to_ast,
-    gen::{compile_to_mono, format_answer, ReplOutput},
+    gen::{compile_to_mono, format_answer},
     ReplApp, ReplAppMemory,
 };
 use roc_reporting::report::DEFAULT_PALETTE_HTML;
@@ -175,9 +175,31 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
 
     // Compile the app
     let target_info = TargetInfo::default_wasm32();
-    let mono = match compile_to_mono(arena, &src, target_info, DEFAULT_PALETTE_HTML) {
-        Ok(m) => m,
-        Err(messages) => return Err(messages.join("\n\n")),
+    // TODO use this to filter out problems and warnings in wrapped defs.
+    // See the variable by the same name in the CLI REPL for how to do this!
+    let mono = match compile_to_mono(
+        arena,
+        std::iter::empty(),
+        &src,
+        target_info,
+        DEFAULT_PALETTE_HTML,
+    ) {
+        (Some(m), problems) if problems.is_empty() => m, // TODO render problems and continue if possible
+        (_, problems) => {
+            // TODO always report these, but continue if possible with the MonomorphizedModule if we have one.
+            let mut buf = String::new();
+
+            // Join all the errors and warnings together with blank lines.
+            for message in problems.errors.iter().chain(problems.warnings.iter()) {
+                if !buf.is_empty() {
+                    buf.push_str("\n\n");
+                }
+
+                buf.push_str(message);
+            }
+
+            return Err(buf);
+        }
     };
 
     let MonomorphizedModule {
@@ -203,7 +225,6 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         &interns,
         DebugPrint::NOTHING,
     );
-    let content = subs.get_content_without_compacting(main_fn_var);
 
     let (_, main_fn_layout) = match procedures.keys().find(|(s, _)| *s == main_fn_symbol) {
         Some(layout) => *layout,
@@ -264,17 +285,18 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         &mut app,
         "", // main_fn_name is ignored (only passed to WasmReplApp methods)
         main_fn_layout,
-        content,
+        main_fn_var,
         &subs,
         &interns,
         layout_interner.into_global().fork(),
         target_info,
     );
 
+    let var_name = String::new(); // TODO turn this into something like " # val1"
+
     // Transform the Expr to a string
     // `Result::Err` becomes a JS exception that will be caught and displayed
-    match format_answer(arena, res_answer, expr_type_str) {
-        ReplOutput::NoProblems { expr, expr_type } => Ok(format!("{} : {}", expr, expr_type)),
-        ReplOutput::Problems(lines) => Err(format!("\n{}\n", lines.join("\n\n"))),
-    }
+    let expr = format_answer(arena, res_answer);
+
+    Ok(format!("{expr} : {expr_type_str}{var_name}"))
 }

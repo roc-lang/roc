@@ -10,13 +10,21 @@ which includes the Roc compiler and various helpful utilities.
 1. To prevent "roc can't be opened because Apple can't check it...":
 
     ```sh
-    xattr -d com.apple.quarantine roc_nightly-darwin_apple_silicon-<VERSION>.tar.gz
+    xattr -d com.apple.quarantine roc_nightly-macos_apple_silicon-<VERSION>.tar.gz
     ```
 
 1. Untar the archive:
 
     ```sh
-    roc_nightly-darwin_apple_silicon-<VERSION>.tar.gz
+    mkdir roc_nightly-macos_apple_silicon-<VERSION>
+    tar xf roc_nightly-macos_apple_silicon-<VERSION>.tar.gz --directory roc_nightly-macos_apple_silicon-<VERSION>
+    cd roc_night<TAB TO AUTOCOMPLETE>
+    ```
+
+1. Install llvm 13:
+
+    ```sh
+    brew install llvm@13
     ```
 
 ## How to install Roc platform dependencies

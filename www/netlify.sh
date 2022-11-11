@@ -2,6 +2,7 @@
 
 # Runs on every Netlify build, to set up the Netlify server.
 
+# https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 set -euxo pipefail
 
 rustup update

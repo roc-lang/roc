@@ -6,14 +6,18 @@ pub struct VecMap<K, V> {
 
 impl<K, V> Default for VecMap<K, V> {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K, V> VecMap<K, V> {
+    pub const fn new() -> Self {
         Self {
             keys: Vec::new(),
             values: Vec::new(),
         }
     }
-}
 
-impl<K, V> VecMap<K, V> {
     pub fn len(&self) -> usize {
         debug_assert_eq!(self.keys.len(), self.values.len());
         self.keys.len()
@@ -24,6 +28,14 @@ impl<K, V> VecMap<K, V> {
         let v = self.values.swap_remove(index);
 
         (k, v)
+    }
+
+    pub fn unzip(self) -> (Vec<K>, Vec<V>) {
+        (self.keys, self.values)
+    }
+
+    pub fn unzip_slices(&self) -> (&[K], &[V]) {
+        (&self.keys, &self.values)
     }
 }
 
@@ -112,14 +124,6 @@ impl<K: PartialEq, V> VecMap<K, V> {
     pub fn truncate(&mut self, len: usize) {
         self.keys.truncate(len);
         self.values.truncate(len);
-    }
-
-    pub fn unzip(self) -> (Vec<K>, Vec<V>) {
-        (self.keys, self.values)
-    }
-
-    pub fn unzip_slices(&self) -> (&[K], &[V]) {
-        (&self.keys, &self.values)
     }
 
     /// # Safety
@@ -247,6 +251,31 @@ where
             }
         }
         None
+    }
+}
+
+impl<K, V> PartialEq for VecMap<K, V>
+where
+    K: PartialEq,
+    V: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        for (k, v) in self.iter() {
+            match other.get(k) {
+                Some(v1) => {
+                    if v != v1 {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+
+        true
     }
 }
 

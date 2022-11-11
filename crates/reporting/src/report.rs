@@ -1,6 +1,6 @@
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
-use roc_module::symbol::{Interns, ModuleId, Symbol};
+use roc_module::symbol::{Interns, ModuleId, PQModuleName, PackageQualified, Symbol};
 use roc_region::all::LineColumnRegion;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -184,7 +184,7 @@ impl<'b> Report<'b> {
 }
 
 /// This struct is a combination of several things
-/// 1. A set of StyleCodes suitable for the platform we're running on (web or terminal)
+/// 1. A set of StyleCodes suitable for the environment we're running in (web or terminal)
 /// 2. A set of colors we decided to use
 /// 3. A mapping from UI elements to the styles we use for them
 /// Note: This should really be called Theme! Usually a "palette" is just (2).
@@ -212,7 +212,7 @@ pub struct Palette {
 }
 
 /// Set the default styles for various semantic elements,
-/// given a set of StyleCodes for a platform (web or terminal).
+/// given a set of StyleCodes for an environment (web or terminal).
 const fn default_palette_from_style_codes(codes: StyleCodes) -> Palette {
     Palette {
         primary: codes.white,
@@ -453,6 +453,15 @@ impl<'a> RocDocAllocator<'a> {
             "app".to_string()
         } else {
             name.to_string()
+        };
+
+        self.text(name).annotate(Annotation::Module)
+    }
+
+    pub fn pq_module_name(&'a self, name: PQModuleName<'a>) -> DocBuilder<'a, Self, Annotation> {
+        let name = match name {
+            PackageQualified::Unqualified(n) => n.to_string(),
+            PackageQualified::Qualified(prefix, n) => format!("{prefix}.{n}"),
         };
 
         self.text(name).annotate(Annotation::Module)

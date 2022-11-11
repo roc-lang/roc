@@ -3,7 +3,7 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct IntroducedVariables {
     // Rigids must be unique within a type annotation.
     // E.g. in `identity : a -> a`, there should only be one

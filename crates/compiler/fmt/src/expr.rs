@@ -288,8 +288,17 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push_str(string)
             }
             SingleQuote(string) => {
+                buf.indent(indent);
                 buf.push('\'');
-                buf.push_str(string);
+                for c in string.chars() {
+                    if c == '"' {
+                        buf.push_char_literal('"')
+                    } else {
+                        for escaped in c.escape_default() {
+                            buf.push_char_literal(escaped);
+                        }
+                    }
+                }
                 buf.push('\'');
             }
             &NonBase10Int {
@@ -533,7 +542,7 @@ fn fmt_binops<'a, 'buf>(
     indent: u16,
 ) {
     let is_multiline = part_of_multi_line_binops
-        || (&loc_right_side.value).is_multiline()
+        || loc_right_side.value.is_multiline()
         || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
     for (loc_left_side, loc_binop) in lefts {
@@ -1036,7 +1045,7 @@ fn fmt_closure<'a, 'buf>(
 
     buf.push_str("->");
 
-    let is_multiline = (&loc_ret.value).is_multiline();
+    let is_multiline = loc_ret.value.is_multiline();
 
     // If the body is multiline, go down a line and indent.
     let body_indent = if is_multiline {
@@ -1147,7 +1156,7 @@ fn fmt_backpassing<'a, 'buf>(
 
     buf.push_str("<-");
 
-    let is_multiline = (&loc_ret.value).is_multiline();
+    let is_multiline = loc_ret.value.is_multiline();
 
     // If the body is multiline, go down a line and indent.
     let body_indent = if is_multiline {
@@ -1373,9 +1382,9 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::LessThanOrEq
                     | BinOp::GreaterThanOrEq
                     | BinOp::And
-                    | BinOp::Or => true,
-                    BinOp::Pizza
-                    | BinOp::Assignment
+                    | BinOp::Or
+                    | BinOp::Pizza => true,
+                    BinOp::Assignment
                     | BinOp::IsAliasType
                     | BinOp::IsOpaqueType
                     | BinOp::Backpassing => false,

@@ -23,25 +23,18 @@ jobs:
           ref: "main"
           clean: "true"
 
-      - name: Earthly version
-        run: earthly --version
-
       - name: on main; prepare a self-contained benchmark folder
-        run: ./ci/safe-earthly.sh --build-arg BENCH_SUFFIX=main +prep-bench-folder
+        run: nix develop -c ./ci/benchmarks/prep_folder.sh main
 
       - uses: actions/checkout@v3
         with:
           clean: "false" # we want to keep the benchmark folder
 
       - name: on current branch; prepare a self-contained benchmark folder
-        run: ./ci/safe-earthly.sh +prep-bench-folder
-
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
+        run: nix develop -c ./ci/benchmarks/prep_folder.sh branch
 
       - name: build benchmark runner
-        run: cd ci/bench-runner && cargo build --release && cd ../..
+        run: nix develop -c bash -c "cd ci/benchmarks/bench-runner && cargo build --release && cd ../../.."
 
       - name: run benchmarks with regression check
-        run: ./ci/bench-runner/target/release/bench-runner --check-executables-changed
+        run: nix develop -c ./ci/benchmarks/bench-runner/target/release/bench-runner --check-executables-changed

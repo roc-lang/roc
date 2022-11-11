@@ -27,7 +27,18 @@
                 eamodio.gitlens
                 bbenoist.nix
                 vadimcn.vscode-lldb
-              ];
+              ]
+                  #++ pkgs.vscode-utils.extensionsFromVscodeMarketplace [
+                  #   {
+                  #      name = "";
+                  #      publisher = "";
+                  #      version = "";
+                        # keep this sha for the first run, nix will tell you the correct one to change it to
+                  #      sha256 = "I1kTVTBZXvp9x3sB+59OgIc1Ttq0WAZy8VCZhEtwrm4=";
+                  #    }
+                  #  ]
+                  ;
+
             };
           in [ vscodeWithExtensions devInputs ];
 

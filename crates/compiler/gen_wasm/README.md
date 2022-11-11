@@ -81,13 +81,12 @@ WebAssembly functions can have any number of local variables. They are declared 
 In this backend, each symbol in the Mono IR gets one WebAssembly local. To illustrate, let's translate a simple Roc example to WebAssembly text format.
 The WebAssembly code below is completely unoptimised and uses far more locals than necessary. But that does help to illustrate the concept of locals.
 
-```
+```coffee
 app "test" provides [main] to "./platform"
 
 main =
     1 + 2 + 4
 ```
-
 
 ### Direct translation of Mono IR
 
@@ -97,7 +96,7 @@ The code ends up being quite bloated, with lots of `local.set` and `local.get` i
 
 I've added comments on each line to show what is on the stack and in the locals at each point in the program.
 
-```
+```text
   (func (;0;) (param i64 i64) (result i64)   ; declare function index 0 (Num.add) with two i64 parameters and an i64 result
     local.get 0              ; load param 0                                    stack=[param0]
     local.get 1              ; load param 1                                    stack=[param0, param1]
@@ -127,7 +126,7 @@ I've added comments on each line to show what is on the stack and in the locals 
 This code doesn't actually require any locals at all.
 (It also doesn't need the `return` instructions, but that's less of a problem.)
 
-```
+```text
   (func (;0;) (param i64 i64) (result i64)
     local.get 0
     local.get 1
@@ -154,7 +153,7 @@ When the `WasmBackend` generates code for a `Let` statement, it can "label" the 
 
 In practice it should be very common for values to appear on the VM stack in the right order, because in the Mono IR, statements occur in dependency order! We should only generate locals when the dependency graph is a little more complicated, and we actually need them.
 
-```
+```text
   ┌─────────────────┐     ┌─────────────┐
   │                 │     │             │
   │                 ├─────►   Storage   ├──────┐
@@ -234,12 +233,14 @@ We implement a few linking operations in the Wasm backend. The most important ar
 In the host .wasm file, `roc__mainForHost_1_exposed` is defined as a Wasm Import, as if it were an external JavaScript function. But when we link the host and app, we need to make it an internal function instead.
 
 There are a few important facts to note about the Wasm binary format:
+
 - Function calls refer to the callee by its function index in the file.
 - If we move a function from one index to another, all of its call sites need to be updated. So we want to minimise this to make linking fast.
 - If we _remove_ a function, then all functions above it will implicitly have their indices shifted down by 1! This is not good for speed. We should try to _swap_ rather than remove.
 - JavaScript imports always get the lower indices.
 
 With that background, here are the linking steps for a single app function that gets called by the host:
+
 - Remove `roc__mainForHost_1_exposed` from the imports, updating all call sites to the new index, which is somewhere in the app.
 - Swap the _last_ JavaScript import into the slot where `roc__mainForHost_1_exposed` was, updating all of its call sites in the host.
 - Insert an internally-defined dummy function at the index where the last JavaScript import used to be.

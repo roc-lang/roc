@@ -8,7 +8,6 @@ interface List
         map,
         len,
         withCapacity,
-        iterate,
         walkBackwards,
         concat,
         first,
@@ -29,6 +28,8 @@ interface List
         map3,
         product,
         walkUntil,
+        walkFrom,
+        walkFromUntil,
         range,
         sortWith,
         drop,
@@ -39,6 +40,7 @@ interface List
         max,
         map4,
         mapTry,
+        walkTry,
         dropFirst,
         joinMap,
         any,
@@ -60,9 +62,13 @@ interface List
         sortAsc,
         sortDesc,
         reserve,
+        walkBackwardsUntil,
+        countIf,
     ]
     imports [
-        Bool.{ Bool },
+        Bool.{ Bool, Eq },
+        Result.{ Result },
+        Num.{ Nat, Num, Int },
     ]
 
 ## Types
@@ -85,9 +91,8 @@ interface List
 ##
 ## ## Performance Details
 ##
-## Under the hood, a list is a record containing a `len : Nat` field as well
-## as a pointer to a reference count and a flat array of bytes. Unique lists
-## store a capacity #Nat instead of a reference count.
+## Under the hood, a list is a record containing a `len : Nat` field, a `capacity : Nat`
+## field, and a pointer to a reference count and a flat array of bytes.
 ##
 ## ## Shared Lists
 ##
@@ -109,9 +114,8 @@ interface List
 ## begins with a refcount of 1, because so far only `ratings` is referencing it.
 ##
 ## The second line alters this refcount. `{ foo: ratings` references
-## the `ratings` list, which will result in its refcount getting incremented
-## from 0 to 1. Similarly, `bar: ratings }` also references the `ratings` list,
-## which will result in its refcount getting incremented from 1 to 2.
+## the `ratings` list, and so does `bar: ratings }`. This will result in its
+## refcount getting incremented from 1 to 3.
 ##
 ## Let's turn this example into a function.
 ##
@@ -129,11 +133,11 @@ interface List
 ##
 ## Since `ratings` represented a way to reference the list, and that way is no
 ## longer accessible, the list's refcount gets decremented when `ratings` goes
-## out of scope. It will decrease from 2 back down to 1.
+## out of scope. It will decrease from 3 back down to 2.
 ##
 ## Putting these together, when we call `getRatings 5`, what we get back is
 ## a record with two fields, `foo`, and `bar`, each of which refers to the same
-## list, and that list has a refcount of 1.
+## list, and that list has a refcount of 2.
 ##
 ## Let's change the last line to be `(getRatings 5).bar` instead of `getRatings 5`:
 ##
@@ -214,7 +218,7 @@ isEmpty = \list ->
 # but will cause a reference count increment on the value it got out of the list
 getUnsafe : List a, Nat -> a
 
-get : List a, Nat -> Result a [OutOfBounds]*
+get : List a, Nat -> Result a [OutOfBounds]
 get = \list, index ->
     if index < List.len list then
         Ok (List.getUnsafe list index)
@@ -293,7 +297,7 @@ reserve : List a, Nat -> List a
 concat : List a, List a -> List a
 
 ## Returns the last element in the list, or `ListWasEmpty` if it was empty.
-last : List a -> Result a [ListWasEmpty]*
+last : List a -> Result a [ListWasEmpty]
 last = \list ->
     when List.get list (Num.subSaturated (List.len list) 1) is
         Ok v -> Ok v
@@ -351,7 +355,7 @@ join = \lists ->
 
     List.walk lists (List.withCapacity totalLength) (\state, list -> List.concat state list)
 
-contains : List a, a -> Bool
+contains : List a, a -> Bool | a has Eq
 contains = \list, needle ->
     List.any list (\x -> x == needle)
 
@@ -364,40 +368,36 @@ contains = \list, needle ->
 ## You can use it in a pipeline:
 ##
 ##     [2, 4, 8]
-##         |> List.walk { start: 0, step: Num.add }
+##         |> List.walk 0 Num.add
 ##
 ## This returns 14 because:
-## * `state` starts at 0 (because of `start: 0`)
+## * `state` starts at 0
 ## * Each `step` runs `Num.add state elem`, and the return value becomes the new `state`.
 ##
 ## Here is a table of how `state` changes as [List.walk] walks over the elements
-## `[2, 4, 8]` using #Num.add as its `step` function to determine the next `state`.
+## `[2, 4, 8]` using [Num.add] as its `step` function to determine the next `state`.
 ##
-## `state` | `elem` | `step state elem` (`Num.add state elem`)
-## --------+--------+-----------------------------------------
-## 0       |        |
-## 0       | 2      | 2
-## 2       | 4      | 6
-## 6       | 8      | 14
+## state | elem  | Num.add state elem
+## :---: | :---: | :----------------:
+## 0     |       |
+## 0     | 2     | 2
+## 2     | 4     | 6
+## 6     | 8     | 14
 ##
-## So `state` goes through these changes:
-## 1. `0` (because of `start: 0`)
-## 2. `1` (because of `Num.add state elem` with `state` = 0 and `elem` = 1
+## The following returns -6:
 ##
 ##     [1, 2, 3]
-##         |> List.walk { start: 0, step: Num.sub }
-##
-## This returns -6 because
+##         |> List.walk 0 Num.sub
 ##
 ## Note that in other languages, `walk` is sometimes called `reduce`,
 ## `fold`, `foldLeft`, or `foldl`.
 walk : List elem, state, (state, elem -> state) -> state
 walk = \list, state, func ->
+    walkHelp : _, _ -> [Continue _, Break []]
     walkHelp = \currentState, element -> Continue (func currentState element)
 
     when List.iterate list state walkHelp is
         Continue newState -> newState
-        Break void -> List.unreachable void
 
 ## Note that in other languages, `walkBackwards` is sometimes called `reduceRight`,
 ## `fold`, `foldRight`, or `foldr`.
@@ -433,6 +433,29 @@ walkUntil = \list, initial, step ->
         Continue new -> new
         Break new -> new
 
+## Same as [List.walkUntil], but does it from the end of the list instead.
+walkBackwardsUntil : List elem, state, (state, elem -> [Continue state, Break state]) -> state
+walkBackwardsUntil = \list, initial, func ->
+    when List.iterateBackwards list initial func is
+        Continue new -> new
+        Break new -> new
+
+## Walks to the end of the list from a specified starting index
+walkFrom : List elem, Nat, state, (state, elem -> state) -> state
+walkFrom = \list, index, state, func ->
+    walkHelp : _, _ -> [Continue _, Break []]
+    walkHelp = \currentState, element -> Continue (func currentState element)
+
+    when List.iterHelp list state walkHelp index (List.len list) is
+        Continue new -> new
+
+## A combination of [List.walkFrom] and [List.walkUntil]
+walkFromUntil : List elem, Nat, state, (state, elem -> [Continue state, Break state]) -> state
+walkFromUntil = \list, index, state, func ->
+    when List.iterHelp list state func index (List.len list) is
+        Continue new -> new
+        Break new -> new
+
 sum : List (Num a) -> Num a
 sum = \list ->
     List.walk list 0 Num.add
@@ -441,7 +464,7 @@ product : List (Num a) -> Num a
 product = \list ->
     List.walk list 1 Num.mul
 
-## Run the given predicate on each element of the list, returning `True` if
+## Run the given predicate on each element of the list, returning `Bool.true` if
 ## any of the elements satisfy it.
 any : List a, (a -> Bool) -> Bool
 any = \list, predicate ->
@@ -452,10 +475,10 @@ any = \list, predicate ->
             Continue {}
 
     when List.iterate list {} looper is
-        Continue {} -> False
-        Break {} -> True
+        Continue {} -> Bool.false
+        Break {} -> Bool.true
 
-## Run the given predicate on each element of the list, returning `True` if
+## Run the given predicate on each element of the list, returning `Bool.true` if
 ## all of the elements satisfy it.
 all : List a, (a -> Bool) -> Bool
 all = \list, predicate ->
@@ -466,11 +489,11 @@ all = \list, predicate ->
             Break {}
 
     when List.iterate list {} looper is
-        Continue {} -> True
-        Break {} -> False
+        Continue {} -> Bool.true
+        Break {} -> Bool.false
 
 ## Run the given function on each element of a list, and return all the
-## elements for which the function returned `True`.
+## elements for which the function returned `Bool.true`.
 ##
 ## >>> List.keepIf [1, 2, 3, 4] (\num -> num > 2)
 ##
@@ -507,7 +530,7 @@ keepIfHelp = \list, predicate, kept, index, length ->
         List.takeFirst list kept
 
 ## Run the given function on each element of a list, and return all the
-## elements for which the function returned `False`.
+## elements for which the function returned `Bool.false`.
 ##
 ## >>> List.dropIf [1, 2, 3, 4] (\num -> num > 2)
 ##
@@ -518,6 +541,18 @@ keepIfHelp = \list, predicate, kept, index, length ->
 dropIf : List a, (a -> Bool) -> List a
 dropIf = \list, predicate ->
     List.keepIf list (\e -> Bool.not (predicate e))
+
+## Run the given function on each element of a list, and return the
+## number of elements for which the function returned `Bool.true`.
+countIf : List a, (a -> Bool) -> Nat
+countIf = \list, predicate ->
+    walkState = \state, elem ->
+        if predicate elem then
+            state + 1
+        else
+            state
+
+    List.walk list 0 walkState
 
 ## This works like [List.map], except only the transformed values that are
 ## wrapped in `Ok` are kept. Any that are wrapped in `Err` are dropped.
@@ -643,7 +678,7 @@ sortDesc = \list -> List.sortWith list (\a, b -> Num.compare b a)
 swap : List a, Nat, Nat -> List a
 
 ## Returns the first element in the list, or `ListWasEmpty` if it was empty.
-first : List a -> Result a [ListWasEmpty]*
+first : List a -> Result a [ListWasEmpty]
 first = \list ->
     when List.get list 0 is
         Ok v -> Ok v
@@ -736,7 +771,7 @@ drop = \list, n ->
 ## To replace the element at a given index, instead of dropping it, see [List.set].
 dropAt : List elem, Nat -> List elem
 
-min : List (Num a) -> Result (Num a) [ListWasEmpty]*
+min : List (Num a) -> Result (Num a) [ListWasEmpty]
 min = \list ->
     when List.first list is
         Ok initial ->
@@ -753,7 +788,7 @@ minHelp = \list, initial ->
         else
             bestSoFar
 
-max : List (Num a) -> Result (Num a) [ListWasEmpty]*
+max : List (Num a) -> Result (Num a) [ListWasEmpty]
 max = \list ->
     when List.first list is
         Ok initial ->
@@ -780,7 +815,7 @@ joinMap = \list, mapper ->
 
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-findFirst : List elem, (elem -> Bool) -> Result elem [NotFound]*
+findFirst : List elem, (elem -> Bool) -> Result elem [NotFound]
 findFirst = \list, pred ->
     callback = \_, elem ->
         if pred elem then
@@ -794,7 +829,7 @@ findFirst = \list, pred ->
 
 ## Returns the last element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-findLast : List elem, (elem -> Bool) -> Result elem [NotFound]*
+findLast : List elem, (elem -> Bool) -> Result elem [NotFound]
 findLast = \list, pred ->
     callback = \_, elem ->
         if pred elem then
@@ -809,7 +844,7 @@ findLast = \list, pred ->
 ## Returns the index at which the first element in the list
 ## satisfying a predicate function can be found.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-findFirstIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
+findFirstIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]
 findFirstIndex = \list, matcher ->
     foundIndex = List.iterate list 0 \index, elem ->
         if matcher elem then
@@ -824,7 +859,7 @@ findFirstIndex = \list, matcher ->
 ## Returns the last index at which the first element in the list
 ## satisfying a predicate function can be found.
 ## If no satisfying element is found, an `Err NotFound` is returned.
-findLastIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]*
+findLastIndex : List elem, (elem -> Bool) -> Result Nat [NotFound]
 findLastIndex = \list, matches ->
     foundIndex = List.iterateBackwards list (List.len list) \prevIndex, elem ->
         if matches elem then
@@ -875,25 +910,25 @@ intersperse = \list, sep ->
 
     List.dropLast newList
 
-## Returns `True` if the first list starts with the second list.
+## Returns `Bool.true` if the first list starts with the second list.
 ##
-## If the second list is empty, this always returns `True`; every list
+## If the second list is empty, this always returns `Bool.true`; every list
 ## is considered to "start with" an empty list.
 ##
-## If the first list is empty, this only returns `True` if the second list is empty.
-startsWith : List elem, List elem -> Bool
+## If the first list is empty, this only returns `Bool.true` if the second list is empty.
+startsWith : List elem, List elem -> Bool | elem has Eq
 startsWith = \list, prefix ->
     # TODO once we have seamless slices, verify that this wouldn't
     # have better performance with a function like List.compareSublists
     prefix == List.sublist list { start: 0, len: List.len prefix }
 
-## Returns `True` if the first list ends with the second list.
+## Returns `Bool.true` if the first list ends with the second list.
 ##
-## If the second list is empty, this always returns `True`; every list
+## If the second list is empty, this always returns `Bool.true`; every list
 ## is considered to "end with" an empty list.
 ##
-## If the first list is empty, this only returns `True` if the second list is empty.
-endsWith : List elem, List elem -> Bool
+## If the first list is empty, this only returns `Bool.true` if the second list is empty.
+endsWith : List elem, List elem -> Bool | elem has Eq
 endsWith = \list, suffix ->
     # TODO once we have seamless slices, verify that this wouldn't
     # have better performance with a function like List.compareSublists
@@ -922,7 +957,7 @@ split = \elements, userSplitIndex ->
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
 ##
 ##     List.splitFirst [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo], after: [Bar, Baz] }
-splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
+splitFirst : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] | elem has Eq
 splitFirst = \list, delimiter ->
     when List.findFirstIndex list (\elem -> elem == delimiter) is
         Ok index ->
@@ -937,7 +972,7 @@ splitFirst = \list, delimiter ->
 ## remaining elements after that occurrence. If the delimiter is not found, returns `Err`.
 ##
 ##     List.splitLast [Foo, Z, Bar, Z, Baz] Z == Ok { before: [Foo, Bar], after: [Baz] }
-splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound]*
+splitLast : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] | elem has Eq
 splitLast = \list, delimiter ->
     when List.findLastIndex list (\elem -> elem == delimiter) is
         Ok index ->
@@ -957,9 +992,8 @@ mapTry = \list, toResult ->
         Result.map (toResult elem) \ok ->
             List.append state ok
 
-## This is the same as `iterate` but with Result instead of [Continue, Break].
+## This is the same as `iterate` but with [Result] instead of `[Continue, Break]`.
 ## Using `Result` saves a conditional in `mapTry`.
-## It might be useful to expose this in userspace?
 walkTry : List elem, state, (state, elem -> Result state err) -> Result state err
 walkTry = \list, init, func ->
     walkTryHelp list init func 0 (List.len list)
@@ -1006,6 +1040,3 @@ iterBackwardsHelp = \list, state, f, prevIndex ->
             Break b -> Break b
     else
         Continue state
-
-## useful for typechecking guaranteed-unreachable cases
-unreachable : [] -> a

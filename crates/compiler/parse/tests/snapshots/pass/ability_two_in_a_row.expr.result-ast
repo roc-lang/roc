@@ -45,11 +45,13 @@ Defs(
                             [
                                 @24-33 HasClause {
                                     var: @24-25 "a",
-                                    ability: @30-33 Apply(
-                                        "",
-                                        "Ab1",
-                                        [],
-                                    ),
+                                    abilities: [
+                                        @30-33 Apply(
+                                            "",
+                                            "Ab1",
+                                            [],
+                                        ),
+                                    ],
                                 },
                             ],
                         ),
@@ -80,11 +82,13 @@ Defs(
                             [
                                 @59-68 HasClause {
                                     var: @59-60 "a",
-                                    ability: @65-68 Apply(
-                                        "",
-                                        "Ab2",
-                                        [],
-                                    ),
+                                    abilities: [
+                                        @65-68 Apply(
+                                            "",
+                                            "Ab2",
+                                            [],
+                                        ),
+                                    ],
                                 },
                             ],
                         ),

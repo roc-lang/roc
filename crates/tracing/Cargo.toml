@@ -8,5 +8,5 @@ description = "Utilities for setting up tracing at various executable entry poin
 
 [dependencies]
 tracing = { version = "0.1.36", features = ["release_max_level_off"] }
-tracing-subscriber = { version = "0.3.15", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
 tracing-appender = "0.2.2"

@@ -1,9 +1,9 @@
-{ rev ? "541a3ca27c9a8220b46f4feb7dd8e94336a77f42", # nixpkgs master
+{ rev ? "a7855f2235a1876f97473a76151fec2afa02b287", # nixpkgs master. Keep up to date with "nixpkgs">"locked">"rev" in flake.lock
 nixpkgsSource ? builtins.fetchTarball {
   url = "https://github.com/nixos/nixpkgs/tarball/${rev}";
-  sha256 = "sha256:1mxv0zigm98pawf05kd4s8ipvk1pvvdsn1yh978c5an97kz0ck5w";
+  sha256 = "sha256-5DGKX81wIPAAiLwUmUYECpA3vop94AHHR7WmGXSsQok=";
 }, pkgs ? import nixpkgsSource { }
-, cargoSha256 ? "sha256-treL2sWPcZ1NBwdab3FOb2FI2wT/Vt9tD4XRfJ8rYWA=", }:
+, cargoSha256 ? "sha256-Qmriwe+xSL5/pU8oqqj5Qw6H179KYqOljWl0rpPD6MY=", }:
 # we only this file to release a nix package, use flake.nix for development
 let
   rustPlatform = pkgs.rustPlatform;
