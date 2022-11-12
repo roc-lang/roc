@@ -46,7 +46,7 @@ jobs:
 
       # Why are these tests not build with previous command? => fingerprint error. Use `CARGO_LOG=cargo::core::compiler::fingerprint=info` to investigate
       - name: Build specific tests without running. Twice for zig lld-link error.
-        run: cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker || cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker
+        run: cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker -p roc_cli || cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker -p roc_cli
 
       - name: Actually run the tests.
-        run: cargo test --locked --release -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker
+        run: cargo test --locked --release -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker -p roc_cli
