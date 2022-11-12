@@ -6,4 +6,6 @@ pub mod compare;
 pub mod convert;
 mod expect;
 pub mod externs;
+mod intrinsics;
+mod lowlevel;
 pub mod refcounting;
