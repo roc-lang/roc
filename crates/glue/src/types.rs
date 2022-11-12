@@ -11,9 +11,12 @@ use roc_module::{
     ident::TagName,
     symbol::{Interns, Symbol},
 };
-use roc_mono::layout::{
-    cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
-    LayoutCache, LayoutInterner, UnionLayout,
+use roc_mono::{
+    ir::{Proc, ProcLayout},
+    layout::{
+        cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant,
+        Layout, LayoutCache, LayoutInterner, UnionLayout,
+    },
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -67,19 +70,25 @@ impl Types {
         }
     }
 
-    pub(crate) fn new<'a, I: Iterator<Item = Variable>>(
+    pub(crate) fn new<'a, I>(
         arena: &'a Bump,
         subs: &'a Subs,
         variables: I,
         interns: &'a Interns,
-        layout_interner: LayoutInterner<'a>,
+        layout_cache: LayoutCache<'a>,
         target: TargetInfo,
-    ) -> Self {
+    ) -> Self
+    where
+        // an iterator of (variable, getter glue procs for that variable)
+        I: Iterator<Item = (Variable, &'a [((Symbol, ProcLayout<'a>), Proc<'a>)])>,
+    {
         let mut types = Self::with_capacity(variables.size_hint().0, target);
-        let mut env = Env::new(arena, subs, interns, layout_interner, target);
+        let mut env = Env::new(arena, subs, interns, layout_cache, target);
 
-        for var in variables {
+        for (var, glue_procs) in variables {
             env.add_type(var, &mut types);
+
+            // TODO incorporate glue_procs!
         }
 
         env.resolve_pending_recursive_types(&mut types);
@@ -765,7 +774,7 @@ impl<'a> Env<'a> {
         arena: &'a Bump,
         subs: &'a Subs,
         interns: &'a Interns,
-        layout_interner: LayoutInterner<'a>,
+        layout_cache: LayoutCache<'a>,
         target: TargetInfo,
     ) -> Self {
         Env {
@@ -776,7 +785,7 @@ impl<'a> Env<'a> {
             enum_names: Default::default(),
             pending_recursive_types: Default::default(),
             known_recursive_types: Default::default(),
-            layout_cache: LayoutCache::new(layout_interner, target),
+            layout_cache,
             target,
         }
     }
