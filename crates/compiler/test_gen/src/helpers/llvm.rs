@@ -107,7 +107,7 @@ fn create_llvm_module<'a>(
     let mut delayed_errors = Vec::new();
 
     for (home, (module_path, src)) in loaded.sources {
-        use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
+        use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
 
         let can_problems = loaded.can_problems.remove(&home).unwrap_or_default();
         let type_problems = loaded.type_problems.remove(&home).unwrap_or_default();

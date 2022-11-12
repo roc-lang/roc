@@ -86,6 +86,7 @@ mod test_reporting {
             let load_config = LoadConfig {
                 target_info: roc_target::TargetInfo::default_x86_64(),
                 render: RenderTarget::Generic,
+                palette: DEFAULT_PALETTE,
                 threading: Threading::Single,
                 exec_mode: ExecutionMode::Check,
             };
