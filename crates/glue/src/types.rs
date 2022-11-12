@@ -85,10 +85,10 @@ impl Types {
         let mut types = Self::with_capacity(variables.size_hint().0, target);
         let mut env = Env::new(arena, subs, interns, layout_cache, target);
 
-        for (var, glue_procs) in variables {
+        for (var, glue_getter_procs) in variables {
             env.add_type(var, &mut types);
 
-            // TODO incorporate glue_procs!
+            // TODO incorporate glue_getter_procs!
         }
 
         env.resolve_pending_recursive_types(&mut types);
