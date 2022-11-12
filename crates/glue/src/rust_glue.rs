@@ -143,8 +143,15 @@ pub fn emit(types_and_targets: &[(Types, TargetInfo)]) -> String {
 
 fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impls) {
     match types.get_type(id) {
-        RocType::Struct { name, fields } => {
-            add_struct(name, target_info, fields, id, types, impls, false)
+        RocType::Struct {
+            name,
+            fields: RocStructFields::HasNoClosure { fields },
+        } => add_struct(name, target_info, fields, id, types, impls, false),
+        RocType::Struct {
+            name,
+            fields: RocStructFields::HasClosure { field_getters },
+        } => {
+            todo!();
         }
         RocType::TagUnionPayload { name, fields } => {
             add_struct(name, target_info, fields, id, types, impls, true)
@@ -161,10 +168,24 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                     impls,
                 ),
                 RocTagUnion::NonRecursive {
-                    tags,
+                    tags:
+                        RocTags::HasClosure {
+                            tag_getters,
+                            discriminant_getter,
+                        },
                     name,
                     discriminant_size,
-                    discriminant_offset,
+                } => {
+                    todo!();
+                }
+                RocTagUnion::NonRecursive {
+                    tags:
+                        RocTags::HasNoClosures {
+                            tags,
+                            discriminant_offset,
+                        },
+                    name,
+                    discriminant_size,
                 } => {
                     // Empty tag unions can never come up at runtime,
                     // and so don't need declared types.
@@ -184,10 +205,24 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                     }
                 }
                 RocTagUnion::Recursive {
-                    tags,
+                    tags:
+                        RocTags::HasClosure {
+                            tag_getters,
+                            discriminant_getter,
+                        },
                     name,
                     discriminant_size,
-                    discriminant_offset,
+                } => {
+                    todo!();
+                }
+                RocTagUnion::Recursive {
+                    tags:
+                        RocTags::HasNoClosures {
+                            tags,
+                            discriminant_offset,
+                        },
+                    name,
+                    discriminant_size,
                 } => {
                     // Empty tag unions can never come up at runtime,
                     // and so don't need declared types.
@@ -209,9 +244,24 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                 RocTagUnion::NullableWrapped {
                     name,
                     index_of_null_tag,
-                    tags,
+                    tags:
+                        RocTags::HasClosure {
+                            tag_getters,
+                            discriminant_getter,
+                        },
                     discriminant_size,
-                    discriminant_offset,
+                } => {
+                    todo!();
+                }
+                RocTagUnion::NullableWrapped {
+                    name,
+                    index_of_null_tag,
+                    tags:
+                        RocTags::HasNoClosures {
+                            tags,
+                            discriminant_offset,
+                        },
+                    discriminant_size,
                 } => {
                     // index_of_null_tag refers to the index of the tag that is represented at runtime as NULL.
                     // For example, in `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`,
@@ -299,7 +349,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
 fn add_single_tag_struct(
     name: &str,
     tag_name: &str,
-    payload: RocSingleTagPayload,
+    payload: &RocSingleTagPayload,
     types: &Types,
     impls: &mut IndexMap<Option<String>, IndexMap<String, Vec<TargetInfo>>>,
     target_info: TargetInfo,
@@ -334,7 +384,7 @@ fn add_single_tag_struct(
 
                     let field_getters = payload_getters
                         .iter()
-                        .map(|type_id| (String::new(), *type_id))
+                        .map(|(type_id, roc_fn)| (String::new(), *type_id, *roc_fn))
                         .collect();
 
                     RocType::Struct {

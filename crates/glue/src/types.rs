@@ -153,26 +153,14 @@ impl Types {
                         SingleTagStruct {
                             name: _,
                             tag_name: tag_name_a,
-                            payload_fields: payload_fields_a,
+                            payload: payload_a,
                         },
                         SingleTagStruct {
                             name: _,
                             tag_name: tag_name_b,
-                            payload_fields: payload_fields_b,
+                            payload: payload_b,
                         },
-                    ) => tag_name_a == tag_name_b && payload_fields_a == payload_fields_b,
-                    (
-                        SingleTagStruct {
-                            name: _,
-                            tag_name: tag_name_a,
-                            payload_field_getters: payload_getters_a,
-                        },
-                        SingleTagStruct {
-                            name: _,
-                            tag_name: tag_name_b,
-                            payload_field_getters: payload_getters_b,
-                        },
-                    ) => tag_name_a == tag_name_b && payload_getters_a == payload_getters_b,
+                    ) => tag_name_a == tag_name_b && payload_a == payload_b,
                     (
                         NonNullableUnwrapped {
                             name: _,
@@ -198,13 +186,11 @@ impl Types {
                         NonRecursive {
                             tags: tags_a,
                             discriminant_size: disc_w_a,
-                            discriminant_offset: disc_o_a,
                             ..
                         },
                         NonRecursive {
                             tags: tags_b,
                             discriminant_size: disc_w_b,
-                            discriminant_offset: disc_o_b,
                             ..
                         },
                     )
@@ -212,35 +198,72 @@ impl Types {
                         Recursive {
                             tags: tags_a,
                             discriminant_size: disc_w_a,
-                            discriminant_offset: disc_o_a,
                             ..
                         },
                         Recursive {
                             tags: tags_b,
                             discriminant_size: disc_w_b,
-                            discriminant_offset: disc_o_b,
                             ..
                         },
                     ) => {
-                        if disc_w_a != disc_w_b
-                            || disc_o_a != disc_o_b
-                            || tags_a.len() != tags_b.len()
-                        {
+                        if disc_w_a != disc_w_b || tags_a.len() != tags_b.len() {
                             false
                         } else {
-                            tags_a.iter().zip(tags_b.iter()).all(
-                                |((name_a, opt_id_a), (name_b, opt_id_b))| {
-                                    name_a == name_b
-                                        && match (opt_id_a, opt_id_b) {
-                                            (Some(id_a), Some(id_b)) => self.is_equivalent_help(
-                                                self.get_type_or_pending(*id_a),
-                                                self.get_type_or_pending(*id_b),
-                                            ),
-                                            (None, None) => true,
-                                            (None, Some(_)) | (Some(_), None) => false,
-                                        }
-                                },
-                            )
+                            match (tags_a, tags_b) {
+                                // discriminant offset doesn't matter for equality,
+                                // since it's determined 100% by other fields
+                                (
+                                    RocTags::HasClosure {
+                                        tag_getters: getters_a,
+                                        discriminant_getter: _,
+                                    },
+                                    RocTags::HasClosure {
+                                        tag_getters: getters_b,
+                                        discriminant_getter: _,
+                                    },
+                                ) => getters_a.iter().zip(getters_b.iter()).all(
+                                    |((name_a, opt_id_a), (name_b, opt_id_b))| {
+                                        name_a == name_b
+                                            && match (opt_id_a, opt_id_b) {
+                                                // ignore the getter function;
+                                                // only compare the TypeId!
+                                                (Some((id_a, _)), Some((id_b, _))) => self
+                                                    .is_equivalent_help(
+                                                        self.get_type_or_pending(*id_a),
+                                                        self.get_type_or_pending(*id_b),
+                                                    ),
+                                                (None, None) => true,
+                                                (None, Some(_)) | (Some(_), None) => false,
+                                            }
+                                    },
+                                ),
+                                // discriminant offset doesn't matter for equality,
+                                // since it's determined 100% by other fields
+                                (
+                                    RocTags::HasNoClosures {
+                                        tags: tags_a,
+                                        discriminant_offset: _,
+                                    },
+                                    RocTags::HasNoClosures {
+                                        tags: tags_b,
+                                        discriminant_offset: _,
+                                    },
+                                ) => tags_a.iter().zip(tags_b.iter()).all(
+                                    |((name_a, opt_id_a), (name_b, opt_id_b))| {
+                                        name_a == name_b
+                                            && match (opt_id_a, opt_id_b) {
+                                                (Some(id_a), Some(id_b)) => self
+                                                    .is_equivalent_help(
+                                                        self.get_type_or_pending(*id_a),
+                                                        self.get_type_or_pending(*id_b),
+                                                    ),
+                                                (None, None) => true,
+                                                (None, Some(_)) | (Some(_), None) => false,
+                                            }
+                                    },
+                                ),
+                                (_, _) => false,
+                            }
                         }
                     }
                     (
@@ -562,6 +585,19 @@ pub enum RocStructFields {
     },
 }
 
+impl RocStructFields {
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            RocStructFields::HasNoClosure { fields } => fields.len(),
+            RocStructFields::HasClosure { field_getters } => field_getters.len(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RocFn {
     pub name: String,
@@ -672,6 +708,19 @@ pub enum RocTags {
         tags: Vec<(String, Option<TypeId>)>,
         discriminant_offset: u32,
     },
+}
+
+impl RocTags {
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            RocTags::HasClosure { tag_getters, .. } => tag_getters.len(),
+            RocTags::HasNoClosures { tags, .. } => tags.len(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
