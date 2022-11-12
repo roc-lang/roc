@@ -141,12 +141,14 @@ pub fn load_types(
 
     let layout_interner = GlobalInterner::with_capacity(128);
 
+    let operating_system = target_info.operating_system;
     let architectures = Architecture::iter();
     let mut types_and_targets = Vec::with_capacity(architectures.len());
+
     for arch in architectures {
         let target_info = TargetInfo {
             architecture: arch,
-            operating_system: OperatingSystem::Unix,
+            operating_system,
         };
 
         let types = Types::new(
