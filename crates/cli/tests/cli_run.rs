@@ -480,6 +480,10 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "this platform is broken, and `roc run --lib` is missing on windows"
+    )]
     fn ruby_interop() {
         test_roc_app_slim("examples/ruby-interop", "main.roc", "libhello", "", true)
     }
