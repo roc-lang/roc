@@ -557,7 +557,7 @@ pub enum RocStructFields {
         fields: Vec<(String, TypeId)>,
     },
     HasClosure {
-        field_getters: Vec<(String, RocFn)>,
+        field_getters: Vec<(String, TypeId, RocFn)>,
         // TODO field_setters
     },
 }
@@ -665,7 +665,7 @@ pub enum RocTags {
     /// field getters and setters because the size and order of those fields can vary based on the
     /// application's implementation, so those sizes and order are not knowable at host build time.
     HasClosure {
-        tag_getters: Vec<(String, Option<RocFn>)>,
+        tag_getters: Vec<(String, Option<(TypeId, RocFn)>)>,
         discriminant_getter: RocFn,
     },
     HasNoClosures {
@@ -680,10 +680,10 @@ pub enum RocSingleTagPayload {
     /// field getters and setters because the size and order of those fields can vary based on the
     /// application's implementation, so those sizes and order are not knowable at host build time.
     HasClosure {
-        payload_getters: Vec<RocFn>,
+        payload_getters: Vec<(TypeId, RocFn)>,
     },
     HasNoClosures {
-        payloads: Vec<TypeId>,
+        payload_fields: Vec<TypeId>,
     },
 }
 

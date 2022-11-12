@@ -1,5 +1,6 @@
 use crate::types::{
-    RocFn, RocNum, RocSingleTagPayload, RocStructFields, RocTagUnion, RocType, TypeId, Types,
+    RocFn, RocNum, RocSingleTagPayload, RocStructFields, RocTagUnion, RocTags, RocType, TypeId,
+    Types,
 };
 use indexmap::IndexMap;
 use roc_target::{Architecture, TargetInfo};
@@ -344,7 +345,9 @@ fn add_single_tag_struct(
                     }
                 }
             }
-            RocSingleTagPayload::HasNoClosures { payloads } => {
+            RocSingleTagPayload::HasNoClosures {
+                payload_fields: payloads,
+            } => {
                 if payloads.is_empty() {
                     // A single tag with no payload is a zero-sized unit type, so
                     // represent it as a zero-sized struct (e.g. "struct Foo()").
@@ -2486,30 +2489,65 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
             has_float_help(types.get_type(*key_id), types, do_not_recurse)
                 || has_float_help(types.get_type(*val_id), types, do_not_recurse)
         }
-        RocType::Struct { fields, .. } => fields
+        RocType::Struct {
+            fields: RocStructFields::HasNoClosure { fields },
+            ..
+        } => fields
             .iter()
             .any(|(_, type_id)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
+        RocType::Struct {
+            fields: RocStructFields::HasClosure { field_getters },
+            ..
+        } => field_getters
+            .iter()
+            .any(|(_, type_id, _)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
         RocType::TagUnionPayload { fields, .. } => fields
             .iter()
             .any(|(_, type_id)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
-        RocType::TagUnion(RocTagUnion::SingleTagStruct { payload_fields, .. }) => payload_fields
+        RocType::TagUnion(RocTagUnion::SingleTagStruct {
+            payload: RocSingleTagPayload::HasNoClosures { payload_fields },
+            ..
+        }) => payload_fields
             .iter()
             .any(|type_id| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
-        RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
-        | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
-            tags.iter().any(|(_, payloads)| {
-                payloads
-                    .iter()
-                    .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
-            })
-        }
-        RocType::TagUnion(RocTagUnion::NullableWrapped { tags, .. }) => {
-            tags.iter().any(|(_, payloads)| {
-                payloads
-                    .iter()
-                    .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
-            })
-        }
+        RocType::TagUnion(RocTagUnion::SingleTagStruct {
+            payload: RocSingleTagPayload::HasClosure { payload_getters },
+            ..
+        }) => payload_getters
+            .iter()
+            .any(|(type_id, _)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
+        RocType::TagUnion(RocTagUnion::Recursive {
+            tags: RocTags::HasNoClosures { tags, .. },
+            ..
+        })
+        | RocType::TagUnion(RocTagUnion::NonRecursive {
+            tags: RocTags::HasNoClosures { tags, .. },
+            ..
+        })
+        | RocType::TagUnion(RocTagUnion::NullableWrapped {
+            tags: RocTags::HasNoClosures { tags, .. },
+            ..
+        }) => tags.iter().any(|(_, payloads)| {
+            payloads
+                .iter()
+                .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
+        }),
+        RocType::TagUnion(RocTagUnion::Recursive {
+            tags: RocTags::HasClosure { tag_getters, .. },
+            ..
+        })
+        | RocType::TagUnion(RocTagUnion::NonRecursive {
+            tags: RocTags::HasClosure { tag_getters, .. },
+            ..
+        })
+        | RocType::TagUnion(RocTagUnion::NullableWrapped {
+            tags: RocTags::HasClosure { tag_getters, .. },
+            ..
+        }) => tag_getters.iter().any(|(_, payloads)| {
+            payloads
+                .iter()
+                .any(|(id, _)| has_float_help(types.get_type(*id), types, do_not_recurse))
+        }),
         RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { payload, .. })
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped {
             non_null_payload: payload,
