@@ -1,22 +1,10 @@
-const std = @import("std");
 const str = @import("str");
 const builtin = @import("builtin");
 const RocStr = str.RocStr;
-const testing = std.testing;
-const expectEqual = testing.expectEqual;
-const expect = testing.expect;
 
 comptime {
-    // This is a workaround for https://github.com/ziglang/zig/issues/8218
-    // which is only necessary on macOS.
-    //
-    // Once that issue is fixed, we can undo the changes in
-    // 177cf12e0555147faa4d436e52fc15175c2c4ff0 and go back to passing
-    // -fcompiler-rt in link.rs instead of doing this. Note that this
-    // workaround is present in many host.zig files, so make sure to undo
-    // it everywhere!
-    if (builtin.os.tag == .macos) {
-        _ = @import("compiler_rt");
+    if (builtin.target.cpu.arch != .wasm32) {
+        @compileError("This platform is for WebAssembly only. You need to pass `--target wasm32` to the Roc compiler.");
     }
 }
 
@@ -51,12 +39,7 @@ export fn roc_memcpy(dest: *anyopaque, src: *anyopaque, count: usize) callconv(.
 
 // NOTE roc_panic is provided in the JS file, so it can throw an exception
 
-const mem = std.mem;
-const Allocator = mem.Allocator;
-
 extern fn roc__mainForHost_1_exposed(*RocStr) void;
-
-const Unit = extern struct {};
 
 extern fn js_display_roc_string(str_bytes: ?[*]u8, str_len: usize) void;
 
