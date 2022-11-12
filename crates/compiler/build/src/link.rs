@@ -1370,7 +1370,15 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
 }
 
 fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_counter: usize) {
-    let cmd_str = format!("{:?}", &command);
+    let mut command_string = std::ffi::OsString::new();
+    command_string.push(command.get_program());
+
+    for arg in command.get_args() {
+        command_string.push(" ");
+        command_string.push(arg);
+    }
+
+    let cmd_str = command_string.to_str().unwrap();
     let cmd_output = command.output().unwrap();
     let max_flaky_fail_count = 10;
 
