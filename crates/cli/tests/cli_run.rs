@@ -142,13 +142,17 @@ mod cli_run {
             std::env::set_var("NO_AVX512", "1");
         }
 
-        let cli_commands = if test_many_cli_commands {
-            vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc]
-        } else if cfg!(windows) {
-            // TODO: expects don't currently work on windows
-            vec![CliMode::RocRun]
+        // TODO: expects don't currently work on windows
+        let cli_commands = if cfg!(windows) {
+            match test_many_cli_commands {
+                true => vec![CliMode::RocBuild, CliMode::RocRun],
+                false => vec![CliMode::RocRun],
+            }
         } else {
-            vec![CliMode::Roc]
+            match test_many_cli_commands {
+                true => vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc],
+                false => vec![CliMode::Roc],
+            }
         };
 
         for cli_mode in cli_commands.iter() {
