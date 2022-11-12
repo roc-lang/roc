@@ -49,7 +49,7 @@ use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModu
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
-use roc_types::types::{Alias, AliasKind};
+use roc_types::types::{Alias, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::env::current_dir;
@@ -384,6 +384,7 @@ fn start_phase<'a>(
                     declarations,
                     dep_idents,
                     pending_derives,
+                    types,
                     ..
                 } = constrained;
 
@@ -393,6 +394,7 @@ fn start_phase<'a>(
                     module,
                     ident_ids,
                     module_timing,
+                    types,
                     constraints,
                     constraint,
                     pending_derives,
@@ -646,6 +648,7 @@ struct ConstrainedModule {
     var_store: VarStore,
     dep_idents: IdentIdsByModule,
     module_timing: ModuleTiming,
+    types: Types,
     // Rather than adding pending derives as constraints, hand them directly to solve because they
     // must be solved at the end of a module.
     pending_derives: PendingDerives,
@@ -1095,6 +1098,7 @@ enum BuildTask<'a> {
         ident_ids: IdentIds,
         exposed_for_module: ExposedForModule,
         module_timing: ModuleTiming,
+        types: Types,
         constraints: Constraints,
         constraint: ConstraintSoa,
         pending_derives: PendingDerives,
@@ -4194,6 +4198,7 @@ impl<'a> BuildTask<'a> {
         module: Module,
         ident_ids: IdentIds,
         module_timing: ModuleTiming,
+        types: Types,
         constraints: Constraints,
         constraint: ConstraintSoa,
         pending_derives: PendingDerives,
@@ -4215,6 +4220,7 @@ impl<'a> BuildTask<'a> {
             module,
             ident_ids,
             exposed_for_module,
+            types,
             constraints,
             constraint,
             pending_derives,
@@ -4276,8 +4282,6 @@ pub fn add_imports(
     def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
     rigid_vars: &mut Vec<Variable>,
 ) -> (Vec<Variable>, AbilitiesStore) {
-    use roc_types::types::Type;
-
     let mut import_variables = Vec::new();
 
     let mut cached_symbol_vars = VecMap::default();
@@ -4302,7 +4306,7 @@ pub fn add_imports(
                     };
 
                     let copied_import = exposed_types.storage_subs.export_variable_to($subs, variable);
-                    let copied_import_index = constraints.push_type(Type::Variable(copied_import.variable));
+                    let copied_import_index = constraints.push_variable(copied_import.variable);
 
                     def_types.push((
                         $symbol,
@@ -4337,7 +4341,7 @@ pub fn add_imports(
     if my_module == ModuleId::NUM {
         // Num needs List.len, but List imports Num.
         let list_len_type_var = synth_list_len_type(subs);
-        let list_len_type_index = constraints.push_type(Type::Variable(list_len_type_var));
+        let list_len_type_index = constraints.push_variable(list_len_type_var);
         def_types.push((Symbol::LIST_LEN, Loc::at_zero(list_len_type_index)));
         import_variables.push(list_len_type_var);
     }
@@ -4403,6 +4407,7 @@ pub fn add_imports(
 #[allow(clippy::complexity)]
 fn run_solve_solve(
     exposed_for_module: ExposedForModule,
+    mut types: Types,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
     pending_derives: PendingDerives,
@@ -4442,10 +4447,9 @@ fn run_solve_solve(
     let actual_constraint =
         constraints.let_import_constraint(rigid_vars, def_types, constraint, &import_variables);
 
-    let mut solve_aliases = default_aliases();
-
+    let mut solve_aliases = roc_solve::solve::Aliases::with_capacity(aliases.len());
     for (name, (_, alias)) in aliases.iter() {
-        solve_aliases.insert(*name, alias.clone());
+        solve_aliases.insert(&mut types, *name, alias.clone());
     }
 
     let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {
@@ -4453,6 +4457,7 @@ fn run_solve_solve(
 
         let (solved_subs, solved_env, problems, abilities_store) = roc_solve::module::run_solve(
             module_id,
+            types,
             &constraints,
             actual_constraint,
             rigid_variables,
@@ -4511,6 +4516,7 @@ fn run_solve<'a>(
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
     exposed_for_module: ExposedForModule,
+    types: Types,
     constraints: Constraints,
     constraint: ConstraintSoa,
     pending_derives: PendingDerives,
@@ -4536,6 +4542,7 @@ fn run_solve<'a>(
             match cached_types.lock().remove(&module_id) {
                 None => run_solve_solve(
                     exposed_for_module,
+                    types,
                     constraints,
                     constraint,
                     pending_derives,
@@ -4559,6 +4566,7 @@ fn run_solve<'a>(
         } else {
             run_solve_solve(
                 exposed_for_module,
+                types,
                 constraints,
                 constraint,
                 pending_derives,
@@ -4703,6 +4711,7 @@ fn canonicalize_and_constrain<'a>(
         &symbols_from_requires,
         &mut var_store,
     );
+    let mut types = Types::new();
 
     // _after has an underscore because it's unused in --release builds
     let _after = roc_types::types::get_type_clone_count();
@@ -4746,6 +4755,7 @@ fn canonicalize_and_constrain<'a>(
         roc_can::constraint::Constraint::True
     } else {
         constrain_module(
+            &mut types,
             &mut constraints,
             module_output.symbols_from_requires,
             &module_output.scope.abilities_store,
@@ -4817,6 +4827,7 @@ fn canonicalize_and_constrain<'a>(
         ident_ids: module_output.scope.locals.ident_ids,
         dep_idents,
         module_timing,
+        types,
         pending_derives: module_output.pending_derives,
     };
 
@@ -5587,6 +5598,7 @@ fn run_task<'a>(
             module,
             module_timing,
             exposed_for_module,
+            types,
             constraints,
             constraint,
             pending_derives,
@@ -5601,6 +5613,7 @@ fn run_task<'a>(
             ident_ids,
             module_timing,
             exposed_for_module,
+            types,
             constraints,
             constraint,
             pending_derives,
@@ -5988,47 +6001,4 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
     report.render_color_terminal(&mut buf, &alloc, &palette);
 
     buf
-}
-
-/// Builtin aliases that are not covered by type checker optimizations
-///
-/// Types like `F64` and `I32` are hardcoded into Subs and therefore we don't define them here.
-/// Generic number types (Num, Int, Float, etc.) are treated as `DelayedAlias`es resolved during
-/// type solving.
-/// All that remains are Signed8, Signed16, etc.
-pub fn default_aliases() -> roc_solve::solve::Aliases {
-    use roc_types::types::Type;
-
-    let mut solve_aliases = roc_solve::solve::Aliases::default();
-
-    let mut zero_opaque = |alias_name: Symbol| {
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            infer_ext_in_output_variables: Default::default(),
-            typ: Type::EmptyTagUnion,
-            kind: AliasKind::Opaque,
-        };
-
-        solve_aliases.insert(alias_name, alias);
-    };
-
-    zero_opaque(Symbol::NUM_SIGNED8);
-    zero_opaque(Symbol::NUM_SIGNED16);
-    zero_opaque(Symbol::NUM_SIGNED32);
-    zero_opaque(Symbol::NUM_SIGNED64);
-    zero_opaque(Symbol::NUM_SIGNED128);
-
-    zero_opaque(Symbol::NUM_UNSIGNED8);
-    zero_opaque(Symbol::NUM_UNSIGNED16);
-    zero_opaque(Symbol::NUM_UNSIGNED32);
-    zero_opaque(Symbol::NUM_UNSIGNED64);
-    zero_opaque(Symbol::NUM_UNSIGNED128);
-
-    zero_opaque(Symbol::NUM_BINARY32);
-    zero_opaque(Symbol::NUM_BINARY64);
-
-    solve_aliases
 }

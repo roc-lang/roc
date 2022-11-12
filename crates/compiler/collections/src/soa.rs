@@ -88,15 +88,15 @@ impl<T> std::fmt::Debug for Slice<T> {
 
 impl<T> Default for Slice<T> {
     fn default() -> Self {
-        Self {
-            start: Default::default(),
-            length: Default::default(),
-            _marker: Default::default(),
-        }
+        Self::empty()
     }
 }
 
 impl<T> Slice<T> {
+    pub const fn empty() -> Self {
+        Self::new(0, 0)
+    }
+
     pub const fn new(start: u32, length: u16) -> Self {
         Self {
             start,

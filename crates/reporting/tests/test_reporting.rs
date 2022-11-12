@@ -202,6 +202,7 @@ mod test_reporting {
             home,
             interns,
             problems: can_problems,
+            mut types,
             ..
         } = can_expr(arena, expr_src)?;
         let mut subs = Subs::new_from_varstore(var_store);
@@ -217,7 +218,7 @@ mod test_reporting {
         let mut solve_aliases = roc_solve::solve::Aliases::default();
 
         for (name, alias) in output.aliases {
-            solve_aliases.insert(name, alias);
+            solve_aliases.insert(&mut types, name, alias);
         }
 
         let mut unify_problems = Vec::new();
@@ -225,6 +226,7 @@ mod test_reporting {
         let (_content, _subs) = infer_expr(
             subs,
             &mut unify_problems,
+            types,
             &constraints,
             &constraint,
             // Use `new_report_problem_as` in order to get proper derives.
@@ -1141,20 +1143,20 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This expression is used in an unexpected way:
+    This 1st argument to `f` has an unexpected type:
 
     7│      g = \x -> f [x]
-                      ^^^^^
+                        ^^^
 
-    This `f` call produces:
-
-        List List b
-
-    But you are trying to use it as:
+    The argument is a list of type:
 
         List b
 
-    Tip: The type annotation uses the type variable `b` to say that this
+    But `f` needs its 1st argument to be:
+
+        a
+
+    Tip: The type annotation uses the type variable `a` to say that this
     definition can produce any type of value. But in the body I see that
     it will only produce a `List` value of a single specific type. Maybe
     change the type annotation to be more specific? Maybe change the code
@@ -12412,5 +12414,41 @@ All branches in an `if` must have the same type!
                 _ -> ""
             "#
         )
+    );
+
+    test_report!(
+        polymorphic_recursion_forces_ungeneralized_type,
+        indoc!(
+            r#"
+            foo : a, Bool -> Str
+            foo = \in, b -> if b then "done" else bar in
+
+            bar = \_ -> foo {} Bool.true
+
+            foo "" Bool.false
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to `foo` has an unexpected type:
+
+    9│      foo "" Bool.false
+                ^^
+
+    The argument is a string of type:
+
+        Str
+
+    But `foo` needs its 1st argument to be:
+
+        a
+
+    Tip: The type annotation uses the type variable `a` to say that this
+    definition can produce any type of value. But in the body I see that
+    it will only produce a `Str` value of a single specific type. Maybe
+    change the type annotation to be more specific? Maybe change the code
+    to be more general?
+    "###
     );
 }
