@@ -3007,19 +3007,17 @@ fn finish_specialization<'a>(
         }
     };
 
+    let module_id = state.root_id;
     let mut glue_getters = Vec::new();
 
-    if let EntryPoint::Executable { symbol, layout, .. } = &entry_point {
+    if let EntryPoint::Executable { layout, .. } = &entry_point {
         let mut locked = ident_ids_by_module.lock();
+        let ident_ids = locked.get_mut(&module_id).unwrap();
+        let ret = &layout.result;
 
-        let ident_ids = locked.get_mut(&symbol.module_id()).unwrap();
-
-        let result = &layout.result;
-        let it = layout.arguments.iter().chain([result]);
-
-        for layout in it {
+        for layout in layout.arguments.iter().chain([ret]) {
             let glue_procs = roc_mono::ir::generate_glue_procs(
-                symbol.module_id(),
+                module_id,
                 ident_ids,
                 arena,
                 &mut layout_interner,
@@ -3042,7 +3040,7 @@ fn finish_specialization<'a>(
         output_path,
         expectations,
         exposed_to_host,
-        module_id: state.root_id,
+        module_id,
         subs,
         interns,
         layout_interner,
