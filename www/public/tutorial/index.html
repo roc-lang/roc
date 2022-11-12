@@ -46,8 +46,8 @@
             <li><a href="#tasks">Tasks</a></li>
             <li><a href="#abilities">Abilities</a></li>
             <li><a href="#next-steps">Next Steps</a></li>
-            <li><a href="#advanced concepts">Advanced Concepts</a></li>
-            <li><a href="#advanced concepts">Operator Desugaring Table</a></li>
+            <li><a href="#advanced-concepts">Advanced Concepts</a></li>
+            <li><a href="#operator-desugaring-table">Operator Desugaring Table</a></li>
         </ol>
     </nav>
     <div id="tutorial-intro">
@@ -386,7 +386,7 @@ different ways.</p>
 <p>Note that when we do this, the fields you're overriding must all be present on the original record,
 and their values must have the same type as the corresponding values in the original record.</p>
 </section>
-<section><h2 id="tags">Tags</h2>
+<section><h2 id="tags"><a href="#tags">Tags</a></h2>
 <p>Sometimes we want to represent that something can have one of several values. For example:</p>
 <samp><span class="attr">stoplightColor</span> <span class="op">=</span>
     <span class="kw">if</span> something <span class="op">&gt;</span> <span class="number">0</span> <span class="kw">then</span>
@@ -472,7 +472,7 @@ that case in this <code>when</code>, and then we can handle it however we think 
                 <span class="str">"not red"</span>
 </samp>
 <p>Either style can be a reasonable choice depending on the circumstances.</p>
-<h3 id="tags-with-payloads">Tags with payloads</h3>
+<h3 id="tags-with-payloads"><a href="#tags-with-payloads">Tags with payloads</a></h3>
 <p>Tags can have <em>payloads</em> - that is, values contained within them. For example:</p>
 <samp>stoplightColor <span class="op">=</span>
     <span class="kw">if</span> something <span class="op">&gt;</span> <span class="number">100</span> <span class="kw">then</span>
@@ -531,7 +531,7 @@ element using <code>List.append</code> like so:</p>
 All values in Roc (including lists, but also records, strings, numbers, and so on) are immutable,
 meaning whenever we want to "change" them, we want to instead pass them to a function which returns some
 variation of what was passed in.</p>
-<h3 id="list-map">List.map</h3>
+<h3 id="list-map"><a href="#list-map">List.map</a></h3>
 <p>A common way to transform one list into another is to use <code>List.map</code>. Here's an example of how to
 use it:</p>
 <samp>List.map [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] \num <span class="op">-&gt;</span> num * <span class="number">2</span>
@@ -548,7 +548,7 @@ In this example, <code>List.map</code> calls the function <code>\num <span class
 <p>For example, the <code>Num.isOdd</code> function returns <code>true</code> if it's given an odd number, and <code>false</code> otherwise.
 So <code>Num.isOdd 5</code> returns <code>true</code> and <code>Num.isOdd 2</code> returns <code>false</code>.</p>
 <p>As such, calling <code>List.map [1, 2, 3] Num.isOdd</code> returns a new list of <code>[Bool.true, Bool.false, Bool.true]</code>.</p>
-<h3 id="list-element-type-compatibility">List element type compatibility</h3>
+<h3 id="list-element-type-compatibility"><a href="#list-element-type-compatibility">List element type compatibility</a></h3>
 <p>If we tried to give <code>List.map</code> a function that didn't work on the elements in the list, then we'd get
 an error at compile time. Here's a valid, and then an invalid example:</p>
 <samp># working example
@@ -574,7 +574,7 @@ add elements to a list, as long as you don't have any compile-time errors, you w
 from calling <code>List.map</code> afterwards - no matter what you appended to the list! More generally, it's safe to assume
 that unless you run out of memory, <code>List.map</code> will run successfully unless you got a compile-time error about an
 incompatibility (like <code>Num.negate</code> on a list of strings).</p>
-<h3 id="lists-that-hold-elements-of-different-types">Lists that hold elements of different types</h3>
+<h3 id="lists-that-hold-elements-of-different-types"><a href="#lists-that-hold-elements-of-different-types">Lists that hold elements of different types</a></h3>
 <p>We can use tags with payloads to make a list that contains a mixture of different types. For example:</p>
 <samp>List.map [StrElem <span class="str">"A"</span>, StrElem <span class="str">"b"</span>, NumElem <span class="number">1</span>, StrElem <span class="str">"c"</span>, NumElem -<span class="number">3</span>] \elem <span class="op">-&gt;</span>
     when elem is
@@ -590,7 +590,7 @@ Instead, we're using a <code>when</code> to tell when we've got a string or a nu
 <code>Num.isNegative</code> or <code>Str.isCapitalized</code> depending on which type we have.</p>
 <p>We could take this as far as we like, adding more different tags (e.g. <code>BoolElem Bool.true</code>) and then adding
 more branches to the <code>when</code> to handle them appropriately.</p>
-<h3 id="using-tags-as-functions">Using tags as functions</h3>
+<h3 id="using-tags-as-functions"><a href="#using-tags-as-functions">Using tags as functions</a></h3>
 <p>Let's say I want to apply a tag to a bunch of elements in a list. For example:</p>
 <samp>List.map [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] \str <span class="op">-&gt;</span> Foo str
 </samp>
@@ -600,7 +600,7 @@ more branches to the <code>when</code> to handle them appropriately.</p>
 <p>These two versions compile to the same thing. As a convenience, Roc lets you specify
 a tag name where a function is expected; when you do this, the compiler infers that you
 want a function which uses all of its arguments as the payload to the given tag.</p>
-<h3 id="-list-any-and-list-all-"><code>List.any</code> and <code>List.all</code></h3>
+<h3 id="list-any-and-list-all"><a href="#list-any-and-list-all"><code>List.any</code> and <code>List.all</code></a></h3>
 <p>There are several functions that work like <code>List.map</code> - they walk through each element of a list and do
 something with it. Another is <code>List.any</code>, which returns <code>Bool.true</code> if calling the given function on any element
 in the list returns <code>true</code>:</p>
@@ -739,7 +739,7 @@ fullName <span class="op">=</span> <span class="str">\firstName,</span> lastName
 </samp>
 <p>Comments can be valuable documentation, but they can also get out of date and become misleading.
 If someone changes this function and forgets to update the comment, it will no longer be accurate.</p>
-<h3 id="type-annotations">Type annotations</h3>
+<h3 id="type-annotations"><a href="#type-annotations">Type annotations</a></h3>
 <p>Here's another way to document this function's type, which doesn't have that problem:</p>
 <samp>fullName : Str, Str <span class="op">-&gt;</span> Str
 fullName <span class="op">=</span> \firstName, lastName <span class="op">-&gt;</span>
@@ -844,7 +844,7 @@ its argument without modifying it in any way. This is known as <a href="https://
 <p>Roc has different numeric types that each have different tradeoffs.
 They can all be broken down into two categories: <a href="https://en.wikipedia.org/wiki/Fraction">fractions</a>,
 and <a href="https://en.wikipedia.org/wiki/Integer">integers</a>. In Roc we call these <code>Frac</code> and <code>Int</code> for short.</p>
-<h3 id="integers">Integers</h3>
+<h3 id="integers"><a href="#integers">Integers</a></h3>
 <p>Roc's integer types have two important characteristics: their <em>size</em> and their <a href="https://en.wikipedia.org/wiki/Signedness"><em>signedness</em></a>.
 Together, these two characteristics determine the range of numbers the integer type can represent.</p>
 <p>For example, the Roc type <code>U8</code> can represent the numbers 0 through 255, whereas the <code>I16</code> type can represent
@@ -985,7 +985,7 @@ despite their precision drawbacks. For example, in graphical applications they
 can be a better choice for representing coordinates because they take up less memory,
 various relevant calculations run faster, and decimal precision loss isn't as big a concern
 when dealing with screen coordinates as it is when dealing with something like currency.</p>
-<h3 id="num-int-and-frac">Num, Int, and Frac</h3>
+<h3 id="num-int-and-frac"><a href="#num-int-and-frac">Num, Int, and Frac</a></h3>
 <p>Some operations work on specific numeric types - such as <code>I64</code> or <code>Dec</code> - but operations support
 multiple numeric types. For example, the <code>Num.abs</code> function works on any number, since you can
 take the <a href="https://en.wikipedia.org/wiki/Absolute_value">absolute value</a> of integers and fractions alike.
@@ -1004,22 +1004,22 @@ compatible with fractions. For example:</p>
 and also <code>Num.cos 1</code> and have them all work as expected; the number literal <code>1</code> has the type
 <code>Num *</code>, which is compatible with the more constrained types <code>Int</code> and <code>Frac</code>. For the same reason,
 you can pass number literals to functions expecting even more constrained types, like <code>I32</code> or <code>F64</code>.</p>
-<h3 id="typed-number-literals">Typed Number Literals</h3>
+<h3 id="typed-number-literals"><a href="#typed-number-literals">Typed Number Literals</a></h3>
 <p>When writing a number literal in Roc you can specify the numeric type as a suffix of the literal.
 <code>1u8</code> specifies <code>1</code> as an unsigned 8-bit integer, <code>5i32</code> specifies <code>5</code> as a signed 32-bit integer, etc.
 The full list of possible suffixes includes:
 <code>i8</code>, <code>u8</code>, <code>i16</code>, <code>u16</code>, <code>i32</code>, <code>u32</code>, <code>i64</code>, <code>u64</code>, <code>i128</code>, <code>u128</code>, <code>nat</code>, <code>f32</code>, <code>f64</code>, <code>dec</code></p>
-<h3 id="hexadecimal-integer-literals">Hexadecimal Integer Literals</h3>
+<h3 id="hexadecimal-integer-literals"><a href="#hexadecimal-integer-literals">Hexadecimal Integer Literals</a></h3>
 <p>Integer literals can be written in hexadecimal form by prefixing with <code>0x</code> followed by hexadecimal characters.
 <code>0xFE</code> evaluates to decimal <code>254</code>
 The integer type can be specified as a suffix to the hexadecimal literal,
 so <code>0xC8u8</code> evaluates to decimal <code>200</code> as an unsigned 8-bit integer.</p>
-<h3 id="binary-integer-literals">Binary Integer Literals</h3>
+<h3 id="binary-integer-literals"><a href="#binary-integer-literals">Binary Integer Literals</a></h3>
 <p>Integer literals can be written in binary form by prefixing with <code>0b</code> followed by the 1's and 0's representing
 each bit. <code>0b0000_1000</code> evaluates to decimal <code>8</code>
 The integer type can be specified as a suffix to the binary literal,
 so <code>0b0100u8</code> evaluates to decimal <code>4</code> as an unsigned 8-bit integer.</p>
-<h2 id="tests-and-expectations">Tests and expectations</h2>
+<h2 id="tests-and-expectations"><a href="#tests-and-expectations">Tests and expectations</a></h2>
 <p>You can write automated tests for your Roc code like so:</p>
 <samp>pluralize <span class="op">=</span> \singular, plural, count <span class="op">-&gt;</span>
     countStr <span class="op">=</span> <span class="hljs-type">Num</span>.toStr count
@@ -1035,7 +1035,7 @@ expect pluralize <span class="str">"cactus"</span> <span class="str">"cacti"</sp
 </samp>
 <p>If you put this in a file named <code>main.roc</code> and run <code>roc test</code>, Roc will execute the two <code>expect</code>
 expressions (that is, the two <code>pluralize</code> calls) and report any that returned <code>false</code>.</p>
-<h3 id="inline-expect-s">Inline <code>expect</code>s</h3>
+<h3 id="inline-expects"><a href="#inline-expects">Inline <code>expect</code>s</a></h3>
 <p>For example:</p>
 <samp>    <span class="kw">if</span> count <span class="op">==</span> <span class="number">1</span> then
         <span class="str">"<span class="hljs-subst">\(countStr)</span> <span class="hljs-subst">\(singular)</span>"</span>
@@ -1056,7 +1056,7 @@ control flow. In fact, if you do <code>roc build</code>, they are not even inclu
 <p>If you try this code out, you may note that when an <code>expect</code> fails (either a top-level or inline
 one), the failure message includes the values of any named variables - such as <code>count</code> here.
 This leads to a useful technique, which we will see next.</p>
-<h3 id="quick-debugging-with-inline-expect-s">Quick debugging with inline <code>expect</code>s</h3>
+<h3 id="quick-debugging-with-inline-expect-s"><a href="#quick-debugging-with-inline-expect-s">Quick debugging with inline <code>expect</code>s</a></h3>
 <p>An age-old debugging technique is printing out a variable to the terminal. In Roc you can use
 <code>expect</code> to do this. Here's an example:</p>
 <samp>\arg <span class="op">-&gt;</span>
@@ -1069,9 +1069,9 @@ This leads to a useful technique, which we will see next.</p>
 </samp>
 <p>The failure output will include both the value of <code>x</code> as well as the comment immediately above it,
 which lets you use that comment for extra context in your output.</p>
-<h2 id="interface-modules">Interface modules</h2>
+<h2 id="interface-modules"><a href="#interface-modules">Interface modules</a></h2>
 <p>[This part of the tutorial has not been written yet. Coming soon!]</p>
-<h2 id="builtin-modules">Builtin modules</h2>
+<h2 id="builtin-modules"><a href="#builtin-modules">Builtin modules</a></h2>
 <p>There are several modules that are built into the Roc compiler, which are imported automatically into every
 Roc module. They are:</p>
 <ol>
@@ -1092,7 +1092,7 @@ Roc compiler. That's why they're called "builtins!"</p>
 <li>They are always imported. You never need to add them to <code>imports</code>.</li>
 <li>All their types are imported unqualified automatically. So you never need to write <code>Num.Nat</code>, because it's as if the <code>Num</code> module was imported using <code>imports [Num.{ Nat }]</code> (and the same for all the other types in the <code>Num</code> module).</li>
 </ul>
-<h2 id="the-app-module-header">The app module header</h2>
+<h2 id="the-app-module-header"><a href="#the-app-module-header">The app module header</a></h2>
 <p>Let's take a closer look at the part of <code>main.roc</code> above the <code>main</code> def:</p>
 <samp><span class="hljs-selector-tag">app</span> "<span class="hljs-selector-tag">hello</span>"
     <span class="hljs-selector-tag">packages</span> { <span class="attribute">pf</span>: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
@@ -1140,7 +1140,7 @@ should look for that <code>line</code> function in the <code>Stdout</code> modul
 <span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program, AdditionalModule, AnotherModule]</span>
 <span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
 </samp>
-<h2 id="comments">Comments</h2>
+<h2 id="comments"><a href="#comments">Comments</a></h2>
 <p>Comments that begin with <code>##</code> will be included in generated documentation (<code>roc docs</code>). They require a single space after the <code>##</code>, and can include code blocks by adding five spaces after <code>##</code>. </p>
 <samp>## This is a comment for documentation, and includes a <span class="kw">code</span> block.
 ##
@@ -1153,7 +1153,7 @@ myFunction : U8<span class="hljs-function"> <span class="op">-&gt;</span> U8
 myFunction <span class="op">=</span> <span class="str">\bit</span> <span <span class="opclass="hljs-function">-&gt;<</span>/span> bit % <span class="number">2</span> <span class="comment"># this is an inline comment</span>
 </samp>
 <p>Roc does not have multiline comment syntax.</p>
-<h2 id="tasks">Tasks</h2>
+<h2 id="tasks"><a href="#tasks">Tasks</a></h2>
 <p>Tasks are technically not part of the Roc language, but they're very common in
 platforms. Let's use the CLI platform in <code>examples/cli/cli-platform/main.roc</code> as an example!</p>
 <p>In the CLI platform, we have four operations we can do:</p>
@@ -1321,11 +1321,11 @@ backpassing for all the <code>await</code> calls, like we had above:</p>
 <li>Backpassing syntax does not need to be used with <code>await</code> in particular. It can be used with any function.</li>
 <li>Roc's compiler treats functions defined with backpassing exactly the same way as functions defined the other way. The only difference between <code>\text <span class="op">-&gt;</span></code> and <code>text &lt;-</code> is how they look, so feel free to use whichever looks nicer to you!</li>
 </ul>
-<h2 id="appendix-advanced-concepts">Appendix: Advanced Concepts</h2>
+<h2 id="appendix-advanced-concepts"><a href="#appendix-advanced-concepts">Appendix: Advanced Concepts</a></h2>
 <p>Here are some concepts you likely won't need as a beginner, but may want to know about eventually.
 This is listed as an appendix rather than the main tutorial, to emphasize that it's totally fine
 to stop reading here and go build things!</p>
-<h3 id="open-records-and-closed-records">Open Records and Closed Records</h3>
+<h3 id="open-records-and-closed-records"><a href="#open-records-and-closed-records">Open Records and Closed Records</a></h3>
 <p>Let's say I write a function which takes a record with a <code>firstName</code>
 and <code>lastName</code> field, and puts them together with a space in between:</p>
 <samp>fullName <span class="op">=</span> \<span class="kw">user</span> <span <span class="opclass="hljs-title">-&gt;
@@ -1386,7 +1386,7 @@ same five fields. The only requirement is that one of those fields must be <code
 <p>In practice, constrained records appear in type annotations much less often than open or closed records do.</p>
 <p>Here's when you can typically expect to encounter these three flavors of type variables in records:</p>
 <ul>
-<li><em>Open records</em> are what the compiler infers when you use a record as an argument, or when destructuring it (for example, <code>{ x, y } <span class="op">=</</span>code>).</li>
+<li><em>Open records</em> are what the compiler infers when you use a record as an argument, or when destructuring it (for example, <code>{ x, y } <span class="op">=</span></code>).</li>
 <li><em>Closed records</em> are what the compiler infers when you create a new record (for example, <code>{ x: 5, y: 6 }</code>)</li>
 <li><em>Constrained records</em> are what the compiler infers when you do a record update (for example, <code>{ user &amp; email: newEmail }</code>)</li>
 </ul>
@@ -1397,7 +1397,7 @@ but a function <code>{ a : Str, b : Bool, c : Bool } <span class="op">-&gt;</spa
 field of that record. So if you passed it a record that was not guaranteed to have all three of those fields
 present (such as an <code>{ a : Str, b : Bool }*</code> record, which only guarantees that the fields <code>a</code> and <code>b</code> are present),
 the function might try to access a <code>c</code> field at runtime that did not exist!</p>
-<h3 id="type-variables-in-record-annotations">Type Variables in Record Annotations</h3>
+<h3 id="type-variables-in-record-annotations"><a href="#type-variables-in-record-annotations">Type Variables in Record Annotations</a></h3>
 <p>You can add type annotations to make record types less flexible than what the compiler infers, but not more
 flexible. For example, you can use an annotation to tell the compiler to treat a record as closed when it would
 be inferred as open (or constrained), but you can't use an annotation to make a record open when it would be
@@ -1478,7 +1478,7 @@ fields were included due to a mistake rather than on purpose, and accepting an o
 prevent the compiler from raising an error that would have revealed the mistake.)</p>
 <p>That said, this is a useful technique to know about if you want to (for example) make a record
 type that accumulates more and more fields as it progresses through a series of operations.</p>
-<h3 id="open-and-closed-tag-unions">Open and Closed Tag Unions</h3>
+<h3 id="open-and-closed-tag-unions"><a href="#open-and-closed-tag-unions">Open and Closed Tag Unions</a></h3>
 <p>Just like how Roc has open records and closed records, it also has open and closed tag unions.</p>
 <p>The <em>open tag union</em> (or <em>open union</em> for short) <code>[Foo Str, Bar Bool]*</code> represents a tag that might
 be <code>Foo Str</code> and might be <code>Bar Bool</code>, but might also be some other tag whose type isn't known at compile time.</p>
@@ -1518,7 +1518,7 @@ than what would be inferred. If we added a <code>_ <span class="op">-&gt;</span>
 accept <code>example : [Foo Str, Bar Bool] <span class="op">-&gt;</span> Bool</code> as the type annotation, even though the catch-all branch
 would permit the more flexible <code>example : [Foo Str, Bar Bool]* <span class="op">-&gt;</span> Bool</code> annotation instead.</p>
 </blockquote>
-<h3 id="combining-open-unions">Combining Open Unions</h3>
+<h3 id="combining-open-unions"><a href="#combining-open-unions">Combining Open Unions</a></h3>
 <p>When we make a new record, it's inferred to be a closed record. For example, in <code>foo { a: "hi" }</code>,
 the type of <code>{ a: "hi" }</code> is inferred to be <code>{ a : Str }</code>. In contrast, when we make a new tag, it's inferred
 to be an open union. So in <code>foo (Bar "hi")</code>, the type of <code>Bar "hi"</code> is inferred to be <code>[Bar Str]*</code>.</p>
@@ -1586,7 +1586,7 @@ but if it is an <code>Ok</code> tag, then it's guaranteed to have a payload of e
 <li>If you <em>accept</em> a closed union, that means you only have to handle the possibilities listed in the union.</li>
 <li>If you <em>accept</em> an open union, that means you have to handle the possibility that it has a tag you can't know about.</li>
 </ul>
-<h3 id="type-variables-in-tag-unions">Type Variables in Tag Unions</h3>
+<h3 id="type-variables-in-tag-unions"><a href="#type-variables-in-tag-unions">Type Variables in Tag Unions</a></h3>
 <p>Earlier we saw these two examples, one with an open tag union and the other with a closed one:</p>
 <samp>example : [Foo Str, Bar Bool]* <span class="op">-&gt;</span> Bool
 example <span class="op">=</span> \tag <span class="op">-&gt;</span>
@@ -1637,9 +1637,9 @@ For example, <code>[Foo Str][Bar Bool][Baz (List Str)]</code> is equivalent to <
 <p>Also just like with records, you can use this to compose tag union type aliases. For example, you can write
 <code>NetworkError : [Timeout, Disconnected]</code> and then <code>Problem : [InvalidInput, UnknownFormat]NetworkError</code></p>
 </blockquote>
-<h3 id="phantom-types">Phantom Types</h3>
+<h3 id="phantom-types"><a href="#phantom-types">Phantom Types</a></h3>
 <p>[This part of the tutorial has not been written yet. Coming soon!]</p>
-<h3 id="operator-desugaring-table">Operator Desugaring Table</h3>
+<h3 id="operator-desugaring-table"><a href="#operator-desugaring-table">Operator Desugaring Table</a></h3>
 <p>Here are various Roc expressions involving operators, and what they desugar to.</p>
 <table>
 <thead>
