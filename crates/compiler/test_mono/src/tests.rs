@@ -98,6 +98,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         target_info: TARGET_INFO,
         threading: Threading::Single,
         render: roc_reporting::report::RenderTarget::Generic,
+        palette: roc_reporting::report::DEFAULT_PALETTE,
         exec_mode: ExecutionMode::Executable,
     };
     let loaded = roc_load::load_and_monomorphize_from_str(

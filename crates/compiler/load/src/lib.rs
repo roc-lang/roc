@@ -4,7 +4,7 @@ use bumpalo::Bump;
 use roc_can::module::{ExposedByModule, TypeState};
 use roc_collections::all::MutMap;
 use roc_module::symbol::ModuleId;
-use roc_reporting::report::{RenderTarget, Palette};
+use roc_reporting::report::{Palette, RenderTarget};
 use roc_target::TargetInfo;
 use std::path::PathBuf;
 
@@ -107,7 +107,8 @@ pub fn load_and_monomorphize(
 ) -> Result<MonomorphizedModule<'_>, LoadMonomorphizedError<'_>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename, load_config.render, load_config.palette)?;
+    let load_start =
+        LoadStart::from_path(arena, filename, load_config.render, load_config.palette)?;
 
     match load(arena, load_start, exposed_types, load_config)? {
         Monomorphized(module) => Ok(module),
@@ -123,7 +124,8 @@ pub fn load_and_typecheck(
 ) -> Result<LoadedModule, LoadingProblem<'_>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename, load_config.render, load_config.palette)?;
+    let load_start =
+        LoadStart::from_path(arena, filename, load_config.render, load_config.palette)?;
 
     match load(arena, load_start, exposed_types, load_config)? {
         Monomorphized(_) => unreachable!(""),
