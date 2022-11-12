@@ -247,10 +247,7 @@ mod cli_run {
                 ),
             };
 
-            // strip out any carriage return characters to make the output on windows match unix
-            let stdout = out.stdout.replace('\r', "");
-
-            if !stdout.ends_with(expected_ending) {
+            if !&out.stdout.ends_with(expected_ending) {
                 panic!(
                     "expected output to end with {:?} but instead got {:#?} - stderr was: {:#?}",
                     expected_ending, out.stdout, out.stderr
@@ -589,7 +586,7 @@ mod cli_run {
             &[],
             &[Arg::ExamplePath("examples/hello.false")],
             &[],
-            "Hello, World!\n",
+            &("Hello, World!".to_string() + LINE_ENDING),
             false,
             true,
         )
