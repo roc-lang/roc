@@ -340,7 +340,7 @@ fn loc_ident_pattern_help<'a>(
                     ))
                 }
             }
-            Ident::AccessorFunction(string) => Ok((
+            Ident::RecordAccessorFunction(string) | Ident::TupleAccessorFunction(string) => Ok((
                 MadeProgress,
                 Loc {
                     region: loc_ident.region,

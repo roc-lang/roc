@@ -147,7 +147,7 @@ fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>
                     // Wrap the previous answer in the new one, so we end up
                     // with a nested Expr. That way, `foo.bar.baz` gets represented
                     // in the AST as if it had been written (foo.bar).baz all along.
-                    value = Expr::Access(arena.alloc(value), field);
+                    value = Expr::RecordAccess(arena.alloc(value), field);
                 }
             }
 
@@ -1868,8 +1868,10 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             is_negative: *is_negative,
         }),
         // These would not have parsed as patterns
-        Expr::AccessorFunction(_)
-        | Expr::Access(_, _)
+        Expr::RecordAccessorFunction(_)
+        | Expr::RecordAccess(_, _)
+        | Expr::TupleAccessorFunction(_)
+        | Expr::TupleAccess(_, _)
         | Expr::List { .. }
         | Expr::Closure(_, _)
         | Expr::Backpassing(_, _, _)
@@ -2417,12 +2419,13 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
                 // Wrap the previous answer in the new one, so we end up
                 // with a nested Expr. That way, `foo.bar.baz` gets represented
                 // in the AST as if it had been written (foo.bar).baz all along.
-                answer = Expr::Access(arena.alloc(answer), field);
+                answer = Expr::RecordAccess(arena.alloc(answer), field);
             }
 
             answer
         }
-        Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
+        Ident::RecordAccessorFunction(string) => Expr::RecordAccessorFunction(string),
+        Ident::TupleAccessorFunction(string) => Expr::TupleAccessorFunction(string),
         Ident::Malformed(string, problem) => Expr::MalformedIdent(string, problem),
     }
 }
@@ -2595,7 +2598,7 @@ fn record_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
                     // Wrap the previous answer in the new one, so we end up
                     // with a nested Expr. That way, `foo.bar.baz` gets represented
                     // in the AST as if it had been written (foo.bar).baz all along.
-                    value = Expr::Access(arena.alloc(value), field);
+                    value = Expr::RecordAccess(arena.alloc(value), field);
                 }
             }
 
