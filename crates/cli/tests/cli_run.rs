@@ -243,7 +243,10 @@ mod cli_run {
                 ),
             };
 
-            if !&out.stdout.ends_with(expected_ending) {
+            // strip out any carriage return characters to make the output on windows match unix
+            let stdout = out.stdout.replace('\r', "");
+
+            if !stdout.ends_with(expected_ending) {
                 panic!(
                     "expected output to end with {:?} but instead got {:#?} - stderr was: {:#?}",
                     expected_ending, out.stdout, out.stderr
@@ -570,7 +573,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "overflows the stack on windows")]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",

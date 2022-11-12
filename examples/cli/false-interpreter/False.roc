@@ -78,7 +78,7 @@ isWhitespace = \char ->
     char
     == 0xA # new line
     || char
-    == 0xB # carriage return
+    == 0xD # carriage return
     || char
     == 0x20 # space
     || char
