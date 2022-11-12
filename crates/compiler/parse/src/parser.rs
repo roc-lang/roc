@@ -108,7 +108,8 @@ impl_space_problem! {
     EAbility<'a>,
     PInParens<'a>,
     PRecord<'a>,
-    PList<'a>
+    PList<'a>,
+    ETuple<'a>
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,6 +361,7 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
+    Tuple(ETuple<'a>, Position),
     Str(EString<'a>, Position),
     SingleQuote(EString<'a>, Position),
     Number(ENumber, Position),
@@ -415,9 +417,42 @@ pub enum ERecord<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ETuple<'a> {
+    // Empty tuples are not allowed
+    Empty(Position),
+
+    // Single element tuples are not allowed
+    Single(Position),
+
+    End(Position),
+    Open(Position),
+
+    Updateable(Position),
+    Field(Position),
+    Colon(Position),
+    QuestionMark(Position),
+    Bar(Position),
+    Ampersand(Position),
+
+    Expr(&'a EExpr<'a>, Position),
+
+    Space(BadInputError, Position),
+
+    IndentOpen(Position),
+    IndentColon(Position),
+    IndentBar(Position),
+    IndentAmpersand(Position),
+    IndentEnd(Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EInParens<'a> {
     End(Position),
     Open(Position),
+
+    /// Empty parens, e.g. () is not allowed
+    Empty(Position),
+
     ///
     Expr(&'a EExpr<'a>, Position),
 

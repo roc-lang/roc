@@ -303,6 +303,7 @@ mod test_parse {
         pass/where_clause_on_newline.expr,
         pass/zero_float.expr,
         pass/zero_int.expr,
+        pass/basic_tuple.expr,
     }
 
     fn snapshot_test(

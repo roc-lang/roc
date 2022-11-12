@@ -648,6 +648,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 fields: fields.remove_spaces(arena),
             },
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
+            Expr::Tuple(a) => Expr::Tuple(a.remove_spaces(arena)),
             Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::Tag(a) => Expr::Tag(a),

@@ -163,7 +163,9 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                 }
             })),
         }),
-
+        Tuple(_fields) => {
+            todo!("desugar_expr: Tuple");
+        }
         RecordUpdate { fields, update } => {
             // NOTE the `update` field is always a `Var { .. }`, we only desugar it to get rid of
             // any spaces before/after
