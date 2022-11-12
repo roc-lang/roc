@@ -660,7 +660,7 @@ impl From<IntWidth> for RocNum {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum RocTags {
+pub enum RocTags {
     /// If at least one payload field contains a closure, we have to provide
     /// field getters and setters because the size and order of those fields can vary based on the
     /// application's implementation, so those sizes and order are not knowable at host build time.
@@ -675,7 +675,7 @@ enum RocTags {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum RocSingleTagPayload {
+pub enum RocSingleTagPayload {
     /// If at least one payload field contains a closure, we have to provide
     /// field getters and setters because the size and order of those fields can vary based on the
     /// application's implementation, so those sizes and order are not knowable at host build time.

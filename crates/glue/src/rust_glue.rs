@@ -1,4 +1,6 @@
-use crate::types::{RocFn, RocNum, RocTagUnion, RocType, TypeId, Types};
+use crate::types::{
+    RocFn, RocNum, RocSingleTagPayload, RocStructFields, RocTagUnion, RocType, TypeId, Types,
+};
 use indexmap::IndexMap;
 use roc_target::{Architecture, TargetInfo};
 use std::fmt::{Display, Write};
@@ -248,16 +250,9 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                 RocTagUnion::SingleTagStruct {
                     name,
                     tag_name,
-                    payload_fields,
+                    payload,
                 } => {
-                    add_single_tag_struct(
-                        name,
-                        tag_name,
-                        payload_fields,
-                        types,
-                        impls,
-                        target_info,
-                    );
+                    add_single_tag_struct(name, tag_name, payload, types, impls, target_info);
                 }
                 RocTagUnion::NonNullableUnwrapped {
                     name,
@@ -303,7 +298,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
 fn add_single_tag_struct(
     name: &str,
     tag_name: &str,
-    payload_fields: &[TypeId],
+    payload: RocSingleTagPayload,
     types: &Types,
     impls: &mut IndexMap<Option<String>, IndexMap<String, Vec<TargetInfo>>>,
     target_info: TargetInfo,
@@ -314,39 +309,76 @@ fn add_single_tag_struct(
     // because they have only one alternative. However, still
     // offer the usual tag union APIs.
     {
-        let derive = derive_str(
-            &RocType::Struct {
-                // Deriving doesn't depend on the struct's name,
-                // so no need to clone name here.
-                name: String::new(),
-                fields: payload_fields
+        let mut buf = String::new();
+
+        // Make a dummy RocType::Struct so that we can pass it to deriving
+        // and have that work out as normal.
+        let struct_type = match payload {
+            RocSingleTagPayload::HasClosure { payload_getters } => {
+                {
+                    if payload_getters.is_empty() {
+                        // A single tag with no payload is a zero-sized unit type, so
+                        // represent it as a zero-sized struct (e.g. "struct Foo()").
+                        buf.push_str("();\n");
+                    } else {
+                        buf.push_str("{\n");
+
+                        for (index, getter_fn) in payload_getters.iter().enumerate() {
+                            // TODO these should be added as separate functions in the impl!
+                            todo!("TODO generate payload getters");
+                        }
+
+                        buf.push_str("}\n");
+                    }
+
+                    let field_getters = payload_getters
+                        .iter()
+                        .map(|type_id| (String::new(), *type_id))
+                        .collect();
+
+                    RocType::Struct {
+                        // Deriving doesn't depend on the struct's name,
+                        // so no need to clone name here.
+                        name: String::new(),
+                        fields: RocStructFields::HasClosure { field_getters },
+                    }
+                }
+            }
+            RocSingleTagPayload::HasNoClosures { payloads } => {
+                if payloads.is_empty() {
+                    // A single tag with no payload is a zero-sized unit type, so
+                    // represent it as a zero-sized struct (e.g. "struct Foo()").
+                    buf.push_str("();\n");
+                } else {
+                    buf.push_str("{\n");
+
+                    for (index, field_id) in payloads.iter().enumerate() {
+                        let field_type = type_name(*field_id, types);
+
+                        // These are all private fields, since this is a tag union.
+                        // ignore returned result, writeln can not fail as it is used here
+                        let _ = writeln!(buf, "{INDENT}f{index}: {field_type},");
+                    }
+
+                    buf.push_str("}\n");
+                }
+
+                let fields = payloads
                     .iter()
                     .map(|type_id| (String::new(), *type_id))
-                    .collect(),
-            },
-            types,
-            false,
-        );
+                    .collect();
 
-        let mut body = format!("#[repr(transparent)]\n{derive}\npub struct {name} ");
-
-        if payload_fields.is_empty() {
-            // A single tag with no payload is a zero-sized unit type, so
-            // represent it as a zero-sized struct (e.g. "struct Foo()").
-            body.push_str("();\n");
-        } else {
-            body.push_str("{\n");
-
-            for (index, field_id) in payload_fields.iter().enumerate() {
-                let field_type = type_name(*field_id, types);
-
-                // These are all private fields, since this is a tag union.
-                // ignore returned result, writeln can not fail as it is used here
-                let _ = writeln!(body, "{INDENT}f{index}: {field_type},");
+                RocType::Struct {
+                    // Deriving doesn't depend on the struct's name,
+                    // so no need to clone name here.
+                    name: String::new(),
+                    fields: RocStructFields::HasNoClosure { fields },
+                }
             }
+        };
+        let derive = derive_str(&struct_type, types, false);
 
-            body.push_str("}\n");
-        }
+        let body = format!("#[repr(transparent)]\n{derive}\npub struct {name} {buf}");
 
         add_decl(impls, None, target_info, body);
     }
