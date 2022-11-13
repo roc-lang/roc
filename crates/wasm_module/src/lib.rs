@@ -14,8 +14,6 @@ pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature}
 use bitvec::vec::BitVec;
 use bumpalo::{collections::Vec, Bump};
 
-use crate::DEBUG_SETTINGS;
-
 use self::linking::{IndexRelocType, LinkingSection, RelocationSection, WasmObjectSymbol};
 use self::parse::{Parse, ParseError};
 use self::sections::{
@@ -24,6 +22,9 @@ use self::sections::{
     TableSection, TypeSection,
 };
 use self::serialize::{SerialBuffer, Serialize};
+
+pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
+pub const FRAME_ALIGNMENT_BYTES: i32 = 16;
 
 /// A representation of the WebAssembly binary file format
 /// https://webassembly.github.io/spec/core/binary/modules.html
@@ -592,4 +593,24 @@ impl<'a> WasmModule<'a> {
             arena,
         )
     }
+}
+
+/// Round up to alignment_bytes (which must be a power of 2)
+#[macro_export]
+macro_rules! round_up_to_alignment {
+    ($unaligned: expr, $alignment_bytes: expr) => {
+        if $alignment_bytes <= 1 {
+            $unaligned
+        } else if $alignment_bytes.count_ones() != 1 {
+            internal_error!(
+                "Cannot align to {} bytes. Not a power of 2.",
+                $alignment_bytes
+            );
+        } else {
+            let mut aligned = $unaligned;
+            aligned += $alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
+            aligned &= !$alignment_bytes + 1; // mask with a flag that has upper bits 1, lower bits 0
+            aligned
+        }
+    };
 }

@@ -35,8 +35,6 @@ const PTR_SIZE: u32 = {
 };
 const PTR_TYPE: ValueType = ValueType::I32;
 
-pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
-pub const FRAME_ALIGNMENT_BYTES: i32 = 16;
 pub const MEMORY_NAME: &str = "memory";
 pub const BUILTINS_IMPORT_MODULE_NAME: &str = "env";
 pub const STACK_POINTER_NAME: &str = "__stack_pointer";
@@ -232,26 +230,6 @@ pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
         code_builder.i32_store8(alignment, i + config.to_offset);
         i += 1;
     }
-}
-
-/// Round up to alignment_bytes (which must be a power of 2)
-#[macro_export]
-macro_rules! round_up_to_alignment {
-    ($unaligned: expr, $alignment_bytes: expr) => {
-        if $alignment_bytes <= 1 {
-            $unaligned
-        } else if $alignment_bytes.count_ones() != 1 {
-            internal_error!(
-                "Cannot align to {} bytes. Not a power of 2.",
-                $alignment_bytes
-            );
-        } else {
-            let mut aligned = $unaligned;
-            aligned += $alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
-            aligned &= !$alignment_bytes + 1; // mask with a flag that has upper bits 1, lower bits 0
-            aligned
-        }
-    };
 }
 
 pub struct WasmDebugSettings {

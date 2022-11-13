@@ -7,8 +7,10 @@ use roc_module::symbol::Symbol;
 use roc_mono::layout::{Layout, STLayoutInterner};
 
 use crate::layout::{CallConv, ReturnMethod, StackMemoryFormat, WasmLayout};
-use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, PTR_TYPE};
-use roc_wasm_module::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
+use crate::{copy_memory, CopyMemoryConfig, PTR_TYPE};
+use roc_wasm_module::{
+    round_up_to_alignment, Align, CodeBuilder, LocalId, ValueType, VmSymbolState,
+};
 
 pub enum StoredVarKind {
     Variable,
