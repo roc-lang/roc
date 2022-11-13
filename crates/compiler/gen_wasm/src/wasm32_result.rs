@@ -11,11 +11,11 @@ use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_target::TargetInfo;
 
 use crate::wasm32_sized::Wasm32Sized;
-use crate::wasm_module::{
+use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
+use roc_wasm_module::{
     linking::SymInfo, linking::WasmObjectSymbol, Align, CodeBuilder, Export, ExportType, LocalId,
     Signature, ValueType, WasmModule,
 };
-use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 
 /// Type-driven wrapper generation
 pub trait Wasm32Result {

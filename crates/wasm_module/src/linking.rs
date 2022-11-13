@@ -1,10 +1,9 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
-use super::parse::parse_fixed_size_items;
+use super::parse::{parse_fixed_size_items, Parse, ParseError, SkipBytes};
 use super::sections::SectionId;
 use super::serialize::{overwrite_padded_i32, overwrite_padded_u32};
-use crate::wasm_module::parse::{Parse, ParseError, SkipBytes};
 
 /*******************************************************************
  *

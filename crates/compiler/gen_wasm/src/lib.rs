@@ -3,7 +3,6 @@ mod backend;
 mod layout;
 mod low_level;
 mod storage;
-pub mod wasm_module;
 
 // Helpers for interfacing to a Wasm module from outside
 pub mod wasm32_result;
@@ -19,10 +18,10 @@ use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::{LayoutIds, STLayoutInterner};
 use roc_target::TargetInfo;
-use wasm_module::parse::ParseError;
+use roc_wasm_module::parse::ParseError;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
-use crate::wasm_module::{Align, CodeBuilder, LocalId, ValueType, WasmModule};
+use roc_wasm_module::{Align, CodeBuilder, LocalId, ValueType, WasmModule};
 
 const TARGET_INFO: TargetInfo = TargetInfo::default_wasm32();
 const PTR_SIZE: u32 = {

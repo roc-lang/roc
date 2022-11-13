@@ -3678,6 +3678,7 @@ dependencies = [
  "roc_mono",
  "roc_std",
  "roc_target",
+ "roc_wasm_module",
 ]
 
 [[package]]
@@ -4156,6 +4157,15 @@ name = "roc_utils"
 version = "0.0.1"
 dependencies = [
  "snafu",
+]
+
+[[package]]
+name = "roc_wasm_module"
+version = "0.0.1"
+dependencies = [
+ "bitvec 1.0.1",
+ "bumpalo",
+ "roc_error_macros",
 ]
 
 [[package]]

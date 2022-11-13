@@ -18,17 +18,17 @@ use roc_std::RocDec;
 use crate::layout::{CallConv, ReturnMethod, WasmLayout};
 use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
 use crate::storage::{AddressValue, Storage, StoredValue, StoredVarKind};
-use crate::wasm_module::linking::{DataSymbol, WasmObjectSymbol};
-use crate::wasm_module::sections::{
-    ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Import, ImportDesc, Limits,
-    MemorySection, NameSection,
-};
-use crate::wasm_module::{
-    code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
-};
 use crate::{
     copy_memory, round_up_to_alignment, CopyMemoryConfig, Env, DEBUG_SETTINGS, MEMORY_NAME,
     PTR_SIZE, PTR_TYPE, TARGET_INFO,
+};
+use roc_wasm_module::linking::{DataSymbol, WasmObjectSymbol};
+use roc_wasm_module::sections::{
+    ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Import, ImportDesc, Limits,
+    MemorySection, NameSection,
+};
+use roc_wasm_module::{
+    code_builder, CodeBuilder, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
 };
 
 #[derive(Clone, Copy, Debug)]

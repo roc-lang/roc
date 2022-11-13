@@ -1,0 +1,12 @@
+[package]
+name = "roc_wasm_module"
+version = "0.0.1"
+edition = "2021"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+description = "Parse, manipulate, and serialize WebAssembly modules."
+
+[dependencies]
+bitvec = "1"
+bumpalo = { version = "3.11.0", features = ["collections"] }
+roc_error_macros = { path = "../error_macros" }
