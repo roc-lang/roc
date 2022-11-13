@@ -10812,11 +10812,11 @@ pub struct GlueProcs<'a> {
     pub layouts: Vec<'a, Layout<'a>>,
 }
 
-pub fn generate_glue_procs<'a>(
+pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
     home: ModuleId,
     ident_ids: &mut IdentIds,
     arena: &'a Bump,
-    layout_interner: &mut STLayoutInterner<'a>,
+    layout_interner: &mut I,
     layout: Layout<'a>,
 ) -> GlueProcs<'a> {
     let mut stack = Vec::new_in(arena);
