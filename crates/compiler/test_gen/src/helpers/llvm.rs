@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use inkwell::module::Module;
 use libloading::Library;
 use roc_build::link::llvm_module_to_dylib;
-use roc_build::program::FunctionIterator;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
@@ -192,7 +191,7 @@ fn create_llvm_module<'a>(
     debug_assert!(kind_id > 0);
     let attr = context.create_enum_attribute(kind_id, 1);
 
-    for function in FunctionIterator::from_module(module) {
+    for function in module.get_functions() {
         let name = function.get_name().to_str().unwrap();
         if name.starts_with("roc_builtins") {
             if name.starts_with("roc_builtins.expect") {
