@@ -10757,51 +10757,6 @@ where
     }
 }
 
-pub fn layout_contains_function(arena: &Bump, layout: Layout) -> bool {
-    let mut stack = Vec::new_in(arena);
-
-    stack.push(layout);
-
-    while let Some(layout) = stack.pop() {
-        match layout {
-            Layout::Builtin(builtin) => match builtin {
-                Builtin::Int(_)
-                | Builtin::Float(_)
-                | Builtin::Bool
-                | Builtin::Decimal
-                | Builtin::Str => { /* do nothing */ }
-                Builtin::List(element) => stack.push(*element),
-            },
-            Layout::Struct { field_layouts, .. } => stack.extend(field_layouts),
-            Layout::Boxed(boxed) => stack.push(*boxed),
-            Layout::Union(tag_union) => match tag_union {
-                UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
-                    for tag in tags {
-                        stack.extend(tag.iter());
-                    }
-                }
-                UnionLayout::NonNullableUnwrapped(fields) => {
-                    stack.extend(fields);
-                }
-                UnionLayout::NullableWrapped { other_tags, .. } => {
-                    for tag in other_tags {
-                        stack.extend(tag.iter());
-                    }
-                }
-                UnionLayout::NullableUnwrapped { other_fields, .. } => {
-                    stack.extend(other_fields);
-                }
-            },
-            Layout::LambdaSet(_) => return true,
-            Layout::RecursivePointer => {
-                /* do nothing, we've already generated for this type through the Union(_) */
-            }
-        }
-    }
-
-    false
-}
-
 #[derive(Debug, Default)]
 pub struct GlueLayouts<'a> {
     pub getters: std::vec::Vec<(Symbol, ProcLayout<'a>)>,
@@ -10836,7 +10791,7 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
                 Builtin::List(element) => stack.push(*element),
             },
             Layout::Struct { field_layouts, .. } => {
-                if layout_contains_function(arena, layout) {
+                if layout.contains_function(arena) {
                     layouts.push(layout);
 
                     generate_glue_procs_for_fields(

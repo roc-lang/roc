@@ -2664,6 +2664,51 @@ impl<'a> Layout<'a> {
         }
     }
 
+    pub fn contains_function(self, arena: &Bump) -> bool {
+        let mut stack = Vec::new_in(arena);
+
+        stack.push(self);
+
+        while let Some(layout) = stack.pop() {
+            match layout {
+                Layout::Builtin(builtin) => match builtin {
+                    Builtin::Int(_)
+                    | Builtin::Float(_)
+                    | Builtin::Bool
+                    | Builtin::Decimal
+                    | Builtin::Str => { /* do nothing */ }
+                    Builtin::List(element) => stack.push(*element),
+                },
+                Layout::Struct { field_layouts, .. } => stack.extend(field_layouts),
+                Layout::Boxed(boxed) => stack.push(*boxed),
+                Layout::Union(tag_union) => match tag_union {
+                    UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
+                        for tag in tags {
+                            stack.extend(tag.iter());
+                        }
+                    }
+                    UnionLayout::NonNullableUnwrapped(fields) => {
+                        stack.extend(fields);
+                    }
+                    UnionLayout::NullableWrapped { other_tags, .. } => {
+                        for tag in other_tags {
+                            stack.extend(tag.iter());
+                        }
+                    }
+                    UnionLayout::NullableUnwrapped { other_fields, .. } => {
+                        stack.extend(other_fields);
+                    }
+                },
+                Layout::LambdaSet(_) => return true,
+                Layout::RecursivePointer => {
+                    /* do nothing, we've already generated for this type through the Union(_) */
+                }
+            }
+        }
+
+        false
+    }
+
     /// Used to build a `Layout::Struct` where the field name order is irrelevant.
     pub fn struct_no_name_order(field_layouts: &'a [Layout]) -> Self {
         if field_layouts.is_empty() {
