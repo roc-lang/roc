@@ -41,7 +41,6 @@ roc_std = { path = "../../roc_std"  }
 roc_debug_flags = {path="../debug_flags"}
 bumpalo = { version = "3.11.0", features = ["collections"] }
 libc = "0.2.135"
-inkwell = { path = "../../vendor/inkwell" }
 target-lexicon = "0.12.3"
 libloading = "0.7.1"
 tempfile = "3.2.0"
@@ -49,6 +48,8 @@ indoc = "1.0.7"
 criterion = { git = "https://github.com/Anton-4/criterion.rs" }
 wasm3 = { git = "https://github.com/roc-lang/wasm3-rs", rev = "f0f807d1fc0a50d1d68e5799e54ee62c05af00f5" }
 lazy_static = "1.4.0"
+
+inkwell.workspace = true
 
 [features]
 default = ["gen-llvm"]
