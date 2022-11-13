@@ -110,7 +110,8 @@ code {
     margin: 0 0.2rem;
     white-space: nowrap;
     background: var(--code-bg);
-    padding: 0.05rem 0.3rem;
+    padding: 0.1rem 0.5rem;
+    border-radius: 4px;
 }
 
 code, samp {
@@ -160,7 +161,7 @@ samp .paren, samp .brace, samp .comma {
     color: #3474db;
 }
 
-samp .str {
+samp .str, samp .number {
     /* string literals */
     color: #158086;
 }
@@ -182,6 +183,47 @@ samp .dim {
 samp .comment {
     color: green;
 }
+samp .comment .kw,
+samp .comment .str,
+samp .comment .number {
+    color: inherit;
+}
+
+/* Tables */
+
+table {
+    border-collapse: collapse;
+    overflow-x: auto;
+    border: 2px solid #f0f0f0;
+}
+thead {
+    border: none;
+}
+tbody {
+    border: none;
+}
+tr {
+    border: none;
+    border-top: 2px solid #f0f0f0;
+}
+th,
+td {
+    border: none;
+    border-right: 2px solid #f0f0f0;
+    padding: 12px;
+}
+th:last-child,
+td:last-child {
+    border-right: none;
+}
+
+@media (prefers-color-scheme: dark) {
+    table, tr, th, td {
+        border-color: #3b3f47;
+    }
+}
+
+/* Tutorial Specific */
 
 #tutorial-start {
     display: flex;

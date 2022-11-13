@@ -519,7 +519,7 @@ to write something like <code>{ name: "Richard", role: Admin }</code>. At first,
 ever be set to <code>Admin</code> or <code>Normal</code>, but because the data has been modeled using tags instead of
 booleans, it's much easier to add other alternatives in the future, like <code>Guest</code> or <code>Moderator</code> -
 some of which might also want payloads.</p>
-<h2 id="lists">Lists</h2>
+<h2 id="lists"><a href="#lists">Lists</a></h2>
 <p>Another thing we can do in Roc is to make a <em>list</em> of values. Here's an example:</p>
 <samp><span class="attr">names</span> <span class="op">=</span> [<span class="str">"Sam"</span>, <span class="str">"Lee"</span>, <span class="str">"Ari"</span>]
 </samp>
@@ -534,7 +534,7 @@ variation of what was passed in.</p>
 <h3 id="list-map"><a href="#list-map">List.map</a></h3>
 <p>A common way to transform one list into another is to use <code>List.map</code>. Here's an example of how to
 use it:</p>
-<samp>List.map [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] \num <span class="op">-&gt;</span> num * <span class="number">2</span>
+<samp>List.map <span class="brace">[</span><span class="number">1</span><span class="comma">,</span> <span class="number">2</span><span class="comma">,</span> <span class="number">3</span><span class="brace">]</span> <span class="op">\</span>num <span class="op">-&gt;</span> num * <span class="number">2</span>
 </samp>
 <p>This returns <code>[2, 4, 6]</code>. <code>List.map</code> takes two arguments:</p>
 <ol>
@@ -551,9 +551,9 @@ So <code>Num.isOdd 5</code> returns <code>true</code> and <code>Num.isOdd 2</cod
 <h3 id="list-element-type-compatibility"><a href="#list-element-type-compatibility">List element type compatibility</a></h3>
 <p>If we tried to give <code>List.map</code> a function that didn't work on the elements in the list, then we'd get
 an error at compile time. Here's a valid, and then an invalid example:</p>
-<samp># working example
+<samp><span class="comment"># working example</span>
 List.map [-<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, -<span class="number">4</span>] Num.isNegative
-# returns [Bool.<span class="hljs-literal">true</span>, Bool.<span class="hljs-literal">false</span>, Bool.<span class="hljs-literal">false</span>, Bool.<span class="hljs-literal">true</span>]
+<span class="comment"># returns [Bool.<span class="hljs-literal">true</span>, Bool.<span class="hljs-literal">false</span>, Bool.<span class="hljs-literal">false</span>, Bool.<span class="hljs-literal">true</span>]</span>
 </samp>
 <samp><span class="comment"># invalid example</span>
 List.map [<span class="str">"A"</span>, <span class="str">"B"</span>, <span class="str">"C"</span>] Num.isNegative
@@ -577,7 +577,7 @@ incompatibility (like <code>Num.negate</code> on a list of strings).</p>
 <h3 id="lists-that-hold-elements-of-different-types"><a href="#lists-that-hold-elements-of-different-types">Lists that hold elements of different types</a></h3>
 <p>We can use tags with payloads to make a list that contains a mixture of different types. For example:</p>
 <samp>List.map [StrElem <span class="str">"A"</span>, StrElem <span class="str">"b"</span>, NumElem <span class="number">1</span>, StrElem <span class="str">"c"</span>, NumElem -<span class="number">3</span>] \elem <span class="op">-&gt;</span>
-    when elem is
+    <span class="op">when</span> elem <span class="op">is</span>
         NumElem num <span class="op">-&gt;</span> Num.isNegative num
         StrElem str <span class="op">-&gt;</span> Str.isCapitalized str
 <span class="comment"># returns [Bool.true, Bool.false, Bool.false, Bool.false, Bool.true]</span>
@@ -592,7 +592,7 @@ Instead, we're using a <code>when</code> to tell when we've got a string or a nu
 more branches to the <code>when</code> to handle them appropriately.</p>
 <h3 id="using-tags-as-functions"><a href="#using-tags-as-functions">Using tags as functions</a></h3>
 <p>Let's say I want to apply a tag to a bunch of elements in a list. For example:</p>
-<samp>List.map [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] \str <span class="op">-&gt;</span> Foo str
+<samp>List.map [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] <span class="op">\</span>str <span class="op">-&gt;</span> Foo str
 </samp>
 <p>This is a perfectly reasonable way to write it, but I can also write it like this:</p>
 <samp>List.map <span class="hljs-meta">[</span><span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span><span class="hljs-meta">]</span> Foo
@@ -605,33 +605,33 @@ want a function which uses all of its arguments as the payload to the given tag.
 something with it. Another is <code>List.any</code>, which returns <code>Bool.true</code> if calling the given function on any element
 in the list returns <code>true</code>:</p>
 <samp>List.any [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] Num.isOdd
-# returns `Bool.true` because <span class="number">1</span> and <span class="number">3</span> are odd
+<span class="comment"># returns `Bool.true` because <span class="number">1</span> and <span class="number">3</span> are odd</span>
 </samp>
 <samp>List.any [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] Num.isNegative
-# returns `Bool.false` because none <span class="kw">of</span> these is negative
+<span class="comment"># returns `Bool.false` because none of these is negative</span>
 </samp>
 <p>There's also <code>List.all</code> which only returns <code>true</code> if all the elements in the list pass the test:</p>
 <samp>List.<span class="kw">all</span> [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] Num.isOdd
-# returns `Bool.<span class="hljs-literal">false</span>` because <span class="number">2</span> <span class="kw">is</span> <span class="kw">not</span> odd
+<span class="comment"># returns `Bool.<span class="hljs-literal">false</span>` because <span class="number">2</span> <span class="kw">is</span> <span class="kw">not</span> odd</span>
 </samp>
 <samp>List.<span class="kw">all</span> [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] Num.isPositive
-# returns `Bool.<span class="hljs-literal">true</span>` because <span class="kw">all</span> <span class="kw">of</span> these are positive
+<span class="comment"># returns `Bool.<span class="hljs-literal">true</span>` because <span class="kw">all</span> <span class="kw">of</span> these are positive</span>
 </samp>
-<h3 id="removing-elements-from-a-list">Removing elements from a list</h3>
+<h3 id="removing-elements-from-a-list"><a href="#removing-elements-from-a-list">Removing elements from a list</a></h3>
 <p>You can also drop elements from a list. One way is <code>List.dropAt</code> - for example:</p>
 <samp>List.dropAt [<span class="str">"Sam"</span>, <span class="str">"Lee"</span>, <span class="str">"Ari"</span>] <span class="number">1</span>
-# drops the element <span class="kw">at</span> offset <span class="number">1</span> (<span class="str">"Lee"</span>) <span class="kw">and</span> returns [<span class="str">"Sam"</span>, <span class="str">"Ari"</span>]
+<span class="comment"># drops the element <span class="kw">at</span> offset <span class="number">1</span> (<span class="str">"Lee"</span>) <span class="kw">and</span> returns [<span class="str">"Sam"</span>, <span class="str">"Ari"</span>]</span>
 </samp>
 <p>Another way is to use <code>List.keepIf</code>, which passes each of the list's elements to the given
 function, and then keeps them only if that function returns <code>true</code>.</p>
 <samp>List.keepIf [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] Num.isEven
-# returns [<span class="number">2</span>, <span class="number">4</span>]
+<span class="comment"># returns [<span class="number">2</span>, <span class="number">4</span>]</span>
 </samp>
 <p>There's also <code>List.dropIf</code>, which does the reverse:</p>
 <samp>List.dropIf [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] Num.isEven
-# returns [<span class="number">1</span>, <span class="number">3</span>, <span class="number">5</span>]
+<span class="comment"># returns [<span class="number">1</span>, <span class="number">3</span>, <span class="number">5</span>]</span>
 </samp>
-<h3 id="custom-operations-that-walk-over-a-list">Custom operations that walk over a list</h3>
+<h3 id="custom-operations-that-walk-over-a-list"><a href="#custom-operations-that-walk-over-a-list">Custom operations that walk over a list</a></h3>
 <p>You can make your own custom operations that walk over all the elements in a list, using <code>List.walk</code>.
 Let's look at an example and then walk (ha!) through it.</p>
 <samp>List.walk [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] { evens: [], odds: [] } \<span class="kw">state</span>, elem <span class="op">-&gt;</span>
@@ -663,7 +663,7 @@ the initial state gets returned immediately.)</p>
 <p><strong>Note:</strong> Other languages give this operation different names, such as "fold," "reduce," "accumulate,"
 "aggregate," "compress," and "inject."</p>
 </blockquote>
-<h3 id="getting-an-individual-element-from-a-list">Getting an individual element from a list</h3>
+<h3 id="getting-an-individual-element-from-a-list"><a href="#getting-an-individual-element-from-a-list">Getting an individual element from a list</a></h3>
 <p>Another thing we can do with a list is to get an individual element out of it. <code>List.get</code> is a common way to do this;
 it takes a list and an index, and then returns the element at that index...if there is one. But what if there isn't?</p>
 <p>For example, what do each of these return?</p>
@@ -687,14 +687,14 @@ with the answer (if successful), or an <code>Err</code> tag with another tag des
 In fact, it's such a common pattern that there's a whole module called <code>Result</code> which deals with these two tags.
 Here are some examples of <code>Result</code> functions:</p>
 <samp>Result.withDefault (List.get [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] <span class="number">100</span>) <span class="str">""</span>
-# returns <span class="str">""</span> because that<span class="hljs-symbol">'s</span> the <span class="kw">default</span> we said to <span class="kw">use</span> <span class="kw">if</span> List.get returned an <span class="hljs-literal">Err</span>
+<span class="comment"># returns <span class="str">""</span> because that<span class="hljs-symbol">'s</span> the <span class="kw">default</span> we said to <span class="kw">use</span> <span class="kw">if</span> List.get returned an <span class="hljs-literal">Err</span></span>
 </samp>
 <samp>Result.isOk (List.get [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] <span class="number">1</span>)
-# returns `Bool.true` because `List.get` returned an `Ok` tag. (The payload gets ignored.)
+<span class="comment"># returns `Bool.true` because `List.get` returned an `Ok` tag. (The payload gets ignored.)</span>
 
-# Note: There<span class="str">'s a Result.isErr function that works similarly.</span>
+<span class="comment"># Note: There<span class="str">'s a Result.isErr function that works similarly.</span></span>
 </samp>
-<h3 id="the-pipe-operator">The pipe operator</h3>
+<h3 id="the-pipe-operator"><a href="#the-pipe-operator">The pipe operator</a></h3>
 <p>When you have nested function calls, sometimes it can be clearer to write them in a "pipelined"
 style using the <code>|&gt;</code> operator. Here are three examples of writing the same expression; they all
 compile to exactly the same thing, but two of them use the <code>|&gt;</code> operator to change how the calls look.</p>
@@ -708,8 +708,8 @@ comes after the <code>|&gt;</code> - so in the example above, the <code>|&gt;</c
 value as the first argument to <code>Result.withDefault</code> - making <code>""</code> the second argument to <code>Result.withDefault</code>.</p>
 <p>We can take this a step further like so:</p>
 <samp>[<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>]
-    <span class="str">|&gt; List.get 1</span>
-    <span class="str">|&gt; Result.withDefault ""</span>
+    <span class="kw">|&gt;</span> List.get <span class="number">1</span>
+    <span class="kw">|&gt;</span> Result.withDefault <span class="str">""</span>
 </samp>
 <p>This is still equivalent to the first expression. Since <code>|&gt;</code> is known as the "pipe operator," we can read
 this as "start with <code>["a", "b", "c"]</code>, then pipe it to <code>List.get</code>, then pipe it to <code>Result.withDefault</code>."</p>
@@ -718,20 +718,20 @@ functions where argument order matters. For example, these two uses of <code>Lis
 <samp>List.append [<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>] <span class="str">"d"</span>
 </samp>
 <samp>[<span class="str">"a"</span>, <span class="str">"b"</span>, <span class="str">"c"</span>]
-    |&gt; List.append <span class="str">"d"</span>
+    <span class="kw">|&gt;</span> List.append <span class="str">"d"</span>
 </samp>
 <p>Another example is <code>Num.div</code>. All three of the following do the same thing, because <code>a / b</code> in Roc is syntax
 sugar for <code>Num.div a b</code>:</p>
-<samp><span class="kw">first</span> / <span class="kw">second</span>
+<samp>first / second
 </samp>
-<samp>Num.<span class="kw">div</span> <span class="kw">first</span> <span class="kw">second</span>
+<samp>Num.div first second
 </samp>
-<samp><span class="kw">first</span>
-    |&gt; Num.<span class="kw">div</span> <span class="kw">second</span>
+<samp>first
+    <span class="kw">|&gt;</span> Num.div second
 </samp>
 <p>All operators in Roc are syntax sugar for normal function calls. See the "Operator Desugaring Table"
 at the end of this tutorial for a complete list of them.</p>
-<h2 id="types">Types</h2>
+<h2 id="types"><a href="#types">Types</a></h2>
 <p>Sometimes you may want to document the type of a definition. For example, you might write:</p>
 <samp><span class="comment"># Takes a firstName string and a lastName string, and returns a string</span>
 fullName <span class="op">=</span> <span class="str">\firstName,</span> lastName<span class="hljs-function"> <span class="op">-&gt;</span>
@@ -840,7 +840,7 @@ of the type annotation, or even the function's implementation! The only way to h
 <code>List *</code> is if it returns an empty list.</p>
 <p>Similarly, the only way to have a function whose type is <code>a <span class="op">-&gt;</span> a</code> is if the function's implementation returns
 its argument without modifying it in any way. This is known as <a href="https://en.wikipedia.org/wiki/Identity_function">the identity function</a>.</p>
-<h2 id="numeric-types">Numeric types</h2>
+<h2 id="numeric-types"><a href="#numeric-types">Numeric types</a></h2>
 <p>Roc has different numeric types that each have different tradeoffs.
 They can all be broken down into two categories: <a href="https://en.wikipedia.org/wiki/Fraction">fractions</a>,
 and <a href="https://en.wikipedia.org/wiki/Integer">integers</a>. In Roc we call these <code>Frac</code> and <code>Int</code> for short.</p>
@@ -952,7 +952,7 @@ or too small to fit in that range (e.g. calling <code>Int.maxI32 + 1</code>, whi
 the highest possible 32-bit integer), then the operation will <em>overflow</em>.
 When an overflow occurs, the program will crash.</p>
 <p>As such, it's very important to design your integer operations not to exceed these bounds!</p>
-<h3 id="fractions">Fractions</h3>
+<h3 id="fractions"><a href="#fractions">Fractions</a></h3>
 <p>Roc has three fractional types:</p>
 <ul>
 <li><code>F32</code>, a 32-bit <a href="https://en.wikipedia.org/wiki/IEEE_754">floating-point number</a></li>
@@ -1142,10 +1142,10 @@ should look for that <code>line</code> function in the <code>Stdout</code> modul
 </samp>
 <h2 id="comments"><a href="#comments">Comments</a></h2>
 <p>Comments that begin with <code>##</code> will be included in generated documentation (<code>roc docs</code>). They require a single space after the <code>##</code>, and can include code blocks by adding five spaces after <code>##</code>. </p>
-<samp>## This is a comment for documentation, and includes a <span class="kw">code</span> block.
-##
-##     x <span class="op">=</span> <span class="number">2</span>
-##     expect x <span class="op">==</span> <span class="number">2</span>
+<samp><span class="comment">## This is a comment for documentation, and includes a <span class="kw">code</span> block.</span>
+<span class="comment">##</span>
+<span class="comment">##     x <span class="op">=</span> <span class="number">2</span></span>
+<span class="comment">##     expect x <span class="op">==</span> <span class="number">2</span></span>
 </samp>
 <p>Roc also supports inline comments and line comments with <code>#</code>. They can be used to add information that won't be included in documentation.</p>
 <samp><span class="comment"># This is a line comment that won't appear in documentation.</span>
@@ -1369,7 +1369,7 @@ it's an open record. If the type variable is missing, then it's a closed record.
 a closed record by putting a <code>{}</code> as the type variable (so for example, <code>{ email : Str }{}</code> is another way to write
 <code>{ email : Str }</code>). In practice, closed records are basically always written without the <code>{}</code> on the end,
 but later on we'll see a situation where putting types other than <code>*</code> in that spot can be useful.</p>
-<h3 id="constrained-records">Constrained Records</h3>
+<h3 id="constrained-records"><a href="#constrained-records">Constrained Records</a></h3>
 <p>The type variable can also be a named type variable, like so:</p>
 <samp>addHttps : { <span class="hljs-type">url</span> : <span class="hljs-type">Str</span> }a <span class="op">-&gt;</span> { url : <span class="hljs-type">Str</span> }a
 addHttps <span class="op">=</span> \<span class="kw">record</span> <span class="op">-&gt;</span>
@@ -1706,9 +1706,7 @@ For example, <code>[Foo Str][Bar Bool][Baz (List Str)]</code> is equivalent to <
 <td><code>Bool.and a b</code></td>
 </tr>
 <tr>
-<td>`a \</td>
-<td>\</td>
-<td>b`</td>
+<td><code>a || b</code></td>
 <td><code>Bool.or a b</code></td>
 </tr>
 <tr>
@@ -1720,13 +1718,11 @@ For example, <code>[Foo Str][Bar Bool][Baz (List Str)]</code> is equivalent to <
 <td><code>Bool.not (f x y)</code></td>
 </tr>
 <tr>
-<td>`a \</td>
-<td>&gt; b`</td>
+<td><code>a |> b</code>
 <td><code>b a</code></td>
 </tr>
 <tr>
-<td>`a b c \</td>
-<td>&gt; f x y`</td>
+<td><code>a b c |> f x y</code></td>
 <td><code>f (a b c) x y</code></td>
 </tr>
 </tbody>
