@@ -351,7 +351,7 @@ h4 {
   font-family: 'Permanent Marker';
   font-style: normal;
   font-weight: 400;
-  src: url(https://fonts.gstatic.com/s/permanentmarker/v16/Fh4uPib9Iyv2ucM6pGQMWimMp004La2Cf5b6jlg.woff2) format('woff2');
+  src: url("fonts/PermanentMarker.woff2") format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
@@ -360,7 +360,7 @@ h4 {
   font-family: 'Merriweather';
   font-style: normal;
   font-weight: 400;
-  src: url(https://fonts.gstatic.com/s/merriweather/v30/u-440qyriQwlOrhSvowK_l5-ciZMdeX3rsHo.woff2) format('woff2');
+  src: url("fonts/MerriweatherExt.woff2") format('woff2');
   unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
@@ -369,7 +369,7 @@ h4 {
   font-family: 'Merriweather';
   font-style: normal;
   font-weight: 400;
-  src: url(https://fonts.gstatic.com/s/merriweather/v30/u-440qyriQwlOrhSvowK_l5-fCZMdeX3rg.woff2) format('woff2');
+  src: url("fonts/Merriweather.woff2") format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
@@ -378,7 +378,7 @@ h4 {
   font-family: 'Merriweather Sans';
   font-style: normal;
   font-weight: 400;
-  src: url(https://fonts.gstatic.com/s/merriweathersans/v22/2-cO9IRs1JiJN1FRAMjTN5zd9vgsFF_5asQTb6hZ2JKZou4Vh-sBzRRXnKOrnx4.woff) format('woff');
+  src: url("fonts/MerriweatherSansExt.woff") format('woff');
   unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 /* latin */
@@ -386,7 +386,7 @@ h4 {
   font-family: 'Merriweather Sans';
   font-style: normal;
   font-weight: 400;
-  src: url(https://fonts.gstatic.com/s/merriweathersans/v22/2-cO9IRs1JiJN1FRAMjTN5zd9vgsFF_5asQTb6hZ2JKZou4ViesBzRRXnKOr.woff) format('woff');
+  src: url("fonts/MerriweatherSans.woff") format('woff');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
@@ -395,7 +395,7 @@ h4 {
   font-family: 'Lato';
   font-style: normal;
   font-weight: 400;
-  src: url(https://fonts.gstatic.com/s/lato/v23/S6uyw4BMUTPHjxAwXiWtFCfQ7A.woff2) format('woff2');
+  src: src("fonts/LatoExt.woff2") format("woff2");
   unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 /* latin */
@@ -403,7 +403,7 @@ h4 {
   font-family: 'Lato';
   font-style: normal;
   font-weight: 400;
-  src: url(https://fonts.gstatic.com/s/lato/v23/S6uyw4BMUTPHjx4wXiWtFCc.woff2) format('woff2');
+  src: url("fonts/Lato.woff2") format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
@@ -412,7 +412,7 @@ h4 {
   font-family: 'Source Code Pro';
   font-style: normal;
   font-weight: 400;
-  src: url(https://fonts.gstatic.com/s/sourcecodepro/v22/HI_diYsKILxRpg3hIP6sJ7fM7PqPMcMnZFqUwX28DMyQtMdrSlcZZJmOpwVS.woff) format('woff');
+  src: url("fonts/SourceCodeProExt.woff") format('woff');
   unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 /* latin */
@@ -420,7 +420,7 @@ h4 {
   font-family: 'Source Code Pro';
   font-style: normal;
   font-weight: 400;
-  src: url(https://fonts.gstatic.com/s/sourcecodepro/v22/HI_diYsKILxRpg3hIP6sJ7fM7PqPMcMnZFqUwX28DMyQtMlrSlcZZJmOpw.woff) format('woff');
+  src: url("fonts/SourceCodePro.woff") format('woff');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
