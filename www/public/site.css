@@ -217,6 +217,22 @@ td:last-child {
     border-right: none;
 }
 
+#integer-types {
+    width: 100%;
+}
+
+#integer-types th:first-of-type, #integer-types td:first-of-type {
+    text-align: right;
+}
+
+#integer-types td:first-of-type code {
+    background-color: inherit;
+}
+
+#integer-types th:last-of-type, #integer-types td:last-of-type {
+    text-align: left;
+}
+
 @media (prefers-color-scheme: dark) {
     table, tr, th, td {
         border-color: #3b3f47;

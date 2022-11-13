@@ -875,64 +875,53 @@ the lowest <code>U16</code> would be zero (since it always is for unsigned integ
 <li>Certain processors work faster on some numeric sizes than others. There isn't even a general rule like "larger numeric sizes run slower" (or the reverse, for that matter) that applies to all processors. In fact, if the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!</li>
 </ul>
 <p>Here are the different fixed-size integer types that Roc supports:</p>
-<table>
+<table id="integer-types">
 <thead>
 <tr>
-<th style="text-align:right">Range</th>
-<th style="text-align:left">Type</th>
-<th style="text-align:left">Size</th>
+<th>Range</th>
+<th>Type</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td style="text-align:right"><code>-128</code><br/><code>127</code></td>
-<td style="text-align:left"><code>I8</code></td>
-<td style="text-align:left">1 Byte</td>
+<td><code>-128</code><br/><code>127</code></td>
+<td><code>I8</code></td>
 </tr>
 <tr>
-<td style="text-align:right"><code>0</code><br/><code>255</code></td>
-<td style="text-align:left"><code>U8</code></td>
-<td style="text-align:left">1 Byte</td>
+<td><code>0</code><br/><code>255</code></td>
+<td><code>U8</code></td>
 </tr>
 <tr>
-<td style="text-align:right"><code>-32_768</code><br/><code>32_767</code></td>
-<td style="text-align:left"><code>I16</code></td>
-<td style="text-align:left">2 Bytes</td>
+<td><code>-32_768</code><br/><code>32_767</code></td>
+<td><code>I16</code></td>
 </tr>
 <tr>
-<td style="text-align:right"><code>0</code><br/><code>65_535</code></td>
-<td style="text-align:left"><code>U16</code></td>
-<td style="text-align:left">2 Bytes</td>
+<td><code>0</code><br/><code>65_535</code></td>
+<td><code>U16</code></td>
 </tr>
 <tr>
-<td style="text-align:right"><code>-2_147_483_648</code><br/><code>2_147_483_647</code></td>
-<td style="text-align:left"><code>I32</code></td>
-<td style="text-align:left">4 Bytes</td>
+<td><code>-2_147_483_648</code><br/><code>2_147_483_647</code></td>
+<td><code>I32</code></td>
 </tr>
 <tr>
-<td style="text-align:right"><code>0</code><br/>(over 4 billion) <code>4_294_967_295</code></td>
-<td style="text-align:left"><code>U32</code></td>
-<td style="text-align:left">4 Bytes</td>
+<td><code>0</code><br/>(over 4 billion) <code>4_294_967_295</code></td>
+<td><code>U32</code></td>
 </tr>
 <tr>
-<td style="text-align:right"><code>-9_223_372_036_854_775_808</code><br/><code>9_223_372_036_854_775_807</code></td>
-<td style="text-align:left"><code>I64</code></td>
-<td style="text-align:left">8 Bytes</td>
+<td><code>-9_223_372_036_854_775_808</code><br/><code>9_223_372_036_854_775_807</code></td>
+<td><code>I64</code></td>
 </tr>
 <tr>
-<td style="text-align:right"><code>0</code><br/>(over 18 quintillion) <code>18_446_744_073_709_551_615</code></td>
-<td style="text-align:left"><code>U64</code></td>
-<td style="text-align:left">8 Bytes</td>
+<td><code>0</code><br/><i>(over 18 quintillion)</i><code>18_446_744_073_709_551_615</code></td>
+<td><code>U64</code></td>
 </tr>
 <tr>
-<td style="text-align:right"><code>-170_141_183_460_469_231_731_687_303_715_884_105_728</code><br/><code>170_141_183_460_469_231_731_687_303_715_884_105_727</code></td>
-<td style="text-align:left"><code>I128</code></td>
-<td style="text-align:left">16 Bytes</td>
+<td><code>-170_141_183_460_469_231_731_687_303_715_884_105_728</code><br/><code>170_141_183_460_469_231_731_687_303_715_884_105_727</code></td>
+<td><code>I128</code></td>
 </tr>
 <tr>
-<td style="text-align:right"><code>0</code><br/>(over 340 undecillion) <code>340_282_366_920_938_463_463_374_607_431_768_211_455</code></td>
-<td style="text-align:left"><code>U128</code></td>
-<td style="text-align:left">16 Bytes</td>
+<td><code>0</code><br/><i>(over 340 undecillion)</i><code>340_282_366_920_938_463_463_374_607_431_768_211_455</code></td>
+<td><code>U128</code></td>
 </tr>
 </tbody>
 </table>
