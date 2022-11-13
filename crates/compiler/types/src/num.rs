@@ -36,7 +36,7 @@ impl NumericRange {
         width.signedness_and_width().1 >= at_least_width.signedness_and_width().1
     }
 
-    fn width(&self) -> IntLitWidth {
+    pub(crate) fn width(&self) -> IntLitWidth {
         use NumericRange::*;
         match self {
             IntAtLeastSigned(w)

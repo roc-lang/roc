@@ -1796,7 +1796,7 @@ impl<'a> ListLiteralElement<'a> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Call<'a> {
     pub call_type: CallType<'a>,
     pub arguments: &'a [Symbol],

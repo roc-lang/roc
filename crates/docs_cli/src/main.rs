@@ -1,3 +1,4 @@
+//! Provides a binary that is only used for static build servers.
 use clap::{Arg, Command};
 use roc_docs::generate_docs_html;
 use std::fs::{self, FileType};

@@ -1,8 +1,9 @@
 #[allow(unused_imports)]
 use indoc::indoc;
+use roc_test_utils::assert_multiline_str_eq;
 
 #[cfg(not(feature = "wasm"))]
-use crate::cli::{expect_failure, expect_success};
+use crate::cli::{expect_failure, expect_success, repl_eval};
 
 #[cfg(feature = "wasm")]
 #[allow(unused_imports)]
@@ -199,8 +200,7 @@ fn newtype_of_big_data() {
                 Either a b : [Left a, Right b]
                 lefty : Either Str Str
                 lefty = Left "loosey"
-                A lefty
-                "#
+                A lefty"#
         ),
         r#"A (Left "loosey") : [A (Either Str Str)]"#,
     )
@@ -214,8 +214,7 @@ fn newtype_nested() {
                 Either a b : [Left a, Right b]
                 lefty : Either Str Str
                 lefty = Left "loosey"
-                A (B (C lefty))
-                "#
+                A (B (C lefty))"#
         ),
         r#"A (B (C (Left "loosey"))) : [A [B [C (Either Str Str)]]]"#,
     )
@@ -229,8 +228,7 @@ fn newtype_of_big_of_newtype() {
                 Big a : [Big a [Wrapper [Newtype a]]]
                 big : Big Str
                 big = Big "s" (Wrapper (Newtype "t"))
-                A big
-                "#
+                A big"#
         ),
         r#"A (Big "s" (Wrapper (Newtype "t"))) : [A (Big Str)]"#,
     )
@@ -560,17 +558,45 @@ fn four_element_record() {
     );
 }
 
+#[cfg(not(feature = "wasm"))]
 #[test]
-fn multiline_string() {
+fn multiline_string_non_wasm() {
+    // If a string contains newlines, format it as a multiline string in the output.
+
+    // We can't use expect_success to test this, because it only looks at the last
+    // line of output, and in this case we care about every line of output!
+    let out = repl_eval(r#""\n\nhi!\n\n""#);
+    let expected = indoc!(
+        r#""""
+
+
+                hi!
+
+
+                """ : Str"#
+    );
+
+    assert_multiline_str_eq!("", out.stderr.as_str());
+
+    // Don't consider the auto variable name ("# val1") at the end.
+    // The state.rs tests do that!
+    assert_multiline_str_eq!(expected, out.stdout.replace("# val1", "").trim());
+
+    assert!(out.status.success());
+}
+
+#[cfg(feature = "wasm")]
+#[test]
+fn multiline_string_wasm() {
     // If a string contains newlines, format it as a multiline string in the output
     expect_success(
         r#""\n\nhi!\n\n""#,
         indoc!(
             r#""""
 
-            
+
                 hi!
-            
+
 
                 """ : Str"#
         ),
@@ -933,39 +959,7 @@ fn parse_problem() {
     );
 }
 
-#[cfg(not(feature = "wasm"))] // TODO: mismatch is due to terminal control codes!
-#[test]
-fn exhaustiveness_problem() {
-    expect_failure(
-        indoc!(
-            r#"
-            t : [A, B, C]
-            t = A
-
-            when t is
-                A -> "a"
-            "#
-        ),
-        indoc!(
-            r#"
-            ── UNSAFE PATTERN ──────────────────────────────────────────────────────────────
-
-            This when does not cover all the possibilities:
-
-            7│>      when t is
-            8│>          A -> "a"
-
-            Other possibilities include:
-
-                B
-                C
-
-            I would have to crash if I saw one of those! Add branches for them!
-            "#
-        ),
-    );
-}
-
+#[ignore] // re-enable (and fix) after https://github.com/roc-lang/roc/issues/4425 is done!
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn issue_2343_complete_mono_with_shadowed_vars() {
@@ -1024,8 +1018,7 @@ fn tag_with_type_behind_alias() {
             T : [A Str]
             v : T
             v = A "value"
-            v
-            "#
+            v"#
         ),
         r#"A "value" : T"#,
     );
@@ -1039,8 +1032,7 @@ fn issue_2588_record_with_function_and_nonfunction() {
             r#"
             x = 1
             f = \n -> n * 2
-            { y: f x, f }
-            "#
+            { y: f x, f }"#
         ),
         r#"{ f: <function>, y: 2 } : { f : Num a -> Num a, y : Num * }"#,
     )
@@ -1053,8 +1045,7 @@ fn opaque_apply() {
             r#"
             Age := U32
 
-            @Age 23
-            "#
+            @Age 23"#
         ),
         "@Age 23 : Age",
     )
@@ -1067,8 +1058,7 @@ fn opaque_apply_polymorphic() {
             r#"
             F t u := [Package t u]
 
-            @F (Package "" { a: "" })
-            "#
+            @F (Package "" { a: "" })"#
         ),
         r#"@F (Package "" { a: "" }) : F Str { a : Str }"#,
     )
@@ -1083,8 +1073,7 @@ fn opaque_pattern_and_call() {
 
             f = \@F (Package A {}) -> @F (Package {} A)
 
-            f (@F (Package A {}))
-            "#
+            f (@F (Package A {}))"#
         ),
         r#"@F (Package {} A) : F {} [A]"#,
     )
@@ -1097,10 +1086,9 @@ fn dec_in_repl() {
             r#"
             x: Dec
             x=1.23
-            x
-            "#
+            x"#
         ),
-        r#"1.23 : Dec"#,
+        "1.23 : Dec",
     )
 }
 
@@ -1111,8 +1099,7 @@ fn print_i8_issue_2710() {
             r#"
             a : I8
             a = -1
-            a
-            "#
+            a"#
         ),
         r#"-1 : I8"#,
     )
@@ -1124,8 +1111,7 @@ fn box_box() {
     expect_success(
         indoc!(
             r#"
-            Box.box "container store"
-            "#
+            Box.box "container store""#
         ),
         r#"Box.box "container store" : Box Str"#,
     )
@@ -1140,8 +1126,7 @@ fn box_box_type_alias() {
             HeapStr : Box Str
             helloHeap : HeapStr
             helloHeap = Box.box "bye stacks"
-            helloHeap
-            "#
+            helloHeap"#
         ),
         r#"Box.box "bye stacks" : HeapStr"#,
     )
@@ -1165,9 +1150,7 @@ fn issue_2818() {
             f : {} -> List Str
             f = \_ ->
               x = []
-              x
-            f
-            "#
+              x"#
         ),
         r"<function> : {} -> List Str",
     )
@@ -1186,8 +1169,7 @@ fn issue_2810_recursive_layout_inside_nonrecursive() {
 
             a : Job
             a = Job (Command (FromJob (Job (Command SystemTool))))
-            a
-            "#
+            a"#
         ),
         "Job (Command (FromJob (Job (Command SystemTool)))) : Job",
     )
@@ -1199,14 +1181,10 @@ fn render_nullable_unwrapped_passing_through_alias() {
         indoc!(
             r#"
             Deep : [L DeepList]
-
             DeepList : [Nil, Cons Deep]
-
             v : DeepList
             v = (Cons (L (Cons (L (Cons (L Nil))))))
-
-            v
-            "#
+            v"#
         ),
         "Cons (L (Cons (L (Cons (L Nil))))) : DeepList",
     )
@@ -1218,8 +1196,7 @@ fn opaque_wrap_function() {
         indoc!(
             r#"
             A a := a
-            List.map [1u8, 2u8, 3u8] @A
-            "#
+            List.map [1u8, 2u8, 3u8] @A"#
         ),
         "[@A 1, @A 2, @A 3] : List (A U8)",
     );
@@ -1230,8 +1207,7 @@ fn dict_get_single() {
     expect_success(
         indoc!(
             r#"
-            Dict.single 0 {a: 1, c: 2} |> Dict.get 0
-            "#
+            Dict.single 0 {a: 1, c: 2} |> Dict.get 0"#
         ),
         r#"Ok { a: 1, c: 2 } : Result { a : Num *, c : Num * } [KeyNotFound]"#,
     )
@@ -1242,8 +1218,7 @@ fn record_of_poly_function() {
     expect_success(
         indoc!(
             r#"
-            { a: \_ -> "a" }
-            "#
+            { a: \_ -> "a" }"#
         ),
         r#"{ a: <function> } : { a : * -> Str }"#,
     );
@@ -1254,8 +1229,7 @@ fn record_of_poly_function_and_string() {
     expect_success(
         indoc!(
             r#"
-            { a: \_ -> "a", b: "b" }
-            "#
+            { a: \_ -> "a", b: "b" }"#
         ),
         r#"{ a: <function>, b: "b" } : { a : * -> Str, b : Str }"#,
     );
@@ -1266,8 +1240,7 @@ fn newtype_by_void_is_wrapped() {
     expect_success(
         indoc!(
             r#"
-            Result.try (Err 42) (\x -> Err (x+1))
-            "#
+            Result.try (Err 42) (\x -> Err (x+1))"#
         ),
         r#"Err 42 : Result b (Num *)"#,
     );
@@ -1275,8 +1248,7 @@ fn newtype_by_void_is_wrapped() {
     expect_success(
         indoc!(
             r#"
-            Result.try (Ok 42) (\x -> Ok (x+1))
-            "#
+            Result.try (Ok 42) (\x -> Ok (x+1))"#
         ),
         r#"Ok 43 : Result (Num *) err"#,
     );

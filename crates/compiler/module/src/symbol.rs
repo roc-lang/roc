@@ -246,29 +246,13 @@ fn fallback_debug_fmt(symbol: Symbol, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "`{:?}.{:?}`", module_id, ident_id)
 }
 
-// TODO this is only here to prevent clippy from complaining about an unused
-// #[macro_use] on lazy_statc in --release builds, because as of January 2020,
-// we only use lazy_static in the debug configuration. If we ever start using
-// lazy_static in release builds, this do-nothing macro invocation will be safe to delete!
-//
-// There's probably also a way to get clippy to stop complaining about the unused
-// #[macro_use] but it didn't seem worth the effort since probably someday we'll
-// end up using it in release builds anyway. Right? ...Right?
-lazy_static! {}
-
+/// This is used in Debug builds only, to let us have a Debug instance
+/// which displays not only the Module ID, but also the Module Name which
+/// corresponds to that ID.
+///
 #[cfg(any(debug_assertions, feature = "debug-symbols"))]
-lazy_static! {
-    /// This is used in Debug builds only, to let us have a Debug instance
-    /// which displays not only the Module ID, but also the Module Name which
-    /// corresponds to that ID.
-    ///
-    static ref DEBUG_MODULE_ID_NAMES: std::sync::Mutex<roc_collections::SmallStringInterner> =
-        // This stores a u32 key instead of a ModuleId key so that if there's
-        // a problem with ModuleId's Debug implementation, logging this for diagnostic
-        // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
-        // this out.
-        std::sync::Mutex::new(roc_collections::SmallStringInterner::with_capacity(10));
-}
+static DEBUG_MODULE_ID_NAMES: std::sync::Mutex<roc_collections::SmallStringInterner> =
+    std::sync::Mutex::new(roc_collections::SmallStringInterner::new());
 
 #[derive(Debug, Default, Clone)]
 pub struct Interns {
@@ -338,18 +322,16 @@ pub fn get_module_ident_ids_mut<'a>(
         })
 }
 
+/// This is used in Debug builds only, to let us have a Debug instance
+/// which displays not only the Module ID, but also the Module Name which
+/// corresponds to that ID.
 #[cfg(any(debug_assertions, feature = "debug-symbols"))]
-lazy_static! {
-    /// This is used in Debug builds only, to let us have a Debug instance
-    /// which displays not only the Module ID, but also the Module Name which
-    /// corresponds to that ID.
-    static ref DEBUG_IDENT_IDS_BY_MODULE_ID: std::sync::Mutex<roc_collections::VecMap<u32, IdentIds>> =
-        // This stores a u32 key instead of a ModuleId key so that if there's
-        // a problem with ModuleId's Debug implementation, logging this for diagnostic
-        // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
-        // this out.
-        std::sync::Mutex::new(roc_collections::VecMap::default());
-}
+static DEBUG_IDENT_IDS_BY_MODULE_ID: std::sync::Mutex<roc_collections::VecMap<u32, IdentIds>> =
+    // This stores a u32 key instead of a ModuleId key so that if there's
+    // a problem with ModuleId's Debug implementation, logging this for diagnostic
+    // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
+    // this out.
+    std::sync::Mutex::new(roc_collections::VecMap::new());
 
 /// A globally unique ID that gets assigned to each module as it is loaded.
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]

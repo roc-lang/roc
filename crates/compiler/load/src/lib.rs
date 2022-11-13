@@ -1,3 +1,5 @@
+//! Used to load a .roc file and coordinate the compiler pipeline, including
+//! parsing, type checking, and [code generation](https://en.wikipedia.org/wiki/Code_generation_(compiler)).
 use bumpalo::Bump;
 use roc_can::module::{ExposedByModule, TypeState};
 use roc_collections::all::MutMap;
@@ -15,8 +17,8 @@ const SKIP_SUBS_CACHE: bool = {
 
 pub use roc_load_internal::docs;
 pub use roc_load_internal::file::{
-    EntryPoint, ExecutionMode, Expectations, LoadConfig, LoadResult, LoadStart, LoadedModule,
-    LoadingProblem, MonomorphizedModule, Phase, Threading,
+    EntryPoint, ExecutionMode, ExpectMetadata, Expectations, LoadConfig, LoadResult, LoadStart,
+    LoadedModule, LoadingProblem, MonomorphizedModule, Phase, Threading,
 };
 
 #[allow(clippy::too_many_arguments)]

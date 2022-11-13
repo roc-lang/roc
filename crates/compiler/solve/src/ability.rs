@@ -191,8 +191,7 @@ impl ObligationCache {
                     // Demote the bad variable that exposed this problem to an error, both so
                     // that we have an ErrorType to report and so that codegen knows to deal
                     // with the error later.
-                    let (error_type, _moar_ghosts_n_stuff) =
-                        subs.var_to_error_type(var, Polarity::OF_VALUE);
+                    let error_type = subs.var_to_error_type(var, Polarity::OF_VALUE);
                     problems.push(TypeError::BadExprMissingAbility(
                         region,
                         category,
@@ -209,8 +208,7 @@ impl ObligationCache {
                     // Demote the bad variable that exposed this problem to an error, both so
                     // that we have an ErrorType to report and so that codegen knows to deal
                     // with the error later.
-                    let (error_type, _moar_ghosts_n_stuff) =
-                        subs.var_to_error_type(var, Polarity::OF_PATTERN);
+                    let error_type = subs.var_to_error_type(var, Polarity::OF_PATTERN);
                     problems.push(TypeError::BadPatternMissingAbility(
                         region,
                         category,
@@ -311,15 +309,14 @@ impl ObligationCache {
             })) => Some(if failure_var == var {
                 UnderivableReason::SurfaceNotDerivable(context)
             } else {
-                let (error_type, _skeletons) =
-                    subs.var_to_error_type(failure_var, Polarity::OF_VALUE);
+                let error_type = subs.var_to_error_type(failure_var, Polarity::OF_VALUE);
                 UnderivableReason::NestedNotDerivable(error_type, context)
             }),
             None => Some(UnderivableReason::NotABuiltin),
         };
 
         if let Some(underivable_reason) = opt_underivable {
-            let (error_type, _skeletons) = subs.var_to_error_type(var, Polarity::OF_VALUE);
+            let error_type = subs.var_to_error_type(var, Polarity::OF_VALUE);
 
             Err(Unfulfilled::AdhocUnderivable {
                 typ: error_type,
@@ -715,13 +712,6 @@ trait DerivableVisitor {
                     }
                     EmptyRecord => Self::visit_empty_record(var)?,
                     EmptyTagUnion => Self::visit_empty_tag_union(var)?,
-
-                    Erroneous(_) => {
-                        return Err(NotDerivable {
-                            var,
-                            context: NotDerivableContext::NoContext,
-                        })
-                    }
                 },
                 Alias(
                     Symbol::NUM_NUM | Symbol::NUM_INTEGER | Symbol::NUM_FLOATINGPOINT,

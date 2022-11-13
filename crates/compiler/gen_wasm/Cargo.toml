@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
+description = "Provides the WASM backend to generate Roc binaries."
 
 [dependencies]
 bitvec = "1"

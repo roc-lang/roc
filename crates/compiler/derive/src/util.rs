@@ -91,7 +91,7 @@ impl Env<'_> {
                     internal_error!("Did not expect derivers to need to specialize unspecialized lambda sets, but we got some: {:?}", lambda_sets_to_specialize)
                 }
             }
-            Unified::Failure(..) | Unified::BadType(..) => {
+            Unified::Failure(..) => {
                 internal_error!("Unification failed in deriver - that's a deriver bug!")
             }
         }
@@ -156,7 +156,7 @@ impl Env<'_> {
                 }
                 specialization_lsets
             }
-            Unified::Failure(..) | Unified::BadType(..) => {
+            Unified::Failure(..) => {
                 internal_error!("Unification failed in deriver - that's a deriver bug!")
             }
         }

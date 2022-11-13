@@ -3234,6 +3234,7 @@ version = "0.0.1"
 dependencies = [
  "indoc",
  "lazy_static",
+ "roc_build",
  "roc_cli",
  "roc_repl_cli",
  "roc_test_utils",
@@ -3355,7 +3356,6 @@ name = "roc_builtins"
 version = "0.0.1"
 dependencies = [
  "dunce",
- "lazy_static",
  "roc_collections",
  "roc_module",
  "roc_region",
@@ -3412,6 +3412,7 @@ dependencies = [
  "roc_fmt",
  "roc_gen_llvm",
  "roc_glue",
+ "roc_intern",
  "roc_linker",
  "roc_load",
  "roc_module",
@@ -3424,8 +3425,10 @@ dependencies = [
  "roc_target",
  "roc_test_utils",
  "roc_tracing",
+ "roc_utils",
  "serial_test",
  "signal-hook",
+ "strum",
  "target-lexicon",
  "tempfile",
  "ven_pretty",
@@ -3823,7 +3826,6 @@ name = "roc_module"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "lazy_static",
  "roc_collections",
  "roc_error_macros",
  "roc_ident",
@@ -3921,6 +3923,7 @@ dependencies = [
  "rustyline",
  "rustyline-derive",
  "target-lexicon",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -3958,6 +3961,7 @@ dependencies = [
  "roc_builtins",
  "roc_can",
  "roc_collections",
+ "roc_error_macros",
  "roc_gen_llvm",
  "roc_intern",
  "roc_load",
@@ -4130,6 +4134,7 @@ dependencies = [
  "roc_region",
  "roc_serialize",
  "static_assertions",
+ "ven_pretty",
 ]
 
 [[package]]
@@ -4733,6 +4738,9 @@ name = "strum"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "063e6045c0e62079840579a7e47a355ae92f60eb74daaf156fb1e84ba164e63f"
+dependencies = [
+ "strum_macros",
+]
 
 [[package]]
 name = "strum_macros"
@@ -4810,7 +4818,6 @@ dependencies = [
  "bumpalo",
  "indoc",
  "insta",
- "lazy_static",
  "pretty_assertions",
  "roc_builtins",
  "roc_can",
@@ -5165,9 +5172,9 @@ checksum = "5bd2fe26506023ed7b5e1e315add59d6f584c621d037f9368fea9cfb988f368c"
 
 [[package]]
 name = "unicode-segmentation"
-version = "1.9.0"
+version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e8820f5d777f6224dc4be3632222971ac30164d4a258d595640799554ebfd99"
+checksum = "0fdbf052a0783de01e944a6ce7a8cb939e295b1e7be835a1112c3b9a7f047a5a"
 
 [[package]]
 name = "unicode-width"

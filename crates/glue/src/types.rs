@@ -866,7 +866,6 @@ fn add_type_help<'a>(
         Content::Structure(FlatType::FunctionOrTagUnion(_, _, _)) => {
             todo!()
         }
-        Content::Structure(FlatType::Erroneous(_)) => todo!(),
         Content::Structure(FlatType::EmptyRecord) => {
             types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
         }

@@ -1,3 +1,4 @@
+//! Provides macros for consistent reporting of errors in Roc's rust code.
 /// `internal_error!` should be used whenever a compiler invariant is broken.
 /// It is a wrapper around panic that tells the user to file a bug.
 /// This should only be used in cases where there would be a compiler bug and the user can't fix it.

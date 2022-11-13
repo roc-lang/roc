@@ -1037,6 +1037,47 @@ pub fn can_problem<'b>(
             title = "MULTIPLE LIST REST PATTERNS".to_string();
             severity = Severity::RuntimeError;
         }
+        Problem::BadTypeArguments {
+            symbol,
+            region,
+            type_got,
+            alias_needs,
+            alias_kind,
+        } => {
+            let needed_arguments = if alias_needs == 1 {
+                alloc.reflow("1 type argument")
+            } else {
+                alloc
+                    .text(alias_needs.to_string())
+                    .append(alloc.reflow(" type arguments"))
+            };
+
+            let found_arguments = alloc.text(type_got.to_string());
+
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("The "),
+                    alloc.symbol_unqualified(symbol),
+                    alloc.reflow(" "),
+                    alloc.reflow(alias_kind.as_str()),
+                    alloc.reflow(" expects "),
+                    needed_arguments,
+                    alloc.reflow(", but it got "),
+                    found_arguments,
+                    alloc.reflow(" instead:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Are there missing parentheses?"),
+            ]);
+
+            title = if type_got > alias_needs {
+                "TOO MANY TYPE ARGUMENTS".to_string()
+            } else {
+                "TOO FEW TYPE ARGUMENTS".to_string()
+            };
+
+            severity = Severity::RuntimeError;
+        }
     };
 
     Report {

@@ -115,7 +115,7 @@ fn loc_tag_pattern_arg<'a>(
 pub fn loc_has_parser<'a>() -> impl Parser<'a, Loc<Has<'a>>, EPattern<'a>> {
     then(
         loc_tag_pattern_arg(false),
-        |_arena, state, progress, pattern, _min_indent| {
+        |_arena, state, progress, pattern| {
             if matches!(pattern.value, Pattern::Identifier("has")) {
                 Ok((progress, Loc::at(pattern.region, Has::Has), state))
             } else {
@@ -228,7 +228,7 @@ fn list_element_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
 fn three_list_rest_pattern_error<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
     then(
         loc!(word3(b'.', b'.', b'.', PList::Rest)),
-        |_arena, state, _progress, word, _min_indent| {
+        |_arena, state, _progress, word| {
             Err((MadeProgress, PList::Rest(word.region.start()), state))
         },
     )

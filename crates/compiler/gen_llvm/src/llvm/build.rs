@@ -163,6 +163,7 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
 pub enum LlvmBackendMode {
     /// Assumes primitives (roc_alloc, roc_panic, etc) are provided by the host
     Binary,
+    BinaryDev,
     /// Creates a test wrapper around the main roc function to catch and report panics.
     /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
     GenTest,
@@ -174,6 +175,7 @@ impl LlvmBackendMode {
     pub(crate) fn has_host(self) -> bool {
         match self {
             LlvmBackendMode::Binary => true,
+            LlvmBackendMode::BinaryDev => true,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => true,
             LlvmBackendMode::CliTest => false,
@@ -184,6 +186,7 @@ impl LlvmBackendMode {
     fn returns_roc_result(self) -> bool {
         match self {
             LlvmBackendMode::Binary => false,
+            LlvmBackendMode::BinaryDev => false,
             LlvmBackendMode::GenTest => true,
             LlvmBackendMode::WasmGenTest => true,
             LlvmBackendMode::CliTest => true,
@@ -193,6 +196,7 @@ impl LlvmBackendMode {
     fn runs_expects(self) -> bool {
         match self {
             LlvmBackendMode::Binary => false,
+            LlvmBackendMode::BinaryDev => true,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => false,
             LlvmBackendMode::CliTest => true,
@@ -2824,6 +2828,10 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             lookups,
                         );
 
+                        if let LlvmBackendMode::BinaryDev = env.mode {
+                            crate::llvm::expect::finalize(env);
+                        }
+
                         bd.build_unconditional_branch(then_block);
                     }
                     roc_target::PtrWidth::Bytes4 => {
@@ -3925,7 +3933,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
             )
         }
 
-        LlvmBackendMode::Binary => {}
+        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev => {}
     }
 
     // a generic version that writes the result into a passed *u8 pointer
@@ -3976,7 +3984,9 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
             roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
         }
 
-        LlvmBackendMode::Binary => basic_type_from_layout(env, &return_layout),
+        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev => {
+            basic_type_from_layout(env, &return_layout)
+        }
     };
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
@@ -4948,7 +4958,7 @@ pub fn build_proc<'a, 'ctx, 'env>(
                 GenTest | WasmGenTest | CliTest => {
                     /* no host, or exposing types is not supported */
                 }
-                Binary => {
+                Binary | BinaryDev => {
                     for (alias_name, (generated_function, top_level, layout)) in aliases.iter() {
                         expose_alias_to_host(
                             env,

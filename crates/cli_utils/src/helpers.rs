@@ -5,6 +5,7 @@ extern crate roc_module;
 extern crate tempfile;
 
 use roc_utils::cargo;
+use roc_utils::root_dir;
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
@@ -28,9 +29,15 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    let roc_binary_path = build_roc_bin_cached();
+
+    run_roc_with_stdin_and_env(&roc_binary_path, args, stdin_vals, extra_env)
+}
+
+// If we don't already have a /target/release/roc, build it!
+pub fn build_roc_bin_cached() -> PathBuf {
     let roc_binary_path = path_to_roc_binary();
 
-    // If we don't have a /target/release/roc, rebuild it!
     if !roc_binary_path.exists() {
         // Remove the /target/release/roc part
         let root_project_dir = roc_binary_path
@@ -49,21 +56,25 @@ where
             vec!["build", "--release", "--bin", "roc"]
         };
 
-        let output = cargo()
-            .current_dir(root_project_dir)
-            .args(args)
-            .output()
-            .unwrap();
+        let mut cargo_cmd = cargo();
 
-        if !output.status.success() {
-            panic!("cargo build --release --bin roc failed. stdout was:\n\n{:?}\n\nstderr was:\n\n{:?}\n",
-                output.stdout,
-                output.stderr
+        cargo_cmd.current_dir(root_project_dir).args(&args);
+
+        let cargo_cmd_str = format!("{:?}", cargo_cmd);
+
+        let cargo_output = cargo_cmd.output().unwrap();
+
+        if !cargo_output.status.success() {
+            panic!(
+                "The following cargo command failed:\n\n  {}\n\n  stdout was:\n\n    {}\n\n  stderr was:\n\n    {}\n",
+                cargo_cmd_str,
+                String::from_utf8(cargo_output.stdout).unwrap(),
+                String::from_utf8(cargo_output.stderr).unwrap()
             );
         }
     }
 
-    run_with_stdin_and_env(&roc_binary_path, args, stdin_vals, extra_env)
+    roc_binary_path
 }
 
 pub fn run_glue<I, S>(args: I) -> Out
@@ -71,7 +82,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    run_with_stdin(&path_to_roc_binary(), args, &[])
+    run_roc_with_stdin(&path_to_roc_binary(), args, &[])
 }
 
 pub fn path_to_roc_binary() -> PathBuf {
@@ -118,16 +129,16 @@ pub fn strip_colors(str: &str) -> String {
         .replace(ANSI_STYLE_CODES.color_reset, "")
 }
 
-pub fn run_with_stdin<I, S>(path: &Path, args: I, stdin_vals: &[&str]) -> Out
+pub fn run_roc_with_stdin<I, S>(path: &Path, args: I, stdin_vals: &[&str]) -> Out
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    run_with_stdin_and_env(path, args, stdin_vals, &[])
+    run_roc_with_stdin_and_env(path, args, stdin_vals, &[])
 }
 
-pub fn run_with_stdin_and_env<I, S>(
-    path: &Path,
+pub fn run_roc_with_stdin_and_env<I, S>(
+    roc_path: &Path,
     args: I,
     stdin_vals: &[&str],
     extra_env: &[(&str, &str)],
@@ -136,46 +147,49 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let mut cmd = Command::new(path);
+    let mut roc_cmd = Command::new(roc_path);
 
     for arg in args {
-        cmd.arg(arg);
+        roc_cmd.arg(arg);
     }
 
     for (k, v) in extra_env {
-        cmd.env(k, v);
+        roc_cmd.env(k, v);
     }
 
-    let mut child = cmd
+    let roc_cmd_str = format!("{:?}", roc_cmd);
+
+    let mut roc_cmd_child = roc_cmd
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap_or_else(|err| {
-            panic!(
-                "failed to execute compiled binary {} in CLI test: {err}",
-                path.to_string_lossy()
-            )
+            panic!("Failed to execute command\n\n  {roc_cmd_str}\n\nwith error:\n\n  {err}",)
         });
 
     {
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
+        let stdin = roc_cmd_child.stdin.as_mut().expect("Failed to open stdin");
 
         for stdin_str in stdin_vals.iter() {
             stdin
                 .write_all(stdin_str.as_bytes())
-                .expect("Failed to write to stdin");
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to write to stdin for command\n\n  {roc_cmd_str}\n\nwith error:\n\n  {err}",
+                    )
+                });
         }
     }
 
-    let output = child
-        .wait_with_output()
-        .expect("failed to get output for compiled binary in CLI test");
+    let roc_cmd_output = roc_cmd_child.wait_with_output().unwrap_or_else(|err| {
+        panic!("Failed to get output for command\n\n  {roc_cmd_str}\n\nwith error:\n\n  {err}",)
+    });
 
     Out {
-        stdout: String::from_utf8(output.stdout).unwrap(),
-        stderr: String::from_utf8(output.stderr).unwrap(),
-        status: output.status,
+        stdout: String::from_utf8(roc_cmd_output.stdout).unwrap(),
+        stderr: String::from_utf8(roc_cmd_output.stderr).unwrap(),
+        status: roc_cmd_output.status,
     }
 }
 
@@ -356,30 +370,6 @@ pub fn extract_valgrind_errors(xml: &str) -> Result<Vec<ValgrindError>, serde_xm
         .collect();
 
     Ok(answer)
-}
-
-#[allow(dead_code)]
-pub fn root_dir() -> PathBuf {
-    let mut path = env::current_exe().ok().unwrap();
-
-    // Get rid of the filename in target/debug/deps/cli_run-99c65e4e9a1fbd06
-    path.pop();
-
-    // If we're in deps/ get rid of deps/ in target/debug/deps/
-    if path.ends_with("deps") {
-        path.pop();
-    }
-
-    // Get rid of target/debug/ so we're back at the project root
-    path.pop();
-    path.pop();
-
-    // running cargo with --target will put us in the target dir
-    if path.ends_with("target") {
-        path.pop();
-    }
-
-    path
 }
 
 // start the dir with crates/cli_testing_examples

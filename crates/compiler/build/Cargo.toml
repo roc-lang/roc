@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Responsible for coordinating building and linking of a Roc app with its host."
 
 [dependencies]
 roc_collections = { path = "../collections" }

@@ -188,6 +188,158 @@ pub enum Problem {
     MultipleListRestPattern {
         region: Region,
     },
+    BadTypeArguments {
+        symbol: Symbol,
+        region: Region,
+        alias_needs: u8,
+        type_got: u8,
+        alias_kind: AliasKind,
+    },
+}
+
+impl Problem {
+    /// Returns a Region value from the Problem, if possible.
+    /// Some problems have more than one region; in those cases,
+    /// this tries to pick the one that's closest to the original
+    /// definition site, since that's what the REPL uses this for:
+    /// filtering out errors and warnings from wrapped defs based
+    /// on their Region being outside the expression currently being evaluated.
+    pub fn region(&self) -> Option<Region> {
+        match self {
+            Problem::UnusedDef(_, region)
+            | Problem::Shadowing {
+                original_region: region,
+                ..
+            }
+            | Problem::UnusedImport(_, region)
+            | Problem::UnusedModuleImport(_, region)
+            | Problem::UnknownGeneratesWith(Loc { region, .. })
+            | Problem::UnusedArgument(_, _, _, region)
+            | Problem::UnusedBranchDef(_, region)
+            | Problem::PrecedenceProblem(PrecedenceProblem::BothNonAssociative(region, _, _))
+            | Problem::UnsupportedPattern(_, region)
+            | Problem::CyclicAlias(_, region, _, _)
+            | Problem::PhantomTypeArgument {
+                variable_region: region,
+                ..
+            }
+            | Problem::UnboundTypeVariable {
+                one_occurrence: region,
+                ..
+            }
+            | Problem::DuplicateRecordFieldValue {
+                record_region: region,
+                ..
+            }
+            | Problem::DuplicateRecordFieldType {
+                record_region: region,
+                ..
+            }
+            | Problem::InvalidOptionalValue {
+                record_region: region,
+                ..
+            }
+            | Problem::DuplicateTag {
+                tag_union_region: region,
+                ..
+            }
+            | Problem::RuntimeError(RuntimeError::Shadowing {
+                original_region: region,
+                ..
+            })
+            | Problem::RuntimeError(RuntimeError::InvalidOptionalValue {
+                record_region: region,
+                ..
+            })
+            | Problem::RuntimeError(RuntimeError::UnsupportedPattern(region))
+            | Problem::RuntimeError(RuntimeError::MalformedPattern(_, region))
+            | Problem::RuntimeError(RuntimeError::LookupNotInScope(Loc { region, .. }, _))
+            | Problem::RuntimeError(RuntimeError::OpaqueNotDefined {
+                usage: Loc { region, .. },
+                ..
+            })
+            | Problem::RuntimeError(RuntimeError::OpaqueOutsideScope {
+                referenced_region: region,
+                ..
+            })
+            | Problem::RuntimeError(RuntimeError::OpaqueNotApplied(Loc { region, .. }))
+            | Problem::RuntimeError(RuntimeError::OpaqueAppliedToMultipleArgs(region))
+            | Problem::RuntimeError(RuntimeError::ValueNotExposed { region, .. })
+            | Problem::RuntimeError(RuntimeError::ModuleNotImported { region, .. })
+            | Problem::RuntimeError(RuntimeError::InvalidPrecedence(_, region))
+            | Problem::RuntimeError(RuntimeError::MalformedIdentifier(_, _, region))
+            | Problem::RuntimeError(RuntimeError::MalformedTypeName(_, region))
+            | Problem::RuntimeError(RuntimeError::MalformedClosure(region))
+            | Problem::RuntimeError(RuntimeError::InvalidRecordUpdate { region })
+            | Problem::RuntimeError(RuntimeError::InvalidFloat(_, region, _))
+            | Problem::RuntimeError(RuntimeError::InvalidInt(_, _, region, _))
+            | Problem::RuntimeError(RuntimeError::InvalidInterpolation(region))
+            | Problem::RuntimeError(RuntimeError::InvalidHexadecimal(region))
+            | Problem::RuntimeError(RuntimeError::InvalidUnicodeCodePt(region))
+            | Problem::RuntimeError(RuntimeError::EmptySingleQuote(region))
+            | Problem::RuntimeError(RuntimeError::MultipleCharsInSingleQuote(region))
+            | Problem::RuntimeError(RuntimeError::DegenerateBranch(region))
+            | Problem::InvalidAliasRigid { region, .. }
+            | Problem::InvalidInterpolation(region)
+            | Problem::InvalidHexadecimal(region)
+            | Problem::InvalidUnicodeCodePt(region)
+            | Problem::NestedDatatype {
+                def_region: region, ..
+            }
+            | Problem::InvalidExtensionType { region, .. }
+            | Problem::AbilityHasTypeVariables {
+                variables_region: region,
+                ..
+            }
+            | Problem::HasClauseIsNotAbility { region }
+            | Problem::IllegalHasClause { region }
+            | Problem::DuplicateHasAbility { region, .. }
+            | Problem::AbilityMemberMissingHasClause { region, .. }
+            | Problem::AbilityMemberMultipleBoundVars {
+                span_has_clauses: region,
+                ..
+            }
+            | Problem::AbilityNotOnToplevel { region }
+            | Problem::AbilityUsedAsType(_, _, region)
+            | Problem::NestedSpecialization(_, region)
+            | Problem::IllegalDerivedAbility(region)
+            | Problem::ImplementationNotFound { region, .. }
+            | Problem::NotAnAbilityMember { region, .. }
+            | Problem::OptionalAbilityImpl { region, .. }
+            | Problem::QualifiedAbilityImpl { region }
+            | Problem::AbilityImplNotIdent { region }
+            | Problem::DuplicateImpl {
+                original: region, ..
+            }
+            | Problem::NotAnAbility(region)
+            | Problem::ImplementsNonRequired { region, .. }
+            | Problem::DoesNotImplementAbility { region, .. }
+            | Problem::NoIdentifiersIntroduced(region)
+            | Problem::OverloadedSpecialization {
+                overload: region, ..
+            }
+            | Problem::NotBoundInAllPatterns { region, .. }
+            | Problem::SignatureDefMismatch {
+                def_pattern: region,
+                ..
+            }
+            | Problem::MultipleListRestPattern { region }
+            | Problem::BadTypeArguments { region, .. }
+            | Problem::UnnecessaryOutputWildcard { region } => Some(*region),
+            Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
+            | Problem::BadRecursion(cycle_entries) => {
+                cycle_entries.first().map(|entry| entry.expr_region)
+            }
+            Problem::RuntimeError(RuntimeError::UnresolvedTypeVar)
+            | Problem::RuntimeError(RuntimeError::ErroneousType)
+            | Problem::RuntimeError(RuntimeError::NonExhaustivePattern)
+            | Problem::RuntimeError(RuntimeError::NoImplementation)
+            | Problem::RuntimeError(RuntimeError::VoidValue)
+            | Problem::RuntimeError(RuntimeError::ExposedButNotDefined(_))
+            | Problem::RuntimeError(RuntimeError::NoImplementationNamed { .. })
+            | Problem::ExposedButNotDefined(_) => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

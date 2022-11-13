@@ -61,17 +61,6 @@ mod cli_run {
         PlainText(&'a str),
     }
 
-    #[derive(Debug, PartialEq, Eq)]
-    struct CliTest<'a> {
-        filename: &'a str,
-        executable_filename: &'a str,
-        stdin: &'a [&'a str],
-        arguments: &'a [Arg<'a>],
-        env: &'a [(&'a str, &'a str)],
-        expected_ending: &'a str,
-        use_valgrind: bool,
-    }
-
     fn check_compile_error(file: &Path, flags: &[&str], expected: &str) {
         let compile_out = run_roc(
             [CMD_CHECK, file.to_str().unwrap()].iter().chain(flags),
@@ -192,7 +181,7 @@ mod cli_run {
                             run_with_valgrind(stdin.iter().copied(), &valgrind_args);
                         if valgrind_out.status.success() {
                             let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
-                                panic!("failed to parse the `valgrind` xml output. Error was:\n\n{:?}\n\nvalgrind xml was: \"{}\"\n\nvalgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", err, raw_xml, valgrind_out.stdout, valgrind_out.stderr);
+                                panic!("failed to parse the `valgrind` xml output:\n\n  Error was:\n\n    {:?}\n\n  valgrind xml was:\n\n    \"{}\"\n\n  valgrind stdout was:\n\n    \"{}\"\n\n  valgrind stderr was:\n\n    \"{}\"", err, raw_xml, valgrind_out.stdout, valgrind_out.stderr);
                             });
 
                             if !memory_errors.is_empty() {
@@ -301,8 +290,8 @@ mod cli_run {
         test_many_cli_commands: bool, // buildOnly, buildAndRun and buildAndRunIfNoErrors
     ) {
         let file_name = file_path_from_root(dir_name, roc_filename);
+        let mut roc_app_args: Vec<String> = Vec::new();
 
-        let mut roc_app_args: Vec<String> = vec![];
         for arg in args {
             match arg {
                 Arg::ExamplePath(file) => {
@@ -320,10 +309,10 @@ mod cli_run {
         }
 
         // workaround for surgical linker issue, see PR #3990
-        let mut custom_flags: Vec<&str> = vec![];
+        let mut custom_flags: Vec<&str> = Vec::new();
 
         match executable_filename {
-            "form" | "hello-gui" | "breakout" | "ruby" => {
+            "form" | "hello-gui" | "breakout" | "libhello" => {
                 // Since these require things the build system often doesn't have
                 // (e.g. GUIs open a window, Ruby needs ruby installed, WASM needs a browser)
                 // we do `roc build` on them but don't run them.

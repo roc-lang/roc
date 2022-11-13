@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Data structures for storing source-code-location information, used heavily for contextual error messages."
 
 [dependencies]
 static_assertions = "1.1.0"

@@ -47,7 +47,7 @@ mod glue_cli_run {
                     assert_eq!(stderr, "");
                     assert!(
                         out.stdout.ends_with($ends_with),
-                        "Unexpected stdout ending\n\nexpected:\n\n{}\n\nbut stdout was:\n\n{}",
+                        "Unexpected stdout ending\n\n  expected:\n\n    {}\n\n  but stdout was:\n\n    {}",
                         $ends_with,
                         out.stdout
                     );

@@ -1,6 +1,6 @@
 use crate::builtins;
 use crate::expr::{constrain_expr, Env};
-use roc_can::constraint::{Constraint, Constraints, TypeOrVar};
+use roc_can::constraint::{Constraint, Constraints, PExpectedTypeIndex, TypeOrVar};
 use roc_can::expected::{Expected, PExpected};
 use roc_can::pattern::Pattern::{self, *};
 use roc_can::pattern::{DestructType, ListPatterns, RecordDestruct};
@@ -187,7 +187,7 @@ pub fn constrain_pattern(
     env: &mut Env,
     pattern: &Pattern,
     region: Region,
-    expected: PExpected<TypeOrVar>,
+    expected: PExpectedTypeIndex,
     state: &mut PatternState,
 ) {
     match pattern {
@@ -198,12 +198,11 @@ pub fn constrain_pattern(
             //     A -> ""
             //     _ -> ""
             // so, we know that "x" (in this case, a tag union) must be open.
-            if could_be_a_tag_union(constraints, *expected.get_type_ref()) {
-                let type_index = expected.get_type();
-
+            let expected_type = *constraints[expected].get_type_ref();
+            if could_be_a_tag_union(constraints, expected_type) {
                 state
                     .delayed_is_open_constraints
-                    .push(constraints.is_open_type(type_index));
+                    .push(constraints.is_open_type(expected_type));
             }
         }
         UnsupportedPattern(_) | MalformedPattern(_, _) | OpaqueNotInScope(..) => {
@@ -211,6 +210,7 @@ pub fn constrain_pattern(
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
+            let expected = &constraints[expected];
             let type_index = *expected.get_type_ref();
 
             if could_be_a_tag_union(constraints, type_index) {
@@ -232,6 +232,7 @@ pub fn constrain_pattern(
             ident: symbol,
             specializes: _,
         } => {
+            let expected = &constraints[expected];
             let type_index = *expected.get_type_ref();
 
             if could_be_a_tag_union(constraints, type_index) {
@@ -260,8 +261,6 @@ pub fn constrain_pattern(
                 Category::Num,
             );
             let num_type = constraints.push_type(num_type);
-
-            let expected = constraints.push_pat_expected_type(expected);
 
             state.constraints.push(constraints.equal_pattern_types(
                 num_type,
@@ -295,7 +294,6 @@ pub fn constrain_pattern(
             });
 
             // Also constrain the pattern against the num var, again to reuse aliases if they're present.
-            let expected = constraints.push_pat_expected_type(expected);
             state.constraints.push(constraints.equal_pattern_types(
                 num_type,
                 expected,
@@ -329,7 +327,6 @@ pub fn constrain_pattern(
             });
 
             // Also constrain the pattern against the num var, again to reuse aliases if they're present.
-            let expected = constraints.push_pat_expected_type(expected);
             state.constraints.push(constraints.equal_pattern_types(
                 num_type_index,
                 expected,
@@ -340,7 +337,6 @@ pub fn constrain_pattern(
 
         StrLiteral(_) => {
             let str_type = constraints.push_type(builtins::str_type());
-            let expected = constraints.push_pat_expected_type(expected);
             state.constraints.push(constraints.equal_pattern_types(
                 str_type,
                 expected,
@@ -379,7 +375,6 @@ pub fn constrain_pattern(
             });
 
             // Also constrain the pattern against the num var, again to reuse aliases if they're present.
-            let expected = constraints.push_pat_expected_type(expected);
             state.constraints.push(constraints.equal_pattern_types(
                 num_type_index,
                 expected,
@@ -412,7 +407,8 @@ pub fn constrain_pattern(
             {
                 let pat_type = Type::Variable(*var);
                 let pat_type_index = constraints.push_type(pat_type.clone());
-                let expected = PExpected::NoExpectation(pat_type_index);
+                let expected =
+                    constraints.push_pat_expected_type(PExpected::NoExpectation(pat_type_index));
 
                 if !state.headers.contains_key(symbol) {
                     state
@@ -467,11 +463,11 @@ pub fn constrain_pattern(
 
                         state.vars.push(*expr_var);
 
-                        let expr_expected = Expected::ForReason(
+                        let expr_expected = constraints.push_expected_type(Expected::ForReason(
                             Reason::RecordDefaultField(label.clone()),
                             pat_type_index,
                             loc_expr.region,
-                        );
+                        ));
 
                         let expr_con = constrain_expr(
                             constraints,
@@ -510,8 +506,6 @@ pub fn constrain_pattern(
                 region,
             );
 
-            let expected = constraints.push_pat_expected_type(expected);
-
             let record_con = constraints.pattern_presence(
                 whole_var_index,
                 expected,
@@ -535,8 +529,11 @@ pub fn constrain_pattern(
             let elem_var_index = constraints.push_type(Type::Variable(*elem_var));
 
             for loc_pat in patterns.iter() {
-                let expected =
-                    PExpected::ForReason(PReason::ListElem, elem_var_index, loc_pat.region);
+                let expected = constraints.push_pat_expected_type(PExpected::ForReason(
+                    PReason::ListElem,
+                    elem_var_index,
+                    loc_pat.region,
+                ));
 
                 constrain_pattern(
                     constraints,
@@ -556,7 +553,6 @@ pub fn constrain_pattern(
             ));
             let store_solved_list = constraints.store(solved_list, *list_var, file!(), line!());
 
-            let expected = constraints.push_pat_expected_type(expected);
             let expected_constraint = constraints.pattern_presence(
                 list_var_index,
                 expected,
@@ -583,14 +579,14 @@ pub fn constrain_pattern(
 
                 let pattern_type = constraints.push_type(Type::Variable(*pattern_var));
 
-                let expected = PExpected::ForReason(
+                let expected = constraints.push_pat_expected_type(PExpected::ForReason(
                     PReason::TagArg {
                         tag_name: tag_name.clone(),
                         index: HumanIndex::zero_based(index),
                     },
                     pattern_type,
                     region,
-                );
+                ));
                 constrain_pattern(
                     constraints,
                     env,
@@ -602,7 +598,7 @@ pub fn constrain_pattern(
             }
 
             let pat_category = PatternCategory::Ctor(tag_name.clone());
-            let expected_type = *expected.get_type_ref();
+            let expected_type = *constraints[expected].get_type_ref();
 
             let whole_con = constraints.includes_tag(
                 expected_type,
@@ -613,7 +609,6 @@ pub fn constrain_pattern(
             );
 
             let whole_type = constraints.push_type(Type::Variable(*whole_var));
-            let expected = constraints.push_pat_expected_type(expected);
 
             let tag_con = constraints.pattern_presence(whole_type, expected, pat_category, region);
 
@@ -652,7 +647,8 @@ pub fn constrain_pattern(
             });
 
             // First, add a constraint for the argument "who"
-            let arg_pattern_expected = PExpected::NoExpectation(arg_pattern_type_index);
+            let arg_pattern_expected = constraints
+                .push_pat_expected_type(PExpected::NoExpectation(arg_pattern_type_index));
             constrain_pattern(
                 constraints,
                 env,
@@ -700,7 +696,6 @@ pub fn constrain_pattern(
 
             // Next, link `whole_var` (the type of "@Id who") to the expected type
             let whole_type = constraints.push_type(Type::Variable(*whole_var));
-            let expected = constraints.push_pat_expected_type(expected);
             let opaque_pattern_con = constraints.pattern_presence(
                 whole_type,
                 expected,

@@ -148,7 +148,6 @@ fn index_var(
                 FlatType::Func(_, _, _) | FlatType::FunctionOrTagUnion(_, _, _) => {
                     return Err(TypeError)
                 }
-                FlatType::Erroneous(_) => return Err(TypeError),
                 FlatType::Apply(Symbol::LIST_LIST, args) => {
                     match (subs.get_subs_slice(*args), ctor) {
                         ([elem_var], IndexCtor::List) => {
