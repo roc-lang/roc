@@ -19,21 +19,19 @@ roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
 roc_error_macros = { path = "../../error_macros" }
-bumpalo = { version = "3.11.0", features = ["collections"] }
-target-lexicon = "0.12.3"
-# TODO: Deal with the update of object to 0.27.
-# It looks like it breaks linking the generated objects.
-# Probably just need to specify an extra field that used to be implicit or something.
-# When fixed also update the version of object in the linker.
-object = { version = "0.29.0", features = ["write"] }
-packed_struct = "0.10.0"
+
+bumpalo.workspace = true
+target-lexicon.workspace = true
+object.workspace = true
+packed_struct.workspace = true
 
 [dev-dependencies]
 roc_can = { path = "../can" }
 roc_parse = { path = "../parse" }
 roc_std = { path = "../../roc_std" }
-bumpalo = { version = "3.11.0", features = ["collections"] }
-capstone = "0.11.0"
+
+bumpalo.workspace = true
+capstone.workspace = true
 
 [features]
 target-aarch64 = []

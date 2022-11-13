@@ -17,14 +17,13 @@ target-x86_64 = ["roc_build/target-x86_64"]
 
 [dependencies]
 inkwell.workspace = true 
-
-bumpalo = {version = "3.11.0", features = ["collections"]}
-const_format = { version = "0.2.23", features = ["const_generics"] }
-libloading = "0.7.1"
-rustyline = {git = "https://github.com/roc-lang/rustyline", rev = "e74333c"}
-rustyline-derive = {git = "https://github.com/roc-lang/rustyline", rev = "e74333c"}
-target-lexicon = "0.12.2"
-unicode-segmentation = "1.10.0"
+bumpalo.workspace = true
+const_format.workspace = true
+libloading.workspace = true
+rustyline.workspace = true
+rustyline-derive.workspace = true
+target-lexicon.workspace = true
+unicode-segmentation.workspace = true
 
 roc_build = {path = "../compiler/build"}
 roc_builtins = {path = "../compiler/builtins"}

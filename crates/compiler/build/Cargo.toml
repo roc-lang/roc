@@ -28,12 +28,13 @@ roc_reporting = { path = "../../reporting" }
 roc_error_macros = { path = "../../error_macros" }
 roc_std = { path = "../../roc_std" }
 roc_utils = { path = "../../utils" }
-bumpalo = { version = "3.11.0", features = ["collections"] }
-libloading = "0.7.1"
-tempfile = "3.2.0"
-target-lexicon = "0.12.3"
+
 wasi_libc_sys = { path = "../../wasi-libc-sys" }
 
+bumpalo.workspace = true
+libloading.workspace = true
+tempfile.workspace = true
+target-lexicon.workspace = true
 inkwell.workspace = true 
 
 [target.'cfg(target_os = "macos")'.dependencies]
