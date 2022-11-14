@@ -257,7 +257,7 @@ toUtf8 : Str -> List U8
 ##     expect Str.fromUtf8 [240, 159, 144, 166] == Ok "🐦"
 ##     expect Str.fromUtf8 [] == Ok ""
 ##     expect Str.fromUtf8 [255] |> Result.isErr
-fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*
+fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]
 fromUtf8 = \bytes ->
     result = fromUtf8RangeLowlevel bytes 0 (List.len bytes)
 
