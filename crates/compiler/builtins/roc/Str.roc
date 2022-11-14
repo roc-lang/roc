@@ -193,7 +193,7 @@ repeat : Str, Nat -> Str
 countGraphemes : Str -> Nat
 
 ## If the string begins with a [Unicode scalar value](https://unicode.org/glossary/#unicode_scalar_value)
-## equal to the given [U32], return `True`. Otherwise return `False`.
+## equal to the given [U32], returns `True`. Otherwise returns `False`.
 ##
 ## If the given [Str] is empty, or if the given [U32] is not a valid
 ## code point, this will return `False`.
@@ -205,7 +205,7 @@ countGraphemes : Str -> Nat
 ##     Str.startsWithScalar "" 40527 # False
 startsWithScalar : Str, U32 -> Bool
 
-## Return a [List] of the [Unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
+## Returns a [List] of the [Unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
 ## in the given string.
 ##
 ## (Roc strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
@@ -224,7 +224,7 @@ startsWithScalar : Str, U32 -> Bool
 ##     Str.toScalars "" # []
 toScalars : Str -> List U32
 
-## Return a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
+## Returns a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
 ## see [Str.split].)
 ##
@@ -237,6 +237,21 @@ toScalars : Str -> List U32
 ##     Str.toUtf8 "🐦" # [240, 159, 144, 166]
 toUtf8 : Str -> List U8
 
+## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
+##
+## Returns `Err` if the given bytes are invalid UTF-8, and returns `Ok ""` when given `[]`.
+##
+##     Str.fromUtf8 [82, 111, 99] # Ok "Roc"
+##
+##     Str.fromUtf8 [233, 185, 143] # Ok "鹏"
+##
+##     Str.fromUtf8 [224, 174, 154, 224, 174, 191] # Ok "சி"
+##
+##     Str.fromUtf8 [240, 159, 144, 166] # Ok "🐦"
+##
+##     Str.fromUtf8 [] # Ok ""
+##
+##     Str.fromUtf8 [255] # Err
 fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*
 fromUtf8 = \bytes ->
     result = fromUtf8RangeLowlevel bytes 0 (List.len bytes)
