@@ -139,7 +139,7 @@ Utf8ByteProblem : [
 
 Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 
-## Returns `Bool.true` if the string is empty, and `Bool.false` otherwise.
+## Returns [Bool.true] if the string is empty, and [Bool.false] otherwise.
 ##
 ##     expect Str.isEmpty "hi!" == Bool.false
 ##     expect Str.isEmpty "" == Bool.true
@@ -203,12 +203,12 @@ countGraphemes : Str -> Nat
 graphemes : Str -> List Str
 
 ## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
-## equal to the given [U32], return `Bool.true`. Otherwise return `Bool.false`.
+## equal to the given [U32], return [Bool.true]. Otherwise return [Bool.false].
 ##
 ## If the given string is empty, or if the given [U32] is not a valid
-## code point, this will return `Bool.false`.
+## code point, this will return [Bool.false].
 ##
-##     Str.startsWithScalar "鹏 means 'roc'" 40527 # True because "鹏" is Unicode scalar 40527
+##     Str.startsWithScalar "鹏 means 'roc'" 40527 # true because "鹏" is Unicode scalar 40527
 ##
 ##     Str.startsWithScalar "9" 9 # False because the Unicode scalar for "9" is 57, not 9
 ##
