@@ -258,28 +258,6 @@ toUtf8 : Str -> List U8
 ##     expect Str.fromUtf8 [] == Ok ""
 ##     expect Str.fromUtf8 [255] |> Result.isErr
 fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*
-
-## Return a [List] of the [unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
-## in the given string. Strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
-## so this is equivalent to returning a list of the string's [code points](https://unicode.org/glossary/#code_point).
-##
-##     expect Str.toScalars "I ♥ Roc" == [73, 32, 9829, 32, 82, 111, 99]
-toScalars : Str -> List U32
-
-## Return a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
-## To split the string into a [List] of smaller [Str] values instead of [U8] values,
-## see `Str.split`.
-##
-##     expect Str.toUtf8 "鹏" == [233, 185, 143]
-##     expect Str.toUtf8 "🐦" == [240, 159, 144, 166]
-toUtf8 : Str -> List U8
-
-## Encode a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit)
-## into a [Str]
-##
-##     expect Str.fromUtf8 [233, 185, 143] == Ok "鹏"
-##     expect Str.fromUtf8 [0xb0] == Err (BadUtf8 InvalidStartByte 0)
-fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]
 fromUtf8 = \bytes ->
     result = fromUtf8RangeLowlevel bytes 0 (List.len bytes)
 
