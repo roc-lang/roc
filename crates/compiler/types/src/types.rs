@@ -560,11 +560,11 @@ impl Types {
     }
 
     #[cfg(debug_assertions)]
-    pub fn dbg(&self, tag: Index<TypeTag>) -> impl std::fmt::Debug + '_ {
+    pub fn dbg(&self, tag: Index<TypeCell>) -> impl std::fmt::Debug + '_ {
         debug_types::DebugTag(self, tag)
     }
 
-    pub fn get_type_arguments(&self, tag: Index<TypeTag>) -> Slice<TypeTag> {
+    pub fn get_type_arguments(&self, tag: Index<TypeCell>) -> Slice<TypeCell> {
         self.tags_slices[tag.index()]
     }
 
@@ -1296,12 +1296,12 @@ mod debug_types {
         types::{AliasShared, RecordField, Uls},
     };
 
-    use super::{TypeTag, Types};
+    use super::{TypeCell, TypeTag, Types};
     use roc_collections::soa::{Index, Slice};
     use roc_module::ident::TagName;
     use ven_pretty::{Arena, DocAllocator, DocBuilder};
 
-    pub struct DebugTag<'a>(pub &'a Types, pub Index<TypeTag>);
+    pub struct DebugTag<'a>(pub &'a Types, pub Index<TypeCell>);
 
     impl<'a> std::fmt::Debug for DebugTag<'a> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1334,10 +1334,10 @@ mod debug_types {
         types: &'a Types,
         f: &'a Arena<'a>,
         p: TPrec,
-        tag: Index<TypeTag>,
+        tag: Index<TypeCell>,
     ) -> DocBuilder<'a, Arena<'a>> {
         use TPrec::*;
-        let group = match types[tag] {
+        let group = match types[tag].get() {
             TypeTag::EmptyRecord => f.text("{}"),
             TypeTag::EmptyTagUnion => f.text("[]"),
             TypeTag::Function(clos, ret) => {
@@ -1469,7 +1469,7 @@ mod debug_types {
     fn ext<'a>(
         types: &'a Types,
         f: &'a Arena<'a>,
-        ext_slice: Slice<TypeTag>,
+        ext_slice: Slice<TypeCell>,
     ) -> DocBuilder<'a, Arena<'a>> {
         f.intersperse(
             ext_slice.into_iter().map(|e| typ(types, f, TPrec::Free, e)),
@@ -1483,7 +1483,7 @@ mod debug_types {
         f: &'a Arena<'a>,
         prefix: DocBuilder<'a, Arena<'a>>,
         tags: UnionLabels<TagName>,
-        ext_slice: Slice<TypeTag>,
+        ext_slice: Slice<TypeCell>,
     ) -> DocBuilder<'a, Arena<'a>> {
         let (tags, payload_slices) = types.union_tag_slices(tags);
         let fmt_tags =
@@ -1512,7 +1512,7 @@ mod debug_types {
     fn alias<'a>(
         types: &'a Types,
         f: &'a Arena<'a>,
-        tag: Index<TypeTag>,
+        tag: Index<TypeCell>,
         shared: Index<AliasShared>,
     ) -> DocBuilder<'a, Arena<'a>> {
         use TPrec::*;
