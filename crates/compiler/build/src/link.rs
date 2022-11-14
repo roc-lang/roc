@@ -186,11 +186,15 @@ pub fn build_zig_host_native(
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
 ) -> Command {
+    // to prevent `clang failed with stderr: zig: error: unable to make temporary file: No such file or directory`
+    let env_userprofile = env::var("USERPROFILE").unwrap_or_else(|_| "".to_string());
+
     let mut zig_cmd = zig();
     zig_cmd
         .env_clear()
         .env("PATH", env_path)
-        .env("HOME", env_home);
+        .env("HOME", env_home)
+        .env("USERPROFILE", env_userprofile);
 
     if let Some(shared_lib_path) = shared_lib_path {
         zig_cmd.args(&[
@@ -419,7 +423,7 @@ pub fn build_c_host_native(
                     dest,
                     sources[0],
                     find_zig_str_path().to_str().unwrap(),
-                    "x86_64-windows-gnu",
+                    get_target_str(target),
                     opt_level,
                     Some(shared_lib_path),
                 );
@@ -578,23 +582,16 @@ pub fn rebuild_host(
                     shared_lib_path,
                 )
             }
-            Architecture::X86_64 => {
-                let target = match target.operating_system {
-                    OperatingSystem::Windows => "x86_64-windows-gnu",
-                    _ => "native",
-                };
-
-                build_zig_host_native(
-                    &env_path,
-                    &env_home,
-                    host_dest.to_str().unwrap(),
-                    zig_host_src.to_str().unwrap(),
-                    zig_str_path.to_str().unwrap(),
-                    target,
-                    opt_level,
-                    shared_lib_path,
-                )
-            }
+            Architecture::X86_64 => build_zig_host_native(
+                &env_path,
+                &env_home,
+                host_dest.to_str().unwrap(),
+                zig_host_src.to_str().unwrap(),
+                zig_str_path.to_str().unwrap(),
+                get_target_str(target),
+                opt_level,
+                shared_lib_path,
+            ),
             Architecture::X86_32(_) => build_zig_host_native(
                 &env_path,
                 &env_home,
@@ -636,7 +633,7 @@ pub fn rebuild_host(
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
             let mut cmd = rustup();
-            cmd.args(["run", "nightly", "cargo"]);
+            cmd.args(["run", "nightly-2022-08-06", "cargo"]);
 
             cmd
         } else {
@@ -805,6 +802,16 @@ pub fn rebuild_host(
     }
 
     host_dest
+}
+
+fn get_target_str(target: &Triple) -> &str {
+    if target.operating_system == OperatingSystem::Windows
+        && target.environment == target_lexicon::Environment::Gnu
+    {
+        "x86_64-windows-gnu"
+    } else {
+        "native"
+    }
 }
 
 fn nix_path_opt() -> Option<String> {
@@ -1227,7 +1234,7 @@ fn link_wasm32(
 }
 
 fn link_windows(
-    _target: &Triple,
+    target: &Triple,
     output_path: PathBuf,
     input_paths: &[&str],
     link_type: LinkType,
@@ -1263,7 +1270,7 @@ fn link_windows(
                 .args(input_paths)
                 .args([
                     "-target",
-                    "x86_64-windows-gnu",
+                    get_target_str(target),
                     "--subsystem",
                     "console",
                     "-lc",
@@ -1386,24 +1393,26 @@ fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_count
         match std::str::from_utf8(&cmd_output.stderr) {
             Ok(stderr) => {
                 // flaky error seen on macos 12 apple silicon, related to https://github.com/ziglang/zig/issues/9711
-                if stderr.contains("unable to save cached ZIR code") && flaky_fail_counter < max_flaky_fail_count {
-                    run_build_command(command, file_to_build, flaky_fail_counter + 1)
+                if stderr.contains("unable to save cached ZIR code") {
+                    if flaky_fail_counter < max_flaky_fail_count {
+                        run_build_command(command, file_to_build, flaky_fail_counter + 1)
+                    } else {
+                        internal_error!(
+                            "Error:\n    Failed to rebuild {} {} times, this is not a flaky failure:\n        The executed command was:\n            {}\n        stderr of that command:\n            {}",
+                            file_to_build,
+                            max_flaky_fail_count,
+                            cmd_str,
+                            stderr
+                        )
+                    }
                 } else {
                     internal_error!(
-                        "Error:\n    Failed to rebuild {} {} times, this is not a flaky failure:\n        The executed command was:\n            {}\n        stderr of that command:\n            {}",
+                        "Error:\n    Failed to rebuild {}:\n        The executed command was:\n            {}\n        stderr of that command:\n            {}",
                         file_to_build,
-                        max_flaky_fail_count,
                         cmd_str,
                         stderr
                     )
                 }
-
-                internal_error!(
-                    "Error:\n    Failed to rebuild {}:\n        The executed command was:\n            {}\n        stderr of that command:\n            {}",
-                    file_to_build,
-                    cmd_str,
-                    stderr
-                )
             },
             Err(utf8_err) => internal_error!(
                 "Error:\n    Failed to rebuild {}:\n        The executed command was:\n            {}\n        stderr of that command could not be parsed as valid utf8:\n            {}",
