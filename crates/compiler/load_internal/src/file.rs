@@ -3016,7 +3016,7 @@ fn finish_specialization<'a>(
         let ret = &layout.result;
 
         for layout in layout.arguments.iter().chain([ret]) {
-            let glue_procs = roc_mono::ir::generate_glue_procs(
+            let all_glue_procs = roc_mono::ir::generate_glue_procs(
                 module_id,
                 ident_ids,
                 arena,
@@ -3024,8 +3024,16 @@ fn finish_specialization<'a>(
                 *layout,
             );
 
-            glue_getters.extend(glue_procs.procs.iter().map(|t| t.0));
-            procedures.extend(glue_procs.procs);
+            glue_getters.extend(all_glue_procs.iter().flat_map(|(_, glue_procs)| {
+                glue_procs
+                    .iter()
+                    .map(|glue_proc| (glue_proc.name, glue_proc.proc_layout))
+            }));
+            procedures.extend(all_glue_procs.into_iter().flat_map(|(_, glue_procs)| {
+                glue_procs
+                    .into_iter()
+                    .map(|glue_proc| ((glue_proc.name, glue_proc.proc_layout), glue_proc.proc))
+            }));
         }
     }
 

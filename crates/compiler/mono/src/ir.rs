@@ -10762,9 +10762,10 @@ pub struct GlueLayouts<'a> {
     pub getters: std::vec::Vec<(Symbol, ProcLayout<'a>)>,
 }
 
-pub struct GlueProcs<'a> {
-    pub procs: Vec<'a, ((Symbol, ProcLayout<'a>), Proc<'a>)>,
-    pub layouts: Vec<'a, Layout<'a>>,
+pub struct GlueProc<'a> {
+    pub name: Symbol,
+    pub proc_layout: ProcLayout<'a>,
+    pub proc: Proc<'a>,
 }
 
 pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
@@ -10773,10 +10774,9 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
     arena: &'a Bump,
     layout_interner: &mut I,
     layout: Layout<'a>,
-) -> GlueProcs<'a> {
+) -> Vec<'a, (Layout<'a>, Vec<'a, GlueProc<'a>>)> {
     let mut stack = Vec::new_in(arena);
-    let mut procs = Vec::new_in(arena);
-    let mut layouts = Vec::new_in(arena);
+    let mut answer = Vec::new_in(arena);
 
     stack.push(layout);
 
@@ -10792,16 +10792,15 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
             },
             Layout::Struct { field_layouts, .. } => {
                 if layout.contains_function(arena) {
-                    layouts.push(layout);
-
-                    generate_glue_procs_for_fields(
+                    let procs = generate_glue_procs_for_fields(
                         home,
                         ident_ids,
                         arena,
                         layout,
                         field_layouts,
-                        &mut procs,
                     );
+
+                    answer.push((layout, procs));
 
                     stack.extend(field_layouts);
                 }
@@ -10834,7 +10833,7 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
         }
     }
 
-    GlueProcs { procs, layouts }
+    answer
 }
 
 fn generate_glue_procs_for_fields<'a>(
@@ -10843,23 +10842,21 @@ fn generate_glue_procs_for_fields<'a>(
     arena: &'a Bump,
     unboxed_struct_layout: Layout<'a>,
     field_layouts: &'a [Layout<'a>],
-    output: &mut Vec<'a, ((Symbol, ProcLayout<'a>), Proc<'a>)>,
-) {
-    output.reserve(field_layouts.len());
-
+) -> Vec<'a, GlueProc<'a>> {
     let boxed_struct_layout = Layout::Boxed(arena.alloc(unboxed_struct_layout));
+    let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
 
     for (index, field) in field_layouts.iter().enumerate() {
-        let symbol = Symbol::new(home, ident_ids.gen_unique());
-        let argument = Symbol::new(home, ident_ids.gen_unique());
-        let unboxed = Symbol::new(home, ident_ids.gen_unique());
-        let result = Symbol::new(home, ident_ids.gen_unique());
-
         let proc_layout = ProcLayout {
             arguments: arena.alloc([boxed_struct_layout]),
             result: *field,
             captures_niche: CapturesNiche::no_niche(),
         };
+
+        let symbol = Symbol::new(home, ident_ids.gen_unique());
+        let argument = Symbol::new(home, ident_ids.gen_unique());
+        let unboxed = Symbol::new(home, ident_ids.gen_unique());
+        let result = Symbol::new(home, ident_ids.gen_unique());
 
         let ret_stmt = arena.alloc(Stmt::Ret(result));
 
@@ -10891,6 +10888,12 @@ fn generate_glue_procs_for_fields<'a>(
             host_exposed_layouts: HostExposedLayouts::NotHostExposed,
         };
 
-        output.push(((symbol, proc_layout), proc));
+        answer.push(GlueProc {
+            name: symbol,
+            proc_layout,
+            proc,
+        });
     }
+
+    answer
 }

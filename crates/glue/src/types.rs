@@ -6,17 +6,14 @@ use roc_builtins::bitcode::{
     FloatWidth::*,
     IntWidth::{self, *},
 };
-use roc_collections::VecMap;
+use roc_collections::{MutMap, VecMap};
 use roc_module::{
     ident::TagName,
-    symbol::{Interns, Symbol},
+    symbol::{Interns, ModuleId, Symbol},
 };
-use roc_mono::{
-    ir::{Proc, ProcLayout},
-    layout::{
-        cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant,
-        Layout, LayoutCache, LayoutInterner, UnionLayout,
-    },
+use roc_mono::layout::{
+    cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
+    LayoutCache, LayoutInterner, UnionLayout,
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -70,25 +67,28 @@ impl Types {
         }
     }
 
-    pub(crate) fn new<'a, I>(
+    pub(crate) fn new<'a, I: Iterator<Item = Variable>>(
         arena: &'a Bump,
         subs: &'a Subs,
         variables: I,
         interns: &'a Interns,
+        glue_procs_by_layout: &'a MutMap<Layout<'a>, &'a [&'a str]>,
+        home: ModuleId,
         layout_cache: LayoutCache<'a>,
         target: TargetInfo,
-    ) -> Self
-    where
-        // an iterator of (variable, getter glue procs for that variable)
-        I: Iterator<Item = (Variable, &'a [((Symbol, ProcLayout<'a>), Proc<'a>)])>,
-    {
+    ) -> Self {
         let mut types = Self::with_capacity(variables.size_hint().0, target);
-        let mut env = Env::new(arena, subs, interns, layout_cache, target);
+        let mut env = Env::new(
+            arena,
+            subs,
+            interns,
+            layout_cache,
+            glue_procs_by_layout,
+            target,
+        );
 
-        for (var, glue_getter_procs) in variables {
+        for var in variables {
             env.add_type(var, &mut types);
-
-            // TODO incorporate glue_getter_procs!
         }
 
         env.resolve_pending_recursive_types(&mut types);
@@ -269,25 +269,46 @@ impl Types {
                     (
                         NullableWrapped { tags: tags_a, .. },
                         NullableWrapped { tags: tags_b, .. },
-                    ) => {
-                        if tags_a.len() != tags_b.len() {
-                            false
-                        } else {
-                            tags_a.iter().zip(tags_b.iter()).all(
-                                |((name_a, opt_id_a), (name_b, opt_id_b))| {
-                                    name_a == name_b
-                                        && match (opt_id_a, opt_id_b) {
-                                            (Some(id_a), Some(id_b)) => self.is_equivalent_help(
-                                                self.get_type_or_pending(*id_a),
-                                                self.get_type_or_pending(*id_b),
-                                            ),
-                                            (None, None) => true,
-                                            (None, Some(_)) | (Some(_), None) => false,
-                                        }
-                                },
-                            )
-                        }
-                    }
+                    ) => match (tags_a, tags_b) {
+                        (
+                            RocTags::HasClosure {
+                                tag_getters: getters_a,
+                                discriminant_getter: _,
+                            },
+                            RocTags::HasClosure {
+                                tag_getters: getters_b,
+                                discriminant_getter: _,
+                            },
+                        ) if getters_a.len() == getters_b.len() => getters_a
+                            .iter()
+                            .zip(getters_b.iter())
+                            .all(|((name_a, opt_getter_a), (name_b, opt_getter_b))| {
+                                name_a == name_b && opt_getter_a == opt_getter_b
+                            }),
+                        (
+                            RocTags::HasNoClosures {
+                                tags: tags_a,
+                                discriminant_offset: _,
+                            },
+                            RocTags::HasNoClosures {
+                                tags: tags_b,
+                                discriminant_offset: _,
+                            },
+                        ) if tags_a.len() == tags_b.len() => tags_a.iter().zip(tags_b.iter()).all(
+                            |((name_a, opt_id_a), (name_b, opt_id_b))| {
+                                name_a == name_b
+                                    && match (opt_id_a, opt_id_b) {
+                                        (Some(id_a), Some(id_b)) => self.is_equivalent_help(
+                                            self.get_type_or_pending(*id_a),
+                                            self.get_type_or_pending(*id_b),
+                                        ),
+                                        (None, None) => true,
+                                        (None, Some(_)) | (Some(_), None) => false,
+                                    }
+                            },
+                        ),
+                        (_, _) => false,
+                    },
                     (
                         NullableUnwrapped {
                             null_tag: null_tag_a,
@@ -575,13 +596,18 @@ enum RocTypeOrPending<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Accessors {
+    getter: String,
+    // TODO setter
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RocStructFields {
     HasNoClosure {
         fields: Vec<(String, TypeId)>,
     },
     HasClosure {
-        field_getters: Vec<(String, TypeId, RocFn)>,
-        // TODO field_setters
+        fields: Vec<(String, TypeId, Accessors)>,
     },
 }
 
@@ -593,7 +619,7 @@ impl RocStructFields {
     pub fn len(&self) -> usize {
         match self {
             RocStructFields::HasNoClosure { fields } => fields.len(),
-            RocStructFields::HasClosure { field_getters } => field_getters.len(),
+            RocStructFields::HasClosure { fields } => fields.len(),
         }
     }
 }
@@ -623,7 +649,7 @@ pub enum RocType {
     },
     TagUnionPayload {
         name: String,
-        fields: Vec<(usize, TypeId)>,
+        fields: RocStructFields,
     },
     /// A recursive pointer, e.g. in StrConsList : [Nil, Cons Str StrConsList],
     /// this would be the field of Cons containing the (recursive) StrConsList type,
@@ -701,7 +727,7 @@ pub enum RocTags {
     /// field getters and setters because the size and order of those fields can vary based on the
     /// application's implementation, so those sizes and order are not knowable at host build time.
     HasClosure {
-        tag_getters: Vec<(String, Option<(TypeId, RocFn)>)>,
+        tag_getters: Vec<(String, Option<(TypeId, String)>)>,
         discriminant_getter: RocFn,
     },
     HasNoClosures {
@@ -729,7 +755,7 @@ pub enum RocSingleTagPayload {
     /// field getters and setters because the size and order of those fields can vary based on the
     /// application's implementation, so those sizes and order are not knowable at host build time.
     HasClosure {
-        payload_getters: Vec<(TypeId, RocFn)>,
+        payload_getters: Vec<(TypeId, String)>,
     },
     HasNoClosures {
         payload_fields: Vec<TypeId>,
@@ -810,6 +836,7 @@ struct Env<'a> {
     arena: &'a Bump,
     subs: &'a Subs,
     layout_cache: LayoutCache<'a>,
+    glue_procs_by_layout: &'a MutMap<Layout<'a>, &'a [&'a str]>,
     interns: &'a Interns,
     struct_names: Structs,
     enum_names: Enums,
@@ -819,11 +846,12 @@ struct Env<'a> {
 }
 
 impl<'a> Env<'a> {
-    pub fn new(
+    fn new(
         arena: &'a Bump,
         subs: &'a Subs,
         interns: &'a Interns,
         layout_cache: LayoutCache<'a>,
+        glue_procs_by_layout: &'a MutMap<Layout<'a>, &'a [&'a str]>,
         target: TargetInfo,
     ) -> Self {
         Env {
@@ -834,6 +862,7 @@ impl<'a> Env<'a> {
             enum_names: Default::default(),
             pending_recursive_types: Default::default(),
             known_recursive_types: Default::default(),
+            glue_procs_by_layout,
             layout_cache,
             target,
         }
@@ -1308,12 +1337,13 @@ fn add_struct<'a, I, L, F>(
 where
     I: IntoIterator<Item = (L, Variable)>,
     L: Display + Ord,
-    F: FnOnce(String, Vec<(L, TypeId)>) -> RocType,
+    F: FnOnce(String, RocStructFields) -> RocType,
 {
     let subs = env.subs;
+    let arena = env.arena;
     let fields_iter = &mut fields.into_iter();
     let mut sortables =
-        bumpalo::collections::Vec::with_capacity_in(fields_iter.size_hint().0, env.arena);
+        bumpalo::collections::Vec::with_capacity_in(fields_iter.size_hint().0, arena);
 
     for (label, field_var) in fields_iter {
         sortables.push((
@@ -1336,19 +1366,47 @@ where
         )
     });
 
-    let fields = sortables
-        .into_iter()
-        .map(|(label, field_var, field_layout)| {
-            let type_id = add_type_help(env, field_layout, field_var, None, types);
+    // This layout should have an entry in glue_procs_by_layout iff it
+    // contains closures, but we'll double-check that with a debug_assert.
+    let struct_fields = match env.glue_procs_by_layout.get(&layout) {
+        Some(&glue_procs) => {
+            debug_assert!(layout.contains_function(arena));
 
-            (label, type_id)
-        })
-        .collect::<Vec<(L, TypeId)>>();
+            let fields: Vec<(String, TypeId, Accessors)> = sortables
+                .into_iter()
+                .zip(glue_procs.iter())
+                .map(|((label, field_var, field_layout), getter)| {
+                    let type_id = add_type_help(env, field_layout, field_var, None, types);
+                    let accessors = Accessors {
+                        getter: getter.to_string(),
+                    };
+
+                    (format!("{}", label), type_id, accessors)
+                })
+                .collect();
+
+            RocStructFields::HasClosure { fields }
+        }
+        None => {
+            debug_assert!(!layout.contains_function(arena));
+
+            let fields: Vec<(String, TypeId)> = sortables
+                .into_iter()
+                .map(|(label, field_var, field_layout)| {
+                    let type_id = add_type_help(env, field_layout, field_var, None, types);
+
+                    (format!("{}", label), type_id)
+                })
+                .collect();
+
+            RocStructFields::HasNoClosure { fields }
+        }
+    };
 
     types.add_named(
         &env.layout_cache.interner,
         name.clone(),
-        to_type(name, fields),
+        to_type(name, struct_fields),
         layout,
     )
 }
@@ -1378,19 +1436,15 @@ fn add_tag_union<'a>(
                 Content::Structure(FlatType::TagUnion(_, _))
             ) =>
         {
-            let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
-
-            // A newtype wrapper should always have exactly one payload.
-            debug_assert_eq!(payload_vars.len(), 1);
-
             // A newtype wrapper should always have the same layout as its payload.
             let payload_layout = layout;
-            let payload_id = add_type_help(env, payload_layout, payload_vars[0], None, types);
+            let (tag_name, payload) =
+                single_tag_payload_fields(union_tags, subs, layout, &[payload_layout], env, types);
 
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
                 tag_name: tag_name.to_string(),
-                payload_fields: vec![payload_id],
+                payload,
             }
         }
         Layout::Union(union_layout) => {
@@ -1521,16 +1575,13 @@ fn add_tag_union<'a>(
             add_int_enumeration(union_tags, subs, &name, int_width)
         }
         Layout::Struct { field_layouts, .. } => {
-            let (tag_name, payload_fields) =
-                single_tag_payload_fields(union_tags, subs, field_layouts, env, types);
+            let (tag_name, payload) =
+                single_tag_payload_fields(union_tags, subs, layout, field_layouts, env, types);
 
-            // A recursive tag union with just one constructor
-            // Optimization: No need to store a tag ID (the payload is "unwrapped")
-            // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
                 tag_name: tag_name.to_string(),
-                payload_fields,
+                payload,
             }
         }
         Layout::Builtin(Builtin::Bool) => {
@@ -1546,17 +1597,20 @@ fn add_tag_union<'a>(
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
                 tag_name: tag_name.to_string(),
-                payload_fields: vec![type_id],
+                payload: RocSingleTagPayload::HasNoClosures {
+                    // Builtins have no closures
+                    payload_fields: vec![type_id],
+                },
             }
         }
         Layout::Boxed(elem_layout) => {
-            let (tag_name, payload_fields) =
-                single_tag_payload_fields(union_tags, subs, &[*elem_layout], env, types);
+            let (tag_name, payload) =
+                single_tag_payload_fields(union_tags, subs, layout, &[*elem_layout], env, types);
 
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
                 tag_name: tag_name.to_string(),
-                payload_fields,
+                payload,
             }
         }
         Layout::LambdaSet(_) => {
@@ -1647,20 +1701,44 @@ fn single_tag_payload<'a>(
 fn single_tag_payload_fields<'a, 'b>(
     union_tags: &'b UnionLabels<TagName>,
     subs: &'b Subs,
+    layout: Layout<'a>,
     field_layouts: &[Layout<'a>],
     env: &mut Env<'a>,
     types: &mut Types,
-) -> (&'b str, Vec<TypeId>) {
-    todo!("TODO take closures into account and return one or the other");
+) -> (&'b str, RocSingleTagPayload) {
     let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
+    let field_type_ids =
+        payload_vars
+            .iter()
+            .zip(field_layouts.iter())
+            .map(|(field_var, field_layout)| {
+                add_type_help(env, *field_layout, *field_var, None, types)
+            });
 
-    let payload_fields: Vec<TypeId> = payload_vars
-        .iter()
-        .zip(field_layouts.iter())
-        .map(|(field_var, field_layout)| add_type_help(env, *field_layout, *field_var, None, types))
-        .collect();
+    // There should be a glue_procs_by_layout entry iff this layout has a closure in it,
+    // so we shouldn't need to separately check that. Howeevr, we still do a debug_assert
+    // anyway just so we have some warning in case that relationship somehow didn't hold!
+    let payload = match env.glue_procs_by_layout.get(&layout) {
+        Some(glue_procs) => {
+            debug_assert!(layout.contains_function(env.arena));
 
-    (tag_name, payload_fields)
+            let payload_getters = field_type_ids
+                .zip(glue_procs.iter())
+                .map(|(type_id, getter_name)| (type_id, getter_name.to_string()))
+                .collect();
+
+            RocSingleTagPayload::HasClosure { payload_getters }
+        }
+        None => {
+            debug_assert!(!layout.contains_function(env.arena));
+
+            RocSingleTagPayload::HasNoClosures {
+                payload_fields: field_type_ids.collect(),
+            }
+        }
+    };
+
+    (tag_name, payload)
 }
 
 fn tag_to_type<'a, D: Display>(

@@ -1,8 +1,10 @@
 use crate::rust_glue;
 use crate::types::Types;
 use bumpalo::Bump;
+use roc_collections::MutMap;
 use roc_intern::GlobalInterner;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
+use roc_mono::ir::{generate_glue_procs, GlueProc};
 use roc_mono::layout::LayoutCache;
 use roc_reporting::report::RenderTarget;
 use roc_target::{Architecture, TargetInfo};
@@ -153,49 +155,53 @@ pub fn load_types(
             operating_system,
         };
         let layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
+        let mut proc_names_by_layout = MutMap::default();
 
         // Populate glue getters/setters for all relevant variables
-        let it = variables.clone().map(|var| {
-            use roc_mono::layout::Layout;
-
-            let mut glue_getters = bumpalo::collections::Vec::new_in(arena);
+        for var in variables.clone() {
             let layout = layout_cache
                 .from_var(arena, var, subs)
                 .expect("Something weird ended up in the content");
 
-            // TODO right here, we want to check the entire layout for closures;
-            // if it has any, then we want to generate getters/setters for them!
-            match layout {
-                Layout::Builtin(_) => todo!(),
-                Layout::Struct {
-                    field_order_hash,
-                    field_layouts,
-                } => todo!(),
-                Layout::Boxed(_) => todo!(),
-                Layout::Union(_) => todo!(),
-                Layout::LambdaSet(_) => {
-                    // TODO get function layout from LambdaSet
-                    // let ret = &layout.result;
+            if layout.contains_function(arena) {
+                // Even though generate_glue_procs does more work than we need it to,
+                // it's important that we use it in order to make sure we get exactly
+                // the same names that mono::ir did for code gen!
+                for (layout, glue_procs) in
+                    generate_glue_procs(home, ident_ids, arena, &mut layout_interner.fork(), layout)
+                {
+                    let names =
+                        bumpalo::collections::Vec::with_capacity_in(glue_procs.len(), arena);
 
-                    // for layout in layout.arguments.iter().chain([ret]) {
-                    //     let glue_procs = roc_mono::ir::generate_glue_procs(
-                    //         home,
-                    //         ident_ids,
-                    //         arena,
-                    //         &mut layout_cache.interner,
-                    //         *layout,
-                    //     );
+                    // Record all the getter/setter names associated with this layout
+                    for GlueProc { name, .. } in glue_procs {
+                        // Store them as strings, because symbols won't be useful to glue generators!
+                        let name_string =
+                            bumpalo::collections::String::from_str_in(name.as_str(&interns), arena);
 
-                    //     glue_getters.extend(glue_procs.procs.iter().map(|t| t.0));
-                    // }
+                        // Given a struct layout (including lambda sets!) the offsets - and therefore
+                        // getters/setters - are deterministic, so we can use layout as the hash key
+                        // for these getters/setters. We also only need to store the name because since
+                        // they are getters and setters, we can know their types (from a TypeId perspective)
+                        // deterministically based on knowing the types of the structs and fields.
+                        names.push(name_string.into_bump_str());
+                    }
+
+                    proc_names_by_layout.insert(layout, names.into_bump_slice());
                 }
-                roc_mono::layout::Layout::RecursivePointer => todo!(),
             }
+        }
 
-            (var, glue_getters.into_bump_slice())
-        });
-
-        let types = Types::new(arena, subs, it, &interns, layout_cache, target_info);
+        let types = Types::new(
+            arena,
+            subs,
+            variables.clone(),
+            &interns,
+            &proc_names_by_layout,
+            home,
+            layout_cache,
+            target_info,
+        );
 
         types_and_targets.push((types, target_info));
     }
