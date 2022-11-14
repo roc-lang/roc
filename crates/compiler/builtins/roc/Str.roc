@@ -208,11 +208,9 @@ graphemes : Str -> List Str
 ## If the given string is empty, or if the given [U32] is not a valid
 ## code point, this will return [Bool.false].
 ##
-##     Str.startsWithScalar "鹏 means 'roc'" 40527 # true because "鹏" is Unicode scalar 40527
-##
-##     Str.startsWithScalar "9" 9 # False because the Unicode scalar for "9" is 57, not 9
-##
-##     Str.startsWithScalar "" 40527 # False
+##     expect Str.startsWithScalar "鹏 means 'roc'" 40527 # "鹏" is Unicode scalar 40527
+##     expect !Str.startsWithScalar "9" 9 # the Unicode scalar for "9" is 57, not 9
+##     expect !Str.startsWithScalar "" 40527
 ##
 ## **Performance Note:** This runs slightly faster than [Str.startsWith], so
 ## if you want to check whether a string begins with something that's representable
@@ -243,30 +241,22 @@ toScalars : Str -> List U32
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
 ## see [Str.split].)
 ##
-##     Str.toUtf8 "Roc" # [82, 111, 99]
-##
-##     Str.toUtf8 "鹏" # [233, 185, 143]
-##
-##     Str.toUtf8 "சி" # [224, 174, 154, 224, 174, 191]
-##
-##     Str.toUtf8 "🐦" # [240, 159, 144, 166]
+##     expect Str.toUtf8 "Roc" == [82, 111, 99]
+##     expect Str.toUtf8 "鹏" == [233, 185, 143]
+##     expect Str.toUtf8 "சி" == [224, 174, 154, 224, 174, 191]
+##     expect Str.toUtf8 "🐦" == [240, 159, 144, 166]
 toUtf8 : Str -> List U8
 
 ## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
 ##
 ## Returns `Err` if the given bytes are invalid UTF-8, and returns `Ok ""` when given `[]`.
 ##
-##     Str.fromUtf8 [82, 111, 99] # Ok "Roc"
-##
-##     Str.fromUtf8 [233, 185, 143] # Ok "鹏"
-##
-##     Str.fromUtf8 [224, 174, 154, 224, 174, 191] # Ok "சி"
-##
-##     Str.fromUtf8 [240, 159, 144, 166] # Ok "🐦"
-##
-##     Str.fromUtf8 [] # Ok ""
-##
-##     Str.fromUtf8 [255] # Err
+##     expect Str.fromUtf8 [82, 111, 99] == Ok "Roc"
+##     expect Str.fromUtf8 [233, 185, 143] == Ok "鹏"
+##     expect Str.fromUtf8 [224, 174, 154, 224, 174, 191] == Ok "சி"
+##     expect Str.fromUtf8 [240, 159, 144, 166] == Ok "🐦"
+##     expect Str.fromUtf8 [] == Ok ""
+##     expect Str.fromUtf8 [255] |> Result.isErr
 fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]*
 
 ## Return a [List] of the [unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
