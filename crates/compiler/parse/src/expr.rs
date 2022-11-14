@@ -1852,9 +1852,15 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             Ok(Pattern::RecordDestructure(patterns))
         }
 
-        Expr::Tuple(_fields) => {
-            todo!("tuple patterns")
-        }
+        Expr::Tuple(fields) => Ok(Pattern::Tuple(fields.map_items_result(
+            arena,
+            |loc_expr| {
+                Ok(Loc {
+                    region: loc_expr.region,
+                    value: expr_to_pattern_help(arena, &loc_expr.value)?,
+                })
+            },
+        )?)),
 
         &Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
         &Expr::Num(string) => Ok(Pattern::NumLiteral(string)),

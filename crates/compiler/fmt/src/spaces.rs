@@ -753,6 +753,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::SpaceAfter(a, _) => a.remove_spaces(arena),
             Pattern::SingleQuote(a) => Pattern::SingleQuote(a),
             Pattern::List(pats) => Pattern::List(pats.remove_spaces(arena)),
+            Pattern::Tuple(pats) => Pattern::Tuple(pats.remove_spaces(arena)),
             Pattern::ListRest => Pattern::ListRest,
         }
     }

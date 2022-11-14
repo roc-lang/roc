@@ -605,6 +605,7 @@ pub enum PList<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PInParens<'a> {
+    Empty(Position),
     End(Position),
     Open(Position),
     Pattern(&'a EPattern<'a>, Position),
