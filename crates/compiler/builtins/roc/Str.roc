@@ -165,7 +165,7 @@ joinWith : List Str, Str -> Str
 ## Split a string around a separator.
 ##
 ## Passing `""` for the separator is not useful;
-## it returns the original string wrapped in a list. To split a string
+## it returns the original string wrapped in a [List]. To split a string
 ## into its individual [graphemes](https://stackoverflow.com/a/27331885/4200103), use `Str.graphemes`
 ##
 ##     expect Str.split "1,2,3" "," == ["1","2","3"]
