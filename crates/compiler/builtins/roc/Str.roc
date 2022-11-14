@@ -203,10 +203,10 @@ countGraphemes : Str -> Nat
 graphemes : Str -> List Str
 
 ## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
-## equal to the given [U32], return [Bool.true]. Otherwise return [Bool.false].
+## equal to the given [U32], returns [Bool.true]. Otherwise returns [Bool.false].
 ##
 ## If the given string is empty, or if the given [U32] is not a valid
-## code point, this will return [Bool.false].
+## code point, returns [Bool.false].
 ##
 ##     expect Str.startsWithScalar "鹏 means 'roc'" 40527 # "鹏" is Unicode scalar 40527
 ##     expect !Str.startsWithScalar "9" 9 # the Unicode scalar for "9" is 57, not 9
@@ -732,14 +732,14 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
     else
         state
 
-## Enlarge the given [Str] for at least capacity additional bytes.
+## Enlarge a string for at least the given number additional bytes.
 reserve : Str, Nat -> Str
 
 ## is UB when the scalar is invalid
 appendScalarUnsafe : Str, U32 -> Str
 
-## Append a [U32] scalar to the given [Str]. If the given scalar is not a valid
-## unicode value, it will return [Err InvalidScalar].
+## Append a [U32] scalar to the given string. If the given scalar is not a valid
+## unicode value, it returns [Err InvalidScalar].
 ##
 ##     expect Str.appendScalar "H" 105 == Ok "Hi"
 ##     expect Str.appendScalar "😢" 0xabcdef == Err InvalidScalar
