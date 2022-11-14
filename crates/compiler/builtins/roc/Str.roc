@@ -145,17 +145,17 @@ Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 ##     expect Str.isEmpty "" == Bool.true
 isEmpty : Str -> Bool
 
-## Combines two strings.
+## Concatenates two strings together.
 ##
 ##     expect Str.concat "ab" "cd" == "abcd"
 ##     expect Str.concat "hello" "" == "hello"
 ##     expect Str.concat "" "" == ""
 concat : Str, Str -> Str
 
-## Returns a string of the specified capacity without any content
+## Returns a string of the specified capacity without any content.
 withCapacity : Nat -> Str
 
-## Combines a list of strings into a single strings, with a separator
+## Combines a [List] of strings into a single string, with a separator
 ## string in between each.
 ##
 ##     expect Str.joinWith ["one", "two", "three"] ", " == "one, two, three"
