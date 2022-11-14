@@ -86,7 +86,7 @@ mod test_fmt {
     ) {
         fmt_module(buf, module);
 
-        match module_defs().parse(arena, state) {
+        match module_defs().parse(arena, state, 0) {
             Ok((_, loc_defs, _)) => {
                 fmt_defs(buf, &loc_defs, 0);
             }
@@ -1098,47 +1098,114 @@ mod test_fmt {
         ));
     }
 
-    // #[test]
-    // fn empty_block_string() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         """"""
-    //         "#
-    //     ));
-    // }
+    #[test]
+    fn empty_block_string() {
+        expr_formats_same(indoc!(
+            r#"
+            """
+            """
+            "#
+        ));
+    }
 
-    // #[test]
-    // fn basic_block_string() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         """blah"""
-    //         "#
-    //     ));
-    // }
+    #[test]
+    fn oneline_empty_block_string() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                """"""
+                "#
+            ),
+            indoc!(
+                r#"
+                """
+                """
+                "#
+            ),
+        );
+    }
 
-    // #[test]
-    // fn newlines_block_string() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         """blah
-    //                 spam
-    //         foo"""
-    //         "#
-    //     ));
-    // }
+    #[test]
+    fn basic_block_string() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                """griffin"""
+                "#
+            ),
+            indoc!(
+                r#"
+                "griffin"
+                "#
+            ),
+        );
+    }
 
-    // #[test]
-    // fn quotes_block_string() {
-    //     expr_formats_same(indoc!(
-    //         r#"
-    //         """
+    #[test]
+    fn multiline_basic_block_string() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                """griffin
+                harpy"""
+                "#
+            ),
+            indoc!(
+                r#"
+                """
+                griffin
+                harpy
+                """
+                "#
+            ),
+        );
+    }
 
-    //         "" \""" ""\"
+    #[test]
+    fn newlines_block_string() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                """griffin
+                        harpy
+                phoenix"""
+                "#
+            ),
+            indoc!(
+                r#"
+                """
+                griffin
+                        harpy
+                phoenix
+                """
+                "#
+            ),
+        );
+    }
 
-    //         """
-    //         "#
-    //     ));
-    // }
+    #[test]
+    fn quotes_block_string_single_segment() {
+        expr_formats_same(indoc!(
+            r#"
+            """
+            "griffin"
+            """
+            "#
+        ));
+    }
+
+    #[test]
+    fn quotes_block_string() {
+        expr_formats_same(indoc!(
+            r#"
+            """
+
+            "" \""" ""\"
+
+            """
+            "#
+        ));
+    }
 
     #[test]
     fn zero() {
@@ -3426,6 +3493,65 @@ mod test_fmt {
     }
 
     #[test]
+    fn def_when() {
+        expr_formats_same(indoc!(
+            r#"
+            myLongFunctionName = \x ->
+                when b is
+                    1 | 2 ->
+                        when c is
+                            6 | 7 ->
+                                8
+
+                    3 | 4 ->
+                        5
+
+            123
+        "#
+        ));
+    }
+
+    #[test]
+    #[ignore] // TODO: reformat when-in-function-body with extra newline
+    fn def_when_with_python_indentation() {
+        expr_formats_to(
+            // vvv Currently this input formats to _itself_ :( vvv
+            // Instead, if the body of the `when` is multiline (the overwhelmingly common case)
+            // we want to make sure the `when` is at the beginning of the line, inserting
+            // a newline if necessary.
+            indoc!(
+                r#"
+                myLongFunctionName = \x -> when b is
+                    1 | 2 ->
+                        when c is
+                            6 | 7 ->
+                                8
+
+                    3 | 4 ->
+                        5
+
+                123
+            "#
+            ),
+            indoc!(
+                r#"
+                myLongFunctionName = \x ->
+                    when b is
+                        1 | 2 ->
+                            when c is
+                                6 | 7 ->
+                                    8
+
+                        3 | 4 ->
+                            5
+
+                123
+            "#
+            ),
+        );
+    }
+
+    #[test]
     fn when_with_alternatives_1() {
         expr_formats_same(indoc!(
             r#"
@@ -3736,6 +3862,17 @@ mod test_fmt {
                 "#
             ),
         );
+    }
+
+    #[test]
+    fn when_with_single_quote_char() {
+        expr_formats_same(indoc!(
+            r#"
+                when x is
+                    '0' -> 0
+                    '1' -> 1
+                "#
+        ));
     }
 
     // NEWLINES
@@ -4997,7 +5134,7 @@ mod test_fmt {
             r#"
             Task.fromResult
                 (
-                    a, b <- binaryOp ctx
+                    b <- binaryOp ctx
                     if a == b then
                         -1
                     else
@@ -5010,7 +5147,7 @@ mod test_fmt {
             indoc!(
                 r#"
                     Task.fromResult
-                        (a, b <- binaryOp ctx
+                        (b <- binaryOp ctx
                             if a == b then
                                 -1
                             else
@@ -5022,7 +5159,7 @@ mod test_fmt {
                 r#"
                     Task.fromResult
                         (
-                            a, b <- binaryOp ctx
+                            b <- binaryOp ctx
                             if a == b then
                                 -1
                             else
@@ -5036,7 +5173,7 @@ mod test_fmt {
             indoc!(
                 r#"
                     Task.fromResult
-                        (a, b <- binaryOp ctx
+                        (b <- binaryOp ctx
                             if a == b then
                                 -1
                             else
@@ -5047,7 +5184,7 @@ mod test_fmt {
                 r#"
                     Task.fromResult
                         (
-                            a, b <- binaryOp ctx
+                            b <- binaryOp ctx
                             if a == b then
                                 -1
                             else
@@ -5455,6 +5592,220 @@ mod test_fmt {
                 foo = bar
             "#
         ));
+    }
+
+    #[test]
+    fn single_line_string_literal_in_pattern() {
+        expr_formats_same(indoc!(
+            r#"
+            when foo is
+                "abc" -> ""
+            "#
+        ));
+    }
+
+    #[test]
+    fn multi_line_string_literal_in_pattern() {
+        expr_formats_same(indoc!(
+            r#"
+            when foo is
+                """
+                abc
+                def
+                """ -> ""
+            "#
+        ));
+    }
+
+    #[test]
+    fn multi_line_string_literal_that_can_be_single_line_in_pattern() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                when foo is
+                    """
+                    abc
+                    """ -> ""
+                "#
+            ),
+            indoc!(
+                r#"
+                when foo is
+                    "abc" -> ""
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn format_chars() {
+        expr_formats_same(indoc!(
+            r#"
+            ' '
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            '\n'
+            "#
+        ));
+    }
+
+    #[test]
+    fn format_nested_pipeline() {
+        expr_formats_same(indoc!(
+            r#"
+            (a |> b) |> c
+            "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+            a |> b |> c
+            "#
+        ));
+    }
+
+    #[test]
+    fn ability_member_doc_comments() {
+        module_formats_same(indoc!(
+            r#"
+            interface Foo exposes [] imports []
+
+            A has
+                ## This is member ab
+                ab : a -> a | a has A
+
+                ## This is member de
+                de : a -> a | a has A
+
+            f = g
+            "#
+        ));
+    }
+
+    #[test]
+    fn leading_comments_preserved() {
+        module_formats_same(indoc!(
+            r#"
+            # hello world
+            interface Foo
+                exposes []
+                imports []
+            "#
+        ));
+
+        module_formats_same(indoc!(
+            r#"
+            # hello world
+            app "test" packages {} imports [] provides [] to "./platform"
+            "#
+        ));
+
+        module_formats_same(indoc!(
+            r#"
+            # hello world
+            platform "hello-world"
+                requires {} { main : Str }
+                exposes []
+                packages {}
+                imports []
+                provides [mainForHost]
+            "#
+        ));
+    }
+
+    #[test]
+    fn clauses_with_multiple_abilities() {
+        expr_formats_same(indoc!(
+            r#"
+            f : {} -> a | a has Eq & Hash & Decode
+
+            f
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                f : {} -> a | a has Eq & Hash & Decode,
+                              b has Eq & Hash
+
+                f
+                "#
+            ),
+            indoc!(
+                // TODO: ideally, this would look a bit nicer - consider
+                // f : {} -> a
+                //   | a has Eq & Hash & Decode,
+                //     b has Eq & Hash
+                r#"
+                f : {} -> a | a has Eq & Hash & Decode, b has Eq & Hash
+
+                f
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn format_list_patterns() {
+        expr_formats_same(indoc!(
+            r#"
+            when [] is
+                [] -> []
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                when [] is
+                    [  ] -> []
+                "#
+            ),
+            indoc!(
+                r#"
+                when [] is
+                    [] -> []
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                when [] is
+                    [ x,  ..  ,    A  5   6,  .. ] -> []
+                "#
+            ),
+            indoc!(
+                r#"
+                when [] is
+                    [x, .., A 5 6, ..] -> []
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                when [] is
+                    [ x, 4, 5 ] -> []
+                    [ ..,   5 ] -> []
+                    [ x,   .. ] -> []
+                "#
+            ),
+            indoc!(
+                r#"
+                when [] is
+                    [x, 4, 5] -> []
+                    [.., 5] -> []
+                    [x, ..] -> []
+                "#
+            ),
+        );
     }
 
     // this is a parse error atm

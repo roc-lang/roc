@@ -144,6 +144,8 @@ comptime {
     exportStrFn(str.strTrimLeft, "trim_left");
     exportStrFn(str.strTrimRight, "trim_right");
     exportStrFn(str.strCloneTo, "clone_to");
+    exportStrFn(str.withCapacity, "with_capacity");
+    exportStrFn(str.strGraphemes, "graphemes");
 
     inline for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");
@@ -167,10 +169,14 @@ comptime {
     @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
 
     if (builtin.target.cpu.arch != .wasm32) {
-        exportUtilsFn(expect.expectFailedStart, "expect_failed_start");
+        exportUtilsFn(expect.expectFailedStartSharedBuffer, "expect_failed_start_shared_buffer");
+        exportUtilsFn(expect.expectFailedStartSharedFile, "expect_failed_start_shared_file");
+        exportUtilsFn(expect.expectFailedFinalize, "expect_failed_finalize");
 
         // sets the buffer used for expect failures
         @export(expect.setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .Weak });
+
+        exportUtilsFn(expect.readSharedBufferEnv, "read_env_shared_buffer");
     }
 
     if (builtin.target.cpu.arch == .aarch64) {
@@ -253,7 +259,9 @@ test "" {
 
 // Export it as weak incase it is already linked in by something else.
 comptime {
-    @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
+    if (builtin.target.os.tag != .windows) {
+        @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
+    }
 }
 fn __muloti4(a: i128, b: i128, overflow: *c_int) callconv(.C) i128 {
     // @setRuntimeSafety(std.builtin.is_test);

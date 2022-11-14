@@ -3,14 +3,12 @@ on:
     - cron:  '0 9 * * *'
 
 name: Nightly Release Linux x86_64
-
+    
 jobs:
   build:
     name: Rust tests, build and package nightly release
-    runs-on: [self-hosted, i5-4690K]
+    runs-on: [self-hosted, i7-6700K]
     timeout-minutes: 90
-    env:
-      FORCE_COLOR: 1 # for earthly logging
     steps:
       - uses: actions/checkout@v3
 
@@ -21,14 +19,26 @@ jobs:
         run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release --locked
         # target-cpu=x86-64 -> For maximal compatibility for all CPU's. Note that this setting will likely make the compiler slower.
 
-      - name: Make release tar archive
-        run: ./ci/package_release.sh roc_linux_x86_64.tar.gz
+      - name: get commit SHA
+        run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
+        
+      - name: get date
+        run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
+        
+      - name: build file name
+        env:
+            DATE: ${{ env.DATE }}
+            SHA: ${{ env.SHA }}
+        run: echo "RELEASE_TAR_FILENAME=roc_nightly-linux_x86_64-$DATE-$SHA.tar.gz" >> $GITHUB_ENV
+       
+      - name: Make nightly release tar archive
+        run: ./ci/package_release.sh ${{ env.RELEASE_TAR_FILENAME }}
 
       - name: Upload roc nightly tar. Actually uploading to github releases has to be done manually.
         uses: actions/upload-artifact@v3
         with:
-           name: roc_nightly-linux_x86_64.tar.gz
-           path: roc_linux_x86_64.tar.gz
+           name: ${{ env.RELEASE_TAR_FILENAME }}
+           path: ${{ env.RELEASE_TAR_FILENAME }}
            retention-days: 4
 
       - name: build wasm repl

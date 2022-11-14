@@ -1,10 +1,10 @@
 use crate::ast::{Has, Pattern};
-use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
+use crate::blankspace::{space0_before_e, space0_e};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, optional, specialize, specialize_ref, then, word1, EPattern, PInParens, PRecord,
-    ParseResult, Parser,
+    backtrackable, optional, specialize, specialize_ref, then, word1, word2, word3, EPattern,
+    PInParens, PList, PRecord, ParseResult, Parser,
 };
 use crate::state::State;
 use bumpalo::collections::string::String;
@@ -24,8 +24,8 @@ pub enum PatternType {
     WhenBranch,
 }
 
-pub fn loc_closure_param<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    move |arena, state| parse_closure_param(arena, state, min_indent)
+pub fn loc_closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    parse_closure_param
 }
 
 fn parse_closure_param<'a>(
@@ -35,58 +35,58 @@ fn parse_closure_param<'a>(
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         // An ident is the most common param, e.g. \foo -> ...
-        loc_ident_pattern_help(min_indent, true),
+        loc_ident_pattern_help(true),
         // Underscore is also common, e.g. \_ -> ...
         loc!(underscore_pattern_help()),
         // You can destructure records in params, e.g. \{ x, y } -> ...
         loc!(specialize(
             EPattern::Record,
-            crate::pattern::record_pattern_help(min_indent)
+            crate::pattern::record_pattern_help()
         )),
         // If you wrap it in parens, you can match any arbitrary pattern at all.
         // e.g. \User.UserId userId -> ...
-        specialize(EPattern::PInParens, loc_pattern_in_parens_help(min_indent))
+        specialize(EPattern::PInParens, loc_pattern_in_parens_help())
     )
-    .parse(arena, state)
+    .parse(arena, state, min_indent)
 }
 
-pub fn loc_pattern_help<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
-        specialize(EPattern::PInParens, loc_pattern_in_parens_help(min_indent)),
+        specialize(EPattern::PInParens, loc_pattern_in_parens_help()),
         loc!(underscore_pattern_help()),
-        loc_ident_pattern_help(min_indent, true),
+        loc_ident_pattern_help(true),
         loc!(specialize(
             EPattern::Record,
-            crate::pattern::record_pattern_help(min_indent)
+            crate::pattern::record_pattern_help()
         )),
+        loc!(specialize(EPattern::List, list_pattern_help())),
         loc!(number_pattern_help()),
         loc!(string_pattern_help()),
         loc!(single_quote_pattern_help()),
     )
 }
 
-fn loc_tag_pattern_args_help<'a>(
-    min_indent: u32,
-) -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>, EPattern<'a>> {
-    zero_or_more!(loc_tag_pattern_arg(min_indent, false))
+fn loc_tag_pattern_args_help<'a>() -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>, EPattern<'a>> {
+    zero_or_more!(loc_tag_pattern_arg(false))
 }
 
 /// Like `loc_tag_pattern_args_help`, but stops if a "has" keyword is seen (indicating an ability).
 fn loc_type_def_tag_pattern_args_help<'a>(
-    min_indent: u32,
 ) -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>, EPattern<'a>> {
-    zero_or_more!(loc_tag_pattern_arg(min_indent, true))
+    zero_or_more!(loc_tag_pattern_arg(true))
 }
 
 fn loc_tag_pattern_arg<'a>(
-    min_indent: u32,
     stop_on_has_kw: bool,
 ) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     // Don't parse operators, because they have a higher precedence than function application.
     // If we encounter one, we're done parsing function args!
-    move |arena, original_state: State<'a>| {
-        let (_, spaces, state) = backtrackable(space0_e(min_indent, EPattern::IndentStart))
-            .parse(arena, original_state.clone())?;
+    move |arena, original_state: State<'a>, min_indent| {
+        let (_, spaces, state) = backtrackable(space0_e(EPattern::IndentStart)).parse(
+            arena,
+            original_state.clone(),
+            min_indent,
+        )?;
 
         let (_, loc_pat, state) = loc_parse_tag_pattern_arg(min_indent, arena, state)?;
 
@@ -112,9 +112,9 @@ fn loc_tag_pattern_arg<'a>(
     }
 }
 
-pub fn loc_has_parser<'a>(min_indent: u32) -> impl Parser<'a, Loc<Has<'a>>, EPattern<'a>> {
+pub fn loc_has_parser<'a>() -> impl Parser<'a, Loc<Has<'a>>, EPattern<'a>> {
     then(
-        loc_tag_pattern_arg(min_indent, false),
+        loc_tag_pattern_arg(false),
         |_arena, state, progress, pattern| {
             if matches!(pattern.value, Pattern::Identifier("has")) {
                 Ok((progress, Loc::at(pattern.region, Has::Has), state))
@@ -131,35 +131,53 @@ fn loc_parse_tag_pattern_arg<'a>(
     state: State<'a>,
 ) -> ParseResult<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
-        specialize(EPattern::PInParens, loc_pattern_in_parens_help(min_indent)),
+        specialize(EPattern::PInParens, loc_pattern_in_parens_help()),
         loc!(underscore_pattern_help()),
         // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
-        loc_ident_pattern_help(min_indent, false),
+        loc_ident_pattern_help(false),
         loc!(specialize(
             EPattern::Record,
-            crate::pattern::record_pattern_help(min_indent)
+            crate::pattern::record_pattern_help()
         )),
         loc!(string_pattern_help()),
         loc!(single_quote_pattern_help()),
         loc!(number_pattern_help())
     )
-    .parse(arena, state)
+    .parse(arena, state, min_indent)
 }
 
-fn loc_pattern_in_parens_help<'a>(
-    min_indent: u32,
-) -> impl Parser<'a, Loc<Pattern<'a>>, PInParens<'a>> {
-    between!(
-        word1(b'(', PInParens::Open),
-        space0_around_ee(
-            move |arena, state| specialize_ref(PInParens::Pattern, loc_pattern_help(min_indent))
-                .parse(arena, state),
-            min_indent,
+fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PInParens<'a>> {
+    then(
+        loc!(collection_trailing_sep_e!(
+            word1(b'(', PInParens::Open),
+            specialize_ref(PInParens::Pattern, loc_pattern_help()),
+            word1(b',', PInParens::End),
+            word1(b')', PInParens::End),
+            PInParens::Open,
             PInParens::IndentOpen,
-            PInParens::IndentEnd,
-        ),
-        word1(b')', PInParens::End)
+            Pattern::SpaceBefore
+        )),
+        move |_arena, state, _, loc_elements| {
+            let elements = loc_elements.value;
+            let region = loc_elements.region;
+
+            if elements.len() > 1 {
+                Ok((
+                    MadeProgress,
+                    Loc::at(region, Pattern::Tuple(elements)),
+                    state,
+                ))
+            } else if elements.is_empty() {
+                Err((NoProgress, PInParens::Empty(state.pos()), state))
+            } else {
+                // TODO: don't discard comments before/after
+                // (stored in the Collection)
+                // TODO: add Pattern::ParensAround to faithfully represent the input
+                Ok((MadeProgress, elements.items[0], state))
+            }
+        },
     )
+    .trace("pat_in_parens")
 }
 
 fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
@@ -202,15 +220,56 @@ fn single_quote_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>>
     )
 }
 
+fn list_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PList<'a>> {
+    move |arena, state, min_indent| {
+        let (_, pats, state) = collection_trailing_sep_e!(
+            word1(b'[', PList::Open),
+            list_element_pattern(),
+            word1(b',', PList::End),
+            word1(b']', PList::End),
+            PList::Open,
+            PList::IndentEnd,
+            Pattern::SpaceBefore
+        )
+        .parse(arena, state, min_indent)?;
+
+        let result = Pattern::List(pats);
+
+        Ok((MadeProgress, result, state))
+    }
+}
+
+fn list_element_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
+    one_of!(
+        three_list_rest_pattern_error(),
+        list_rest_pattern(),
+        specialize_ref(PList::Pattern, loc_pattern_help()),
+    )
+}
+
+fn three_list_rest_pattern_error<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
+    then(
+        loc!(word3(b'.', b'.', b'.', PList::Rest)),
+        |_arena, state, _progress, word| {
+            Err((MadeProgress, PList::Rest(word.region.start()), state))
+        },
+    )
+}
+
+fn list_rest_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
+    map!(loc!(word2(b'.', b'.', PList::Open)), |loc_word: Loc<_>| {
+        loc_word.map(|_| Pattern::ListRest)
+    })
+}
+
 fn loc_ident_pattern_help<'a>(
-    min_indent: u32,
     can_have_arguments: bool,
 ) -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
-    move |arena: &'a Bump, state: State<'a>| {
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let original_state = state.clone();
 
-        let (_, loc_ident, state) =
-            specialize(|_, pos| EPattern::Start(pos), loc!(parse_ident)).parse(arena, state)?;
+        let (_, loc_ident, state) = specialize(|_, pos| EPattern::Start(pos), loc!(parse_ident))
+            .parse(arena, state, min_indent)?;
 
         match loc_ident.value {
             Ident::Tag(tag) => {
@@ -222,7 +281,7 @@ fn loc_ident_pattern_help<'a>(
                 // Make sure `Foo Bar 1` is parsed as `Foo (Bar) 1`, and not `Foo (Bar 1)`
                 if can_have_arguments {
                     let (_, loc_args, state) =
-                        loc_type_def_tag_pattern_args_help(min_indent).parse(arena, state)?;
+                        loc_type_def_tag_pattern_args_help().parse(arena, state, min_indent)?;
 
                     if loc_args.is_empty() {
                         Ok((MadeProgress, loc_tag, state))
@@ -249,7 +308,7 @@ fn loc_ident_pattern_help<'a>(
                 // Make sure `@Foo Bar 1` is parsed as `@Foo (Bar) 1`, and not `@Foo (Bar 1)`
                 if can_have_arguments {
                     let (_, loc_args, state) =
-                        loc_tag_pattern_args_help(min_indent).parse(arena, state)?;
+                        loc_tag_pattern_args_help().parse(arena, state, min_indent)?;
 
                     if loc_args.is_empty() {
                         Ok((MadeProgress, loc_pat, state))
@@ -303,7 +362,7 @@ fn loc_ident_pattern_help<'a>(
                     ))
                 }
             }
-            Ident::AccessorFunction(string) => Ok((
+            Ident::RecordAccessorFunction(string) | Ident::TupleAccessorFunction(string) => Ok((
                 MadeProgress,
                 Loc {
                     region: loc_ident.region,
@@ -328,11 +387,12 @@ fn loc_ident_pattern_help<'a>(
 }
 
 fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
-    move |arena: &'a Bump, state: State<'a>| {
-        let (_, _, next_state) = word1(b'_', EPattern::Underscore).parse(arena, state)?;
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, _, next_state) =
+            word1(b'_', EPattern::Underscore).parse(arena, state, min_indent)?;
 
         let (_, output, final_state) =
-            optional(lowercase_ident_pattern).parse(arena, next_state)?;
+            optional(lowercase_ident_pattern).parse(arena, next_state, min_indent)?;
 
         match output {
             Some(name) => Ok((MadeProgress, Pattern::Underscore(name), final_state)),
@@ -344,28 +404,26 @@ fn underscore_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
 fn lowercase_ident_pattern<'a>(
     arena: &'a Bump,
     state: State<'a>,
+    min_indent: u32,
 ) -> ParseResult<'a, &'a str, EPattern<'a>> {
     let pos = state.pos();
 
-    specialize(move |_, _| EPattern::End(pos), lowercase_ident()).parse(arena, state)
+    specialize(move |_, _| EPattern::End(pos), lowercase_ident()).parse(arena, state, min_indent)
 }
 
 #[inline(always)]
-fn record_pattern_help<'a>(min_indent: u32) -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
-    move |arena, state| {
+fn record_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
+    move |arena, state, min_indent| {
         let (_, fields, state) = collection_trailing_sep_e!(
-            // word1_check_indent!(b'{', PRecord::Open, min_indent, PRecord::IndentOpen),
             word1(b'{', PRecord::Open),
-            record_pattern_field(min_indent),
+            record_pattern_field(),
             word1(b',', PRecord::End),
-            // word1_check_indent!(b'}', PRecord::End, min_indent, PRecord::IndentEnd),
             word1(b'}', PRecord::End),
-            min_indent,
             PRecord::Open,
             PRecord::IndentEnd,
             Pattern::SpaceBefore
         )
-        .parse(arena, state)?;
+        .parse(arena, state, min_indent)?;
 
         let result = Pattern::RecordDestructure(fields);
 
@@ -373,10 +431,10 @@ fn record_pattern_help<'a>(min_indent: u32) -> impl Parser<'a, Pattern<'a>, PRec
     }
 }
 
-fn record_pattern_field<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> {
+fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> {
     use crate::parser::Either::*;
 
-    move |arena, state: State<'a>| {
+    move |arena, state: State<'a>, min_indent: u32| {
         // You must have a field name, e.g. "email"
         // using the initial pos is important for error reporting
         let pos = state.pos();
@@ -384,10 +442,10 @@ fn record_pattern_field<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>
             move |_, _| PRecord::Field(pos),
             lowercase_ident()
         ))
-        .parse(arena, state)?;
+        .parse(arena, state, min_indent)?;
         debug_assert_eq!(progress, MadeProgress);
 
-        let (_, spaces, state) = space0_e(min_indent, PRecord::IndentEnd).parse(arena, state)?;
+        let (_, spaces, state) = space0_e(PRecord::IndentEnd).parse(arena, state, min_indent)?;
 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
@@ -395,14 +453,13 @@ fn record_pattern_field<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>
             word1(b':', PRecord::Colon),
             word1(b'?', PRecord::Optional)
         ))
-        .parse(arena, state)?;
+        .parse(arena, state, min_indent)?;
 
         match opt_loc_val {
             Some(First(_)) => {
-                let val_parser = specialize_ref(PRecord::Pattern, loc_pattern_help(min_indent));
-                let (_, loc_val, state) =
-                    space0_before_e(val_parser, min_indent, PRecord::IndentColon)
-                        .parse(arena, state)?;
+                let val_parser = specialize_ref(PRecord::Pattern, loc_pattern_help());
+                let (_, loc_val, state) = space0_before_e(val_parser, PRecord::IndentColon)
+                    .parse(arena, state, min_indent)?;
 
                 let Loc {
                     value: label,
@@ -426,13 +483,11 @@ fn record_pattern_field<'a>(min_indent: u32) -> impl Parser<'a, Loc<Pattern<'a>>
                 ))
             }
             Some(Second(_)) => {
-                let val_parser = specialize_ref(PRecord::Expr, move |a, s| {
-                    crate::expr::parse_loc_expr_no_multi_backpassing(min_indent, a, s)
-                });
+                let val_parser =
+                    specialize_ref(PRecord::Expr, crate::expr::loc_expr_no_multi_backpassing());
 
-                let (_, loc_val, state) =
-                    space0_before_e(val_parser, min_indent, PRecord::IndentColon)
-                        .parse(arena, state)?;
+                let (_, loc_val, state) = space0_before_e(val_parser, PRecord::IndentColon)
+                    .parse(arena, state, min_indent)?;
 
                 let Loc {
                     value: label,

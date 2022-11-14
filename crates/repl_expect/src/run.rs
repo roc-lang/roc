@@ -1,24 +1,28 @@
-use std::os::unix::process::parent_id;
+use std::{os::unix::process::parent_id, sync::Arc};
 
 use bumpalo::collections::Vec as BumpVec;
 use bumpalo::Bump;
 use inkwell::context::Context;
 use roc_build::link::llvm_module_to_dylib;
+use roc_can::expr::ExpectLookup;
 use roc_collections::{MutSet, VecMap};
+use roc_error_macros::internal_error;
 use roc_gen_llvm::{
     llvm::{build::LlvmBackendMode, externs::add_default_roc_externs},
     run_roc::RocCallResult,
     run_roc_dylib,
 };
+use roc_intern::{GlobalInterner, SingleThreadedInterner};
 use roc_load::{EntryPoint, Expectations, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::ir::OptLevel;
+use roc_mono::{ir::OptLevel, layout::Layout};
 use roc_region::all::Region;
 use roc_reporting::{error::expect::Renderer, report::RenderTarget};
 use roc_target::TargetInfo;
+use roc_types::subs::{Subs, Variable};
 use target_lexicon::Triple;
 
-pub(crate) struct ExpectMemory<'a> {
+pub struct ExpectMemory<'a> {
     ptr: *mut u8,
     length: usize,
     shm_name: Option<std::ffi::CString>,
@@ -38,7 +42,7 @@ impl<'a> ExpectMemory<'a> {
         }
     }
 
-    fn create_or_reuse_mmap(shm_name: &str) -> Self {
+    pub fn create_or_reuse_mmap(shm_name: &str) -> Self {
         let cstring = std::ffi::CString::new(shm_name).unwrap();
         Self::mmap_help(cstring, libc::O_RDWR | libc::O_CREAT)
     }
@@ -51,18 +55,42 @@ impl<'a> ExpectMemory<'a> {
     fn mmap_help(cstring: std::ffi::CString, shm_flags: i32) -> Self {
         let ptr = unsafe {
             let shared_fd = libc::shm_open(cstring.as_ptr().cast(), shm_flags, 0o666);
+            if shared_fd == -1 {
+                internal_error!("failed to shm_open fd");
+            }
 
-            libc::ftruncate(shared_fd, Self::SHM_SIZE as _);
+            let mut stat: libc::stat = std::mem::zeroed();
+            if libc::fstat(shared_fd, &mut stat) == -1 {
+                internal_error!("failed to stat shared file, does it exist?");
+            }
+            if stat.st_size < Self::SHM_SIZE as _
+                && libc::ftruncate(shared_fd, Self::SHM_SIZE as _) == -1
+            {
+                internal_error!("failed to truncate shared file, are the permissions wrong?");
+            }
 
-            libc::mmap(
+            let ptr = libc::mmap(
                 std::ptr::null_mut(),
                 Self::SHM_SIZE,
                 libc::PROT_WRITE | libc::PROT_READ,
                 libc::MAP_SHARED,
                 shared_fd,
                 0,
-            )
+            );
+
+            if ptr as usize == usize::MAX {
+                // ptr = -1
+                roc_error_macros::internal_error!("failed to mmap shared pointer")
+            }
+
+            // fill the buffer with a fill pattern
+            libc::memset(ptr, 0xAA, Self::SHM_SIZE);
+
+            ptr
         };
+
+        // puts in the initial header
+        let _ = ExpectSequence::new(ptr as *mut u8);
 
         Self {
             ptr: ptr.cast(),
@@ -80,11 +108,12 @@ impl<'a> ExpectMemory<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_expects<W: std::io::Write>(
+pub fn run_inline_expects<'a, W: std::io::Write>(
     writer: &mut W,
     render_target: RenderTarget,
-    arena: &Bump,
-    interns: &Interns,
+    arena: &'a Bump,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     expects: ExpectFunctions<'_>,
@@ -97,6 +126,7 @@ pub fn run_expects<W: std::io::Write>(
         render_target,
         arena,
         interns,
+        layout_interner,
         lib,
         expectations,
         expects,
@@ -105,11 +135,39 @@ pub fn run_expects<W: std::io::Write>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn run_expects_with_memory<W: std::io::Write>(
+pub fn run_toplevel_expects<'a, W: std::io::Write>(
     writer: &mut W,
     render_target: RenderTarget,
-    arena: &Bump,
-    interns: &Interns,
+    arena: &'a Bump,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    lib: &libloading::Library,
+    expectations: &mut VecMap<ModuleId, Expectations>,
+    expects: ExpectFunctions<'_>,
+) -> std::io::Result<(usize, usize)> {
+    let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
+    let mut memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
+
+    run_expects_with_memory(
+        writer,
+        render_target,
+        arena,
+        interns,
+        layout_interner,
+        lib,
+        expectations,
+        expects,
+        &mut memory,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_expects_with_memory<'a, W: std::io::Write>(
+    writer: &mut W,
+    render_target: RenderTarget,
+    arena: &'a Bump,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     expects: ExpectFunctions<'_>,
@@ -124,6 +182,7 @@ pub(crate) fn run_expects_with_memory<W: std::io::Write>(
             render_target,
             arena,
             interns,
+            layout_interner,
             lib,
             expectations,
             memory,
@@ -144,6 +203,7 @@ pub(crate) fn run_expects_with_memory<W: std::io::Write>(
             render_target,
             arena,
             interns,
+            layout_interner,
             lib,
             expectations,
             memory,
@@ -160,11 +220,12 @@ pub(crate) fn run_expects_with_memory<W: std::io::Write>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_expect_pure<W: std::io::Write>(
+fn run_expect_pure<'a, W: std::io::Write>(
     writer: &mut W,
     render_target: RenderTarget,
-    arena: &Bump,
-    interns: &Interns,
+    arena: &'a Bump,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     shared_memory: &mut ExpectMemory,
@@ -201,6 +262,7 @@ fn run_expect_pure<W: std::io::Write>(
                     Some(expect),
                     expectations,
                     interns,
+                    layout_interner,
                     shared_memory_ptr,
                     offset,
                 )?;
@@ -216,11 +278,12 @@ fn run_expect_pure<W: std::io::Write>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_expect_fx<W: std::io::Write>(
+fn run_expect_fx<'a, W: std::io::Write>(
     writer: &mut W,
     render_target: RenderTarget,
-    arena: &Bump,
-    interns: &Interns,
+    arena: &'a Bump,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     parent_memory: &mut ExpectMemory,
@@ -228,7 +291,7 @@ fn run_expect_fx<W: std::io::Write>(
 ) -> std::io::Result<bool> {
     use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
 
-    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
+    let mut signals = Signals::new([SIGCHLD, SIGUSR1]).unwrap();
 
     match unsafe { libc::fork() } {
         0 => unsafe {
@@ -299,6 +362,7 @@ fn run_expect_fx<W: std::io::Write>(
                             None,
                             expectations,
                             interns,
+                            layout_interner,
                             parent_memory.ptr,
                             ExpectSequence::START_OFFSET,
                         )?;
@@ -313,13 +377,16 @@ fn run_expect_fx<W: std::io::Write>(
     }
 }
 
-pub fn roc_dev_expect(
+pub fn render_expects_in_memory<'a>(
     writer: &mut impl std::io::Write,
-    arena: &Bump,
+    arena: &'a Bump,
     expectations: &mut VecMap<ModuleId, Expectations>,
-    interns: &Interns,
-    shared_ptr: *mut u8,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    memory: &ExpectMemory,
 ) -> std::io::Result<usize> {
+    let shared_ptr = memory.ptr;
+
     let frame = ExpectFrame::at_offset(shared_ptr, ExpectSequence::START_OFFSET);
     let module_id = frame.module_id;
 
@@ -343,9 +410,31 @@ pub fn roc_dev_expect(
         None,
         expectations,
         interns,
+        layout_interner,
         shared_ptr,
         ExpectSequence::START_OFFSET,
     )
+}
+
+fn split_expect_lookups(subs: &Subs, lookups: &[ExpectLookup]) -> (Vec<Symbol>, Vec<Variable>) {
+    lookups
+        .iter()
+        .filter_map(
+            |ExpectLookup {
+                 symbol,
+                 var,
+                 ability_info: _,
+             }| {
+                // mono will have dropped lookups that resolve to functions, so we should not keep
+                // them either.
+                if subs.is_function(*var) {
+                    None
+                } else {
+                    Some((*symbol, *var))
+                }
+            },
+        )
+        .unzip()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -356,6 +445,7 @@ fn render_expect_failure<'a>(
     expect: Option<ToplevelExpect>,
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     start: *const u8,
     offset: usize,
 ) -> std::io::Result<usize> {
@@ -371,23 +461,23 @@ fn render_expect_failure<'a>(
     let data = expectations.get_mut(&module_id).unwrap();
 
     let current = match data.expectations.get(&failure_region) {
-        None => panic!("region not in list of expects"),
+        None => panic!("region {failure_region:?} not in list of expects"),
         Some(current) => current,
     };
     let subs = arena.alloc(&mut data.subs);
 
-    let (symbols, variables): (Vec<_>, Vec<_>) = current.iter().map(|(a, b)| (*a, *b)).unzip();
+    let (symbols, variables) = split_expect_lookups(subs, current);
 
     let (offset, expressions) = crate::get_values(
         target_info,
         arena,
         subs,
         interns,
+        layout_interner,
         start,
         frame.start_offset,
         &variables,
-    )
-    .unwrap();
+    );
 
     renderer.render_failure(
         writer,
@@ -473,7 +563,14 @@ pub fn expect_mono_module_to_dylib<'a>(
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
     mode: LlvmBackendMode,
-) -> Result<(libloading::Library, ExpectFunctions<'a>), libloading::Error> {
+) -> Result<
+    (
+        libloading::Library,
+        ExpectFunctions<'a>,
+        SingleThreadedInterner<'a, Layout<'a>>,
+    ),
+    libloading::Error,
+> {
     let target_info = TargetInfo::from(&target);
 
     let MonomorphizedModule {
@@ -481,6 +578,7 @@ pub fn expect_mono_module_to_dylib<'a>(
         procedures,
         entry_point,
         interns,
+        layout_interner,
         ..
     } = loaded;
 
@@ -499,6 +597,7 @@ pub fn expect_mono_module_to_dylib<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
+        layout_interner: &layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -590,5 +689,5 @@ pub fn expect_mono_module_to_dylib<'a>(
         );
     }
 
-    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects))
+    llvm_module_to_dylib(env.module, &target, opt_level).map(|lib| (lib, expects, layout_interner))
 }

@@ -5,7 +5,7 @@ use roc_module::{
 use roc_types::subs::{Content, FlatType, GetSubsSlice, Subs, Variable};
 
 use crate::{
-    util::{check_empty_ext_var, debug_name_record},
+    util::{check_derivable_ext_var, debug_name_record, debug_name_tag},
     DeriveError,
 };
 
@@ -32,19 +32,7 @@ impl FlatEncodableKey {
             FlatEncodableKey::Set() => "set".to_string(),
             FlatEncodableKey::Dict() => "dict".to_string(),
             FlatEncodableKey::Record(fields) => debug_name_record(fields),
-            FlatEncodableKey::TagUnion(tags) => {
-                let mut str = String::from('[');
-                tags.iter().enumerate().for_each(|(i, (tag, arity))| {
-                    if i > 0 {
-                        str.push(',');
-                    }
-                    str.push_str(tag.0.as_str());
-                    str.push(' ');
-                    str.push_str(&arity.to_string());
-                });
-                str.push(']');
-                str
-            }
+            FlatEncodableKey::TagUnion(tags) => debug_name_tag(tags),
         }
     }
 }
@@ -63,12 +51,17 @@ impl FlatEncodable {
                     _ => Err(Underivable),
                 },
                 FlatType::Record(fields, ext) => {
-                    check_empty_ext_var(subs, ext, |ext| {
+                    let (fields_iter, ext) = fields.unsorted_iterator_and_ext(subs, ext);
+
+                    check_derivable_ext_var(subs, ext, |ext| {
                         matches!(ext, Content::Structure(FlatType::EmptyRecord))
                     })?;
 
-                    let mut field_names: Vec<_> =
-                        subs.get_subs_slice(fields.field_names()).to_vec();
+                    let mut field_names = Vec::with_capacity(fields.len());
+                    for (field_name, _) in fields_iter {
+                        field_names.push(field_name.clone());
+                    }
+
                     field_names.sort();
 
                     Ok(Key(FlatEncodableKey::Record(field_names)))
@@ -83,29 +76,36 @@ impl FlatEncodable {
                     //   [ A t1, B t1 t2 ] as R
                     // look the same on the surface, because `R` is only somewhere inside of the
                     // `t`-prefixed payload types.
-                    check_empty_ext_var(subs, ext, |ext| {
+                    let (tags_iter, ext) = tags.unsorted_tags_and_ext(subs, ext);
+
+                    check_derivable_ext_var(subs, ext, |ext| {
                         matches!(ext, Content::Structure(FlatType::EmptyTagUnion))
                     })?;
 
-                    let mut tag_names_and_payload_sizes: Vec<_> = tags
-                        .iter_all()
-                        .map(|(name_index, payload_slice_index)| {
-                            let payload_slice = subs[payload_slice_index];
-                            let payload_size = payload_slice.length;
-                            let name = &subs[name_index];
-                            (name.clone(), payload_size)
+                    let mut tag_names_and_payload_sizes: Vec<_> = tags_iter
+                        .tags
+                        .into_iter()
+                        .map(|(name, payload_slice)| {
+                            let payload_size = payload_slice.len();
+                            (name.clone(), payload_size as _)
                         })
                         .collect();
+
                     tag_names_and_payload_sizes.sort_by(|(t1, _), (t2, _)| t1.cmp(t2));
+
                     Ok(Key(FlatEncodableKey::TagUnion(tag_names_and_payload_sizes)))
                 }
-                FlatType::FunctionOrTagUnion(name_index, _, _) => Ok(Key(
-                    FlatEncodableKey::TagUnion(vec![(subs[name_index].clone(), 0)]),
-                )),
+                FlatType::FunctionOrTagUnion(names_index, _, _) => {
+                    Ok(Key(FlatEncodableKey::TagUnion(
+                        subs.get_subs_slice(names_index)
+                            .iter()
+                            .map(|t| (t.clone(), 0))
+                            .collect(),
+                    )))
+                }
                 FlatType::EmptyRecord => Ok(Key(FlatEncodableKey::Record(vec![]))),
                 FlatType::EmptyTagUnion => Ok(Key(FlatEncodableKey::TagUnion(vec![]))),
                 //
-                FlatType::Erroneous(_) => Err(Underivable),
                 FlatType::Func(..) => Err(Underivable),
             },
             Content::Alias(sym, _, real_var, _) => match sym {

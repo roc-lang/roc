@@ -3,7 +3,8 @@ use roc_module::ident::{Ident, Lowercase, ModuleName};
 use roc_module::symbol::DERIVABLE_ABILITIES;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
-    BadPattern, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError, ShadowKind,
+    BadPattern, CycleEntry, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
+    ShadowKind,
 };
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
 use roc_types::types::AliasKind;
@@ -87,7 +88,24 @@ pub fn can_problem<'b>(
             title = UNUSED_DEF.to_string();
             severity = Severity::Warning;
         }
-        Problem::UnusedImport(module_id, region) => {
+        Problem::UnusedImport(symbol, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.symbol_qualified(symbol),
+                    alloc.reflow(" is not used in this module."),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("Since "),
+                    alloc.symbol_qualified(symbol),
+                    alloc.reflow(" isn't used, you don't need to import it."),
+                ]),
+            ]);
+
+            title = UNUSED_IMPORT.to_string();
+            severity = Severity::Warning;
+        }
+        Problem::UnusedModuleImport(module_id, region) => {
             doc = alloc.stack([
                 alloc.concat([
                     alloc.reflow("Nothing from "),
@@ -257,9 +275,11 @@ pub fn can_problem<'b>(
             shadow,
             kind,
         } => {
-            doc = report_shadowing(alloc, lines, original_region, shadow, kind);
+            let (res_title, res_doc) =
+                report_shadowing(alloc, lines, original_region, shadow, kind);
 
-            title = DUPLICATE_NAME.to_string();
+            doc = res_doc;
+            title = res_title.to_string();
             severity = Severity::RuntimeError;
         }
         Problem::CyclicAlias(symbol, region, others, alias_kind) => {
@@ -657,6 +677,24 @@ pub fn can_problem<'b>(
             severity = Severity::RuntimeError;
         }
 
+        Problem::DuplicateHasAbility { ability, region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("I already saw that this type variable is bound to the "),
+                    alloc.symbol_foreign_qualified(ability),
+                    alloc.reflow(" ability once before:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("Abilities only need to bound to a type variable once in a "),
+                    alloc.keyword("has"),
+                    alloc.reflow(" clause!"),
+                ]),
+            ]);
+            title = "DUPLICATE BOUND ABILITY".to_string();
+            severity = Severity::Warning;
+        }
+
         Problem::AbilityMemberMissingHasClause {
             member,
             ability,
@@ -972,10 +1010,73 @@ pub fn can_problem<'b>(
                     alloc.symbol_unqualified(original_opaque),
                     alloc.reflow("."),
                 ]),
-                alloc.reflow("Ability specializations can only provide implementations for one opauqe type, since all opaque types are different!"),
+                alloc.reflow("Ability specializations can only provide implementations for one opaque type, since all opaque types are different!"),
             ]);
             title = "OVERLOADED SPECIALIZATION".to_string();
             severity = Severity::Warning;
+        }
+        Problem::UnnecessaryOutputWildcard { region } => {
+            doc = alloc.stack([
+                alloc.reflow("I see you annotated a wildcard in a place where it's not needed:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Tag unions that are constants, or the return values of functions, are always inferred to be open by default! You can remove this annotation safely."),
+            ]);
+            title = "UNNECESSARY WILDCARD".to_string();
+            severity = Severity::Warning;
+        }
+        Problem::MultipleListRestPattern { region } => {
+            doc = alloc.stack([
+                alloc.reflow("This list pattern match has multiple rest patterns:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.reflow("I only support compiling list patterns with one "),
+                    alloc.parser_suggestion(".."),
+                    alloc.reflow(" pattern! Can you remove this additional one?"),
+                ]),
+            ]);
+            title = "MULTIPLE LIST REST PATTERNS".to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::BadTypeArguments {
+            symbol,
+            region,
+            type_got,
+            alias_needs,
+            alias_kind,
+        } => {
+            let needed_arguments = if alias_needs == 1 {
+                alloc.reflow("1 type argument")
+            } else {
+                alloc
+                    .text(alias_needs.to_string())
+                    .append(alloc.reflow(" type arguments"))
+            };
+
+            let found_arguments = alloc.text(type_got.to_string());
+
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("The "),
+                    alloc.symbol_unqualified(symbol),
+                    alloc.reflow(" "),
+                    alloc.reflow(alias_kind.as_str()),
+                    alloc.reflow(" expects "),
+                    needed_arguments,
+                    alloc.reflow(", but it got "),
+                    found_arguments,
+                    alloc.reflow(" instead:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Are there missing parentheses?"),
+            ]);
+
+            title = if type_got > alias_needs {
+                "TOO MANY TYPE ARGUMENTS".to_string()
+            } else {
+                "TOO FEW TYPE ARGUMENTS".to_string()
+            };
+
+            severity = Severity::RuntimeError;
         }
     };
 
@@ -989,7 +1090,9 @@ pub fn can_problem<'b>(
 
 fn list_builtin_abilities<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
     alloc.intersperse(
-        [alloc.symbol_qualified(DERIVABLE_ABILITIES[0].0)],
+        DERIVABLE_ABILITIES
+            .iter()
+            .map(|(ab, _)| alloc.symbol_unqualified(*ab)),
         alloc.reflow(", "),
     )
 }
@@ -1287,7 +1390,18 @@ fn to_bad_ident_pattern_report<'b>(
             ])
         }
 
-        _ => todo!(),
+        BadOpaqueRef(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            alloc.stack([
+                alloc.reflow("This opaque type reference has an invalid name:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow(r"Opaque type names must begin with a capital letter, "),
+                    alloc.reflow(r"and must contain only letters and numbers."),
+                ]),
+            ])
+        }
     }
 }
 
@@ -1360,28 +1474,48 @@ fn report_shadowing<'b>(
     original_region: Region,
     shadow: Loc<Ident>,
     kind: ShadowKind,
-) -> RocDocBuilder<'b> {
-    let what = match kind {
-        ShadowKind::Variable => "variables",
-        ShadowKind::Alias => "aliases",
-        ShadowKind::Opaque => "opaques",
-        ShadowKind::Ability => "abilities",
+) -> (&'static str, RocDocBuilder<'b>) {
+    let (what, what_plural, is_builtin) = match kind {
+        ShadowKind::Variable => ("variable", "variables", false),
+        ShadowKind::Alias(sym) => ("alias", "aliases", sym.is_builtin()),
+        ShadowKind::Opaque(sym) => ("opaque type", "opaque types", sym.is_builtin()),
+        ShadowKind::Ability(sym) => ("ability", "abilities", sym.is_builtin()),
     };
 
-    alloc.stack([
-        alloc
-            .text("The ")
-            .append(alloc.ident(shadow.value))
-            .append(alloc.reflow(" name is first defined here:")),
-        alloc.region(lines.convert_region(original_region)),
-        alloc.reflow("But then it's defined a second time here:"),
-        alloc.region(lines.convert_region(shadow.region)),
-        alloc.concat([
-            alloc.reflow("Since these "),
-            alloc.reflow(what),
-            alloc.reflow(" have the same name, it's easy to use the wrong one on accident. Give one of them a new name."),
-        ]),
-    ])
+    let doc = if is_builtin {
+        alloc.stack([
+            alloc.concat([
+                alloc.reflow("This "),
+                alloc.reflow(what),
+                alloc.reflow(" has the same name as a builtin:"),
+            ]),
+            alloc.region(lines.convert_region(shadow.region)),
+            alloc.concat([
+                alloc.reflow("All builtin "),
+                alloc.reflow(what_plural),
+                alloc.reflow(" are in scope by default, so I need this "),
+                alloc.reflow(what),
+                alloc.reflow(" to have a different name!"),
+            ]),
+        ])
+    } else {
+        alloc.stack([
+            alloc
+                .text("The ")
+                .append(alloc.ident(shadow.value))
+                .append(alloc.reflow(" name is first defined here:")),
+            alloc.region(lines.convert_region(original_region)),
+            alloc.reflow("But then it's defined a second time here:"),
+            alloc.region(lines.convert_region(shadow.region)),
+            alloc.concat([
+                alloc.reflow("Since these "),
+                alloc.reflow(what_plural),
+                alloc.reflow(" have the same name, it's easy to use the wrong one on accident. Give one of them a new name."),
+            ]),
+        ])
+    };
+
+    (DUPLICATE_NAME, doc)
 }
 
 fn pretty_runtime_error<'b>(
@@ -1409,8 +1543,7 @@ fn pretty_runtime_error<'b>(
             shadow,
             kind,
         } => {
-            doc = report_shadowing(alloc, lines, original_region, shadow, kind);
-            title = DUPLICATE_NAME;
+            (title, doc) = report_shadowing(alloc, lines, original_region, shadow, kind);
         }
 
         RuntimeError::LookupNotInScope(loc_name, options) => {
@@ -1442,6 +1575,7 @@ fn pretty_runtime_error<'b>(
                 QualifiedIdentifier => " qualified ",
                 EmptySingleQuote => " empty character literal ",
                 MultipleCharsInSingleQuote => " overfull literal ",
+                DuplicateListRestPattern => " second rest pattern ",
             };
 
             let tip = match problem {
@@ -1454,6 +1588,9 @@ fn pretty_runtime_error<'b>(
                 QualifiedIdentifier => alloc
                     .tip()
                     .append(alloc.reflow("In patterns, only tags can be qualified")),
+                DuplicateListRestPattern => alloc
+                    .tip()
+                    .append(alloc.reflow("List patterns can only have one rest pattern")),
             };
 
             doc = alloc.stack([
@@ -1976,12 +2113,18 @@ pub fn to_circular_def_doc<'b>(
     // TODO tip?
     match entries {
         [] => unreachable!(),
-        [first] => alloc
-            .reflow("The ")
-            .append(alloc.symbol_unqualified(first.symbol))
-            .append(alloc.reflow(
-                " value is defined directly in terms of itself, causing an infinite loop.",
-            )),
+        [CycleEntry { symbol, symbol_region, expr_region }] =>
+             alloc.stack([
+                alloc.concat([
+                    alloc.symbol_unqualified(*symbol),
+                    alloc.reflow(" is defined directly in terms of itself:"),
+                ]),
+                alloc.region(lines.convert_region(Region::span_across(symbol_region, expr_region))),
+                alloc.reflow("Roc evaluates values strictly, so running this program would enter an infinite loop!"),
+                alloc.hint("").append(alloc.concat([
+                    alloc.reflow("Did you mean to define "),alloc.symbol_unqualified(*symbol),alloc.reflow(" as a function?"),
+                ])),
+            ]),
         [first, others @ ..] => {
             alloc.stack([
                 alloc

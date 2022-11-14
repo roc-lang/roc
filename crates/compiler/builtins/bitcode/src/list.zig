@@ -1,6 +1,5 @@
 const std = @import("std");
 const utils = @import("utils.zig");
-const RocResult = utils.RocResult;
 const UpdateMode = utils.UpdateMode;
 const mem = std.mem;
 const math = std.math;
@@ -93,20 +92,6 @@ pub const RocList = extern struct {
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
-    pub fn allocate(
-        alignment: u32,
-        length: usize,
-        element_size: usize,
-    ) RocList {
-        const data_bytes = length * element_size;
-
-        return RocList{
-            .bytes = utils.allocateWithRefcount(data_bytes, alignment),
-            .length = length,
-            .capacity = length,
-        };
-    }
-
     pub fn makeUniqueExtra(self: RocList, alignment: u32, element_width: usize, update_mode: UpdateMode) RocList {
         if (update_mode == .InPlace) {
             return self;
@@ -140,6 +125,24 @@ pub const RocList = extern struct {
         return new_list;
     }
 
+    pub fn allocate(
+        alignment: u32,
+        length: usize,
+        element_width: usize,
+    ) RocList {
+        if (length == 0) {
+            return empty();
+        }
+
+        const capacity = utils.calculateCapacity(0, length, element_width);
+        const data_bytes = capacity * element_width;
+        return RocList{
+            .bytes = utils.allocateWithRefcount(data_bytes, alignment),
+            .length = length,
+            .capacity = capacity,
+        };
+    }
+
     pub fn reallocate(
         self: RocList,
         alignment: u32,
@@ -148,13 +151,17 @@ pub const RocList = extern struct {
     ) RocList {
         if (self.bytes) |source_ptr| {
             if (self.isUnique()) {
-                const new_source = utils.unsafeReallocate(source_ptr, alignment, self.len(), new_length, element_width);
-
-                return RocList{ .bytes = new_source, .length = new_length, .capacity = new_length };
+                if (self.capacity >= new_length) {
+                    return RocList{ .bytes = self.bytes, .length = new_length, .capacity = self.capacity };
+                } else {
+                    const new_capacity = utils.calculateCapacity(self.capacity, new_length, element_width);
+                    const new_source = utils.unsafeReallocate(source_ptr, alignment, self.len(), new_capacity, element_width);
+                    return RocList{ .bytes = new_source, .length = new_length, .capacity = new_capacity };
+                }
             }
+            return self.reallocateFresh(alignment, new_length, element_width);
         }
-
-        return self.reallocateFresh(alignment, new_length, element_width);
+        return RocList.allocate(alignment, new_length, element_width);
     }
 
     /// reallocate by explicitly making a new allocation and copying elements over
@@ -167,23 +174,15 @@ pub const RocList = extern struct {
         const old_length = self.length;
         const delta_length = new_length - old_length;
 
-        const data_bytes = new_length * element_width;
-        const first_slot = utils.allocateWithRefcount(data_bytes, alignment);
+        const result = RocList.allocate(alignment, new_length, element_width);
 
         // transfer the memory
-
         if (self.bytes) |source_ptr| {
-            const dest_ptr = first_slot;
+            const dest_ptr = result.bytes orelse unreachable;
 
             @memcpy(dest_ptr, source_ptr, old_length * element_width);
             @memset(dest_ptr + old_length * element_width, 0, delta_length * element_width);
         }
-
-        const result = RocList{
-            .bytes = first_slot,
-            .length = new_length,
-            .capacity = new_length,
-        };
 
         utils.decref(self.bytes, old_length * element_width, alignment);
 
@@ -514,17 +513,25 @@ pub fn listSublist(
     len: usize,
     dec: Dec,
 ) callconv(.C) RocList {
-    if (len == 0) {
+    const size = list.len();
+    if (len == 0 or start >= size) {
+        if (list.isUnique()) {
+            // Decrement the reference counts of all elements.
+            if (list.bytes) |source_ptr| {
+                var i: usize = 0;
+                while (i < size) : (i += 1) {
+                    const element = source_ptr + i * element_width;
+                    dec(element);
+                }
+                var output = list;
+                output.length = 0;
+                return output;
+            }
+        }
         return RocList.empty();
     }
 
     if (list.bytes) |source_ptr| {
-        const size = list.len();
-
-        if (start >= size) {
-            return RocList.empty();
-        }
-
         const keep_len = std.math.min(len, size - start);
         const drop_start_len = start;
         const drop_end_len = size - (start + keep_len);
@@ -543,10 +550,17 @@ pub fn listSublist(
             dec(element);
         }
 
-        if (start == 0 and list.isUnique()) {
+        if (list.isUnique()) {
             var output = list;
             output.length = keep_len;
-            return output;
+            if (start == 0) {
+                return output;
+            } else {
+                // We want memmove due to aliasing. Zig does not expose it directly.
+                // Instead use copy which can write to aliases as long as the dest is before the source.
+                mem.copy(u8, source_ptr[0 .. keep_len * element_width], source_ptr[start * element_width .. (start + keep_len) * element_width]);
+                return output;
+            }
         } else {
             const output = RocList.allocate(alignment, keep_len, element_width);
             const target_ptr = output.bytes orelse unreachable;
@@ -592,9 +606,10 @@ pub fn listDropAt(
 
         if (list.isUnique()) {
             var i = drop_index;
-            while (i < size) : (i += 1) {
+            while (i < size - 1) : (i += 1) {
                 const copy_target = source_ptr + i * element_width;
                 const copy_source = copy_target + element_width;
+
                 @memcpy(copy_target, copy_source, element_width);
             }
 
@@ -727,37 +742,57 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         return list_b;
     } else if (list_b.isEmpty()) {
         return list_a;
-    } else if (!list_a.isEmpty() and list_a.isUnique()) {
+    } else if (list_a.isUnique()) {
         const total_length: usize = list_a.len() + list_b.len();
 
-        if (list_a.bytes) |source| {
-            const new_source = utils.unsafeReallocate(
-                source,
-                alignment,
-                list_a.len(),
-                total_length,
-                element_width,
-            );
+        const resized_list_a = list_a.reallocate(alignment, total_length, element_width);
 
-            if (list_b.bytes) |source_b| {
-                @memcpy(new_source + list_a.len() * element_width, source_b, list_b.len() * element_width);
-            }
+        // These must exist, otherwise, the lists would have been empty.
+        const source_a = resized_list_a.bytes orelse unreachable;
+        const source_b = list_b.bytes orelse unreachable;
+        @memcpy(source_a + list_a.len() * element_width, source_b, list_b.len() * element_width);
 
-            return RocList{ .bytes = new_source, .length = total_length, .capacity = total_length };
-        }
+        // decrement list b.
+        utils.decref(source_b, list_b.len(), alignment);
+
+        return resized_list_a;
+    } else if (list_b.isUnique()) {
+        const total_length: usize = list_a.len() + list_b.len();
+
+        const resized_list_b = list_b.reallocate(alignment, total_length, element_width);
+
+        // These must exist, otherwise, the lists would have been empty.
+        const source_a = list_a.bytes orelse unreachable;
+        const source_b = resized_list_b.bytes orelse unreachable;
+
+        // This is a bit special, we need to first copy the elements of list_b to the end,
+        // then copy the elements of list_a to the beginning.
+        // This first call must use mem.copy because the slices might overlap.
+        const byte_count_a = list_a.len() * element_width;
+        const byte_count_b = list_b.len() * element_width;
+        mem.copy(u8, source_b[byte_count_a .. byte_count_a + byte_count_b], source_b[0..byte_count_b]);
+        @memcpy(source_b, source_a, byte_count_a);
+
+        // decrement list a.
+        utils.decref(source_a, list_a.len(), alignment);
+
+        return resized_list_b;
     }
     const total_length: usize = list_a.len() + list_b.len();
 
     const output = RocList.allocate(alignment, total_length, element_width);
 
-    if (output.bytes) |target| {
-        if (list_a.bytes) |source| {
-            @memcpy(target, source, list_a.len() * element_width);
-        }
-        if (list_b.bytes) |source| {
-            @memcpy(target + list_a.len() * element_width, source, list_b.len() * element_width);
-        }
-    }
+    // These must exist, otherwise, the lists would have been empty.
+    const target = output.bytes orelse unreachable;
+    const source_a = list_a.bytes orelse unreachable;
+    const source_b = list_b.bytes orelse unreachable;
+
+    @memcpy(target, source_a, list_a.len() * element_width);
+    @memcpy(target + list_a.len() * element_width, source_b, list_b.len() * element_width);
+
+    // decrement list a and b.
+    utils.decref(source_a, list_a.len(), alignment);
+    utils.decref(source_b, list_b.len(), alignment);
 
     return output;
 }

@@ -79,48 +79,14 @@ fn neq_u64() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn eq_f64() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    i : F64
-                    i = 1
-
-                    i == i
-                "#
-        ),
-        true,
-        bool
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn neq_f64() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-                    i : F64
-                    i = 1
-
-                    i != i
-                "#
-        ),
-        false,
-        bool
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_bool_tag() {
     assert_evals_to!(
         indoc!(
             r#"
                 true : Bool
-                true = True
+                true = Bool.true
 
-                true == True
+                true == Bool.true
                 "#
         ),
         true,
@@ -135,9 +101,9 @@ fn neq_bool_tag() {
         indoc!(
             r#"
                 true : Bool
-                true = True
+                true = Bool.true
 
-                true == False
+                true == Bool.false
                 "#
         ),
         false,
@@ -673,8 +639,8 @@ fn compare_nullable_recursive_union_same_content() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn boxed_eq_int() {
-    assert_evals_to!("Box.box 1 == Box.box 1", true, bool);
-    assert_evals_to!("Box.box 2 == Box.box 1", false, bool);
+    assert_evals_to!("Box.box 1i64 == Box.box 1", true, bool);
+    assert_evals_to!("Box.box 2i64 == Box.box 1", false, bool);
 }
 
 #[test]

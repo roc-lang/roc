@@ -1700,7 +1700,7 @@ fn to_scalar_4_byte() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_split_first() {
+fn str_split_first_one_char() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1716,7 +1716,49 @@ fn str_split_first() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
-fn str_split_last() {
+fn str_split_first_multiple_chars() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo//bar//baz" "//"
+            "#
+        ),
+        RocResult::ok((RocStr::from("bar//baz"), RocStr::from("foo"))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_first_entire_input() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo" "foo"
+            "#
+        ),
+        RocResult::ok((RocStr::from(""), RocStr::from(""))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_first_not_found() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo" "bar"
+            "#
+        ),
+        RocResult::err(()),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_last_one_char() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -1724,6 +1766,48 @@ fn str_split_last() {
             "#
         ),
         RocResult::ok((RocStr::from("baz"), RocStr::from("foo/bar"))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_last_multiple_chars() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitLast "foo//bar//baz" "//"
+            "#
+        ),
+        RocResult::ok((RocStr::from("baz"), RocStr::from("foo//bar"))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_last_entire_input() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitLast "foo" "foo"
+            "#
+        ),
+        RocResult::ok((RocStr::from(""), RocStr::from(""))),
+        RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_last_not_found() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.splitFirst "foo" "bar"
+            "#
+        ),
+        RocResult::err(()),
         RocResult<(RocStr, RocStr), ()>
     );
 }
@@ -1792,9 +1876,9 @@ fn llvm_wasm_str_layout() {
                 |> Str.reserve 42
             "#
         ),
-        [0, 5, 42],
+        [0, 5, 1],
         [u32; 3],
-        |[_ptr, len, cap]: [u32; 3]| [0, len, cap]
+        |[_ptr, len, cap]: [u32; 3]| [0, len, if cap >= 42 { 1 } else { 0 }]
     )
 }
 
@@ -1844,5 +1928,100 @@ fn when_on_strings() {
         ),
         4,
         i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn with_capacity() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.withCapacity 10
+            "#
+        ),
+        RocStr::from(""),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn with_capacity_concat() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.withCapacity 10 |> Str.concat "Forty-two"
+            "#
+        ),
+        RocStr::from("Forty-two"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn str_with_prefix() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.withPrefix "world!" "Hello "
+            "#
+        ),
+        RocStr::from("Hello world!"),
+        RocStr
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "two" |> Str.withPrefix "Forty "
+            "#
+        ),
+        RocStr::from("Forty two"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn destructure_pattern_assigned_from_thunk_opaque() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            MyCustomType := Str
+            myMsg = @MyCustomType "Hello"
+
+            main =
+                @MyCustomType msg = myMsg
+
+                msg
+            "#
+        ),
+        RocStr::from("Hello"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn destructure_pattern_assigned_from_thunk_tag() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            myMsg = A "hello " "world"
+
+            main =
+                A m1 m2 = myMsg
+
+                Str.concat m1 m2
+            "#
+        ),
+        RocStr::from("hello world"),
+        RocStr
     );
 }

@@ -22,6 +22,7 @@ use roc_parse::ast::{self, Defs, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
+use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
 use roc_types::types::{Alias, Category, LambdaSet, OptAbleVar, Type};
 use std::fmt::{Debug, Display};
@@ -64,7 +65,7 @@ impl Output {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Copy)]
+#[derive(Clone, Debug, PartialEq, Eq, Copy)]
 pub enum IntValue {
     I128([u8; 16]),
     U128([u8; 16]),
@@ -91,14 +92,15 @@ pub enum Expr {
     Int(Variable, Variable, Box<str>, IntValue, IntBound),
     Float(Variable, Variable, Box<str>, f64, FloatBound),
     Str(Box<str>),
-    SingleQuote(char),
+    // Number variable, precision variable, value, bound
+    SingleQuote(Variable, Variable, char, SingleQuoteBound),
     List {
         elem_var: Variable,
         loc_elems: Vec<Loc<Expr>>,
     },
 
     // Lookups
-    Var(Symbol),
+    Var(Symbol, Variable),
     AbilityMember(
         /// Actual member name
         Symbol,
@@ -228,14 +230,14 @@ pub enum Expr {
     Expect {
         loc_condition: Box<Loc<Expr>>,
         loc_continuation: Box<Loc<Expr>>,
-        lookups_in_cond: Vec<(Symbol, Variable)>,
+        lookups_in_cond: Vec<ExpectLookup>,
     },
 
     // not parsed, but is generated when lowering toplevel effectful expects
     ExpectFx {
         loc_condition: Box<Loc<Expr>>,
         loc_continuation: Box<Loc<Expr>>,
-        lookups_in_cond: Vec<(Symbol, Variable)>,
+        lookups_in_cond: Vec<ExpectLookup>,
     },
 
     /// Rendered as empty box in editor
@@ -243,6 +245,13 @@ pub enum Expr {
 
     /// Compiles, but will crash if reached
     RuntimeError(RuntimeError),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ExpectLookup {
+    pub symbol: Symbol,
+    pub var: Variable,
+    pub ability_info: Option<SpecializationId>,
 }
 
 impl Expr {
@@ -254,7 +263,7 @@ impl Expr {
             Self::Str(..) => Category::Str,
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
-            &Self::Var(sym) => Category::Lookup(sym),
+            &Self::Var(sym, _) => Category::Lookup(sym),
             &Self::AbilityMember(sym, _, _) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
             Self::If { .. } => Category::If,
@@ -336,7 +345,7 @@ pub struct ClosureData {
 ///
 /// We distinguish them from closures so we can have better error messages
 /// during constraint generation.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccessorData {
     pub name: Symbol,
     pub function_var: Variable,
@@ -370,7 +379,7 @@ impl AccessorData {
             record_var,
             ext_var,
             field_var,
-            loc_expr: Box::new(Loc::at_zero(Expr::Var(record_symbol))),
+            loc_expr: Box::new(Loc::at_zero(Expr::Var(record_symbol, record_var))),
             field,
         };
 
@@ -438,7 +447,10 @@ impl OpaqueWrapFunctionData {
         let body = Expr::OpaqueRef {
             opaque_var,
             name: opaque_name,
-            argument: Box::new((argument_var, Loc::at_zero(Expr::Var(argument_symbol)))),
+            argument: Box::new((
+                argument_var,
+                Loc::at_zero(Expr::Var(argument_symbol, argument_var)),
+            )),
             specialized_def_type: Box::new(specialized_def_type),
             type_arguments,
             lambda_set_variables,
@@ -473,7 +485,7 @@ pub struct Field {
     pub loc_expr: Box<Loc<Expr>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Recursive {
     NotRecursive = 0,
     Recursive = 1,
@@ -584,13 +596,16 @@ pub fn canonicalize_expr<'a>(
                 }
             }
         }
+        ast::Expr::Tuple(_fields) => {
+            todo!("canonicalize tuple");
+        }
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
         } => {
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
-            if let Var(symbol) = &can_update.value {
+            if let Var(symbol, _) = &can_update.value {
                 match canonicalize_fields(env, var_store, scope, region, fields.items) {
                     Ok((can_fields, mut output)) => {
                         output.references.union_mut(&update_out.references);
@@ -637,7 +652,15 @@ pub fn canonicalize_expr<'a>(
             let mut it = string.chars().peekable();
             if let Some(char) = it.next() {
                 if it.peek().is_none() {
-                    (Expr::SingleQuote(char), Output::default())
+                    (
+                        Expr::SingleQuote(
+                            var_store.fresh(),
+                            var_store.fresh(),
+                            char,
+                            SingleQuoteBound::from_char(char),
+                        ),
+                        Output::default(),
+                    )
                 } else {
                     // multiple chars is found
                     let error = roc_problem::can::RuntimeError::MultipleCharsInSingleQuote(region);
@@ -755,7 +778,7 @@ pub fn canonicalize_expr<'a>(
                 output.tail_call = None;
 
                 let expr = match fn_expr.value {
-                    Var(symbol) => {
+                    Var(symbol, _) => {
                         output.references.insert_call(symbol);
 
                         // we're tail-calling a symbol by name, check if it's the tail-callable symbol
@@ -868,7 +891,7 @@ pub fn canonicalize_expr<'a>(
                         var_store,
                         inner_scope,
                         region,
-                        *branch,
+                        branch,
                         &mut output,
                     )
                 });
@@ -898,7 +921,7 @@ pub fn canonicalize_expr<'a>(
 
             (expr, output)
         }
-        ast::Expr::Access(record_expr, field) => {
+        ast::Expr::RecordAccess(record_expr, field) => {
             let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, record_expr);
 
             (
@@ -912,7 +935,7 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::AccessorFunction(field) => (
+        ast::Expr::RecordAccessorFunction(field) => (
             Accessor(AccessorData {
                 name: scope.gen_unique_symbol(),
                 function_var: var_store.fresh(),
@@ -924,6 +947,8 @@ pub fn canonicalize_expr<'a>(
             }),
             Output::default(),
         ),
+        ast::Expr::TupleAccess(_record_expr, _field) => todo!("handle TupleAccess"),
+        ast::Expr::TupleAccessorFunction(_) => todo!("handle TupleAccessorFunction"),
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -984,7 +1009,7 @@ pub fn canonicalize_expr<'a>(
 
             // Get all the lookups that were referenced in the condition,
             // so we can print their values later.
-            let lookups_in_cond = get_lookup_symbols(&loc_condition.value, var_store);
+            let lookups_in_cond = get_lookup_symbols(&loc_condition.value);
 
             let (loc_continuation, output2) = canonicalize_expr(
                 env,
@@ -1473,7 +1498,7 @@ fn canonicalize_fields<'a>(
     let mut output = Output::default();
 
     for loc_field in fields.iter() {
-        match canonicalize_field(env, var_store, scope, &loc_field.value, loc_field.region) {
+        match canonicalize_field(env, var_store, scope, &loc_field.value) {
             Ok((label, field_expr, field_out, field_var)) => {
                 let field = Field {
                     var: field_var,
@@ -1526,7 +1551,6 @@ fn canonicalize_field<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
-    region: Region,
 ) -> Result<(Lowercase, Loc<Expr>, Output, Variable), CanonicalizeFieldProblem> {
     use roc_parse::ast::AssignedField::*;
 
@@ -1556,7 +1580,7 @@ fn canonicalize_field<'a>(
         }
 
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
-            canonicalize_field(env, var_store, scope, sub_field, region)
+            canonicalize_field(env, var_store, scope, sub_field)
         }
 
         Malformed(_string) => {
@@ -1590,7 +1614,7 @@ fn canonicalize_var_lookup(
                         var_store.fresh(),
                     )
                 } else {
-                    Var(symbol)
+                    Var(symbol, var_store.fresh())
                 }
             }
             Err(problem) => {
@@ -1613,7 +1637,7 @@ fn canonicalize_var_lookup(
                         var_store.fresh(),
                     )
                 } else {
-                    Var(symbol)
+                    Var(symbol, var_store.fresh())
                 }
             }
             Err(problem) => {
@@ -1632,7 +1656,7 @@ fn canonicalize_var_lookup(
 }
 
 /// Currently uses the heuristic of "only inline if it's a builtin"
-pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> Expr {
+pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
     use Expr::*;
 
     match expr {
@@ -1642,12 +1666,12 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         | other @ Int(..)
         | other @ Float(..)
         | other @ Str { .. }
-        | other @ SingleQuote(_)
+        | other @ SingleQuote(..)
         | other @ RuntimeError(_)
         | other @ EmptyRecord
         | other @ Accessor { .. }
         | other @ Update { .. }
-        | other @ Var(_)
+        | other @ Var(..)
         | other @ AbilityMember(..)
         | other @ RunLowLevel { .. }
         | other @ TypedHole { .. }
@@ -1661,7 +1685,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             let mut new_elems = Vec::with_capacity(loc_elems.len());
 
             for loc_elem in loc_elems {
-                let value = inline_calls(var_store, scope, loc_elem.value);
+                let value = inline_calls(var_store, loc_elem.value);
 
                 new_elems.push(Loc {
                     value,
@@ -1686,20 +1710,20 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         } => {
             let loc_cond = Box::new(Loc {
                 region: loc_cond.region,
-                value: inline_calls(var_store, scope, loc_cond.value),
+                value: inline_calls(var_store, loc_cond.value),
             });
 
             let mut new_branches = Vec::with_capacity(branches.len());
 
             for branch in branches {
                 let value = Loc {
-                    value: inline_calls(var_store, scope, branch.value.value),
+                    value: inline_calls(var_store, branch.value.value),
                     region: branch.value.region,
                 };
                 let guard = match branch.guard {
                     Some(loc_expr) => Some(Loc {
                         region: loc_expr.region,
-                        value: inline_calls(var_store, scope, loc_expr.value),
+                        value: inline_calls(var_store, loc_expr.value),
                     }),
                     None => None,
                 };
@@ -1733,12 +1757,12 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
 
             for (loc_cond, loc_expr) in branches {
                 let loc_cond = Loc {
-                    value: inline_calls(var_store, scope, loc_cond.value),
+                    value: inline_calls(var_store, loc_cond.value),
                     region: loc_cond.region,
                 };
 
                 let loc_expr = Loc {
-                    value: inline_calls(var_store, scope, loc_expr.value),
+                    value: inline_calls(var_store, loc_expr.value),
                     region: loc_expr.region,
                 };
 
@@ -1747,7 +1771,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
 
             let final_else = Box::new(Loc {
                 region: final_else.region,
-                value: inline_calls(var_store, scope, final_else.value),
+                value: inline_calls(var_store, final_else.value),
             });
 
             If {
@@ -1765,12 +1789,12 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         } => {
             let loc_condition = Loc {
                 region: loc_condition.region,
-                value: inline_calls(var_store, scope, loc_condition.value),
+                value: inline_calls(var_store, loc_condition.value),
             };
 
             let loc_continuation = Loc {
                 region: loc_continuation.region,
-                value: inline_calls(var_store, scope, loc_continuation.value),
+                value: inline_calls(var_store, loc_continuation.value),
             };
 
             Expect {
@@ -1787,12 +1811,12 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         } => {
             let loc_condition = Loc {
                 region: loc_condition.region,
-                value: inline_calls(var_store, scope, loc_condition.value),
+                value: inline_calls(var_store, loc_condition.value),
             };
 
             let loc_continuation = Loc {
                 region: loc_continuation.region,
-                value: inline_calls(var_store, scope, loc_continuation.value),
+                value: inline_calls(var_store, loc_continuation.value),
             };
 
             ExpectFx {
@@ -1810,7 +1834,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                     loc_pattern: def.loc_pattern,
                     loc_expr: Loc {
                         region: def.loc_expr.region,
-                        value: inline_calls(var_store, scope, def.loc_expr.value),
+                        value: inline_calls(var_store, def.loc_expr.value),
                     },
                     expr_var: def.expr_var,
                     pattern_vars: def.pattern_vars,
@@ -1820,7 +1844,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
 
             let loc_expr = Loc {
                 region: loc_expr.region,
-                value: inline_calls(var_store, scope, loc_expr.value),
+                value: inline_calls(var_store, loc_expr.value),
             };
 
             LetRec(new_defs, Box::new(loc_expr), mark)
@@ -1831,7 +1855,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
                 loc_pattern: def.loc_pattern,
                 loc_expr: Loc {
                     region: def.loc_expr.region,
-                    value: inline_calls(var_store, scope, def.loc_expr.value),
+                    value: inline_calls(var_store, def.loc_expr.value),
                 },
                 expr_var: def.expr_var,
                 pattern_vars: def.pattern_vars,
@@ -1840,7 +1864,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
 
             let loc_expr = Loc {
                 region: loc_expr.region,
-                value: inline_calls(var_store, scope, loc_expr.value),
+                value: inline_calls(var_store, loc_expr.value),
             };
 
             LetNonRec(Box::new(def), Box::new(loc_expr))
@@ -1858,7 +1882,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
         }) => {
             let loc_expr = *loc_body;
             let loc_expr = Loc {
-                value: inline_calls(var_store, scope, loc_expr.value),
+                value: inline_calls(var_store, loc_expr.value),
                 region: loc_expr.region,
             };
 
@@ -1918,7 +1942,7 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             let (var, loc_expr) = *argument;
             let argument = Box::new((
                 var,
-                loc_expr.map_owned(|expr| inline_calls(var_store, scope, expr)),
+                loc_expr.map_owned(|expr| inline_calls(var_store, expr)),
             ));
 
             OpaqueRef {
@@ -1950,67 +1974,71 @@ pub fn inline_calls(var_store: &mut VarStore, scope: &mut Scope, expr: Expr) -> 
             let (fn_var, loc_expr, closure_var, expr_var) = *boxed_tuple;
 
             match loc_expr.value {
-                Var(symbol) if symbol.is_builtin() => match builtin_defs_map(symbol, var_store) {
-                    Some(Def {
-                        loc_expr:
-                            Loc {
-                                value:
-                                    Closure(ClosureData {
-                                        recursive,
-                                        arguments: params,
-                                        loc_body: boxed_body,
-                                        ..
-                                    }),
-                                ..
-                            },
-                        ..
-                    }) => {
-                        debug_assert_eq!(recursive, Recursive::NotRecursive);
+                Var(symbol, _) if symbol.is_builtin() => {
+                    match builtin_defs_map(symbol, var_store) {
+                        Some(Def {
+                            loc_expr:
+                                Loc {
+                                    value:
+                                        Closure(ClosureData {
+                                            recursive,
+                                            arguments: params,
+                                            loc_body: boxed_body,
+                                            ..
+                                        }),
+                                    ..
+                                },
+                            ..
+                        }) => {
+                            debug_assert_eq!(recursive, Recursive::NotRecursive);
 
-                        // Since this is a canonicalized Expr, we should have
-                        // already detected any arity mismatches and replaced this
-                        // with a RuntimeError if there was a mismatch.
-                        debug_assert_eq!(params.len(), args.len());
+                            // Since this is a canonicalized Expr, we should have
+                            // already detected any arity mismatches and replaced this
+                            // with a RuntimeError if there was a mismatch.
+                            debug_assert_eq!(params.len(), args.len());
 
-                        // Start with the function's body as the answer.
-                        let mut loc_answer = *boxed_body;
+                            // Start with the function's body as the answer.
+                            let mut loc_answer = *boxed_body;
 
-                        // Wrap the body in one LetNonRec for each argument,
-                        // such that at the end we have all the arguments in
-                        // scope with the values the caller provided.
-                        for ((_param_var, _exhaustive_mark, loc_pattern), (expr_var, loc_expr)) in
-                            params.iter().cloned().zip(args.into_iter()).rev()
-                        {
-                            // TODO get the correct vars into here.
-                            // Not sure if param_var should be involved.
-                            let pattern_vars = SendMap::default();
+                            // Wrap the body in one LetNonRec for each argument,
+                            // such that at the end we have all the arguments in
+                            // scope with the values the caller provided.
+                            for (
+                                (_param_var, _exhaustive_mark, loc_pattern),
+                                (expr_var, loc_expr),
+                            ) in params.iter().cloned().zip(args.into_iter()).rev()
+                            {
+                                // TODO get the correct vars into here.
+                                // Not sure if param_var should be involved.
+                                let pattern_vars = SendMap::default();
 
-                            let def = Def {
-                                loc_pattern,
-                                loc_expr,
-                                expr_var,
-                                pattern_vars,
-                                annotation: None,
-                            };
+                                let def = Def {
+                                    loc_pattern,
+                                    loc_expr,
+                                    expr_var,
+                                    pattern_vars,
+                                    annotation: None,
+                                };
 
-                            loc_answer = Loc {
-                                region: Region::zero(),
-                                value: LetNonRec(Box::new(def), Box::new(loc_answer)),
-                            };
+                                loc_answer = Loc {
+                                    region: Region::zero(),
+                                    value: LetNonRec(Box::new(def), Box::new(loc_answer)),
+                                };
+                            }
+
+                            loc_answer.value
                         }
-
-                        loc_answer.value
+                        Some(_) => {
+                            unreachable!("Tried to inline a non-function");
+                        }
+                        None => {
+                            unreachable!(
+                                "Tried to inline a builtin that wasn't registered: {:?}",
+                                symbol
+                            );
+                        }
                     }
-                    Some(_) => {
-                        unreachable!("Tried to inline a non-function");
-                    }
-                    None => {
-                        unreachable!(
-                            "Tried to inline a builtin that wasn't registered: {:?}",
-                            symbol
-                        );
-                    }
-                },
+                }
                 _ => {
                     // For now, we only inline calls to builtins. Leave this alone!
                     Call(
@@ -2042,7 +2070,7 @@ fn flatten_str_literal<'a>(
 pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
     match expr {
         ast::Expr::Var { .. } => true,
-        ast::Expr::Access(sub_expr, _) => is_valid_interpolation(sub_expr),
+        ast::Expr::RecordAccess(sub_expr, _) => is_valid_interpolation(sub_expr),
         _ => false,
     }
 }
@@ -2162,7 +2190,10 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
             Interpolation(loc_interpolated_expr) => loc_interpolated_expr,
         };
 
-        let fn_expr = Loc::at(Region::zero(), Expr::Var(Symbol::STR_CONCAT));
+        let fn_expr = Loc::at(
+            Region::zero(),
+            Expr::Var(Symbol::STR_CONCAT, var_store.fresh()),
+        );
         let expr = Expr::Call(
             Box::new((
                 var_store.fresh(),
@@ -2521,7 +2552,7 @@ impl Declarations {
             })
     }
 
-    pub fn expects(&self) -> VecMap<Region, Vec<(Symbol, Variable)>> {
+    pub fn expects(&self) -> VecMap<Region, Vec<ExpectLookup>> {
         let mut collector = ExpectCollector {
             expects: VecMap::default(),
         };
@@ -2605,16 +2636,34 @@ pub struct DestructureDef {
     pub pattern_vars: VecMap<Symbol, Variable>,
 }
 
-fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Variable)> {
+fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
     let mut stack: Vec<&Expr> = vec![expr];
-    let mut symbols = Vec::new();
+    let mut lookups: Vec<ExpectLookup> = Vec::new();
 
     while let Some(expr) = stack.pop() {
         match expr {
-            Expr::Var(symbol) | Expr::Update { symbol, .. } | Expr::AbilityMember(symbol, _, _) => {
+            Expr::Var(symbol, var)
+            | Expr::Update {
+                symbol,
+                record_var: var,
+                ..
+            } => {
                 // Don't introduce duplicates, or make unused variables
-                if !symbols.iter().any(|(sym, _)| sym == symbol) {
-                    symbols.push((*symbol, var_store.fresh()));
+                if !lookups.iter().any(|l| l.symbol == *symbol) {
+                    lookups.push(ExpectLookup {
+                        symbol: *symbol,
+                        var: *var,
+                        ability_info: None,
+                    });
+                }
+            }
+            Expr::AbilityMember(symbol, spec_id, var) => {
+                if !lookups.iter().any(|l| l.symbol == *symbol) {
+                    lookups.push(ExpectLookup {
+                        symbol: *symbol,
+                        var: *var,
+                        ability_info: *spec_id,
+                    });
                 }
             }
             Expr::List { loc_elems, .. } => {
@@ -2655,7 +2704,7 @@ fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Var
                 stack.reserve(1 + args.len());
 
                 match &boxed_expr.1.value {
-                    Expr::Var(_) => {
+                    Expr::Var(_, _) => {
                         // do nothing
                     }
                     function_expr => {
@@ -2692,7 +2741,7 @@ fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Var
             | Expr::ExpectFx {
                 loc_continuation, ..
             } => {
-                stack.push(&(*loc_continuation).value);
+                stack.push(&loc_continuation.value);
 
                 // Intentionally ignore the lookups in the nested `expect` condition itself,
                 // because they couldn't possibly influence the outcome of this `expect`!
@@ -2703,7 +2752,7 @@ fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Var
             | Expr::Str(_)
             | Expr::ZeroArgumentTag { .. }
             | Expr::Accessor(_)
-            | Expr::SingleQuote(_)
+            | Expr::SingleQuote(..)
             | Expr::EmptyRecord
             | Expr::TypedHole(_)
             | Expr::RuntimeError(_)
@@ -2711,7 +2760,7 @@ fn get_lookup_symbols(expr: &Expr, var_store: &mut VarStore) -> Vec<(Symbol, Var
         }
     }
 
-    symbols
+    lookups
 }
 
 /// Here we transform
@@ -2758,14 +2807,22 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
     loop {
         match loc_expr.value {
             Expr::LetNonRec(boxed_def, remainder) => {
-                lookups_in_cond.extend(boxed_def.pattern_vars.iter().map(|(a, b)| (*a, *b)));
+                lookups_in_cond.extend(boxed_def.pattern_vars.iter().map(|(a, b)| ExpectLookup {
+                    symbol: *a,
+                    var: *b,
+                    ability_info: None,
+                }));
 
                 stack.push(StoredDef::NonRecursive(loc_expr.region, boxed_def));
                 loc_expr = *remainder;
             }
             Expr::LetRec(defs, remainder, mark) => {
                 for def in &defs {
-                    lookups_in_cond.extend(def.pattern_vars.iter().map(|(a, b)| (*a, *b)));
+                    lookups_in_cond.extend(def.pattern_vars.iter().map(|(a, b)| ExpectLookup {
+                        symbol: *a,
+                        var: *b,
+                        ability_info: None,
+                    }));
                 }
 
                 stack.push(StoredDef::Recursive(loc_expr.region, defs, mark));
@@ -2808,7 +2865,7 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
 }
 
 struct ExpectCollector {
-    expects: VecMap<Region, Vec<(Symbol, Variable)>>,
+    expects: VecMap<Region, Vec<ExpectLookup>>,
 }
 
 impl crate::traverse::Visitor for ExpectCollector {

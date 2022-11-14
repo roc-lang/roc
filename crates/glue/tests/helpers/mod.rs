@@ -1,4 +1,4 @@
-use roc_glue::load::load_types;
+use roc_glue::load::{load_types, IgnoreErrors};
 use roc_glue::rust_glue;
 use roc_load::Threading;
 use std::env;
@@ -33,7 +33,12 @@ pub fn generate_bindings(decl_src: &str) -> String {
         let mut file = File::create(file_path).unwrap();
         writeln!(file, "{}", &src).unwrap();
 
-        let result = load_types(full_file_path, Threading::Single);
+        let result = load_types(
+            full_file_path,
+            Threading::Single,
+            // required `nothing` is unused; that error is okay
+            IgnoreErrors { can: true },
+        );
 
         dir.close().expect("Unable to close tempdir");
 

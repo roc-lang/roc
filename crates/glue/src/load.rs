@@ -1,6 +1,7 @@
 use crate::rust_glue;
 use crate::types::{Env, Types};
 use bumpalo::Bump;
+use roc_intern::GlobalInterner;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_reporting::report::RenderTarget;
 use roc_target::{Architecture, OperatingSystem, TargetInfo};
@@ -11,8 +12,20 @@ use std::process;
 use strum::IntoEnumIterator;
 use target_lexicon::Triple;
 
+pub struct IgnoreErrors {
+    pub can: bool,
+}
+
+impl IgnoreErrors {
+    const NONE: Self = IgnoreErrors { can: false };
+}
+
 pub fn generate(input_path: &Path, output_path: &Path) -> io::Result<i32> {
-    match load_types(input_path.to_path_buf(), Threading::AllAvailable) {
+    match load_types(
+        input_path.to_path_buf(),
+        Threading::AllAvailable,
+        IgnoreErrors::NONE,
+    ) {
         Ok(types_and_targets) => {
             let mut file = File::create(output_path).unwrap_or_else(|err| {
                 eprintln!(
@@ -66,6 +79,7 @@ pub fn generate(input_path: &Path, output_path: &Path) -> io::Result<i32> {
 pub fn load_types(
     full_file_path: PathBuf,
     threading: Threading,
+    ignore_errors: IgnoreErrors,
 ) -> Result<Vec<(Types, TargetInfo)>, io::Error> {
     let target_info = (&Triple::host()).into();
 
@@ -77,7 +91,7 @@ pub fn load_types(
         mut type_problems,
         mut declarations_by_id,
         mut solved,
-        mut interns,
+        interns,
         ..
     } = roc_load::load_and_typecheck(
         arena,
@@ -107,7 +121,7 @@ pub fn load_types(
     let can_problems = can_problems.remove(&home).unwrap_or_default();
     let type_problems = type_problems.remove(&home).unwrap_or_default();
 
-    if !can_problems.is_empty() || !type_problems.is_empty() {
+    if (!ignore_errors.can && !can_problems.is_empty()) || !type_problems.is_empty() {
         todo!(
             "Gracefully report compilation problems during glue generation: {:?}, {:?}",
             can_problems,
@@ -136,17 +150,24 @@ pub fn load_types(
         }
     });
 
-    let types_and_targets = Architecture::iter()
-        .map(|arch| {
-            let target_info = TargetInfo {
-                architecture: arch,
-                operating_system: OperatingSystem::Unix,
-            };
-            let mut env = Env::new(arena, subs, &mut interns, target_info);
+    let layout_interner = GlobalInterner::with_capacity(128);
 
-            (env.vars_to_types(variables.clone()), target_info)
-        })
-        .collect();
+    let architectures = Architecture::iter();
+    let mut types_and_targets = Vec::with_capacity(architectures.len());
+    for arch in architectures {
+        let target_info = TargetInfo {
+            architecture: arch,
+            operating_system: OperatingSystem::Unix,
+        };
+
+        let types = {
+            let mut env = Env::new(arena, subs, &interns, layout_interner.fork(), target_info);
+
+            env.vars_to_types(variables.clone())
+        };
+
+        types_and_targets.push((types, target_info));
+    }
 
     Ok(types_and_targets)
 }

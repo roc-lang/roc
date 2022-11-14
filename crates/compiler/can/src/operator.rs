@@ -79,7 +79,7 @@ fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a>
             ann_pattern,
             ann_type,
             comment: *comment,
-            body_pattern: *body_pattern,
+            body_pattern,
             body_expr: desugar_expr(arena, body_expr),
         },
         Expect {
@@ -120,7 +120,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | NonBase10Int { .. }
         | Str(_)
         | SingleQuote(_)
-        | AccessorFunction(_)
+        | RecordAccessorFunction(_)
+        | TupleAccessorFunction(_)
         | Var { .. }
         | Underscore { .. }
         | MalformedIdent(_, _)
@@ -129,13 +130,14 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | Tag(_)
         | OpaqueRef(_) => loc_expr,
 
-        Access(sub_expr, paths) => {
+        TupleAccess(_sub_expr, _paths) => todo!("Handle TupleAccess"),
+        RecordAccess(sub_expr, paths) => {
             let region = loc_expr.region;
             let loc_sub_expr = Loc {
                 region,
                 value: **sub_expr,
             };
-            let value = Access(&desugar_expr(arena, arena.alloc(loc_sub_expr)).value, paths);
+            let value = RecordAccess(&desugar_expr(arena, arena.alloc(loc_sub_expr)).value, paths);
 
             arena.alloc(Loc { region, value })
         }
@@ -163,7 +165,9 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                 }
             })),
         }),
-
+        Tuple(_fields) => {
+            todo!("desugar_expr: Tuple");
+        }
         RecordUpdate { fields, update } => {
             // NOTE the `update` field is always a `Var { .. }`, we only desugar it to get rid of
             // any spaces before/after

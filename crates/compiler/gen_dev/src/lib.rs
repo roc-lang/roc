@@ -1,3 +1,6 @@
+//! Provides the compiler backend to generate Roc binaries fast, for a nice
+//! developer experience. See [README.md](./compiler/gen_dev/README.md) for
+//! more information.
 #![warn(clippy::dbg_macro)]
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant, clippy::upper_case_acronyms)]
@@ -14,7 +17,9 @@ use roc_mono::ir::{
     BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, Param, Proc, ProcLayout,
     SelfRecursive, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, LayoutId, LayoutIds, TagIdIntType, UnionLayout};
+use roc_mono::layout::{
+    Builtin, Layout, LayoutId, LayoutIds, STLayoutInterner, TagIdIntType, UnionLayout,
+};
 
 mod generic64;
 mod object_builder;
@@ -23,6 +28,7 @@ mod run_roc;
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
+    pub layout_interner: &'a STLayoutInterner<'a>,
     pub module_id: ModuleId,
     pub exposed_to_host: MutSet<Symbol>,
     pub lazy_literals: bool,
@@ -153,7 +159,7 @@ trait Backend<'a> {
                     let module_id = env.module_id;
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
-                    rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, *following)
+                    rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, following)
                 };
 
                 for spec in new_specializations.into_iter() {
@@ -405,6 +411,9 @@ trait Backend<'a> {
                 );
                 self.build_num_add(sym, &args[0], &args[1], ret_layout)
             }
+            LowLevel::NumAddChecked => {
+                self.build_num_add_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
+            }
             LowLevel::NumAcos => self.build_fn_call(
                 sym,
                 bitcode::NUM_ACOS[FloatWidth::F64].to_string(),
@@ -492,6 +501,27 @@ trait Backend<'a> {
                     "NumSub: expected to have the same argument and return layout"
                 );
                 self.build_num_sub(sym, &args[0], &args[1], ret_layout)
+            }
+            LowLevel::NumBitwiseAnd => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = ret_layout {
+                    self.build_int_bitwise_and(sym, &args[0], &args[1], *int_width)
+                } else {
+                    internal_error!("bitwise and on a non-integer")
+                }
+            }
+            LowLevel::NumBitwiseOr => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = ret_layout {
+                    self.build_int_bitwise_or(sym, &args[0], &args[1], *int_width)
+                } else {
+                    internal_error!("bitwise or on a non-integer")
+                }
+            }
+            LowLevel::NumBitwiseXor => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = ret_layout {
+                    self.build_int_bitwise_xor(sym, &args[0], &args[1], *int_width)
+                } else {
+                    internal_error!("bitwise xor on a non-integer")
+                }
             }
             LowLevel::Eq => {
                 debug_assert_eq!(2, args.len(), "Eq: expected to have exactly two argument");
@@ -694,6 +724,23 @@ trait Backend<'a> {
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
+            Symbol::NUM_ADD_CHECKED => {
+                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
+                let fn_name = self.symbol_to_string(func_sym, layout_id);
+                // Now that the arguments are needed, load them if they are literals.
+                self.load_literal_symbols(args);
+                self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
+            }
+            Symbol::BOOL_TRUE => {
+                let bool_layout = Layout::Builtin(Builtin::Bool);
+                self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(true));
+                self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
+            }
+            Symbol::BOOL_FALSE => {
+                let bool_layout = Layout::Builtin(Builtin::Bool);
+                self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(false));
+                self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
+            }
             _ => todo!("the function, {:?}", func_sym),
         }
     }
@@ -715,6 +762,16 @@ trait Backend<'a> {
     /// build_num_add stores the sum of src1 and src2 into dst.
     fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
 
+    /// build_num_add_checked stores the sum of src1 and src2 into dst.
+    fn build_num_add_checked(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        num_layout: &Layout<'a>,
+        return_layout: &Layout<'a>,
+    );
+
     /// build_num_mul stores `src1 * src2` into dst.
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
 
@@ -726,6 +783,33 @@ trait Backend<'a> {
 
     /// build_num_sub stores the `src1 - src2` difference into dst.
     fn build_num_sub(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
+
+    /// stores the `src1 & src2` into dst.
+    fn build_int_bitwise_and(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
+
+    /// stores the `src1 | src2` into dst.
+    fn build_int_bitwise_or(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
+
+    /// stores the `src1 ^ src2` into dst.
+    fn build_int_bitwise_xor(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
 
     /// build_eq stores the result of `src1 == src2` into dst.
     fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>);

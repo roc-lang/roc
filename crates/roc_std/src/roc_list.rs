@@ -103,6 +103,44 @@ impl<T> RocList<T> {
         self.len() == 0
     }
 
+    pub fn is_unique(&self) -> bool {
+        if let Some(storage) = self.storage() {
+            storage.is_unique()
+        } else {
+            // If there is no storage, this list is empty.
+            // An empty list is always unique.
+            true
+        }
+    }
+
+    pub fn is_readonly(&self) -> bool {
+        if let Some(storage) = self.storage() {
+            storage.is_readonly()
+        } else {
+            false
+        }
+    }
+
+    /// Marks a list as readonly. This means that it will be leaked.
+    /// For constants passed in from platform to application, this may be reasonable.
+    ///
+    /// # Safety
+    ///
+    /// A value can be read-only in Roc for 3 reasons:
+    ///   1. The value is stored in read-only memory like a constant in the app.
+    ///   2. Our refcounting maxes out. When that happens, we saturate to read-only.
+    ///   3. This function is called
+    ///
+    /// Any value that is set to read-only will be leaked.
+    /// There is no way to tell how many references it has and if it is safe to free.
+    /// As such, only values that should have a static lifetime for the entire application run
+    /// should be considered for marking read-only.
+    pub unsafe fn set_readonly(&self) {
+        if let Some((_, storage)) = self.elements_and_storage() {
+            storage.set(Storage::Readonly);
+        }
+    }
+
     /// Note that there is no way to convert directly to a Vec.
     ///
     /// This is because RocList values are not allocated using the system allocator, so
@@ -498,53 +536,6 @@ impl<'a, T> IntoIterator for &'a RocList<T> {
     }
 }
 
-impl<T> IntoIterator for RocList<T> {
-    type Item = T;
-    type IntoIter = IntoIter<T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        IntoIter { list: self, idx: 0 }
-    }
-}
-
-pub struct IntoIter<T> {
-    list: RocList<T>,
-    idx: usize,
-}
-
-impl<T> Iterator for IntoIter<T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.list.len() <= self.idx {
-            return None;
-        }
-
-        let elements = self.list.elements?;
-        let element_ptr = unsafe { elements.as_ptr().add(self.idx) };
-        self.idx += 1;
-
-        // Return the element.
-        Some(unsafe { ManuallyDrop::into_inner(element_ptr.read()) })
-    }
-}
-
-impl<T> Drop for IntoIter<T> {
-    fn drop(&mut self) {
-        // If there are any elements left that need to be dropped, drop them.
-        if let Some(elements) = self.list.elements {
-            // Set the list's length to zero to prevent double-frees.
-            // Note that this leaks if dropping any of the elements panics.
-            let len = mem::take(&mut self.list.length);
-
-            // Drop the elements that haven't been returned from the iterator.
-            for i in self.idx..len {
-                mem::drop::<T>(unsafe { ManuallyDrop::take(&mut *elements.as_ptr().add(i)) })
-            }
-        }
-    }
-}
-
 impl<T: Hash> Hash for RocList<T> {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         // This is the same as Rust's Vec implementation, which
@@ -630,6 +621,48 @@ where
         D: Deserializer<'de>,
     {
         deserializer.deserialize_seq(RocListVisitor::new())
+    }
+}
+
+// This is a RocList that is checked to ensure it is unique or readonly such that it can be sent between threads safely.
+#[repr(transparent)]
+pub struct SendSafeRocList<T>(RocList<T>);
+
+unsafe impl<T> Send for SendSafeRocList<T> where T: Send {}
+
+impl<T> Clone for SendSafeRocList<T>
+where
+    T: Clone,
+{
+    fn clone(&self) -> Self {
+        if self.0.is_readonly() {
+            SendSafeRocList(self.0.clone())
+        } else {
+            // To keep self send safe, this must copy.
+            SendSafeRocList(RocList::from_slice(&self.0))
+        }
+    }
+}
+
+impl<T> From<RocList<T>> for SendSafeRocList<T>
+where
+    T: Clone,
+{
+    fn from(l: RocList<T>) -> Self {
+        if l.is_unique() || l.is_readonly() {
+            SendSafeRocList(l)
+        } else {
+            // This is not unique, do a deep copy.
+            // TODO: look into proper into_iter that takes ownership.
+            // Then this won't need clone and will skip and refcount inc and dec for each element.
+            SendSafeRocList(RocList::from_slice(&l))
+        }
+    }
+}
+
+impl<T> From<SendSafeRocList<T>> for RocList<T> {
+    fn from(l: SendSafeRocList<T>) -> Self {
+        l.0
     }
 }
 

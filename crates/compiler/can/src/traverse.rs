@@ -472,6 +472,12 @@ pub fn walk_pattern<V: Visitor>(visitor: &mut V, pattern: &Pattern) {
         RecordDestructure { destructs, .. } => destructs
             .iter()
             .for_each(|d| visitor.visit_record_destruct(&d.value, d.region)),
+        List {
+            patterns, elem_var, ..
+        } => patterns
+            .patterns
+            .iter()
+            .for_each(|p| visitor.visit_pattern(&p.value, p.region, Some(*elem_var))),
         NumLiteral(..) => { /* terminal */ }
         IntLiteral(..) => { /* terminal */ }
         FloatLiteral(..) => { /* terminal */ }

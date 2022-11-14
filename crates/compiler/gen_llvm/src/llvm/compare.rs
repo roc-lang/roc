@@ -13,8 +13,9 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
-use super::build::{dec_binop_with_unchecked, load_roc_value, use_roc_value};
+use super::build::{load_roc_value, use_roc_value};
 use super::convert::argument_type_from_union_layout;
+use super::lowlevel::dec_binop_with_unchecked;
 
 #[derive(Clone, Debug)]
 enum WhenRecursive<'a> {
@@ -147,6 +148,8 @@ fn build_eq<'a, 'ctx, 'env>(
     rhs_layout: &Layout<'a>,
     when_recursive: WhenRecursive<'a>,
 ) -> BasicValueEnum<'ctx> {
+    let lhs_layout = &lhs_layout.runtime_representation(env.layout_interner);
+    let rhs_layout = &rhs_layout.runtime_representation(env.layout_interner);
     if lhs_layout != rhs_layout {
         panic!(
             "Equality of different layouts; did you have a type mismatch?\n{:?} == {:?}",

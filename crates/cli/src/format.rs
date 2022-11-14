@@ -55,8 +55,7 @@ fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> 
 }
 
 fn is_roc_file(path: &Path) -> bool {
-    let ext = path.extension().and_then(OsStr::to_str);
-    return matches!(ext, Some("roc"));
+    matches!(path.extension().and_then(OsStr::to_str), Some("roc"))
 }
 
 pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), String> {
@@ -101,11 +100,11 @@ pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), Str
 
             let mut before_file = file.clone();
             before_file.set_extension("roc-format-failed-ast-before");
-            std::fs::write(&before_file, &format!("{:#?}\n", ast)).unwrap();
+            std::fs::write(&before_file, &format!("{:#?}\n", ast_normalized)).unwrap();
 
             let mut after_file = file.clone();
             after_file.set_extension("roc-format-failed-ast-after");
-            std::fs::write(&after_file, &format!("{:#?}\n", reparsed_ast)).unwrap();
+            std::fs::write(&after_file, &format!("{:#?}\n", reparsed_ast_normalized)).unwrap();
 
             internal_error!(
                 "Formatting bug; formatting didn't reparse as the same tree\n\n\
@@ -158,7 +157,9 @@ fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'
     let (module, state) = module::parse_header(arena, State::new(src.as_bytes()))
         .map_err(|e| SyntaxError::Header(e.problem))?;
 
-    let (_, defs, _) = module_defs().parse(arena, state).map_err(|(_, e, _)| e)?;
+    let (_, defs, _) = module_defs()
+        .parse(arena, state, 0)
+        .map_err(|(_, e, _)| e)?;
 
     Ok(Ast { module, defs })
 }

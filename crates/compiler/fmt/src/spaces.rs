@@ -542,17 +542,17 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
             },
             Expect {
                 condition,
-                preceding_comment,
+                preceding_comment: _,
             } => Expect {
                 condition: arena.alloc(condition.remove_spaces(arena)),
-                preceding_comment,
+                preceding_comment: Region::zero(),
             },
             ExpectFx {
                 condition,
-                preceding_comment,
+                preceding_comment: _,
             } => ExpectFx {
                 condition: arena.alloc(condition.remove_spaces(arena)),
-                preceding_comment,
+                preceding_comment: Region::zero(),
             },
         }
     }
@@ -640,14 +640,17 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 is_negative,
             },
             Expr::Str(a) => Expr::Str(a.remove_spaces(arena)),
-            Expr::Access(a, b) => Expr::Access(arena.alloc(a.remove_spaces(arena)), b),
-            Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
+            Expr::RecordAccess(a, b) => Expr::RecordAccess(arena.alloc(a.remove_spaces(arena)), b),
+            Expr::RecordAccessorFunction(a) => Expr::RecordAccessorFunction(a),
+            Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.remove_spaces(arena)), b),
+            Expr::TupleAccessorFunction(a) => Expr::TupleAccessorFunction(a),
             Expr::List(a) => Expr::List(a.remove_spaces(arena)),
             Expr::RecordUpdate { update, fields } => Expr::RecordUpdate {
                 update: arena.alloc(update.remove_spaces(arena)),
                 fields: fields.remove_spaces(arena),
             },
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
+            Expr::Tuple(a) => Expr::Tuple(a.remove_spaces(arena)),
             Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::Tag(a) => Expr::Tag(a),
@@ -748,7 +751,10 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             }
             Pattern::SpaceBefore(a, _) => a.remove_spaces(arena),
             Pattern::SpaceAfter(a, _) => a.remove_spaces(arena),
-            Pattern::SingleQuote(a) => Pattern::NumLiteral(a),
+            Pattern::SingleQuote(a) => Pattern::SingleQuote(a),
+            Pattern::List(pats) => Pattern::List(pats.remove_spaces(arena)),
+            Pattern::Tuple(pats) => Pattern::Tuple(pats.remove_spaces(arena)),
+            Pattern::ListRest => Pattern::ListRest,
         }
     }
 }
@@ -795,7 +801,7 @@ impl<'a> RemoveSpaces<'a> for HasClause<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         HasClause {
             var: self.var.remove_spaces(arena),
-            ability: self.ability.remove_spaces(arena),
+            abilities: self.abilities.remove_spaces(arena),
         }
     }
 }

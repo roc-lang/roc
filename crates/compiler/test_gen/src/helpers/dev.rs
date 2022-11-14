@@ -73,6 +73,7 @@ pub fn helper(
         procedures,
         mut interns,
         exposed_to_host,
+        layout_interner,
         ..
     } = loaded;
 
@@ -143,7 +144,7 @@ pub fn helper(
         for problem in can_problems.into_iter() {
             // Ignore "unused" problems
             match problem {
-                UnusedDef(_, _) | UnusedArgument(_, _, _, _) | UnusedImport(_, _) => {
+                UnusedDef(_, _) | UnusedArgument(_, _, _, _) | UnusedModuleImport(_, _) => {
                     delayed_errors.push(problem);
                     continue;
                 }
@@ -176,6 +177,7 @@ pub fn helper(
 
     let env = roc_gen_dev::Env {
         arena,
+        layout_interner: &layout_interner,
         module_id,
         exposed_to_host: exposed_to_host.values.keys().copied().collect(),
         lazy_literals,

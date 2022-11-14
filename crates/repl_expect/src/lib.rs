@@ -1,17 +1,17 @@
+//! Supports evaluating `expect` and printing contextual information when they fail.
 #[cfg(not(windows))]
 use {
+    roc_intern::GlobalInterner,
     roc_module::symbol::Interns,
     roc_mono::{
         ir::ProcLayout,
-        layout::{CapturesNiche, LayoutCache},
+        layout::{CapturesNiche, Layout, LayoutCache},
     },
     roc_parse::ast::Expr,
-    roc_repl_eval::{
-        eval::{jit_to_ast, ToAstProblem},
-        ReplAppMemory,
-    },
+    roc_repl_eval::{eval::jit_to_ast, ReplAppMemory},
     roc_target::TargetInfo,
     roc_types::subs::{Subs, Variable},
+    std::sync::Arc,
 };
 
 #[cfg(not(windows))]
@@ -29,10 +29,11 @@ pub fn get_values<'a>(
     arena: &'a bumpalo::Bump,
     subs: &Subs,
     interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     start: *const u8,
     start_offset: usize,
     variables: &[Variable],
-) -> Result<(usize, Vec<Expr<'a>>), ToAstProblem> {
+) -> (usize, Vec<Expr<'a>>) {
     let mut result = Vec::with_capacity(variables.len());
 
     let memory = ExpectMemory { start };
@@ -51,9 +52,8 @@ pub fn get_values<'a>(
         let expr = {
             let variable = *variable;
 
-            let content = subs.get_content_without_compacting(variable);
-
-            let mut layout_cache = LayoutCache::new(target_info);
+            // TODO: pass layout_cache to jit_to_ast directly
+            let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
             let layout = layout_cache.from_var(arena, variable, subs).unwrap();
 
             let proc_layout = ProcLayout {
@@ -62,24 +62,23 @@ pub fn get_values<'a>(
                 captures_niche: CapturesNiche::no_niche(),
             };
 
-            let element = jit_to_ast(
+            jit_to_ast(
                 arena,
                 app,
                 "expect_repl_main_fn",
                 proc_layout,
-                content,
+                variable,
                 subs,
                 interns,
+                layout_interner.fork(),
                 target_info,
-            )?;
-
-            element
+            )
         };
 
         result.push(expr);
     }
 
-    Ok((app.offset, result))
+    (app.offset, result)
 }
 
 #[cfg(not(windows))]
@@ -134,7 +133,7 @@ mod test {
 
         let interns = loaded.interns.clone();
 
-        let (lib, expects) = expect_mono_module_to_dylib(
+        let (lib, expects, layout_interner) = expect_mono_module_to_dylib(
             arena,
             target.clone(),
             loaded,
@@ -162,6 +161,7 @@ mod test {
             RenderTarget::ColorTerminal,
             arena,
             interns,
+            &layout_interner.into_global(),
             &lib,
             &mut expectations,
             expects,
@@ -258,10 +258,10 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                a : Num a
+                a : Num *
                 a = 1
 
-                b : Num a
+                b : Num *
                 b = 2
                 "#
             ),
@@ -335,7 +335,7 @@ mod test {
                 When it failed, these variables had these values:
 
                 a : List (List Str)
-                a = [[""], []]
+                a = [["foo"], []]
 
                 b : List (List Str)
                 b = [["a string so long that it cannot be short", "bar"]]
@@ -355,7 +355,7 @@ mod test {
 
                 expect
                     items = [0, 1]
-                    expected : Result I64 [OutOfBounds]*
+                    expected : Result I64 [OutOfBounds]
                     expected = Ok 42
 
                     List.get items 0 == expected
@@ -367,17 +367,17 @@ mod test {
 
                  5│>  expect
                  6│>      items = [0, 1]
-                 7│>      expected : Result I64 [OutOfBounds]*
+                 7│>      expected : Result I64 [OutOfBounds]
                  8│>      expected = Ok 42
                  9│>
                 10│>      List.get items 0 == expected
 
                 When it failed, these variables had these values:
 
-                items : List (Num a)
+                items : List (Num *)
                 items = [0, 1]
 
-                expected : Result I64 [OutOfBounds]*
+                expected : Result I64 [OutOfBounds]
                 expected = Ok 42
                 "#
             ),
@@ -456,10 +456,10 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                vec1 : { x : Frac a, y : Frac b }
+                vec1 : { x : Frac *, y : Frac * }
                 vec1 = { x: 1, y: 2 }
 
-                vec2 : { x : Frac a, y : Frac b }
+                vec2 : { x : Frac *, y : Frac * }
                 vec2 = { x: 4, y: 8 }
                 "#
             ),
@@ -642,10 +642,10 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                a : [Ok Str]a
+                a : [Ok Str]
                 a = Ok "Astra mortemque praestare gradatim"
 
-                b : [Err Str]a
+                b : [Err Str]
                 b = Err "Profundum et fundamentum"
                 "#
             ),
@@ -839,6 +839,114 @@ mod test {
 
                 b : RoseTree Str
                 b = Tree "foo" [Tree "bar" []]
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn big_recursive_tag_copied_back() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                NonEmpty := [
+                    First Str U8,
+                    Next (List { item: Str, rest: NonEmpty }),
+                ]
+                
+                expect
+                    nonEmpty =
+                        a = "abcdefgh"
+                        b = @NonEmpty (First "ijkl" 67u8)
+                        c = Next [{ item: a, rest: b }]
+                        @NonEmpty c
+                
+                    when nonEmpty is
+                        _ -> Bool.false
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+                
+                 8│>  expect
+                 9│>      nonEmpty =
+                10│>          a = "abcdefgh"
+                11│>          b = @NonEmpty (First "ijkl" 67u8)
+                12│>          c = Next [{ item: a, rest: b }]
+                13│>          @NonEmpty c
+                14│>
+                15│>      when nonEmpty is
+                16│>          _ -> Bool.false
+                
+                When it failed, these variables had these values:
+                
+                nonEmpty : NonEmpty
+                nonEmpty = @NonEmpty (Next [{ item: "abcdefgh", rest: @NonEmpty (First "ijkl" 67) }])
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn arg_parser() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                makeForcer : {} -> (Str -> U8)
+                makeForcer = \{} -> \_ -> 2u8
+
+                expect
+                    forcer = makeForcer {}
+
+                    case = ""
+
+                    forcer case == 5u8
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 6│>  expect
+                 7│>      forcer = makeForcer {}
+                 8│>
+                 9│>      case = ""
+                10│>
+                11│>      forcer case == 5u8
+
+                When it failed, these variables had these values:
+
+                case : Str
+                case = ""
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn issue_i4389() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                expect
+                    totalCount = \{} -> 1u8
+                    totalCount {} == 96u8
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                3│>  expect
+                4│>      totalCount = \{} -> 1u8
+                5│>      totalCount {} == 96u8
                 "#
             ),
         );

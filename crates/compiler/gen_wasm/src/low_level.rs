@@ -50,6 +50,7 @@ impl From<Layout<'_>> for CodeGenNumType {
             || internal_error!("Tried to perform a Num low-level operation on {:?}", layout);
         match layout {
             Layout::Builtin(builtin) => match builtin {
+                Builtin::Bool => I32,
                 Builtin::Int(int_width) => match int_width {
                     IntWidth::U8 => I32,
                     IntWidth::U16 => I32,
@@ -149,7 +150,7 @@ impl<'a> LowLevelCall<'a> {
             &mut backend.code_builder,
             self.arguments,
             self.ret_symbol,
-            &WasmLayout::new(&self.ret_layout),
+            &WasmLayout::new(backend.env.layout_interner, &self.ret_layout),
             CallConv::Zig,
         )
     }
@@ -283,7 +284,7 @@ impl<'a> LowLevelCall<'a> {
                     &mut backend.code_builder,
                     self.arguments,
                     self.ret_symbol,
-                    &WasmLayout::new(&self.ret_layout),
+                    &WasmLayout::new(backend.env.layout_interner, &self.ret_layout),
                     CallConv::Zig,
                 );
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
@@ -302,6 +303,8 @@ impl<'a> LowLevelCall<'a> {
             StrSubstringUnsafe => {
                 self.load_args_and_call_zig(backend, bitcode::STR_SUBSTRING_UNSAFE)
             }
+            StrWithCapacity => self.load_args_and_call_zig(backend, bitcode::STR_WITH_CAPACITY),
+            StrGraphemes => self.load_args_and_call_zig(backend, bitcode::STR_GRAPHEMES),
 
             // List
             ListLen => match backend.storage.get(&self.arguments[0]) {
@@ -358,7 +361,9 @@ impl<'a> LowLevelCall<'a> {
                 backend
                     .storage
                     .load_symbols(&mut backend.code_builder, &[index]);
-                let elem_size = self.ret_layout.stack_size(TARGET_INFO);
+                let elem_size = self
+                    .ret_layout
+                    .stack_size(backend.env.layout_interner, TARGET_INFO);
                 backend.code_builder.i32_const(elem_size as i32);
                 backend.code_builder.i32_mul(); // index*size
 
@@ -415,15 +420,16 @@ impl<'a> LowLevelCall<'a> {
                         ..
                     } if value_layout == *list_elem => {
                         let list_offset = 0;
-                        let elem_offset =
-                            Layout::Builtin(Builtin::List(list_elem)).stack_size(TARGET_INFO);
+                        let elem_offset = Layout::Builtin(Builtin::List(list_elem))
+                            .stack_size(backend.env.layout_interner, TARGET_INFO);
                         (list_offset, elem_offset, value_layout)
                     }
                     Layout::Struct {
                         field_layouts: &[value_layout, Layout::Builtin(Builtin::List(list_elem))],
                         ..
                     } if value_layout == *list_elem => {
-                        let list_offset = value_layout.stack_size(TARGET_INFO);
+                        let list_offset =
+                            value_layout.stack_size(backend.env.layout_interner, TARGET_INFO);
                         let elem_offset = 0;
                         (list_offset, elem_offset, value_layout)
                     }
@@ -431,7 +437,7 @@ impl<'a> LowLevelCall<'a> {
                 };
 
                 let (elem_width, elem_alignment) =
-                    elem_layout.stack_size_and_alignment(TARGET_INFO);
+                    elem_layout.stack_size_and_alignment(backend.env.layout_interner, TARGET_INFO);
 
                 // Ensure the new element is stored in memory so we can pass a pointer to Zig
                 let (new_elem_local, new_elem_offset, _) =
@@ -480,7 +486,8 @@ impl<'a> LowLevelCall<'a> {
 
                 let capacity: Symbol = self.arguments[0];
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
-                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.env.layout_interner, TARGET_INFO);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -511,13 +518,14 @@ impl<'a> LowLevelCall<'a> {
                     &mut backend.code_builder,
                     self.arguments,
                     self.ret_symbol,
-                    &WasmLayout::new(&self.ret_layout),
+                    &WasmLayout::new(backend.env.layout_interner, &self.ret_layout),
                     CallConv::Zig,
                 );
 
                 // Load monomorphization constants
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
-                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.env.layout_interner, TARGET_INFO);
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
 
@@ -531,7 +539,8 @@ impl<'a> LowLevelCall<'a> {
                 let spare: Symbol = self.arguments[1];
 
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
-                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.env.layout_interner, TARGET_INFO);
                 let (spare_local, spare_offset, _) = ensure_symbol_is_in_memory(
                     backend,
                     spare,
@@ -553,7 +562,7 @@ impl<'a> LowLevelCall<'a> {
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
-                    &WasmLayout::new(&self.ret_layout),
+                    &WasmLayout::new(backend.env.layout_interner, &self.ret_layout),
                     CallConv::Zig,
                 );
 
@@ -579,7 +588,7 @@ impl<'a> LowLevelCall<'a> {
                 let elem: Symbol = self.arguments[1];
 
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
-                let elem_width = elem_layout.stack_size(TARGET_INFO);
+                let elem_width = elem_layout.stack_size(backend.env.layout_interner, TARGET_INFO);
                 let (elem_local, elem_offset, _) =
                     ensure_symbol_is_in_memory(backend, elem, *elem_layout, backend.env.arena);
 
@@ -595,7 +604,7 @@ impl<'a> LowLevelCall<'a> {
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
-                    &WasmLayout::new(&self.ret_layout),
+                    &WasmLayout::new(backend.env.layout_interner, &self.ret_layout),
                     CallConv::Zig,
                 );
 
@@ -616,7 +625,8 @@ impl<'a> LowLevelCall<'a> {
                 let elem: Symbol = self.arguments[1];
 
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
-                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.env.layout_interner, TARGET_INFO);
                 let (elem_local, elem_offset, _) =
                     ensure_symbol_is_in_memory(backend, elem, *elem_layout, backend.env.arena);
 
@@ -633,7 +643,7 @@ impl<'a> LowLevelCall<'a> {
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
-                    &WasmLayout::new(&self.ret_layout),
+                    &WasmLayout::new(backend.env.layout_interner, &self.ret_layout),
                     CallConv::Zig,
                 );
 
@@ -657,7 +667,8 @@ impl<'a> LowLevelCall<'a> {
                 let len: Symbol = self.arguments[2];
 
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
-                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.env.layout_interner, TARGET_INFO);
 
                 // The refcount function receives a pointer to an element in the list
                 // This is the same as a Struct containing the element
@@ -682,7 +693,7 @@ impl<'a> LowLevelCall<'a> {
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
-                    &WasmLayout::new(&self.ret_layout),
+                    &WasmLayout::new(backend.env.layout_interner, &self.ret_layout),
                     CallConv::Zig,
                 );
 
@@ -701,7 +712,8 @@ impl<'a> LowLevelCall<'a> {
                 let drop_index: Symbol = self.arguments[1];
 
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
-                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.env.layout_interner, TARGET_INFO);
 
                 // The refcount function receives a pointer to an element in the list
                 // This is the same as a Struct containing the element
@@ -726,7 +738,7 @@ impl<'a> LowLevelCall<'a> {
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
-                    &WasmLayout::new(&self.ret_layout),
+                    &WasmLayout::new(backend.env.layout_interner, &self.ret_layout),
                     CallConv::Zig,
                 );
 
@@ -746,7 +758,8 @@ impl<'a> LowLevelCall<'a> {
                 let index_2: Symbol = self.arguments[2];
 
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
-                let (elem_width, elem_align) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.env.layout_interner, TARGET_INFO);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -763,7 +776,7 @@ impl<'a> LowLevelCall<'a> {
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
-                    &WasmLayout::new(&self.ret_layout),
+                    &WasmLayout::new(backend.env.layout_interner, &self.ret_layout),
                     CallConv::Zig,
                 );
 
@@ -1625,7 +1638,10 @@ impl<'a> LowLevelCall<'a> {
                         // In most languages this operation is for signed numbers, but Roc defines it on all integers.
                         // So the argument is implicitly converted to signed before the shift operator.
                         // We need to make that conversion explicit for i8 and i16, which use Wasm's i32 type.
-                        let bit_width = 8 * self.ret_layout.stack_size(TARGET_INFO) as i32;
+                        let bit_width = 8 * self
+                            .ret_layout
+                            .stack_size(backend.env.layout_interner, TARGET_INFO)
+                            as i32;
                         if bit_width < 32 && !symbol_is_signed_int(backend, num) {
                             // Sign-extend the number by shifting left and right again
                             backend
@@ -1670,8 +1686,10 @@ impl<'a> LowLevelCall<'a> {
                         // In most languages this operation is for unsigned numbers, but Roc defines it on all integers.
                         // So the argument is implicitly converted to unsigned before the shift operator.
                         // We need to make that conversion explicit for i8 and i16, which use Wasm's i32 type.
-                        let bit_width = 8 * self.ret_layout.stack_size(TARGET_INFO);
-                        if bit_width < 32 && symbol_is_signed_int(backend, bits) {
+                        let bit_width = 8 * self
+                            .ret_layout
+                            .stack_size(backend.env.layout_interner, TARGET_INFO);
+                        if bit_width < 32 && symbol_is_signed_int(backend, num) {
                             let mask = (1 << bit_width) - 1;
 
                             backend
@@ -1708,6 +1726,7 @@ impl<'a> LowLevelCall<'a> {
                 let arg_type = CodeGenNumType::from(arg_layout);
                 let arg_width = match arg_layout {
                     Layout::Builtin(Builtin::Int(w)) => w,
+                    Layout::Builtin(Builtin::Bool) => IntWidth::U8,
                     x => internal_error!("Num.intCast is not defined for {:?}", x),
                 };
 
@@ -1861,10 +1880,10 @@ impl<'a> LowLevelCall<'a> {
     /// Equality and inequality
     /// These can operate on any data type (except functions) so they're more complex than other operators.
     fn eq_or_neq(&self, backend: &mut WasmBackend<'a>) {
-        let arg_layout =
-            backend.storage.symbol_layouts[&self.arguments[0]].runtime_representation();
-        let other_arg_layout =
-            backend.storage.symbol_layouts[&self.arguments[1]].runtime_representation();
+        let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]]
+            .runtime_representation(backend.env.layout_interner);
+        let other_arg_layout = backend.storage.symbol_layouts[&self.arguments[1]]
+            .runtime_representation(backend.env.layout_interner);
         debug_assert!(
             arg_layout == other_arg_layout,
             "Cannot do `==` comparison on different types: {:?} vs {:?}",
@@ -2136,8 +2155,14 @@ pub fn call_higher_order_lowlevel<'a>(
     let (closure_data_layout, closure_data_exists) =
         match backend.storage.symbol_layouts[captured_environment] {
             Layout::LambdaSet(lambda_set) => {
-                if lambda_set.is_represented().is_some() {
-                    (lambda_set.runtime_representation(), true)
+                if lambda_set
+                    .is_represented(backend.env.layout_interner)
+                    .is_some()
+                {
+                    (
+                        lambda_set.runtime_representation(backend.env.layout_interner),
+                        true,
+                    )
                 } else {
                     // Closure data is a lambda set, which *itself* has no closure data!
                     // The higher-order wrapper doesn't need to pass this down, that's
@@ -2161,6 +2186,7 @@ pub fn call_higher_order_lowlevel<'a>(
         // make sure that the wrapping struct is available in stack memory, so we can hand out a
         // pointer to it.
         let wrapped_storage = backend.storage.allocate_var(
+            backend.env.layout_interner,
             wrapped_captures_layout,
             wrapped_closure_data_sym,
             crate::storage::StoredVarKind::Variable,
@@ -2323,7 +2349,8 @@ pub fn call_higher_order_lowlevel<'a>(
 
         ListSortWith { xs } => {
             let elem_layout = unwrap_list_elem_layout(backend.storage.symbol_layouts[xs]);
-            let (element_width, alignment) = elem_layout.stack_size_and_alignment(TARGET_INFO);
+            let (element_width, alignment) =
+                elem_layout.stack_size_and_alignment(backend.env.layout_interner, TARGET_INFO);
 
             let cb = &mut backend.code_builder;
 
@@ -2386,7 +2413,8 @@ fn list_map_n<'a>(
     );
 
     let elem_ret = unwrap_list_elem_layout(return_layout);
-    let (elem_ret_size, elem_ret_align) = elem_ret.stack_size_and_alignment(TARGET_INFO);
+    let (elem_ret_size, elem_ret_align) =
+        elem_ret.stack_size_and_alignment(backend.env.layout_interner, TARGET_INFO);
 
     let cb = &mut backend.code_builder;
 
@@ -2407,7 +2435,7 @@ fn list_map_n<'a>(
     cb.i32_const(owns_captured_environment as i32);
     cb.i32_const(elem_ret_align as i32);
     for el in arg_elem_layouts.iter() {
-        cb.i32_const(el.stack_size(TARGET_INFO) as i32);
+        cb.i32_const(el.stack_size(backend.env.layout_interner, TARGET_INFO) as i32);
     }
     cb.i32_const(elem_ret_size as i32);
 
@@ -2446,7 +2474,8 @@ fn ensure_symbol_is_in_memory<'a>(
             (local, offset, layout)
         }
         _ => {
-            let (width, alignment) = layout.stack_size_and_alignment(TARGET_INFO);
+            let (width, alignment) =
+                layout.stack_size_and_alignment(backend.env.layout_interner, TARGET_INFO);
             let (frame_ptr, offset) = backend
                 .storage
                 .allocate_anonymous_stack_memory(width, alignment);

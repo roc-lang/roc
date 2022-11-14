@@ -1,3 +1,4 @@
+use roc_error_macros::internal_error;
 use std::marker::PhantomPinned;
 use std::ptr::{copy_nonoverlapping, NonNull};
 
@@ -391,6 +392,6 @@ fn verify_ownership<T>(
 
         // The address wasn't within any of our chunks' bounds.
         // Panic to avoid use-after-free errors!
-        panic!("Pointer ownership verification failed.");
+        internal_error!("Pointer ownership verification failed.");
     }
 }

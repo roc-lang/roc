@@ -11,7 +11,7 @@ use crate::helpers::wasm::assert_evals_to;
 #[allow(unused_imports)]
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::{RocDec, RocOrder};
+use roc_std::{RocDec, RocOrder, RocResult};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
@@ -616,6 +616,25 @@ fn i64_abs() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn various_sized_abs() {
+    assert_evals_to!("Num.abs -6i8", 6, i8);
+    assert_evals_to!("Num.abs -6i16", 6, i16);
+    assert_evals_to!("Num.abs -6i32", 6, i32);
+    assert_evals_to!("Num.abs -6i64", 6, i64);
+    if !cfg!(feature = "gen-wasm") {
+        assert_evals_to!("Num.abs -6i128", 6, i128);
+    }
+    assert_evals_to!("Num.abs 6u8", 6, u8);
+    assert_evals_to!("Num.abs 6u16", 6, u16);
+    assert_evals_to!("Num.abs 6u32", 6, u32);
+    assert_evals_to!("Num.abs 6u64", 6, u64);
+    if !cfg!(feature = "gen-wasm") {
+        assert_evals_to!("Num.abs 6u128", 6, u128);
+    }
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(
     expected = r#"Roc failed with message: "integer absolute overflowed because its argument is the minimum value"#
 )]
@@ -856,7 +875,7 @@ fn gen_int_eq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn gen_int_neq() {
     assert_evals_to!(
         indoc!(
@@ -929,7 +948,7 @@ fn gen_wrap_int_neq() {
     assert_evals_to!(
         indoc!(
             r#"
-                    wrappedNotEq : a, a -> Bool
+                    wrappedNotEq : a, a -> Bool | a has Eq
                     wrappedNotEq = \num1, num2 ->
                         num1 != num2
 
@@ -1299,7 +1318,7 @@ fn tan() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn bitwise_and() {
     assert_evals_to!("Num.bitwiseAnd 20 20", 20, i64);
     assert_evals_to!("Num.bitwiseAnd 25 10", 8, i64);
@@ -1307,7 +1326,7 @@ fn bitwise_and() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn bitwise_xor() {
     assert_evals_to!("Num.bitwiseXor 20 20", 0, i64);
     assert_evals_to!("Num.bitwiseXor 15 14", 1, i64);
@@ -1316,7 +1335,7 @@ fn bitwise_xor() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn bitwise_or() {
     assert_evals_to!("Num.bitwiseOr 1 1", 1, i64);
     assert_evals_to!("Num.bitwiseOr 1 2", 3, i64);
@@ -1787,30 +1806,22 @@ fn int_add_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn int_add_checked() {
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn int_add_checked_ok() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                when Num.addChecked 1 2 is
-                    Ok v -> v
-                    _ -> -1
-                "#
-        ),
-        3,
-        i64
+        "Num.addChecked 1 2",
+        RocResult::ok(3),
+        RocResult<i64, ()>
     );
+}
 
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn int_add_checked_err() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                when Num.addChecked 9_223_372_036_854_775_807 1 is
-                    Err Overflow -> -1
-                    Ok v -> v
-                "#
-        ),
-        -1,
-        i64
+        "Num.addChecked 9_223_372_036_854_775_807 1",
+        RocResult::err(()),
+        RocResult<i64, ()>
     );
 }
 
@@ -1818,11 +1829,7 @@ fn int_add_checked() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn int_add_wrap() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                Num.addWrap 9_223_372_036_854_775_807 1
-                "#
-        ),
+        "Num.addWrap 9_223_372_036_854_775_807 1",
         std::i64::MIN,
         i64
     );
@@ -1832,15 +1839,9 @@ fn int_add_wrap() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_add_checked_pass() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                when Num.addChecked 1.0 0.0 is
-                    Ok v -> v
-                    Err Overflow -> -1.0
-                "#
-        ),
-        1.0,
-        f64
+        "Num.addChecked 1.0 0.0",
+        RocResult::ok(1.0),
+        RocResult<f64, ()>
     );
 }
 
@@ -1848,27 +1849,17 @@ fn float_add_checked_pass() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_add_checked_fail() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                when Num.addChecked 1.7976931348623157e308 1.7976931348623157e308 is
-                    Err Overflow -> -1
-                    Ok v -> v
-                "#
-        ),
-        -1.0,
-        f64
+        "Num.addChecked 1.7976931348623157e308 1.7976931348623157e308",
+        RocResult::err(()),
+        RocResult<f64, ()>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen_dev"))]
 fn float_add_overflow() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                    1.7976931348623157e308 + 1.7976931348623157e308
-                    "#
-        ),
+        "1.7976931348623157e308 + 1.7976931348623157e308",
         f64::INFINITY,
         f64
     );
@@ -1907,11 +1898,7 @@ fn int_sub_wrap() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn float_sub_overflow() {
     assert_evals_to!(
-        indoc!(
-            r#"
-                    -1.7976931348623157e308 - 1.7976931348623157e308
-                "#
-        ),
+        "-1.7976931348623157e308 - 1.7976931348623157e308",
         -f64::INFINITY,
         f64
     );
@@ -2107,6 +2094,7 @@ fn shift_left_by() {
     assert_evals_to!("Num.shiftLeftBy 0b0000_0001 0", 0b0000_0001, i64);
     assert_evals_to!("Num.shiftLeftBy 0b0000_0001 1", 0b0000_0010, i64);
     assert_evals_to!("Num.shiftLeftBy 0b0000_0011 2", 0b0000_1100, i64);
+    assert_evals_to!("Num.shiftLeftBy 2u16 2", 8, u16);
 }
 
 #[test]
@@ -2136,7 +2124,6 @@ fn shift_right_by() {
     assert_evals_to!("Num.shiftRightBy -12 1", -6, i64);
     assert_evals_to!("Num.shiftRightBy 12 8", 0, i64);
     assert_evals_to!("Num.shiftRightBy -12 8", -1, i64);
-    assert_evals_to!("Num.shiftRightBy 12 -1", 0, i64);
     assert_evals_to!("Num.shiftRightBy 0 0", 0, i64);
     assert_evals_to!("Num.shiftRightBy 0 1", 0, i64);
 
@@ -2152,8 +2139,6 @@ fn shift_right_by() {
     assert_evals_to!("Num.shiftRightBy 12i8 8", 0, i8);
 
     if !is_llvm_release_mode {
-        assert_evals_to!("Num.shiftRightBy 0 -1", 0, i64);
-        assert_evals_to!("Num.shiftRightBy -12 -1", -1, i64);
         assert_evals_to!("Num.shiftRightBy -12i8 8", -1, i8);
     }
 }
@@ -3832,7 +3817,7 @@ fn condition_polymorphic_num_becomes_float() {
     assert_evals_to!(
         indoc!(
             r#"
-            x = if True then 2 else 3
+            x = if Bool.true then 2 else 3
             x * 5f32
             "#
         ),

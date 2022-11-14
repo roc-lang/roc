@@ -1,0 +1,10 @@
+[package]
+name = "roc_serialize"
+version = "0.0.1"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+description = "Provides helpers for serializing and deserializing to/from bytes."
+
+[dependencies]
+roc_collections = { path = "../collections" }

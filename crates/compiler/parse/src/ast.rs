@@ -109,7 +109,7 @@ pub enum StrSegment<'a> {
     Interpolated(Loc<&'a Expr<'a>>), // e.g. (name) in "Hi, \(name)!"
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EscapedChar {
     Newline,        // \n
     Tab,            // \t
@@ -163,12 +163,18 @@ pub enum Expr<'a> {
 
     // String Literals
     Str(StrLiteral<'a>), // string without escapes in it
-    /// Look up exactly one field on a record, e.g. (expr).foo.
-    Access(&'a Expr<'a>, &'a str),
-    /// e.g. `.foo`
-    AccessorFunction(&'a str),
     /// eg 'b'
     SingleQuote(&'a str),
+
+    /// Look up exactly one field on a record, e.g. `x.foo`.
+    RecordAccess(&'a Expr<'a>, &'a str),
+    /// e.g. `.foo`
+    RecordAccessorFunction(&'a str),
+
+    /// Look up exactly one field on a tuple, e.g. `(x, y).1`.
+    TupleAccess(&'a Expr<'a>, &'a str),
+    /// e.g. `.1`
+    TupleAccessorFunction(&'a str),
 
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
@@ -179,6 +185,8 @@ pub enum Expr<'a> {
     },
 
     Record(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
+
+    Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
 
     // Lookups
     Var {
@@ -439,7 +447,7 @@ pub type AbilityName<'a> = Loc<TypeAnnotation<'a>>;
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct HasClause<'a> {
     pub var: Loc<Spaced<'a, &'a str>>,
-    pub ability: AbilityName<'a>,
+    pub abilities: &'a [AbilityName<'a>],
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -581,7 +589,7 @@ pub enum AssignedField<'a, Val> {
     Malformed(&'a str),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommentOrNewline<'a> {
     Newline,
     LineComment(&'a str),
@@ -613,6 +621,14 @@ impl<'a> CommentOrNewline<'a> {
             Newline => "\n".to_owned(),
             LineComment(comment_str) => format!("#{}", comment_str),
             DocComment(comment_str) => format!("##{}", comment_str),
+        }
+    }
+
+    pub fn comment_str(&'a self) -> Option<&'a str> {
+        match self {
+            CommentOrNewline::LineComment(s) => Some(*s),
+            CommentOrNewline::DocComment(s) => Some(*s),
+            _ => None,
         }
     }
 }
@@ -652,6 +668,16 @@ pub enum Pattern<'a> {
     StrLiteral(StrLiteral<'a>),
     Underscore(&'a str),
     SingleQuote(&'a str),
+
+    /// A tuple pattern, e.g. (Just x, 1)
+    Tuple(Collection<'a, Loc<Pattern<'a>>>),
+
+    /// A list pattern like [_, x, ..]
+    List(Collection<'a, Loc<Pattern<'a>>>),
+
+    /// A list-rest pattern ".."
+    /// Can only occur inside of a [Pattern::List]
+    ListRest,
 
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
@@ -714,7 +740,8 @@ impl<'a> Pattern<'a> {
                     Pattern::Malformed(buf.into_bump_str())
                 }
             }
-            Ident::AccessorFunction(string) => Pattern::Malformed(string),
+            Ident::RecordAccessorFunction(string) => Pattern::Malformed(string),
+            Ident::TupleAccessorFunction(string) => Pattern::Malformed(string),
             Ident::Malformed(string, _problem) => Pattern::Malformed(string),
         }
     }
@@ -873,7 +900,7 @@ impl<'a, T> Collection<'a, T> {
 
     pub fn final_comments(&self) -> &'a [CommentOrNewline<'a>] {
         if let Some(final_comments) = self.final_comments {
-            *final_comments
+            final_comments
         } else {
             &[]
         }

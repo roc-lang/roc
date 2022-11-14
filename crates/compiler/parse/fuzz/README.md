@@ -1,6 +1,8 @@
+# fuzz
+
 To setup fuzzing you will need to install cargo-fuzz and run with rust nightly:
 
-```
+```sh
 $ cargo install cargo-fuzz
 $ cargo +nightly fuzz run -j<cores> <target> -- -dict=dict.txt
 ```

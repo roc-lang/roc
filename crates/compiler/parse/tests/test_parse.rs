@@ -37,7 +37,7 @@ mod test_parse {
         };
         (module => $arena:expr, $input:expr) => {
             module_defs()
-                .parse($arena, State::new($input.as_bytes()))
+                .parse($arena, State::new($input.as_bytes()), 0)
                 .map(|tuple| tuple.1)
         };
     }
@@ -120,8 +120,12 @@ mod test_parse {
 
     // see tests/snapshots to see test input(.roc) and expected output(.result-ast)
     snapshot_tests! {
+        fail/lambda_extra_comma.expr,
+        fail/lambda_missing_indent.expr,
         fail/type_argument_no_arrow.expr,
         fail/type_double_comma.expr,
+        fail/when_missing_arrow.expr,
+        fail/pattern_binds_keyword.expr,
         pass/ability_demand_signature_is_multiline.expr,
         pass/ability_multi_line.expr,
         pass/ability_single_line.expr,
@@ -157,6 +161,7 @@ mod test_parse {
         pass/empty_string.expr,
         pass/equals_with_spaces.expr,
         pass/equals.expr,
+        pass/expect_fx.module,
         pass/expect.expr,
         pass/float_with_underscores.expr,
         pass/full_app_header_trailing_commas.header,
@@ -167,9 +172,12 @@ mod test_parse {
         pass/if_def.expr,
         pass/int_with_underscore.expr,
         pass/interface_with_newline.header,
+        pass/lambda_in_chain.expr,
+        pass/lambda_indent.expr,
         pass/list_closing_indent_not_enough.expr,
         pass/list_closing_same_indent_no_trailing_comma.expr,
         pass/list_closing_same_indent_with_trailing_comma.expr,
+        pass/list_patterns.expr,
         pass/lowest_float.expr,
         pass/lowest_int.expr,
         pass/malformed_ident_due_to_underscore.expr,
@@ -181,6 +189,7 @@ mod test_parse {
         pass/module_def_newline.module,
         pass/multi_backpassing.expr,
         pass/multi_char_string.expr,
+        pass/multiline_string.expr,
         pass/multiline_type_signature_with_comment.expr,
         pass/multiline_type_signature.expr,
         pass/multiple_fields.expr,
@@ -204,7 +213,6 @@ mod test_parse {
         pass/not_docs.expr,
         pass/number_literal_suffixes.expr,
         pass/one_backpassing.expr,
-        pass/multiline_string.expr,
         pass/one_char_string.expr,
         pass/one_def.expr,
         pass/one_minus_two.expr,
@@ -251,7 +259,6 @@ mod test_parse {
         pass/spaced_singleton_list.expr,
         pass/spaces_inside_empty_list.expr,
         pass/standalone_module_defs.module,
-        pass/expect_fx.module,
         pass/string_without_escape.expr,
         pass/sub_var_with_spaces.expr,
         pass/sub_with_spaces.expr,
@@ -272,14 +279,16 @@ mod test_parse {
         pass/underscore_backpassing.expr,
         pass/underscore_in_assignment_pattern.expr,
         pass/var_else.expr,
+        pass/tuple_accessor_function.expr,
         pass/var_if.expr,
         pass/var_is.expr,
         pass/var_minus_two.expr,
         pass/var_then.expr,
         pass/var_when.expr,
+        pass/when_if_guard.expr,
         pass/when_in_assignment.expr,
         pass/when_in_function.expr,
-        pass/when_if_guard.expr,
+        pass/when_in_function_python_style_indent.expr,
         pass/when_in_parens_indented.expr,
         pass/when_in_parens.expr,
         pass/when_with_alternative_patterns.expr,
@@ -288,12 +297,17 @@ mod test_parse {
         pass/when_with_numbers.expr,
         pass/when_with_records.expr,
         pass/where_clause_function.expr,
+        pass/where_clause_multiple_bound_abilities.expr,
         pass/where_clause_multiple_has_across_newlines.expr,
         pass/where_clause_multiple_has.expr,
         pass/where_clause_non_function.expr,
         pass/where_clause_on_newline.expr,
         pass/zero_float.expr,
         pass/zero_int.expr,
+        pass/basic_tuple.expr,
+        pass/when_with_tuples.expr,
+        pass/when_with_tuple_in_record.expr,
+        pass/annotated_tuple_destructure.expr,
     }
 
     fn snapshot_test(
@@ -795,7 +809,7 @@ mod test_parse {
             "#
         );
         let actual = module_defs()
-            .parse(&arena, State::new(src.as_bytes()))
+            .parse(&arena, State::new(src.as_bytes()), 0)
             .map(|tuple| tuple.1);
 
         // It should occur twice in the debug output - once for the pattern,
@@ -821,7 +835,7 @@ mod test_parse {
 
         let state = State::new(src.as_bytes());
         let parser = module_defs();
-        let parsed = parser.parse(arena, state);
+        let parsed = parser.parse(arena, state, 0);
         match parsed {
             Ok((_, _, _state)) => {
                 // dbg!(_state);

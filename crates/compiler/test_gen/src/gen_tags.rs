@@ -10,6 +10,7 @@ use crate::helpers::wasm::assert_evals_to;
 #[cfg(test)]
 use indoc::indoc;
 
+use roc_mono::layout::STLayoutInterner;
 #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
 use roc_std::{RocList, RocStr, U128};
 
@@ -18,14 +19,16 @@ fn width_and_alignment_u8_u8() {
     use roc_mono::layout::Layout;
     use roc_mono::layout::UnionLayout;
 
+    let interner = STLayoutInterner::with_capacity(4);
+
     let t = &[Layout::u8()] as &[_];
     let tt = [t, t];
 
     let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
 
     let target_info = roc_target::TargetInfo::default_x86_64();
-    assert_eq!(layout.alignment_bytes(target_info), 1);
-    assert_eq!(layout.stack_size(target_info), 2);
+    assert_eq!(layout.alignment_bytes(&interner, target_info), 1);
+    assert_eq!(layout.stack_size(&interner, target_info), 2);
 }
 
 #[test]
@@ -112,8 +115,8 @@ fn true_is_true() {
     assert_evals_to!(
         indoc!(
             r#"
-                   bool : [True, False]
-                   bool = True
+                   bool : Bool
+                   bool = Bool.true
 
                    bool
                 "#
@@ -129,8 +132,8 @@ fn false_is_false() {
     assert_evals_to!(
         indoc!(
             r#"
-                   bool : [True, False]
-                   bool = False
+                   bool : Bool
+                   bool = Bool.false
 
                    bool
                 "#
@@ -211,8 +214,8 @@ fn basic_enum() {
 //                isEmpty : LinkedList a -> Bool
 //                isEmpty = \list ->
 //                    when list is
-//                        Nil -> True
-//                        Cons _ _ -> False
+//                        Nil -> Bool.true
+//                        Cons _ _ -> Bool.false
 //
 //                isEmpty (Cons 4 Nil)
 //                "#
@@ -229,14 +232,14 @@ fn even_odd() {
             r#"
                 even = \n ->
                     when n is
-                        0 -> True
-                        1 -> False
+                        0 -> Bool.true
+                        1 -> Bool.false
                         _ -> odd (n - 1)
 
                 odd = \n ->
                     when n is
-                        0 -> False
-                        1 -> True
+                        0 -> Bool.false
+                        1 -> Bool.true
                         _ -> even (n - 1)
 
                 odd 5 && even 42
@@ -253,7 +256,7 @@ fn gen_literal_true() {
     assert_evals_to!(
         indoc!(
             r#"
-                if True then -1 else 1
+                if Bool.true then -1 else 1
                 "#
         ),
         -1,
@@ -267,7 +270,7 @@ fn gen_if_float() {
     assert_evals_to!(
         indoc!(
             r#"
-                if True then -1.0 else 1.0
+                if Bool.true then -1.0 else 1.0
                 "#
         ),
         -1.0,
@@ -421,8 +424,8 @@ fn maybe_is_just_not_nested() {
                 isJust : Maybe a -> Bool
                 isJust = \list ->
                     when list is
-                        Nothing -> False
-                        Just _ -> True
+                        Nothing -> Bool.false
+                        Just _ -> Bool.true
 
                 main =
                     isJust (Just 42)
@@ -444,8 +447,8 @@ fn maybe_is_just_nested() {
                 isJust : Maybe a -> Bool
                 isJust = \list ->
                     when list is
-                        Nothing -> False
-                        Just _ -> True
+                        Nothing -> Bool.false
+                        Just _ -> Bool.true
 
                 isJust (Just 42)
                 "#
@@ -598,7 +601,7 @@ fn if_guard_pattern_false() {
             r#"
                 wrapper = \{} ->
                     when 2 is
-                        2 if False -> 0
+                        2 if Bool.false -> 0
                         _ -> 42
 
                 wrapper {}
@@ -617,7 +620,7 @@ fn if_guard_switch() {
             r#"
                 wrapper = \{} ->
                     when 2 is
-                        2 | 3 if False -> 0
+                        2 | 3 if Bool.false -> 0
                         _ -> 42
 
                 wrapper {}
@@ -636,7 +639,7 @@ fn if_guard_pattern_true() {
             r#"
                 wrapper = \{} ->
                     when 2 is
-                        2 if True -> 42
+                        2 if Bool.true -> 42
                         _ -> 0
 
                 wrapper {}
@@ -655,7 +658,7 @@ fn if_guard_exhaustiveness() {
             r#"
                 wrapper = \{} ->
                     when 2 is
-                        _ if False -> 0
+                        _ if Bool.false -> 0
                         _ -> 42
 
                 wrapper {}
@@ -811,7 +814,7 @@ fn join_point_if() {
         indoc!(
             r#"
                 x =
-                    if True then 1 else 2
+                    if Bool.true then 1 else 2
 
                 x
                 "#
@@ -892,7 +895,7 @@ fn alignment_in_single_tag_construction() {
     assert_evals_to!(indoc!("Three (1 == 1) 32"), (32i64, true), (i64, bool));
 
     assert_evals_to!(
-        indoc!("Three (1 == 1) (if True then Red else if True then Green else Blue) 32"),
+        indoc!("Three (1 == 1) (if Bool.true then Red else if Bool.true then Green else Blue) 32"),
         (32i64, true, 2u8),
         (i64, bool, u8)
     );
@@ -918,7 +921,7 @@ fn alignment_in_single_tag_pattern_match() {
     assert_evals_to!(
         indoc!(
             r"#
-                x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
+                x = Three (1 == 1) (if Bool.true then Red else if Bool.true then Green else Blue) 32
 
                 when x is
                     Three bool color int ->
@@ -955,7 +958,7 @@ fn alignment_in_multi_tag_construction_three() {
         indoc!(
             r"#
                 x : [Three Bool [Red, Green, Blue] I64, Empty]
-                x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
+                x = Three (1 == 1) (if Bool.true then Red else if Bool.true then Green else Blue) 32
 
                 x
                 #"
@@ -979,7 +982,7 @@ fn alignment_in_multi_tag_pattern_match() {
                         { bool, int }
 
                     Empty ->
-                        { bool: False, int: 0 }
+                        { bool: Bool.false, int: 0 }
                 #"
         ),
         (32i64, true),
@@ -990,13 +993,13 @@ fn alignment_in_multi_tag_pattern_match() {
         indoc!(
             r"#
                 x : [Three Bool [Red, Green, Blue] I64, Empty]
-                x = Three (1 == 1) (if True then Red else if True then Green else Blue) 32
+                x = Three (1 == 1) (if Bool.true then Red else if Bool.true then Green else Blue) 32
 
                 when x is
                     Three bool color int ->
                         { bool, color, int }
                     Empty ->
-                        { bool: False, color: Red, int: 0 }
+                        { bool: Bool.false, color: Red, int: 0 }
                 #"
         ),
         (32i64, true, 2u8),
@@ -1061,12 +1064,8 @@ fn result_never() {
                 res : Result I64 []
                 res = Ok 4
 
-                # we should provide this in the stdlib
-                never : [] -> a
-
                 when res is
                     Ok v -> v
-                    Err empty -> never empty
                 #"
         ),
         4,
@@ -1238,8 +1237,8 @@ fn monomorphized_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-            b = False
-            f : Bool, [True, False, Idk] -> U8
+            b = Bar
+            f : [Foo, Bar], [Bar, Baz] -> U8
             f = \_, _ -> 18
             f b b
             "#
@@ -1532,7 +1531,7 @@ fn polymorphic_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : [Y U8]*
+            x : [Y U8]
             x = Y 3
             x
             "#
@@ -1637,7 +1636,12 @@ fn issue_2777_default_branch_codegen() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// This doesn't work on Windows. If you make it return a `bool`, e.g. with `|> Str.isEmpty` at the end,
+// then it works. We don't know what the problem is here!
+#[cfg(all(
+    not(target_family = "windows"),
+    any(feature = "gen-llvm", feature = "gen-wasm")
+))]
 #[should_panic(expected = "Erroneous")]
 fn issue_2900_unreachable_pattern() {
     assert_evals_to!(
@@ -1691,7 +1695,7 @@ fn instantiate_annotated_as_recursive_alias_toplevel() {
 
             Value : [Nil, Array (List Value)]
 
-            foo : [Nil]*
+            foo : [Nil]
             foo = Nil
 
             it : Value
@@ -1719,7 +1723,7 @@ fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
             main =
                 Value : [Nil, Array (List Value)]
 
-                foo : [Nil]*
+                foo : [Nil]
                 foo = Nil
 
                 it : Value
@@ -1746,7 +1750,7 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
             main =
                 Value : [Nil, Array (List Value)]
 
-                foo : [Nil]*
+                foo : [Nil]
                 foo = Nil
 
                 v1 : Value
@@ -1849,10 +1853,10 @@ fn error_type_in_tag_union_payload() {
             r#"
             f : ([] -> Bool) -> Bool
             f = \fun ->
-              if True then
+              if Bool.true then
                 fun 42
               else
-                False
+                Bool.false
 
             f (\x -> x)
             "#
@@ -1952,6 +1956,69 @@ fn tag_union_let_generalization() {
             "#
         ),
         RocStr::from("done"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn fit_recursive_union_in_struct_into_recursive_pointer() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            NonEmpty := [
+                First Str,
+                Next { item: Str, rest: NonEmpty },
+            ]
+
+            nonEmpty =
+                a = "abcdefgh"
+                b = @NonEmpty (First "ijkl")
+                c = Next { item: a, rest: b }
+                @NonEmpty c
+
+            when nonEmpty is
+                @NonEmpty (Next r) -> r.item
+                _ -> "<bad>"
+            "#
+        ),
+        RocStr::from("abcdefgh"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn match_on_result_with_uninhabited_error_branch() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            x : Result Str []
+            x = Ok "abc"
+
+            when x is
+                Ok s -> s
+            "#
+        ),
+        RocStr::from("abc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn dispatch_tag_union_function_inferred() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            g = \b -> if b then H else J
+
+            when P ((g Bool.true) "") ((g Bool.false) "") is
+                P (H _) (J _) -> "okay"
+                _ -> "FAIL"
+            "#
+        ),
+        RocStr::from("okay"),
         RocStr
     );
 }

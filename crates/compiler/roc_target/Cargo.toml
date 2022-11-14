@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Provides types and helpers for compiler targets such as default_x86_64."
 
 [dependencies]
 target-lexicon = "0.12.3"

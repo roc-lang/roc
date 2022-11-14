@@ -16,9 +16,9 @@ use inkwell::values::{
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
+use roc_mono::layout::{Builtin, Layout, LayoutIds, STLayoutInterner, UnionLayout};
 
-use super::build::{load_roc_value, FunctionSpec};
+use super::build::{cast_if_necessary_for_opaque_recursive_pointers, load_roc_value, FunctionSpec};
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
 
 pub struct PointerToRefcount<'ctx> {
@@ -124,7 +124,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
     pub fn decrement<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>, layout: &Layout<'a>) {
         let alignment = layout
-            .allocation_alignment_bytes(env.target_info)
+            .allocation_alignment_bytes(env.layout_interner, env.target_info)
             .max(env.target_info.ptr_width() as u32);
 
         let context = env.context;
@@ -327,12 +327,10 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
 
     arg_val.set_name(arg_symbol.as_str(&env.interns));
 
-    let parent = fn_val;
-
     let wrapper_struct = arg_val.into_struct_value();
 
     for (i, field_layout) in layouts.iter().enumerate() {
-        if field_layout.contains_refcounted() {
+        if field_layout.contains_refcounted(env.layout_interner) {
             let raw_value = env
                 .builder
                 .build_extract_value(wrapper_struct, i as u32, "decrement_struct_field")
@@ -347,7 +345,6 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
 
             modify_refcount_layout_help(
                 env,
-                parent,
                 layout_ids,
                 mode.to_call_mode(fn_val),
                 when_recursive,
@@ -362,42 +359,32 @@ fn modify_refcount_struct_help<'a, 'ctx, 'env>(
 
 pub fn increment_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     inc_amount: u64,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) {
     let amount = env.ptr_int().const_int(inc_amount, false);
-    increment_n_refcount_layout(env, parent, layout_ids, amount, value, layout);
+    increment_n_refcount_layout(env, layout_ids, amount, value, layout);
 }
 
 pub fn increment_n_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     amount: IntValue<'ctx>,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) {
-    modify_refcount_layout(
-        env,
-        parent,
-        layout_ids,
-        CallMode::Inc(amount),
-        value,
-        layout,
-    );
+    modify_refcount_layout(env, layout_ids, CallMode::Inc(amount), value, layout);
 }
 
 pub fn decrement_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     value: BasicValueEnum<'ctx>,
     layout: &Layout<'a>,
 ) {
-    modify_refcount_layout(env, parent, layout_ids, CallMode::Dec, value, layout);
+    modify_refcount_layout(env, layout_ids, CallMode::Dec, value, layout);
 }
 
 fn modify_refcount_builtin<'a, 'ctx, 'env>(
@@ -435,7 +422,6 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
 
 fn modify_refcount_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     call_mode: CallMode<'ctx>,
     value: BasicValueEnum<'ctx>,
@@ -443,7 +429,6 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
 ) {
     modify_refcount_layout_help(
         env,
-        parent,
         layout_ids,
         call_mode,
         &WhenRecursive::Unreachable,
@@ -460,7 +445,6 @@ enum WhenRecursive<'a> {
 
 fn modify_refcount_layout_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     call_mode: CallMode<'ctx>,
     when_recursive: &WhenRecursive<'a>,
@@ -474,7 +458,6 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
 
     let function = match modify_refcount_layout_build_function(
         env,
-        parent,
         layout_ids,
         mode,
         when_recursive,
@@ -515,6 +498,12 @@ fn call_help<'a, 'ctx, 'env>(
     call_mode: CallMode<'ctx>,
     value: BasicValueEnum<'ctx>,
 ) -> inkwell::values::CallSiteValue<'ctx> {
+    let value = cast_if_necessary_for_opaque_recursive_pointers(
+        env.builder,
+        value,
+        function.get_params()[0].get_type(),
+    );
+
     let call = match call_mode {
         CallMode::Inc(inc_amount) => {
             env.builder
@@ -532,7 +521,6 @@ fn call_help<'a, 'ctx, 'env>(
 
 fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    parent: FunctionValue<'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
     when_recursive: &WhenRecursive<'a>,
@@ -597,7 +585,6 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
 
                 let function = modify_refcount_layout_build_function(
                     env,
-                    parent,
                     layout_ids,
                     mode,
                     when_recursive,
@@ -609,11 +596,10 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
         },
         LambdaSet(lambda_set) => modify_refcount_layout_build_function(
             env,
-            parent,
             layout_ids,
             mode,
             when_recursive,
-            &lambda_set.runtime_representation(),
+            &lambda_set.runtime_representation(env.layout_interner),
         ),
     }
 }
@@ -717,7 +703,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(modification_block);
 
-    if element_layout.contains_refcounted() {
+    if element_layout.contains_refcounted(env.layout_interner) {
         let ptr_type = basic_type_from_layout(env, element_layout).ptr_type(AddressSpace::Generic);
 
         let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
@@ -725,7 +711,6 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
         let loop_fn = |_index, element| {
             modify_refcount_layout_help(
                 env,
-                parent,
                 layout_ids,
                 mode.to_call_mode(fn_val),
                 when_recursive,
@@ -818,7 +803,9 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
 
     let parent = fn_val;
 
-    let arg_val = if Layout::Builtin(Builtin::Str).is_passed_by_reference(env.target_info) {
+    let arg_val = if Layout::Builtin(Builtin::Str)
+        .is_passed_by_reference(env.layout_interner, env.target_info)
+    {
         env.builder
             .build_load(arg_val.into_pointer_value(), "load_str_to_stack")
     } else {
@@ -973,12 +960,20 @@ pub fn build_header_help<'a, 'ctx, 'env>(
         VoidType(t) => t.fn_type(arguments, false),
     };
 
+    // this should be `Linkage::Private`, but that will remove all of the code for the inc/dec
+    // functions on windows. LLVM just does not emit the assembly for them. Investigate why this is
+    let linkage = if let roc_target::OperatingSystem::Windows = env.target_info.operating_system {
+        Linkage::External
+    } else {
+        Linkage::Private
+    };
+
     let fn_val = add_func(
         env.context,
         env.module,
         fn_name,
         FunctionSpec::known_fastcc(fn_type),
-        Linkage::Private,
+        linkage,
     );
 
     let subprogram = env.new_subprogram(fn_name);
@@ -1178,10 +1173,10 @@ enum DecOrReuse {
     Reuse,
 }
 
-fn fields_need_no_refcounting(field_layouts: &[Layout]) -> bool {
+fn fields_need_no_refcounting(interner: &STLayoutInterner, field_layouts: &[Layout]) -> bool {
     !field_layouts
         .iter()
-        .any(|x| x.is_refcounted() || x.contains_refcounted())
+        .any(|x| x.is_refcounted() || x.contains_refcounted(interner))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1211,7 +1206,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
 
     for (tag_id, field_layouts) in tags.iter().enumerate() {
         // if none of the fields are or contain anything refcounted, just move on
-        if fields_need_no_refcounting(field_layouts) {
+        if fields_need_no_refcounting(env.layout_interner, field_layouts) {
             continue;
         }
 
@@ -1256,7 +1251,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                 let recursive_field_ptr = cast_basic_basic(env.builder, ptr_as_i64_ptr, union_type);
 
                 deferred_rec.push(recursive_field_ptr);
-            } else if field_layout.contains_refcounted() {
+            } else if field_layout.contains_refcounted(env.layout_interner) {
                 let elem_pointer = env
                     .builder
                     .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
@@ -1286,7 +1281,6 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         for (field, field_layout) in deferred_nonrec {
             modify_refcount_layout_help(
                 env,
-                parent,
                 layout_ids,
                 mode.to_call_mode(decrement_fn),
                 when_recursive,
@@ -1350,7 +1344,7 @@ fn union_layout_tags<'a>(
     match union_layout {
         NullableWrapped {
             other_tags: tags, ..
-        } => *tags,
+        } => tags,
         NullableUnwrapped { other_fields, .. } => arena.alloc([*other_fields]),
         NonNullableUnwrapped(fields) => arena.alloc([*fields]),
         Recursive(tags) => tags,
@@ -1620,7 +1614,7 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         // if none of the fields are or contain anything refcounted, just move on
         if !field_layouts
             .iter()
-            .any(|x| x.is_refcounted() || x.contains_refcounted())
+            .any(|x| x.is_refcounted() || x.contains_refcounted(env.layout_interner))
         {
             continue;
         }
@@ -1671,28 +1665,27 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
 
                 modify_refcount_layout_help(
                     env,
-                    parent,
                     layout_ids,
                     mode.to_call_mode(fn_val),
                     when_recursive,
                     recursive_ptr_field_value,
                     &Layout::RecursivePointer,
                 )
-            } else if field_layout.contains_refcounted() {
+            } else if field_layout.contains_refcounted(env.layout_interner) {
                 let field_ptr = env
                     .builder
                     .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
                     .unwrap();
 
-                let field_value = if field_layout.is_passed_by_reference(env.target_info) {
-                    field_ptr.into()
-                } else {
-                    env.builder.build_load(field_ptr, "field_value")
-                };
+                let field_value =
+                    if field_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
+                        field_ptr.into()
+                    } else {
+                        env.builder.build_load(field_ptr, "field_value")
+                    };
 
                 modify_refcount_layout_help(
                     env,
-                    parent,
                     layout_ids,
                     mode.to_call_mode(fn_val),
                     when_recursive,

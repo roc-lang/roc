@@ -44,12 +44,14 @@ const SYMBOL_HAS_NICHE: () =
 // register_debug_idents calls (which should be made in debug mode).
 // Set it to false if you want to see the raw ModuleId and IdentId ints,
 // but please set it back to true before checking in the result!
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, feature = "debug-symbols"))]
 const PRETTY_PRINT_DEBUG_SYMBOLS: bool = true;
 
 pub const DERIVABLE_ABILITIES: &[(Symbol, &[Symbol])] = &[
     (Symbol::ENCODE_ENCODING, &[Symbol::ENCODE_TO_ENCODER]),
     (Symbol::DECODE_DECODING, &[Symbol::DECODE_DECODER]),
+    (Symbol::HASH_HASH_ABILITY, &[Symbol::HASH_HASH]),
+    (Symbol::BOOL_EQ, &[Symbol::BOOL_IS_EQ]),
 ];
 
 /// In Debug builds only, Symbol has a name() method that lets
@@ -95,6 +97,17 @@ impl Symbol {
 
     pub fn derivable_ability(self) -> Option<&'static (Symbol, &'static [Symbol])> {
         DERIVABLE_ABILITIES.iter().find(|(name, _)| *name == self)
+    }
+
+    /// A symbol that should never be exposed to userspace, but needs to be exposed
+    /// to compiled modules for deriving abilities for structural types.
+    pub fn is_exposed_for_builtin_derivers(&self) -> bool {
+        matches!(
+            self,
+            // The `structuralEq` call used deriving structural equality, which will wrap the `Eq`
+            // low-level implementation.
+            &Self::BOOL_STRUCTURAL_EQ
+        )
     }
 
     pub fn module_string<'a>(&self, interns: &'a Interns) -> &'a ModuleName {
@@ -170,7 +183,7 @@ impl Symbol {
 ///
 /// `Foo.bar`
 impl fmt::Debug for Symbol {
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "debug-symbols"))]
     #[allow(clippy::print_in_format_impl)]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if PRETTY_PRINT_DEBUG_SYMBOLS {
@@ -203,7 +216,7 @@ impl fmt::Debug for Symbol {
         }
     }
 
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(any(debug_assertions, feature = "debug-symbols")))]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fallback_debug_fmt(*self, f)
     }
@@ -233,29 +246,13 @@ fn fallback_debug_fmt(symbol: Symbol, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "`{:?}.{:?}`", module_id, ident_id)
 }
 
-// TODO this is only here to prevent clippy from complaining about an unused
-// #[macro_use] on lazy_statc in --release builds, because as of January 2020,
-// we only use lazy_static in the debug configuration. If we ever start using
-// lazy_static in release builds, this do-nothing macro invocation will be safe to delete!
-//
-// There's probably also a way to get clippy to stop complaining about the unused
-// #[macro_use] but it didn't seem worth the effort since probably someday we'll
-// end up using it in release builds anyway. Right? ...Right?
-lazy_static! {}
-
-#[cfg(debug_assertions)]
-lazy_static! {
-    /// This is used in Debug builds only, to let us have a Debug instance
-    /// which displays not only the Module ID, but also the Module Name which
-    /// corresponds to that ID.
-    ///
-    static ref DEBUG_MODULE_ID_NAMES: std::sync::Mutex<roc_collections::SmallStringInterner> =
-        // This stores a u32 key instead of a ModuleId key so that if there's
-        // a problem with ModuleId's Debug implementation, logging this for diagnostic
-        // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
-        // this out.
-        std::sync::Mutex::new(roc_collections::SmallStringInterner::with_capacity(10));
-}
+/// This is used in Debug builds only, to let us have a Debug instance
+/// which displays not only the Module ID, but also the Module Name which
+/// corresponds to that ID.
+///
+#[cfg(any(debug_assertions, feature = "debug-symbols"))]
+static DEBUG_MODULE_ID_NAMES: std::sync::Mutex<roc_collections::SmallStringInterner> =
+    std::sync::Mutex::new(roc_collections::SmallStringInterner::new());
 
 #[derive(Debug, Default, Clone)]
 pub struct Interns {
@@ -325,18 +322,16 @@ pub fn get_module_ident_ids_mut<'a>(
         })
 }
 
+/// This is used in Debug builds only, to let us have a Debug instance
+/// which displays not only the Module ID, but also the Module Name which
+/// corresponds to that ID.
 #[cfg(any(debug_assertions, feature = "debug-symbols"))]
-lazy_static! {
-    /// This is used in Debug builds only, to let us have a Debug instance
-    /// which displays not only the Module ID, but also the Module Name which
-    /// corresponds to that ID.
-    static ref DEBUG_IDENT_IDS_BY_MODULE_ID: std::sync::Mutex<roc_collections::VecMap<u32, IdentIds>> =
-        // This stores a u32 key instead of a ModuleId key so that if there's
-        // a problem with ModuleId's Debug implementation, logging this for diagnostic
-        // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
-        // this out.
-        std::sync::Mutex::new(roc_collections::VecMap::default());
-}
+static DEBUG_IDENT_IDS_BY_MODULE_ID: std::sync::Mutex<roc_collections::VecMap<u32, IdentIds>> =
+    // This stores a u32 key instead of a ModuleId key so that if there's
+    // a problem with ModuleId's Debug implementation, logging this for diagnostic
+    // purposes won't recursively trigger ModuleId's Debug instance in the course of printing
+    // this out.
+    std::sync::Mutex::new(roc_collections::VecMap::new());
 
 /// A globally unique ID that gets assigned to each module as it is loaded.
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -386,7 +381,7 @@ impl fmt::Debug for ModuleId {
     /// needs a global mutex, so we don't do this in release builds. This means
     /// the Debug impl in release builds only shows the number, not the name (which
     /// it does not have available, due to having never stored it in the mutexed intern table.)
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "debug-symbols"))]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // Originally, this printed both name and numeric ID, but the numeric ID
         // didn't seem to add anything useful. Feel free to temporarily re-add it
@@ -412,7 +407,7 @@ impl fmt::Debug for ModuleId {
     }
 
     /// In release builds, all we have access to is the number, so only display that.
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(any(debug_assertions, feature = "debug-symbols")))]
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.0.fmt(f)
     }
@@ -425,7 +420,7 @@ impl fmt::Debug for ModuleId {
 /// 4. throw away short names. stash the module id in the can env under the resolved module name
 /// 5. test:
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PackageQualified<'a, T> {
     Unqualified(T),
     Qualified(&'a str, T),
@@ -457,7 +452,7 @@ impl<'a> PackageModuleIds<'a> {
         // didn't find it, so we'll add it
         let module_id = ModuleId::from_zero_indexed(self.by_id.len());
         self.by_id.push(module_name.clone());
-        if cfg!(debug_assertions) {
+        if cfg!(any(debug_assertions, feature = "debug-symbols")) {
             Self::insert_debug_name(module_id, module_name);
         }
 
@@ -474,7 +469,7 @@ impl<'a> PackageModuleIds<'a> {
         ModuleIds { by_id }
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "debug-symbols"))]
     fn insert_debug_name(module_id: ModuleId, module_name: &PQModuleName) {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
@@ -490,7 +485,7 @@ impl<'a> PackageModuleIds<'a> {
         }
     }
 
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(any(debug_assertions, feature = "debug-symbols")))]
     fn insert_debug_name(_module_id: ModuleId, _module_name: &PQModuleName) {
         // By design, this is a no-op in release builds!
     }
@@ -512,6 +507,20 @@ impl<'a> PackageModuleIds<'a> {
     pub fn available_modules(&self) -> impl Iterator<Item = &PQModuleName> {
         self.by_id.iter()
     }
+
+    /// Returns true iff two modules belong to the same package.
+    /// Returns [None] if one module is unknown.
+    pub fn package_eq(&self, left: ModuleId, right: ModuleId) -> Option<bool> {
+        if left.is_builtin() ^ right.is_builtin() {
+            return Some(false);
+        }
+        let result = match (self.get_name(left)?, self.get_name(right)?) {
+            (PQModuleName::Unqualified(_), PQModuleName::Unqualified(_)) => true,
+            (PQModuleName::Qualified(pkg1, _), PQModuleName::Qualified(pkg2, _)) => pkg1 == pkg2,
+            _ => false,
+        };
+        Some(result)
+    }
 }
 
 /// Stores a mapping between ModuleId and InlinableString.
@@ -530,14 +539,14 @@ impl ModuleIds {
         // didn't find it, so we'll add it
         let module_id = ModuleId::from_zero_indexed(self.by_id.len());
         self.by_id.push(module_name.clone());
-        if cfg!(debug_assertions) {
+        if cfg!(any(debug_assertions, feature = "debug-symbols")) {
             Self::insert_debug_name(module_id, module_name);
         }
 
         module_id
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, feature = "debug-symbols"))]
     fn insert_debug_name(module_id: ModuleId, module_name: &ModuleName) {
         let mut names = DEBUG_MODULE_ID_NAMES.lock().expect("Failed to acquire lock for Debug interning into DEBUG_MODULE_ID_NAMES, presumably because a thread panicked.");
 
@@ -547,7 +556,7 @@ impl ModuleIds {
         }
     }
 
-    #[cfg(not(debug_assertions))]
+    #[cfg(not(any(debug_assertions, feature = "debug-symbols")))]
     fn insert_debug_name(_module_id: ModuleId, _module_name: &ModuleName) {
         // By design, this is a no-op in release builds!
     }
@@ -776,12 +785,22 @@ macro_rules! define_builtins {
         $(
             $module_id:literal $module_const:ident: $module_name:literal => {
                 $(
-                    $ident_id:literal $ident_const:ident: $ident_name:literal $($imported:ident)?
+                    $ident_id:literal $ident_const:ident: $ident_name:literal
+                    $(exposed_apply_type=$exposed_apply_type:literal)?
+                    $(exposed_type=$exposed_type:literal)?
+                    $(in_scope_for_hints=$in_scope_for_hints:literal)?
                 )*
+                $(unexposed $u_ident_id:literal $u_ident_const:ident: $u_ident_name:literal)*
             }
         )+
         num_modules: $total:literal
     } => {
+        impl<'a> super::ident::QualifiedModuleName<'a> {
+            pub fn is_builtin(&self) -> bool {
+                self.opt_package.is_none() && ($($module_name == self.module.as_str() ||)+ false)
+            }
+        }
+
         impl IdentIds {
             pub fn exposed_builtins(extra_capacity: usize) -> IdentIdsByModule {
                 let mut exposed_idents_by_module = VecMap::with_capacity(extra_capacity + $total);
@@ -831,7 +850,7 @@ macro_rules! define_builtins {
                         IdentIds{ interner }
                     };
 
-                    if cfg!(debug_assertions) {
+                    if cfg!(any(debug_assertions, feature = "debug-symbols")) {
                         let name = PQModuleName::Unqualified($module_name.into());
                         PackageModuleIds::insert_debug_name(module_id, &name);
                         module_id.register_debug_idents(&ident_ids);
@@ -873,7 +892,7 @@ macro_rules! define_builtins {
                 let mut insert_both = |id: ModuleId, name_str: &'static str| {
                     let name: ModuleName = name_str.into();
 
-                    if cfg!(debug_assertions) {
+                    if cfg!(any(debug_assertions, feature = "debug-symbols")) {
                         Self::insert_debug_name(id, &name);
                     }
 
@@ -899,7 +918,7 @@ macro_rules! define_builtins {
                     let raw_name: IdentStr = name_str.into();
                     let name = PQModuleName::Unqualified(raw_name.into());
 
-                    if cfg!(debug_assertions) {
+                    if cfg!(any(debug_assertions, feature = "debug-symbols")) {
                         Self::insert_debug_name(id, &name);
                     }
 
@@ -919,25 +938,68 @@ macro_rules! define_builtins {
                 $(
                     pub const $ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($ident_id));
                 )*
+                $(
+                    pub const $u_ident_const: Symbol = Symbol::new(ModuleId::$module_const, IdentId($u_ident_id));
+                )*
             )+
 
-            /// The default idents that should be in scope,
+            /// The default `Apply` types that should be in scope,
             /// and what symbols they should resolve to.
             ///
-            /// This is for type aliases like `Int` and `Str` and such.
-            pub fn default_in_scope() -> VecMap<Ident, (Symbol, Region)> {
+            /// This is for type aliases that don't have a concrete Roc representation and as such
+            /// we hide their implementation, like `Str` and `List`.
+            pub fn apply_types_in_scope() -> VecMap<Ident, (Symbol, Region)> {
                 let mut scope = VecMap::default();
 
                 $(
                     $(
                         $(
-                            // TODO is there a cleaner way to do this?
-                            // The goal is to make sure that we only
-                            // actually import things into scope if
-                            // they are tagged as "imported" in define_builtins!
-                            let $imported = true;
+                            if $exposed_apply_type {
+                                scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
+                            }
+                        )?
+                    )*
+                )+
 
-                            if $imported {
+                scope
+            }
+
+            /// Types from a builtin module that should always be added to the default scope.
+            #[track_caller]
+            pub fn builtin_types_in_scope(module_id: ModuleId) -> &'static [(&'static str, (Symbol, Region))] {
+                match module_id {
+                    $(
+                    ModuleId::$module_const => {
+                        const LIST : &'static [(&'static str, (Symbol, Region))] = &[
+                            $(
+                                $(
+                                    if $exposed_type {
+                                        ($ident_name, (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()))
+                                    } else {
+                                        unreachable!()
+                                    },
+                                )?
+                            )*
+                        ];
+                        LIST
+                    }
+                    )+
+                    m => roc_error_macros::internal_error!("{:?} is not a builtin module!", m),
+                }
+            }
+
+            /// Symbols that should be added to the default scope, for hints as suggestions of
+            /// names you might want to use.
+            ///
+            /// TODO: this is a hack to get tag names to show up in error messages as suggestions,
+            /// really we should be extracting tag names from candidate type aliases in scope.
+            pub fn symbols_in_scope_for_hints() -> VecMap<Ident, (Symbol, Region)> {
+                let mut scope = VecMap::default();
+
+                $(
+                    $(
+                        $(
+                            if $in_scope_for_hints {
                                 scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
                             }
                         )?
@@ -1018,21 +1080,21 @@ define_builtins! {
     2 DERIVED_GEN: "#Derived_gen" => {
     }
     3 NUM: "Num" => {
-        0 NUM_NUM: "Num"  // the Num.Num type alias
-        1 NUM_I128: "I128"  // the Num.I128 type alias
-        2 NUM_U128: "U128"  // the Num.U128 type alias
-        3 NUM_I64: "I64"  // the Num.I64 type alias
-        4 NUM_U64: "U64"  // the Num.U64 type alias
-        5 NUM_I32: "I32"  // the Num.I32 type alias
-        6 NUM_U32: "U32"  // the Num.U32 type alias
-        7 NUM_I16: "I16"  // the Num.I16 type alias
-        8 NUM_U16: "U16"  // the Num.U16 type alias
-        9 NUM_I8: "I8"  // the Num.I8 type alias
-        10 NUM_U8: "U8"  // the Num.U8 type alias
-        11 NUM_INTEGER: "Integer" // Int : Num Integer
-        12 NUM_F64: "F64"  // the Num.F64 type alias
-        13 NUM_F32: "F32"  // the Num.F32 type alias
-        14 NUM_FLOATINGPOINT: "FloatingPoint" // Float : Num FloatingPoint
+        0 NUM_NUM: "Num" exposed_type=true  // the Num.Num type alias
+        1 NUM_I128: "I128" exposed_type=true  // the Num.I128 type alias
+        2 NUM_U128: "U128" exposed_type=true  // the Num.U128 type alias
+        3 NUM_I64: "I64" exposed_type=true  // the Num.I64 type alias
+        4 NUM_U64: "U64" exposed_type=true  // the Num.U64 type alias
+        5 NUM_I32: "I32" exposed_type=true  // the Num.I32 type alias
+        6 NUM_U32: "U32" exposed_type=true  // the Num.U32 type alias
+        7 NUM_I16: "I16" exposed_type=true  // the Num.I16 type alias
+        8 NUM_U16: "U16" exposed_type=true  // the Num.U16 type alias
+        9 NUM_I8: "I8" exposed_type=true  // the Num.I8 type alias
+        10 NUM_U8: "U8" exposed_type=true  // the Num.U8 type alias
+        11 NUM_INTEGER: "Integer" exposed_type=true // Int : Num Integer
+        12 NUM_F64: "F64" exposed_type=true  // the Num.F64 type alias
+        13 NUM_F32: "F32" exposed_type=true  // the Num.F32 type alias
+        14 NUM_FLOATINGPOINT: "FloatingPoint" exposed_type=true // Float : Num FloatingPoint
         15 NUM_MAX_F32: "maxF32"
         16 NUM_MIN_F32: "minF32"
         17 NUM_ABS: "abs"
@@ -1075,18 +1137,18 @@ define_builtins! {
         54 NUM_ATAN: "atan"
         55 NUM_ACOS: "acos"
         56 NUM_ASIN: "asin"
-        57 NUM_SIGNED128: "Signed128"
-        58 NUM_SIGNED64: "Signed64"
-        59 NUM_SIGNED32: "Signed32"
-        60 NUM_SIGNED16: "Signed16"
-        61 NUM_SIGNED8: "Signed8"
-        62 NUM_UNSIGNED128: "Unsigned128"
-        63 NUM_UNSIGNED64: "Unsigned64"
-        64 NUM_UNSIGNED32: "Unsigned32"
-        65 NUM_UNSIGNED16: "Unsigned16"
-        66 NUM_UNSIGNED8: "Unsigned8"
-        67 NUM_BINARY64: "Binary64"
-        68 NUM_BINARY32: "Binary32"
+        57 NUM_SIGNED128: "Signed128" exposed_type=true
+        58 NUM_SIGNED64: "Signed64" exposed_type=true
+        59 NUM_SIGNED32: "Signed32" exposed_type=true
+        60 NUM_SIGNED16: "Signed16" exposed_type=true
+        61 NUM_SIGNED8: "Signed8" exposed_type=true
+        62 NUM_UNSIGNED128: "Unsigned128" exposed_type=true
+        63 NUM_UNSIGNED64: "Unsigned64" exposed_type=true
+        64 NUM_UNSIGNED32: "Unsigned32" exposed_type=true
+        65 NUM_UNSIGNED16: "Unsigned16" exposed_type=true
+        66 NUM_UNSIGNED8: "Unsigned8" exposed_type=true
+        67 NUM_BINARY64: "Binary64" exposed_type=true
+        68 NUM_BINARY32: "Binary32" exposed_type=true
         69 NUM_BITWISE_AND: "bitwiseAnd"
         70 NUM_BITWISE_XOR: "bitwiseXor"
         71 NUM_BITWISE_OR: "bitwiseOr"
@@ -1099,14 +1161,14 @@ define_builtins! {
         78 NUM_MUL_WRAP: "mulWrap"
         79 NUM_MUL_CHECKED: "mulChecked"
         80 NUM_MUL_SATURATED: "mulSaturated"
-        81 NUM_INT: "Int"
-        82 NUM_FRAC: "Frac"
-        83 NUM_NATURAL: "Natural"
-        84 NUM_NAT: "Nat"
+        81 NUM_INT: "Int" exposed_type=true
+        82 NUM_FRAC: "Frac" exposed_type=true
+        83 NUM_NATURAL: "Natural" exposed_type=true
+        84 NUM_NAT: "Nat" exposed_type=true
         85 NUM_INT_CAST: "intCast"
         86 NUM_IS_MULTIPLE_OF: "isMultipleOf"
-        87 NUM_DECIMAL: "Decimal"
-        88 NUM_DEC: "Dec"  // the Num.Dectype alias
+        87 NUM_DECIMAL: "Decimal" exposed_type=true
+        88 NUM_DEC: "Dec" exposed_type=true  // the Num.Dectype alias
         89 NUM_BYTES_TO_U16: "bytesToU16"
         90 NUM_BYTES_TO_U32: "bytesToU32"
         91 NUM_CAST_TO_NAT: "#castToNat"
@@ -1131,55 +1193,59 @@ define_builtins! {
         110 NUM_MAX_U64: "maxU64"
         111 NUM_MIN_I128: "minI128"
         112 NUM_MAX_I128: "maxI128"
-        113 NUM_TO_I8: "toI8"
-        114 NUM_TO_I8_CHECKED: "toI8Checked"
-        115 NUM_TO_I16: "toI16"
-        116 NUM_TO_I16_CHECKED: "toI16Checked"
-        117 NUM_TO_I32: "toI32"
-        118 NUM_TO_I32_CHECKED: "toI32Checked"
-        119 NUM_TO_I64: "toI64"
-        120 NUM_TO_I64_CHECKED: "toI64Checked"
-        121 NUM_TO_I128: "toI128"
-        122 NUM_TO_I128_CHECKED: "toI128Checked"
-        123 NUM_TO_U8: "toU8"
-        124 NUM_TO_U8_CHECKED: "toU8Checked"
-        125 NUM_TO_U16: "toU16"
-        126 NUM_TO_U16_CHECKED: "toU16Checked"
-        127 NUM_TO_U32: "toU32"
-        128 NUM_TO_U32_CHECKED: "toU32Checked"
-        129 NUM_TO_U64: "toU64"
-        130 NUM_TO_U64_CHECKED: "toU64Checked"
-        131 NUM_TO_U128: "toU128"
-        132 NUM_TO_U128_CHECKED: "toU128Checked"
-        133 NUM_TO_NAT: "toNat"
-        134 NUM_TO_NAT_CHECKED: "toNatChecked"
-        135 NUM_TO_F32: "toF32"
-        136 NUM_TO_F32_CHECKED: "toF32Checked"
-        137 NUM_TO_F64: "toF64"
-        138 NUM_TO_F64_CHECKED: "toF64Checked"
-        139 NUM_MAX_F64: "maxF64"
-        140 NUM_MIN_F64: "minF64"
-        141 NUM_ADD_CHECKED_LOWLEVEL: "addCheckedLowlevel"
-        142 NUM_SUB_CHECKED_LOWLEVEL: "subCheckedLowlevel"
-        143 NUM_MUL_CHECKED_LOWLEVEL: "mulCheckedLowlevel"
-        144 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
-        145 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
+        113 NUM_MIN_U128: "minU128"
+        114 NUM_MAX_U128: "maxU128"
+        115 NUM_TO_I8: "toI8"
+        116 NUM_TO_I8_CHECKED: "toI8Checked"
+        117 NUM_TO_I16: "toI16"
+        118 NUM_TO_I16_CHECKED: "toI16Checked"
+        119 NUM_TO_I32: "toI32"
+        120 NUM_TO_I32_CHECKED: "toI32Checked"
+        121 NUM_TO_I64: "toI64"
+        122 NUM_TO_I64_CHECKED: "toI64Checked"
+        123 NUM_TO_I128: "toI128"
+        124 NUM_TO_I128_CHECKED: "toI128Checked"
+        125 NUM_TO_U8: "toU8"
+        126 NUM_TO_U8_CHECKED: "toU8Checked"
+        127 NUM_TO_U16: "toU16"
+        128 NUM_TO_U16_CHECKED: "toU16Checked"
+        129 NUM_TO_U32: "toU32"
+        130 NUM_TO_U32_CHECKED: "toU32Checked"
+        131 NUM_TO_U64: "toU64"
+        132 NUM_TO_U64_CHECKED: "toU64Checked"
+        133 NUM_TO_U128: "toU128"
+        134 NUM_TO_U128_CHECKED: "toU128Checked"
+        135 NUM_TO_NAT: "toNat"
+        136 NUM_TO_NAT_CHECKED: "toNatChecked"
+        137 NUM_TO_F32: "toF32"
+        138 NUM_TO_F32_CHECKED: "toF32Checked"
+        139 NUM_TO_F64: "toF64"
+        140 NUM_TO_F64_CHECKED: "toF64Checked"
+        141 NUM_MAX_F64: "maxF64"
+        142 NUM_MIN_F64: "minF64"
+        143 NUM_ADD_CHECKED_LOWLEVEL: "addCheckedLowlevel"
+        144 NUM_SUB_CHECKED_LOWLEVEL: "subCheckedLowlevel"
+        145 NUM_MUL_CHECKED_LOWLEVEL: "mulCheckedLowlevel"
+        146 NUM_BYTES_TO_U16_LOWLEVEL: "bytesToU16Lowlevel"
+        147 NUM_BYTES_TO_U32_LOWLEVEL: "bytesToU32Lowlevel"
     }
     4 BOOL: "Bool" => {
-        0 BOOL_BOOL: "Bool" // the Bool.Bool type alias
-        1 BOOL_FALSE: "False" imported // Bool.Bool = [False, True]
-                                       // NB: not strictly needed; used for finding tag names in error suggestions
-        2 BOOL_TRUE: "True" imported // Bool.Bool = [False, True]
-                                     // NB: not strictly needed; used for finding tag names in error suggestions
+        0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
+        1 BOOL_FALSE: "false"
+        2 BOOL_TRUE: "true"
         3 BOOL_AND: "and"
         4 BOOL_OR: "or"
         5 BOOL_NOT: "not"
         6 BOOL_XOR: "xor"
-        7 BOOL_EQ: "isEq"
-        8 BOOL_NEQ: "isNotEq"
+        7 BOOL_NEQ: "isNotEq"
+        8 BOOL_EQ: "Eq" exposed_type=true
+        9 BOOL_IS_EQ: "isEq"
+        10 BOOL_IS_EQ_IMPL: "boolIsEq"
+        unexposed 11 BOOL_STRUCTURAL_EQ: "structuralEq"
+        unexposed 12 BOOL_STRUCTURAL_NOT_EQ: "structuralNotEq"
     }
     5 STR: "Str" => {
-        0 STR_STR: "Str" imported // the Str.Str type alias
+        0 STR_STR: "Str" exposed_apply_type=true // the Str.Str type alias
         1 STR_IS_EMPTY: "isEmpty"
         2 STR_APPEND: "#append" // unused
         3 STR_CONCAT: "concat"
@@ -1229,9 +1295,15 @@ define_builtins! {
         47 STR_TO_NUM: "strToNum"
         48 STR_FROM_UTF8_RANGE_LOWLEVEL: "fromUtf8RangeLowlevel"
         49 STR_CAPACITY: "capacity"
+        50 STR_REPLACE_EACH: "replaceEach"
+        51 STR_REPLACE_FIRST: "replaceFirst"
+        52 STR_REPLACE_LAST: "replaceLast"
+        53 STR_WITH_CAPACITY: "withCapacity"
+        54 STR_WITH_PREFIX: "withPrefix"
+        55 STR_GRAPHEMES: "graphemes"
     }
     6 LIST: "List" => {
-        0 LIST_LIST: "List" imported // the List.List type alias
+        0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias
         1 LIST_IS_EMPTY: "isEmpty"
         2 LIST_GET: "get"
         3 LIST_SET: "set"
@@ -1306,13 +1378,16 @@ define_builtins! {
         72 LIST_SUBLIST_LOWLEVEL: "sublistLowlevel"
         73 LIST_CAPACITY: "capacity"
         74 LIST_MAP_TRY: "mapTry"
+        75 LIST_WALK_TRY: "walkTry"
+        76 LIST_WALK_BACKWARDS_UNTIL: "walkBackwardsUntil"
+        77 LIST_COUNT_IF: "countIf"
+        78 LIST_WALK_FROM: "walkFrom"
+        79 LIST_WALK_FROM_UNTIL: "walkFromUntil"
     }
     7 RESULT: "Result" => {
-        0 RESULT_RESULT: "Result" // the Result.Result type alias
-        1 RESULT_OK: "Ok" imported // Result.Result a e = [Ok a, Err e]
-                                   // NB: not strictly needed; used for finding tag names in error suggestions
-        2 RESULT_ERR: "Err" imported // Result.Result a e = [Ok a, Err e]
-                                     // NB: not strictly needed; used for finding tag names in error suggestions
+        0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
+        1 RESULT_OK: "Ok" in_scope_for_hints=true // Result.Result a e = [Ok a, Err e]
+        2 RESULT_ERR: "Err" in_scope_for_hints=true // Result.Result a e = [Ok a, Err e]
         3 RESULT_MAP: "map"
         4 RESULT_MAP_ERR: "mapErr"
         5 RESULT_WITH_DEFAULT: "withDefault"
@@ -1322,7 +1397,7 @@ define_builtins! {
         9 RESULT_ON_ERR: "onErr"
     }
     8 DICT: "Dict" => {
-        0 DICT_DICT: "Dict" // the Dict.Dict type alias
+        0 DICT_DICT: "Dict" exposed_type=true // the Dict.Dict type alias
         1 DICT_EMPTY: "empty"
         2 DICT_SINGLE: "single"
         3 DICT_GET: "get"
@@ -1342,9 +1417,12 @@ define_builtins! {
 
         15 DICT_WITH_CAPACITY: "withCapacity"
         16 DICT_CAPACITY: "capacity"
+        17 DICT_UPDATE: "update"
+
+        18 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
     }
     9 SET: "Set" => {
-        0 SET_SET: "Set" // the Set.Set type alias
+        0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
         1 SET_EMPTY: "empty"
         2 SET_SINGLE: "single"
         3 SET_LEN: "len"
@@ -1362,15 +1440,15 @@ define_builtins! {
         15 SET_CAPACITY: "capacity"
     }
     10 BOX: "Box" => {
-        0 BOX_BOX_TYPE: "Box" imported // the Box.Box opaque type
+        0 BOX_BOX_TYPE: "Box" exposed_apply_type=true // the Box.Box opaque type
         1 BOX_BOX_FUNCTION: "box" // Box.box
         2 BOX_UNBOX: "unbox"
     }
     11 ENCODE: "Encode" => {
-        0 ENCODE_ENCODER: "Encoder"
-        1 ENCODE_ENCODING: "Encoding"
+        0 ENCODE_ENCODER: "Encoder" exposed_type=true
+        1 ENCODE_ENCODING: "Encoding" exposed_type=true
         2 ENCODE_TO_ENCODER: "toEncoder"
-        3 ENCODE_ENCODERFORMATTING: "EncoderFormatting"
+        3 ENCODE_ENCODERFORMATTING: "EncoderFormatting" exposed_type=true
         4 ENCODE_U8: "u8"
         5 ENCODE_U16: "u16"
         6 ENCODE_U32: "u32"
@@ -1395,12 +1473,12 @@ define_builtins! {
         25 ENCODE_TO_BYTES: "toBytes"
     }
     12 DECODE: "Decode" => {
-        0 DECODE_DECODE_ERROR: "DecodeError"
-        1 DECODE_DECODE_RESULT: "DecodeResult"
-        2 DECODE_DECODER_OPAQUE: "Decoder"
-        3 DECODE_DECODING: "Decoding"
+        0 DECODE_DECODE_ERROR: "DecodeError" exposed_type=true
+        1 DECODE_DECODE_RESULT: "DecodeResult" exposed_type=true
+        2 DECODE_DECODER_OPAQUE: "Decoder" exposed_type=true
+        3 DECODE_DECODING: "Decoding" exposed_type=true
         4 DECODE_DECODER: "decoder"
-        5 DECODE_DECODERFORMATTING: "DecoderFormatting"
+        5 DECODE_DECODERFORMATTING: "DecoderFormatting" exposed_type=true
         6 DECODE_U8: "u8"
         7 DECODE_U16: "u16"
         8 DECODE_U32: "u32"
@@ -1422,10 +1500,31 @@ define_builtins! {
         24 DECODE_DECODE_WITH: "decodeWith"
         25 DECODE_FROM_BYTES_PARTIAL: "fromBytesPartial"
         26 DECODE_FROM_BYTES: "fromBytes"
+        27 DECODE_MAP_RESULT: "mapResult"
     }
-    13 JSON: "Json" => {
+    13 HASH: "Hash" => {
+        0 HASH_HASH_ABILITY: "Hash" exposed_type=true
+        1 HASH_HASH: "hash"
+        2 HASH_HASHER: "Hasher" exposed_type=true
+        3  HASH_ADD_BYTES: "addBytes"
+        4  HASH_ADD_U8: "addU8"
+        5  HASH_ADD_U16: "addU16"
+        6  HASH_ADD_U32: "addU32"
+        7  HASH_ADD_U64: "addU64"
+        8  HASH_ADD_U128: "addU128"
+        9  HASH_HASH_I8: "hashI8"
+        10 HASH_HASH_I16: "hashI16"
+        11 HASH_HASH_I32: "hashI32"
+        12 HASH_HASH_I64: "hashI64"
+        13 HASH_HASH_I128: "hashI128"
+        14 HASH_COMPLETE: "complete"
+        15 HASH_HASH_STR_BYTES: "hashStrBytes"
+        16 HASH_HASH_LIST: "hashList"
+        17 HASH_HASH_UNORDERED: "hashUnordered"
+    }
+    14 JSON: "Json" => {
         0 JSON_JSON: "Json"
     }
 
-    num_modules: 14 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
+    num_modules: 15 // Keep this count up to date by hand! (TODO: see the mut_map! macro for how we could determine this count correctly in the macro)
 }

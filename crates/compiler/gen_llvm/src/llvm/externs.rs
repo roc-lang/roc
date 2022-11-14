@@ -7,7 +7,8 @@ use inkwell::values::BasicValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 
-use super::build::{get_sjlj_buffer, LLVM_LONGJMP};
+use super::build::get_sjlj_buffer;
+use super::intrinsics::LLVM_LONGJMP;
 
 /// Define functions for roc_alloc, roc_realloc, and roc_dealloc
 /// which use libc implementations (malloc, realloc, and free)
@@ -155,7 +156,29 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
             }
         }
 
+        unreachable_function(env, "roc_getppid");
+        unreachable_function(env, "roc_mmap");
+        unreachable_function(env, "roc_send_signal");
+        unreachable_function(env, "roc_shm_open");
+
         add_sjlj_roc_panic(env)
+    }
+}
+
+fn unreachable_function(env: &Env, name: &str) {
+    // The type of this function (but not the implementation) should have
+    // already been defined by the builtins, which rely on it.
+    let fn_val = env.module.get_function(name).unwrap();
+
+    // Add a basic block for the entry point
+    let entry = env.context.append_basic_block(fn_val, "entry");
+
+    env.builder.position_at_end(entry);
+
+    env.builder.build_unreachable();
+
+    if cfg!(debug_assertions) {
+        crate::llvm::build::verify_fn(fn_val);
     }
 }
 

@@ -1,3 +1,5 @@
+//! Provides the core CLI functionality for the Roc binary.
+
 #[macro_use]
 extern crate const_format;
 
@@ -5,17 +7,18 @@ use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
-use roc_collections::VecMap;
+use roc_build::program::{CodeGenBackend, CodeGenOptions, Problems};
 use roc_error_macros::{internal_error, user_error};
-use roc_load::{Expectations, LoadingProblem, Threading};
-use roc_module::symbol::{Interns, ModuleId};
+use roc_load::{ExpectMetadata, LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
+use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
+use strum::{EnumIter, IntoEnumIterator, IntoStaticStr};
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
     Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
@@ -42,6 +45,7 @@ pub const CMD_VERSION: &str = "version";
 pub const CMD_FORMAT: &str = "format";
 pub const CMD_TEST: &str = "test";
 pub const CMD_GLUE: &str = "glue";
+pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
 
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_DEV: &str = "dev";
@@ -53,7 +57,7 @@ pub const FLAG_NO_LINK: &str = "no-link";
 pub const FLAG_TARGET: &str = "target";
 pub const FLAG_TIME: &str = "time";
 pub const FLAG_LINKER: &str = "linker";
-pub const FLAG_PRECOMPILED: &str = "precompiled-host";
+pub const FLAG_PREBUILT: &str = "prebuilt-platform";
 pub const FLAG_CHECK: &str = "check";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const ROC_FILE: &str = "ROC_FILE";
@@ -67,51 +71,51 @@ const VERSION: &str = include_str!("../../../version.txt");
 pub fn build_app<'a>() -> Command<'a> {
     let flag_optimize = Arg::new(FLAG_OPTIMIZE)
         .long(FLAG_OPTIMIZE)
-        .help("Optimize the compiled program to run faster. (Optimization takes time to complete.)")
+        .help("Optimize the compiled program to run faster\n(Optimization takes time to complete.)")
         .required(false);
 
     let flag_max_threads = Arg::new(FLAG_MAX_THREADS)
         .long(FLAG_MAX_THREADS)
-        .help("Limit the number of threads (and hence cores) used during compilation.")
+        .help("Limit the number of threads (and hence cores) used during compilation")
         .takes_value(true)
         .validator(|s| s.parse::<usize>())
         .required(false);
 
     let flag_opt_size = Arg::new(FLAG_OPT_SIZE)
         .long(FLAG_OPT_SIZE)
-        .help("Optimize the compiled program to have a small binary size. (Optimization takes time to complete.)")
+        .help("Optimize the compiled program to have a small binary size\n(Optimization takes time to complete.)")
         .required(false);
 
     let flag_dev = Arg::new(FLAG_DEV)
         .long(FLAG_DEV)
-        .help("Make compilation finish as soon as possible, at the expense of runtime performance.")
+        .help("Make compilation finish as soon as possible, at the expense of runtime performance")
         .required(false);
 
     let flag_debug = Arg::new(FLAG_DEBUG)
         .long(FLAG_DEBUG)
-        .help("Store LLVM debug information in the generated program.")
+        .help("Store LLVM debug information in the generated program")
         .required(false);
 
     let flag_time = Arg::new(FLAG_TIME)
         .long(FLAG_TIME)
-        .help("Prints detailed compilation time information.")
+        .help("Print detailed compilation time information")
         .required(false);
 
     let flag_linker = Arg::new(FLAG_LINKER)
         .long(FLAG_LINKER)
-        .help("Sets which linker to use. The surgical linker is enabled by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.")
+        .help("Set which linker to use\n(The surgical linker is enabled by default only when building for wasm32 or x86_64 Linux, because those are the only targets it currently supports. Otherwise the legacy linker is used by default.)")
         .possible_values(["surgical", "legacy"])
         .required(false);
 
-    let flag_precompiled = Arg::new(FLAG_PRECOMPILED)
-        .long(FLAG_PRECOMPILED)
-        .help("Assumes the host has been precompiled and skips recompiling the host. (Enabled by default when using `roc build` with a --target other than `--target host`)")
+    let flag_prebuilt = Arg::new(FLAG_PREBUILT)
+        .long(FLAG_PREBUILT)
+        .help("Assume the platform has been prebuilt and skip rebuilding the platform\n(This is enabled by default when using `roc build` with a --target other than `--target <current machine>`.)")
         .possible_values(["true", "false"])
         .required(false);
 
     let flag_wasm_stack_size_kb = Arg::new(FLAG_WASM_STACK_SIZE_KB)
         .long(FLAG_WASM_STACK_SIZE_KB)
-        .help("Stack size in kilobytes for wasm32 target. Only applies when --dev also provided.")
+        .help("Stack size in kilobytes for wasm32 target\n(This only applies when --dev also provided.)")
         .takes_value(true)
         .validator(|s| s.parse::<u32>())
         .required(false);
@@ -123,7 +127,7 @@ pub fn build_app<'a>() -> Command<'a> {
         .default_value(DEFAULT_ROC_FILENAME);
 
     let args_for_app = Arg::new(ARGS_FOR_APP)
-        .help("Arguments to pass into the app being run, e.g. `roc run -- arg1 arg2`")
+        .help("Arguments to pass into the app being run\ne.g. `roc run -- arg1 arg2`")
         .allow_invalid_utf8(true)
         .multiple_values(true)
         .takes_value(true)
@@ -132,7 +136,7 @@ pub fn build_app<'a>() -> Command<'a> {
 
     let app = Command::new("roc")
         .version(concatcp!(VERSION, "\n"))
-        .about("Runs the given .roc file, if there are no compilation errors.\nUse one of the SUBCOMMANDS below to do something else!")
+        .about("Run the given .roc file, if there are no compilation errors.\nYou can use one of the SUBCOMMANDS below to do something else!")
         .subcommand(Command::new(CMD_BUILD)
             .about("Build a binary from the given .roc file, but don't run it")
             .arg(flag_optimize.clone())
@@ -142,26 +146,28 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_debug.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
-            .arg(flag_precompiled.clone())
+            .arg(flag_prebuilt.clone())
             .arg(flag_wasm_stack_size_kb.clone())
             .arg(
                 Arg::new(FLAG_TARGET)
                     .long(FLAG_TARGET)
                     .help("Choose a different target")
-                    .default_value(Target::default().as_str())
-                    .possible_values(Target::OPTIONS)
+                    .default_value(Target::default().into())
+                    .possible_values(Target::iter().map(|target| {
+                        Into::<&'static str>::into(target)
+                    }))
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_LIB)
                     .long(FLAG_LIB)
-                    .help("Build a C library instead of an executable.")
+                    .help("Build a C library instead of an executable")
                     .required(false),
             )
             .arg(
                 Arg::new(FLAG_NO_LINK)
                     .long(FLAG_NO_LINK)
-                    .help("Does not link. Instead just outputs the `.o` file")
+                    .help("Do not link\n(Instead, just output the `.o` file.)")
                     .required(false),
             )
             .arg(
@@ -173,7 +179,7 @@ pub fn build_app<'a>() -> Command<'a> {
             )
         )
         .subcommand(Command::new(CMD_TEST)
-            .about("Run all top-level `expect`s in a main module and any modules it imports.")
+            .about("Run all top-level `expect`s in a main module and any modules it imports")
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -181,7 +187,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_debug.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
-            .arg(flag_precompiled.clone())
+            .arg(flag_prebuilt.clone())
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the main module")
@@ -203,12 +209,12 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_debug.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
-            .arg(flag_precompiled.clone())
+            .arg(flag_prebuilt.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone())
         )
         .subcommand(Command::new(CMD_DEV)
-            .about("`check` a .roc file, and then run it if there were no errors.")
+            .about("`check` a .roc file, and then run it if there were no errors")
             .arg(flag_optimize.clone())
             .arg(flag_max_threads.clone())
             .arg(flag_opt_size.clone())
@@ -216,7 +222,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(flag_debug.clone())
             .arg(flag_time.clone())
             .arg(flag_linker.clone())
-            .arg(flag_precompiled.clone())
+            .arg(flag_prebuilt.clone())
             .arg(roc_file_to_run.clone())
             .arg(args_for_app.clone())
         )
@@ -231,14 +237,14 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(FLAG_CHECK)
                     .long(FLAG_CHECK)
-                    .help("Checks that specified files are formatted. If formatting is needed, it will return a non-zero exit code.")
+                    .help("Checks that specified files are formatted\n(If formatting is needed, return a non-zero exit code.)")
                     .required(false),
             )
         )
         .subcommand(Command::new(CMD_VERSION)
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
         .subcommand(Command::new(CMD_CHECK)
-            .about("Check the code for problems, but doesn’t build or run it")
+            .about("Check the code for problems, but don’t build or run it")
             .arg(flag_time.clone())
             .arg(flag_max_threads.clone())
             .arg(
@@ -260,7 +266,7 @@ pub fn build_app<'a>() -> Command<'a> {
                 )
         )
         .subcommand(Command::new(CMD_GLUE)
-            .about("Generate glue code between a platform's Roc API and its host language.")
+            .about("Generate glue code between a platform's Roc API and its host language")
             .arg(
                 Arg::new(ROC_FILE)
                     .help("The .roc file for the platform module")
@@ -269,20 +275,39 @@ pub fn build_app<'a>() -> Command<'a> {
             )
             .arg(
                 Arg::new(GLUE_FILE)
-                    .help("The filename for the generated glue code. Currently, this must be a .rs file because only Rust glue generation is supported so far.")
+                    .help("The filename for the generated glue code\n(Currently, this must be a .rs file because only Rust glue generation is supported so far.)")
                     .allow_invalid_utf8(true)
                     .required(true)
             )
         )
+        .subcommand(Command::new(CMD_GEN_STUB_LIB)
+            .about("Generate a stubbed shared library that can be used for linking a platform binary.\nThe stubbed library has prototypes, but no function bodies.\n\nNote: This command will be removed in favor of just using `roc build` once all platforms support the surgical linker")
+            .arg(
+                Arg::new(ROC_FILE)
+                    .help("The .roc file for an app using the platform")
+                    .allow_invalid_utf8(true)
+                    .required(true)
+            )
+            .arg(
+                Arg::new(FLAG_TARGET)
+                    .long(FLAG_TARGET)
+                    .help("Choose a different target")
+                    .default_value(Target::default().into())
+                    .possible_values(Target::iter().map(|target| {
+                        Into::<&'static str>::into(target)
+                    }))
+                    .required(false),
+            )
+        )
         .trailing_var_arg(true)
         .arg(flag_optimize)
-            .arg(flag_max_threads.clone())
+        .arg(flag_max_threads.clone())
         .arg(flag_opt_size)
         .arg(flag_dev)
         .arg(flag_debug)
         .arg(flag_time)
         .arg(flag_linker)
-        .arg(flag_precompiled)
+        .arg(flag_prebuilt)
         .arg(roc_file_to_run.required(false))
         .arg(args_for_app);
 
@@ -294,7 +319,7 @@ pub fn build_app<'a>() -> Command<'a> {
                     Arg::new(DIRECTORY_OR_FILES)
                         .multiple_values(true)
                         .required(false)
-                        .help("(optional) The directory or files to open on launch."),
+                        .help("(optional) The directory or files to open on launch"),
                 ),
         )
     } else {
@@ -396,7 +421,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let interns = loaded.interns.clone();
 
-    let (lib, expects) = roc_repl_expect::run::expect_mono_module_to_dylib(
+    let (lib, expects, layout_interner) = roc_repl_expect::run::expect_mono_module_to_dylib(
         arena,
         target.clone(),
         loaded,
@@ -410,11 +435,12 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
 
     let mut writer = std::io::stdout();
 
-    let (failed, passed) = roc_repl_expect::run::run_expects(
+    let (failed, passed) = roc_repl_expect::run::run_toplevel_expects(
         &mut writer,
         roc_reporting::report::RenderTarget::ColorTerminal,
         arena,
         interns,
+        &layout_interner.into_global(),
         &lib,
         &mut expectations,
         expects,
@@ -458,18 +484,33 @@ pub fn build(
     use build::build_file;
     use BuildConfig::*;
 
-    let arena = Bump::new();
-    let filename = matches.value_of_os(ROC_FILE).unwrap();
-    let opt_level = match (
-        matches.is_present(FLAG_OPTIMIZE),
-        matches.is_present(FLAG_OPT_SIZE),
-        matches.is_present(FLAG_DEV),
-    ) {
-        (true, false, false) => OptLevel::Optimize,
-        (false, true, false) => OptLevel::Size,
-        (false, false, true) => OptLevel::Development,
-        (false, false, false) => OptLevel::Normal,
-        _ => user_error!("build can be only one of `--dev`, `--optimize`, or `--opt-size`"),
+    // the process will end after this function,
+    // so we don't want to spend time freeing these values
+    let arena = ManuallyDrop::new(Bump::new());
+
+    let code_gen_backend = if matches!(triple.architecture, Architecture::Wasm32) {
+        CodeGenBackend::Wasm
+    } else {
+        match matches.is_present(FLAG_DEV) {
+            true => CodeGenBackend::Assembly,
+            false => CodeGenBackend::Llvm,
+        }
+    };
+
+    let opt_level = if let BuildConfig::BuildAndRunIfNoErrors = config {
+        OptLevel::Development
+    } else {
+        match (
+            matches.is_present(FLAG_OPTIMIZE),
+            matches.is_present(FLAG_OPT_SIZE),
+        ) {
+            (true, false) => OptLevel::Optimize,
+            (false, true) => OptLevel::Size,
+            (false, false) => OptLevel::Normal,
+            (true, true) => {
+                user_error!("build can be only one of `--optimize` and `--opt-size`")
+            }
+        }
     };
     let emit_debug_info = matches.is_present(FLAG_DEBUG);
     let emit_timings = matches.is_present(FLAG_TIME);
@@ -485,7 +526,7 @@ pub fn build(
     };
 
     let wasm_dev_backend = matches!(opt_level, OptLevel::Development)
-        && matches!(triple.architecture, Architecture::Wasm32);
+        && matches!(code_gen_backend, CodeGenBackend::Wasm);
 
     let linking_strategy = if wasm_dev_backend {
         LinkingStrategy::Additive
@@ -497,14 +538,16 @@ pub fn build(
         LinkingStrategy::Surgical
     };
 
-    let precompiled = if matches.is_present(FLAG_PRECOMPILED) {
-        matches.value_of(FLAG_PRECOMPILED) == Some("true")
+    let prebuilt = if matches.is_present(FLAG_PREBUILT) {
+        matches.value_of(FLAG_PREBUILT) == Some("true")
     } else {
-        // When compiling for a different target, default to assuming a precompiled host.
-        // Otherwise compilation would most likely fail because many toolchains assume you're compiling for the host
+        // When compiling for a different target, default to assuming a prebuilt platform.
+        // Otherwise compilation would most likely fail because many toolchains assume you're compiling for the current machine.
         // We make an exception for Wasm, because cross-compiling is the norm in that case.
         triple != Triple::host() && !matches!(triple.architecture, Architecture::Wasm32)
     };
+
+    let filename = matches.value_of_os(ROC_FILE).unwrap();
     let path = Path::new(filename);
 
     // Spawn the root task
@@ -536,16 +579,22 @@ pub fn build(
         BuildAndRunIfNoErrors => BuildOrdering::BuildIfChecks,
         _ => BuildOrdering::AlwaysBuild,
     };
+
+    let code_gen_options = CodeGenOptions {
+        backend: code_gen_backend,
+        opt_level,
+        emit_debug_info,
+    };
+
     let res_binary_path = build_file(
         &arena,
         &triple,
         path.to_path_buf(),
-        opt_level,
-        emit_debug_info,
+        code_gen_options,
         emit_timings,
         link_type,
         linking_strategy,
-        precompiled,
+        prebuilt,
         threading,
         wasm_dev_stack_bytes,
         build_ordering,
@@ -556,97 +605,43 @@ pub fn build(
             binary_path,
             problems,
             total_time,
-            expectations,
-            interns,
+            expect_metadata,
         }) => {
             match config {
                 BuildOnly => {
                     // If possible, report the generated executable name relative to the current dir.
                     let generated_filename = binary_path
                         .strip_prefix(env::current_dir().unwrap())
-                        .unwrap_or(&binary_path);
+                        .unwrap_or(&binary_path)
+                        .to_str()
+                        .unwrap();
 
                     // No need to waste time freeing this memory,
                     // since the process is about to exit anyway.
-                    std::mem::forget(arena);
+                    // std::mem::forget(arena);
 
-                    println!(
-                        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms while successfully building:\n\n    {}",
-                        if problems.errors == 0 {
-                            32 // green
-                        } else {
-                            33 // yellow
-                        },
-                        problems.errors,
-                        if problems.errors == 1 {
-                            "error"
-                        } else {
-                            "errors"
-                        },
-                        if problems.warnings == 0 {
-                            32 // green
-                        } else {
-                            33 // yellow
-                        },
-                        problems.warnings,
-                        if problems.warnings == 1 {
-                            "warning"
-                        } else {
-                            "warnings"
-                        },
-                        total_time.as_millis(),
-                        generated_filename.to_str().unwrap()
-                    );
+                    print_problems(problems, total_time);
+                    println!(" while successfully building:\n\n    {generated_filename}");
 
                     // Return a nonzero exit code if there were problems
                     Ok(problems.exit_code())
                 }
                 BuildAndRun => {
                     if problems.errors > 0 || problems.warnings > 0 {
+                        print_problems(problems, total_time);
                         println!(
-                            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nRunning program anyway…\n\n\x1B[36m{}\x1B[39m",
-                            if problems.errors == 0 {
-                                32 // green
-                            } else {
-                                33 // yellow
-                            },
-                            problems.errors,
-                            if problems.errors == 1 {
-                                "error"
-                            } else {
-                                "errors"
-                            },
-                            if problems.warnings == 0 {
-                                32 // green
-                            } else {
-                                33 // yellow
-                            },
-                            problems.warnings,
-                            if problems.warnings == 1 {
-                                "warning"
-                            } else {
-                                "warnings"
-                            },
-                            total_time.as_millis(),
+                            ".\n\nRunning program anyway…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
                         );
                     }
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
-                    let mut bytes = std::fs::read(&binary_path).unwrap();
+                    // don't waste time deallocating; the process ends anyway
+                    // ManuallyDrop will leak the bytes because we don't drop manually
+                    let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    let x = roc_run(
-                        arena,
-                        opt_level,
-                        triple,
-                        args,
-                        &mut bytes,
-                        expectations,
-                        interns,
-                    );
-                    std::mem::forget(bytes);
-                    x
+                    roc_run(&arena, opt_level, triple, args, bytes, expect_metadata)
                 }
                 BuildAndRunIfNoErrors => {
                     debug_assert!(
@@ -654,34 +649,20 @@ pub fn build(
                         "if there are errors, they should have been returned as an error variant"
                     );
                     if problems.warnings > 0 {
+                        print_problems(problems, total_time);
                         println!(
-                            "\x1B[32m0\x1B[39m errors and \x1B[33m{}\x1B[39m {} found in {} ms.\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
-                            problems.warnings,
-                            if problems.warnings == 1 {
-                                "warning"
-                            } else {
-                                "warnings"
-                            },
-                            total_time.as_millis(),
+                            ".\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
                         );
                     }
 
                     let args = matches.values_of_os(ARGS_FOR_APP).unwrap_or_default();
 
-                    let mut bytes = std::fs::read(&binary_path).unwrap();
+                    // don't waste time deallocating; the process ends anyway
+                    // ManuallyDrop will leak the bytes because we don't drop manually
+                    let bytes = &ManuallyDrop::new(std::fs::read(&binary_path).unwrap());
 
-                    let x = roc_run(
-                        arena,
-                        opt_level,
-                        triple,
-                        args,
-                        &mut bytes,
-                        expectations,
-                        interns,
-                    );
-                    std::mem::forget(bytes);
-                    x
+                    roc_run(&arena, opt_level, triple, args, bytes, expect_metadata)
                 }
             }
         }
@@ -693,40 +674,17 @@ pub fn build(
 
             let problems = roc_build::program::report_problems_typechecked(&mut module);
 
-            let mut output = format!(
-                "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.\n\nYou can run the program anyway with \x1B[32mroc run",
-                if problems.errors == 0 {
-                    32 // green
-                } else {
-                    33 // yellow
-                },
-                problems.errors,
-                if problems.errors == 1 {
-                    "error"
-                } else {
-                    "errors"
-                },
-                if problems.warnings == 0 {
-                    32 // green
-                } else {
-                    33 // yellow
-                },
-                problems.warnings,
-                if problems.warnings == 1 {
-                    "warning"
-                } else {
-                    "warnings"
-                },
-                total_time.as_millis(),
-            );
+            print_problems(problems, total_time);
+
+            print!(".\n\nYou can run the program anyway with \x1B[32mroc run");
+
             // If you're running "main.roc" then you can just do `roc run`
             // to re-run the program.
             if filename != DEFAULT_ROC_FILENAME {
-                output.push(' ');
-                output.push_str(&filename.to_string_lossy());
+                print!(" {}", &filename.to_string_lossy());
             }
 
-            println!("{}\x1B[39m", output);
+            println!("\x1B[39m");
 
             Ok(problems.exit_code())
         }
@@ -741,14 +699,41 @@ pub fn build(
     }
 }
 
+fn print_problems(problems: Problems, total_time: std::time::Duration) {
+    const GREEN: usize = 32;
+    const YELLOW: usize = 33;
+
+    print!(
+        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms",
+        match problems.errors {
+            0 => GREEN,
+            _ => YELLOW,
+        },
+        problems.errors,
+        match problems.errors {
+            1 => "error",
+            _ => "errors",
+        },
+        match problems.warnings {
+            0 => GREEN,
+            _ => YELLOW,
+        },
+        problems.warnings,
+        match problems.warnings {
+            1 => "warning",
+            _ => "warnings",
+        },
+        total_time.as_millis(),
+    );
+}
+
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
-    arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
+    arena: &Bump,
     opt_level: OptLevel,
     triple: Triple,
     args: I,
-    binary_bytes: &mut [u8],
-    expectations: VecMap<ModuleId, Expectations>,
-    interns: Interns,
+    binary_bytes: &[u8],
+    expect_metadata: ExpectMetadata,
 ) -> io::Result<i32> {
     match triple.architecture {
         Architecture::Wasm32 => {
@@ -758,10 +743,6 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
             let generated_filename = path
                 .strip_prefix(env::current_dir().unwrap())
                 .unwrap_or(path);
-
-            // No need to waste time freeing this memory,
-            // since the process is about to exit anyway.
-            std::mem::forget(arena);
 
             #[cfg(target_family = "unix")]
             {
@@ -787,11 +768,21 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             Ok(0)
         }
-        _ => roc_run_native(arena, opt_level, args, binary_bytes, expectations, interns),
+        _ => roc_run_native(arena, opt_level, args, binary_bytes, expect_metadata),
     }
 }
 
 #[cfg(target_family = "unix")]
+fn os_str_as_utf8_bytes(os_str: &OsStr) -> &[u8] {
+    use std::os::unix::ffi::OsStrExt;
+    os_str.as_bytes()
+}
+
+#[cfg(not(target_family = "unix"))]
+fn os_str_as_utf8_bytes(os_str: &OsStr) -> &[u8] {
+    os_str.to_str().unwrap().as_bytes()
+}
+
 fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     arena: &'a Bump,
     executable: &ExecutableFile,
@@ -801,10 +792,9 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     bumpalo::collections::Vec<'a, CString>,
 ) {
     use bumpalo::collections::CollectIn;
-    use std::os::unix::ffi::OsStrExt;
 
     let path = executable.as_path();
-    let path_cstring = CString::new(path.as_os_str().as_bytes()).unwrap();
+    let path_cstring = CString::new(os_str_as_utf8_bytes(path.as_os_str())).unwrap();
 
     // argv is an array of pointers to strings passed to the new program
     // as its command-line arguments.  By convention, the first of these
@@ -813,7 +803,7 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     // by a NULL pointer. (Thus, in the new program, argv[argc] will be NULL.)
     let it = args
         .into_iter()
-        .map(|x| CString::new(x.as_ref().as_bytes()).unwrap());
+        .map(|x| CString::new(os_str_as_utf8_bytes(x.as_ref())).unwrap());
 
     let argv_cstrings: bumpalo::collections::Vec<CString> =
         std::iter::once(path_cstring).chain(it).collect_in(arena);
@@ -821,12 +811,17 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
     // envp is an array of pointers to strings, conventionally of the
     // form key=value, which are passed as the environment of the new
     // program.  The envp array must be terminated by a NULL pointer.
+    let mut buffer = Vec::with_capacity(100);
     let envp_cstrings: bumpalo::collections::Vec<CString> = std::env::vars_os()
-        .flat_map(|(k, v)| {
-            [
-                CString::new(k.as_bytes()).unwrap(),
-                CString::new(v.as_bytes()).unwrap(),
-            ]
+        .map(|(k, v)| {
+            buffer.clear();
+
+            use std::io::Write;
+            buffer.write_all(os_str_as_utf8_bytes(&k)).unwrap();
+            buffer.write_all(b"=").unwrap();
+            buffer.write_all(os_str_as_utf8_bytes(&v)).unwrap();
+
+            CString::new(buffer.as_slice()).unwrap()
         })
         .collect_in(arena);
 
@@ -836,35 +831,32 @@ fn make_argv_envp<'a, I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 /// Run on the native OS (not on wasm)
 #[cfg(target_family = "unix")]
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
-    arena: Bump,
+    arena: &Bump,
     opt_level: OptLevel,
     args: I,
-    binary_bytes: &mut [u8],
-    expectations: VecMap<ModuleId, Expectations>,
-    interns: Interns,
+    binary_bytes: &[u8],
+    expect_metadata: ExpectMetadata,
 ) -> std::io::Result<i32> {
     use bumpalo::collections::CollectIn;
 
     unsafe {
         let executable = roc_run_executable_file_path(binary_bytes)?;
-        let (argv_cstrings, envp_cstrings) = make_argv_envp(&arena, &executable, args);
+        let (argv_cstrings, envp_cstrings) = make_argv_envp(arena, &executable, args);
 
         let argv: bumpalo::collections::Vec<*const c_char> = argv_cstrings
             .iter()
             .map(|s| s.as_ptr())
             .chain([std::ptr::null()])
-            .collect_in(&arena);
+            .collect_in(arena);
 
         let envp: bumpalo::collections::Vec<*const c_char> = envp_cstrings
             .iter()
             .map(|s| s.as_ptr())
             .chain([std::ptr::null()])
-            .collect_in(&arena);
+            .collect_in(arena);
 
         match opt_level {
-            OptLevel::Development => {
-                roc_run_native_debug(executable, &argv, &envp, expectations, interns)
-            }
+            OptLevel::Development => roc_dev_native(arena, executable, argv, envp, expect_metadata),
             OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
                 roc_run_native_fast(executable, &argv, &envp);
             }
@@ -928,12 +920,9 @@ impl ExecutableFile {
 
             #[cfg(target_family = "windows")]
             ExecutableFile::OnDisk(_, path) => {
-                let _ = argv;
-                let _ = envp;
-                use memexec::memexec_exe;
-                let bytes = std::fs::read(path).unwrap();
-                memexec_exe(&bytes).unwrap();
-                std::process::exit(0);
+                let path_cstring = CString::new(path.to_str().unwrap()).unwrap();
+
+                libc::execve(path_cstring.as_ptr().cast(), argv.as_ptr(), envp.as_ptr())
             }
         }
     }
@@ -941,18 +930,80 @@ impl ExecutableFile {
 
 // with Expect
 #[cfg(target_family = "unix")]
-unsafe fn roc_run_native_debug(
-    _executable: ExecutableFile,
-    _argv: &[*const c_char],
-    _envp: &[*const c_char],
-    _expectations: VecMap<ModuleId, Expectations>,
-    _interns: Interns,
-) {
-    todo!()
+fn roc_dev_native(
+    arena: &Bump,
+    executable: ExecutableFile,
+    argv: bumpalo::collections::Vec<*const c_char>,
+    envp: bumpalo::collections::Vec<*const c_char>,
+    expect_metadata: ExpectMetadata,
+) -> ! {
+    use roc_repl_expect::run::ExpectMemory;
+    use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
+
+    let ExpectMetadata {
+        mut expectations,
+        interns,
+        layout_interner,
+    } = expect_metadata;
+
+    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
+
+    // let shm_name =
+    let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
+    let memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
+
+    let layout_interner = layout_interner.into_global();
+
+    let mut writer = std::io::stdout();
+
+    match unsafe { libc::fork() } {
+        0 => unsafe {
+            // we are the child
+
+            executable.execve(&argv, &envp);
+
+            // Display a human-friendly error message
+            println!("Error {:?}", std::io::Error::last_os_error());
+
+            std::process::exit(1);
+        },
+        -1 => {
+            // something failed
+
+            // Display a human-friendly error message
+            println!("Error {:?}", std::io::Error::last_os_error());
+
+            std::process::exit(1)
+        }
+        1.. => {
+            for sig in &mut signals {
+                match sig {
+                    SIGCHLD => break,
+                    SIGUSR1 => {
+                        // this is the signal we use for an expect failure. Let's see what the child told us
+
+                        roc_repl_expect::run::render_expects_in_memory(
+                            &mut writer,
+                            arena,
+                            &mut expectations,
+                            &interns,
+                            &layout_interner,
+                            &memory,
+                        )
+                        .unwrap();
+                    }
+                    _ => println!("received signal {}", sig),
+                }
+            }
+
+            std::process::exit(0)
+        }
+        _ => unreachable!(),
+    }
 }
 
 #[cfg(target_os = "linux")]
-fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<ExecutableFile> {
     // on linux, we use the `memfd_create` function to create an in-memory anonymous file.
     let flags = 0;
     let anonymous_file_name = "roc_file_descriptor\0";
@@ -974,7 +1025,7 @@ fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<Exec
 }
 
 #[cfg(all(target_family = "unix", not(target_os = "linux")))]
-fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<ExecutableFile> {
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -1000,7 +1051,7 @@ fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<Exec
 }
 
 #[cfg(all(target_family = "windows"))]
-fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<ExecutableFile> {
+fn roc_run_executable_file_path(binary_bytes: &[u8]) -> std::io::Result<ExecutableFile> {
     use std::fs::OpenOptions;
     use std::io::Write;
 
@@ -1027,12 +1078,11 @@ fn roc_run_executable_file_path(binary_bytes: &mut [u8]) -> std::io::Result<Exec
 /// Run on the native OS (not on wasm)
 #[cfg(not(target_family = "unix"))]
 fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
-    arena: Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
+    arena: &Bump, // This should be passed an owned value, not a reference, so we can usefully mem::forget it!
     opt_level: OptLevel,
-    _args: I,
-    binary_bytes: &mut [u8],
-    _expectations: VecMap<ModuleId, Expectations>,
-    _interns: Interns,
+    args: I,
+    binary_bytes: &[u8],
+    _expect_metadata: ExpectMetadata,
 ) -> io::Result<i32> {
     use bumpalo::collections::CollectIn;
 
@@ -1040,26 +1090,24 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
         let executable = roc_run_executable_file_path(binary_bytes)?;
 
         // TODO forward the arguments
-        // let (argv_cstrings, envp_cstrings) = make_argv_envp(&arena, &executable, args);
-        let argv_cstrings = bumpalo::vec![ in &arena; CString::default()];
-        let envp_cstrings = bumpalo::vec![ in &arena; CString::default()];
+        let (argv_cstrings, envp_cstrings) = make_argv_envp(&arena, &executable, args);
 
         let argv: bumpalo::collections::Vec<*const c_char> = argv_cstrings
             .iter()
             .map(|s| s.as_ptr())
             .chain([std::ptr::null()])
-            .collect_in(&arena);
+            .collect_in(arena);
 
         let envp: bumpalo::collections::Vec<*const c_char> = envp_cstrings
             .iter()
             .map(|s| s.as_ptr())
             .chain([std::ptr::null()])
-            .collect_in(&arena);
+            .collect_in(arena);
 
         match opt_level {
             OptLevel::Development => {
                 // roc_run_native_debug(executable, &argv, &envp, expectations, interns)
-                todo!()
+                internal_error!("running `expect`s does not currently work on windows")
             }
             OptLevel::Normal | OptLevel::Size | OptLevel::Optimize => {
                 roc_run_native_fast(executable, &argv, &envp);
@@ -1106,12 +1154,17 @@ fn run_with_wasmer<I: Iterator<Item = S>, S: AsRef<[u8]>>(_wasm_path: &std::path
     println!("Running wasm files is not supported on this target.");
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, EnumIter, IntoStaticStr, PartialEq, Eq)]
 pub enum Target {
+    #[strum(serialize = "system")]
     System,
+    #[strum(serialize = "linux32")]
     Linux32,
+    #[strum(serialize = "linux64")]
     Linux64,
+    #[strum(serialize = "windows64")]
     Windows64,
+    #[strum(serialize = "wasm32")]
     Wasm32,
 }
 
@@ -1122,27 +1175,6 @@ impl Default for Target {
 }
 
 impl Target {
-    const fn as_str(&self) -> &'static str {
-        use Target::*;
-
-        match self {
-            System => "system",
-            Linux32 => "linux32",
-            Linux64 => "linux64",
-            Windows64 => "windows64",
-            Wasm32 => "wasm32",
-        }
-    }
-
-    /// NOTE keep up to date!
-    const OPTIONS: &'static [&'static str] = &[
-        Target::System.as_str(),
-        Target::Linux32.as_str(),
-        Target::Linux64.as_str(),
-        Target::Windows64.as_str(),
-        Target::Wasm32.as_str(),
-    ];
-
     pub fn to_triple(self) -> Triple {
         use Target::*;
 
@@ -1172,7 +1204,7 @@ impl Target {
             Wasm32 => Triple {
                 architecture: Architecture::Wasm32,
                 vendor: Vendor::Unknown,
-                operating_system: OperatingSystem::Unknown,
+                operating_system: OperatingSystem::Wasi,
                 environment: Environment::Unknown,
                 binary_format: BinaryFormat::Wasm,
             },
@@ -1188,7 +1220,7 @@ impl From<&Target> for Triple {
 
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        write!(f, "{}", Into::<&'static str>::into(self))
     }
 }
 

@@ -44,7 +44,9 @@ pub enum Ident<'a> {
         parts: &'a [&'a str],
     },
     /// .foo { foo: 42 }
-    AccessorFunction(&'a str),
+    RecordAccessorFunction(&'a str),
+    /// .1 (1, 2, 3)
+    TupleAccessorFunction(&'a str),
     /// .Foo or foo. or something like foo.Bar
     Malformed(&'a str, BadIdent),
 }
@@ -69,7 +71,8 @@ impl<'a> Ident<'a> {
 
                 len - 1
             }
-            AccessorFunction(string) => string.len(),
+            RecordAccessorFunction(string) => string.len(),
+            TupleAccessorFunction(string) => string.len(),
             Malformed(string, _) => string.len(),
         }
     }
@@ -84,7 +87,7 @@ impl<'a> Ident<'a> {
 /// * A record field, e.g. "email" in `.email` or in `email:`
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
 pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>| match chomp_lowercase_part(state.bytes()) {
+    move |_, state: State<'a>, _min_indent: u32| match chomp_lowercase_part(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
@@ -98,7 +101,9 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 }
 
 pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |arena, state: State<'a>| uppercase_ident().parse(arena, state)
+    move |arena, state: State<'a>, min_indent: u32| {
+        uppercase_ident().parse(arena, state, min_indent)
+    }
 }
 
 /// This could be:
@@ -107,7 +112,7 @@ pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
 /// * A type name
 /// * A tag
 pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
-    move |_, state: State<'a>| match chomp_uppercase_part(state.bytes()) {
+    move |_, state: State<'a>, _min_indent: u32| match chomp_uppercase_part(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             let width = ident.len();
@@ -122,7 +127,7 @@ pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
 /// * A type name
 /// * A tag
 pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>| match chomp_uppercase_part(state.bytes()) {
+    move |_, state: State<'a>, _min_indent: u32| match chomp_uppercase_part(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             let width = ident.len();
@@ -132,7 +137,7 @@ pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 }
 
 pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>| match chomp_part(|c| c.is_alphabetic(), state.bytes()) {
+    move |_, state: State<'a>, _min_indent: u32| match chomp_anycase_part(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok(ident) => {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
@@ -151,7 +156,11 @@ macro_rules! advance_state {
     };
 }
 
-pub fn parse_ident<'a>(arena: &'a Bump, state: State<'a>) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
+pub fn parse_ident<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    _min_indent: u32,
+) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
     let initial = state.clone();
 
     match parse_ident_help(arena, state) {
@@ -225,18 +234,35 @@ pub enum BadIdent {
     BadOpaqueRef(Position),
 }
 
+fn is_alnum(ch: char) -> bool {
+    ch.is_alphabetic() || ch.is_ascii_digit()
+}
+
 fn chomp_lowercase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(|c: char| c.is_lowercase(), buffer)
+    chomp_part(char::is_lowercase, is_alnum, buffer)
 }
 
 fn chomp_uppercase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(|c: char| c.is_uppercase(), buffer)
+    chomp_part(char::is_uppercase, is_alnum, buffer)
+}
+
+fn chomp_anycase_part(buffer: &[u8]) -> Result<&str, Progress> {
+    chomp_part(char::is_alphabetic, is_alnum, buffer)
+}
+
+fn chomp_integer_part(buffer: &[u8]) -> Result<&str, Progress> {
+    chomp_part(
+        |ch| char::is_ascii_digit(&ch),
+        |ch| char::is_ascii_digit(&ch),
+        buffer,
+    )
 }
 
 #[inline(always)]
-fn chomp_part<F>(leading_is_good: F, buffer: &[u8]) -> Result<&str, Progress>
+fn chomp_part<F, G>(leading_is_good: F, rest_is_good: G, buffer: &[u8]) -> Result<&str, Progress>
 where
     F: Fn(char) -> bool,
+    G: Fn(char) -> bool,
 {
     use encode_unicode::CharExt;
 
@@ -251,7 +277,7 @@ where
     }
 
     while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        if ch.is_alphabetic() || ch.is_ascii_digit() {
+        if rest_is_good(ch) {
             chomped += width;
         } else {
             // we're done
@@ -268,8 +294,13 @@ where
     }
 }
 
-/// a `.foo` accessor function
-fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
+pub enum Accessor<'a> {
+    RecordField(&'a str),
+    TupleIndex(&'a str),
+}
+
+/// a `.foo` or `.1` accessor function
+fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
     // assumes the leading `.` has been chomped already
     use encode_unicode::CharExt;
 
@@ -280,12 +311,25 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
             if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
                 Err(BadIdent::WeirdAccessor(pos))
             } else {
-                Ok(name)
+                Ok(Accessor::RecordField(name))
             }
         }
         Err(_) => {
-            // we've already made progress with the initial `.`
-            Err(BadIdent::StrayDot(pos.bump_column(1)))
+            match chomp_integer_part(buffer) {
+                Ok(name) => {
+                    let chomped = name.len();
+
+                    if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+                        Err(BadIdent::WeirdAccessor(pos))
+                    } else {
+                        Ok(Accessor::TupleIndex(name))
+                    }
+                }
+                Err(_) => {
+                    // we've already made progress with the initial `.`
+                    Err(BadIdent::StrayDot(pos.bump_column(1)))
+                }
+            }
         }
     }
 }
@@ -293,7 +337,7 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
 /// a `@Token` opaque
 fn chomp_opaque_ref(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     // assumes the leading `@` has NOT been chomped already
-    debug_assert_eq!(buffer.get(0), Some(&b'@'));
+    debug_assert_eq!(buffer.first(), Some(&b'@'));
     use encode_unicode::CharExt;
 
     let bad_ident = BadIdent::BadOpaqueRef;
@@ -326,10 +370,13 @@ fn chomp_identifier_chain<'a>(
     match char::from_utf8_slice_start(&buffer[chomped..]) {
         Ok((ch, width)) => match ch {
             '.' => match chomp_accessor(&buffer[1..], pos) {
-                Ok(accessor) => {
+                Ok(Accessor::RecordField(accessor)) => {
                     let bytes_parsed = 1 + accessor.len();
-
-                    return Ok((bytes_parsed as u32, Ident::AccessorFunction(accessor)));
+                    return Ok((bytes_parsed as u32, Ident::RecordAccessorFunction(accessor)));
+                }
+                Ok(Accessor::TupleIndex(accessor)) => {
+                    let bytes_parsed = 1 + accessor.len();
+                    return Ok((bytes_parsed as u32, Ident::TupleAccessorFunction(accessor)));
                 }
                 Err(fail) => return Err((1, fail)),
             },
@@ -456,7 +503,7 @@ fn chomp_module_chain(buffer: &[u8]) -> Result<u32, Progress> {
 }
 
 pub fn concrete_type<'a>() -> impl Parser<'a, (&'a str, &'a str), ()> {
-    move |_, state: State<'a>| match chomp_concrete_type(state.bytes()) {
+    move |_, state: State<'a>, _min_indent: u32| match chomp_concrete_type(state.bytes()) {
         Err(progress) => Err((progress, (), state)),
         Ok((module_name, type_name, width)) => {
             Ok((MadeProgress, (module_name, type_name), state.advance(width)))

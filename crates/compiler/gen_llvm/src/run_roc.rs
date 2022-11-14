@@ -120,7 +120,11 @@ macro_rules! run_jit_function {
 
                 $transform(success)
             }
-            Err(error_msg) => panic!("Roc failed with message: {}", error_msg),
+            Err(error_msg) => {
+                eprintln!("This Roc code crashed with: \"{error_msg}\"");
+
+                Expr::MalformedClosure
+            }
         }
     }};
 }
@@ -162,7 +166,7 @@ macro_rules! run_jit_function_dynamic_type {
                 // first field is a char pointer (to the error message)
                 // read value, and transmute to a pointer
                 let ptr_as_int = *(result as *const u64).offset(1);
-                let ptr = std::mem::transmute::<u64, *mut c_char>(ptr_as_int);
+                let ptr = ptr_as_int as *mut c_char;
 
                 // make CString (null-terminated)
                 let raw = CString::from_raw(ptr);

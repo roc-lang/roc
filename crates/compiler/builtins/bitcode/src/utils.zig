@@ -22,6 +22,29 @@ extern fn roc_panic(c_ptr: *const anyopaque, tag_id: u32) callconv(.C) void;
 // should work just like libc memcpy (we can't assume libc is present)
 extern fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 
+extern fn kill(pid: c_int, sig: c_int) c_int;
+extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
+extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
+extern fn getppid() c_int;
+
+fn testing_roc_getppid() callconv(.C) c_int {
+    return getppid();
+}
+
+fn roc_getppid_windows_stub() callconv(.C) c_int {
+    return 0;
+}
+
+fn testing_roc_send_signal(pid: c_int, sig: c_int) callconv(.C) c_int {
+    return kill(pid, sig);
+}
+fn testing_roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) callconv(.C) c_int {
+    return shm_open(name, oflag, mode);
+}
+fn testing_roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) callconv(.C) *anyopaque {
+    return mmap(addr, length, prot, flags, fd, offset);
+}
+
 comptime {
     const builtin = @import("builtin");
     // During tests, use the testing allocators to satisfy these functions.
@@ -31,6 +54,13 @@ comptime {
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
         @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
         @export(testing_roc_memcpy, .{ .name = "roc_memcpy", .linkage = .Strong });
+
+        if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
+            @export(testing_roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
+            @export(testing_roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
+            @export(testing_roc_send_signal, .{ .name = "roc_send_signal", .linkage = .Strong });
+            @export(testing_roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
+        }
     }
 }
 
@@ -213,6 +243,53 @@ inline fn decref_ptr_to_refcount(
     }
 }
 
+// We follow roughly the [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md) when it comes to growing a RocList.
+// Here is [their growth strategy](https://github.com/facebook/folly/blob/3e0525988fd444201b19b76b390a5927c15cb697/folly/FBVector.h#L1128) for push_back:
+//
+// (1) initial size
+//     Instead of growing to size 1 from empty, fbvector allocates at least
+//     64 bytes. You may still use reserve to reserve a lesser amount of
+//     memory.
+// (2) 1.5x
+//     For medium-sized vectors, the growth strategy is 1.5x. See the docs
+//     for details.
+//     This does not apply to very small or very large fbvectors. This is a
+//     heuristic.
+//
+// In our case, we exposed allocate and reallocate, which will use a smart growth stategy.
+// We also expose allocateExact and reallocateExact for case where a specific number of elements is requested.
+
+// calculateCapacity should only be called in cases the list will be growing.
+// requested_length should always be greater than old_capacity.
+pub inline fn calculateCapacity(
+    old_capacity: usize,
+    requested_length: usize,
+    element_width: usize,
+) usize {
+    // TODO: there are two adjustments that would likely lead to better results for Roc.
+    // 1. Deal with the fact we allocate an extra u64 for refcount.
+    //    This may lead to allocating page size + 8 bytes.
+    //    That could mean allocating an entire page for 8 bytes of data which isn't great.
+    // 2. Deal with the fact that we can request more than 1 element at a time.
+    //    fbvector assumes just appending 1 element at a time when using this algorithm.
+    //    As such, they will generally grow in a way that should better match certain memory multiple.
+    //    This is also the normal case for roc, but we could also grow by a much larger amount.
+    //    We may want to round to multiples of 2 or something similar.
+    var new_capacity: usize = 0;
+    if (element_width == 0) {
+        return requested_length;
+    } else if (old_capacity == 0) {
+        new_capacity = 64 / element_width;
+    } else if (old_capacity < 4096 / element_width) {
+        new_capacity = old_capacity * 2;
+    } else if (old_capacity > 4096 * 32 / element_width) {
+        new_capacity = old_capacity * 2;
+    } else {
+        new_capacity = (old_capacity * 3 + 1) / 2;
+    }
+    return @maximum(new_capacity, requested_length);
+}
+
 pub fn allocateWithRefcountC(
     data_bytes: usize,
     element_alignment: u32,
@@ -254,7 +331,7 @@ pub fn unsafeReallocate(
     const old_width = align_width + old_length * element_width;
     const new_width = align_width + new_length * element_width;
 
-    if (old_width == new_width) {
+    if (old_width >= new_width) {
         return source_ptr;
     }
 
@@ -266,25 +343,6 @@ pub fn unsafeReallocate(
     const new_source = @ptrCast([*]u8, new_allocation) + align_width;
     return new_source;
 }
-
-pub const RocResult = extern struct {
-    bytes: ?[*]u8,
-
-    pub fn isOk(self: RocResult) bool {
-        // assumptions
-        //
-        // - the tag is the first field
-        // - the tag is usize bytes wide
-        // - Ok has tag_id 1, because Err < Ok
-        const usizes: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.bytes));
-
-        return usizes[0] == 1;
-    }
-
-    pub fn isErr(self: RocResult) bool {
-        return !self.isOk();
-    }
-};
 
 pub const Ordering = enum(u8) {
     EQ = 0,

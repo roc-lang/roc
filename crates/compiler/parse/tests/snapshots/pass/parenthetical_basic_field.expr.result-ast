@@ -1,4 +1,4 @@
-Access(
+RecordAccess(
     ParensAround(
         Var {
             module_name: "",

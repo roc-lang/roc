@@ -10,9 +10,10 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
-    union_sorted_tags_help, Builtin, Layout, LayoutCache, UnionLayout, UnionVariant, WrappedVariant,
+    self, union_sorted_tags_pub, Builtin, Layout, LayoutCache, LayoutInterner, UnionLayout,
+    UnionVariant, WrappedVariant,
 };
-use roc_parse::ast::{AssignedField, Collection, Expr, StrLiteral};
+use roc_parse::ast::{AssignedField, Collection, Expr, Pattern, StrLiteral};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
@@ -25,11 +26,7 @@ struct Env<'a, 'env> {
     subs: &'env Subs,
     target_info: TargetInfo,
     interns: &'a Interns,
-}
-
-#[derive(Debug)]
-pub enum ToAstProblem {
-    FunctionLayout,
+    layout_cache: LayoutCache<'a>,
 }
 
 /// JIT execute the given main function, and then wrap its results in an Expr
@@ -46,16 +43,18 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     app: &mut A,
     main_fn_name: &str,
     layout: ProcLayout<'a>,
-    content: &Content,
+    var: Variable,
     subs: &Subs,
     interns: &'a Interns,
+    layout_interner: LayoutInterner<'a>,
     target_info: TargetInfo,
-) -> Result<Expr<'a>, ToAstProblem> {
-    let env = Env {
+) -> Expr<'a> {
+    let mut env = Env {
         arena,
         subs,
         target_info,
         interns,
+        layout_cache: LayoutCache::new(layout_interner, target_info),
     };
 
     match layout {
@@ -64,10 +63,24 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
             result,
             captures_niche: _,
         } => {
-            // this is a thunk
-            jit_to_ast_help(&env, app, main_fn_name, &result, content)
+            // This is a thunk, which cannot be defined in userspace, so we know
+            // it's `main` and can be executed.
+            jit_to_ast_help(&mut env, app, main_fn_name, &result, var)
         }
-        _ => Err(ToAstProblem::FunctionLayout),
+        ProcLayout { arguments, .. } => {
+            // This is a user-supplied function; create a fake Expr for it.
+            let mut arg_patterns =
+                bumpalo::collections::Vec::with_capacity_in(arguments.len(), arena);
+
+            // Put in an underscore for each of the args, just to get the arity right.
+            for _ in 0..arguments.len() {
+                arg_patterns.push(Loc::at_zero(Pattern::Underscore("_")));
+            }
+
+            let body_expr = Loc::at_zero(Expr::Record(Collection::empty()));
+
+            Expr::Closure(arg_patterns.into_bump_slice(), arena.alloc(body_expr))
+        }
     }
 }
 
@@ -76,6 +89,45 @@ enum NewtypeKind {
     Tag(TagName),
     RecordField(String),
     Opaque(Symbol),
+}
+
+fn get_newtype_tag_and_var(
+    env: &mut Env,
+    var: Variable,
+    tags: UnionTags,
+) -> Option<(TagName, Variable)> {
+    let union_variant = {
+        let mut layout_env = roc_mono::layout::Env::from_components(
+            &mut env.layout_cache,
+            env.subs,
+            env.arena,
+            env.target_info,
+        );
+        roc_mono::layout::union_sorted_tags(&mut layout_env, var).unwrap()
+    };
+
+    let tag_name = match union_variant {
+        UnionVariant::Newtype { tag_name, .. }
+        | UnionVariant::NewtypeByVoid {
+            data_tag_name: tag_name,
+            ..
+        } => tag_name.expect_tag(),
+        _ => return None,
+    };
+
+    let vars = tags
+        .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
+        .find(|(tag, _)| **tag == tag_name)
+        .unwrap()
+        .1;
+
+    match vars {
+        [var] => Some((tag_name, *var)),
+        _ => {
+            // Multiple variables; we should not display this as a newtype.
+            None
+        }
+    }
 }
 
 /// Unrolls types that are newtypes. These include
@@ -93,24 +145,23 @@ enum NewtypeKind {
 ///
 /// Returns (new type containers, optional alias content, real content).
 fn unroll_newtypes_and_aliases<'a, 'env>(
-    env: &Env<'a, 'env>,
-
-    mut content: &'env Content,
-) -> (Vec<'a, NewtypeKind>, Option<&'env Content>, &'env Content) {
+    env: &mut Env<'a, 'env>,
+    var: Variable,
+) -> (Vec<'a, NewtypeKind>, Option<&'env Content>, Variable) {
+    let mut var = var;
     let mut newtype_containers = Vec::with_capacity_in(1, env.arena);
     let mut alias_content = None;
     loop {
+        let content = env.subs.get_content_without_compacting(var);
         match content {
-            Content::Structure(FlatType::TagUnion(tags, _))
-                if tags.is_newtype_wrapper(env.subs) =>
-            {
-                let (tag_name, vars): (&TagName, &[Variable]) = tags
-                    .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
-                    .next()
-                    .unwrap();
-                newtype_containers.push(NewtypeKind::Tag(tag_name.clone()));
-                let var = vars[0];
-                content = env.subs.get_content_without_compacting(var);
+            Content::Structure(FlatType::TagUnion(tags, _)) => {
+                match get_newtype_tag_and_var(env, var, *tags) {
+                    Some((tag_name, inner_var)) => {
+                        newtype_containers.push(NewtypeKind::Tag(tag_name));
+                        var = inner_var;
+                    }
+                    None => return (newtype_containers, alias_content, var),
+                }
             }
             Content::Structure(FlatType::Record(fields, _)) if fields.len() == 1 => {
                 let (label, field) = fields
@@ -118,9 +169,12 @@ fn unroll_newtypes_and_aliases<'a, 'env>(
                     .next()
                     .unwrap();
                 newtype_containers.push(NewtypeKind::RecordField(label.to_string()));
-                content = env.subs.get_content_without_compacting(field.into_inner());
+                var = field.into_inner();
             }
             Content::Alias(name, _, real_var, kind) => {
+                if *name == Symbol::BOOL_BOOL {
+                    return (newtype_containers, alias_content, var);
+                }
                 // We need to pass through aliases too, because their underlying types may have
                 // unrolled newtypes. For example,
                 //   T : { a : Str }
@@ -135,9 +189,9 @@ fn unroll_newtypes_and_aliases<'a, 'env>(
                     newtype_containers.push(NewtypeKind::Opaque(*name));
                 }
                 alias_content = Some(content);
-                content = env.subs.get_content_without_compacting(*real_var);
+                var = *real_var;
             }
-            _ => return (newtype_containers, alias_content, content),
+            _ => return (newtype_containers, alias_content, var),
         }
     }
 }
@@ -185,7 +239,7 @@ fn unroll_recursion_var<'env>(env: &Env<'_, 'env>, mut content: &'env Content) -
 }
 
 fn get_tags_vars_and_variant<'a>(
-    env: &Env<'a, '_>,
+    env: &mut Env<'a, '_>,
     tags: &UnionTags,
     opt_rec_var: Option<Variable>,
 ) -> (MutMap<TagName, std::vec::Vec<Variable>>, UnionVariant<'a>) {
@@ -196,14 +250,21 @@ fn get_tags_vars_and_variant<'a>(
 
     let vars_of_tag: MutMap<_, _> = tags_vec.iter().cloned().collect();
 
-    let union_variant =
-        union_sorted_tags_help(env.arena, tags_vec, opt_rec_var, env.subs, env.target_info);
+    let union_variant = {
+        let mut layout_env = layout::Env::from_components(
+            &mut env.layout_cache,
+            env.subs,
+            env.arena,
+            env.target_info,
+        );
+        union_sorted_tags_pub(&mut layout_env, tags_vec, opt_rec_var)
+    };
 
     (vars_of_tag, union_variant)
 }
 
 fn expr_of_tag<'a, 'env, M: ReplAppMemory>(
-    env: &Env<'a, 'env>,
+    env: &mut Env<'a, 'env>,
     mem: &'a M,
     data_addr: usize,
     tag_name: &TagName,
@@ -229,11 +290,11 @@ fn expr_of_tag<'a, 'env, M: ReplAppMemory>(
 fn tag_id_from_data<'a, 'env, M: ReplAppMemory>(
     env: &Env<'a, 'env>,
     mem: &M,
-    union_layout: UnionLayout,
+    union_layout: UnionLayout<'a>,
     data_addr: usize,
 ) -> i64 {
     let offset = union_layout
-        .data_size_without_tag_id(env.target_info)
+        .data_size_without_tag_id(&env.layout_cache.interner, env.target_info)
         .unwrap();
     let tag_id_addr = data_addr + offset as usize;
 
@@ -253,7 +314,7 @@ fn tag_id_from_data<'a, 'env, M: ReplAppMemory>(
 fn tag_id_from_recursive_ptr<'a, M: ReplAppMemory>(
     env: &Env<'a, '_>,
     mem: &M,
-    union_layout: UnionLayout,
+    union_layout: UnionLayout<'a>,
     rec_addr: usize,
 ) -> (i64, usize) {
     let tag_in_ptr = union_layout.stores_tag_id_in_pointer(env.target_info);
@@ -274,14 +335,13 @@ const OPAQUE_FUNCTION: Expr = Expr::Var {
 };
 
 fn jit_to_ast_help<'a, A: ReplApp<'a>>(
-    env: &Env<'a, '_>,
+    env: &mut Env<'a, '_>,
     app: &mut A,
     main_fn_name: &str,
     layout: &Layout<'a>,
-    content: &Content,
-) -> Result<Expr<'a>, ToAstProblem> {
-    let (newtype_containers, alias_content, raw_content) =
-        unroll_newtypes_and_aliases(env, content);
+    var: Variable,
+) -> Expr<'a> {
+    let (newtype_containers, alias_content, raw_var) = unroll_newtypes_and_aliases(env, var);
 
     macro_rules! num_helper {
         ($ty:ty) => {
@@ -291,21 +351,22 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
         };
     }
 
-    let result = match layout {
-        Layout::Builtin(Builtin::Bool) => Ok(app
-            .call_function(main_fn_name, |mem: &A::Memory, num: bool| {
-                bool_to_ast(env, mem, num, raw_content)
-            })),
+    let expr = match layout {
+        Layout::Builtin(Builtin::Bool) => {
+            app.call_function(main_fn_name, |_mem: &A::Memory, num: bool| {
+                bool_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
+            })
+        }
         Layout::Builtin(Builtin::Int(int_width)) => {
             use Content::*;
             use IntWidth::*;
 
-            let result = match (alias_content, int_width) {
+            match (alias_content, int_width) {
                 (Some(Alias(Symbol::NUM_UNSIGNED8, ..)), U8) => num_helper!(u8),
                 (_, U8) => {
                     // This is not a number, it's a tag union or something else
-                    app.call_function(main_fn_name, |mem: &A::Memory, num: u8| {
-                        byte_to_ast(env, mem, num, raw_content)
+                    app.call_function(main_fn_name, |_mem: &A::Memory, num: u8| {
+                        byte_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
                     })
                 }
                 // The rest are numbers... for now
@@ -318,22 +379,18 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 (_, I32) => num_helper!(i32),
                 (_, I64) => num_helper!(i64),
                 (_, I128) => num_helper!(i128),
-            };
-
-            Ok(result)
+            }
         }
         Layout::Builtin(Builtin::Float(float_width)) => {
             use FloatWidth::*;
 
-            let result = match float_width {
+            match float_width {
                 F32 => num_helper!(f32),
                 F64 => num_helper!(f64),
                 F128 => todo!("F128 not implemented"),
-            };
-
-            Ok(result)
+            }
         }
-        Layout::Builtin(Builtin::Decimal) => Ok(num_helper!(RocDec)),
+        Layout::Builtin(Builtin::Decimal) => num_helper!(RocDec),
         Layout::Builtin(Builtin::Str) => {
             let body = |mem: &A::Memory, addr| {
                 let string = mem.deref_str(addr);
@@ -341,54 +398,50 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 Expr::Str(StrLiteral::PlainLine(arena_str))
             };
 
-            Ok(app.call_function_returns_roc_str(env.target_info, main_fn_name, body))
+            app.call_function_returns_roc_str(env.target_info, main_fn_name, body)
         }
-        Layout::Builtin(Builtin::List(elem_layout)) => {
-            //
-            Ok(app.call_function_returns_roc_list(
-                main_fn_name,
-                |mem: &A::Memory, (addr, len, _cap)| {
-                    list_to_ast(env, mem, addr, len, elem_layout, raw_content)
-                },
-            ))
-        }
+        Layout::Builtin(Builtin::List(elem_layout)) => app.call_function_returns_roc_list(
+            main_fn_name,
+            |mem: &A::Memory, (addr, len, _cap)| {
+                list_to_ast(
+                    env,
+                    mem,
+                    addr,
+                    len,
+                    elem_layout,
+                    env.subs.get_content_without_compacting(raw_var),
+                )
+            },
+        ),
         Layout::Struct { field_layouts, .. } => {
-            let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match raw_content {
+            let fields = [Layout::u64(), *layout];
+            let layout = Layout::struct_no_name_order(env.arena.alloc(fields));
+
+            let result_stack_size = layout.stack_size(&env.layout_cache.interner, env.target_info);
+
+            let struct_addr_to_ast = |mem: &'a A::Memory, addr: usize| match env
+                .subs
+                .get_content_without_compacting(raw_var)
+            {
                 Content::Structure(FlatType::Record(fields, _)) => {
-                    Ok(struct_to_ast(env, mem, addr, *fields))
+                    struct_to_ast(env, mem, addr, *fields)
                 }
                 Content::Structure(FlatType::EmptyRecord) => {
-                    Ok(struct_to_ast(env, mem, addr, RecordFields::empty()))
+                    struct_to_ast(env, mem, addr, RecordFields::empty())
                 }
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
-                    debug_assert_eq!(tags.len(), 1);
-
                     let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
 
-                    Ok(single_tag_union_to_ast(
-                        env,
-                        mem,
-                        addr,
-                        field_layouts,
-                        tag_name,
-                        payload_vars,
-                    ))
+                    single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, payload_vars)
                 }
-                Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
-                    let tag_name = &env.subs[*tag_name];
+                Content::Structure(FlatType::FunctionOrTagUnion(tag_names, _, _)) => {
+                    let tag_name = &env.subs.get_subs_slice(*tag_names)[0];
 
-                    Ok(single_tag_union_to_ast(
-                        env,
-                        mem,
-                        addr,
-                        field_layouts,
-                        tag_name,
-                        &[],
-                    ))
+                    single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, &[])
                 }
                 Content::Structure(FlatType::Func(_, _, _)) => {
                     // a function with a struct as the closure environment
-                    Ok(OPAQUE_FUNCTION)
+                    OPAQUE_FUNCTION
                 }
                 other => {
                     unreachable!(
@@ -398,11 +451,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 }
             };
 
-            let fields = [Layout::u64(), *layout];
-            let layout = Layout::struct_no_name_order(&fields);
-
-            let result_stack_size = layout.stack_size(env.target_info);
-
             app.call_function_dynamic_size(
                 main_fn_name,
                 result_stack_size as usize,
@@ -410,8 +458,9 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             )
         }
         Layout::Union(UnionLayout::NonRecursive(_)) => {
-            let size = layout.stack_size(env.target_info);
-            Ok(app.call_function_dynamic_size(
+            let size = layout.stack_size(&env.layout_cache.interner, env.target_info);
+
+            app.call_function_dynamic_size(
                 main_fn_name,
                 size as usize,
                 |mem: &'a A::Memory, addr: usize| {
@@ -421,17 +470,18 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                         addr,
                         layout,
                         WhenRecursive::Unreachable,
-                        raw_content,
+                        env.subs.get_root_key_without_compacting(raw_var),
                     )
                 },
-            ))
+            )
         }
         Layout::Union(UnionLayout::Recursive(_))
         | Layout::Union(UnionLayout::NonNullableUnwrapped(_))
         | Layout::Union(UnionLayout::NullableUnwrapped { .. })
         | Layout::Union(UnionLayout::NullableWrapped { .. }) => {
-            let size = layout.stack_size(env.target_info);
-            Ok(app.call_function_dynamic_size(
+            let size = layout.stack_size(&env.layout_cache.interner, env.target_info);
+
+            app.call_function_dynamic_size(
                 main_fn_name,
                 size as usize,
                 |mem: &'a A::Memory, addr: usize| {
@@ -441,34 +491,32 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                         addr,
                         layout,
                         WhenRecursive::Loop(*layout),
-                        raw_content,
+                        env.subs.get_root_key_without_compacting(raw_var),
                     )
                 },
-            ))
+            )
         }
         Layout::RecursivePointer => {
             unreachable!("RecursivePointers can only be inside structures")
         }
-        Layout::LambdaSet(_) => Ok(OPAQUE_FUNCTION),
+        Layout::LambdaSet(_) => OPAQUE_FUNCTION,
         Layout::Boxed(_) => {
-            let size = layout.stack_size(env.target_info);
-            Ok(app.call_function_dynamic_size(
-                main_fn_name,
-                size as usize,
-                |mem: &A::Memory, addr| {
-                    addr_to_ast(
-                        env,
-                        mem,
-                        addr,
-                        layout,
-                        WhenRecursive::Unreachable,
-                        raw_content,
-                    )
-                },
-            ))
+            let size = layout.stack_size(&env.layout_cache.interner, env.target_info);
+
+            app.call_function_dynamic_size(main_fn_name, size as usize, |mem: &A::Memory, addr| {
+                addr_to_ast(
+                    env,
+                    mem,
+                    addr,
+                    layout,
+                    WhenRecursive::Unreachable,
+                    env.subs.get_root_key_without_compacting(raw_var),
+                )
+            })
         }
     };
-    result.map(|e| apply_newtypes(env, newtype_containers.into_bump_slice(), e))
+
+    apply_newtypes(env, newtype_containers.into_bump_slice(), expr)
 }
 
 fn tag_name_to_expr<'a>(env: &Env<'a, '_>, tag_name: &TagName) -> Expr<'a> {
@@ -484,12 +532,12 @@ enum WhenRecursive<'a> {
 }
 
 fn addr_to_ast<'a, M: ReplAppMemory>(
-    env: &Env<'a, '_>,
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     addr: usize,
     layout: &Layout<'a>,
     when_recursive: WhenRecursive<'a>,
-    content: &Content,
+    var: Variable,
 ) -> Expr<'a> {
     macro_rules! helper {
         ($method: ident, $ty: ty) => {{
@@ -499,8 +547,8 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         }};
     }
 
-    let (newtype_containers, _alias_content, raw_content) =
-        unroll_newtypes_and_aliases(env, content);
+    let (newtype_containers, _alias_content, raw_var) = unroll_newtypes_and_aliases(env, var);
+    let raw_content = env.subs.get_content_without_compacting(raw_var);
 
     let expr = match (raw_content, layout) {
         (Content::Structure(FlatType::Func(_, _, _)), _) | (_, Layout::LambdaSet(_)) => {
@@ -511,7 +559,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             // num is always false at the moment.
             let num: bool = mem.deref_bool(addr);
 
-            bool_to_ast(env, mem, num, raw_content)
+            bool_to_ast(env, num, raw_content)
         }
         (_, Layout::Builtin(Builtin::Int(int_width))) => {
             use IntWidth::*;
@@ -560,8 +608,8 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 let (tag_name, payload_vars) = unpack_single_element_tag_union(env.subs, *tags);
                 single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, payload_vars)
             }
-            Content::Structure(FlatType::FunctionOrTagUnion(tag_name, _, _)) => {
-                let tag_name = &env.subs[*tag_name];
+            Content::Structure(FlatType::FunctionOrTagUnion(tag_names, _, _)) => {
+                let tag_name = &env.subs.get_subs_slice(*tag_names)[0];
                 single_tag_union_to_ast(env, mem, addr, field_layouts, tag_name, &[])
             }
             Content::Structure(FlatType::EmptyRecord) => {
@@ -582,8 +630,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 },
                 WhenRecursive::Loop(union_layout),
             ) => {
-                let content = env.subs.get_content_without_compacting(*structure);
-                addr_to_ast(env, mem, addr, &union_layout, when_recursive, content)
+                addr_to_ast(env, mem, addr, &union_layout, when_recursive, *structure)
             }
 
             (
@@ -595,13 +642,12 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             ) => {
                 // It's possible to hit a recursive pointer before the full type layout; just
                 // figure out the actual recursive structure layout at this point.
-                let content = env.subs.get_content_without_compacting(*structure);
-                let union_layout = LayoutCache::new(env.target_info)
+                let union_layout = env.layout_cache
                     .from_var(env.arena, *structure, env.subs)
                     .expect("no layout for structure");
                 debug_assert!(matches!(union_layout, Layout::Union(..)));
                 let when_recursive = WhenRecursive::Loop(union_layout);
-                addr_to_ast(env, mem, addr, &union_layout, when_recursive, content)
+                addr_to_ast(env, mem, addr, &union_layout, when_recursive, *structure)
             }
             other => unreachable!("Something had a RecursivePointer layout, but instead of being a RecursionVar and having a known recursive layout, I found {:?}", other),
         },
@@ -645,7 +691,15 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
                     (rec_var, tags)
                 }
-                _ => unreachable!("any other content would have a different layout"),
+                Content::RecursionVar { structure, ..} => {
+                    match env.subs.get_content_without_compacting(*structure) {
+                        Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, _)) => {
+                            (rec_var, tags)
+                        }
+                        content => unreachable!("any other content should have a different layout, but we saw {:#?}", roc_types::subs::SubsFmtContent(content, env.subs)),
+                    }
+                }
+                _ => unreachable!("any other content should have a different layout, but we saw {:#?}", roc_types::subs::SubsFmtContent(raw_content, env.subs)),
             };
             debug_assert_eq!(union_layouts.len(), tags.len());
 
@@ -793,7 +847,6 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
 
             let inner_var_index = args.into_iter().next().unwrap();
             let inner_var = env.subs[inner_var_index];
-            let inner_content = env.subs.get_content_without_compacting(inner_var);
 
             let addr_of_inner = mem.deref_usize(addr);
             let inner_expr = addr_to_ast(
@@ -802,7 +855,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 addr_of_inner,
                 inner_layout,
                 WhenRecursive::Unreachable,
-                inner_content,
+                inner_var,
             );
 
             let box_box = env.arena.alloc(Loc::at_zero(Expr::Var {
@@ -828,21 +881,19 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
 }
 
 fn list_to_ast<'a, M: ReplAppMemory>(
-    env: &Env<'a, '_>,
+    env: &mut Env<'a, '_>,
     mem: &'a M,
     addr: usize,
     len: usize,
     elem_layout: &Layout<'a>,
     content: &Content,
 ) -> Expr<'a> {
-    let elem_content = match content {
+    let elem_var = match content {
         Content::Structure(FlatType::Apply(Symbol::LIST_LIST, vars)) => {
             debug_assert_eq!(vars.len(), 1);
 
             let elem_var_index = vars.into_iter().next().unwrap();
-            let elem_var = env.subs[elem_var_index];
-
-            env.subs.get_content_without_compacting(elem_var)
+            env.subs[elem_var_index]
         }
         other => {
             unreachable!(
@@ -854,13 +905,13 @@ fn list_to_ast<'a, M: ReplAppMemory>(
 
     let arena = env.arena;
     let mut output = Vec::with_capacity_in(len, arena);
-    let elem_size = elem_layout.stack_size(env.target_info) as usize;
+    let elem_size = elem_layout.stack_size(&env.layout_cache.interner, env.target_info) as usize;
 
     for index in 0..len {
         let offset_bytes = index * elem_size;
         let elem_addr = addr + offset_bytes;
         let (newtype_containers, _alias_content, elem_content) =
-            unroll_newtypes_and_aliases(env, elem_content);
+            unroll_newtypes_and_aliases(env, elem_var);
         let expr = addr_to_ast(
             env,
             mem,
@@ -884,7 +935,7 @@ fn list_to_ast<'a, M: ReplAppMemory>(
 }
 
 fn single_tag_union_to_ast<'a, 'env, M: ReplAppMemory>(
-    env: &Env<'a, 'env>,
+    env: &mut Env<'a, 'env>,
     mem: &'a M,
     addr: usize,
     field_layouts: &'a [Layout<'a>],
@@ -911,7 +962,7 @@ fn single_tag_union_to_ast<'a, 'env, M: ReplAppMemory>(
 }
 
 fn sequence_of_expr<'a, 'env, I, M: ReplAppMemory>(
-    env: &Env<'a, 'env>,
+    env: &mut Env<'a, 'env>,
     mem: &'a M,
     addr: usize,
     sequence: I,
@@ -922,28 +973,26 @@ where
     I: ExactSizeIterator<Item = (Variable, &'a Layout<'a>)>,
 {
     let arena = env.arena;
-    let subs = env.subs;
     let mut output = Vec::with_capacity_in(sequence.len(), arena);
 
     // We'll advance this as we iterate through the fields
     let mut field_addr = addr;
 
     for (var, layout) in sequence {
-        let content = subs.get_content_without_compacting(var);
-        let expr = addr_to_ast(env, mem, field_addr, layout, when_recursive, content);
+        let expr = addr_to_ast(env, mem, field_addr, layout, when_recursive, var);
         let loc_expr = Loc::at_zero(expr);
 
         output.push(&*arena.alloc(loc_expr));
 
         // Advance the field pointer to the next field.
-        field_addr += layout.stack_size(env.target_info) as usize;
+        field_addr += layout.stack_size(&env.layout_cache.interner, env.target_info) as usize;
     }
 
     output
 }
 
 fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
-    env: &Env<'a, 'env>,
+    env: &mut Env<'a, 'env>,
     mem: &'a M,
     addr: usize,
     record_fields: RecordFields,
@@ -951,7 +1000,6 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
     let arena = env.arena;
     let subs = env.subs;
     let mut output = Vec::with_capacity_in(record_fields.len(), arena);
-    let mut layout_cache = LayoutCache::new(env.target_info);
 
     if record_fields.len() == 1 {
         // this is a 1-field wrapper record around another record or 1-tag tag union
@@ -960,8 +1008,9 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
             .next()
             .unwrap();
 
-        let inner_content = env.subs.get_content_without_compacting(field.into_inner());
-        let field_layout = layout_cache
+        let inner_var = field.into_inner();
+        let field_layout = env
+            .layout_cache
             .from_var(arena, field.into_inner(), env.subs)
             .unwrap();
         let inner_layouts = arena.alloc([field_layout]);
@@ -973,7 +1022,7 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
                 addr,
                 &Layout::struct_no_name_order(inner_layouts),
                 WhenRecursive::Unreachable,
-                inner_content,
+                inner_var,
             ),
             region: Region::zero(),
         });
@@ -999,8 +1048,9 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
         // always only sorted alphabetically. We want to arrange the rendered record in the order of
         // the type.
         for (label, field) in record_fields.sorted_iterator(subs, Variable::EMPTY_RECORD) {
-            let content = subs.get_content_without_compacting(field.into_inner());
-            let field_layout = layout_cache
+            let field_var = field.into_inner();
+            let field_layout = env
+                .layout_cache
                 .from_var(arena, field.into_inner(), env.subs)
                 .unwrap();
 
@@ -1011,7 +1061,7 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
                     field_addr,
                     &field_layout,
                     WhenRecursive::Unreachable,
-                    content,
+                    field_var,
                 ),
                 region: Region::zero(),
             });
@@ -1028,7 +1078,8 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
             output.push(loc_field);
 
             // Advance the field pointer to the next field.
-            field_addr += field_layout.stack_size(env.target_info) as usize;
+            field_addr +=
+                field_layout.stack_size(&env.layout_cache.interner, env.target_info) as usize;
         }
 
         let output = output.into_bump_slice();
@@ -1067,12 +1118,7 @@ fn unpack_two_element_tag_union(
     (tag_name1, payload_vars1, tag_name2, payload_vars2)
 }
 
-fn bool_to_ast<'a, M: ReplAppMemory>(
-    env: &Env<'a, '_>,
-    mem: &M,
-    value: bool,
-    content: &Content,
-) -> Expr<'a> {
+fn bool_to_ast<'a>(env: &Env<'a, '_>, value: bool, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -1102,7 +1148,7 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
                         let content = env.subs.get_content_without_compacting(var);
 
                         let loc_payload = &*arena.alloc(Loc {
-                            value: bool_to_ast(env, mem, value, content),
+                            value: bool_to_ast(env, value, content),
                             region: Region::zero(),
                         });
 
@@ -1126,15 +1172,32 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
 
                     tag_name_to_expr(env, tag_name)
                 }
+                FlatType::FunctionOrTagUnion(tags, _, _) if tags.len() == 2 => {
+                    let tags = env.subs.get_subs_slice(*tags);
+                    let tag_name_1 = &tags[0];
+                    let tag_name_2 = &tags[1];
+
+                    let tag_name = if value {
+                        max_by_key(tag_name_1, tag_name_2, |n| n.as_ident_str())
+                    } else {
+                        min_by_key(tag_name_1, tag_name_2, |n| n.as_ident_str())
+                    };
+
+                    tag_name_to_expr(env, tag_name)
+                }
                 other => {
                     unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
                 }
             }
         }
+        Alias(Symbol::BOOL_BOOL, _, _, _) => Expr::Var {
+            module_name: "Bool",
+            ident: if value { "true" } else { "false" },
+        },
         Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 
-            bool_to_ast(env, mem, value, content)
+            bool_to_ast(env, value, content)
         }
         other => {
             unreachable!("Unexpected FlatType {:?} in bool_to_ast", other);
@@ -1142,12 +1205,7 @@ fn bool_to_ast<'a, M: ReplAppMemory>(
     }
 }
 
-fn byte_to_ast<'a, M: ReplAppMemory>(
-    env: &Env<'a, '_>,
-    mem: &M,
-    value: u8,
-    content: &Content,
-) -> Expr<'a> {
+fn byte_to_ast<'a>(env: &mut Env<'a, '_>, value: u8, content: &Content) -> Expr<'a> {
     use Content::*;
 
     let arena = env.arena;
@@ -1177,7 +1235,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                         let content = env.subs.get_content_without_compacting(var);
 
                         let loc_payload = &*arena.alloc(Loc {
-                            value: byte_to_ast(env, mem, value, content),
+                            value: byte_to_ast(env, value, content),
                             region: Region::zero(),
                         });
 
@@ -1195,13 +1253,46 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
                         .map(|(a, b)| (a.clone(), b.to_vec()))
                         .collect();
 
-                    let union_variant = union_sorted_tags_help(
-                        env.arena,
-                        tags_vec,
-                        None,
-                        env.subs,
-                        env.target_info,
-                    );
+                    let union_variant = {
+                        let mut layout_env = layout::Env::from_components(
+                            &mut env.layout_cache,
+                            env.subs,
+                            env.arena,
+                            env.target_info,
+                        );
+                        union_sorted_tags_pub(&mut layout_env, tags_vec, None)
+                    };
+
+                    match union_variant {
+                        UnionVariant::ByteUnion(tagnames) => {
+                            let tag_name = &tagnames[value as usize].expect_tag_ref();
+                            let tag_expr = tag_name_to_expr(env, tag_name);
+                            let loc_tag_expr = Loc::at_zero(tag_expr);
+                            Expr::Apply(env.arena.alloc(loc_tag_expr), &[], CalledVia::Space)
+                        }
+                        _ => unreachable!("invalid union variant for a Byte!"),
+                    }
+                }
+                FlatType::FunctionOrTagUnion(tags, _, _) => {
+                    // anything with fewer tags is not a byte
+                    debug_assert!(tags.len() > 2);
+
+                    let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> = env
+                        .subs
+                        .get_subs_slice(*tags)
+                        .iter()
+                        .map(|t| (t.clone(), vec![]))
+                        .collect();
+
+                    let union_variant = {
+                        let mut layout_env = layout::Env::from_components(
+                            &mut env.layout_cache,
+                            env.subs,
+                            env.arena,
+                            env.target_info,
+                        );
+                        union_sorted_tags_pub(&mut layout_env, tags_vec, None)
+                    };
 
                     match union_variant {
                         UnionVariant::ByteUnion(tagnames) => {
@@ -1221,7 +1312,7 @@ fn byte_to_ast<'a, M: ReplAppMemory>(
         Alias(_, _, var, _) => {
             let content = env.subs.get_content_without_compacting(*var);
 
-            byte_to_ast(env, mem, value, content)
+            byte_to_ast(env, value, content)
         }
         other => {
             unreachable!("Unexpected FlatType {:?} in byte_to_ast", other);

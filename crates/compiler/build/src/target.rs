@@ -2,6 +2,7 @@ use inkwell::{
     targets::{CodeModel, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple},
     OptimizationLevel,
 };
+use roc_error_macros::internal_error;
 use roc_mono::ir::OptLevel;
 use target_lexicon::{Architecture, Environment, OperatingSystem, Triple};
 
@@ -44,7 +45,7 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
             operating_system: OperatingSystem::Windows,
             ..
         } => "x86_64-pc-windows-gnu",
-        _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
+        _ => internal_error!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
 
@@ -92,7 +93,7 @@ pub fn target_zig_str(target: &Triple) -> &'static str {
             operating_system: OperatingSystem::Darwin,
             ..
         } => "aarch64-apple-darwin",
-        _ => panic!("TODO gracefully handle unsupported target: {:?}", target),
+        _ => internal_error!("TODO gracefully handle unsupported target: {:?}", target),
     }
 }
 
@@ -112,7 +113,7 @@ pub fn init_arch(target: &Triple) {
         Architecture::Wasm32 if cfg!(feature = "target-wasm32") => {
             Target::initialize_webassembly(&InitializationConfig::default());
         }
-        _ => panic!(
+        _ => internal_error!(
             "TODO gracefully handle unsupported target architecture: {:?}",
             target.architecture
         ),
@@ -132,7 +133,7 @@ pub fn arch_str(target: &Triple) -> &'static str {
         Architecture::Aarch64(_) if cfg!(feature = "target-aarch64") => "aarch64",
         Architecture::Arm(_) if cfg!(feature = "target-arm") => "arm",
         Architecture::Wasm32 if cfg!(feature = "target-webassembly") => "wasm32",
-        _ => panic!(
+        _ => internal_error!(
             "TODO gracefully handle unsupported target architecture: {:?}",
             target.architecture
         ),

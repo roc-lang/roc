@@ -6,12 +6,12 @@ use crossbeam::thread;
 use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
-use roc_can::constraint::{Constraint as ConstraintSoa, Constraints};
-use roc_can::expr::Declarations;
+use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
 use roc_can::expr::PendingDerives;
+use roc_can::expr::{Declarations, ExpectLookup};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
-    ResolvedImplementations,
+    ResolvedImplementations, TypeState,
 };
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
@@ -23,6 +23,7 @@ use roc_debug_flags::{
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
+use roc_intern::{GlobalInterner, SingleThreadedInterner};
 use roc_late_solve::{AbilitiesView, WorldAbilities};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
@@ -33,20 +34,22 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs, ProcsBase,
     UpdateModeIds,
 };
-use roc_mono::layout::{CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem};
+use roc_mono::layout::{
+    CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, STLayoutInterner,
+};
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
-use roc_parse::parser::{FileError, Parser, SyntaxError};
+use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_reporting::report::RenderTarget;
+use roc_reporting::report::{Annotation, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
 use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
-use roc_types::types::{Alias, AliasKind};
+use roc_types::types::{Alias, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
 use std::env::current_dir;
@@ -58,8 +61,8 @@ use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 use std::{env, fs};
 
-use crate::work::Dependencies;
 pub use crate::work::Phase;
+use crate::work::{DepCycle, Dependencies};
 
 #[cfg(target_family = "wasm")]
 use crate::wasm_instant::{Duration, Instant};
@@ -76,42 +79,6 @@ const ROC_FILE_EXTENSION: &str = "roc";
 const MODULE_SEPARATOR: char = '.';
 
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
-
-const PRELUDE_TYPES: [(&str, Symbol); 33] = [
-    ("Num", Symbol::NUM_NUM),
-    ("Int", Symbol::NUM_INT),
-    ("Frac", Symbol::NUM_FRAC),
-    ("Integer", Symbol::NUM_INTEGER),
-    ("FloatingPoint", Symbol::NUM_FLOATINGPOINT),
-    ("Binary32", Symbol::NUM_BINARY32),
-    ("Binary64", Symbol::NUM_BINARY64),
-    ("Signed128", Symbol::NUM_SIGNED128),
-    ("Signed64", Symbol::NUM_SIGNED64),
-    ("Signed32", Symbol::NUM_SIGNED32),
-    ("Signed16", Symbol::NUM_SIGNED16),
-    ("Signed8", Symbol::NUM_SIGNED8),
-    ("Unsigned128", Symbol::NUM_UNSIGNED128),
-    ("Unsigned64", Symbol::NUM_UNSIGNED64),
-    ("Unsigned32", Symbol::NUM_UNSIGNED32),
-    ("Unsigned16", Symbol::NUM_UNSIGNED16),
-    ("Unsigned8", Symbol::NUM_UNSIGNED8),
-    ("Natural", Symbol::NUM_NATURAL),
-    ("Decimal", Symbol::NUM_DECIMAL),
-    ("Nat", Symbol::NUM_NAT),
-    ("I8", Symbol::NUM_I8),
-    ("I16", Symbol::NUM_I16),
-    ("I32", Symbol::NUM_I32),
-    ("I64", Symbol::NUM_I64),
-    ("I128", Symbol::NUM_I128),
-    ("U8", Symbol::NUM_U8),
-    ("U16", Symbol::NUM_U16),
-    ("U32", Symbol::NUM_U32),
-    ("U64", Symbol::NUM_U64),
-    ("U128", Symbol::NUM_U128),
-    ("F32", Symbol::NUM_F32),
-    ("F64", Symbol::NUM_F64),
-    ("Dec", Symbol::NUM_DEC),
-];
 
 macro_rules! log {
     ($($arg:tt)*) => (dbg_do!(ROC_PRINT_LOAD_LOG, println!($($arg)*)))
@@ -210,6 +177,7 @@ impl Default for ModuleCache<'_> {
             BOX,
             ENCODE,
             DECODE,
+            HASH,
             JSON,
         }
 
@@ -376,6 +344,9 @@ fn start_phase<'a>(
                                     )
                                 });
 
+                            // Add the declared abilities from the modules we import;
+                            // we may not know all their types yet since type-solving happens in
+                            // parallel, but we'll fill that in during type-checking our module.
                             abilities_store
                                 .union(import_store.closure_from_imported(exposed_symbols));
                         }
@@ -385,7 +356,7 @@ fn start_phase<'a>(
                 let skip_constraint_gen = {
                     // Give this its own scope to make sure that the Guard from the lock() is dropped
                     // immediately after contains_key returns
-                    state.cached_subs.lock().contains_key(&module_id)
+                    state.cached_types.lock().contains_key(&module_id)
                 };
 
                 BuildTask::CanonicalizeAndConstrain {
@@ -413,6 +384,7 @@ fn start_phase<'a>(
                     declarations,
                     dep_idents,
                     pending_derives,
+                    types,
                     ..
                 } = constrained;
 
@@ -422,6 +394,7 @@ fn start_phase<'a>(
                     module,
                     ident_ids,
                     module_timing,
+                    types,
                     constraints,
                     constraint,
                     pending_derives,
@@ -430,7 +403,7 @@ fn start_phase<'a>(
                     &state.exposed_types,
                     dep_idents,
                     declarations,
-                    state.cached_subs.clone(),
+                    state.cached_types.clone(),
                     derived_module,
                 )
             }
@@ -461,9 +434,11 @@ fn start_phase<'a>(
 
                 let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
+                let build_expects = matches!(state.exec_mode, ExecutionMode::Test)
+                    && state.module_cache.expectations.contains_key(&module_id);
+
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
-                    execution_mode: state.exec_mode,
                     module_id,
                     module_timing,
                     solved_subs,
@@ -475,6 +450,7 @@ fn start_phase<'a>(
                     // TODO: awful, how can we get rid of the clone?
                     exposed_by_module: state.exposed_types.clone(),
                     derived_module,
+                    build_expects,
                 }
             }
             Phase::MakeSpecializations => {
@@ -506,7 +482,7 @@ fn start_phase<'a>(
                             IdentIds::default(),
                             Subs::default(),
                             ProcsBase::default(),
-                            LayoutCache::new(state.target_info),
+                            LayoutCache::new(state.layout_interner.fork(), state.target_info),
                             ModuleTiming::new(Instant::now()),
                         )
                     } else if state.make_specializations_pass.current_pass() == 1 {
@@ -672,6 +648,7 @@ struct ConstrainedModule {
     var_store: VarStore,
     dep_idents: IdentIdsByModule,
     module_timing: ModuleTiming,
+    types: Types,
     // Rather than adding pending derives as constraints, hand them directly to solve because they
     // must be solved at the end of a module.
     pending_derives: PendingDerives,
@@ -718,6 +695,7 @@ pub struct MonomorphizedModule<'a> {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub subs: Subs,
+    pub layout_interner: SingleThreadedInterner<'a, Layout<'a>>,
     pub output_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
@@ -727,6 +705,13 @@ pub struct MonomorphizedModule<'a> {
     pub exposed_to_host: ExposedToHost,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
+    pub expectations: VecMap<ModuleId, Expectations>,
+}
+
+/// Values used to render expect output
+pub struct ExpectMetadata<'a> {
+    pub interns: Interns,
+    pub layout_interner: SingleThreadedInterner<'a, Layout<'a>>,
     pub expectations: VecMap<ModuleId, Expectations>,
 }
 
@@ -744,7 +729,7 @@ pub enum EntryPoint<'a> {
 pub struct Expectations {
     pub subs: roc_types::subs::Subs,
     pub path: PathBuf,
-    pub expectations: VecMap<Region, Vec<(Symbol, Variable)>>,
+    pub expectations: VecMap<Region, Vec<ExpectLookup>>,
     pub ident_ids: IdentIds,
 }
 
@@ -788,7 +773,7 @@ struct ParsedModule<'a> {
     header_for: HeaderFor<'a>,
 }
 
-type LocExpects = VecMap<Region, Vec<(Symbol, Variable)>>;
+type LocExpects = VecMap<Region, Vec<ExpectLookup>>;
 
 /// A message sent out _from_ a worker thread,
 /// representing a result of work done, or a request for further work
@@ -845,6 +830,9 @@ enum Msg<'a> {
     /// all modules are now monomorphized, we are done
     FinishedAllSpecialization {
         subs: Subs,
+        /// The layout interner after all passes in mono are done.
+        /// DO NOT use the one on state; that is left in an empty state after specialization is complete!
+        layout_interner: STLayoutInterner<'a>,
         exposed_to_host: ExposedToHost,
     },
 
@@ -853,6 +841,8 @@ enum Msg<'a> {
         filename: PathBuf,
         error: io::ErrorKind,
     },
+
+    IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
 }
 
 #[derive(Debug)]
@@ -950,11 +940,13 @@ struct State<'a> {
 
     make_specializations_pass: MakeSpecializationsPass,
 
-    // cached subs (used for builtin modules, could include packages in the future too)
-    cached_subs: CachedSubs,
+    // cached types (used for builtin modules, could include packages in the future too)
+    cached_types: CachedTypeState,
+
+    layout_interner: Arc<GlobalInterner<'a, Layout<'a>>>,
 }
 
-type CachedSubs = Arc<Mutex<MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>>>;
+type CachedTypeState = Arc<Mutex<MutMap<ModuleId, TypeState>>>;
 
 impl<'a> State<'a> {
     fn goal_phase(&self) -> Phase {
@@ -968,7 +960,7 @@ impl<'a> State<'a> {
         exposed_types: ExposedByModule,
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
         ident_ids_by_module: SharedIdentIdsByModule,
-        cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
+        cached_types: MutMap<ModuleId, TypeState>,
         render: RenderTarget,
         number_of_workers: usize,
         exec_mode: ExecutionMode,
@@ -999,11 +991,12 @@ impl<'a> State<'a> {
             exposed_symbols_by_module: MutMap::default(),
             timings: MutMap::default(),
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
-            cached_subs: Arc::new(Mutex::new(cached_subs)),
+            cached_types: Arc::new(Mutex::new(cached_types)),
             render,
             exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
+            layout_interner: GlobalInterner::with_capacity(128),
         }
     }
 }
@@ -1105,18 +1098,18 @@ enum BuildTask<'a> {
         ident_ids: IdentIds,
         exposed_for_module: ExposedForModule,
         module_timing: ModuleTiming,
+        types: Types,
         constraints: Constraints,
         constraint: ConstraintSoa,
         pending_derives: PendingDerives,
         var_store: VarStore,
         declarations: Declarations,
         dep_idents: IdentIdsByModule,
-        cached_subs: CachedSubs,
+        cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
     },
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
-        execution_mode: ExecutionMode,
         layout_cache: LayoutCache<'a>,
         solved_subs: Solved<Subs>,
         imported_module_thunks: &'a [Symbol],
@@ -1127,6 +1120,7 @@ enum BuildTask<'a> {
         exposed_by_module: ExposedByModule,
         abilities_store: AbilitiesStore,
         derived_module: SharedDerivedModule,
+        build_expects: bool,
     },
     MakeSpecializations {
         module_id: ModuleId,
@@ -1148,6 +1142,13 @@ enum WorkerMsg {
 }
 
 #[derive(Debug)]
+pub struct IncorrectModuleName<'a> {
+    pub module_id: ModuleId,
+    pub found: Loc<PQModuleName<'a>>,
+    pub expected: PQModuleName<'a>,
+}
+
+#[derive(Debug)]
 pub enum LoadingProblem<'a> {
     FileProblem {
         filename: PathBuf,
@@ -1162,6 +1163,9 @@ pub enum LoadingProblem<'a> {
 
     /// a formatted report
     FormattedReport(String),
+
+    ImportCycle(PathBuf, Vec<ModuleId>),
+    IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
 }
 
 pub enum Phases {
@@ -1256,6 +1260,7 @@ impl<'a> LoadStart<'a> {
                 filename,
                 true,
                 None,
+                None,
                 Arc::clone(&arc_modules),
                 Arc::clone(&ident_ids_by_module),
                 root_start_time,
@@ -1309,6 +1314,46 @@ impl<'a> LoadStart<'a> {
                 }
                 Err(LoadingProblem::FileProblem { filename, error }) => {
                     let buf = to_file_problem_report(&filename, error);
+                    return Err(LoadingProblem::FormattedReport(buf));
+                }
+                Err(LoadingProblem::ImportCycle(filename, cycle)) => {
+                    let module_ids = Arc::try_unwrap(arc_modules)
+                        .unwrap_or_else(|_| {
+                            panic!("There were still outstanding Arc references to module_ids")
+                        })
+                        .into_inner()
+                        .into_module_ids();
+
+                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+                    let buf = to_import_cycle_report(
+                        module_ids,
+                        root_exposed_ident_ids,
+                        cycle,
+                        filename,
+                        render,
+                    );
+                    return Err(LoadingProblem::FormattedReport(buf));
+                }
+                Err(LoadingProblem::IncorrectModuleName(FileError {
+                    problem: SourceError { problem, bytes },
+                    filename,
+                })) => {
+                    let module_ids = Arc::try_unwrap(arc_modules)
+                        .unwrap_or_else(|_| {
+                            panic!("There were still outstanding Arc references to module_ids")
+                        })
+                        .into_inner()
+                        .into_module_ids();
+
+                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+                    let buf = to_incorrect_module_name_report(
+                        module_ids,
+                        root_exposed_ident_ids,
+                        problem,
+                        filename,
+                        bytes,
+                        render,
+                    );
                     return Err(LoadingProblem::FormattedReport(buf));
                 }
                 Err(e) => return Err(e),
@@ -1425,7 +1470,7 @@ pub fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
-    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
+    cached_types: MutMap<ModuleId, TypeState>,
     load_config: LoadConfig,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     enum Threads {
@@ -1458,7 +1503,7 @@ pub fn load<'a>(
             load_start,
             exposed_types,
             load_config.target_info,
-            cached_subs,
+            cached_types,
             load_config.render,
             load_config.exec_mode,
         ),
@@ -1467,7 +1512,7 @@ pub fn load<'a>(
             load_start,
             exposed_types,
             load_config.target_info,
-            cached_subs,
+            cached_types,
             load_config.render,
             threads,
             load_config.exec_mode,
@@ -1482,7 +1527,7 @@ pub fn load_single_threaded<'a>(
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
-    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
+    cached_types: MutMap<ModuleId, TypeState>,
     render: RenderTarget,
     exec_mode: ExecutionMode,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
@@ -1508,7 +1553,7 @@ pub fn load_single_threaded<'a>(
         exposed_types,
         arc_modules,
         ident_ids_by_module,
-        cached_subs,
+        cached_types,
         render,
         number_of_workers,
         exec_mode,
@@ -1602,12 +1647,14 @@ fn state_thread_step<'a>(
                 }
                 Msg::FinishedAllSpecialization {
                     subs,
+                    layout_interner,
                     exposed_to_host,
                 } => {
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
 
-                    let monomorphized = finish_specialization(state, subs, exposed_to_host)?;
+                    let monomorphized =
+                        finish_specialization(state, subs, layout_interner, exposed_to_host)?;
 
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
@@ -1622,6 +1669,21 @@ fn state_thread_step<'a>(
                         problem,
                         module_ids,
                         state.constrained_ident_ids,
+                        state.render,
+                    );
+                    Err(LoadingProblem::FormattedReport(buf))
+                }
+                Msg::IncorrectModuleName(FileError {
+                    problem: SourceError { problem, bytes },
+                    filename,
+                }) => {
+                    let module_ids = (*state.arc_modules).lock().clone().into_module_ids();
+                    let buf = to_incorrect_module_name_report(
+                        module_ids,
+                        state.constrained_ident_ids,
+                        problem,
+                        filename,
+                        bytes,
                         state.render,
                     );
                     Err(LoadingProblem::FormattedReport(buf))
@@ -1665,6 +1727,36 @@ fn state_thread_step<'a>(
                             );
                             Err(LoadingProblem::FormattedReport(buf))
                         }
+                        Err(LoadingProblem::ImportCycle(filename, cycle)) => {
+                            let module_ids = arc_modules.lock().clone().into_module_ids();
+
+                            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+                            let buf = to_import_cycle_report(
+                                module_ids,
+                                root_exposed_ident_ids,
+                                cycle,
+                                filename,
+                                render,
+                            );
+                            return Err(LoadingProblem::FormattedReport(buf));
+                        }
+                        Err(LoadingProblem::IncorrectModuleName(FileError {
+                            problem: SourceError { problem, bytes },
+                            filename,
+                        })) => {
+                            let module_ids = arc_modules.lock().clone().into_module_ids();
+
+                            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+                            let buf = to_incorrect_module_name_report(
+                                module_ids,
+                                root_exposed_ident_ids,
+                                problem,
+                                filename,
+                                bytes,
+                                render,
+                            );
+                            return Err(LoadingProblem::FormattedReport(buf));
+                        }
                         Err(e) => Err(e),
                     }
                 }
@@ -1683,7 +1775,7 @@ fn load_multi_threaded<'a>(
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
-    cached_subs: MutMap<ModuleId, (Subs, Vec<(Symbol, Variable)>)>,
+    cached_types: MutMap<ModuleId, TypeState>,
     render: RenderTarget,
     available_threads: usize,
     exec_mode: ExecutionMode,
@@ -1725,7 +1817,7 @@ fn load_multi_threaded<'a>(
         exposed_types,
         arc_modules,
         ident_ids_by_module,
-        cached_subs,
+        cached_types,
         render,
         num_workers,
         exec_mode,
@@ -1890,6 +1982,9 @@ fn worker_task_step<'a>(
                                     .send(Msg::FailedToReadFile { filename, error })
                                     .unwrap();
                             }
+                            Err(LoadingProblem::IncorrectModuleName(err)) => {
+                                msg_tx.send(Msg::IncorrectModuleName(err)).unwrap();
+                            }
                             Err(other) => {
                                 return Err(other);
                             }
@@ -1954,6 +2049,9 @@ fn worker_task<'a>(
                                 .send(Msg::FailedToReadFile { filename, error })
                                 .unwrap();
                         }
+                        Err(LoadingProblem::IncorrectModuleName(err)) => {
+                            msg_tx.send(Msg::IncorrectModuleName(err)).unwrap();
+                        }
                         Err(other) => {
                             return Err(other);
                         }
@@ -1983,12 +2081,12 @@ fn start_tasks<'a>(
 }
 
 macro_rules! debug_print_ir {
-    ($state:expr, $flag:path) => {
+    ($state:expr, $interner:expr, $flag:path) => {
         dbg_do!($flag, {
             let procs_string = $state
                 .procedures
                 .values()
-                .map(|proc| proc.to_pretty(200))
+                .map(|proc| proc.to_pretty($interner, 200))
                 .collect::<Vec<_>>();
 
             let result = procs_string.join("\n");
@@ -2005,13 +2103,16 @@ fn report_unused_imported_modules<'a>(
     constrained_module: &ConstrainedModule,
 ) {
     let mut unused_imported_modules = constrained_module.imported_modules.clone();
+    let mut unused_imports = constrained_module.module.exposed_imports.clone();
 
     for symbol in constrained_module.module.referenced_values.iter() {
         unused_imported_modules.remove(&symbol.module_id());
+        unused_imports.remove(symbol);
     }
 
     for symbol in constrained_module.module.referenced_types.iter() {
         unused_imported_modules.remove(&symbol.module_id());
+        unused_imports.remove(symbol);
     }
 
     let existing = match state.module_cache.can_problems.entry(module_id) {
@@ -2021,9 +2122,28 @@ fn report_unused_imported_modules<'a>(
 
     for (unused, region) in unused_imported_modules.drain() {
         if !unused.is_builtin() {
-            existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
+            existing.push(roc_problem::can::Problem::UnusedModuleImport(
+                unused, region,
+            ));
         }
     }
+
+    for (unused, region) in unused_imports.drain() {
+        existing.push(roc_problem::can::Problem::UnusedImport(unused, region));
+    }
+}
+
+fn extend_header_with_builtin(header: &mut ModuleHeader, module: ModuleId) {
+    header
+        .package_qualified_imported_modules
+        .insert(PackageQualified::Unqualified(module));
+
+    header.imported_modules.insert(module, Region::zero());
+
+    let types = Symbol::builtin_types_in_scope(module)
+        .iter()
+        .map(|(name, info)| (Ident::from(*name), *info));
+    header.exposed_imports.extend(types);
 }
 
 fn update<'a>(
@@ -2126,113 +2246,18 @@ fn update<'a>(
             // add the prelude
             let mut header = header;
 
-            if ![ModuleId::RESULT, ModuleId::BOOL].contains(&header.module_id) {
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::RESULT));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::RESULT, Region::zero());
-
-                header.exposed_imports.insert(
-                    Ident::from("Result"),
-                    (Symbol::RESULT_RESULT, Region::zero()),
-                );
-            }
-
-            if ![ModuleId::NUM, ModuleId::BOOL, ModuleId::RESULT].contains(&header.module_id) {
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::NUM));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::NUM, Region::zero());
-
-                for (type_name, symbol) in PRELUDE_TYPES {
-                    header
-                        .exposed_imports
-                        .insert(Ident::from(type_name), (symbol, Region::zero()));
-                }
-            }
-
-            if header.module_id != ModuleId::BOOL {
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::BOOL));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::BOOL, Region::zero());
-
-                header
-                    .exposed_imports
-                    .insert(Ident::from("Bool"), (Symbol::BOOL_BOOL, Region::zero()));
-            }
-
-            if header.module_id == ModuleId::NUM {
-                header
-                    .exposed_imports
-                    .insert(Ident::from("List"), (Symbol::LIST_LIST, Region::zero()));
-            }
-
             if !header.module_id.is_builtin() {
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::BOX));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::BOX, Region::zero());
-
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::STR));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::STR, Region::zero());
-
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::DICT));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::DICT, Region::zero());
-
-                header
-                    .exposed_imports
-                    .insert(Ident::from("Dict"), (Symbol::DICT_DICT, Region::zero()));
-
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::SET));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::SET, Region::zero());
-
-                header
-                    .exposed_imports
-                    .insert(Ident::from("Set"), (Symbol::SET_SET, Region::zero()));
-
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::LIST));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::LIST, Region::zero());
-
-                header
-                    .package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(ModuleId::ENCODE));
-
-                header
-                    .imported_modules
-                    .insert(ModuleId::ENCODE, Region::zero());
+                extend_header_with_builtin(&mut header, ModuleId::NUM);
+                extend_header_with_builtin(&mut header, ModuleId::BOOL);
+                extend_header_with_builtin(&mut header, ModuleId::STR);
+                extend_header_with_builtin(&mut header, ModuleId::LIST);
+                extend_header_with_builtin(&mut header, ModuleId::RESULT);
+                extend_header_with_builtin(&mut header, ModuleId::DICT);
+                extend_header_with_builtin(&mut header, ModuleId::SET);
+                extend_header_with_builtin(&mut header, ModuleId::BOX);
+                extend_header_with_builtin(&mut header, ModuleId::ENCODE);
+                extend_header_with_builtin(&mut header, ModuleId::DECODE);
+                extend_header_with_builtin(&mut header, ModuleId::HASH);
             }
 
             state
@@ -2247,11 +2272,23 @@ fn update<'a>(
                         .map(|x| *x.as_inner()),
                 );
 
-            work.extend(state.dependencies.add_module(
+            let added_deps_result = state.dependencies.add_module(
                 header.module_id,
                 &header.package_qualified_imported_modules,
                 state.exec_mode.goal_phase(),
-            ));
+            );
+
+            let new_work = match added_deps_result {
+                Ok(work) => work,
+                Err(DepCycle { cycle }) => {
+                    return Err(LoadingProblem::ImportCycle(
+                        header.module_path.clone(),
+                        cycle,
+                    ));
+                }
+            };
+
+            work.extend(new_work);
 
             state.module_cache.headers.insert(header.module_id, header);
 
@@ -2358,7 +2395,14 @@ fn update<'a>(
                 .type_problems
                 .insert(module_id, solved_module.problems);
 
-            if !loc_expects.is_empty() {
+            let should_include_expects = !loc_expects.is_empty() && {
+                let modules = state.arc_modules.lock();
+                modules
+                    .package_eq(module_id, state.root_id)
+                    .expect("root or this module is not yet known - that's a bug!")
+            };
+
+            if should_include_expects {
                 let (path, _) = state.module_cache.sources.get(&module_id).unwrap();
 
                 let expectations = Expectations {
@@ -2383,7 +2427,11 @@ fn update<'a>(
                 Some(ref platform_data) => module_id == platform_data.module_id,
             };
 
-            if is_host_exposed {
+            let add_to_host_exposed = is_host_exposed &&
+                // During testing, we don't need to expose anything to the host.
+                !matches!(state.exec_mode, ExecutionMode::Test);
+
+            if add_to_host_exposed {
                 state.exposed_to_host.values.extend(
                     solved_module
                         .exposed_vars_by_symbol
@@ -2471,10 +2519,9 @@ fn update<'a>(
                 if state.goal_phase() > Phase::SolveTypes
                     || matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck)
                 {
-                    let layout_cache = state
-                        .layout_caches
-                        .pop()
-                        .unwrap_or_else(|| LayoutCache::new(state.target_info));
+                    let layout_cache = state.layout_caches.pop().unwrap_or_else(|| {
+                        LayoutCache::new(state.layout_interner.fork(), state.target_info)
+                    });
 
                     let typechecked = TypeCheckedModule {
                         module_id,
@@ -2659,7 +2706,7 @@ fn update<'a>(
                             ident_ids,
                             subs,
                             module_timing,
-                            layout_cache: _,
+                            layout_cache: _layout_cache,
                             procs_base: _,
                         },
                     ) in state.module_cache.late_specializations.drain()
@@ -2669,11 +2716,25 @@ fn update<'a>(
                             state.root_subs = Some(subs);
                         }
                         state.timings.insert(module_id, module_timing);
+
+                        #[cfg(debug_assertions)]
+                        {
+                            log_layout_stats(module_id, &_layout_cache);
+                        }
                     }
+
+                    let layout_interner = {
+                        let mut taken = GlobalInterner::with_capacity(0);
+                        std::mem::swap(&mut state.layout_interner, &mut taken);
+                        taken
+                    };
+                    let layout_interner = layout_interner
+                        .unwrap()
+                        .expect("outstanding references to global layout interener, but we just drained all layout caches");
 
                     log!("specializations complete from {:?}", module_id);
 
-                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_SPECIALIZATION);
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_SPECIALIZATION);
 
                     let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
 
@@ -2685,17 +2746,18 @@ fn update<'a>(
                         &mut state.procedures,
                     );
 
-                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_RESET_REUSE);
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
                     Proc::insert_refcount_operations(
                         arena,
+                        &layout_interner,
                         module_id,
                         ident_ids,
                         &mut update_mode_ids,
                         &mut state.procedures,
                     );
 
-                    debug_print_ir!(state, ROC_PRINT_IR_AFTER_REFCOUNT);
+                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_REFCOUNT);
 
                     // This is not safe with the new non-recursive RC updates that we do for tag unions
                     //
@@ -2713,7 +2775,7 @@ fn update<'a>(
                     msg_tx
                         .send(Msg::FinishedAllSpecialization {
                             subs,
-                            // TODO thread through mono problems
+                            layout_interner,
                             exposed_to_host: state.exposed_to_host.clone(),
                         })
                         .map_err(|_| LoadingProblem::MsgChannelDied)?;
@@ -2810,14 +2872,41 @@ fn update<'a>(
         Msg::FailedToReadFile { .. } => {
             unreachable!();
         }
+        Msg::IncorrectModuleName(..) => {
+            internal_error!();
+        }
     }
 }
 
-fn finish_specialization(
-    state: State,
+#[cfg(debug_assertions)]
+fn log_layout_stats(module_id: ModuleId, layout_cache: &LayoutCache) {
+    let (cache_stats, raw_function_cache_stats) = layout_cache.statistics();
+    roc_tracing::info!(
+        module = ?module_id,
+        insertions = cache_stats.insertions,
+        hits = cache_stats.hits,
+        misses = cache_stats.misses,
+        non_insertable = cache_stats.non_insertable,
+        non_reusable = cache_stats.non_reusable,
+        "cache stats"
+    );
+    roc_tracing::info!(
+        module = ?module_id,
+        insertions = raw_function_cache_stats.insertions,
+        hits = raw_function_cache_stats.hits,
+        misses = raw_function_cache_stats.misses,
+        non_insertable = raw_function_cache_stats.non_insertable,
+        non_reusable = raw_function_cache_stats.non_reusable,
+        "raw function cache stats"
+    );
+}
+
+fn finish_specialization<'a>(
+    state: State<'a>,
     subs: Subs,
+    layout_interner: STLayoutInterner<'a>,
     exposed_to_host: ExposedToHost,
-) -> Result<MonomorphizedModule, LoadingProblem> {
+) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     if false {
         println!(
             "total Type clones: {} ",
@@ -2940,6 +3029,7 @@ fn finish_specialization(
         module_id: state.root_id,
         subs,
         interns,
+        layout_interner,
         procedures,
         entry_point,
         sources,
@@ -3021,7 +3111,7 @@ fn load_platform_module<'a>(
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = Instant::now();
     let file_io_start = Instant::now();
-    let file = fs::read(&filename);
+    let file = fs::read(filename);
     let file_io_duration = file_io_start.elapsed();
 
     match file {
@@ -3141,13 +3231,14 @@ fn load_builtin_module<'a>(
 
     let (info, parse_state) = load_builtin_module_help(arena, module_name, src_bytes);
 
-    send_header(
+    let (module_id, _, header) = build_header(
         info,
         parse_state,
         module_ids,
         ident_ids_by_module,
         module_timing,
-    )
+    );
+    (module_id, Msg::Header(header))
 }
 
 /// Load a module by its module name, rather than by its filename
@@ -3200,16 +3291,18 @@ fn load_module<'a>(
         "Box", ModuleId::BOX
         "Encode", ModuleId::ENCODE
         "Decode", ModuleId::DECODE
+        "Hash", ModuleId::HASH
         "Json", ModuleId::JSON
     }
 
-    let (filename, opt_shorthand) = module_name_to_path(src_dir, module_name, arc_shorthands);
+    let (filename, opt_shorthand) = module_name_to_path(src_dir, &module_name, arc_shorthands);
 
     load_filename(
         arena,
         filename,
         false,
         opt_shorthand,
+        Some(module_name),
         module_ids,
         ident_ids_by_module,
         module_start_time,
@@ -3218,7 +3311,7 @@ fn load_module<'a>(
 
 fn module_name_to_path<'a>(
     src_dir: &Path,
-    module_name: PQModuleName<'a>,
+    module_name: &PQModuleName<'a>,
     arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
 ) -> (PathBuf, Option<&'a str>) {
     let mut filename;
@@ -3235,7 +3328,7 @@ fn module_name_to_path<'a>(
             }
         }
         PQModuleName::Qualified(shorthand, name) => {
-            opt_shorthand = Some(shorthand);
+            opt_shorthand = Some(*shorthand);
             let shorthands = arc_shorthands.lock();
 
             match shorthands.get(shorthand) {
@@ -3291,6 +3384,45 @@ fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]
     })
 }
 
+fn verify_interface_matches_file_path<'a>(
+    interface_name: Loc<roc_parse::header::ModuleName<'a>>,
+    path: &Path,
+    state: &roc_parse::state::State<'a>,
+) -> Result<(), LoadingProblem<'a>> {
+    let module_parts = interface_name.value.as_str().split(MODULE_SEPARATOR).rev();
+
+    let mut is_mismatched = false;
+    let mut opt_path = Some(path);
+    for part in module_parts {
+        match opt_path.and_then(|path| path.file_stem().map(|fi| (path, fi))) {
+            None => {
+                is_mismatched = true;
+                break;
+            }
+            Some((path, fi)) => {
+                if fi != part {
+                    is_mismatched = true;
+                    break;
+                }
+                opt_path = path.parent();
+            }
+        }
+    }
+
+    if !is_mismatched {
+        return Ok(());
+    }
+
+    use roc_parse::parser::EHeader;
+    let syntax_problem =
+        SyntaxError::Header(EHeader::InconsistentModuleName(interface_name.region));
+    let problem = LoadingProblem::ParsingFailed(FileError {
+        problem: SourceError::new(syntax_problem, state),
+        filename: path.to_path_buf(),
+    });
+    Err(problem)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn parse_header<'a>(
     arena: &'a Bump,
@@ -3298,6 +3430,7 @@ fn parse_header<'a>(
     filename: PathBuf,
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
+    opt_expected_module_name: Option<PackageQualified<'a, ModuleName>>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     src_bytes: &'a [u8],
@@ -3316,9 +3449,13 @@ fn parse_header<'a>(
 
     match parsed {
         Ok((ast::Module::Interface { header }, parse_state)) => {
+            verify_interface_matches_file_path(header.name, &filename, &parse_state)?;
+
+            let header_name_region = header.name.region;
+
             let info = HeaderInfo {
                 loc_name: Loc {
-                    region: header.name.region,
+                    region: header_name_region,
                     value: ModuleNameEnum::Interface(header.name.value),
                 },
                 filename,
@@ -3330,13 +3467,33 @@ fn parse_header<'a>(
                 extra: HeaderFor::Interface,
             };
 
-            Ok(send_header(
+            let (module_id, module_name, header) = build_header(
                 info,
-                parse_state,
+                parse_state.clone(),
                 module_ids,
                 ident_ids_by_module,
                 module_timing,
-            ))
+            );
+
+            if let Some(expected_module_name) = opt_expected_module_name {
+                if expected_module_name != module_name {
+                    let problem = SourceError::new(
+                        IncorrectModuleName {
+                            module_id,
+                            found: Loc::at(header_name_region, module_name),
+                            expected: expected_module_name,
+                        },
+                        &parse_state,
+                    );
+                    let problem = LoadingProblem::IncorrectModuleName(FileError {
+                        problem,
+                        filename: header.module_path,
+                    });
+                    return Err(problem);
+                }
+            }
+
+            Ok((module_id, Msg::Header(header)))
         }
         Ok((ast::Module::Hosted { header }, parse_state)) => {
             let info = HeaderInfo {
@@ -3356,13 +3513,15 @@ fn parse_header<'a>(
                 },
             };
 
-            Ok(send_header(
+            let (module_id, _, header) = build_header(
                 info,
                 parse_state,
                 module_ids,
                 ident_ids_by_module,
                 module_timing,
-            ))
+            );
+
+            Ok((module_id, Msg::Header(header)))
         }
         Ok((ast::Module::App { header }, parse_state)) => {
             let mut app_file_dir = filename.clone();
@@ -3400,13 +3559,14 @@ fn parse_header<'a>(
                 },
             };
 
-            let (module_id, app_module_header_msg) = send_header(
+            let (module_id, _, resolved_header) = build_header(
                 info,
                 parse_state,
                 module_ids.clone(),
                 ident_ids_by_module.clone(),
                 module_timing,
             );
+            let app_module_header_msg = Msg::Header(resolved_header);
 
             match header.to.value {
                 To::ExistingPackage(existing_package) => {
@@ -3486,6 +3646,7 @@ fn load_filename<'a>(
     filename: PathBuf,
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
+    opt_expected_module_name: Option<PackageQualified<'a, ModuleName>>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     module_start_time: Instant,
@@ -3501,6 +3662,7 @@ fn load_filename<'a>(
             filename,
             is_root_module,
             opt_shorthand,
+            opt_expected_module_name,
             module_ids,
             ident_ids_by_module,
             arena.alloc(bytes),
@@ -3533,6 +3695,7 @@ fn load_from_str<'a>(
         filename,
         false,
         None,
+        None,
         module_ids,
         ident_ids_by_module,
         src.as_bytes(),
@@ -3553,13 +3716,13 @@ struct HeaderInfo<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn send_header<'a>(
+fn build_header<'a>(
     info: HeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     module_timing: ModuleTiming,
-) -> (ModuleId, Msg<'a>) {
+) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
     use ModuleNameEnum::*;
 
     let HeaderInfo {
@@ -3584,7 +3747,7 @@ fn send_header<'a>(
         }
     };
 
-    let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
+    let mut imported: Vec<(QualifiedModuleName, Vec<Loc<Ident>>, Region)> =
         Vec::with_capacity(imports.len());
     let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
     let mut scope_size = 0;
@@ -3607,13 +3770,14 @@ fn send_header<'a>(
     let mut scope: MutMap<Ident, (Symbol, Region)> =
         HashMap::with_capacity_and_hasher(scope_size, default_hasher());
     let home: ModuleId;
+    let name: PQModuleName;
 
     let ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
         let mut module_ids = (*module_ids).lock();
         let mut ident_ids_by_module = (*ident_ids_by_module).lock();
 
-        let name = match opt_shorthand {
+        name = match opt_shorthand {
             Some(shorthand) => PQModuleName::Qualified(shorthand, declared_name),
             None => PQModuleName::Unqualified(declared_name),
         };
@@ -3629,14 +3793,21 @@ fn send_header<'a>(
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
             let cloned_module_name = qualified_module_name.module.clone();
-            let pq_module_name = match qualified_module_name.opt_package {
-                None => match opt_shorthand {
-                    Some(shorthand) => {
-                        PQModuleName::Qualified(shorthand, qualified_module_name.module)
-                    }
-                    None => PQModuleName::Unqualified(qualified_module_name.module),
-                },
-                Some(package) => PQModuleName::Qualified(package, cloned_module_name),
+            let pq_module_name = if qualified_module_name.is_builtin() {
+                // If this is a builtin, it must be unqualified, and we should *never* prefix it
+                // with the package shorthand! The user intended to import the module as-is here.
+                debug_assert!(qualified_module_name.opt_package.is_none());
+                PQModuleName::Unqualified(qualified_module_name.module)
+            } else {
+                match qualified_module_name.opt_package {
+                    None => match opt_shorthand {
+                        Some(shorthand) => {
+                            PQModuleName::Qualified(shorthand, qualified_module_name.module)
+                        }
+                        None => PQModuleName::Unqualified(qualified_module_name.module),
+                    },
+                    Some(package) => PQModuleName::Qualified(package, cloned_module_name),
+                }
             };
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
@@ -3649,7 +3820,11 @@ fn send_header<'a>(
             // to the same symbols as the ones we're using here.
             let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
-            for ident in exposed_idents {
+            for Loc {
+                region,
+                value: ident,
+            } in exposed_idents
+            {
                 let ident_id = ident_ids.get_or_insert(ident.as_str());
                 let symbol = Symbol::new(module_id, ident_id);
 
@@ -3731,7 +3906,8 @@ fn send_header<'a>(
 
     (
         home,
-        Msg::Header(ModuleHeader {
+        name,
+        ModuleHeader {
             module_id: home,
             module_path: filename,
             is_root_module,
@@ -3747,7 +3923,7 @@ fn send_header<'a>(
             symbols_from_requires: Vec::new(),
             header_for: extra,
             module_timing,
-        }),
+        },
     )
 }
 
@@ -3788,7 +3964,7 @@ fn send_header_two<'a>(
     let declared_name: ModuleName = "".into();
     let mut symbols_from_requires = Vec::with_capacity(requires.len());
 
-    let mut imported: Vec<(QualifiedModuleName, Vec<Ident>, Region)> =
+    let mut imported: Vec<(QualifiedModuleName, Vec<Loc<Ident>>, Region)> =
         Vec::with_capacity(imports.len());
     let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
 
@@ -3846,14 +4022,21 @@ fn send_header_two<'a>(
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
             let cloned_module_name = qualified_module_name.module.clone();
-            let pq_module_name = match qualified_module_name.opt_package {
-                None => match opt_shorthand {
-                    Some(shorthand) => {
-                        PQModuleName::Qualified(shorthand, qualified_module_name.module)
-                    }
-                    None => PQModuleName::Unqualified(qualified_module_name.module),
-                },
-                Some(package) => PQModuleName::Qualified(package, cloned_module_name),
+            let pq_module_name = if qualified_module_name.is_builtin() {
+                // If this is a builtin, it must be unqualified, and we should *never* prefix it
+                // with the package shorthand! The user intended to import the module as-is here.
+                debug_assert!(qualified_module_name.opt_package.is_none());
+                PQModuleName::Unqualified(qualified_module_name.module)
+            } else {
+                match qualified_module_name.opt_package {
+                    None => match opt_shorthand {
+                        Some(shorthand) => {
+                            PQModuleName::Qualified(shorthand, qualified_module_name.module)
+                        }
+                        None => PQModuleName::Unqualified(qualified_module_name.module),
+                    },
+                    Some(package) => PQModuleName::Qualified(package, cloned_module_name),
+                }
             };
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
@@ -3866,7 +4049,11 @@ fn send_header_two<'a>(
             // to the same symbols as the ones we're using here.
             let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
-            for ident in exposed_idents {
+            for Loc {
+                region,
+                value: ident,
+            } in exposed_idents
+            {
                 let ident_id = ident_ids.get_or_insert(ident.as_str());
                 let symbol = Symbol::new(module_id, ident_id);
 
@@ -4011,6 +4198,7 @@ impl<'a> BuildTask<'a> {
         module: Module,
         ident_ids: IdentIds,
         module_timing: ModuleTiming,
+        types: Types,
         constraints: Constraints,
         constraint: ConstraintSoa,
         pending_derives: PendingDerives,
@@ -4019,7 +4207,7 @@ impl<'a> BuildTask<'a> {
         exposed_types: &ExposedByModule,
         dep_idents: IdentIdsByModule,
         declarations: Declarations,
-        cached_subs: CachedSubs,
+        cached_subs: CachedTypeState,
         derived_module: SharedDerivedModule,
     ) -> Self {
         let exposed_by_module = exposed_types.retain_modules(imported_modules.keys());
@@ -4032,6 +4220,7 @@ impl<'a> BuildTask<'a> {
             module,
             ident_ids,
             exposed_for_module,
+            types,
             constraints,
             constraint,
             pending_derives,
@@ -4086,14 +4275,13 @@ fn synth_list_len_type(subs: &mut Subs) -> Variable {
 
 pub fn add_imports(
     my_module: ModuleId,
+    constraints: &mut Constraints,
     subs: &mut Subs,
     mut pending_abilities: PendingAbilitiesStore,
     exposed_for_module: &ExposedForModule,
-    def_types: &mut Vec<(Symbol, Loc<roc_types::types::Type>)>,
+    def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
     rigid_vars: &mut Vec<Variable>,
 ) -> (Vec<Variable>, AbilitiesStore) {
-    use roc_types::types::Type;
-
     let mut import_variables = Vec::new();
 
     let mut cached_symbol_vars = VecMap::default();
@@ -4118,10 +4306,11 @@ pub fn add_imports(
                     };
 
                     let copied_import = exposed_types.storage_subs.export_variable_to($subs, variable);
+                    let copied_import_index = constraints.push_variable(copied_import.variable);
 
                     def_types.push((
                         $symbol,
-                        Loc::at_zero(Type::Variable(copied_import.variable)),
+                        Loc::at_zero(copied_import_index),
                     ));
 
                     // not a typo; rigids are turned into flex during type inference, but when imported we must
@@ -4151,14 +4340,15 @@ pub fn add_imports(
     // Patch used symbols from circular dependencies.
     if my_module == ModuleId::NUM {
         // Num needs List.len, but List imports Num.
-        let list_len_type = synth_list_len_type(subs);
-        def_types.push((
-            Symbol::LIST_LEN,
-            Loc::at_zero(Type::Variable(list_len_type)),
-        ));
-        import_variables.push(list_len_type);
+        let list_len_type_var = synth_list_len_type(subs);
+        let list_len_type_index = constraints.push_variable(list_len_type_var);
+        def_types.push((Symbol::LIST_LEN, Loc::at_zero(list_len_type_index)));
+        import_variables.push(list_len_type_var);
     }
 
+    // Fill in the implementation information of the abilities from the modules we import, which we
+    // now know because all imported modules should be solved by now.
+    //
     // TODO: see if we can reduce the amount of specializations we need to import.
     // One idea is to just always assume external modules fulfill their specialization obligations
     // and save lambda set resolution for mono.
@@ -4217,6 +4407,7 @@ pub fn add_imports(
 #[allow(clippy::complexity)]
 fn run_solve_solve(
     exposed_for_module: ExposedForModule,
+    mut types: Types,
     mut constraints: Constraints,
     constraint: ConstraintSoa,
     pending_derives: PendingDerives,
@@ -4239,12 +4430,13 @@ fn run_solve_solve(
     } = module;
 
     let mut rigid_vars: Vec<Variable> = Vec::new();
-    let mut def_types: Vec<(Symbol, Loc<roc_types::types::Type>)> = Vec::new();
+    let mut def_types: Vec<(Symbol, Loc<TypeOrVar>)> = Vec::new();
 
     let mut subs = Subs::new_from_varstore(var_store);
 
     let (import_variables, abilities_store) = add_imports(
         module.module_id,
+        &mut constraints,
         &mut subs,
         pending_abilities,
         &exposed_for_module,
@@ -4255,10 +4447,9 @@ fn run_solve_solve(
     let actual_constraint =
         constraints.let_import_constraint(rigid_vars, def_types, constraint, &import_variables);
 
-    let mut solve_aliases = default_aliases();
-
+    let mut solve_aliases = roc_solve::solve::Aliases::with_capacity(aliases.len());
     for (name, (_, alias)) in aliases.iter() {
-        solve_aliases.insert(*name, alias.clone());
+        solve_aliases.insert(&mut types, *name, alias.clone());
     }
 
     let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {
@@ -4266,6 +4457,7 @@ fn run_solve_solve(
 
         let (solved_subs, solved_env, problems, abilities_store) = roc_solve::module::run_solve(
             module_id,
+            types,
             &constraints,
             actual_constraint,
             rigid_variables,
@@ -4285,7 +4477,7 @@ fn run_solve_solve(
                 .values()
                 .any(|resolved_impl| match resolved_impl {
                     ResolvedImpl::Impl(specialization) => specialization.symbol == sym,
-                    ResolvedImpl::Derived | ResolvedImpl::Error => false,
+                    ResolvedImpl::Error => false,
                 })
         };
 
@@ -4293,7 +4485,11 @@ fn run_solve_solve(
         // ability.
         let exposed_vars_by_symbol: Vec<_> = solved_env
             .vars_by_symbol()
-            .filter(|(k, _)| exposed_symbols.contains(k) || is_specialization_symbol(*k))
+            .filter(|(k, _)| {
+                exposed_symbols.contains(k)
+                    || is_specialization_symbol(*k)
+                    || k.is_exposed_for_builtin_derivers()
+            })
             .collect();
 
         (
@@ -4320,13 +4516,14 @@ fn run_solve<'a>(
     ident_ids: IdentIds,
     mut module_timing: ModuleTiming,
     exposed_for_module: ExposedForModule,
+    types: Types,
     constraints: Constraints,
     constraint: ConstraintSoa,
     pending_derives: PendingDerives,
     var_store: VarStore,
     decls: Declarations,
     dep_idents: IdentIdsByModule,
-    cached_subs: CachedSubs,
+    cached_types: CachedTypeState,
     derived_module: SharedDerivedModule,
 ) -> Msg<'a> {
     let solve_start = Instant::now();
@@ -4342,9 +4539,10 @@ fn run_solve<'a>(
 
     let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {
         if module_id.is_builtin() {
-            match cached_subs.lock().remove(&module_id) {
+            match cached_types.lock().remove(&module_id) {
                 None => run_solve_solve(
                     exposed_for_module,
+                    types,
                     constraints,
                     constraint,
                     pending_derives,
@@ -4352,21 +4550,23 @@ fn run_solve<'a>(
                     module,
                     derived_module,
                 ),
-                Some((subs, exposed_vars_by_symbol)) => {
-                    (
-                        Solved(subs),
-                        // TODO(abilities) cache abilities for builtins
-                        VecMap::default(),
-                        exposed_vars_by_symbol.to_vec(),
-                        vec![],
-                        // TODO(abilities) cache abilities for builtins
-                        AbilitiesStore::default(),
-                    )
-                }
+                Some(TypeState {
+                    subs,
+                    exposed_vars_by_symbol,
+                    abilities,
+                    solved_implementations,
+                }) => (
+                    Solved(subs),
+                    solved_implementations,
+                    exposed_vars_by_symbol,
+                    vec![],
+                    abilities,
+                ),
             }
         } else {
             run_solve_solve(
                 exposed_for_module,
+                types,
                 constraints,
                 constraint,
                 pending_derives,
@@ -4511,6 +4711,7 @@ fn canonicalize_and_constrain<'a>(
         &symbols_from_requires,
         &mut var_store,
     );
+    let mut types = Types::new();
 
     // _after has an underscore because it's unused in --release builds
     let _after = roc_types::types::get_type_clone_count();
@@ -4554,6 +4755,7 @@ fn canonicalize_and_constrain<'a>(
         roc_can::constraint::Constraint::True
     } else {
         constrain_module(
+            &mut types,
             &mut constraints,
             module_output.symbols_from_requires,
             &module_output.scope.abilities_store,
@@ -4589,7 +4791,11 @@ fn canonicalize_and_constrain<'a>(
             Vacant(vacant) => {
                 let should_include_builtin = matches!(
                     name.module_id(),
-                    ModuleId::ENCODE | ModuleId::DECODE | ModuleId::DICT | ModuleId::SET
+                    ModuleId::ENCODE
+                        | ModuleId::DECODE
+                        | ModuleId::DICT
+                        | ModuleId::SET
+                        | ModuleId::HASH
                 );
 
                 if !name.is_builtin() || should_include_builtin {
@@ -4621,6 +4827,7 @@ fn canonicalize_and_constrain<'a>(
         ident_ids: module_output.scope.locals.ident_ids,
         dep_idents,
         module_timing,
+        types,
         pending_derives: module_output.pending_derives,
     };
 
@@ -4636,7 +4843,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     let parse_start = Instant::now();
     let source = header.parse_state.original_bytes();
     let parse_state = header.parse_state;
-    let parsed_defs = match module_defs().parse(arena, parse_state) {
+    let parsed_defs = match module_defs().parse(arena, parse_state, 0) {
         Ok((_, success, _state)) => success,
         Err((_, fail, state)) => {
             return Err(LoadingProblem::ParsingFailed(
@@ -4688,7 +4895,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     Ok(Msg::Parsed(parsed))
 }
 
-fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>, Vec<Ident>) {
+fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>, Vec<Loc<Ident>>) {
     use roc_parse::header::ImportsEntry::*;
 
     match entry {
@@ -4696,7 +4903,7 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
             let mut exposed = Vec::with_capacity(exposes.len());
 
             for loc_entry in exposes.iter() {
-                exposed.push(ident_from_exposed(&loc_entry.value));
+                exposed.push(loc_entry.map(ident_from_exposed));
             }
 
             let qualified_module_name = QualifiedModuleName {
@@ -4711,7 +4918,7 @@ fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>
             let mut exposed = Vec::with_capacity(exposes.len());
 
             for loc_entry in exposes.iter() {
-                exposed.push(ident_from_exposed(&loc_entry.value));
+                exposed.push(loc_entry.map(ident_from_exposed));
             }
 
             let qualified_module_name = QualifiedModuleName {
@@ -4808,7 +5015,6 @@ fn make_specializations<'a>(
 #[allow(clippy::too_many_arguments)]
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
-    execution_mode: ExecutionMode,
     solved_subs: Solved<Subs>,
     imported_module_thunks: &'a [Symbol],
     home: ModuleId,
@@ -4821,6 +5027,7 @@ fn build_pending_specializations<'a>(
     exposed_by_module: &ExposedByModule,
     abilities_store: AbilitiesStore,
     derived_module: SharedDerivedModule,
+    build_expects: bool,
 ) -> Msg<'a> {
     let find_specializations_start = Instant::now();
 
@@ -5067,11 +5274,8 @@ fn build_pending_specializations<'a>(
             }
             Expectation => {
                 // skip expectations if we're not going to run them
-                match execution_mode {
-                    ExecutionMode::Test => { /* fall through */ }
-                    ExecutionMode::Check
-                    | ExecutionMode::Executable
-                    | ExecutionMode::ExecutableIfCheck => continue,
+                if !build_expects {
+                    continue;
                 }
 
                 // mark this symbol as a top-level thunk before any other work on the procs
@@ -5143,11 +5347,8 @@ fn build_pending_specializations<'a>(
             }
             ExpectationFx => {
                 // skip expectations if we're not going to run them
-                match execution_mode {
-                    ExecutionMode::Test => { /* fall through */ }
-                    ExecutionMode::Check
-                    | ExecutionMode::Executable
-                    | ExecutionMode::ExecutableIfCheck => continue,
+                if !build_expects {
+                    continue;
                 }
 
                 // mark this symbol as a top-level thunk before any other work on the procs
@@ -5397,6 +5598,7 @@ fn run_task<'a>(
             module,
             module_timing,
             exposed_for_module,
+            types,
             constraints,
             constraint,
             pending_derives,
@@ -5411,6 +5613,7 @@ fn run_task<'a>(
             ident_ids,
             module_timing,
             exposed_for_module,
+            types,
             constraints,
             constraint,
             pending_derives,
@@ -5422,7 +5625,6 @@ fn run_task<'a>(
         )),
         BuildPendingSpecializations {
             module_id,
-            execution_mode,
             ident_ids,
             decls,
             module_timing,
@@ -5433,9 +5635,9 @@ fn run_task<'a>(
             abilities_store,
             exposed_by_module,
             derived_module,
+            build_expects,
         } => Ok(build_pending_specializations(
             arena,
-            execution_mode,
             solved_subs,
             imported_module_thunks,
             module_id,
@@ -5448,6 +5650,7 @@ fn run_task<'a>(
             &exposed_by_module,
             abilities_store,
             derived_module,
+            build_expects,
         )),
         MakeSpecializations {
             module_id,
@@ -5538,10 +5741,14 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
         _ => {
             let error = std::io::Error::from(error);
             let formatted = format!("{}", error);
-            let doc = alloc.concat([
-                alloc.reflow(r"I tried to read this file, but ran into a "),
-                alloc.text(formatted),
-                alloc.reflow(r" problem."),
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to read this file:"),
+                alloc
+                    .text(filename.to_str().unwrap())
+                    .annotate(Annotation::Error)
+                    .indent(4),
+                alloc.reflow(r"But ran into:"),
+                alloc.text(formatted).annotate(Annotation::Error).indent(4),
             ]);
 
             Report {
@@ -5557,6 +5764,114 @@ fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
     let palette = DEFAULT_PALETTE;
     report.render_color_terminal(&mut buf, &alloc, &palette);
 
+    buf
+}
+
+fn to_import_cycle_report(
+    module_ids: ModuleIds,
+    all_ident_ids: IdentIdsByModule,
+    import_cycle: Vec<ModuleId>,
+    filename: PathBuf,
+    render: RenderTarget,
+) -> String {
+    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use ven_pretty::DocAllocator;
+
+    // import_cycle looks like CycleModule, Import1, ..., ImportN, CycleModule
+    // In a self-referential case, it just looks like CycleModule, CycleModule.
+    debug_assert!(import_cycle.len() >= 2);
+    let source_of_cycle = import_cycle.first().unwrap();
+
+    // We won't be printing any lines for this report, so this is okay.
+    // TODO: it would be nice to show how each module imports another in the cycle.
+    let src_lines = &[];
+
+    let interns = Interns {
+        module_ids,
+        all_ident_ids,
+    };
+    let alloc = RocDocAllocator::new(src_lines, *source_of_cycle, &interns);
+
+    let doc = alloc.stack([
+        alloc.concat([
+            alloc.reflow("I can't compile "),
+            alloc.module(*source_of_cycle),
+            alloc.reflow(
+                " because it depends on itself through the following chain of module imports:",
+            ),
+        ]),
+        roc_reporting::report::cycle(
+            &alloc,
+            4,
+            alloc.module(*source_of_cycle),
+            import_cycle
+                .into_iter()
+                .skip(1)
+                .map(|module| alloc.module(module))
+                .collect(),
+        ),
+        alloc.reflow("Cyclic dependencies are not allowed in Roc! Can you restructure a module in this import chain so that it doesn't have to depend on itself?")
+    ]);
+
+    let report = Report {
+        filename,
+        doc,
+        title: "IMPORT CYCLE".to_string(),
+        severity: Severity::RuntimeError,
+    };
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+    report.render(render, &mut buf, &alloc, &palette);
+    buf
+}
+
+fn to_incorrect_module_name_report<'a>(
+    module_ids: ModuleIds,
+    all_ident_ids: IdentIdsByModule,
+    problem: IncorrectModuleName<'a>,
+    filename: PathBuf,
+    src: &'a [u8],
+    render: RenderTarget,
+) -> String {
+    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use ven_pretty::DocAllocator;
+
+    let IncorrectModuleName {
+        module_id,
+        found,
+        expected,
+    } = problem;
+
+    // SAFETY: if the module was not UTF-8, that would be reported as a parsing problem, rather
+    // than an incorrect module name problem (the latter can happen only after parsing).
+    let src = unsafe { from_utf8_unchecked(src) };
+    let src_lines = src.lines().collect::<Vec<_>>();
+    let lines = LineInfo::new(src);
+
+    let interns = Interns {
+        module_ids,
+        all_ident_ids,
+    };
+    let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
+
+    let doc = alloc.stack([
+        alloc.reflow("This module has a different name than I expected:"),
+        alloc.region(lines.convert_region(found.region)),
+        alloc.reflow("Based on the nesting and use of this module, I expect it to have name"),
+        alloc.pq_module_name(expected).indent(4),
+    ]);
+
+    let report = Report {
+        filename,
+        doc,
+        title: "INCORRECT MODULE NAME".to_string(),
+        severity: Severity::RuntimeError,
+    };
+
+    let mut buf = String::new();
+    let palette = DEFAULT_PALETTE;
+    report.render(render, &mut buf, &alloc, &palette);
     buf
 }
 
@@ -5686,46 +6001,4 @@ fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> Strin
     report.render_color_terminal(&mut buf, &alloc, &palette);
 
     buf
-}
-
-/// Builtin aliases that are not covered by type checker optimizations
-///
-/// Types like `F64` and `I32` are hardcoded into Subs and therefore we don't define them here.
-/// Generic number types (Num, Int, Float, etc.) are treated as `DelayedAlias`es resolved during
-/// type solving.
-/// All that remains are Signed8, Signed16, etc.
-pub fn default_aliases() -> roc_solve::solve::Aliases {
-    use roc_types::types::Type;
-
-    let mut solve_aliases = roc_solve::solve::Aliases::default();
-
-    let mut zero_opaque = |alias_name: Symbol| {
-        let alias = Alias {
-            region: Region::zero(),
-            type_variables: vec![],
-            lambda_set_variables: Default::default(),
-            recursion_variables: Default::default(),
-            typ: Type::EmptyTagUnion,
-            kind: AliasKind::Opaque,
-        };
-
-        solve_aliases.insert(alias_name, alias);
-    };
-
-    zero_opaque(Symbol::NUM_SIGNED8);
-    zero_opaque(Symbol::NUM_SIGNED16);
-    zero_opaque(Symbol::NUM_SIGNED32);
-    zero_opaque(Symbol::NUM_SIGNED64);
-    zero_opaque(Symbol::NUM_SIGNED128);
-
-    zero_opaque(Symbol::NUM_UNSIGNED8);
-    zero_opaque(Symbol::NUM_UNSIGNED16);
-    zero_opaque(Symbol::NUM_UNSIGNED32);
-    zero_opaque(Symbol::NUM_UNSIGNED64);
-    zero_opaque(Symbol::NUM_UNSIGNED128);
-
-    zero_opaque(Symbol::NUM_BINARY32);
-    zero_opaque(Symbol::NUM_BINARY64);
-
-    solve_aliases
 }

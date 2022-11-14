@@ -4,21 +4,23 @@ name = "roc_repl_wasm"
 version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
+description = "Provides a build of the REPL for the Roc website using WebAssembly."
 
 [lib]
 crate-type = ["cdylib"]
 
 [build-dependencies]
 roc_builtins = {path = "../compiler/builtins"}
+roc_utils = {path = "../utils"}
 wasi_libc_sys = { path = "../wasi-libc-sys" }
 
 [dependencies]
-bumpalo = {version = "3.8.0", features = ["collections"]}
+bumpalo.workspace = true 
 console_error_panic_hook = {version = "0.1.7", optional = true}
-futures = {version = "0.3.17", optional = true}
-js-sys = "0.3.56"
+futures = {version = "0.3.24", optional = true}
+js-sys = "0.3.60"
 wasm-bindgen = "0.2.79"
-wasm-bindgen-futures = "0.4.32"
+wasm-bindgen-futures = "0.4.33"
 
 roc_collections = {path = "../compiler/collections"}
 roc_gen_wasm = {path = "../compiler/gen_wasm"}

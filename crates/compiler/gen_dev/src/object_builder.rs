@@ -421,7 +421,7 @@ fn build_proc<'a, B: Backend<'a>>(
             }
             Relocation::LinkedFunction { offset, name } => {
                 // If the symbol is an undefined roc function, we need to add it here.
-                if output.symbol_id(name.as_bytes()) == None && name.starts_with("roc_") {
+                if output.symbol_id(name.as_bytes()).is_none() && name.starts_with("roc_") {
                     let builtin_symbol = Symbol {
                         name: name.as_bytes().to_vec(),
                         value: 0,
@@ -435,7 +435,7 @@ fn build_proc<'a, B: Backend<'a>>(
                     output.add_symbol(builtin_symbol);
                 }
                 // If the symbol is an undefined reference counting procedure, we need to add it here.
-                if output.symbol_id(name.as_bytes()) == None {
+                if output.symbol_id(name.as_bytes()).is_none() {
                     for (sym, rc_name) in rc_proc_names.iter() {
                         if name == rc_name {
                             let section_id = output.add_section(

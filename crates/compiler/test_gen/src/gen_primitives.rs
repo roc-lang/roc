@@ -946,7 +946,13 @@ fn when_peano() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+// This doesn't work on Windows. If you make it return a Result.withDefault 0 (so it's returning
+// an integer instead of a Result), then it works on Windows, suggesting this is a C ABI issue.
+// We should try this out on Windows again after making adjustments to the Result C ABI!
+#[cfg(all(
+    not(target_family = "windows"),
+    any(feature = "gen-llvm", feature = "gen-wasm")
+))]
 #[should_panic(expected = "Roc failed with message: ")]
 fn overflow_frees_list() {
     assert_evals_to!(
@@ -977,7 +983,7 @@ fn undefined_variable() {
     assert_evals_to!(
         indoc!(
             r#"
-                 if True then
+                 if Bool.true then
                      x + z
                  else
                      y + z
@@ -1256,10 +1262,10 @@ fn linked_list_is_singleton() {
             isSingleton = \list ->
                 when list is
                     Cons _ Nil ->
-                        True
+                        Bool.true
 
                     _ ->
-                        False
+                        Bool.false
 
             main : Bool
             main =
@@ -1291,10 +1297,10 @@ fn linked_list_is_empty_1() {
             isEmpty = \list ->
                 when list is
                     Cons _ _ ->
-                        False
+                        Bool.false
 
                     Nil ->
-                        True
+                        Bool.true
 
             main : Bool
             main =
@@ -1323,10 +1329,10 @@ fn linked_list_is_empty_2() {
             isEmpty = \list ->
                 when list is
                     Cons _ _ ->
-                        False
+                        Bool.false
 
                     Nil ->
-                        True
+                        Bool.true
 
             main : Bool
             main =
@@ -2000,9 +2006,9 @@ fn hof_conditional() {
     assert_evals_to!(
         indoc!(
             r#"
-                passTrue = \f -> f True
+                passTrue = \f -> f Bool.true
 
-                passTrue (\trueVal -> if trueVal then False else True)
+                passTrue (\trueVal -> if trueVal then Bool.false else Bool.true)
             "#
         ),
         0,
@@ -2081,8 +2087,8 @@ fn fingertree_basic() {
             main : Bool
             main =
                 when cons 0x1 Nil is
-                    Unit 1 -> True
-                    _ -> False
+                    Unit 1 -> Bool.true
+                    _ -> Bool.false
             "#
         ),
         true,
@@ -2130,8 +2136,8 @@ fn rosetree_basic() {
                 x : Tree F64
                 x = singleton 3
                 when x is
-                    Tree 3.0 _ -> True
-                    _ -> False
+                    Tree 3.0 _ -> Bool.true
+                    _ -> Bool.false
             "#
         ),
         true,
@@ -2158,6 +2164,7 @@ fn case_jump() {
                     Pair Nil _ -> 1
                     Pair _ Nil -> 2
                     Pair (Cons a _) (Cons b _) -> a + b + 3
+                    Pair _ _ -> 4
             "#
         ),
         1,
@@ -2332,7 +2339,7 @@ fn multiple_increment() {
                 leaf = Leaf
 
                 m : Map
-                m = Node Black (Node Black leaf 10 False leaf) 11 False (Node Black leaf 12 False (Node Red leaf 13 False leaf))
+                m = Node Black (Node Black leaf 10 Bool.false leaf) 11 Bool.false (Node Black leaf 12 Bool.false (Node Red leaf 13 Bool.false leaf))
 
                 when m is
                     Leaf -> 0
@@ -2544,7 +2551,7 @@ fn increment_or_double_closure() {
                     two = 2
 
                     b : Bool
-                    b = True
+                    b = Bool.true
 
                     increment : I64 -> I64
                     increment = \x -> x + one
@@ -2552,7 +2559,7 @@ fn increment_or_double_closure() {
                     double : I64 -> I64
                     double = \x -> if b then x * two else x
 
-                    f = (if True then increment else double)
+                    f = (if Bool.true then increment else double)
 
                     apply f 42
             "#
@@ -2589,7 +2596,7 @@ fn pass_through_unresolved_type_variable() {
 
                 main : Str
                 main =
-                    (accept Bool.isEq) "B"
+                    (accept \x -> x) "B"
 
 
                 accept : * -> (b -> b)
@@ -2872,10 +2879,10 @@ fn unresolved_tvar_when_capture_is_unused() {
 
                 main : I64
                 main =
-                    r : Bool
-                    r = False
+                    r : U8
+                    r = 1
 
-                    p1 = (\_ -> r == (1 == 1))
+                    p1 = (\_ -> r == 1)
                     oneOfResult = List.map [p1] (\p -> p Green)
 
                     when oneOfResult is
@@ -3393,7 +3400,7 @@ fn polymorphic_lambda_set_usage() {
             r#"
             id1 = \x -> x
             id2 = \y -> y
-            id = if True then id1 else id2
+            id = if Bool.true then id1 else id2
 
             id 9u8
             "#
@@ -3411,7 +3418,7 @@ fn polymorphic_lambda_set_multiple_specializations() {
             r#"
             id1 = \x -> x
             id2 = \y -> y
-            id = if True then id1 else id2
+            id = if Bool.true then id1 else id2
 
             (id 9u8) + Num.toU8 (id 16u16)
             "#
@@ -3443,7 +3450,7 @@ fn list_map2_conslist() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn mutual_recursion_top_level_defs() {
     assert_evals_to!(
         indoc!(
@@ -3452,14 +3459,14 @@ fn mutual_recursion_top_level_defs() {
 
             isEven = \n ->
                 when n is
-                    0 -> True
-                    1 -> False
+                    0 -> Bool.true
+                    1 -> Bool.false
                     _ -> isOdd (n - 1)
 
             isOdd = \n ->
                 when n is
-                    0 -> False
-                    1 -> True
+                    0 -> Bool.false
+                    1 -> Bool.true
                     _ -> isEven (n - 1)
 
             main = isOdd 11
@@ -3480,7 +3487,7 @@ fn polymorphic_lambda_captures_polymorphic_value() {
 
             f1 = \_ -> x
 
-            f = if True then f1 else f1
+            f = if Bool.true then f1 else f1
             f {}
             "#
         ),
@@ -3500,13 +3507,14 @@ fn lambda_capture_niche_u64_vs_u8_capture() {
                 \{} ->
                     Num.toStr val
 
-            x : [True, False]
-            x = True
+            x : Bool
+            x = Bool.true
 
             fun =
-                when x is
-                    True -> capture 123u64
-                    False -> capture 18u8
+                if x then
+                    capture 123u64
+                else
+                    capture 18u8
 
             fun {}
             "#
@@ -3602,12 +3610,13 @@ fn lambda_capture_niches_have_captured_function_in_closure() {
 
             fun = \x ->
                 h =
-                    when x is
-                        True -> after (\{} -> "") f
-                        False -> after (\{} -> {s1: "s1"}) g
+                    if x then
+                        after (\{} -> "") f
+                    else
+                        after (\{} -> {s1: "s1"}) g
                 h {}
 
-            {a: fun False, b: fun True}
+            {a: fun Bool.false, b: fun Bool.true}
             "#
         ),
         (RocStr::from("s1"), RocStr::from("fun f")),
@@ -4001,10 +4010,10 @@ fn mutually_recursive_captures() {
         indoc!(
             r#"
             x : Bool
-            x = True
+            x = Bool.true
 
             y : Bool
-            y = False
+            y = Bool.false
 
             a = "foo"
             b = "bar"
@@ -4016,25 +4025,6 @@ fn mutually_recursive_captures() {
             "#
         ),
         RocStr::from("foo"),
-        RocStr
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn monomorphization_sees_polymorphic_recursion() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            foo : a, Bool -> Str
-            foo = \in, b -> if b then "done" else bar in
-
-            bar = \_ -> foo {} True
-
-            foo "" False
-            "#
-        ),
-        RocStr::from("done"),
         RocStr
     );
 }
@@ -4056,6 +4046,64 @@ fn int_let_generalization() {
             "#
         ),
         RocStr::from("done"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn pattern_match_char() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            c = 'A'
+
+            when c is
+                'A' -> "okay"
+                _ -> "FAIL"
+            "#
+        ),
+        RocStr::from("okay"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_4348() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            str = "z"
+            (\_ ->
+                when str is
+                    "z" -> "okay"
+                    _ -> "") "FAIL"
+            "#
+        ),
+        RocStr::from("okay"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_4349() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            ir = Ok ""
+            res =
+                Result.try ir \_ ->
+                    when ir is
+                        Ok "" -> Ok ""
+                        _ -> Err Bad
+            when res is
+                Ok _ -> "okay"
+                _ -> "FAIL"
+            "#
+        ),
+        RocStr::from("okay"),
         RocStr
     );
 }

@@ -162,8 +162,6 @@ impl FunctionLayout {
         subs: &Subs,
         flat_type: &FlatType,
     ) -> Result<Self, LayoutError> {
-        use LayoutError::*;
-
         match flat_type {
             FlatType::Func(arguments, lambda_set, result) => {
                 let slice = Slice::reserve(layouts, arguments.len() + 1);
@@ -188,8 +186,6 @@ impl FunctionLayout {
                     lambda_set: lambda_set_index,
                 })
             }
-
-            FlatType::Erroneous(_) => Err(TypeError(())),
 
             _ => todo!(),
         }
@@ -292,7 +288,7 @@ impl LambdaSet {
 
         let variables = solved.variables();
         if variables.len() == 1 {
-            let symbol = subs.closure_names[lambda_names.start as usize];
+            let symbol = subs.symbol_names[lambda_names.start as usize];
             let symbol_index = Index::new(layouts.symbols.len() as u32);
             layouts.symbols.push(symbol);
             let variable_slice = subs.variable_slices[variables.start as usize];
@@ -339,7 +335,7 @@ impl LambdaSet {
     ) -> Slice<Symbol> {
         let slice = Slice::new(layouts.symbols.len() as u32, subs_slice.len() as u16);
 
-        let symbols = &subs.closure_names[subs_slice.indices()];
+        let symbols = &subs.symbol_names[subs_slice.indices()];
 
         for symbol in symbols {
             layouts.symbols.push(*symbol);
@@ -742,8 +738,6 @@ impl Layout {
         subs: &Subs,
         flat_type: &FlatType,
     ) -> Result<Layout, LayoutError> {
-        use LayoutError::*;
-
         match flat_type {
             FlatType::Apply(Symbol::LIST_LIST, arguments) => {
                 debug_assert_eq!(arguments.len(), 1);
@@ -807,7 +801,9 @@ impl Layout {
                         RecordField::Optional(_) | RecordField::RigidOptional(_) => {
                             // do nothing
                         }
-                        RecordField::Required(_) | RecordField::Demanded(_) => {
+                        RecordField::Required(_)
+                        | RecordField::Demanded(_)
+                        | RecordField::RigidRequired(_) => {
                             let var = subs.variables[var_index.index as usize];
                             let layout = Layout::from_var_help(layouts, subs, var)?;
 
@@ -865,7 +861,6 @@ impl Layout {
 
                 Ok(Layout::UnionRecursive(slices))
             }
-            FlatType::Erroneous(_) => Err(TypeError(())),
             FlatType::EmptyRecord => Ok(Layout::UNIT),
             FlatType::EmptyTagUnion => Ok(Layout::VOID),
         }

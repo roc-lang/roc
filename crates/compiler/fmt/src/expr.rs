@@ -34,8 +34,10 @@ impl<'a> Formattable for Expr<'a> {
             | Num(..)
             | NonBase10Int { .. }
             | SingleQuote(_)
-            | Access(_, _)
-            | AccessorFunction(_)
+            | RecordAccess(_, _)
+            | RecordAccessorFunction(_)
+            | TupleAccess(_, _)
+            | TupleAccessorFunction(_)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
@@ -106,6 +108,7 @@ impl<'a> Formattable for Expr<'a> {
             }
 
             Record(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
+            Tuple(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
             RecordUpdate { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
         }
     }
@@ -288,8 +291,17 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push_str(string)
             }
             SingleQuote(string) => {
+                buf.indent(indent);
                 buf.push('\'');
-                buf.push_str(string);
+                for c in string.chars() {
+                    if c == '"' {
+                        buf.push_char_literal('"')
+                    } else {
+                        for escaped in c.escape_default() {
+                            buf.push_char_literal(escaped);
+                        }
+                    }
+                }
                 buf.push('\'');
             }
             &NonBase10Int {
@@ -313,6 +325,9 @@ impl<'a> Formattable for Expr<'a> {
             }
             Record(fields) => {
                 fmt_record(buf, None, *fields, indent);
+            }
+            Tuple(_fields) => {
+                todo!("format tuple");
             }
             RecordUpdate { update, fields } => {
                 fmt_record(buf, Some(*update), *fields, indent);
@@ -386,12 +401,22 @@ impl<'a> Formattable for Expr<'a> {
 
                 sub_expr.format_with_options(buf, Parens::InApply, newlines, indent);
             }
-            AccessorFunction(key) => {
+            RecordAccessorFunction(key) => {
                 buf.indent(indent);
                 buf.push('.');
                 buf.push_str(key);
             }
-            Access(expr, key) => {
+            RecordAccess(expr, key) => {
+                expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+                buf.push('.');
+                buf.push_str(key);
+            }
+            TupleAccessorFunction(key) => {
+                buf.indent(indent);
+                buf.push('.');
+                buf.push_str(key);
+            }
+            TupleAccess(expr, key) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                 buf.push('.');
                 buf.push_str(key);
@@ -419,7 +444,15 @@ fn format_str_segment<'a, 'buf>(seg: &StrSegment<'a>, buf: &mut Buf<'buf>, inden
 
     match seg {
         Plaintext(string) => {
-            buf.push_str_allow_spaces(string);
+            // Lines in block strings will end with Plaintext ending in "\n" to indicate
+            // a line break in the input string
+            match string.strip_suffix('\n') {
+                Some(string_without_newline) => {
+                    buf.push_str_allow_spaces(string_without_newline);
+                    buf.newline();
+                }
+                None => buf.push_str_allow_spaces(string),
+            }
         }
         Unicode(loc_str) => {
             buf.push_str("\\u(");
@@ -476,24 +509,20 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
     buf.push('"');
     match literal {
         PlainLine(string) => {
-            // When a PlainLine contains "\n" it is formatted as a block string using """
-            let mut lines = string.split('\n');
-            match (lines.next(), lines.next()) {
-                (Some(first), Some(second)) => {
-                    buf.push_str("\"\"");
-                    buf.newline();
-
-                    for line in [first, second].into_iter().chain(lines) {
-                        buf.indent(indent);
-                        buf.push_str_allow_spaces(line);
-                        buf.newline();
-                    }
-
+            // When a PlainLine contains '\n' or '"', format as a block string
+            if string.contains('"') || string.contains('\n') {
+                buf.push_str("\"\"");
+                buf.newline();
+                for line in string.split('\n') {
                     buf.indent(indent);
-                    buf.push_str("\"\"");
+                    buf.push_str_allow_spaces(line);
+                    buf.newline();
                 }
-                _ => buf.push_str_allow_spaces(string),
-            }
+                buf.indent(indent);
+                buf.push_str("\"\"");
+            } else {
+                buf.push_str_allow_spaces(string);
+            };
         }
         Line(segments) => {
             for seg in segments.iter() {
@@ -501,36 +530,19 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
             }
         }
         Block(lines) => {
+            // Block strings will always be formatted with """ on new lines
             buf.push_str("\"\"");
+            buf.newline();
 
-            if lines.len() > 1 {
-                // Since we have multiple lines, format this with
-                // the `"""` symbols on their own lines, and the
+            for segments in lines.iter() {
+                for seg in segments.iter() {
+                    buf.indent(indent);
+                    format_str_segment(seg, buf, indent);
+                }
+
                 buf.newline();
-
-                for segments in lines.iter() {
-                    for seg in segments.iter() {
-                        format_str_segment(seg, buf, indent);
-                    }
-
-                    buf.newline();
-                }
-            } else {
-                // This is a single-line block string, for example:
-                //
-                //     """Whee, "quotes" inside quotes!"""
-
-                // This loop will run either 0 or 1 times.
-                for segments in lines.iter() {
-                    for seg in segments.iter() {
-                        format_str_segment(seg, buf, indent);
-                    }
-
-                    // Don't print a newline here, because we either
-                    // just printed 1 or 0 lines.
-                }
             }
-
+            buf.indent(indent);
             buf.push_str("\"\"");
         }
     }
@@ -546,7 +558,7 @@ fn fmt_binops<'a, 'buf>(
     indent: u16,
 ) {
     let is_multiline = part_of_multi_line_binops
-        || (&loc_right_side.value).is_multiline()
+        || loc_right_side.value.is_multiline()
         || lefts.iter().any(|(expr, _)| expr.value.is_multiline());
 
     for (loc_left_side, loc_binop) in lefts {
@@ -1049,7 +1061,7 @@ fn fmt_closure<'a, 'buf>(
 
     buf.push_str("->");
 
-    let is_multiline = (&loc_ret.value).is_multiline();
+    let is_multiline = loc_ret.value.is_multiline();
 
     // If the body is multiline, go down a line and indent.
     let body_indent = if is_multiline {
@@ -1160,7 +1172,7 @@ fn fmt_backpassing<'a, 'buf>(
 
     buf.push_str("<-");
 
-    let is_multiline = (&loc_ret.value).is_multiline();
+    let is_multiline = loc_ret.value.is_multiline();
 
     // If the body is multiline, go down a line and indent.
     let body_indent = if is_multiline {
@@ -1386,9 +1398,9 @@ fn sub_expr_requests_parens(expr: &Expr<'_>) -> bool {
                     | BinOp::LessThanOrEq
                     | BinOp::GreaterThanOrEq
                     | BinOp::And
-                    | BinOp::Or => true,
-                    BinOp::Pizza
-                    | BinOp::Assignment
+                    | BinOp::Or
+                    | BinOp::Pizza => true,
+                    BinOp::Assignment
                     | BinOp::IsAliasType
                     | BinOp::IsOpaqueType
                     | BinOp::Backpassing => false,

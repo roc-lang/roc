@@ -10,7 +10,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_solve_problem::TypeError;
 use roc_types::subs::{Content, ExposedTypesStorageSubs, FlatType, StorageSubs, Subs, Variable};
-use roc_types::types::{Alias, MemberImpl};
+use roc_types::types::{Alias, MemberImpl, Types};
 
 /// A marker that a given Subs has been solved.
 /// The only way to obtain a Solved<Subs> is by running the solver on it.
@@ -56,6 +56,7 @@ pub struct SolvedModule {
 #[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 pub fn run_solve(
     home: ModuleId,
+    types: Types,
     constraints: &Constraints,
     constraint: ConstraintSoa,
     rigid_variables: RigidVariables,
@@ -70,8 +71,8 @@ pub fn run_solve(
         subs.rigid_var(var, name);
     }
 
-    for (var, (name, ability)) in rigid_variables.able {
-        subs.rigid_able_var(var, name, ability);
+    for (var, (name, abilities)) in rigid_variables.able {
+        subs.rigid_able_var(var, name, abilities);
     }
 
     for var in rigid_variables.wildcards {
@@ -85,6 +86,7 @@ pub fn run_solve(
     // Run the solver to populate Subs.
     let (solved_subs, solved_env) = solve::run(
         home,
+        types,
         constraints,
         &mut problems,
         subs,
@@ -147,9 +149,6 @@ pub fn exposed_types_storage_subs(
                     stored_specialization_lambda_set_vars.insert(lset_var, imported_lset_var);
                 }
             }
-            ResolvedImpl::Derived => {
-                // nothing to do
-            }
             ResolvedImpl::Error => {
                 // nothing to do
             }
@@ -202,7 +201,6 @@ pub fn extract_module_owned_implementations(
                     );
                     ResolvedImpl::Impl(specialization.clone())
                 }
-                MemberImpl::Derived => ResolvedImpl::Derived,
                 MemberImpl::Error => ResolvedImpl::Error,
             };
 

@@ -1,3 +1,4 @@
+use std::fmt::Write as _; // import without risk of name clashing
 use std::path::PathBuf;
 
 use bumpalo::Bump;
@@ -19,13 +20,14 @@ use roc_constrain::expr::constrain_decls;
 use roc_debug_flags::dbg_do;
 use roc_derive::DerivedModule;
 use roc_derive_key::{DeriveBuiltin, DeriveError, DeriveKey, Derived};
-use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
+use roc_load_internal::file::{add_imports, LoadedModule, Threading};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_region::all::LineInfo;
 use roc_reporting::report::{type_problem, RocDocAllocator};
 use roc_types::{
     pretty_print::{name_and_print_var, DebugPrint},
     subs::{ExposedTypesStorageSubs, Subs, Variable},
+    types::Types,
 };
 
 const DERIVED_MODULE: ModuleId = ModuleId::DERIVED_SYNTH;
@@ -50,13 +52,23 @@ fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, Pa
             module_source(ModuleId::DECODE),
             builtins_path.join("Decode.roc"),
         ),
+        DeriveBuiltin::Hash => (
+            ModuleId::HASH,
+            module_source(ModuleId::HASH),
+            builtins_path.join("Hash.roc"),
+        ),
+        DeriveBuiltin::IsEq => (
+            ModuleId::BOOL,
+            module_source(ModuleId::BOOL),
+            builtins_path.join("Bool.roc"),
+        ),
     }
 }
 
 /// DSL for creating [`Content`][roc_types::subs::Content].
 #[macro_export]
 macro_rules! v {
-     ({ $($field:ident: $make_v:expr,)* $(?$opt_field:ident : $make_opt_v:expr,)* }) => {{
+     ({ $($field:ident: $make_v:expr,)* $(?$opt_field:ident : $make_opt_v:expr,)* }$( $($ext:tt)+ )?) => {{
          #[allow(unused)]
          use roc_types::types::RecordField;
          use roc_types::subs::{Subs, RecordFields, Content, FlatType, Variable};
@@ -68,25 +80,12 @@ macro_rules! v {
                  $( (stringify!($opt_field).into(), RecordField::Optional($opt_field)) ,)*
              ];
              let fields = RecordFields::insert_into_subs(subs, fields);
-             roc_derive::synth_var(subs, Content::Structure(FlatType::Record(fields, Variable::EMPTY_RECORD)))
-         }
-     }};
-     ([ $($tag:ident $($payload:expr)*),* ]$( $ext:tt )?) => {{
-         #[allow(unused)]
-         use roc_types::subs::{Subs, UnionTags, Content, FlatType, Variable};
-         #[allow(unused)]
-         use roc_module::ident::TagName;
-         |subs: &mut Subs| {
-             $(
-             let $tag = vec![ $( $payload(subs), )* ];
-             )*
-             let tags = UnionTags::insert_into_subs::<_, Vec<Variable>>(subs, vec![ $( (TagName(stringify!($tag).into()), $tag) ,)* ]);
 
-             #[allow(unused_mut)]
-             let mut ext = Variable::EMPTY_TAG_UNION;
-             $( ext = $crate::v!($ext)(subs); )?
+             #[allow(unused_mut, unused)]
+             let mut ext = Variable::EMPTY_RECORD;
+             $( ext = $crate::v!($($ext)+)(subs); )?
 
-             roc_derive::synth_var(subs, Content::Structure(FlatType::TagUnion(tags, ext)))
+             roc_derive::synth_var(subs, Content::Structure(FlatType::Record(fields, ext)))
          }
      }};
      ([ $($tag:ident $($payload:expr)*),* ] as $rec_var:ident) => {{
@@ -113,6 +112,24 @@ macro_rules! v {
              tag_union_var
          }
      }};
+     ([ $($tag:ident $($payload:expr)*),* ]$( $($ext:tt)+ )?) => {{
+         #[allow(unused)]
+         use roc_types::subs::{Subs, UnionTags, Content, FlatType, Variable};
+         #[allow(unused)]
+         use roc_module::ident::TagName;
+         |subs: &mut Subs| {
+             $(
+             let $tag = vec![ $( $payload(subs), )* ];
+             )*
+             let tags = UnionTags::insert_into_subs::<_, Vec<Variable>>(subs, vec![ $( (TagName(stringify!($tag).into()), $tag) ,)* ]);
+
+             #[allow(unused_mut, unused)]
+             let mut ext = Variable::EMPTY_TAG_UNION;
+             $( ext = $crate::v!($($ext)+)(subs); )?
+
+             roc_derive::synth_var(subs, Content::Structure(FlatType::TagUnion(tags, ext)))
+         }
+     }};
      (Symbol::$sym:ident $($arg:expr)*) => {{
          use roc_types::subs::{Subs, SubsSlice, Content, FlatType};
          use roc_module::symbol::Symbol;
@@ -128,7 +145,7 @@ macro_rules! v {
          use roc_module::symbol::Symbol;
          |subs: &mut Subs| {
              let args = vec![$( $arg(subs) )*];
-             let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>>(subs, args, vec![]);
+             let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>, _>(subs, args, vec![], vec![]);
              let real_var = $real_var(subs);
              roc_derive::synth_var(subs, Content::Alias(Symbol::$alias, alias_variables, real_var, AliasKind::Structural))
          }
@@ -139,7 +156,7 @@ macro_rules! v {
          use roc_module::symbol::Symbol;
          |subs: &mut Subs| {
              let args = vec![$( $arg(subs) )*];
-             let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>>(subs, args, vec![]);
+             let alias_variables = AliasVariables::insert_into_subs::<Vec<_>, Vec<_>, _>(subs, args, vec![], vec![]);
              let real_var = $real_var(subs);
              roc_derive::synth_var(subs, Content::Alias(Symbol::$alias, alias_variables, real_var, AliasKind::Opaque))
          }
@@ -147,6 +164,17 @@ macro_rules! v {
      (*) => {{
          use roc_types::subs::{Subs, Content};
          |subs: &mut Subs| { roc_derive::synth_var(subs, Content::FlexVar(None)) }
+     }};
+     ($name:ident has $ability:path) => {{
+         use roc_types::subs::{Subs, SubsIndex, SubsSlice, Content};
+         |subs: &mut Subs| {
+             let name_index =
+                 SubsIndex::push_new(&mut subs.field_names, stringify!($name).into());
+
+             let abilities_slice = SubsSlice::extend_new(&mut subs.symbol_names, [$ability]);
+
+             roc_derive::synth_var(subs, Content::FlexAbleVar(Some(name_index), abilities_slice))
+         }
      }};
      (^$rec_var:ident) => {{
          use roc_types::subs::{Subs};
@@ -197,6 +225,18 @@ macro_rules! test_key_neq {
     )*};
 }
 
+pub(crate) fn check_derivable<Sy>(builtin: DeriveBuiltin, synth: Sy, key: DeriveKey)
+where
+    Sy: FnOnce(&mut Subs) -> Variable,
+{
+    let mut subs = Subs::new();
+    let var = synth(&mut subs);
+
+    let derived = Derived::builtin(builtin, &subs, var);
+
+    assert_eq!(derived, Ok(Derived::Key(key)));
+}
+
 pub(crate) fn check_underivable<Sy>(builtin: DeriveBuiltin, synth: Sy, err: DeriveError)
 where
     Sy: FnOnce(&mut Subs) -> Variable,
@@ -221,6 +261,18 @@ where
     assert_eq!(key, Ok(Derived::Immediate(immediate)));
 }
 
+pub(crate) fn check_single_lset_immediate<S>(builtin: DeriveBuiltin, synth: S, immediate: Symbol)
+where
+    S: FnOnce(&mut Subs) -> Variable,
+{
+    let mut subs = Subs::new();
+    let var = synth(&mut subs);
+
+    let key = Derived::builtin(builtin, &subs, var);
+
+    assert_eq!(key, Ok(Derived::SingleLambdaSetImmediate(immediate)));
+}
+
 #[allow(clippy::too_many_arguments)]
 fn assemble_derived_golden(
     subs: &mut Subs,
@@ -241,6 +293,7 @@ fn assemble_derived_golden(
             DebugPrint {
                 print_lambda_sets: true,
                 print_only_under_alias,
+                ..DebugPrint::NOTHING
             },
         );
         subs.rollback_to(snapshot);
@@ -249,20 +302,21 @@ fn assemble_derived_golden(
 
     let mut pretty_buf = String::new();
 
-    pretty_buf.push_str(&format!("# derived for {}\n", print_var(source_var, false)));
+    // ignore returned result, writeln can not fail as it is used here
+    let _ = writeln!(pretty_buf, "# derived for {}", print_var(source_var, false));
 
     let pretty_type = print_var(typ, false);
-    pretty_buf.push_str(&format!("# {}\n", &pretty_type));
+    let _ = writeln!(pretty_buf, "# {}", &pretty_type);
 
     let pretty_type_under_aliases = print_var(typ, true);
-    pretty_buf.push_str(&format!("# {}\n", &pretty_type_under_aliases));
+    let _ = writeln!(pretty_buf, "# {}", &pretty_type_under_aliases);
 
     pretty_buf.push_str("# Specialization lambda sets:\n");
     let mut specialization_lsets = specialization_lsets.into_iter().collect::<Vec<_>>();
     specialization_lsets.sort_by_key(|(region, _)| *region);
     for (region, var) in specialization_lsets {
         let pretty_lset = print_var(var, false);
-        pretty_buf.push_str(&format!("#   @<{}>: {}\n", region, pretty_lset));
+        let _ = writeln!(pretty_buf, "#   @<{}>: {}", region, pretty_lset);
     }
 
     pretty_buf.push_str(derived_source);
@@ -290,11 +344,12 @@ fn check_derived_typechecks_and_golden(
     check_golden: impl Fn(&str),
 ) {
     // constrain the derived
+    let mut types = Types::new();
     let mut constraints = Constraints::new();
     let def_var = derived_def.expr_var;
     let mut decls = Declarations::new();
     decls.push_def(derived_def);
-    let constr = constrain_decls(&mut constraints, test_module, &decls);
+    let constr = constrain_decls(&mut types, &mut constraints, test_module, &decls);
 
     // the derived implementation on stuff from the builtin module, so
     //   - we need to add those dependencies as imported on the constraint
@@ -324,6 +379,7 @@ fn check_derived_typechecks_and_golden(
     let mut rigid_vars = Default::default();
     let (import_variables, abilities_store) = add_imports(
         test_module,
+        &mut constraints,
         &mut test_subs,
         pending_abilities,
         &exposed_for_module,
@@ -340,11 +396,12 @@ fn check_derived_typechecks_and_golden(
     );
     let (mut solved_subs, _, problems, _) = roc_solve::module::run_solve(
         test_module,
+        types,
         &constraints,
         constr,
         RigidVariables::default(),
         test_subs,
-        default_aliases(),
+        Default::default(),
         abilities_store,
         Default::default(),
         &exposed_for_module.exposed_by_module,
