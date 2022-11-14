@@ -6,11 +6,10 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Layout, STLayoutInterner};
 
+use crate::code_builder::{CodeBuilder, VmSymbolState};
 use crate::layout::{CallConv, ReturnMethod, StackMemoryFormat, WasmLayout};
 use crate::{copy_memory, CopyMemoryConfig, PTR_TYPE};
-use roc_wasm_module::{
-    round_up_to_alignment, Align, CodeBuilder, LocalId, ValueType, VmSymbolState,
-};
+use roc_wasm_module::{round_up_to_alignment, Align, LocalId, ValueType};
 
 pub enum StoredVarKind {
     Variable,

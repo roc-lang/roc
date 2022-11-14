@@ -1,51 +1,22 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use core::panic;
+
 use roc_error_macros::internal_error;
-
 use roc_module::symbol::Symbol;
-
-use super::opcodes::{OpCode, OpCode::*};
-use super::serialize::{SerialBuffer, Serialize};
-use crate::{
-    round_up_to_alignment, DEBUG_SETTINGS, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
+use roc_wasm_module::opcodes::{OpCode, OpCode::*};
+use roc_wasm_module::serialize::{SerialBuffer, Serialize};
+use roc_wasm_module::{
+    round_up_to_alignment, Align, LocalId, ValueType, FRAME_ALIGNMENT_BYTES,
+    STACK_POINTER_GLOBAL_ID,
 };
+
+use crate::DEBUG_SETTINGS;
 
 macro_rules! log_instruction {
     ($($x: expr),+) => {
         if DEBUG_SETTINGS.instructions { println!($($x,)*); }
     };
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LocalId(pub u32);
-
-/// Wasm value type. (Rust representation matches Wasm encoding)
-#[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum ValueType {
-    I32 = 0x7f,
-    I64 = 0x7e,
-    F32 = 0x7d,
-    F64 = 0x7c,
-}
-
-impl Serialize for ValueType {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_u8(*self as u8);
-    }
-}
-
-impl From<u8> for ValueType {
-    fn from(x: u8) -> Self {
-        match x {
-            0x7f => Self::I32,
-            0x7e => Self::I64,
-            0x7d => Self::F32,
-            0x7c => Self::F64,
-            _ => internal_error!("Invalid ValueType 0x{:02x}", x),
-        }
-    }
 }
 
 const BLOCK_NO_RESULT: u8 = 0x40;
@@ -62,52 +33,6 @@ struct VmBlock<'a> {
 impl std::fmt::Debug for VmBlock<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("{:?} {:?}", self.opcode, self.value_stack))
-    }
-}
-
-/// Wasm memory alignment for load/store instructions.
-/// Rust representation matches Wasm encoding.
-/// It's an error to specify alignment higher than the "natural" alignment of the instruction
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd)]
-pub enum Align {
-    Bytes1 = 0,
-    Bytes2 = 1,
-    Bytes4 = 2,
-    Bytes8 = 3,
-}
-
-impl Align {
-    /// Calculate the largest possible alignment for a load/store at a given stack frame offset
-    /// Assumes the stack frame is aligned to at least 8 bytes
-    pub fn from_stack_offset(max_align: Align, offset: u32) -> Align {
-        if (max_align == Align::Bytes8) && (offset & 7 == 0) {
-            return Align::Bytes8;
-        }
-        if (max_align >= Align::Bytes4) && (offset & 3 == 0) {
-            return Align::Bytes4;
-        }
-        if (max_align >= Align::Bytes2) && (offset & 1 == 0) {
-            return Align::Bytes2;
-        }
-        Align::Bytes1
-    }
-}
-
-impl From<u32> for Align {
-    fn from(x: u32) -> Align {
-        match x {
-            1 => Align::Bytes1,
-            2 => Align::Bytes2,
-            4 => Align::Bytes4,
-            _ => {
-                if x.count_ones() == 1 {
-                    Align::Bytes8 // Max value supported by any Wasm instruction
-                } else {
-                    internal_error!("Cannot align to {} bytes", x);
-                }
-            }
-        }
     }
 }
 

@@ -1,7 +1,6 @@
 use bitvec::vec::BitVec;
 use bumpalo::collections::{String, Vec};
 
-use code_builder::Align;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
@@ -15,21 +14,22 @@ use roc_mono::ir::{
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_std::RocDec;
 
-use crate::layout::{CallConv, ReturnMethod, WasmLayout};
-use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
-use crate::storage::{AddressValue, Storage, StoredValue, StoredVarKind};
-use crate::{
-    copy_memory, CopyMemoryConfig, Env, DEBUG_SETTINGS, MEMORY_NAME, PTR_SIZE, PTR_TYPE,
-    TARGET_INFO,
-};
 use roc_wasm_module::linking::{DataSymbol, WasmObjectSymbol};
 use roc_wasm_module::sections::{
     ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Import, ImportDesc, Limits,
     MemorySection, NameSection,
 };
 use roc_wasm_module::{
-    code_builder, round_up_to_alignment, CodeBuilder, ExportType, LocalId, Signature, SymInfo,
-    ValueType, WasmModule,
+    round_up_to_alignment, Align, ExportType, LocalId, Signature, SymInfo, ValueType, WasmModule,
+};
+
+use crate::code_builder::CodeBuilder;
+use crate::layout::{CallConv, ReturnMethod, WasmLayout};
+use crate::low_level::{call_higher_order_lowlevel, LowLevelCall};
+use crate::storage::{AddressValue, Storage, StoredValue, StoredVarKind};
+use crate::{
+    copy_memory, CopyMemoryConfig, Env, DEBUG_SETTINGS, MEMORY_NAME, PTR_SIZE, PTR_TYPE,
+    TARGET_INFO,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -104,10 +104,9 @@ impl<'a> WasmBackend<'a> {
         }
 
         module.link_host_to_app_calls(env.arena, host_to_app_map);
-        module.code.code_builders.reserve(proc_lookup.len());
 
         let host_function_count = module.import.imports.len()
-            + (module.code.dead_import_dummy_count + module.code.preloaded_count) as usize;
+            + (module.code.dead_import_dummy_count + module.code.function_count) as usize;
 
         WasmBackend {
             env,
@@ -212,7 +211,7 @@ impl<'a> WasmBackend<'a> {
                     self.module.data.end_addr += PTR_SIZE;
 
                     self.module.reloc_code.apply_relocs_u32(
-                        &mut self.module.code.preloaded_bytes,
+                        &mut self.module.code.bytes,
                         sym_index as u32,
                         global_value_addr,
                     );
@@ -320,7 +319,7 @@ impl<'a> WasmBackend<'a> {
         self.module.export.append(Export {
             name: START,
             ty: ExportType::Func,
-            index: self.fn_index_offset + self.module.code.code_builders.len() as u32,
+            index: self.module.code.function_count,
         });
 
         self.code_builder.i32_const(0); // argc=0
@@ -367,7 +366,8 @@ impl<'a> WasmBackend<'a> {
         // Push the completed CodeBuilder into the module and swap it for a new empty one
         let mut swap_code_builder = CodeBuilder::new(self.env.arena);
         std::mem::swap(&mut swap_code_builder, &mut self.code_builder);
-        self.module.code.code_builders.push(swap_code_builder);
+
+        swap_code_builder.serialize_without_relocs(&mut self.module.code.bytes);
 
         self.storage.clear();
         self.joinpoint_label_map.clear();
@@ -1343,7 +1343,7 @@ impl<'a> WasmBackend<'a> {
 
         self.called_preload_fns.set(*fn_index as usize, true);
 
-        let host_import_count = self.fn_index_offset - self.module.code.preloaded_count;
+        let host_import_count = self.fn_index_offset - self.module.code.function_count;
         if *fn_index < host_import_count {
             self.code_builder
                 .call_import(*fn_index, num_wasm_args, has_return_val);

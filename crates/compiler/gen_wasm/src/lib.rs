@@ -1,5 +1,6 @@
 //! Provides the WASM backend to generate Roc binaries.
 mod backend;
+mod code_builder;
 mod layout;
 mod low_level;
 mod storage;
@@ -19,9 +20,10 @@ use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::{LayoutIds, STLayoutInterner};
 use roc_target::TargetInfo;
 use roc_wasm_module::parse::ParseError;
+use roc_wasm_module::{Align, LocalId, ValueType, WasmModule};
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
-use roc_wasm_module::{Align, CodeBuilder, LocalId, ValueType, WasmModule};
+use crate::code_builder::CodeBuilder;
 
 const TARGET_INFO: TargetInfo = TargetInfo::default_wasm32();
 const PTR_SIZE: u32 = {
@@ -96,7 +98,7 @@ pub fn build_app_module<'a>(
 
     // Adjust Wasm function indices to account for functions from the object file
     let fn_index_offset: u32 =
-        host_module.import.function_count() as u32 + host_module.code.preloaded_count;
+        host_module.import.function_count() as u32 + host_module.code.function_count;
 
     // Pre-pass over the procedure names & layouts
     // Create a lookup to tell us the final index of each proc in the output file
