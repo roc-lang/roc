@@ -115,7 +115,7 @@ For any OS, you can use [`zigup`](https://github.com/marler8997/zigup) to manage
 
 If you prefer a package manager, you can try the following:
 
-- For MacOS, you can install with `brew install zig`
+- For MacOS, you can install with `brew install zig@0.9.1`
 - For, Ubuntu, you can use Snap, you can install with `snap install zig --classic --beta`
 - For other systems, checkout this [page](https://github.com/ziglang/zig/wiki/Install-Zig-from-a-Package-Manager)
 
