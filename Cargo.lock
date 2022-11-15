@@ -3445,8 +3445,6 @@ dependencies = [
 name = "roc_cli"
 version = "0.0.1"
 dependencies = [
- "base64-url",
- "blake3",
  "bumpalo",
  "clap 3.2.20",
  "cli_utils",
@@ -3457,7 +3455,6 @@ dependencies = [
  "inkwell",
  "libc",
  "libloading",
- "lz4_flex",
  "mimalloc",
  "once_cell",
  "parking_lot 0.12.1",
@@ -3490,11 +3487,9 @@ dependencies = [
  "serial_test",
  "signal-hook",
  "strum",
- "tar",
  "target-lexicon",
  "tempfile",
  "ven_pretty",
- "walkdir",
  "wasmer",
  "wasmer-wasi",
 ]

@@ -18,6 +18,7 @@ use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::Instant;
 use strum::{EnumIter, IntoEnumIterator, IntoStaticStr};
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
@@ -356,7 +357,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     use roc_gen_llvm::llvm::build::LlvmBackendMode;
     use roc_load::{ExecutionMode, LoadConfig};
     use roc_target::TargetInfo;
-    use std::time::Instant;
 
     let start_time = Instant::now();
     let arena = Bump::new();
@@ -515,13 +515,16 @@ pub fn build(
         }
 
         if matches.is_present(FLAG_BUNDLE) {
+            let start_time = Instant::now();
+
             // Rather than building an executable or library, we're building
             // a rp1 bundle so this code can be distributed via a HTTPS
             let filename = roc_packaging::rp1::build(path)?;
+            let total_time = start_time.elapsed().as_millis();
             let created_path = path.with_file_name(&filename);
 
             println!(
-                "Built \x1B[33m{}\x1B[39m into the following bundle:\n\n\t\x1B[33m{}\x1B[39m\n\nTo distribute this bundle as a package, upload this to some URL and then add it as a dependency with:\n\n\t\x1B[32m\"https://your-url-goes-here/{filename}\"\x1B[39m\n",
+                "Built \x1B[33m{}\x1B[39m into the following bundle in {total_time} ms:\n\n\t\x1B[33m{}\x1B[39m\n\nTo distribute this bundle as a package, upload this to some URL and then add it as a dependency with:\n\n\t\x1B[32m\"https://your-url-goes-here/{filename}\"\x1B[39m\n",
                 path.to_string_lossy(),
                 created_path.to_string_lossy()
             );
