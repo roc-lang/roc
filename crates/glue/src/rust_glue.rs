@@ -1,6 +1,6 @@
 use crate::types::{
-    Accessors, RocFn, RocNum, RocSingleTagPayload, RocStructFields, RocTagUnion, RocTags, RocType,
-    TypeId, Types,
+    Accessors, RocFn, RocNum, RocSingleTagPayload, RocStructFields, RocTagUnion, RocType, TypeId,
+    Types,
 };
 use indexmap::IndexMap;
 use roc_target::{Architecture, TargetInfo};
@@ -161,15 +161,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                     impls,
                 ),
                 RocTagUnion::NonRecursive {
-                    tags: RocTags::HasClosure { tag_getters },
-                    name,
-                    discriminant_size,
-                    discriminant_offset,
-                } => {
-                    todo!();
-                }
-                RocTagUnion::NonRecursive {
-                    tags: RocTags::HasNoClosures { tags },
+                    tags,
                     name,
                     discriminant_size,
                     discriminant_offset,
@@ -192,15 +184,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                     }
                 }
                 RocTagUnion::Recursive {
-                    tags: RocTags::HasClosure { tag_getters },
-                    name,
-                    discriminant_size,
-                    discriminant_offset,
-                } => {
-                    todo!();
-                }
-                RocTagUnion::Recursive {
-                    tags: RocTags::HasNoClosures { tags },
+                    tags,
                     name,
                     discriminant_size,
                     discriminant_offset,
@@ -225,16 +209,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                 RocTagUnion::NullableWrapped {
                     name,
                     index_of_null_tag,
-                    tags: RocTags::HasClosure { tag_getters },
-                    discriminant_size,
-                    discriminant_offset,
-                } => {
-                    todo!();
-                }
-                RocTagUnion::NullableWrapped {
-                    name,
-                    index_of_null_tag,
-                    tags: RocTags::HasNoClosures { tags },
+                    tags,
                     discriminant_size,
                     discriminant_offset,
                 } => {
@@ -1847,27 +1822,110 @@ fn type_name(id: TypeId, types: &Types) -> String {
 /// case of a struct that's a payload for a recursive tag union, typ.has_enumeration()
 /// will return true, but actually we want to derive Debug here anyway.
 fn derive_str(typ: &RocType, types: &Types, include_debug: bool) -> String {
-    let mut buf = "#[derive(Clone, ".to_string();
+    let mut derives = vec!["Clone"];
 
     if !cannot_derive_copy(typ, types) {
-        buf.push_str("Copy, ");
+        derives.push("Copy");
     }
 
     if include_debug {
-        buf.push_str("Debug, ");
+        derives.push("Debug");
     }
 
     if !cannot_derive_default(typ, types) {
-        buf.push_str("Default, ");
+        derives.push("Default");
     }
 
     if !has_float(typ, types) {
-        buf.push_str("Eq, Ord, Hash, ");
+        derives.push("Eq");
+        derives.push("Ord");
+        derives.push("Hash");
     }
 
-    buf.push_str("PartialEq, PartialOrd)]");
+    if type_has_functions(typ) {
+        derives.push("PartialEq");
+        derives.push("PartialOrd");
+    }
 
-    buf
+    format!("#[derive({})]", derives.join(", "))
+}
+
+fn type_has_functions(typ: &RocType, types: &Types) -> bool {
+    match typ {
+        RocType::RocStr
+        | RocType::Bool
+        | RocType::Unit
+        | RocType::Num(_)
+        | RocType::EmptyTagUnion => false,
+        RocType::TagUnion(tag_union) => match tag_union {
+            RocTagUnion::Enumeration { .. } => false,
+            RocTagUnion::NonRecursive { tags, .. }
+            | RocTagUnion::Recursive { tags, .. }
+            | RocTagUnion::NullableWrapped { tags, .. } => {
+                tags.iter().any(|(_, opt_payload_id)| {
+                    if let Some(payload_id) = opt_payload_id {
+                        type_has_functions(types.get_type(payload_id), types)
+                    } else {
+                        false
+                    }
+                })
+            }
+            RocTagUnion::NullableUnwrapped {
+                non_null_payload: payload,
+                ..
+            }
+            | RocTagUnion::NonNullableUnwrapped { payload, .. } => {
+                type_has_functions(payload, types)
+            }
+            RocTagUnion::SingleTagStruct {
+                payload: RocSingleTagPayload::HasNoClosures { payload_fields },
+                ..
+            } => payload_fields
+                .iter()
+                .any(|payload_id| type_has_functions(types.get_type(payload_id), types)),
+            RocTagUnion::SingleTagStruct {
+                payload: RocSingleTagPayload::HasClosure { payload_getters },
+                ..
+            } => payload_getters
+                .iter()
+                .any(|(payload_id, _)| type_has_functions(types.get_type(payload_id), types)),
+        },
+        RocType::TagUnionPayload {
+            fields:
+                RocStructFields::HasNoClosure {
+                    fields,
+                    struct_size: _,
+                },
+            ..
+        }
+        | RocType::Struct {
+            fields:
+                RocStructFields::HasNoClosure {
+                    fields,
+                    struct_size: _,
+                },
+            ..
+        } => fields
+            .iter()
+            .any(|(_, type_id)| type_has_functions(types.get_type(type_id), types)),
+        RocType::TagUnionPayload {
+            fields: RocStructFields::HasClosure { fields },
+            ..
+        }
+        | RocType::Struct {
+            fields: RocStructFields::HasClosure { fields },
+            ..
+        } => fields
+            .iter()
+            .any(|(_, type_id, _)| type_has_functions(types.get_type(type_id), types)),
+        RocType::RecursivePointer(type_id) => type_has_functions(types.get_type(type_id), types),
+        RocType::RocResult(_, _) => todo!(),
+        RocType::RocList(_) => todo!(),
+        RocType::RocDict(_, _) => todo!(),
+        RocType::RocSet(_) => todo!(),
+        RocType::RocBox(_) => todo!(),
+        RocType::Function(_) => true,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2563,37 +2621,40 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
             .iter()
             .any(|(type_id, _)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
         RocType::TagUnion(RocTagUnion::Recursive {
-            tags: RocTags::HasNoClosures { tags, .. },
-            ..
+            tags,
+            name: _,
+            variant_size: _,
+            discriminant_offset: _,
+            discriminant_size: _,
         })
         | RocType::TagUnion(RocTagUnion::NonRecursive {
-            tags: RocTags::HasNoClosures { tags, .. },
-            ..
+            tags,
+            name: _,
+            variant_size: _,
+            discriminant_offset: _,
+            discriminant_size: _,
         })
         | RocType::TagUnion(RocTagUnion::NullableWrapped {
-            tags: RocTags::HasNoClosures { tags, .. },
-            ..
+            tags,
+            name: _,
+            index_of_null_tag: _,
+            variant_size: _,
+            discriminant_size: _,
+            discriminant_offset: _,
         }) => tags.iter().any(|(_, payloads)| {
             payloads
                 .iter()
                 .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
         }),
-        RocType::TagUnion(RocTagUnion::Recursive {
-            tags: RocTags::HasClosure { tag_getters, .. },
-            ..
-        })
-        | RocType::TagUnion(RocTagUnion::NonRecursive {
-            tags: RocTags::HasClosure { tag_getters, .. },
-            ..
-        })
-        | RocType::TagUnion(RocTagUnion::NullableWrapped {
-            tags: RocTags::HasClosure { tag_getters, .. },
-            ..
-        }) => tag_getters.iter().any(|(_, payloads)| {
-            payloads
-                .iter()
-                .any(|(id, _)| has_float_help(types.get_type(*id), types, do_not_recurse))
-        }),
+        RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
+        | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. })
+        | RocType::TagUnion(RocTagUnion::NullableWrapped { tags, .. }) => {
+            tag_getters.iter().any(|(_, payloads)| {
+                payloads
+                    .iter()
+                    .any(|(id, _)| has_float_help(types.get_type(*id), types, do_not_recurse))
+            })
+        }
         RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { payload, .. })
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped {
             non_null_payload: payload,

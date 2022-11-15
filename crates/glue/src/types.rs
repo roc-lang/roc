@@ -587,6 +587,7 @@ enum RocTypeOrPending<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Accessors {
+    // The name of the extern
     getter: String,
     // TODO setter
 }
@@ -595,9 +596,11 @@ pub struct Accessors {
 pub enum RocStructFields {
     HasNoClosure {
         fields: Vec<(String, TypeId)>,
+        struct_size: u64,
     },
     HasClosure {
         fields: Vec<(String, TypeId, Accessors)>,
+        // no struct_size because it's not knowable if there's a closure; must call a size getter!
     },
 }
 
@@ -712,32 +715,6 @@ impl From<IntWidth> for RocNum {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum RocTags {
-    /// If at least one payload field contains a closure, we have to provide
-    /// field getters and setters because the size and order of those fields can vary based on the
-    /// application's implementation, so those sizes and order are not knowable at host build time.
-    HasClosure {
-        tag_getters: Vec<(String, Option<(TypeId, String)>)>,
-    },
-    HasNoClosures {
-        tags: Vec<(String, Option<TypeId>)>,
-    },
-}
-
-impl RocTags {
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn len(&self) -> usize {
-        match self {
-            RocTags::HasClosure { tag_getters, .. } => tag_getters.len(),
-            RocTags::HasNoClosures { tags, .. } => tags.len(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RocSingleTagPayload {
     /// If at least one payload field contains a closure, we have to provide
     /// field getters and setters because the size and order of those fields can vary based on the
@@ -761,7 +738,8 @@ pub enum RocTagUnion {
     /// e.g. `Result a e : [Ok a, Err e]`
     NonRecursive {
         name: String,
-        tags: RocTags,
+        tags: Vec<(String, Option<TypeId>)>,
+        variant_size: Option<u64>, // None if this tag union has closures; must call getter at runtime!
         discriminant_offset: u32,
         discriminant_size: u32,
     },
@@ -769,7 +747,8 @@ pub enum RocTagUnion {
     /// e.g. `Expr : [Sym Str, Add Expr Expr]`
     Recursive {
         name: String,
-        tags: RocTags,
+        tags: Vec<(String, Option<TypeId>)>,
+        variant_size: Option<u64>, // None if this tag union has closures; must call getter at runtime!
         discriminant_offset: u32,
         discriminant_size: u32,
     },
@@ -801,7 +780,8 @@ pub enum RocTagUnion {
         /// Note that this index is *not necessarily* the same as the offset of that tag
         /// at runtime, which can move around if any of the payloads contain closures!
         index_of_null_tag: u16,
-        tags: RocTags,
+        tags: Vec<(String, Option<TypeId>)>,
+        variant_size: Option<u64>, // None if this tag union has closures; must call getter at runtime!
         discriminant_size: u32,
         discriminant_offset: u32,
     },
