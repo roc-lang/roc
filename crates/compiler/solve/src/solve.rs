@@ -896,7 +896,6 @@ fn solve(
                 let category = &constraints.categories[category_index.index()];
 
                 let actual = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -910,7 +909,6 @@ fn solve(
 
                 let expectation = &constraints.expectations[expectation_index.index()];
                 let expected = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -980,7 +978,6 @@ fn solve(
                 // a special version of Eq that is used to store types in the AST.
                 // IT DOES NOT REPORT ERRORS!
                 let actual = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -1024,7 +1021,6 @@ fn solve(
                         let expectation = &constraints.expectations[expectation_index.index()];
 
                         let expected = either_type_index_to_var(
-                            constraints,
                             subs,
                             rank,
                             pools,
@@ -1119,7 +1115,6 @@ fn solve(
                 let category = &constraints.pattern_categories[category_index.index()];
 
                 let actual = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -1133,7 +1128,6 @@ fn solve(
 
                 let expectation = &constraints.pattern_expectations[expectation_index.index()];
                 let expected = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -1300,7 +1294,6 @@ fn solve(
             }
             IsOpenType(type_index) => {
                 let actual = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -1330,7 +1323,6 @@ fn solve(
                 let pattern_category = &constraints.pattern_categories[pattern_category.index()];
 
                 let actual = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -1464,7 +1456,6 @@ fn solve(
                 };
 
                 let real_var = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -1477,7 +1468,6 @@ fn solve(
                 );
 
                 let branches_var = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -2182,7 +2172,6 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
 
         for (&(symbol, region), typ_index) in (loc_symbols_slice.iter()).zip(type_indices_slice) {
             let var = either_type_index_to_var(
-                constraints,
                 subs,
                 rank,
                 pools,
@@ -2201,7 +2190,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
     }
 }
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::ops::ControlFlow;
 std::thread_local! {
     /// Scratchpad arena so we don't need to allocate a new one all the time
@@ -2219,7 +2208,6 @@ fn put_scratchpad(scratchpad: bumpalo::Bump) {
 }
 
 fn either_type_index_to_var(
-    constraints: &Constraints,
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
@@ -2232,9 +2220,8 @@ fn either_type_index_to_var(
 ) -> Variable {
     match either_type_index.split() {
         Ok(type_index) => {
-            let typ_cell = &constraints.types[type_index.index()];
-
-            type_cell_to_var(
+            // Converts the celled type to a variable, emplacing the new variable for re-use.
+            let var = type_to_var(
                 subs,
                 rank,
                 problems,
@@ -2243,45 +2230,19 @@ fn either_type_index_to_var(
                 pools,
                 types,
                 aliases,
-                typ_cell,
-            )
+                type_index,
+            );
+            unsafe {
+                types.emplace_variable(type_index, var);
+            }
+
+            var
         }
         Err(var_index) => {
             // we cheat, and  store the variable directly in the index
             unsafe { Variable::from_index(var_index.index() as _) }
         }
     }
-}
-
-/// Converts a type in a cell to a variable, leaving the converted variable behind for re-use.
-fn type_cell_to_var(
-    subs: &mut Subs,
-    rank: Rank,
-    problems: &mut Vec<TypeError>,
-    abilities_store: &mut AbilitiesStore,
-    obligation_cache: &mut ObligationCache,
-    pools: &mut Pools,
-    types: &mut Types,
-    aliases: &mut Aliases,
-    typ_cell: &Cell<Index<TypeTag>>,
-) -> Variable {
-    let typ = typ_cell.get();
-    let var = type_to_var(
-        subs,
-        rank,
-        problems,
-        abilities_store,
-        obligation_cache,
-        pools,
-        types,
-        aliases,
-        typ,
-    );
-    unsafe {
-        types.set_variable(typ, var);
-    }
-
-    var
 }
 
 pub(crate) fn type_to_var(
