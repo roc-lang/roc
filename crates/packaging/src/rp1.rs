@@ -2,6 +2,7 @@ use bumpalo::Bump;
 use roc_parse::header::PlatformHeader;
 use roc_parse::module::parse_header;
 use roc_parse::state::State;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
@@ -104,8 +105,10 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
             fn is_keeper(entry: &DirEntry) -> bool {
                 let path = entry.path();
 
-                // Ignore all hidden files and directories.
-                if path.starts_with(".") {
+                // Ignore all hidden files and directories, and also ignore other .rp1 files
+                if path.starts_with(".")
+                    || path.extension().and_then(OsStr::to_str) == Some(EXTENSION)
+                {
                     return false;
                 }
 
