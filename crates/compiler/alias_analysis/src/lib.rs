@@ -469,6 +469,34 @@ impl<'a> Env<'a> {
     }
 }
 
+fn apply_refcount_operation<'a>(
+    builder: &mut FuncDefBuilder,
+    env: &mut Env<'a>,
+    block: BlockId,
+    modify_rc: &ModifyRc,
+) -> Result<()> {
+    match modify_rc {
+        ModifyRc::Inc(symbol, _) => {
+            let argument = env.symbols[symbol];
+
+            // a recursive touch is never worse for optimizations than a normal touch
+            // and a bit more permissive in its type
+            builder.add_recursive_touch(block, argument)?;
+        }
+
+        ModifyRc::Dec(symbol) => {
+            let argument = env.symbols[symbol];
+            builder.add_recursive_touch(block, argument)?;
+        }
+        ModifyRc::DecRef(symbol) => {
+            let argument = env.symbols[symbol];
+            builder.add_recursive_touch(block, argument)?;
+        }
+    }
+
+    Ok(())
+}
+
 fn stmt_spec<'a>(
     builder: &mut FuncDefBuilder,
     interner: &STLayoutInterner<'a>,
@@ -486,12 +514,25 @@ fn stmt_spec<'a>(
 
             let mut queue = vec![symbol];
 
-            while let Let(symbol, expr, expr_layout, c) = continuation {
-                let value_id = expr_spec(builder, interner, env, block, expr_layout, expr)?;
-                env.symbols.insert(*symbol, value_id);
+            loop {
+                match continuation {
+                    Let(symbol, expr, expr_layout, c) => {
+                        let value_id = expr_spec(builder, interner, env, block, expr_layout, expr)?;
+                        env.symbols.insert(*symbol, value_id);
 
-                queue.push(symbol);
-                continuation = c;
+                        queue.push(symbol);
+                        continuation = c;
+                    }
+                    Refcounting(modify_rc, c) => {
+                        // in practice it is common to see a chain of `Let`s interspersed with
+                        // Inc/Dec. For e.g. the False interpreter, this caused stack overflows.
+                        // so we handle RC operations here to limit recursion depth
+                        apply_refcount_operation(builder, env, block, modify_rc)?;
+
+                        continuation = c;
+                    }
+                    _ => break,
+                }
             }
 
             let result = stmt_spec(builder, interner, env, block, layout, continuation)?;
@@ -527,32 +568,11 @@ fn stmt_spec<'a>(
         Expect { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         ExpectFx { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         Ret(symbol) => Ok(env.symbols[symbol]),
-        Refcounting(modify_rc, continuation) => match modify_rc {
-            ModifyRc::Inc(symbol, _) => {
-                let argument = env.symbols[symbol];
+        Refcounting(modify_rc, continuation) => {
+            apply_refcount_operation(builder, env, block, modify_rc)?;
 
-                // a recursive touch is never worse for optimizations than a normal touch
-                // and a bit more permissive in its type
-                builder.add_recursive_touch(block, argument)?;
-
-                stmt_spec(builder, interner, env, block, layout, continuation)
-            }
-
-            ModifyRc::Dec(symbol) => {
-                let argument = env.symbols[symbol];
-
-                builder.add_recursive_touch(block, argument)?;
-
-                stmt_spec(builder, interner, env, block, layout, continuation)
-            }
-            ModifyRc::DecRef(symbol) => {
-                let argument = env.symbols[symbol];
-
-                builder.add_recursive_touch(block, argument)?;
-
-                stmt_spec(builder, interner, env, block, layout, continuation)
-            }
-        },
+            stmt_spec(builder, interner, env, block, layout, continuation)
+        }
         Join {
             id,
             parameters,
