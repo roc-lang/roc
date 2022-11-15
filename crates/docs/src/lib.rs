@@ -458,6 +458,7 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
         let load_config = LoadConfig {
             target_info: roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
             render: roc_reporting::report::RenderTarget::ColorTerminal,
+            palette: roc_reporting::report::DEFAULT_PALETTE,
             threading: Threading::AllAvailable,
             exec_mode: ExecutionMode::Check,
         };

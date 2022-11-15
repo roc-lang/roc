@@ -4,7 +4,7 @@ use bumpalo::Bump;
 use roc_can::module::{ExposedByModule, TypeState};
 use roc_collections::all::MutMap;
 use roc_module::symbol::ModuleId;
-use roc_reporting::report::RenderTarget;
+use roc_reporting::report::{Palette, RenderTarget};
 use roc_target::TargetInfo;
 use std::path::PathBuf;
 
@@ -40,6 +40,7 @@ pub fn load_single_threaded<'a>(
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
+    palette: Palette,
     exec_mode: ExecutionMode,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let cached_subs = read_cached_types();
@@ -51,6 +52,7 @@ pub fn load_single_threaded<'a>(
         target_info,
         cached_subs,
         render,
+        palette,
         exec_mode,
     )
 }
@@ -105,7 +107,8 @@ pub fn load_and_monomorphize(
 ) -> Result<MonomorphizedModule<'_>, LoadMonomorphizedError<'_>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename, load_config.render)?;
+    let load_start =
+        LoadStart::from_path(arena, filename, load_config.render, load_config.palette)?;
 
     match load(arena, load_start, exposed_types, load_config)? {
         Monomorphized(module) => Ok(module),
@@ -121,7 +124,8 @@ pub fn load_and_typecheck(
 ) -> Result<LoadedModule, LoadingProblem<'_>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename, load_config.render)?;
+    let load_start =
+        LoadStart::from_path(arena, filename, load_config.render, load_config.palette)?;
 
     match load(arena, load_start, exposed_types, load_config)? {
         Monomorphized(_) => unreachable!(""),
@@ -129,6 +133,7 @@ pub fn load_and_typecheck(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn load_and_typecheck_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -137,6 +142,7 @@ pub fn load_and_typecheck_str<'a>(
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
+    palette: Palette,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
@@ -151,6 +157,7 @@ pub fn load_and_typecheck_str<'a>(
         exposed_types,
         target_info,
         render,
+        palette,
         ExecutionMode::Check,
     )? {
         Monomorphized(_) => unreachable!(""),

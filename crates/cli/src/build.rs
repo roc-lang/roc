@@ -9,7 +9,7 @@ use roc_load::{
     LoadingProblem, Threading,
 };
 use roc_mono::ir::OptLevel;
-use roc_reporting::report::RenderTarget;
+use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::TargetInfo;
 use std::time::{Duration, Instant};
 use std::{path::PathBuf, thread::JoinHandle};
@@ -81,6 +81,7 @@ pub fn build_file<'a>(
         target_info,
         // TODO: expose this from CLI?
         render: RenderTarget::ColorTerminal,
+        palette: DEFAULT_PALETTE,
         threading,
         exec_mode,
     };
@@ -469,6 +470,7 @@ pub fn check_file(
         target_info,
         // TODO: expose this from CLI?
         render: RenderTarget::ColorTerminal,
+        palette: DEFAULT_PALETTE,
         threading,
         exec_mode: ExecutionMode::Check,
     };
