@@ -2232,10 +2232,14 @@ fn either_type_index_to_var(
                 aliases,
                 type_index,
             );
-            unsafe {
-                types.emplace_variable(type_index, var);
-            }
 
+            debug_assert!(
+                matches!(types[type_index], TypeTag::Variable(v) if v == var)
+                    || matches!(
+                        types[type_index],
+                        TypeTag::EmptyRecord | TypeTag::EmptyTagUnion
+                    )
+            );
             var
         }
         Err(var_index) => {
@@ -2311,14 +2315,18 @@ impl RegisterVariable {
             | TypeTag::HostExposedAlias { shared, .. } => {
                 let AliasShared { symbol, .. } = types[shared];
                 if let Some(reserved) = Variable::get_reserved(symbol) {
-                    if rank.is_none() {
+                    let direct_var = if rank.is_none() {
                         // reserved variables are stored with rank NONE
-                        return Direct(reserved);
+                        reserved
                     } else {
                         // for any other rank, we need to copy; it takes care of adjusting the rank
                         let copied = deep_copy_var_in(subs, rank, pools, reserved, arena);
-                        return Direct(copied);
-                    }
+                        copied
+                    };
+                    // Safety: the `destination` will become the source-of-truth for the type index, since it
+                    // was not already transformed before (if it was, we'd be in the Variable branch!)
+                    let _old_typ = unsafe { types.emplace_variable(typ, direct_var) };
+                    return Direct(direct_var);
                 }
 
                 Deferred
@@ -2334,15 +2342,19 @@ impl RegisterVariable {
         pools: &mut Pools,
         arena: &'_ bumpalo::Bump,
         types: &mut Types,
-        typ: Index<TypeTag>,
+        typ_index: Index<TypeTag>,
         stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
     ) -> Variable {
-        match Self::from_type(subs, rank, pools, arena, types, typ) {
+        match Self::from_type(subs, rank, pools, arena, types, typ_index) {
             Self::Direct(var) => var,
             Self::Deferred => {
                 let var = subs.fresh_unnamed_flex_var();
+                // Safety: the `destination` will become the source-of-truth for the type index, since it
+                // was not already transformed before (if it was, it wouldn't be deferred!)
+                let typ = unsafe { types.emplace_variable(typ_index, var) };
                 stack.push(TypeToVar::Defer {
                     typ,
+                    typ_index,
                     destination: var,
                     ambient_function: AmbientFunctionPolicy::NoFunction,
                 });
@@ -2405,7 +2417,8 @@ impl AmbientFunctionPolicy {
 #[derive(Debug)]
 enum TypeToVar {
     Defer {
-        typ: Index<TypeTag>,
+        typ: TypeTag,
+        typ_index: Index<TypeTag>,
         destination: Variable,
         ambient_function: AmbientFunctionPolicy,
     },
@@ -2443,11 +2456,18 @@ fn type_to_variable<'a>(
                 }
                 RegisterVariable::Deferred => {
                     let var = subs.fresh_unnamed_flex_var();
+
+                    // Safety: the `destination` will become the source-of-truth for the type index, since it
+                    // was not already transformed before (if it was, it wouldn't be deferred!)
+                    let typ = unsafe { types.emplace_variable($typ, var) };
+
                     stack.push(TypeToVar::Defer {
-                        typ: $typ,
+                        typ: typ,
+                        typ_index: $typ,
                         destination: var,
                         ambient_function: $ambient_function_policy,
                     });
+
                     var
                 }
             }
@@ -2460,15 +2480,16 @@ fn type_to_variable<'a>(
     let result = helper!(typ);
 
     while let Some(TypeToVar::Defer {
+        typ_index,
         typ,
         destination,
         ambient_function,
     }) = stack.pop()
     {
         use TypeTag::*;
-        match types[typ] {
+        match typ {
             Variable(_) | EmptyRecord | EmptyTagUnion => {
-                unreachable!("This variant should never be deferred!")
+                unreachable!("This variant should never be deferred!",)
             }
             RangedNumber(range) => {
                 let content = Content::RangedNumber(range);
@@ -2480,7 +2501,7 @@ fn type_to_variable<'a>(
                 type_argument_regions: _,
                 region: _,
             } => {
-                let arguments = types.get_type_arguments(typ);
+                let arguments = types.get_type_arguments(typ_index);
                 let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
                 for (target_index, var_index) in
                     (new_arguments.indices()).zip(arguments.into_iter())
@@ -2499,7 +2520,7 @@ fn type_to_variable<'a>(
                 name,
                 ambient_function,
             } => {
-                let captures = types.get_type_arguments(typ);
+                let captures = types.get_type_arguments(typ_index);
                 let union_lambdas = create_union_lambda(
                     subs, rank, pools, arena, types, name, captures, &mut stack,
                 );
@@ -2546,7 +2567,7 @@ fn type_to_variable<'a>(
             }
             // This case is important for the rank of boolean variables
             Function(closure_type, ret_type) => {
-                let arguments = types.get_type_arguments(typ);
+                let arguments = types.get_type_arguments(typ_index);
                 let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
                 for (target_index, var_index) in
                     (new_arguments.indices()).zip(arguments.into_iter())
@@ -2564,7 +2585,7 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
             Record(fields) => {
-                let ext_slice = types.get_type_arguments(typ);
+                let ext_slice = types.get_type_arguments(typ_index);
 
                 // An empty fields is inefficient (but would be correct)
                 // If hit, try to turn the value into an EmptyRecord in canonicalization
@@ -2611,7 +2632,7 @@ fn type_to_variable<'a>(
             }
 
             TagUnion(tags) => {
-                let ext_slice = types.get_type_arguments(typ);
+                let ext_slice = types.get_type_arguments(typ_index);
 
                 // An empty tags is inefficient (but would be correct)
                 // If hit, try to turn the value into an EmptyTagUnion in canonicalization
@@ -2625,8 +2646,8 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
             FunctionOrTagUnion(symbol) => {
-                let ext_slice = types.get_type_arguments(typ);
-                let tag_name = types.get_tag_name(&typ).clone();
+                let ext_slice = types.get_type_arguments(typ_index);
+                let tag_name = types.get_tag_name(&typ_index).clone();
 
                 debug_assert!(ext_slice.len() <= 1);
                 let temp_ext_var = match ext_slice.into_iter().next() {
@@ -2654,7 +2675,7 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
             RecursiveTagUnion(rec_var, tags) => {
-                let ext_slice = types.get_type_arguments(typ);
+                let ext_slice = types.get_type_arguments(typ_index);
 
                 // An empty tags is inefficient (but would be correct)
                 // If hit, try to turn the value into an EmptyTagUnion in canonicalization
@@ -2692,7 +2713,7 @@ fn type_to_variable<'a>(
                     infer_ext_in_output_variables,
                 } = types[shared];
 
-                let type_arguments = types.get_type_arguments(typ);
+                let type_arguments = types.get_type_arguments(typ_index);
 
                 let alias_variables = {
                     let all_vars_length = type_arguments.len()
@@ -2773,7 +2794,7 @@ fn type_to_variable<'a>(
             }
 
             StructuralAlias { shared, actual } | OpaqueAlias { shared, actual } => {
-                let kind = match types[typ] {
+                let kind = match typ {
                     StructuralAlias { .. } => AliasKind::Structural,
                     OpaqueAlias { .. } => AliasKind::Opaque,
                     _ => internal_error!(),
@@ -2789,7 +2810,7 @@ fn type_to_variable<'a>(
 
                 debug_assert!(roc_types::subs::Variable::get_reserved(symbol).is_none());
 
-                let type_arguments = types.get_type_arguments(typ);
+                let type_arguments = types.get_type_arguments(typ_index);
 
                 let alias_variables = {
                     let all_vars_length = type_arguments.len()
@@ -2860,7 +2881,7 @@ fn type_to_variable<'a>(
                     infer_ext_in_output_variables: _, // TODO
                 } = types[shared];
 
-                let type_arguments = types.get_type_arguments(typ);
+                let type_arguments = types.get_type_arguments(typ_index);
 
                 let alias_variables = {
                     let length = type_arguments.len() + lambda_set_variables.len();
