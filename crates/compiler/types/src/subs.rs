@@ -2147,7 +2147,6 @@ impl Subs {
         }
     }
 
-    #[cfg(debug_assertions)]
     pub fn dbg(&self, var: Variable) -> impl std::fmt::Debug + '_ {
         SubsFmtContent(self.get_content_without_compacting(var), self)
     }
