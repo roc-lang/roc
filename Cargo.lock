@@ -4880,6 +4880,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "roc_utils",
+ "roc_wasm_module",
  "target-lexicon",
  "tempfile",
  "wasi_libc_sys",

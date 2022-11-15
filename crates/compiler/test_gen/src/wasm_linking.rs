@@ -7,7 +7,6 @@ use std::process::Command;
 
 use roc_builtins::bitcode::IntWidth;
 use roc_collections::{MutMap, MutSet};
-use roc_gen_wasm::wasm_module::WasmModule;
 use roc_module::ident::{ForeignSymbol, ModuleName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{
@@ -19,6 +18,7 @@ use roc_mono::ir::{
     UpdateModeId,
 };
 use roc_mono::layout::{Builtin, CapturesNiche, LambdaName, Layout, STLayoutInterner};
+use roc_wasm_module::WasmModule;
 use wasm3::{Environment, Module};
 
 const LINKING_TEST_HOST_WASM: &str = "build/wasm_linking_test_host.wasm";
