@@ -161,24 +161,18 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                     impls,
                 ),
                 RocTagUnion::NonRecursive {
-                    tags:
-                        RocTags::HasClosure {
-                            tag_getters,
-                            discriminant_getter,
-                        },
+                    tags: RocTags::HasClosure { tag_getters },
                     name,
                     discriminant_size,
+                    discriminant_offset,
                 } => {
                     todo!();
                 }
                 RocTagUnion::NonRecursive {
-                    tags:
-                        RocTags::HasNoClosures {
-                            tags,
-                            discriminant_offset,
-                        },
+                    tags: RocTags::HasNoClosures { tags },
                     name,
                     discriminant_size,
+                    discriminant_offset,
                 } => {
                     // Empty tag unions can never come up at runtime,
                     // and so don't need declared types.
@@ -198,24 +192,18 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                     }
                 }
                 RocTagUnion::Recursive {
-                    tags:
-                        RocTags::HasClosure {
-                            tag_getters,
-                            discriminant_getter,
-                        },
+                    tags: RocTags::HasClosure { tag_getters },
                     name,
                     discriminant_size,
+                    discriminant_offset,
                 } => {
                     todo!();
                 }
                 RocTagUnion::Recursive {
-                    tags:
-                        RocTags::HasNoClosures {
-                            tags,
-                            discriminant_offset,
-                        },
+                    tags: RocTags::HasNoClosures { tags },
                     name,
                     discriminant_size,
+                    discriminant_offset,
                 } => {
                     // Empty tag unions can never come up at runtime,
                     // and so don't need declared types.
@@ -237,24 +225,18 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
                 RocTagUnion::NullableWrapped {
                     name,
                     index_of_null_tag,
-                    tags:
-                        RocTags::HasClosure {
-                            tag_getters,
-                            discriminant_getter,
-                        },
+                    tags: RocTags::HasClosure { tag_getters },
                     discriminant_size,
+                    discriminant_offset,
                 } => {
                     todo!();
                 }
                 RocTagUnion::NullableWrapped {
                     name,
                     index_of_null_tag,
-                    tags:
-                        RocTags::HasNoClosures {
-                            tags,
-                            discriminant_offset,
-                        },
+                    tags: RocTags::HasNoClosures { tags },
                     discriminant_size,
+                    discriminant_offset,
                 } => {
                     // index_of_null_tag refers to the index of the tag that is represented at runtime as NULL.
                     // For example, in `FingerTree a : [Empty, Single a, More (Some a) (FingerTree (Tuple a)) (Some a)]`,

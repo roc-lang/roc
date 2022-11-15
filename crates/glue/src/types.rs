@@ -215,11 +215,9 @@ impl Types {
                                 (
                                     RocTags::HasClosure {
                                         tag_getters: getters_a,
-                                        discriminant_getter: _,
                                     },
                                     RocTags::HasClosure {
                                         tag_getters: getters_b,
-                                        discriminant_getter: _,
                                     },
                                 ) => getters_a.iter().zip(getters_b.iter()).all(
                                     |((name_a, opt_id_a), (name_b, opt_id_b))| {
@@ -240,14 +238,8 @@ impl Types {
                                 // discriminant offset doesn't matter for equality,
                                 // since it's determined 100% by other fields
                                 (
-                                    RocTags::HasNoClosures {
-                                        tags: tags_a,
-                                        discriminant_offset: _,
-                                    },
-                                    RocTags::HasNoClosures {
-                                        tags: tags_b,
-                                        discriminant_offset: _,
-                                    },
+                                    RocTags::HasNoClosures { tags: tags_a },
+                                    RocTags::HasNoClosures { tags: tags_b },
                                 ) => tags_a.iter().zip(tags_b.iter()).all(
                                     |((name_a, opt_id_a), (name_b, opt_id_b))| {
                                         name_a == name_b
@@ -273,11 +265,9 @@ impl Types {
                         (
                             RocTags::HasClosure {
                                 tag_getters: getters_a,
-                                discriminant_getter: _,
                             },
                             RocTags::HasClosure {
                                 tag_getters: getters_b,
-                                discriminant_getter: _,
                             },
                         ) if getters_a.len() == getters_b.len() => getters_a
                             .iter()
@@ -728,11 +718,9 @@ pub enum RocTags {
     /// application's implementation, so those sizes and order are not knowable at host build time.
     HasClosure {
         tag_getters: Vec<(String, Option<(TypeId, String)>)>,
-        discriminant_getter: RocFn,
     },
     HasNoClosures {
         tags: Vec<(String, Option<TypeId>)>,
-        discriminant_offset: u32,
     },
 }
 
@@ -774,6 +762,7 @@ pub enum RocTagUnion {
     NonRecursive {
         name: String,
         tags: RocTags,
+        discriminant_offset: u32,
         discriminant_size: u32,
     },
     /// A recursive tag union (general case)
@@ -781,6 +770,7 @@ pub enum RocTagUnion {
     Recursive {
         name: String,
         tags: RocTags,
+        discriminant_offset: u32,
         discriminant_size: u32,
     },
     /// Optimization: No need to store a tag ID (the payload is "unwrapped")
@@ -813,6 +803,7 @@ pub enum RocTagUnion {
         index_of_null_tag: u16,
         tags: RocTags,
         discriminant_size: u32,
+        discriminant_offset: u32,
     },
     /// A recursive tag union with only two variants, where one is empty.
     /// Optimizations: Use null for the empty variant AND don't store a tag ID for the other variant.
