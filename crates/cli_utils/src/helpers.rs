@@ -19,6 +19,7 @@ use tempfile::NamedTempFile;
 
 #[derive(Debug)]
 pub struct Out {
+    pub cmd_str: String, // command with all its arguments, for easy debugging
     pub stdout: String,
     pub stderr: String,
     pub status: ExitStatus,
@@ -187,6 +188,7 @@ where
     });
 
     Out {
+        cmd_str: roc_cmd_str,
         stdout: String::from_utf8(roc_cmd_output.stdout).unwrap(),
         stderr: String::from_utf8(roc_cmd_output.stderr).unwrap(),
         status: roc_cmd_output.status,
@@ -204,6 +206,8 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
     for arg in args {
         cmd.arg(arg);
     }
+
+    let cmd_str = format!("{:?}", cmd);
 
     for (env, val) in env.into_iter() {
         cmd.env(env, val);
@@ -231,6 +235,7 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
         .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
 
     Out {
+        cmd_str,
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
         status: output.status,
@@ -274,6 +279,8 @@ pub fn run_with_valgrind<'a, I: IntoIterator<Item = &'a str>>(
         cmd.arg(arg);
     }
 
+    let cmd_str = format!("{:?}", cmd);
+
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -303,6 +310,7 @@ pub fn run_with_valgrind<'a, I: IntoIterator<Item = &'a str>>(
 
     (
         Out {
+            cmd_str,
             stdout: String::from_utf8(output.stdout).unwrap(),
             stderr: String::from_utf8(output.stderr).unwrap(),
             status: output.status,

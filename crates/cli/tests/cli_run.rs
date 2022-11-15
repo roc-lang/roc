@@ -115,10 +115,10 @@ mod cli_run {
 
         let is_reporting_runtime = stderr.starts_with("runtime: ") && stderr.ends_with("ms\n");
         if !(stderr.is_empty() || is_reporting_runtime) {
-            panic!("`roc` command had unexpected stderr: {}", stderr);
+            panic!("\n___________\nThe roc command:\n\n  {}\n\nhad unexpected stderr:\n\n  {}\n___________\n", compile_out.cmd_str, stderr);
         }
 
-        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+        assert!(compile_out.status.success(), "\n___________\nRoc command failed with status {:?}:\n\n  {:?}\n___________\n", compile_out.status, compile_out);
 
         compile_out
     }

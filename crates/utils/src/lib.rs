@@ -107,15 +107,9 @@ pub fn get_lib_path() -> Option<PathBuf> {
     let exe_relative_str_path_opt = std::env::current_exe().ok();
 
     if let Some(exe_relative_str_path) = exe_relative_str_path_opt {
-        // on windows, the current exe path is prefixed with `\\?\`, the "verbatim" prefix
-        // such a path does not works as an argument to `zig` and other command line tools,
-        // and there seems to be no good way to strip it. So we resort to some string manipulation
-        #[cfg(windows)]
-        let strip_windows_prefix = exe_relative_str_path.display().to_string();
 
         #[cfg(windows)]
-        let exe_relative_str_path =
-            std::path::Path::new(strip_windows_prefix.trim_start_matches(r"\\?\"));
+        let exe_relative_str_path = strip_windows_prefix(&exe_relative_str_path);
 
         let mut curr_parent_opt = exe_relative_str_path.parent();
 
@@ -138,7 +132,18 @@ pub fn get_lib_path() -> Option<PathBuf> {
     None
 }
 
-// get the Path of the root of the repository
+/// On windows, the path is prefixed with `\\?\`, the "verbatim" prefix.
+/// Such a path does not works as an argument to `zig` and other command line tools,
+/// and there seems to be no good way to strip it. So we resort to some string manipulation.
+#[cfg(windows)]
+pub fn strip_windows_prefix(path_buf: &PathBuf) -> std::path::PathBuf {
+    
+    let path_str = path_buf.display().to_string();
+
+    std::path::Path::new(path_str.trim_start_matches(r"\\?\")).to_path_buf()
+}
+
+/// get the Path of the root of the repository
 pub fn root_dir() -> PathBuf {
     let mut path = env::current_exe().ok().unwrap();
 

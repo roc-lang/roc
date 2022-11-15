@@ -223,7 +223,11 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
                         run_command(command, flaky_fail_counter + 1)
                     }
                 } else {
-                    panic!("{} failed: {}", command_str, error_str);
+                    if error_str.contains("lld-link: error: failed to write the output file: Permission denied") {
+                        panic!("{} failed with:\n\n  {}\n\nWorkaround:\n\n  Re-run the cargo command that triggered this build.", command_str, error_str);
+                    } else {
+                        panic!("{} failed with:\n\n  {}\n", command_str, error_str);
+                    }
                 }
             }
         },
