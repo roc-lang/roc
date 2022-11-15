@@ -1,14 +1,15 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use core::panic;
+use roc_wasm_module::linking::IndexRelocType;
 
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_wasm_module::opcodes::{OpCode, OpCode::*};
-use roc_wasm_module::serialize::{SerialBuffer, Serialize};
+use roc_wasm_module::serialize::SerialBuffer;
 use roc_wasm_module::{
-    round_up_to_alignment, Align, LocalId, ValueType, FRAME_ALIGNMENT_BYTES,
-    STACK_POINTER_GLOBAL_ID,
+    round_up_to_alignment, Align, LocalId, RelocationEntry, ValueType, WasmModule,
+    FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
 };
 
 use crate::DEBUG_SETTINGS;
@@ -109,12 +110,6 @@ pub struct CodeBuilder<'a> {
     import_relocations: Vec<'a, (usize, u32)>,
 }
 
-impl<'a> Serialize for CodeBuilder<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        self.serialize_without_relocs(buffer);
-    }
-}
-
 #[allow(clippy::new_without_default)]
 impl<'a> CodeBuilder<'a> {
     pub fn new(arena: &'a Bump) -> Self {
@@ -137,29 +132,14 @@ impl<'a> CodeBuilder<'a> {
         }
     }
 
-    /**********************************************************
-
-        LINKING
-
-    ***********************************************************/
-
-    /// Build a dummy function with just a single `unreachable` instruction
-    pub fn dummy(arena: &'a Bump) -> Self {
-        let mut builder = Self::new(arena);
-        builder.unreachable_();
-        builder.build_fn_header_and_footer(&[], 0, None);
-        builder
-    }
-
-    pub fn apply_import_relocs(&mut self, live_import_fns: &[usize]) {
-        for (code_index, fn_index) in self.import_relocations.iter() {
-            for (new_index, old_index) in live_import_fns.iter().enumerate() {
-                if *fn_index as usize == *old_index {
-                    self.code
-                        .overwrite_padded_u32(*code_index, new_index as u32);
-                }
-            }
-        }
+    pub fn clear(&mut self) {
+        self.code.clear();
+        self.insertions.clear();
+        self.insert_bytes.clear();
+        self.preamble.clear();
+        self.inner_length.clear();
+        self.vm_block_stack.clear();
+        self.import_relocations.clear();
     }
 
     /**********************************************************
@@ -459,19 +439,51 @@ impl<'a> CodeBuilder<'a> {
     }
 
     /// Serialize all byte vectors in the right order
-    /// Also update relocation offsets relative to the base offset (code section body start)
-    pub fn serialize_without_relocs<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_slice(&self.inner_length);
-        buffer.append_slice(&self.preamble);
+    /// Insert relocations for imported functions
+    pub fn insert_into_module(&self, module: &mut WasmModule<'a>) {
+        let fn_offset = module.code.bytes.len();
+        module.code.function_count += 1;
+        module.code.function_offsets.push(fn_offset as u32);
 
-        let mut code_pos = 0;
-        for Insertion { at, start, end } in self.insertions.iter() {
-            buffer.append_slice(&self.code[code_pos..(*at)]);
-            buffer.append_slice(&self.insert_bytes[*start..*end]);
-            code_pos = *at;
+        // Insertions are chunks of code we generated out-of-order.
+        // Now insert them at the correct offsets.
+        {
+            let buffer = &mut module.code.bytes;
+            buffer.extend_from_slice(&self.inner_length);
+            buffer.extend_from_slice(&self.preamble);
+
+            let mut code_pos = 0;
+            for Insertion { at, start, end } in self.insertions.iter() {
+                buffer.extend_from_slice(&self.code[code_pos..*at]);
+                code_pos = *at;
+                buffer.extend_from_slice(&self.insert_bytes[*start..*end]);
+            }
+
+            buffer.extend_from_slice(&self.code[code_pos..self.code.len()]);
         }
 
-        buffer.append_slice(&self.code[code_pos..self.code.len()]);
+        // Create linker relocations for calls to imported functions, whose indices may change during DCE.
+        {
+            let relocs = &mut module.reloc_code.entries;
+            let mut skip = 0;
+            for (reloc_code_pos, reloc_fn) in self.import_relocations.iter() {
+                let mut insertion_bytes = 0;
+                for (i, insertion) in self.insertions.iter().enumerate().skip(skip) {
+                    if insertion.at >= *reloc_code_pos {
+                        break;
+                    }
+                    insertion_bytes = insertion.end;
+                    skip = i;
+                }
+                // Adjust for (1) the offset of this function in the Code section and (2) our own Insertions.
+                let offset = reloc_code_pos + fn_offset + insertion_bytes;
+                relocs.push(RelocationEntry::Index {
+                    type_id: IndexRelocType::FunctionIndexLeb,
+                    offset: offset as u32,
+                    symbol_index: *reloc_fn,
+                })
+            }
+        }
     }
 
     /**********************************************************

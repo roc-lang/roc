@@ -363,12 +363,8 @@ impl<'a> WasmBackend<'a> {
 
     /// Reset function-level data
     fn reset(&mut self) {
-        // Push the completed CodeBuilder into the module and swap it for a new empty one
-        let mut swap_code_builder = CodeBuilder::new(self.env.arena);
-        std::mem::swap(&mut swap_code_builder, &mut self.code_builder);
-
-        swap_code_builder.serialize_without_relocs(&mut self.module.code.bytes);
-
+        self.code_builder.insert_into_module(&mut self.module);
+        self.code_builder.clear();
         self.storage.clear();
         self.joinpoint_label_map.clear();
         assert_eq!(self.block_depth, 0);

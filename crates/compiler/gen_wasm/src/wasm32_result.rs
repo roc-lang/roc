@@ -12,8 +12,8 @@ use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 use roc_target::TargetInfo;
 use roc_wasm_module::{
-    linking::SymInfo, linking::WasmObjectSymbol, Align, Export, ExportType, LocalId, Serialize,
-    Signature, ValueType, WasmModule,
+    linking::SymInfo, linking::WasmObjectSymbol, Align, Export, ExportType, LocalId, Signature,
+    ValueType, WasmModule,
 };
 
 use crate::code_builder::CodeBuilder;
@@ -30,7 +30,7 @@ pub trait Wasm32Result {
         insert_wrapper_metadata(arena, module, wrapper_name);
         let mut code_builder = CodeBuilder::new(arena);
         Self::build_wrapper_body(&mut code_builder, main_function_index);
-        code_builder.serialize(&mut module.code.bytes);
+        code_builder.insert_into_module(module);
     }
 
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32);
@@ -53,7 +53,7 @@ pub fn insert_wrapper_for_layout<'a>(
             insert_wrapper_metadata(arena, module, wrapper_name);
             let mut code_builder = CodeBuilder::new(arena);
             build_wrapper_body_stack_memory(&mut code_builder, main_fn_index, size as usize);
-            code_builder.serialize(&mut module.code.bytes);
+            code_builder.insert_into_module(module);
         }
     };
 
