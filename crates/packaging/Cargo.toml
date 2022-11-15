@@ -1,0 +1,23 @@
+[package]
+name = "roc_packaging"
+version = "0.0.1"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+repository = "https://github.com/roc-lang/roc"
+edition = "2021"
+description = "Functionality for packaging Roc source code - e.g. for distribution over the network"
+
+[dependencies]
+roc_parse = { path = "../compiler/parse" }
+
+tar = "0.4.38" # used for `roc build --bundle` so .rp1 files can hold multiple other files
+lz4_flex = "0.9.5" # used for `roc build --bundle` to compress/decompress .rp1 files
+walkdir = "2.3.2"
+blake3 = "1.3.1"
+base64-url = "1.4.13"
+
+bumpalo.workspace = true
+
+[dev-dependencies]
+pretty_assertions = "1.3.0"
+indoc = "1.0.7"
