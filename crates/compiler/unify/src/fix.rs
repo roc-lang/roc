@@ -8,6 +8,24 @@ struct Update {
     update_var: Variable,
 }
 
+#[must_use]
+pub fn fix_fixpoint(subs: &mut Subs, left: Variable, right: Variable) -> Vec<Variable> {
+    let updates = find_chain(subs, left, right);
+    let mut new = vec![];
+
+    for Update {
+        source_of_truth,
+        update_var,
+    } in updates
+    {
+        let source_of_truth_desc = subs.get_without_compacting(source_of_truth);
+        subs.union(source_of_truth, update_var, source_of_truth_desc);
+        new.push(source_of_truth);
+    }
+
+    new
+}
+
 fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Item = Update> {
     let left = subs.get_root_key_without_compacting(left);
     let right = subs.get_root_key_without_compacting(right);
@@ -249,22 +267,4 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
 
         Err(())
     }
-}
-
-#[must_use]
-pub fn fix_fixpoint(subs: &mut Subs, left: Variable, right: Variable) -> Vec<Variable> {
-    let updates = find_chain(subs, left, right);
-    let mut new = vec![];
-
-    for Update {
-        source_of_truth,
-        update_var,
-    } in updates
-    {
-        let source_of_truth_desc = subs.get_without_compacting(source_of_truth);
-        subs.union(source_of_truth, update_var, source_of_truth_desc);
-        new.push(source_of_truth);
-    }
-
-    new
 }
