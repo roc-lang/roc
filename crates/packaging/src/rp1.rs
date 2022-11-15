@@ -35,9 +35,21 @@ pub fn build(path_to_main: &Path) -> io::Result<String> {
     // Write the bytes to disk.
     {
         let dest_path = path_to_main.with_file_name(&filename);
-        let mut file = File::open(dest_path)?;
+        let mut file = File::create(&dest_path).unwrap_or_else(|err| {
+            panic!(
+                "Unable to open {} for writing - error was: {:?}",
+                dest_path.to_string_lossy(),
+                err
+            );
+        });
 
-        file.write_all(&archive_bytes)?;
+        file.write_all(&archive_bytes).unwrap_or_else(|err| {
+            panic!(
+                "Unable to write to {} - error was: {:?}",
+                dest_path.to_string_lossy(),
+                err
+            );
+        });
     }
 
     Ok(filename)

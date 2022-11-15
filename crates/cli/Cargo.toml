@@ -45,6 +45,7 @@ roc_collections = { path = "../compiler/collections" }
 roc_can = { path = "../compiler/can" }
 roc_docs = { path = "../docs" }
 roc_glue = { path = "../glue" }
+roc_packaging = { path = "../packaging" }
 roc_parse = { path = "../compiler/parse" }
 roc_region = { path = "../compiler/region" }
 roc_module = { path = "../compiler/module" }
@@ -79,7 +80,7 @@ strum.workspace = true
 libloading.workspace = true
 signal-hook.workspace = true
 
-inkwell.workspace = true 
+inkwell.workspace = true
 
 # for now, uses unix/libc functions that windows does not support
 [target.'cfg(not(windows))'.dependencies]

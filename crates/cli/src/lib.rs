@@ -48,6 +48,7 @@ pub const CMD_GLUE: &str = "glue";
 pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
 
 pub const FLAG_DEBUG: &str = "debug";
+pub const FLAG_BUNDLE: &str = "bundle";
 pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_MAX_THREADS: &str = "max-threads";
@@ -162,6 +163,12 @@ pub fn build_app<'a>() -> Command<'a> {
                 Arg::new(FLAG_LIB)
                     .long(FLAG_LIB)
                     .help("Build a C library instead of an executable")
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_BUNDLE)
+                    .long(FLAG_BUNDLE)
+                    .help("Create a .rp1 bundle for a package, so others can add it as a HTTPS dependency.")
                     .required(false),
             )
             .arg(
@@ -485,6 +492,46 @@ pub fn build(
     use build::build_file;
     use BuildConfig::*;
 
+    let filename = matches.value_of_os(ROC_FILE).unwrap();
+    let path_buf = {
+        let path = Path::new(filename);
+
+        // Spawn the root task
+        if !path.exists() {
+            let path_string = path.to_string_lossy();
+
+            // TODO these should use roc_reporting to display nicer error messages.
+            match matches.value_source(ROC_FILE) {
+                        Some(ValueSource::DefaultValue) => {
+                            eprintln!(
+                                "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
+                                DEFAULT_ROC_FILENAME
+                            )
+                        }
+                        _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
+                    }
+
+            process::exit(1);
+        }
+
+        if matches.is_present(FLAG_BUNDLE) {
+            // Rather than building an executable or library, we're building
+            // a rp1 bundle so this code can be distributed via a HTTPS
+            let filename = roc_packaging::rp1::build(path)?;
+            let created_path = path.with_file_name(&filename);
+
+            println!(
+                "Built \x1B[33m{}\x1B[39m into the following bundle:\n\n\t\x1B[33m{}\x1B[39m\n\nTo distribute this bundle as a package, upload this to some URL and then add it as a dependency with:\n\n\t\x1B[32m\"https://your-url-goes-here/{filename}\"\x1B[39m\n",
+                path.to_string_lossy(),
+                created_path.to_string_lossy()
+            );
+
+            return Ok(0);
+        }
+
+        path.to_path_buf()
+    };
+
     // the process will end after this function,
     // so we don't want to spend time freeing these values
     let arena = ManuallyDrop::new(Bump::new());
@@ -548,27 +595,6 @@ pub fn build(
         triple != Triple::host() && !matches!(triple.architecture, Architecture::Wasm32)
     };
 
-    let filename = matches.value_of_os(ROC_FILE).unwrap();
-    let path = Path::new(filename);
-
-    // Spawn the root task
-    if !path.exists() {
-        let path_string = path.to_string_lossy();
-
-        // TODO these should use roc_reporting to display nicer error messages.
-        match matches.value_source(ROC_FILE) {
-                    Some(ValueSource::DefaultValue) => {
-                        eprintln!(
-                            "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
-                            DEFAULT_ROC_FILENAME
-                        )
-                    }
-                    _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
-                }
-
-        process::exit(1);
-    }
-
     let wasm_dev_stack_bytes: Option<u32> = matches
         .try_get_one::<&str>(FLAG_WASM_STACK_SIZE_KB)
         .ok()
@@ -590,7 +616,7 @@ pub fn build(
     let res_binary_path = build_file(
         &arena,
         &triple,
-        path.to_path_buf(),
+        path_buf,
         code_gen_options,
         emit_timings,
         link_type,
