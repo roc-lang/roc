@@ -12,7 +12,7 @@ use crate::parser::{
     self, backtrackable, increment_min_indent, line_min_indent, optional, reset_min_indent,
     sep_by1, sep_by1_e, set_min_indent, specialize, specialize_ref, then, trailing_sep_by0, word1,
     word1_indent, word2, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern,
-    ERecord, EString, EType, EWhen, Either, ParseResult, Parser,
+    ERecord, EString, ETuple, EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{loc_closure_param, loc_has_parser};
 use crate::state::State;
@@ -81,72 +81,79 @@ pub fn expr_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
 }
 
 fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>> {
-    move |arena, state, min_indent| {
-        let (_, loc_expr, state) =
-            loc_expr_in_parens_help_help().parse(arena, state, min_indent)?;
-
-        Ok((
-            MadeProgress,
-            Loc {
-                region: loc_expr.region,
-                value: Expr::ParensAround(arena.alloc(loc_expr.value)),
-            },
-            state,
-        ))
-    }
-}
-
-fn loc_expr_in_parens_help_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>> {
-    between!(
-        word1(b'(', EInParens::Open),
-        space0_around_ee(
-            specialize_ref(EInParens::Expr, loc_expr()),
-            EInParens::IndentOpen,
+    then(
+        loc!(collection_trailing_sep_e!(
+            word1(b'(', EInParens::Open),
+            specialize_ref(EInParens::Expr, loc_expr_no_multi_backpassing()),
+            word1(b',', EInParens::End),
+            word1(b')', EInParens::End),
+            EInParens::Open,
             EInParens::IndentEnd,
-        ),
-        word1(b')', EInParens::End)
+            Expr::SpaceBefore
+        )),
+        move |arena, state, _, loc_elements| {
+            let elements = loc_elements.value;
+            let region = loc_elements.region;
+
+            if elements.len() > 1 {
+                Ok((
+                    MadeProgress,
+                    Loc::at(region, Expr::Tuple(elements.ptrify_items(arena))),
+                    state,
+                ))
+            } else if elements.is_empty() {
+                Err((NoProgress, EInParens::Empty(state.pos()), state))
+            } else {
+                // TODO: don't discard comments before/after
+                // (stored in the Collection)
+                Ok((
+                    MadeProgress,
+                    Loc::at(
+                        elements.items[0].region,
+                        Expr::ParensAround(&elements.items[0].value),
+                    ),
+                    state,
+                ))
+            }
+        },
     )
+    .trace("in_parens")
 }
 
 fn loc_expr_in_parens_etc_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
-    move |arena, state: State<'a>, min_indent: u32| {
-        let parser = loc!(and!(
+    map_with_arena!(
+        loc!(and!(
             specialize(EExpr::InParens, loc_expr_in_parens_help()),
             one_of![record_field_access_chain(), |a, s, _m| Ok((
                 NoProgress,
                 Vec::new_in(a),
                 s
             ))]
-        ));
-
-        let (
-            _,
-            Loc {
+        )),
+        move |arena: &'a Bump, value: Loc<(Loc<Expr<'a>>, Vec<'a, &'a str>)>| {
+            let Loc {
                 mut region,
                 value: (loc_expr, field_accesses),
-            },
-            state,
-        ) = parser.parse(arena, state, min_indent)?;
+            } = value;
 
-        let mut value = loc_expr.value;
+            let mut value = loc_expr.value;
 
-        // if there are field accesses, include the parentheses in the region
-        // otherwise, don't include the parentheses
-        if field_accesses.is_empty() {
-            region = loc_expr.region;
-        } else {
-            for field in field_accesses {
-                // Wrap the previous answer in the new one, so we end up
-                // with a nested Expr. That way, `foo.bar.baz` gets represented
-                // in the AST as if it had been written (foo.bar).baz all along.
-                value = Expr::Access(arena.alloc(value), field);
+            // if there are field accesses, include the parentheses in the region
+            // otherwise, don't include the parentheses
+            if field_accesses.is_empty() {
+                region = loc_expr.region;
+            } else {
+                for field in field_accesses {
+                    // Wrap the previous answer in the new one, so we end up
+                    // with a nested Expr. That way, `foo.bar.baz` gets represented
+                    // in the AST as if it had been written (foo.bar).baz all along.
+                    value = Expr::RecordAccess(arena.alloc(value), field);
+                }
             }
+
+            Loc::at(region, value)
         }
-
-        let loc_expr = Loc::at(region, value);
-
-        Ok((MadeProgress, loc_expr, state))
-    }
+    )
 }
 
 fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, &'a str>, EExpr<'a>> {
@@ -1845,6 +1852,16 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             Ok(Pattern::RecordDestructure(patterns))
         }
 
+        Expr::Tuple(fields) => Ok(Pattern::Tuple(fields.map_items_result(
+            arena,
+            |loc_expr| {
+                Ok(Loc {
+                    region: loc_expr.region,
+                    value: expr_to_pattern_help(arena, &loc_expr.value)?,
+                })
+            },
+        )?)),
+
         &Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
         &Expr::Num(string) => Ok(Pattern::NumLiteral(string)),
         Expr::NonBase10Int {
@@ -1857,8 +1874,10 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             is_negative: *is_negative,
         }),
         // These would not have parsed as patterns
-        Expr::AccessorFunction(_)
-        | Expr::Access(_, _)
+        Expr::RecordAccessorFunction(_)
+        | Expr::RecordAccess(_, _)
+        | Expr::TupleAccessorFunction(_)
+        | Expr::TupleAccess(_, _)
         | Expr::List { .. }
         | Expr::Closure(_, _)
         | Expr::Backpassing(_, _, _)
@@ -2406,12 +2425,13 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
                 // Wrap the previous answer in the new one, so we end up
                 // with a nested Expr. That way, `foo.bar.baz` gets represented
                 // in the AST as if it had been written (foo.bar).baz all along.
-                answer = Expr::Access(arena.alloc(answer), field);
+                answer = Expr::RecordAccess(arena.alloc(answer), field);
             }
 
             answer
         }
-        Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
+        Ident::RecordAccessorFunction(string) => Expr::RecordAccessorFunction(string),
+        Ident::TupleAccessorFunction(string) => Expr::TupleAccessorFunction(string),
         Ident::Malformed(string, problem) => Expr::MalformedIdent(string, problem),
     }
 }
@@ -2433,6 +2453,13 @@ fn list_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EList<'a>> {
         }
     )
     .trace("list_literal")
+}
+
+pub fn tuple_value_field<'a>() -> impl Parser<'a, Loc<Expr<'a>>, ETuple<'a>> {
+    space0_before_e(
+        specialize_ref(ETuple::Expr, loc_expr_no_multi_backpassing()),
+        ETuple::IndentEnd,
+    )
 }
 
 pub fn record_value_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
@@ -2577,7 +2604,7 @@ fn record_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
                     // Wrap the previous answer in the new one, so we end up
                     // with a nested Expr. That way, `foo.bar.baz` gets represented
                     // in the AST as if it had been written (foo.bar).baz all along.
-                    value = Expr::Access(arena.alloc(value), field);
+                    value = Expr::RecordAccess(arena.alloc(value), field);
                 }
             }
 

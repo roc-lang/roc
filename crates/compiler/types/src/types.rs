@@ -365,6 +365,7 @@ impl std::ops::Neg for Polarity {
     }
 }
 
+#[derive(Debug)]
 pub struct AliasShared {
     pub symbol: Symbol,
     pub type_argument_abilities: Slice<AbilitySet>,
@@ -374,7 +375,7 @@ pub struct AliasShared {
 }
 
 /// The tag (head constructor) of a canonical type stored in [Types].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum TypeTag {
     EmptyRecord,
     EmptyTagUnion,
@@ -456,6 +457,7 @@ impl AsideTypeSlice {
 /// the [type solving representation][crate::subs::Content] of types.
 ///
 /// See [TypeTag].
+#[derive(Debug)]
 pub struct Types {
     // main storage. Each type is represented by a tag, which is identified by its index.
     // `tags_slices` is a parallel array (so these two vectors always have the same size), that
@@ -494,11 +496,31 @@ impl Default for Types {
 }
 
 impl Types {
+    pub const EMPTY_RECORD: Index<TypeTag> = Index::new(0);
+    const EMPTY_RECORD_TAG: TypeTag = TypeTag::Variable(Variable::EMPTY_RECORD);
+    const EMPTY_RECORD_ARGS: Slice<TypeTag> = Slice::empty();
+
+    pub const EMPTY_TAG_UNION: Index<TypeTag> = Index::new(1);
+    const EMPTY_TAG_UNION_TAG: TypeTag = TypeTag::Variable(Variable::EMPTY_TAG_UNION);
+    const EMPTY_TAG_UNION_ARGS: Slice<TypeTag> = Slice::empty();
+
+    pub const STR: Index<TypeTag> = Index::new(2);
+    const STR_TAG: TypeTag = TypeTag::Variable(Variable::STR);
+    const STR_ARGS: Slice<TypeTag> = Slice::empty();
+
     pub fn new() -> Self {
         Self {
             // tags.len() == tags_slices.len()
-            tags: vec![TypeTag::EmptyRecord, TypeTag::EmptyTagUnion],
-            tags_slices: vec![Default::default(), Default::default()],
+            tags: vec![
+                Self::EMPTY_RECORD_TAG,
+                Self::EMPTY_TAG_UNION_TAG,
+                Self::STR_TAG,
+            ],
+            tags_slices: vec![
+                Self::EMPTY_RECORD_ARGS,
+                Self::EMPTY_TAG_UNION_ARGS,
+                Self::STR_ARGS,
+            ],
 
             aside_types_slices: Default::default(),
 
@@ -560,6 +582,13 @@ impl Types {
         (tags, payload_slices)
     }
 
+    /// # Safety
+    ///
+    /// May only be called if `var` is known to represent the type at `index`.
+    pub unsafe fn emplace_variable(&mut self, index: Index<TypeTag>, var: Variable) {
+        self.tags[index.index()] = TypeTag::Variable(var);
+    }
+
     fn reserve_type_tags(&mut self, length: usize) -> Slice<TypeTag> {
         use std::iter::repeat;
 
@@ -587,11 +616,18 @@ impl Types {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    fn from_old_type_slice(&mut self, old: &[Type]) -> Slice<TypeTag> {
+    pub fn from_old_type_slice<B>(
+        &mut self,
+        // evil, but allows us to emulate reference-polymorphism
+        old: impl ExactSizeIterator<Item = B>,
+    ) -> Slice<TypeTag>
+    where
+        B: std::borrow::Borrow<Type>,
+    {
         let slice = self.reserve_type_tags(old.len());
 
         for (index, argument) in slice.into_iter().zip(old) {
-            self.from_old_type_at(index, argument);
+            self.from_old_type_at(index, argument.borrow());
         }
 
         slice
@@ -612,7 +648,7 @@ impl Types {
         );
 
         for (slice_index, (_, types)) in type_slices.indices().zip(tags) {
-            self.aside_types_slices[slice_index] = self.from_old_type_slice(types);
+            self.aside_types_slices[slice_index] = self.from_old_type_slice(types.iter());
         }
 
         let union_tags = UnionTags {
@@ -686,6 +722,19 @@ impl Types {
         index
     }
 
+    pub fn function(
+        &mut self,
+        arguments: Slice<TypeTag>,
+        lambda_set: Index<TypeTag>,
+        ret: Index<TypeTag>,
+    ) -> Index<TypeTag> {
+        let index = self.reserve_type_tag();
+
+        let tag = TypeTag::Function(lambda_set, ret);
+        self.set_type_tag(index, tag, arguments);
+        index
+    }
+
     #[allow(clippy::wrong_self_convention)]
     fn from_old_type_at(&mut self, index: Index<TypeTag>, old: &Type) {
         match old {
@@ -694,7 +743,7 @@ impl Types {
                 self.set_type_tag(index, TypeTag::EmptyTagUnion, Slice::default())
             }
             Type::Function(arguments, lambda_set, return_type) => {
-                let argument_slice = self.from_old_type_slice(arguments);
+                let argument_slice = self.from_old_type_slice(arguments.iter());
 
                 let tag = TypeTag::Function(
                     self.from_old_type(lambda_set),
@@ -795,7 +844,7 @@ impl Types {
                 captures,
                 ambient_function,
             } => {
-                let type_slice = self.from_old_type_slice(captures);
+                let type_slice = self.from_old_type_slice(captures.iter());
 
                 let tag = TypeTag::ClosureTag {
                     name: *name,
@@ -909,7 +958,7 @@ impl Types {
                 actual_var,
                 actual,
             } => {
-                let type_arguments_slice = self.from_old_type_slice(type_arguments);
+                let type_arguments_slice = self.from_old_type_slice(type_arguments.iter());
 
                 let lambda_set_slice = {
                     let slice = self.reserve_type_tags(lambda_set_variables.len());

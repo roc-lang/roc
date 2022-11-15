@@ -529,6 +529,11 @@ pub fn canonicalize_pattern<'a>(
                 permit_shadows,
             )
         }
+
+        Tuple(_patterns) => {
+            todo!("canonicalize_pattern: Tuple")
+        }
+
         RecordDestructure(patterns) => {
             let ext_var = var_store.fresh();
             let whole_var = var_store.fresh();

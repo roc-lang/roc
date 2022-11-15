@@ -20,13 +20,14 @@ use roc_constrain::expr::constrain_decls;
 use roc_debug_flags::dbg_do;
 use roc_derive::DerivedModule;
 use roc_derive_key::{DeriveBuiltin, DeriveError, DeriveKey, Derived};
-use roc_load_internal::file::{add_imports, default_aliases, LoadedModule, Threading};
+use roc_load_internal::file::{add_imports, LoadedModule, Threading};
 use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_region::all::LineInfo;
 use roc_reporting::report::{type_problem, RocDocAllocator};
 use roc_types::{
     pretty_print::{name_and_print_var, DebugPrint},
     subs::{ExposedTypesStorageSubs, Subs, Variable},
+    types::Types,
 };
 
 const DERIVED_MODULE: ModuleId = ModuleId::DERIVED_SYNTH;
@@ -343,11 +344,12 @@ fn check_derived_typechecks_and_golden(
     check_golden: impl Fn(&str),
 ) {
     // constrain the derived
+    let mut types = Types::new();
     let mut constraints = Constraints::new();
     let def_var = derived_def.expr_var;
     let mut decls = Declarations::new();
     decls.push_def(derived_def);
-    let constr = constrain_decls(&mut constraints, test_module, &decls);
+    let constr = constrain_decls(&mut types, &mut constraints, test_module, &decls);
 
     // the derived implementation on stuff from the builtin module, so
     //   - we need to add those dependencies as imported on the constraint
@@ -394,11 +396,12 @@ fn check_derived_typechecks_and_golden(
     );
     let (mut solved_subs, _, problems, _) = roc_solve::module::run_solve(
         test_module,
+        types,
         &constraints,
         constr,
         RigidVariables::default(),
         test_subs,
-        default_aliases(),
+        Default::default(),
         abilities_store,
         Default::default(),
         &exposed_for_module.exposed_by_module,
@@ -486,6 +489,7 @@ where
         Default::default(),
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
+        roc_reporting::report::DEFAULT_PALETTE,
         Threading::AllAvailable,
     )
     .unwrap();

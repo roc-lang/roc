@@ -21,15 +21,17 @@ roc_load = { path = "../compiler/load" }
 roc_target = { path = "../compiler/roc_target" }
 roc_error_macros = { path = "../error_macros" }
 roc_reporting = { path = "../reporting" }
-arrayvec = "0.7.2"
-bumpalo = { version = "3.11.0", features = ["collections"] }
-page_size = "0.4.2"
-snafu = { version = "0.7.1", features = ["backtraces"] }
+
 ven_graph = { path = "../vendor/pathfinding" }
-libc = "0.2.135"
+
+arrayvec.workspace = true 
+bumpalo.workspace = true 
+page_size.workspace = true 
+snafu.workspace = true 
+libc.workspace = true 
 
 [dev-dependencies]
-indoc = "1.0.7"
+indoc.workspace = true 
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["memoryapi"]}

@@ -805,7 +805,12 @@ mod cli_run {
                 &[],
             );
 
-            assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+            assert!(
+                compile_out.status.success(),
+                "bad status stderr:\n{}\nstdout:\n{}",
+                compile_out.stderr,
+                compile_out.stdout
+            );
 
             let mut path = file.with_file_name(executable_filename);
             path.set_extension("wasm");

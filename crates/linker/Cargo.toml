@@ -18,17 +18,18 @@ roc_collections = { path = "../compiler/collections" }
 roc_error_macros = { path = "../error_macros" }
 roc_load = { path = "../compiler/load" }
 roc_reporting = { path = "../reporting" }
-bumpalo = { version = "3.11.0", features = ["collections"] }
-iced-x86 = { version = "1.15.0", default-features = false, features = ["std", "decoder", "op_code_info", "instr_info"] }
-memmap2 = "0.5.7"
-object = { version = "0.29.0", features = ["read", "write"] }
-mach_object = "0.1"
-serde = { version = "1.0.144", features = ["derive"] }
-bincode = "1.3.3"
-target-lexicon = "0.12.3"
-tempfile = "3.2.0"
+
+bumpalo.workspace = true
+iced-x86.workspace = true
+memmap2.workspace = true
+object.workspace = true
+mach_object.workspace = true
+serde.workspace = true
+bincode.workspace = true
+target-lexicon.workspace = true
+tempfile.workspace = true
 
 
 [dev-dependencies]
-indoc = "1.0.7"
-libc = "0.2.135"
+indoc.workspace = true
+libc.workspace = true

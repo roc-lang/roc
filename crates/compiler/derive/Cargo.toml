@@ -15,7 +15,7 @@ roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_unify = { path = "../unify" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo.workspace = true
 
 [features]
 default = []

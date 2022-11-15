@@ -5134,7 +5134,7 @@ mod test_fmt {
             r#"
             Task.fromResult
                 (
-                    a, b <- binaryOp ctx
+                    b <- binaryOp ctx
                     if a == b then
                         -1
                     else
@@ -5147,7 +5147,7 @@ mod test_fmt {
             indoc!(
                 r#"
                     Task.fromResult
-                        (a, b <- binaryOp ctx
+                        (b <- binaryOp ctx
                             if a == b then
                                 -1
                             else
@@ -5159,7 +5159,7 @@ mod test_fmt {
                 r#"
                     Task.fromResult
                         (
-                            a, b <- binaryOp ctx
+                            b <- binaryOp ctx
                             if a == b then
                                 -1
                             else
@@ -5173,7 +5173,7 @@ mod test_fmt {
             indoc!(
                 r#"
                     Task.fromResult
-                        (a, b <- binaryOp ctx
+                        (b <- binaryOp ctx
                             if a == b then
                                 -1
                             else
@@ -5184,7 +5184,7 @@ mod test_fmt {
                 r#"
                     Task.fromResult
                         (
-                            a, b <- binaryOp ctx
+                            b <- binaryOp ctx
                             if a == b then
                                 -1
                             else

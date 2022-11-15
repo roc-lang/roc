@@ -11,9 +11,9 @@ roc_region = { path = "../region" }
 roc_ident = { path = "../ident" }
 roc_collections = { path = "../collections" }
 roc_error_macros = {path = "../../error_macros"}
-bumpalo = { version = "3.11.0", features = ["collections"] }
-static_assertions = "1.1.0"
-snafu = { version = "0.7.1", features = ["backtraces"] }
+bumpalo.workspace = true
+static_assertions.workspace = true
+snafu.workspace = true
 
 [features]
 default = []

@@ -1772,13 +1772,6 @@ checksum = "adab1eaa3408fb7f0c777a73e7465fd5656136fc93b670eb6df3c88c2c1344e3"
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-dependencies = [
- "inkwell 0.1.0 (git+https://github.com/roc-lang/inkwell?branch=master)",
-]
-
-[[package]]
-name = "inkwell"
-version = "0.1.0"
 source = "git+https://github.com/roc-lang/inkwell?branch=master#accd406858a40ca2a1463ff77d79f3c5e4c96f4e"
 dependencies = [
  "either",
@@ -3322,7 +3315,7 @@ name = "roc_build"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "inkwell 0.1.0",
+ "inkwell",
  "libloading",
  "roc_builtins",
  "roc_can",
@@ -3395,7 +3388,7 @@ dependencies = [
  "criterion",
  "errno",
  "indoc",
- "inkwell 0.1.0",
+ "inkwell",
  "libc",
  "libloading",
  "mimalloc",
@@ -3649,7 +3642,7 @@ name = "roc_gen_llvm"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "inkwell 0.1.0",
+ "inkwell",
  "morphic_lib",
  "roc_alias_analysis",
  "roc_builtins",
@@ -3903,7 +3896,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "const_format",
- "inkwell 0.1.0",
+ "inkwell",
  "libloading",
  "roc_build",
  "roc_builtins",
@@ -3953,7 +3946,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "indoc",
- "inkwell 0.1.0",
+ "inkwell",
  "libc",
  "libloading",
  "pretty_assertions",
@@ -4843,7 +4836,7 @@ dependencies = [
  "bumpalo",
  "criterion",
  "indoc",
- "inkwell 0.1.0",
+ "inkwell",
  "lazy_static",
  "libc",
  "libloading",
