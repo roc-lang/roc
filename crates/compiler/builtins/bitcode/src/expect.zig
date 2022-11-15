@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const SIGUSR1: c_int = 10;
+const SIGUSR1: c_int = if (builtin.os.tag.isDarwin()) 30 else 10;
 
 const O_RDWR: c_int = 2;
 const O_CREAT: c_int = 64;
