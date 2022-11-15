@@ -124,8 +124,7 @@ toHelp = \parser ->
 succeed : a -> Parser a
 succeed = \val -> @Parser (Succeed val)
 
-# TODO: check overflows when this annotation is included
-# toHelpHelper : Parser *, List Config -> Help
+toHelpHelper : Parser *, List Config -> Help
 toHelpHelper = \@Parser parser, configs ->
     when parser is
         Succeed _ -> Config configs
