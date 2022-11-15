@@ -52,4 +52,7 @@ jobs:
         run: cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker -p roc_cli || cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker -p roc_cli
 
       - name: Actually run the tests.
-        run: cargo test --locked --release -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker -p roc_cli
+        run: cargo test --locked --release -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker
+
+      - name: Run roc_cli tests that work on CI
+        run: cargo test --locked --release -p roc_cli cli_run::fibonacci cli_run::format_check_good cli_run::format_check_reformatting_needed cli_run::platform_switching_zig cli_run::platform_switching_main

@@ -3,7 +3,7 @@ use snafu::OptionExt;
 use std::{
     collections::HashMap,
     env::{self, VarError},
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::Command,
     slice::SliceIndex,
 };
@@ -131,14 +131,17 @@ pub fn get_lib_path() -> Option<PathBuf> {
     None
 }
 
+#[cfg(windows)]
+use std::path::Path;
+
 /// On windows, the path is prefixed with `\\?\`, the "verbatim" prefix.
 /// Such a path does not works as an argument to `zig` and other command line tools,
 /// and there seems to be no good way to strip it. So we resort to some string manipulation.
 #[cfg(windows)]
-pub fn strip_windows_prefix(path_buf: &Path) -> std::path::PathBuf {
+pub fn strip_windows_prefix(path_buf: &Path) -> PathBuf {
     let path_str = path_buf.display().to_string();
 
-    std::path::Path::new(path_str.trim_start_matches(r"\\?\")).to_path_buf()
+    Path::new(path_str.trim_start_matches(r"\\?\")).to_path_buf()
 }
 
 /// get the Path of the root of the repository
