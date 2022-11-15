@@ -1,5 +1,5 @@
 use crate::ast::{Has, Pattern};
-use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
+use crate::blankspace::{space0_before_e, space0_e};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
@@ -147,15 +147,37 @@ fn loc_parse_tag_pattern_arg<'a>(
 }
 
 fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PInParens<'a>> {
-    between!(
-        word1(b'(', PInParens::Open),
-        space0_around_ee(
+    then(
+        loc!(collection_trailing_sep_e!(
+            word1(b'(', PInParens::Open),
             specialize_ref(PInParens::Pattern, loc_pattern_help()),
+            word1(b',', PInParens::End),
+            word1(b')', PInParens::End),
+            PInParens::Open,
             PInParens::IndentOpen,
-            PInParens::IndentEnd,
-        ),
-        word1(b')', PInParens::End)
+            Pattern::SpaceBefore
+        )),
+        move |_arena, state, _, loc_elements| {
+            let elements = loc_elements.value;
+            let region = loc_elements.region;
+
+            if elements.len() > 1 {
+                Ok((
+                    MadeProgress,
+                    Loc::at(region, Pattern::Tuple(elements)),
+                    state,
+                ))
+            } else if elements.is_empty() {
+                Err((NoProgress, PInParens::Empty(state.pos()), state))
+            } else {
+                // TODO: don't discard comments before/after
+                // (stored in the Collection)
+                // TODO: add Pattern::ParensAround to faithfully represent the input
+                Ok((MadeProgress, elements.items[0], state))
+            }
+        },
     )
+    .trace("pat_in_parens")
 }
 
 fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
@@ -340,7 +362,7 @@ fn loc_ident_pattern_help<'a>(
                     ))
                 }
             }
-            Ident::AccessorFunction(string) => Ok((
+            Ident::RecordAccessorFunction(string) | Ident::TupleAccessorFunction(string) => Ok((
                 MadeProgress,
                 Loc {
                     region: loc_ident.region,

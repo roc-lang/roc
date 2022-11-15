@@ -1,5 +1,5 @@
 UnaryOp(
-    @1-11 Access(
+    @1-11 RecordAccess(
         Var {
             module_name: "",
             ident: "rec1",

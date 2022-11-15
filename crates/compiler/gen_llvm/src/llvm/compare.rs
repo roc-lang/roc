@@ -13,8 +13,9 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
-use super::build::{dec_binop_with_unchecked, load_roc_value, use_roc_value};
+use super::build::{load_roc_value, use_roc_value};
 use super::convert::argument_type_from_union_layout;
+use super::lowlevel::dec_binop_with_unchecked;
 
 #[derive(Clone, Debug)]
 enum WhenRecursive<'a> {

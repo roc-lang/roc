@@ -7,8 +7,12 @@ license = "UPL-1.0"
 description = "Supports evaluating expect and printing contextual information when they fail."
 
 [dependencies]
-bumpalo = {version = "3.11.0", features = ["collections"]}
-target-lexicon = "0.12.2"
+bumpalo.workspace = true
+target-lexicon.workspace = true
+libloading.workspace = true
+signal-hook.workspace = true
+libc.workspace = true
+inkwell.workspace = true 
 
 roc_builtins = {path = "../compiler/builtins"}
 roc_can = {path = "../compiler/can"}
@@ -28,18 +32,14 @@ roc_region = { path = "../compiler/region" }
 roc_build = { path = "../compiler/build" }
 roc_error_macros = { path = "../error_macros" }
 
-libloading = "0.7.1"
-inkwell = { path = "../vendor/inkwell" }
-signal-hook = "0.3.14"
-libc = "0.2.135"
-
 [dev-dependencies]
 test_gen = { path = "../compiler/test_gen" }
 roc_build = { path = "../compiler/build", features = ["target-aarch64", "target-x86_64"]  }
-tempfile = "3.2.0"
-indoc = "1.0.7"
-pretty_assertions = "1.3.0"
-strip-ansi-escapes = "0.1.1"
+
+tempfile.workspace = true
+indoc.workspace = true
+pretty_assertions.workspace = true
+strip-ansi-escapes.workspace = true
 
 
 [lib]

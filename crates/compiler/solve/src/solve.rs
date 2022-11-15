@@ -138,12 +138,19 @@ impl DelayedAliasVariables {
 
 #[derive(Debug, Default)]
 pub struct Aliases {
-    aliases: Vec<(Symbol, Type, DelayedAliasVariables, AliasKind)>,
+    aliases: Vec<(Symbol, Index<TypeTag>, DelayedAliasVariables, AliasKind)>,
     variables: Vec<OptAbleVar>,
 }
 
 impl Aliases {
-    pub fn insert(&mut self, symbol: Symbol, alias: Alias) {
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            aliases: Vec::with_capacity(cap),
+            variables: Vec::with_capacity(cap * 2),
+        }
+    }
+
+    pub fn insert(&mut self, types: &mut Types, symbol: Symbol, alias: Alias) {
         let alias_variables =
             {
                 let start = self.variables.len() as _;
@@ -188,8 +195,11 @@ impl Aliases {
                 }
             };
 
+        // TODO: can we construct Aliases from TypeTag directly?
+        let alias_typ = types.from_old_type(&alias.typ);
+
         self.aliases
-            .push((symbol, alias.typ, alias_variables, alias.kind));
+            .push((symbol, alias_typ, alias_variables, alias.kind));
     }
 
     fn instantiate_result_result(
@@ -287,6 +297,18 @@ impl Aliases {
 
                 Some((num_content_var, AliasKind::Structural))
             }
+            Symbol::NUM_SIGNED8 => Some((Variable::SIGNED8, AliasKind::Opaque)),
+            Symbol::NUM_SIGNED16 => Some((Variable::SIGNED16, AliasKind::Opaque)),
+            Symbol::NUM_SIGNED32 => Some((Variable::SIGNED32, AliasKind::Opaque)),
+            Symbol::NUM_SIGNED64 => Some((Variable::SIGNED64, AliasKind::Opaque)),
+            Symbol::NUM_SIGNED128 => Some((Variable::SIGNED128, AliasKind::Opaque)),
+            Symbol::NUM_UNSIGNED8 => Some((Variable::UNSIGNED8, AliasKind::Opaque)),
+            Symbol::NUM_UNSIGNED16 => Some((Variable::UNSIGNED16, AliasKind::Opaque)),
+            Symbol::NUM_UNSIGNED32 => Some((Variable::UNSIGNED32, AliasKind::Opaque)),
+            Symbol::NUM_UNSIGNED64 => Some((Variable::UNSIGNED64, AliasKind::Opaque)),
+            Symbol::NUM_UNSIGNED128 => Some((Variable::UNSIGNED128, AliasKind::Opaque)),
+            Symbol::NUM_BINARY32 => Some((Variable::BINARY32, AliasKind::Opaque)),
+            Symbol::NUM_BINARY64 => Some((Variable::BINARY64, AliasKind::Opaque)),
             _ => None,
         }
     }
@@ -316,18 +338,15 @@ impl Aliases {
             return (var, kind);
         }
 
-        let (typ, delayed_variables, &mut kind) =
-            match self.aliases.iter_mut().find(|(s, _, _, _)| *s == symbol) {
+        let (typ, delayed_variables, kind) =
+            match self.aliases.iter().find(|(s, _, _, _)| *s == symbol) {
                 None => internal_error!(
                     "Alias {:?} not registered in delayed aliases! {:?}",
                     symbol,
                     &self.aliases
                 ),
-                Some((_, typ, delayed_variables, kind)) => (typ, delayed_variables, kind),
+                Some(&(_, typ, delayed_variables, kind)) => (typ, delayed_variables, kind),
             };
-
-        // TODO(types-soa) store SoA type in aliases directly
-        let typ = types.from_old_type(typ);
 
         let mut substitutions: MutMap<_, _> = Default::default();
 
@@ -507,6 +526,7 @@ struct State {
 #[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 pub fn run(
     home: ModuleId,
+    types: Types,
     constraints: &Constraints,
     problems: &mut Vec<TypeError>,
     mut subs: Subs,
@@ -519,6 +539,7 @@ pub fn run(
 ) -> (Solved<Subs>, Env) {
     let env = run_in_place(
         home,
+        types,
         constraints,
         problems,
         &mut subs,
@@ -537,6 +558,7 @@ pub fn run(
 #[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 fn run_in_place(
     _home: ModuleId, // TODO: remove me?
+    mut types: Types,
     constraints: &Constraints,
     problems: &mut Vec<TypeError>,
     subs: &mut Subs,
@@ -561,6 +583,7 @@ fn run_in_place(
 
     let pending_derives = PendingDerivesTable::new(
         subs,
+        &mut types,
         aliases,
         pending_derives,
         problems,
@@ -580,6 +603,7 @@ fn run_in_place(
 
     let state = solve(
         &arena,
+        types,
         constraints,
         state,
         rank,
@@ -636,6 +660,7 @@ enum Work<'a> {
 #[allow(clippy::too_many_arguments)]
 fn solve(
     arena: &Bump,
+    mut can_types: Types,
     constraints: &Constraints,
     mut state: State,
     rank: Rank,
@@ -694,6 +719,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     subs,
                     let_con.def_types,
@@ -757,6 +783,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     subs,
                     let_con.def_types,
@@ -876,6 +903,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *type_index,
                 );
@@ -889,6 +917,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *expectation.get_type_ref(),
                 );
@@ -958,6 +987,7 @@ fn solve(
                     &mut vec![], // don't report any extra errors
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *source_index,
                 );
@@ -1001,6 +1031,7 @@ fn solve(
                             problems,
                             abilities_store,
                             obligation_cache,
+                            &mut can_types,
                             aliases,
                             *expectation.get_type_ref(),
                         );
@@ -1095,6 +1126,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *type_index,
                 );
@@ -1108,6 +1140,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *expectation.get_type_ref(),
                 );
@@ -1274,6 +1307,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *type_index,
                 );
@@ -1303,6 +1337,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     *type_index,
                 );
@@ -1312,10 +1347,10 @@ fn solve(
                     .map(|v| Type::Variable(*v))
                     .collect();
 
-                let tag_ty = Type::TagUnion(
+                let tag_ty = can_types.from_old_type(&Type::TagUnion(
                     vec![(tag_name.clone(), payload_types)],
                     TypeExtension::Closed,
-                );
+                ));
                 let includes = type_to_var(
                     subs,
                     rank,
@@ -1323,8 +1358,9 @@ fn solve(
                     abilities_store,
                     obligation_cache,
                     pools,
+                    &mut can_types,
                     aliases,
-                    &tag_ty,
+                    tag_ty,
                 );
 
                 match unify(
@@ -1435,6 +1471,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     real_var,
                 );
@@ -1447,6 +1484,7 @@ fn solve(
                     problems,
                     abilities_store,
                     obligation_cache,
+                    &mut can_types,
                     aliases,
                     branches_var,
                 );
@@ -2132,6 +2170,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
         problems: &mut Vec<TypeError>,
         abilities_store: &mut AbilitiesStore,
         obligation_cache: &mut ObligationCache,
+        types: &mut Types,
         aliases: &mut Aliases,
         subs: &mut Subs,
         def_types_slice: roc_can::constraint::DefTypes,
@@ -2150,6 +2189,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
                 problems,
                 abilities_store,
                 obligation_cache,
+                types,
                 aliases,
                 *typ_index,
             );
@@ -2186,6 +2226,7 @@ fn either_type_index_to_var(
     problems: &mut Vec<TypeError>,
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
+    types: &mut Types,
     aliases: &mut Aliases,
     either_type_index: TypeOrVar,
 ) -> Variable {
@@ -2200,6 +2241,7 @@ fn either_type_index_to_var(
                 abilities_store,
                 obligation_cache,
                 pools,
+                types,
                 aliases,
                 typ_cell,
             )
@@ -2219,10 +2261,11 @@ fn type_cell_to_var(
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
     pools: &mut Pools,
+    types: &mut Types,
     aliases: &mut Aliases,
-    typ_cell: &Cell<Type>,
+    typ_cell: &Cell<Index<TypeTag>>,
 ) -> Variable {
-    let typ = typ_cell.replace(Type::EmptyTagUnion);
+    let typ = typ_cell.get();
     let var = type_to_var(
         subs,
         rank,
@@ -2230,10 +2273,14 @@ fn type_cell_to_var(
         abilities_store,
         obligation_cache,
         pools,
+        types,
         aliases,
-        &typ,
+        typ,
     );
-    typ_cell.replace(Type::Variable(var));
+    unsafe {
+        types.set_variable(typ, var);
+    }
+
     var
 }
 
@@ -2244,15 +2291,14 @@ pub(crate) fn type_to_var(
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
     pools: &mut Pools,
+    types: &mut Types,
     aliases: &mut Aliases,
-    typ: &Type,
+    typ: Index<TypeTag>,
 ) -> Variable {
-    if let Type::Variable(var) = typ {
-        *var
+    if let TypeTag::Variable(var) = types[typ] {
+        var
     } else {
         let mut arena = take_scratchpad();
-        let mut types = Types::new();
-        let typ = types.from_old_type(typ);
 
         let var = type_to_variable(
             subs,
@@ -2263,7 +2309,7 @@ pub(crate) fn type_to_var(
             obligation_cache,
             &arena,
             aliases,
-            &mut types,
+            types,
             typ,
             false,
         );

@@ -61,22 +61,25 @@ roc_linker = { path = "../linker" }
 roc_repl_cli = { path = "../repl_cli", optional = true }
 roc_tracing = { path = "../tracing" }
 roc_intern = { path = "../compiler/intern" }
-clap = { version = "3.2.20", default-features = false, features = ["std", "color", "suggestions"] }
-const_format = { version = "0.2.23", features = ["const_generics"] }
-bumpalo = { version = "3.11.0", features = ["collections"] }
-mimalloc = { version = "0.1.26", default-features = false }
-libc = "0.2.135"
-errno = "0.2.8"
+roc_gen_llvm = {path = "../compiler/gen_llvm"}
+
 ven_pretty = { path = "../vendor/pretty" }
 
-target-lexicon = "0.12.3"
-tempfile = "3.2.0"
 wasmer-wasi = { version = "2.2.1", optional = true }
-strum = { version = "0.24.1", features = ["derive"] }
-libloading = "0.7.1"
-roc_gen_llvm = {path = "../compiler/gen_llvm"}
-inkwell = {path = "../vendor/inkwell"}
-signal-hook = "0.3.14"
+
+clap.workspace = true
+const_format.workspace = true
+mimalloc.workspace = true
+bumpalo.workspace = true
+libc.workspace = true
+errno.workspace = true
+target-lexicon.workspace = true
+tempfile.workspace = true
+strum.workspace = true
+libloading.workspace = true
+signal-hook.workspace = true
+
+inkwell.workspace = true 
 
 # for now, uses unix/libc functions that windows does not support
 [target.'cfg(not(windows))'.dependencies]

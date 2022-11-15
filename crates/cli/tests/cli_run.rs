@@ -118,7 +118,12 @@ mod cli_run {
             panic!("`roc` command had unexpected stderr: {}", stderr);
         }
 
-        assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+        assert!(
+            compile_out.status.success(),
+            "bad status stderr:\n{}\nstdout:\n{}",
+            compile_out.stderr,
+            compile_out.stdout
+        );
 
         compile_out
     }
@@ -142,13 +147,17 @@ mod cli_run {
             std::env::set_var("NO_AVX512", "1");
         }
 
-        let cli_commands = if test_many_cli_commands {
-            vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc]
-        } else if cfg!(windows) {
-            // TODO: expects don't currently work on windows
-            vec![CliMode::RocRun]
+        // TODO: expects don't currently work on windows
+        let cli_commands = if cfg!(windows) {
+            match test_many_cli_commands {
+                true => vec![CliMode::RocBuild, CliMode::RocRun],
+                false => vec![CliMode::RocRun],
+            }
         } else {
-            vec![CliMode::Roc]
+            match test_many_cli_commands {
+                true => vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc],
+                false => vec![CliMode::Roc],
+            }
         };
 
         for cli_mode in cli_commands.iter() {
@@ -243,7 +252,10 @@ mod cli_run {
                 ),
             };
 
-            if !&out.stdout.ends_with(expected_ending) {
+            // strip out any carriage return characters to make the output on windows match unix
+            let stdout = out.stdout.replace('\r', "");
+
+            if !stdout.ends_with(expected_ending) {
                 panic!(
                     "expected output to end with {:?} but instead got {:#?} - stderr was: {:#?}",
                     expected_ending, out.stdout, out.stderr
@@ -570,7 +582,6 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore = "overflows the stack on windows")]
     fn false_interpreter() {
         test_roc_app(
             "examples/cli/false-interpreter",
@@ -793,7 +804,12 @@ mod cli_run {
                 &[],
             );
 
-            assert!(compile_out.status.success(), "bad status {:?}", compile_out);
+            assert!(
+                compile_out.status.success(),
+                "bad status stderr:\n{}\nstdout:\n{}",
+                compile_out.stderr,
+                compile_out.stdout
+            );
 
             let mut path = file.with_file_name(executable_filename);
             path.set_extension("wasm");

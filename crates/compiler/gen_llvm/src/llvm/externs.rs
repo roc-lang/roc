@@ -7,7 +7,8 @@ use inkwell::values::BasicValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 
-use super::build::{get_sjlj_buffer, LLVM_LONGJMP};
+use super::build::get_sjlj_buffer;
+use super::intrinsics::LLVM_LONGJMP;
 
 /// Define functions for roc_alloc, roc_realloc, and roc_dealloc
 /// which use libc implementations (malloc, realloc, and free)

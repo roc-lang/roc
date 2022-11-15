@@ -1,6 +1,5 @@
 use inkwell::memory_buffer::MemoryBuffer;
 use roc_error_macros::internal_error;
-pub use roc_gen_llvm::llvm::build::FunctionIterator;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_load::{EntryPoint, ExpectMetadata, LoadedModule, MonomorphizedModule};
@@ -256,7 +255,7 @@ fn gen_from_mono_module_llvm<'a>(
     debug_assert!(kind_id > 0);
     let enum_attr = context.create_enum_attribute(kind_id, 1);
 
-    for function in FunctionIterator::from_module(module) {
+    for function in module.get_functions() {
         let name = function.get_name().to_str().unwrap();
 
         // mark our zig-defined builtins as internal
