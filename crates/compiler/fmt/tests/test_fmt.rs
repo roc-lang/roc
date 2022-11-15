@@ -5,6 +5,8 @@ extern crate roc_fmt;
 
 #[cfg(test)]
 mod test_fmt {
+    use std::path::PathBuf;
+
     use bumpalo::Bump;
     use roc_fmt::annotation::{Formattable, Newlines, Parens};
     use roc_fmt::def::fmt_defs;
@@ -21,10 +23,9 @@ mod test_fmt {
     /// parses without error, formats without error, and
     /// (optionally, based on the value of `check_stability`) re-parses to
     /// the same AST as the original.
-    fn expr_formats(input: &str, expected: Option<&str>, check_stability: bool) {
+    fn expr_formats(input: &str, check_formatting: impl Fn(&str), check_stability: bool) {
         let arena = Bump::new();
         let input = input.trim();
-        let expected = expected.map(|e| e.trim());
 
         match roc_parse::test_helpers::parse_expr_with(&arena, input) {
             Ok(actual) => {
@@ -36,9 +37,7 @@ mod test_fmt {
 
                 let output = buf.as_str();
 
-                if let Some(expected) = expected {
-                    assert_multiline_str_eq!(expected, output);
-                }
+                check_formatting(output);
 
                 let reparsed_ast = roc_parse::test_helpers::parse_expr_with(&arena, output).unwrap_or_else(|err| {
                     panic!(
@@ -84,12 +83,19 @@ mod test_fmt {
         };
     }
 
+    fn check_formatting(expected: &'_ str) -> impl Fn(&str) + '_ {
+        let expected = expected.trim();
+        move |output| {
+            assert_multiline_str_eq!(expected, output);
+        }
+    }
+
     fn expr_formats_to(input: &str, expected: &str) {
-        expr_formats(input, Some(expected), true);
+        expr_formats(input, check_formatting(expected), true);
     }
 
     fn expr_formats_same(input: &str) {
-        expr_formats(input, Some(input), true);
+        expr_formats(input, check_formatting(input), true);
     }
 
     fn fmt_module_and_defs<'a>(
@@ -5850,12 +5856,63 @@ mod test_fmt {
                 .collect::<std::vec::Vec<_>>()
         }
 
+        fn check_saved_formatting(original: &'_ str, result_path: PathBuf) -> impl Fn(&str) + '_ {
+            move |actual_result: &str| {
+                if std::env::var("ROC_SNAPSHOT_TEST_OVERWRITE").is_ok() {
+                    if original == actual_result {
+                        std::fs::remove_file(&result_path)
+                            .or_else(|e| {
+                                if e.kind() == std::io::ErrorKind::NotFound {
+                                    Ok(())
+                                } else {
+                                    Err(e)
+                                }
+                            })
+                            .unwrap();
+                    } else {
+                        std::fs::write(&result_path, actual_result).unwrap();
+                    }
+                } else if original == actual_result {
+                    // We represent this expectation on the filesystem as the  _absence_ of the .formatted.expr.roc file.
+                    // This makes the directory a bit cleaner.
+
+                    assert!(!result_path.exists(),
+                        "Expected no file at {}\n\
+                        This how we represent the expectation that the formatting of the input file should not change.\n\
+                        consider running the tests with:\n\
+                        `env ROC_SNAPSHOT_TEST_OVERWRITE=1 cargo test ...` (which will delete the file for you),\n\
+                        and commiting the delete.",
+                        result_path.display());
+                } else {
+                    let expected_result =
+                        std::fs::read_to_string(&result_path).unwrap_or_else(|e| {
+                            panic!(
+                                "Error opening test output file {}:\n\
+                                {:?}
+                                Supposing the file is missing, consider running the tests with:\n\
+                                `env ROC_SNAPSHOT_TEST_OVERWRITE=1 cargo test ...`\n\
+                                and committing the file that creates.",
+                                result_path.display(),
+                                e
+                            );
+                        });
+
+                    assert_multiline_str_eq!(expected_result.as_str(), actual_result);
+                }
+            }
+        }
+
         let base = std::path::PathBuf::from("../parse/tests/snapshots/pass");
         for file in list(&base) {
-            if file.ends_with(".expr.roc") {
+            if let Some(prefix) = file.strip_suffix(".expr.roc") {
                 println!("formatting {}", file);
-                let contents = std::fs::read_to_string(base.join(file)).unwrap();
-                expr_formats(&contents, None, false);
+                let contents = std::fs::read_to_string(base.join(&file)).unwrap();
+                let formatted_path = base.join(format!("{}.expr.formatted.roc", prefix));
+                expr_formats(
+                    &contents,
+                    check_saved_formatting(&contents, formatted_path),
+                    false,
+                );
             } else if file.ends_with(".module.roc") {
                 // TODO: re-format module defs and ensure they're correct.
                 // Note that these tests don't have an actual module header,
