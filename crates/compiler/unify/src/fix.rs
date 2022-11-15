@@ -98,8 +98,6 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
             return Ok(vec![needle]);
         }
 
-        // dbg!((left, right));
-
         use Content::*;
         use FlatType::*;
         match (
@@ -117,15 +115,11 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
                 // By construction, the recursion variables will be adjusted to be equal after
                 // the transformation, so we can immediately look at the inner variable. We only
                 // need to adjust head constructors.
-                // help(subs, needle, *structure, right)
                 let chain = help(subs, needle, *structure, right)?;
-                //chain.push((left, right));
                 Ok(chain)
             }
             (_, RecursionVar { structure, .. }) => {
-                // dbg!("HERE");
                 let chain = help(subs, needle, left, *structure)?;
-                //chain.push((left, right));
                 Ok(chain)
             }
             (LambdaSet(..), _) | (_, LambdaSet(..)) => {
