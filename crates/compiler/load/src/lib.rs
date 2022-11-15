@@ -133,6 +133,7 @@ pub fn load_and_typecheck(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn load_and_typecheck_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
