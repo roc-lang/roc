@@ -4,7 +4,6 @@ edition = "2021"
 license = "UPL-1.0"
 name = "roc_alias_analysis"
 version = "0.0.1"
-description = "Performs analysis and optimizations to remove unneeded reference counts at runtime, and supports in-place mutation."
 
 [dependencies]
 morphic_lib = {path = "../../vendor/morphic_lib"}
@@ -12,4 +11,4 @@ roc_collections = {path = "../collections"}
 roc_module = {path = "../module"}
 roc_mono = {path = "../mono"}
 roc_debug_flags = {path = "../debug_flags"}
-roc_error_macros = { path = "../../error_macros" }
+bumpalo.workspace = true
