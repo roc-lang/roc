@@ -4259,12 +4259,16 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
     let it = procedures.iter().map(|x| x.1);
 
-    let solutions =
-        match roc_alias_analysis::spec_program(env.layout_interner, opt_level, opt_entry_point, it)
-        {
-            Err(e) => panic!("Error in alias analysis: {}", e),
-            Ok(solutions) => solutions,
-        };
+    let solutions = match roc_alias_analysis::spec_program(
+        env.arena,
+        env.layout_interner,
+        opt_level,
+        opt_entry_point,
+        it,
+    ) {
+        Err(e) => panic!("Error in alias analysis: {}", e),
+        Ok(solutions) => solutions,
+    };
 
     let solutions = env.arena.alloc(solutions);
 
