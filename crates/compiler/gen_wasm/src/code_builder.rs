@@ -138,8 +138,10 @@ impl<'a> CodeBuilder<'a> {
         self.insert_bytes.clear();
         self.preamble.clear();
         self.inner_length.clear();
-        self.vm_block_stack.clear();
         self.import_relocations.clear();
+
+        self.vm_block_stack.truncate(1);
+        self.vm_block_stack[0].value_stack.clear();
     }
 
     /**********************************************************
