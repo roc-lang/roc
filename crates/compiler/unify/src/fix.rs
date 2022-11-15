@@ -16,18 +16,23 @@ struct Update {
 ///
 /// As an example, let's consider
 ///
-///   F : [FromG G]
-///   G : [G {lst : List F}]
+/// ```text
+/// F : [FromG G]
+/// G : [G {lst : List F}]
+/// ```
 ///
 /// after expansion, these aliases have type
 ///
-///   F = [FromG [G {lst: List <1>}] as <1>
-///   G = [G {lst: List [FromG <2>]}] as <2>
+/// ```text
+/// F = [FromG [G {lst: List <1>}] as <1>
+/// G = [G {lst: List [FromG <2>]}] as <2>
+/// ```
 ///
 /// where <1> and <2> are their respective fixpoints.
 ///
 /// Unification will pass through an occurs check, and we'll see that these types are isomorphic
 ///
+/// ```text
 ///          [G {lst: List <1>}]          ~  [G {lst: List [FromG <2>]}] as <2>
 ///             {lst: List <1>}           ~     {lst: List [FromG <2>]}
 ///                   List <1>            ~           List [FromG <2>]
@@ -36,6 +41,7 @@ struct Update {
 ///          [G {lst: List <1>}]          ~                       <2>
 ///          [G {lst: List <1>}]          ~  [G {lst: List [FromG <2>]}] as <2> <- OCCURS
 ///   ...cycle
+/// ```
 ///
 /// Unfortunately, isomorphism modulo fixpoint is not enough for us - we need isomorphism with
 /// respect to fixpoint, because types T, U where T ~= U / fixpoint will have generated layouts
@@ -46,20 +52,26 @@ struct Update {
 /// So, in these cases, we clobber the type variables in either closure with the type variables of
 /// the other closure. Concretely, in the case above, we will emplace types via the transformation
 ///
+/// ```text
 ///          [G {lst: List <1>}]          <=  [G {lst: List [FromG <2>]}] as <2>
 ///             {lst: List <1>}           <=     {lst: List [FromG <2>]}
 ///                   List <1>            <=           List [FromG <2>]
 ///                        <1>            <=                [FromG <2>]
 ///   [FromG [G {lst: List <1>}]] as <1>  <=                [FromG <2>]
+/// ```
 ///
 /// Notice that we only need to emplace types in the clousre that consist of concrete head
 /// constructors. In particular, we do not include the emplacement
 ///
+/// ```text
 ///          [G {lst: List <1>}]          <=                       <2>
+/// ```
 ///
 /// because this would not be useful - this emplacement is already priced in thanks to
 ///
+/// ```text
 ///          [G {lst: List <1>}]          <=  [G {lst: List [FromG <2>]}] as <2>
+/// ```
 ///
 /// We know that this transformation is complete because the recursive closure of a recursive type
 /// must, by definition, entirely define that recursive type.
