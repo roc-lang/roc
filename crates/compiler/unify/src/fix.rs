@@ -8,6 +8,64 @@ struct Update {
     update_var: Variable,
 }
 
+/// Fixes fixpoints of recursive types that are isomorphic, but differ at their fixpoints, to be
+/// equivalent with respect to fixpoints.
+///
+/// Fixpoints are adjusted by finding the recursive closures of both recursive types, and emplacing
+/// the recursive closure of one type on the other.
+///
+/// As an example, let's consider
+///
+///   F : [FromG G]
+///   G : [G {lst : List F}]
+///
+/// after expansion, these aliases have type
+///
+///   F = [FromG [G {lst: List <1>}] as <1>
+///   G = [G {lst: List [FromG <2>]}] as <2>
+///
+/// where <1> and <2> are their respective fixpoints.
+///
+/// Unification will pass through an occurs check, and we'll see that these types are isomorphic
+///
+///          [G {lst: List <1>}]          ~  [G {lst: List [FromG <2>]}] as <2>
+///             {lst: List <1>}           ~     {lst: List [FromG <2>]}
+///                   List <1>            ~           List [FromG <2>]
+///                        <1>            ~                [FromG <2>]
+///   [FromG [G {lst: List <1>}]] as <1>  ~                [FromG <2>]
+///          [G {lst: List <1>}]          ~                       <2>
+///          [G {lst: List <1>}]          ~  [G {lst: List [FromG <2>]}] as <2> <- OCCURS
+///   ...cycle
+///
+/// Unfortunately, isomorphism modulo fixpoint is not enough for us - we need isomorphism with
+/// respect to fixpoint, because types T, U where T ~= U / fixpoint will have generated layouts
+/// Lay_T, Lay_U where Lay_T != Lay_U due to their differing recursion positions.
+/// Lay_T != Lay_U is a hard blocker in our compilation pipeline, as we do not transform layouts,
+/// or use uniform representations.
+///
+/// So, in these cases, we clobber the type variables in either closure with the type variables of
+/// the other closure. Concretely, in the case above, we will emplace types via the transformation
+///
+///          [G {lst: List <1>}]          <=  [G {lst: List [FromG <2>]}] as <2>
+///             {lst: List <1>}           <=     {lst: List [FromG <2>]}
+///                   List <1>            <=           List [FromG <2>]
+///                        <1>            <=                [FromG <2>]
+///   [FromG [G {lst: List <1>}]] as <1>  <=                [FromG <2>]
+///
+/// Notice that we only need to emplace types in the clousre that consist of concrete head
+/// constructors. In particular, we do not include the emplacement
+///
+///          [G {lst: List <1>}]          <=                       <2>
+///
+/// because this would not be useful - this emplacement is already priced in thanks to
+///
+///          [G {lst: List <1>}]          <=  [G {lst: List [FromG <2>]}] as <2>
+///
+/// We know that this transformation is complete because the recursive closure of a recursive type
+/// must, by definition, entirely define that recursive type.
+///
+/// The choice of which side to clobber is arbitrary; in the future, there may be better heuristics
+/// to decide it.
 #[must_use]
 pub fn fix_fixpoint(subs: &mut Subs, left: Variable, right: Variable) -> Vec<Variable> {
     let updates = find_chain(subs, left, right);
