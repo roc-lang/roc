@@ -88,7 +88,7 @@ mod test {
     use pretty_assertions::assert_eq;
     use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult, run_roc_dylib};
     use roc_load::{ExecutionMode, LoadConfig, Threading};
-    use roc_reporting::report::RenderTarget;
+    use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
     use target_lexicon::Triple;
 
     use crate::run::expect_mono_module_to_dylib;
@@ -114,6 +114,7 @@ mod test {
         let load_config = LoadConfig {
             target_info,
             render: RenderTarget::ColorTerminal,
+            palette: DEFAULT_PALETTE,
             threading: Threading::Single,
             exec_mode: ExecutionMode::Test,
         };

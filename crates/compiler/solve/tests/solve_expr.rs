@@ -108,6 +108,7 @@ mod solve_expr {
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
                 roc_reporting::report::RenderTarget::Generic,
+                roc_reporting::report::DEFAULT_PALETTE,
             );
 
             dir.close()?;

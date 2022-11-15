@@ -4,6 +4,7 @@ use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::DEBUG_SETTINGS;
 use roc_load::{ExecutionMode, LoadConfig, Threading};
+use roc_reporting::report::DEFAULT_PALETTE_HTML;
 use roc_wasm_module::{Export, ExportType};
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -87,6 +88,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     let load_config = LoadConfig {
         target_info: roc_target::TargetInfo::default_wasm32(),
         render: roc_reporting::report::RenderTarget::ColorTerminal,
+        palette: DEFAULT_PALETTE_HTML,
         threading: Threading::Single,
         exec_mode: ExecutionMode::Executable,
     };

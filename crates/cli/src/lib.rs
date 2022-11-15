@@ -408,6 +408,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         target_info,
         // TODO: expose this from CLI?
         render: roc_reporting::report::RenderTarget::ColorTerminal,
+        palette: roc_reporting::report::DEFAULT_PALETTE,
         threading,
         exec_mode: ExecutionMode::Test,
     };

@@ -669,6 +669,9 @@ pub enum Pattern<'a> {
     Underscore(&'a str),
     SingleQuote(&'a str),
 
+    /// A tuple pattern, e.g. (Just x, 1)
+    Tuple(Collection<'a, Loc<Pattern<'a>>>),
+
     /// A list pattern like [_, x, ..]
     List(Collection<'a, Loc<Pattern<'a>>>),
 

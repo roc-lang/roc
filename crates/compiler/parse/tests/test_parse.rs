@@ -305,6 +305,9 @@ mod test_parse {
         pass/zero_float.expr,
         pass/zero_int.expr,
         pass/basic_tuple.expr,
+        pass/when_with_tuples.expr,
+        pass/when_with_tuple_in_record.expr,
+        pass/annotated_tuple_destructure.expr,
     }
 
     fn snapshot_test(

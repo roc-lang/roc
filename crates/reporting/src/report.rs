@@ -149,7 +149,8 @@ impl<'b> Report<'b> {
             .expect(err_msg);
     }
 
-    /// Render to a color terminal using ANSI escape sequences
+    /// Render to a color terminal using ANSI escape sequences,
+    /// or to the web REPL, using HTML tags.
     pub fn render_color_terminal(
         self,
         buf: &mut String,
@@ -188,6 +189,7 @@ impl<'b> Report<'b> {
 /// 2. A set of colors we decided to use
 /// 3. A mapping from UI elements to the styles we use for them
 /// Note: This should really be called Theme! Usually a "palette" is just (2).
+#[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub primary: &'static str,
     pub code_block: &'static str,

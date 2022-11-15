@@ -91,34 +91,6 @@ macro_rules! debug_info_init {
     }};
 }
 
-/// Iterate over all functions in an llvm module
-pub struct FunctionIterator<'ctx> {
-    next: Option<FunctionValue<'ctx>>,
-}
-
-impl<'ctx> FunctionIterator<'ctx> {
-    pub fn from_module(module: &inkwell::module::Module<'ctx>) -> Self {
-        Self {
-            next: module.get_first_function(),
-        }
-    }
-}
-
-impl<'ctx> Iterator for FunctionIterator<'ctx> {
-    type Item = FunctionValue<'ctx>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.next {
-            Some(function) => {
-                self.next = function.get_next_function();
-
-                Some(function)
-            }
-            None => None,
-        }
-    }
-}
-
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, BasicValueEnum<'ctx>)>,
@@ -4287,12 +4259,16 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
     let it = procedures.iter().map(|x| x.1);
 
-    let solutions =
-        match roc_alias_analysis::spec_program(env.layout_interner, opt_level, opt_entry_point, it)
-        {
-            Err(e) => panic!("Error in alias analysis: {}", e),
-            Ok(solutions) => solutions,
-        };
+    let solutions = match roc_alias_analysis::spec_program(
+        env.arena,
+        env.layout_interner,
+        opt_level,
+        opt_entry_point,
+        it,
+    ) {
+        Err(e) => panic!("Error in alias analysis: {}", e),
+        Ok(solutions) => solutions,
+    };
 
     let solutions = env.arena.alloc(solutions);
 

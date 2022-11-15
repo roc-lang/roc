@@ -44,7 +44,7 @@ use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_reporting::report::{Annotation, RenderTarget};
+use roc_reporting::report::{Annotation, Palette, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
@@ -88,6 +88,7 @@ macro_rules! log {
 pub struct LoadConfig {
     pub target_info: TargetInfo,
     pub render: RenderTarget,
+    pub palette: Palette,
     pub threading: Threading,
     pub exec_mode: ExecutionMode,
 }
@@ -933,6 +934,7 @@ struct State<'a> {
     pub layout_caches: std::vec::Vec<LayoutCache<'a>>,
 
     pub render: RenderTarget,
+    pub palette: Palette,
     pub exec_mode: ExecutionMode,
 
     /// All abilities across all modules.
@@ -962,6 +964,7 @@ impl<'a> State<'a> {
         ident_ids_by_module: SharedIdentIdsByModule,
         cached_types: MutMap<ModuleId, TypeState>,
         render: RenderTarget,
+        palette: Palette,
         number_of_workers: usize,
         exec_mode: ExecutionMode,
     ) -> Self {
@@ -993,6 +996,7 @@ impl<'a> State<'a> {
             layout_caches: std::vec::Vec::with_capacity(number_of_workers),
             cached_types: Arc::new(Mutex::new(cached_types)),
             render,
+            palette,
             exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
@@ -1203,6 +1207,7 @@ pub fn load_and_typecheck_str<'a>(
     exposed_types: ExposedByModule,
     target_info: TargetInfo,
     render: RenderTarget,
+    palette: Palette,
     threading: Threading,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
@@ -1216,6 +1221,7 @@ pub fn load_and_typecheck_str<'a>(
     let load_config = LoadConfig {
         target_info,
         render,
+        palette,
         threading,
         exec_mode: ExecutionMode::Check,
     };
@@ -1245,6 +1251,7 @@ impl<'a> LoadStart<'a> {
         arena: &'a Bump,
         filename: PathBuf,
         render: RenderTarget,
+        palette: Palette,
     ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
         let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
@@ -1309,6 +1316,7 @@ impl<'a> LoadStart<'a> {
                         module_ids,
                         root_exposed_ident_ids,
                         render,
+                        palette,
                     );
                     return Err(LoadingProblem::FormattedReport(buf));
                 }
@@ -1505,6 +1513,7 @@ pub fn load<'a>(
             load_config.target_info,
             cached_types,
             load_config.render,
+            load_config.palette,
             load_config.exec_mode,
         ),
         Threads::Many(threads) => load_multi_threaded(
@@ -1514,6 +1523,7 @@ pub fn load<'a>(
             load_config.target_info,
             cached_types,
             load_config.render,
+            load_config.palette,
             threads,
             load_config.exec_mode,
         ),
@@ -1529,6 +1539,7 @@ pub fn load_single_threaded<'a>(
     target_info: TargetInfo,
     cached_types: MutMap<ModuleId, TypeState>,
     render: RenderTarget,
+    palette: Palette,
     exec_mode: ExecutionMode,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
@@ -1555,6 +1566,7 @@ pub fn load_single_threaded<'a>(
         ident_ids_by_module,
         cached_types,
         render,
+        palette,
         number_of_workers,
         exec_mode,
     );
@@ -1670,6 +1682,7 @@ fn state_thread_step<'a>(
                         module_ids,
                         state.constrained_ident_ids,
                         state.render,
+                        state.palette,
                     );
                     Err(LoadingProblem::FormattedReport(buf))
                 }
@@ -1695,6 +1708,7 @@ fn state_thread_step<'a>(
                     let arc_modules = state.arc_modules.clone();
 
                     let render = state.render;
+                    let palette = state.palette;
 
                     let res_state = update(
                         state,
@@ -1724,6 +1738,7 @@ fn state_thread_step<'a>(
                                 module_ids,
                                 root_exposed_ident_ids,
                                 render,
+                                palette,
                             );
                             Err(LoadingProblem::FormattedReport(buf))
                         }
@@ -1777,6 +1792,7 @@ fn load_multi_threaded<'a>(
     target_info: TargetInfo,
     cached_types: MutMap<ModuleId, TypeState>,
     render: RenderTarget,
+    palette: Palette,
     available_threads: usize,
     exec_mode: ExecutionMode,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
@@ -1819,6 +1835,7 @@ fn load_multi_threaded<'a>(
         ident_ids_by_module,
         cached_types,
         render,
+        palette,
         num_workers,
         exec_mode,
     );
@@ -5880,8 +5897,9 @@ fn to_parse_problem_report<'a>(
     mut module_ids: ModuleIds,
     all_ident_ids: IdentIdsByModule,
     render: RenderTarget,
+    palette: Palette,
 ) -> String {
-    use roc_reporting::report::{parse_problem, RocDocAllocator, DEFAULT_PALETTE};
+    use roc_reporting::report::{parse_problem, RocDocAllocator};
 
     // TODO this is not in fact safe
     let src = unsafe { from_utf8_unchecked(problem.problem.bytes) };
@@ -5912,7 +5930,6 @@ fn to_parse_problem_report<'a>(
     );
 
     let mut buf = String::new();
-    let palette = DEFAULT_PALETTE;
 
     report.render(render, &mut buf, &alloc, &palette);
 

@@ -86,6 +86,7 @@ mod test_reporting {
             let load_config = LoadConfig {
                 target_info: roc_target::TargetInfo::default_x86_64(),
                 render: RenderTarget::Generic,
+                palette: DEFAULT_PALETTE,
                 threading: Threading::Single,
                 exec_mode: ExecutionMode::Check,
             };
@@ -5947,12 +5948,12 @@ All branches in an `if` must have the same type!
     here:
 
     4│      \( a
-                ^
+    5│
+    6│
+        ^
 
     I was expecting to see a closing parenthesis before this, so try
     adding a ) and see if that helps?
-
-    Note: I may be confused by indentation
     "###
     );
 
@@ -5970,7 +5971,9 @@ All branches in an `if` must have the same type!
     here:
 
     4│      \( a,
-                ^
+    5│
+    6│
+        ^
 
     I was expecting to see a closing parenthesis before this, so try
     adding a ) and see if that helps?
@@ -5991,17 +5994,17 @@ All branches in an `if` must have the same type!
     here:
 
     4│      \( a
-                ^
+    5│
+    6│
+        ^
 
     I was expecting to see a closing parenthesis before this, so try
     adding a ) and see if that helps?
-
-    Note: I may be confused by indentation
     "###
     );
 
     test_report!(
-        pattern_in_parens_indent_end,
+        unfinished_closure_pattern_in_parens,
         indoc!(
             r#"
             x = \( a
@@ -6009,17 +6012,15 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
-    ── NEED MORE INDENTATION ─────────── tmp/pattern_in_parens_indent_end/Test.roc ─
+    ── UNFINISHED FUNCTION ───── tmp/unfinished_closure_pattern_in_parens/Test.roc ─
 
-    I am partway through parsing a pattern in parentheses, but I got stuck
-    here:
+    I was partway through parsing a  function, but I got stuck here:
 
     4│      x = \( a
     5│      )
-            ^
+             ^
 
-    I need this parenthesis to be indented more. Try adding more spaces
-    before it!
+    I just saw a pattern, so I was expecting to see a -> next.
     "###
     );
 

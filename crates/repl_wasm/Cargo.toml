@@ -15,7 +15,7 @@ roc_utils = {path = "../utils"}
 wasi_libc_sys = { path = "../wasi-libc-sys" }
 
 [dependencies]
-bumpalo = {version = "3.11.0", features = ["collections"]}
+bumpalo.workspace = true 
 console_error_panic_hook = {version = "0.1.7", optional = true}
 futures = {version = "0.3.24", optional = true}
 js-sys = "0.3.60"
