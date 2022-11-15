@@ -18,7 +18,6 @@ const NEWLINE: &str = "\r\n";
 #[cfg(not(windows))]
 const NEWLINE: &str = "\n";
 
-
 #[derive(Debug)]
 pub struct Ast<'a> {
     pub module: Module<'a>,

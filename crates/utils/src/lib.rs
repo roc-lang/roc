@@ -3,7 +3,7 @@ use snafu::OptionExt;
 use std::{
     collections::HashMap,
     env::{self, VarError},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Command,
     slice::SliceIndex,
 };
@@ -107,7 +107,6 @@ pub fn get_lib_path() -> Option<PathBuf> {
     let exe_relative_str_path_opt = std::env::current_exe().ok();
 
     if let Some(exe_relative_str_path) = exe_relative_str_path_opt {
-
         #[cfg(windows)]
         let exe_relative_str_path = strip_windows_prefix(&exe_relative_str_path);
 
@@ -136,8 +135,7 @@ pub fn get_lib_path() -> Option<PathBuf> {
 /// Such a path does not works as an argument to `zig` and other command line tools,
 /// and there seems to be no good way to strip it. So we resort to some string manipulation.
 #[cfg(windows)]
-pub fn strip_windows_prefix(path_buf: &PathBuf) -> std::path::PathBuf {
-    
+pub fn strip_windows_prefix(path_buf: &Path) -> std::path::PathBuf {
     let path_str = path_buf.display().to_string();
 
     std::path::Path::new(path_str.trim_start_matches(r"\\?\")).to_path_buf()

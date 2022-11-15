@@ -118,7 +118,12 @@ mod cli_run {
             panic!("\n___________\nThe roc command:\n\n  {}\n\nhad unexpected stderr:\n\n  {}\n___________\n", compile_out.cmd_str, stderr);
         }
 
-        assert!(compile_out.status.success(), "\n___________\nRoc command failed with status {:?}:\n\n  {:?}\n___________\n", compile_out.status, compile_out);
+        assert!(
+            compile_out.status.success(),
+            "\n___________\nRoc command failed with status {:?}:\n\n  {:?}\n___________\n",
+            compile_out.status,
+            compile_out
+        );
 
         compile_out
     }
