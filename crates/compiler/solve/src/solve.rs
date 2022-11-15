@@ -2320,8 +2320,7 @@ impl RegisterVariable {
                         reserved
                     } else {
                         // for any other rank, we need to copy; it takes care of adjusting the rank
-                        let copied = deep_copy_var_in(subs, rank, pools, reserved, arena);
-                        copied
+                        deep_copy_var_in(subs, rank, pools, reserved, arena)
                     };
                     // Safety: the `destination` will become the source-of-truth for the type index, since it
                     // was not already transformed before (if it was, we'd be in the Variable branch!)
@@ -2462,7 +2461,7 @@ fn type_to_variable<'a>(
                     let typ = unsafe { types.emplace_variable($typ, var) };
 
                     stack.push(TypeToVar::Defer {
-                        typ: typ,
+                        typ,
                         typ_index: $typ,
                         destination: var,
                         ambient_function: $ambient_function_policy,
