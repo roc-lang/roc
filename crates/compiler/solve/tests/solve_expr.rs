@@ -8197,4 +8197,27 @@ mod solve_expr {
         "###
         );
     }
+
+    #[test]
+    fn fix_recursion_under_alias_issue_4368() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [doIt] to "./platform"
+
+                Effect : [
+                    DoIt {} ({} -> Effect),
+                ]
+
+                Task := ({} -> Effect) -> Effect
+
+                doIt : {} -> Task
+                doIt = \{} ->
+                    @Task \toNext ->
+                        DoIt {} \{} -> (toNext {})
+                "#
+            ),
+            "{} -> Task",
+        )
+    }
 }

@@ -3255,13 +3255,17 @@ fn occurs(
                     EmptyRecord | EmptyTagUnion => Ok(()),
                 }
             }
-            Alias(_, args, _, _) => {
+            Alias(_, args, real_var, _) => {
                 let mut new_seen = seen.to_owned();
                 new_seen.push(root_var);
 
                 for var_index in args.into_iter() {
                     let var = subs[var_index];
-                    short_circuit_help(subs, root_var, &new_seen, var)?;
+                    if short_circuit_help(subs, root_var, &new_seen, var).is_err() {
+                        // Pay the cost and figure out what the actual recursion point is
+
+                        return short_circuit_help(subs, root_var, &new_seen, *real_var);
+                    }
                 }
 
                 Ok(())
