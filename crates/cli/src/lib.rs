@@ -524,7 +524,7 @@ pub fn build(
             let created_path = path.with_file_name(&filename);
 
             println!(
-                "Built \x1B[33m{}\x1B[39m into the following bundle in {total_time} ms:\n\n\t\x1B[33m{}\x1B[39m\n\nTo distribute this bundle as a package, upload this to some URL and then add it as a dependency with:\n\n\t\x1B[32m\"https://your-url-goes-here/{filename}\"\x1B[39m\n",
+                "\nBundled \x1B[33m{}\x1B[39m and its dependent files into the following file in {total_time} ms:\n\n\t\x1B[33m{}\x1B[39m\n\nTo distribute this bundle as a package, upload this to some URL and then add it as a dependency with:\n\n\t\x1B[32m\"https://your-url-goes-here/{filename}\"\x1B[39m\n",
                 path.to_string_lossy(),
                 created_path.to_string_lossy()
             );
