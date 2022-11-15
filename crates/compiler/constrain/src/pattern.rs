@@ -769,7 +769,7 @@ pub fn constrain_pattern(
 fn could_be_a_tag_union(types: &Types, typ: TypeOrVar) -> bool {
     match typ.split() {
         Ok(typ_index) => !matches!(
-            types[typ_index].get(),
+            types[typ_index],
             TypeTag::Apply { .. } | TypeTag::Function(..) | TypeTag::Record(..)
         ),
         Err(_) => {

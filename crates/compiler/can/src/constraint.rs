@@ -8,7 +8,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
-use roc_types::types::{Category, PatternCategory, TypeCell, TypeTag, Types};
+use roc_types::types::{Category, PatternCategory, TypeTag, Types};
 
 pub struct Constraints {
     pub constraints: Vec<Constraint>,
@@ -59,7 +59,7 @@ impl Default for Constraints {
 
 pub type ExpectedTypeIndex = Index<Expected<TypeOrVar>>;
 pub type PExpectedTypeIndex = Index<PExpected<TypeOrVar>>;
-pub type TypeOrVar = EitherIndex<TypeCell, Variable>;
+pub type TypeOrVar = EitherIndex<TypeTag, Variable>;
 
 impl Constraints {
     pub fn new() -> Self {
@@ -129,9 +129,9 @@ impl Constraints {
         }
     }
 
-    pub const EMPTY_RECORD: Index<Cell<Index<TypeCell>>> = Index::new(0);
-    pub const EMPTY_TAG_UNION: Index<Cell<Index<TypeCell>>> = Index::new(1);
-    pub const STR: Index<Cell<Index<TypeCell>>> = Index::new(2);
+    pub const EMPTY_RECORD: Index<Cell<Index<TypeTag>>> = Index::new(0);
+    pub const EMPTY_TAG_UNION: Index<Cell<Index<TypeTag>>> = Index::new(1);
+    pub const STR: Index<Cell<Index<TypeTag>>> = Index::new(2);
 
     pub const CATEGORY_RECORD: Index<Category> = Index::new(0);
     pub const CATEGORY_FOREIGNCALL: Index<Category> = Index::new(1);
@@ -161,8 +161,8 @@ impl Constraints {
     pub const PCATEGORY_CHARACTER: Index<PatternCategory> = Index::new(10);
 
     #[inline(always)]
-    pub fn push_type(&mut self, types: &Types, typ: Index<TypeCell>) -> TypeOrVar {
-        if let TypeTag::Variable(var) = types[typ].get() {
+    pub fn push_type(&mut self, types: &Types, typ: Index<TypeTag>) -> TypeOrVar {
+        if let TypeTag::Variable(var) = types[typ] {
             Self::push_type_variable(var)
         } else {
             EitherIndex::from_left(typ)
