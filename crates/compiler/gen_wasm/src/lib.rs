@@ -242,7 +242,6 @@ pub struct WasmDebugSettings {
     instructions: bool,
     storage_map: bool,
     pub keep_test_binary: bool,
-    pub skip_dead_code_elim: bool,
 }
 
 pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
@@ -253,7 +252,6 @@ pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
     instructions: false && cfg!(debug_assertions),
     storage_map: false && cfg!(debug_assertions),
     keep_test_binary: false && cfg!(debug_assertions),
-    skip_dead_code_elim: false && cfg!(debug_assertions),
 };
 
 #[cfg(test)]
