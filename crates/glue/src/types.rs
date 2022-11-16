@@ -204,39 +204,49 @@ impl Types {
                             discriminant_size: disc_size_b,
                             ..
                         },
-                    ) if disc_size_a == disc_size_b && tags_a.len() == tags_b.len() => {
-                        // discriminant offset doesn't matter for equality,
-                        // since it's determined 100% by other fields
-                        tags_a.iter().zip(tags_b.iter()).all(
-                            |((name_a, opt_id_a), (name_b, opt_id_b))| {
-                                name_a == name_b
-                                    && match (opt_id_a, opt_id_b) {
-                                        (Some(id_a), Some(id_b)) => self.is_equivalent_help(
-                                            self.get_type_or_pending(*id_a),
-                                            self.get_type_or_pending(*id_b),
-                                        ),
-                                        (None, None) => true,
-                                        (None, Some(_)) | (Some(_), None) => false,
-                                    }
-                            },
-                        )
+                    ) => {
+                        if disc_size_a == disc_size_b && tags_a.len() == tags_b.len() {
+                            // discriminant offset doesn't matter for equality,
+                            // since it's determined 100% by other fields
+                            tags_a.iter().zip(tags_b.iter()).all(
+                                |((name_a, opt_id_a), (name_b, opt_id_b))| {
+                                    name_a == name_b
+                                        && match (opt_id_a, opt_id_b) {
+                                            (Some(id_a), Some(id_b)) => self.is_equivalent_help(
+                                                self.get_type_or_pending(*id_a),
+                                                self.get_type_or_pending(*id_b),
+                                            ),
+                                            (None, None) => true,
+                                            (None, Some(_)) | (Some(_), None) => false,
+                                        }
+                                },
+                            )
+                        } else {
+                            false
+                        }
                     }
                     (
                         NullableWrapped { tags: tags_a, .. },
                         NullableWrapped { tags: tags_b, .. },
-                    ) if tags_a.len() != tags_b.len() => tags_a.iter().zip(tags_b.iter()).all(
-                        |((name_a, opt_id_a), (name_b, opt_id_b))| {
-                            name_a == name_b
-                                && match (opt_id_a, opt_id_b) {
-                                    (Some(id_a), Some(id_b)) => self.is_equivalent_help(
-                                        self.get_type_or_pending(*id_a),
-                                        self.get_type_or_pending(*id_b),
-                                    ),
-                                    (None, None) => true,
-                                    (None, Some(_)) | (Some(_), None) => false,
-                                }
-                        },
-                    ),
+                    ) => {
+                        if tags_a.len() != tags_b.len() {
+                            tags_a.iter().zip(tags_b.iter()).all(
+                                |((name_a, opt_id_a), (name_b, opt_id_b))| {
+                                    name_a == name_b
+                                        && match (opt_id_a, opt_id_b) {
+                                            (Some(id_a), Some(id_b)) => self.is_equivalent_help(
+                                                self.get_type_or_pending(*id_a),
+                                                self.get_type_or_pending(*id_b),
+                                            ),
+                                            (None, None) => true,
+                                            (None, Some(_)) | (Some(_), None) => false,
+                                        }
+                                },
+                            )
+                        } else {
+                            false
+                        }
+                    }
                     (
                         NullableUnwrapped {
                             null_tag: null_tag_a,
@@ -268,6 +278,8 @@ impl Types {
                     | (_, NonRecursive { .. })
                     | (Recursive { .. }, _)
                     | (_, Recursive { .. })
+                    | (SingleTagStruct { .. }, NullableWrapped { .. })
+                    | (NullableWrapped { .. }, SingleTagStruct { .. })
                     | (NullableUnwrapped { .. }, _)
                     | (_, NullableUnwrapped { .. }) => false,
                 }

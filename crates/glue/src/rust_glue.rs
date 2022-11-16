@@ -2682,15 +2682,6 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
                 .iter()
                 .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
         }),
-        RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
-        | RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. })
-        | RocType::TagUnion(RocTagUnion::NullableWrapped { tags, .. }) => {
-            tags.iter().any(|(_, payloads)| {
-                payloads
-                    .iter()
-                    .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
-            })
-        }
         RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { payload, .. })
         | RocType::TagUnion(RocTagUnion::NullableUnwrapped {
             non_null_payload: payload,
