@@ -682,8 +682,7 @@ macro_rules! round_up_to_alignment {
 
 /// Bytes for a dummy function with just a single `unreachable` instruction.
 /// Used in dead code elimination to replace unused functions.
-const DUMMY_FUNCTION: [u8; 4] = [
-    3,                         // inner byte length
+const DUMMY_FUNCTION: [u8; 3] = [
     0,                         // number of local variable declarations
     OpCode::UNREACHABLE as u8, // panic if we were wrong to eliminate!
     OpCode::END as u8,         // end of function (required for validation)
