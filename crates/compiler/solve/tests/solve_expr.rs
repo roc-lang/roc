@@ -8220,4 +8220,26 @@ mod solve_expr {
             "{} -> Task",
         )
     }
+
+    #[test]
+    fn generalize_inferred_opaque_variable_bound_to_ability_issue_4408() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [top] to "./platform"
+
+                MDict u := (List u) | u has Eq
+
+                bot : MDict k -> MDict k
+                bot = \@MDict data ->
+                    when {} is
+                        {} -> @MDict data
+
+                top : MDict v -> MDict v
+                top = \x -> bot x
+                "#
+            ),
+            "MDict v -> MDict v | v has Eq",
+        );
+    }
 }
