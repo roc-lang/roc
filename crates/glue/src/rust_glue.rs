@@ -1870,13 +1870,16 @@ fn type_has_functions(typ: &RocType, types: &Types) -> bool {
                     }
                 })
             }
-            RocTagUnion::NullableUnwrapped {
-                non_null_payload: payload,
+            RocType::RocBox(type_id)
+            | RocType::RocList(type_id)
+            | RocType::RocSet(type_id)
+            | RocTagUnion::NullableUnwrapped {
+                non_null_payload: type_id,
                 ..
             }
-            | RocTagUnion::NonNullableUnwrapped { payload, .. } => {
-                type_has_functions(payload, types)
-            }
+            | RocTagUnion::NonNullableUnwrapped {
+                payload: type_id, ..
+            } => type_has_functions(type_id, types),
             RocTagUnion::SingleTagStruct {
                 payload: RocSingleTagPayload::HasNoClosures { payload_fields },
                 ..
@@ -1919,11 +1922,10 @@ fn type_has_functions(typ: &RocType, types: &Types) -> bool {
             .iter()
             .any(|(_, type_id, _)| type_has_functions(types.get_type(type_id), types)),
         RocType::RecursivePointer(type_id) => type_has_functions(types.get_type(type_id), types),
-        RocType::RocResult(_, _) => todo!(),
-        RocType::RocList(_) => todo!(),
-        RocType::RocDict(_, _) => todo!(),
-        RocType::RocSet(_) => todo!(),
-        RocType::RocBox(_) => todo!(),
+        RocType::RocResult(id1, id2) | RocType::RocDict(id1, id2) => {
+            type_has_functions(types.get_type(id1), types)
+                || type_has_functions(types.get_type(id2), types)
+        }
         RocType::Function(_) => true,
     }
 }
