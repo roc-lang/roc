@@ -95,10 +95,6 @@ impl Types {
         types
     }
 
-    pub(crate) fn add_entry_point(&mut self, name: String, type_id: TypeId) {
-        self.entry_points.push((name, type_id));
-    }
-
     pub fn entry_points(&self) -> &[(String, TypeId)] {
         self.entry_points.as_slice()
     }

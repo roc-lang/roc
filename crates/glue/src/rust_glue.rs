@@ -324,7 +324,7 @@ fn add_single_tag_struct(
                     } else {
                         buf.push_str("{\n");
 
-                        for (index, getter_fn) in payload_getters.iter().enumerate() {
+                        for (_index, _getter_fn) in payload_getters.iter().enumerate() {
                             // TODO these should be added as separate functions in the impl!
                             todo!("TODO generate payload getters");
                         }
@@ -546,7 +546,7 @@ fn add_single_tag_struct(
                 }
             }
         }
-        RocSingleTagPayload::HasClosure { payload_getters } => todo!(),
+        RocSingleTagPayload::HasClosure { payload_getters: _ } => todo!(),
     }
 
     // The Debug impl for the single-tag union
@@ -580,7 +580,7 @@ fn add_single_tag_struct(
 
             add_decl(impls, opt_impl, target_info, buf);
         }
-        RocSingleTagPayload::HasClosure { payload_getters } => todo!(),
+        RocSingleTagPayload::HasClosure { payload_getters: _ } => todo!(),
     }
 }
 
@@ -1635,7 +1635,7 @@ pub struct {name} {{
                                     ));
                                         }
                                     }
-                                    RocStructFields::HasClosure { fields } => todo!(),
+                                    RocStructFields::HasClosure { fields: _ } => todo!(),
                                 }
 
                                 buf.join("\n")
@@ -1773,7 +1773,7 @@ fn add_struct(
 
             buf.push('}');
         }
-        RocStructFields::HasClosure { fields } => todo!(),
+        RocStructFields::HasClosure { fields: _ } => todo!(),
     }
 
     add_decl(impls, None, target_info, buf);
@@ -2277,7 +2277,7 @@ pub struct {name} {{
                             buf.push(format!(".field(&(&*{extra_deref}self.pointer).{label})"));
                         }
                     }
-                    RocStructFields::HasClosure { fields } => todo!(),
+                    RocStructFields::HasClosure { fields: _ } => todo!(),
                 }
 
                 buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
@@ -2292,7 +2292,7 @@ pub struct {name} {{
                             buf.push(format!(".field(&(&*{extra_deref}self.pointer).f{label})"));
                         }
                     }
-                    RocStructFields::HasClosure { fields } => todo!(),
+                    RocStructFields::HasClosure { fields: _ } => todo!(),
                 }
 
                 buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
@@ -2494,7 +2494,7 @@ fn tag_union_struct_help<'a>(
                 borrowed_ret_type,
             }
         }
-        RocStructFields::HasClosure { fields } => todo!(),
+        RocStructFields::HasClosure { fields: _ } => todo!(),
     }
 }
 
