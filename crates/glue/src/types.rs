@@ -535,7 +535,6 @@ pub struct Accessors {
 pub enum RocStructFields {
     HasNoClosure {
         fields: Vec<(String, TypeId)>,
-        struct_size: u64,
     },
     HasClosure {
         fields: Vec<(String, TypeId, Accessors)>,
@@ -678,7 +677,6 @@ pub enum RocTagUnion {
     NonRecursive {
         name: String,
         tags: Vec<(String, Option<TypeId>)>,
-        variant_size: Option<u64>, // None if this tag union has closures; must call getter at runtime!
         discriminant_offset: u32,
         discriminant_size: u32,
     },
@@ -687,7 +685,6 @@ pub enum RocTagUnion {
     Recursive {
         name: String,
         tags: Vec<(String, Option<TypeId>)>,
-        variant_size: Option<u64>, // None if this tag union has closures; must call getter at runtime!
         discriminant_offset: u32,
         discriminant_size: u32,
     },
@@ -720,7 +717,6 @@ pub enum RocTagUnion {
         /// at runtime, which can move around if any of the payloads contain closures!
         index_of_null_tag: u16,
         tags: Vec<(String, Option<TypeId>)>,
-        variant_size: Option<u64>, // None if this tag union has closures; must call getter at runtime!
         discriminant_size: u32,
         discriminant_offset: u32,
     },
