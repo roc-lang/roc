@@ -157,7 +157,7 @@ pub fn load_types(
             operating_system,
         };
         let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
-        let mut proc_names_by_layout = MutMap::default();
+        let mut glue_procs_by_layout = MutMap::default();
 
         // Populate glue getters/setters for all relevant variables
         for var in variables.clone() {
@@ -191,7 +191,7 @@ pub fn load_types(
                         names.push(name_str.to_string());
                     }
 
-                    proc_names_by_layout.insert(layout, names.into_bump_slice());
+                    glue_procs_by_layout.insert(layout, names.into_bump_slice());
                 }
             }
         }
@@ -201,7 +201,7 @@ pub fn load_types(
             subs,
             variables.clone(),
             arena.alloc(interns),
-            proc_names_by_layout,
+            glue_procs_by_layout,
             layout_cache,
             target_info,
         );
