@@ -185,106 +185,30 @@ impl Types {
                     (
                         NonRecursive {
                             tags: tags_a,
-                            discriminant_size: disc_w_a,
+                            discriminant_size: disc_size_a,
                             ..
                         },
                         NonRecursive {
                             tags: tags_b,
-                            discriminant_size: disc_w_b,
+                            discriminant_size: disc_size_b,
                             ..
                         },
                     )
                     | (
                         Recursive {
                             tags: tags_a,
-                            discriminant_size: disc_w_a,
+                            discriminant_size: disc_size_a,
                             ..
                         },
                         Recursive {
                             tags: tags_b,
-                            discriminant_size: disc_w_b,
+                            discriminant_size: disc_size_b,
                             ..
                         },
-                    ) => {
-                        if disc_w_a != disc_w_b || tags_a.len() != tags_b.len() {
-                            false
-                        } else {
-                            match (tags_a, tags_b) {
-                                // discriminant offset doesn't matter for equality,
-                                // since it's determined 100% by other fields
-                                (
-                                    RocTags::HasClosure {
-                                        tag_getters: getters_a,
-                                    },
-                                    RocTags::HasClosure {
-                                        tag_getters: getters_b,
-                                    },
-                                ) => getters_a.iter().zip(getters_b.iter()).all(
-                                    |((name_a, opt_id_a), (name_b, opt_id_b))| {
-                                        name_a == name_b
-                                            && match (opt_id_a, opt_id_b) {
-                                                // ignore the getter function;
-                                                // only compare the TypeId!
-                                                (Some((id_a, _)), Some((id_b, _))) => self
-                                                    .is_equivalent_help(
-                                                        self.get_type_or_pending(*id_a),
-                                                        self.get_type_or_pending(*id_b),
-                                                    ),
-                                                (None, None) => true,
-                                                (None, Some(_)) | (Some(_), None) => false,
-                                            }
-                                    },
-                                ),
-                                // discriminant offset doesn't matter for equality,
-                                // since it's determined 100% by other fields
-                                (
-                                    RocTags::HasNoClosures { tags: tags_a },
-                                    RocTags::HasNoClosures { tags: tags_b },
-                                ) => tags_a.iter().zip(tags_b.iter()).all(
-                                    |((name_a, opt_id_a), (name_b, opt_id_b))| {
-                                        name_a == name_b
-                                            && match (opt_id_a, opt_id_b) {
-                                                (Some(id_a), Some(id_b)) => self
-                                                    .is_equivalent_help(
-                                                        self.get_type_or_pending(*id_a),
-                                                        self.get_type_or_pending(*id_b),
-                                                    ),
-                                                (None, None) => true,
-                                                (None, Some(_)) | (Some(_), None) => false,
-                                            }
-                                    },
-                                ),
-                                (_, _) => false,
-                            }
-                        }
-                    }
-                    (
-                        NullableWrapped { tags: tags_a, .. },
-                        NullableWrapped { tags: tags_b, .. },
-                    ) => match (tags_a, tags_b) {
-                        (
-                            RocTags::HasClosure {
-                                tag_getters: getters_a,
-                            },
-                            RocTags::HasClosure {
-                                tag_getters: getters_b,
-                            },
-                        ) if getters_a.len() == getters_b.len() => getters_a
-                            .iter()
-                            .zip(getters_b.iter())
-                            .all(|((name_a, opt_getter_a), (name_b, opt_getter_b))| {
-                                name_a == name_b && opt_getter_a == opt_getter_b
-                            }),
-                        (
-                            RocTags::HasNoClosures {
-                                tags: tags_a,
-                                discriminant_offset: _,
-                            },
-                            RocTags::HasNoClosures {
-                                tags: tags_b,
-                                discriminant_offset: _,
-                            },
-                        ) if tags_a.len() == tags_b.len() => tags_a.iter().zip(tags_b.iter()).all(
+                    ) if disc_size_a == disc_size_b && tags_a.len() == tags_b.len() => {
+                        // discriminant offset doesn't matter for equality,
+                        // since it's determined 100% by other fields
+                        tags_a.iter().zip(tags_b.iter()).all(
                             |((name_a, opt_id_a), (name_b, opt_id_b))| {
                                 name_a == name_b
                                     && match (opt_id_a, opt_id_b) {
@@ -296,9 +220,24 @@ impl Types {
                                         (None, Some(_)) | (Some(_), None) => false,
                                     }
                             },
-                        ),
-                        (_, _) => false,
-                    },
+                        )
+                    }
+                    (
+                        NullableWrapped { tags: tags_a, .. },
+                        NullableWrapped { tags: tags_b, .. },
+                    ) if tags_a.len() != tags_b.len() => tags_a.iter().zip(tags_b.iter()).all(
+                        |((name_a, opt_id_a), (name_b, opt_id_b))| {
+                            name_a == name_b
+                                && match (opt_id_a, opt_id_b) {
+                                    (Some(id_a), Some(id_b)) => self.is_equivalent_help(
+                                        self.get_type_or_pending(*id_a),
+                                        self.get_type_or_pending(*id_b),
+                                    ),
+                                    (None, None) => true,
+                                    (None, Some(_)) | (Some(_), None) => false,
+                                }
+                        },
+                    ),
                     (
                         NullableUnwrapped {
                             null_tag: null_tag_a,
