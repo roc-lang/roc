@@ -1342,7 +1342,7 @@ where
     // contains closures, but we'll double-check that with a debug_assert.
     let struct_fields = match env.glue_procs_by_layout.get(&layout) {
         Some(&glue_procs) => {
-            debug_assert!(layout.contains_function(arena));
+            debug_assert!(layout.has_varying_stack_size(arena));
 
             let fields: Vec<(String, TypeId, Accessors)> = sortables
                 .into_iter()
@@ -1360,7 +1360,7 @@ where
             RocStructFields::HasClosure { fields }
         }
         None => {
-            debug_assert!(!layout.contains_function(arena));
+            debug_assert!(!layout.has_varying_stack_size(arena));
 
             let fields: Vec<(String, TypeId)> = sortables
                 .into_iter()
@@ -1683,7 +1683,7 @@ fn single_tag_payload_fields<'a, 'b>(
     // anyway just so we have some warning in case that relationship somehow didn't hold!
     debug_assert_eq!(
         env.glue_procs_by_layout.get(&layout).is_some(),
-        layout.contains_function(env.arena)
+        layout.has_varying_stack_size(env.arena)
     );
 
     let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);

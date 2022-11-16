@@ -165,7 +165,7 @@ pub fn load_types(
                 .from_var(arena, var, subs)
                 .expect("Something weird ended up in the content");
 
-            if layout.contains_function(arena) {
+            if layout.has_varying_stack_size(arena) {
                 // Even though generate_glue_procs does more work than we need it to,
                 // it's important that we use it in order to make sure we get exactly
                 // the same names that mono::ir did for code gen!

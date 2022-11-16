@@ -2664,7 +2664,7 @@ impl<'a> Layout<'a> {
         }
     }
 
-    pub fn contains_function(self, arena: &Bump) -> bool {
+    pub fn has_varying_stack_size(self, arena: &Bump) -> bool {
         let mut stack = Vec::new_in(arena);
 
         stack.push(self);
@@ -2676,11 +2676,12 @@ impl<'a> Layout<'a> {
                     | Builtin::Float(_)
                     | Builtin::Bool
                     | Builtin::Decimal
-                    | Builtin::Str => { /* do nothing */ }
-                    Builtin::List(element) => stack.push(*element),
+                    | Builtin::Str
+                    // If there's any layer of indirection (behind a pointer), then it doesn't vary!
+                    | Builtin::List(_) => { /* do nothing */ }
                 },
+                // If there's any layer of indirection (behind a pointer), then it doesn't vary!
                 Layout::Struct { field_layouts, .. } => stack.extend(field_layouts),
-                Layout::Boxed(boxed) => stack.push(*boxed),
                 Layout::Union(tag_union) => match tag_union {
                     UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
                         for tag in tags {
@@ -2700,6 +2701,9 @@ impl<'a> Layout<'a> {
                     }
                 },
                 Layout::LambdaSet(_) => return true,
+                Layout::Boxed(_) => {
+                    // If there's any layer of indirection (behind a pointer), then it doesn't vary!
+                }
                 Layout::RecursivePointer => {
                     /* do nothing, we've already generated for this type through the Union(_) */
                 }
