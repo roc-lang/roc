@@ -35,21 +35,27 @@
 
 #[macro_export]
 macro_rules! dbg_set {
-    ($flag:path) => {
-        if !cfg!(debug_assertions) {
+    ($flag:path) => {{
+        #[cfg(not(debug_assertions))]
+        {
             false
-        } else {
+        }
+        #[cfg(debug_assertions)]
+        {
             let flag = std::env::var($flag);
             !flag.is_err() && flag.as_deref() != Ok("0")
         }
-    };
+    }};
 }
 
 #[macro_export]
 macro_rules! dbg_do {
     ($flag:path, $expr:expr) => {
-        if $crate::dbg_set!($flag) {
-            $expr
+        #[cfg(debug_assertions)]
+        {
+            if $crate::dbg_set!($flag) {
+                $expr
+            }
         }
     };
 }

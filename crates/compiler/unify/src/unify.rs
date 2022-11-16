@@ -1,8 +1,8 @@
 use bitflags::bitflags;
 use roc_collections::{VecMap, VecSet};
-use roc_debug_flags::{dbg_do, dbg_set, ROC_VERIFY_OCCURS_RECURSION};
+use roc_debug_flags::{dbg_do, dbg_set};
 #[cfg(debug_assertions)]
-use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
+use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS, ROC_VERIFY_OCCURS_RECURSION};
 use roc_error_macros::internal_error;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
