@@ -1,14 +1,18 @@
 #![allow(non_snake_case)]
 
+mod glue;
+
 use core::ffi::c_void;
+use glue::Op;
 use roc_std::RocStr;
 use std::ffi::CStr;
 use std::io::Write;
+use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]
-    fn roc_main(_: &mut RocStr);
+    fn roc_main(_: *mut Op);
 }
 
 #[no_mangle]
@@ -91,11 +95,31 @@ pub unsafe extern "C" fn roc_send_signal(pid: libc::pid_t, sig: libc::c_int) -> 
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
-    let mut roc_str = RocStr::default();
-    unsafe { roc_main(&mut roc_str) };
+    use glue::discriminant_Op::*;
 
-    if let Err(e) = std::io::stdout().write_all(roc_str.as_bytes()) {
-        panic!("Writing to stdout failed! {:?}", e);
+    let op: Op = unsafe {
+        let mut mem = MaybeUninit::uninit();
+
+        roc_main(mem.as_mut_ptr());
+
+        mem.assume_init()
+    };
+
+    match op.discriminant() {
+        StdoutWrite => {
+            let roc_str: RocStr = unsafe { op.into_StdoutWrite() };
+
+            if let Err(e) = std::io::stdout().write_all(roc_str.as_bytes()) {
+                panic!("Writing to stdout failed! {:?}", e);
+            }
+        }
+        StderrWrite => unsafe {
+            let roc_str: RocStr = unsafe { op.into_StderrWrite() };
+
+            if let Err(e) = std::io::stderr().write_all(roc_str.as_bytes()) {
+                panic!("Writing to stderr failed! {:?}", e);
+            }
+        },
     }
 
     // Exit code

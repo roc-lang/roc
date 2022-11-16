@@ -3,4 +3,4 @@ app "rocLovesRust"
     imports []
     provides [main] to pf
 
-main = "Roc <3 Rust!\n"
+main = StdoutWrite "Roc <3 Rust!\n"

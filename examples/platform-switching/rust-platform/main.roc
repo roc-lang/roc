@@ -1,9 +1,11 @@
 platform "echo-in-rust"
-    requires {} { main : Str }
+    requires {} { main : _ }
     exposes []
     packages {}
     imports []
     provides [mainForHost]
 
-mainForHost : Str
+Op : [StdoutWrite Str, StderrWrite Str]
+
+mainForHost : Op
 mainForHost = main
