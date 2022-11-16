@@ -527,8 +527,8 @@ impl<'a> Serialize for FunctionSection<'a> {
  *
  * Table section
  *
- * Defines tables used for indirect references to host memory.
- * The table *contents* are elsewhere, in the ElementSection.
+ * Defines tables used for indirect references to external code or data.
+ * The table *contents* are in the ElementSection.
  *
  *******************************************************************/
 

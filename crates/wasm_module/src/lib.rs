@@ -177,17 +177,17 @@ impl<'a> WasmModule<'a> {
         })
     }
 
-    pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_host_fns: BitVec<usize>) {
+    pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_fns: BitVec<usize>) {
         if DEBUG_SETTINGS.skip_dead_code_elim {
             return;
         }
         //
-        // Mark all live host functions
+        // Mark all live functions
         //
 
         let import_count = self.import.imports.len();
-        let host_fn_min = import_count as u32 + self.code.dead_import_dummy_count;
-        let host_fn_max = host_fn_min + self.code.function_count;
+        let fn_index_min = import_count as u32 + self.code.dead_import_dummy_count;
+        let fn_index_max = called_fns.len() as u32;
 
         // All functions exported to JS must be kept alive
         let exported_fns = self
@@ -213,13 +213,13 @@ impl<'a> WasmModule<'a> {
         );
 
         // Trace callees of the live functions, and mark those as live too
-        let live_flags = self.trace_live_host_functions(
+        let live_flags = self.trace_live_functions(
             arena,
-            called_host_fns,
+            called_fns,
             exported_fns,
             indirect_callees_and_signatures,
-            host_fn_min,
-            host_fn_max,
+            fn_index_min,
+            fn_index_max,
         );
 
         //
@@ -267,9 +267,9 @@ impl<'a> WasmModule<'a> {
             self.names.function_names[old_index].1 = new_name;
         }
 
-        // Relocate calls from host to JS imports
+        // Relocate calls from to JS imports
         // This must happen *before* we run dead code elimination on the code section,
-        // so that byte offsets in the host's linking data will still be valid.
+        // so that byte offsets in the linking data will still be valid.
         for (new_index, &old_index) in live_import_fns.iter().enumerate() {
             if new_index == old_index {
                 continue;
@@ -288,7 +288,7 @@ impl<'a> WasmModule<'a> {
         //
         let mut buffer = Vec::with_capacity_in(self.code.bytes.len(), arena);
         self.code.function_count.serialize(&mut buffer);
-        for (i, fn_index) in (host_fn_min..host_fn_max).enumerate() {
+        for (i, fn_index) in (fn_index_min..fn_index_max).enumerate() {
             if live_flags[fn_index as usize] {
                 let code_start = self.code.function_offsets[i] as usize;
                 let code_end = self.code.function_offsets[i + 1] as usize;
@@ -301,14 +301,14 @@ impl<'a> WasmModule<'a> {
         self.code.bytes = buffer;
     }
 
-    fn trace_live_host_functions<I: Iterator<Item = u32>>(
+    fn trace_live_functions<I: Iterator<Item = u32>>(
         &self,
         arena: &'a Bump,
-        called_host_fns: BitVec<usize>,
+        called_fns: BitVec<usize>,
         exported_fns: I,
         indirect_callees_and_signatures: Vec<'a, (u32, u32)>,
-        host_fn_min: u32,
-        host_fn_max: u32,
+        fn_index_min: u32,
+        fn_index_max: u32,
     ) -> BitVec<usize> {
         let reloc_len = self.reloc_code.entries.len();
 
@@ -345,10 +345,10 @@ impl<'a> WasmModule<'a> {
         );
 
         // Loop variables for the main loop below
-        let mut live_flags = BitVec::repeat(false, called_host_fns.len());
-        let mut next_pass_fns = BitVec::repeat(false, called_host_fns.len());
-        let mut current_pass_fns = called_host_fns;
-        for index in exported_fns.filter(|i| *i < host_fn_max) {
+        let mut live_flags = BitVec::repeat(false, called_fns.len());
+        let mut next_pass_fns = BitVec::repeat(false, called_fns.len());
+        let mut current_pass_fns = called_fns;
+        for index in exported_fns.filter(|i| *i < fn_index_max) {
             current_pass_fns.set(index as usize, true);
         }
 
@@ -360,12 +360,12 @@ impl<'a> WasmModule<'a> {
             // For each live function in the current pass
             for fn_index in current_pass_fns.iter_ones() {
                 // Skip JS imports and Roc functions
-                if fn_index < host_fn_min as usize || fn_index >= host_fn_max as usize {
+                if fn_index < fn_index_min as usize || fn_index >= fn_index_max as usize {
                     continue;
                 }
 
                 // Find where the function body is
-                let offset_index = fn_index - host_fn_min as usize;
+                let offset_index = fn_index - fn_index_min as usize;
                 let code_start = self.code.function_offsets[offset_index];
                 let code_end = self.code.function_offsets[offset_index + 1];
 

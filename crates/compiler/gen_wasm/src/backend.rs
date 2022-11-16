@@ -56,7 +56,8 @@ pub struct WasmBackend<'a> {
     module: WasmModule<'a>,
     layout_ids: LayoutIds<'a>,
     pub fn_index_offset: u32,
-    called_preload_fns: BitVec<usize>,
+    import_fn_count: u32,
+    called_fns: BitVec<usize>,
     pub proc_lookup: Vec<'a, ProcLookupData<'a>>,
     host_lookup: Vec<'a, (&'a str, u32)>,
     helper_proc_gen: CodeGenHelp<'a>,
@@ -104,9 +105,12 @@ impl<'a> WasmBackend<'a> {
         }
 
         module.link_host_to_app_calls(env.arena, host_to_app_map);
-
-        let host_function_count = module.import.imports.len()
-            + (module.code.dead_import_dummy_count + module.code.function_count) as usize;
+        let import_fn_count = module.import.function_count();
+        let host_function_count = import_fn_count
+            + module.code.dead_import_dummy_count as usize
+            + module.code.function_count as usize;
+        let mut called_fns = BitVec::repeat(false, host_function_count);
+        called_fns.extend(std::iter::repeat(true).take(proc_lookup.len()));
 
         WasmBackend {
             env,
@@ -114,10 +118,10 @@ impl<'a> WasmBackend<'a> {
 
             // Module-level data
             module,
-
             layout_ids,
             fn_index_offset,
-            called_preload_fns: BitVec::repeat(false, host_function_count),
+            import_fn_count: import_fn_count as u32,
+            called_fns,
             proc_lookup,
             host_lookup,
             helper_proc_gen,
@@ -261,6 +265,8 @@ impl<'a> WasmBackend<'a> {
             source,
         });
 
+        self.called_fns.push(true);
+
         let linker_symbol = SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed {
             flags: 0,
             index: wasm_fn_index,
@@ -278,7 +284,7 @@ impl<'a> WasmBackend<'a> {
         self.maybe_call_host_main();
         let fn_table_size = 1 + self.module.element.max_table_index();
         self.module.table.function_table.limits = Limits::MinMax(fn_table_size, fn_table_size);
-        (self.module, self.called_preload_fns)
+        (self.module, self.called_fns)
     }
 
     /// If the host has a `main` function then we need to insert a `_start` to call it.
@@ -329,7 +335,7 @@ impl<'a> WasmBackend<'a> {
         self.code_builder.build_fn_header_and_footer(&[], 0, None);
         self.reset();
 
-        self.called_preload_fns.set(main_fn_index as usize, true);
+        self.called_fns.set(main_fn_index as usize, true);
     }
 
     /// Register the debug names of Symbols in a global lookup table
@@ -1337,10 +1343,9 @@ impl<'a> WasmBackend<'a> {
             .find(|(fn_name, _)| *fn_name == name)
             .unwrap_or_else(|| panic!("The Roc app tries to call `{}` but I can't find it!", name));
 
-        self.called_preload_fns.set(*fn_index as usize, true);
+        self.called_fns.set(*fn_index as usize, true);
 
-        let host_import_count = self.fn_index_offset - self.module.code.function_count;
-        if *fn_index < host_import_count {
+        if *fn_index < self.import_fn_count {
             self.code_builder
                 .call_import(*fn_index, num_wasm_args, has_return_val);
         } else {
