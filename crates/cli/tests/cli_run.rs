@@ -968,6 +968,7 @@ mod cli_run {
 
     #[test]
     #[serial(multi_dep_str)]
+    #[cfg_attr(windows, ignore)]
     fn run_multi_dep_str_unoptimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-str", "Main.roc"),
