@@ -2807,7 +2807,7 @@ fn unify_shared_tags_merge_new<M: MetaCollector>(
     let flat_type = match recursion_var {
         Rec::None => FlatType::TagUnion(new_tags, new_ext_var),
         Rec::Left(rec) | Rec::Right(rec) | Rec::Both(rec, _) => {
-            debug_assert!(is_recursion_var(env.subs, rec));
+            debug_assert!(is_recursion_var(env.subs, rec), "{:?}", env.subs.dbg(rec));
             FlatType::RecursiveTagUnion(rec, new_tags, new_ext_var)
         }
     };
@@ -3494,7 +3494,9 @@ fn is_recursion_var(subs: &Subs, var: Variable) -> bool {
     matches!(
         subs.get_content_without_compacting(var),
         Content::RecursionVar { .. }
-    )
+    ) ||
+        // Error-like vars should always unify, so pretend they are recursion vars too.
+        subs.is_error_var(var)
 }
 
 #[allow(clippy::too_many_arguments)]
