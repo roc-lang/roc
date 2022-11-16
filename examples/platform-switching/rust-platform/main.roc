@@ -5,7 +5,7 @@ platform "echo-in-rust"
     imports []
     provides [mainForHost]
 
-Op : [StdoutWrite Str, StderrWrite Str]
+Op : [StdoutWrite Str ({} -> Op), StderrWrite Str ({} -> Op), Done]
 
 mainForHost : Op
 mainForHost = main

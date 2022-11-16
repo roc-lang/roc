@@ -107,19 +107,22 @@ pub extern "C" fn rust_main() -> i32 {
 
     match op.discriminant() {
         StdoutWrite => {
-            let roc_str: RocStr = unsafe { op.into_StdoutWrite() };
+            let output: RocStr = unsafe { op.get_StdoutWrite_0() };
+            // let _next = unsafe { op.get_StdoutWrite_1() };
 
-            if let Err(e) = std::io::stdout().write_all(roc_str.as_bytes()) {
+            if let Err(e) = std::io::stdout().write_all(output.as_bytes()) {
                 panic!("Writing to stdout failed! {:?}", e);
             }
         }
-        StderrWrite => unsafe {
-            let roc_str: RocStr = unsafe { op.into_StderrWrite() };
+        StderrWrite => {
+            let output: RocStr = unsafe { op.get_StderrWrite_0() };
+            // let _next = unsafe { op.get_StderrWrite_1() };
 
-            if let Err(e) = std::io::stderr().write_all(roc_str.as_bytes()) {
+            if let Err(e) = std::io::stderr().write_all(output.as_bytes()) {
                 panic!("Writing to stderr failed! {:?}", e);
             }
-        },
+        }
+        Done => {}
     }
 
     // Exit code
