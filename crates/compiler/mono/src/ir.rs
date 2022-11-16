@@ -10775,8 +10775,8 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
     layout_interner: &mut I,
     layout: Layout<'a>,
 ) -> Vec<'a, (Layout<'a>, Vec<'a, GlueProc<'a>>)> {
-    let mut stack = Vec::new_in(arena);
     let mut answer = Vec::new_in(arena);
+    let mut stack = Vec::from_iter_in([layout], arena);
 
     stack.push(layout);
 
