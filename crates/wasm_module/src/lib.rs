@@ -283,7 +283,7 @@ impl<'a> WasmModule<'a> {
         }
 
         //
-        // Dead code elimination. Replace dead functions with tiny dummies.
+        // Code section: Replace dead functions with tiny dummies.
         // Live function indices are unchanged, so no relocations are needed.
         //
         let mut buffer = Vec::with_capacity_in(self.code.bytes.len(), arena);
@@ -294,7 +294,7 @@ impl<'a> WasmModule<'a> {
                 let code_end = self.code.function_offsets[i + 1] as usize;
                 buffer.extend_from_slice(&self.code.bytes[code_start..code_end]);
             } else {
-                buffer.extend_from_slice(&DUMMY_FUNCTION);
+                DUMMY_FUNCTION.serialize(&mut buffer);
             }
         }
 
