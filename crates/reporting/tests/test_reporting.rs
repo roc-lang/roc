@@ -5011,12 +5011,13 @@ mod test_reporting {
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    5│          5 -> 2
     6│           _ -> 2
                    ^^
 
     It makes sense to see arrows around here, so I suspect it is something
-    earlier.Maybe this pattern is indented a bit farther from the previous
-    patterns?
+    earlier. Maybe this pattern is indented a bit farther from the
+    previous patterns?
 
     Note: Here is an example of a valid `when` expression for reference.
 
@@ -5047,12 +5048,13 @@ mod test_reporting {
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    5│          5 -> Num.neg
     6│           2 -> 2
                    ^^
 
     It makes sense to see arrows around here, so I suspect it is something
-    earlier.Maybe this pattern is indented a bit farther from the previous
-    patterns?
+    earlier. Maybe this pattern is indented a bit farther from the
+    previous patterns?
 
     Note: Here is an example of a valid `when` expression for reference.
 
@@ -5295,6 +5297,7 @@ mod test_reporting {
 
     This multiline string is not sufficiently indented:
 
+    4│          """
     5│        testing
               ^
 
@@ -8069,6 +8072,7 @@ All branches in an `if` must have the same type!
         I was partway through parsing an ability definition, but I got stuck
         here:
 
+        4│      MEq has
         5│          eq b c : a, a -> U64 | a has MEq
                        ^
 

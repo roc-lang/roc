@@ -7,9 +7,9 @@ use crate::header::{
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, increment_min_indent, optional, reset_min_indent, specialize, specialize_region,
-    word1, EExposes, EGenerates, EGeneratesWith, EHeader, EImports, EPackages, EProvides,
-    ERequires, ETypedIdent, Parser, SourceError, SpaceProblem, SyntaxError,
+    backtrackable, increment_min_indent, optional, reset_min_indent, specialize, word1, EExposes,
+    EGenerates, EGeneratesWith, EHeader, EImports, EPackages, EProvides, ERequires, ETypedIdent,
+    Parser, SourceError, SpaceProblem, SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal;
@@ -21,7 +21,7 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
         if state.has_reached_end() {
             Ok((NoProgress, (), state))
         } else {
-            Err((NoProgress, SyntaxError::NotEndOfFile(state.pos()), state))
+            Err((NoProgress, SyntaxError::NotEndOfFile(state.pos())))
         }
     }
 }
@@ -29,10 +29,7 @@ fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
 #[inline(always)]
 pub fn module_defs<'a>() -> impl Parser<'a, Defs<'a>, SyntaxError<'a>> {
     skip_second!(
-        specialize_region(
-            |e, r| SyntaxError::Expr(e, r.start()),
-            crate::expr::toplevel_defs(),
-        ),
+        specialize(SyntaxError::Expr, crate::expr::toplevel_defs(),),
         end_of_file()
     )
 }
@@ -42,9 +39,9 @@ pub fn parse_header<'a>(
     state: State<'a>,
 ) -> Result<(Module<'a>, State<'a>), SourceError<'a, EHeader<'a>>> {
     let min_indent = 0;
-    match header().parse(arena, state, min_indent) {
+    match header().parse(arena, state.clone(), min_indent) {
         Ok((_, module, state)) => Ok((module, state)),
-        Err((_, fail, state)) => Err(SourceError::new(fail, &state)),
+        Err((_, fail)) => Err(SourceError::new(fail, &state)),
     }
 }
 
@@ -234,7 +231,7 @@ fn module_name<'a>() -> impl Parser<'a, ModuleName<'a>, ()> {
 
             Ok((MadeProgress, ModuleName::new(name), state))
         }
-        Err(progress) => Err((progress, (), state)),
+        Err(progress) => Err((progress, ())),
     }
 }
 
