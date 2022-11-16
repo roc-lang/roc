@@ -278,11 +278,57 @@ impl Types {
                 }
             }
             (
+                TagUnionPayload {
+                    fields: RocStructFields::HasClosure { fields: fields_a },
+                    name: _,
+                },
+                TagUnionPayload {
+                    fields: RocStructFields::HasClosure { fields: fields_b },
+                    name: _,
+                },
+            )
+            | (
                 Struct {
-                    fields: fields_a, ..
+                    fields: RocStructFields::HasClosure { fields: fields_a },
+                    name: _,
                 },
                 Struct {
-                    fields: fields_b, ..
+                    fields: RocStructFields::HasClosure { fields: fields_b },
+                    name: _,
+                },
+            ) => {
+                if fields_a.len() == fields_b.len() {
+                    fields_a.iter().zip(fields_b.iter()).all(
+                        |((name_a, id_a, _), (name_b, id_b, _))| {
+                            name_a == name_b
+                                && self.is_equivalent_help(
+                                    self.get_type_or_pending(*id_a),
+                                    self.get_type_or_pending(*id_b),
+                                )
+                        },
+                    )
+                } else {
+                    false
+                }
+            }
+            (
+                TagUnionPayload {
+                    fields: RocStructFields::HasNoClosure { fields: fields_a },
+                    name: _,
+                },
+                TagUnionPayload {
+                    fields: RocStructFields::HasNoClosure { fields: fields_b },
+                    name: _,
+                },
+            )
+            | (
+                Struct {
+                    fields: RocStructFields::HasNoClosure { fields: fields_a },
+                    name: _,
+                },
+                Struct {
+                    fields: RocStructFields::HasNoClosure { fields: fields_b },
+                    name: _,
                 },
             ) => {
                 if fields_a.len() == fields_b.len() {
@@ -302,27 +348,44 @@ impl Types {
             }
             (
                 TagUnionPayload {
-                    fields: fields_a, ..
+                    fields: RocStructFields::HasClosure { .. },
+                    name: _,
                 },
                 TagUnionPayload {
-                    fields: fields_b, ..
+                    fields: RocStructFields::HasNoClosure { .. },
+                    name: _,
                 },
-            ) => {
-                if fields_a.len() == fields_b.len() {
-                    fields_a
-                        .iter()
-                        .zip(fields_b.iter())
-                        .all(|((name_a, id_a), (name_b, id_b))| {
-                            name_a == name_b
-                                && self.is_equivalent_help(
-                                    self.get_type_or_pending(*id_a),
-                                    self.get_type_or_pending(*id_b),
-                                )
-                        })
-                } else {
-                    false
-                }
-            }
+            )
+            | (
+                TagUnionPayload {
+                    fields: RocStructFields::HasNoClosure { .. },
+                    name: _,
+                },
+                TagUnionPayload {
+                    fields: RocStructFields::HasClosure { .. },
+                    name: _,
+                },
+            )
+            | (
+                Struct {
+                    fields: RocStructFields::HasNoClosure { .. },
+                    name: _,
+                },
+                Struct {
+                    fields: RocStructFields::HasClosure { .. },
+                    name: _,
+                },
+            )
+            | (
+                Struct {
+                    fields: RocStructFields::HasClosure { .. },
+                    name: _,
+                },
+                Struct {
+                    fields: RocStructFields::HasNoClosure { .. },
+                    name: _,
+                },
+            ) => false,
             (
                 Function(RocFn {
                     name: name_a,

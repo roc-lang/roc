@@ -2567,14 +2567,25 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
                 || cannot_derive_copy(types.get_type(*err_id), types)
         }
         RocType::Struct {
+            fields: RocStructFields::HasNoClosure { fields },
+            ..
+        }
+        | RocType::TagUnionPayload {
+            fields: RocStructFields::HasNoClosure { fields },
+            ..
+        } => fields
+            .iter()
+            .any(|(_, type_id)| cannot_derive_copy(types.get_type(*type_id), types)),
+        RocType::Struct {
+            fields: RocStructFields::HasClosure { fields },
+            ..
+        }
+        | RocType::TagUnionPayload {
             fields: RocStructFields::HasClosure { fields },
             ..
         } => fields
             .iter()
             .any(|(_, type_id, _)| cannot_derive_copy(types.get_type(*type_id), types)),
-        RocType::TagUnionPayload { fields, .. } => fields
-            .iter()
-            .any(|(_, type_id)| cannot_derive_copy(types.get_type(*type_id), types)),
     }
 }
 
@@ -2610,21 +2621,26 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
             has_float_help(types.get_type(*key_id), types, do_not_recurse)
                 || has_float_help(types.get_type(*val_id), types, do_not_recurse)
         }
-        RocType::Struct {
+        RocType::TagUnionPayload {
             fields: RocStructFields::HasNoClosure { fields },
-            ..
+            name: _,
+        }
+        | RocType::Struct {
+            fields: RocStructFields::HasNoClosure { fields },
+            name: _,
         } => fields
             .iter()
             .any(|(_, type_id)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
-        RocType::Struct {
-            fields: RocStructFields::HasClosure { field_getters },
-            ..
-        } => field_getters
+        RocType::TagUnionPayload {
+            fields: RocStructFields::HasClosure { fields },
+            name: _,
+        }
+        | RocType::Struct {
+            fields: RocStructFields::HasClosure { fields },
+            name: _,
+        } => fields
             .iter()
             .any(|(_, type_id, _)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
-        RocType::TagUnionPayload { fields, .. } => fields
-            .iter()
-            .any(|(_, type_id)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
         RocType::TagUnion(RocTagUnion::SingleTagStruct {
             payload: RocSingleTagPayload::HasNoClosure { payload_fields },
             ..
@@ -2640,14 +2656,12 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
         RocType::TagUnion(RocTagUnion::Recursive {
             tags,
             name: _,
-            variant_size: _,
             discriminant_offset: _,
             discriminant_size: _,
         })
         | RocType::TagUnion(RocTagUnion::NonRecursive {
             tags,
             name: _,
-            variant_size: _,
             discriminant_offset: _,
             discriminant_size: _,
         })
@@ -2655,7 +2669,6 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
             tags,
             name: _,
             index_of_null_tag: _,
-            variant_size: _,
             discriminant_size: _,
             discriminant_offset: _,
         }) => tags.iter().any(|(_, payloads)| {
@@ -2669,7 +2682,7 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
             tags.iter().any(|(_, payloads)| {
                 payloads
                     .iter()
-                    .any(|(id, _)| has_float_help(types.get_type(*id), types, do_not_recurse))
+                    .any(|id| has_float_help(types.get_type(*id), types, do_not_recurse))
             })
         }
         RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { payload, .. })
