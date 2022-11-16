@@ -43,7 +43,7 @@ macro_rules! dbg_set {
         #[cfg(debug_assertions)]
         {
             let flag = std::env::var($flag);
-            !flag.is_err() && flag.as_deref() != Ok("0")
+            flag.as_deref() != Ok("0")
         }
     }};
 }
