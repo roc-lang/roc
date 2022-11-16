@@ -2454,7 +2454,7 @@ fn count_generated_name_usages<'a>(
                 stack.push((ret, false));
             }
             Alias(_, args, real, _) => {
-                // First, count the occurences in the real var
+                // First, count the occurrences in the real var
                 stack.push((real, false));
                 // Then, count up any phantom args that were missed b/c they're not referenced in
                 // the real var. Set `only_unseen` so that we don not double-count vars that do
