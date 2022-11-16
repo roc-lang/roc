@@ -132,7 +132,7 @@ impl NumericRange {
             NumericRange::IntAtLeastSigned(w) | NumericRange::NumAtLeastSigned(w) => {
                 [IntLitWidth::I64, IntLitWidth::I128]
                     .iter()
-                    .find(|candidate| candidate.is_superset(&w, true))
+                    .find(|candidate| candidate.is_superset(w, true))
                     .expect("if number doesn't fit, should have been a type error")
             }
             NumericRange::IntAtLeastEitherSign(w) | NumericRange::NumAtLeastEitherSign(w) => [
@@ -142,7 +142,7 @@ impl NumericRange {
                 IntLitWidth::U128,
             ]
             .iter()
-            .find(|candidate| candidate.is_superset(&w, false))
+            .find(|candidate| candidate.is_superset(w, false))
             .expect("if number doesn't fit, should have been a type error"),
         }
     }
