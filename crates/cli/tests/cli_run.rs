@@ -423,6 +423,7 @@ mod cli_run {
     const LINE_ENDING: &str = "\n";
 
     #[test]
+    #[cfg_attr(windows, ignore)]
     // uses C platform
     fn platform_switching_main() {
         test_roc_app_slim(
@@ -451,6 +452,7 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore)]
     fn platform_switching_zig() {
         test_roc_app_slim(
             "examples/platform-switching",
@@ -493,6 +495,7 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore)]
     fn fibonacci() {
         test_roc_app_slim(
             "crates/cli_testing_examples/algorithms",
@@ -998,6 +1001,7 @@ mod cli_run {
 
     #[test]
     #[serial(multi_dep_thunk)]
+    #[cfg_attr(windows, ignore)]
     fn run_multi_dep_thunk_unoptimized() {
         check_output_with_stdin(
             &fixture_file("multi-dep-thunk", "Main.roc"),
