@@ -1543,11 +1543,32 @@ fn expr_spec<'a>(
             }
             _ => unreachable!("empty array does not have a list layout"),
         },
-        Reset { symbol, .. } => {
-            let type_id = layout_spec(env, builder, interner, layout, &WhenRecursive::Unreachable)?;
-            let value_id = env.symbols[symbol];
+        Reset {
+            symbol,
+            update_mode,
+        } => {
+            let tag_value_id = env.symbols[symbol];
 
-            builder.add_unknown_with(block, &[value_id], type_id)
+            let union_layout = match layout {
+                Layout::Union(ul) => ul,
+                _ => unreachable!(),
+            };
+
+            let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
+            let type_name = TypeName(&type_name_bytes);
+
+            // unwrap the named wrapper
+            let union_id = builder.add_unwrap_named(block, MOD_APP, type_name, tag_value_id)?;
+
+            let heap_cell = builder.add_get_tuple_field(block, union_id, TAG_CELL_INDEX)?;
+            let union_data = builder.add_get_tuple_field(block, union_id, TAG_DATA_INDEX)?;
+
+            let mode = update_mode.to_bytes();
+            let update_mode_var = UpdateModeVar(&mode);
+
+            let _unit = builder.add_update(block, update_mode_var, heap_cell)?;
+
+            with_new_heap_cell(builder, block, union_data)
         }
         RuntimeErrorFunction(_) => {
             let type_id = layout_spec(env, builder, interner, layout, &WhenRecursive::Unreachable)?;
