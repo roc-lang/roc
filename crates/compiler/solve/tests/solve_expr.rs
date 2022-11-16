@@ -8199,6 +8199,31 @@ mod solve_expr {
     }
 
     #[test]
+    fn inferred_fixed_fixpoints() {
+        infer_queries!(
+            indoc!(
+                r#"
+                 app "test" provides [job] to "./platform"
+
+                 F : [Bar, FromG G]
+                 G : [G {lst : List F}]
+
+                 job : { lst : List F } -> G
+                 job = \config -> G config
+                 #^^^{-1}
+                 #      ^^^^^^    ^^^^^^^^
+                 "#
+            ),
+        @r###"
+        job : { lst : List [Bar, FromG a] } -[[job(0)]]-> [G { lst : List [Bar, FromG a] }] as a
+        config : { lst : List [Bar, FromG ([G { lst : List [Bar, FromG a] }] as a)] }
+        G config : [G { lst : List [Bar, FromG a] }] as a
+        "###
+        print_only_under_alias: true
+        );
+    }
+
+    #[test]
     fn fix_recursion_under_alias_issue_4368() {
         infer_eq_without_problem(
             indoc!(
@@ -8218,6 +8243,6 @@ mod solve_expr {
                 "#
             ),
             "{} -> Task",
-        )
+        );
     }
 }

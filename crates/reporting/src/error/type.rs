@@ -2411,47 +2411,56 @@ fn count_generated_name_usages<'a>(
     usages: &mut VecMap<Lowercase, usize>,
     types: impl IntoIterator<Item = &'a ErrorType>,
 ) {
-    let mut stack = types.into_iter().collect::<Vec<_>>();
+    // Stack consists of (type, only_unseen) where if `only_unseen`, then the count should only be
+    // incremented if the variable has not already been seen. This is to deal with counting phantom
+    // variables in type aliases, while not double-counting alias type arguments that also appear
+    // in the real type.
+    let mut stack = types.into_iter().map(|t| (t, false)).collect::<Vec<_>>();
 
     let mut ext_stack = vec![];
 
     use ErrorType::*;
-    while let Some(tipe) = stack.pop() {
+    while let Some((tipe, only_unseen)) = stack.pop() {
         match tipe {
             FlexVar(name) | FlexAbleVar(name, _) => {
                 if is_generated_name(name) {
                     let count = usages.get_or_insert(name.clone(), || 0);
-                    *count += 1;
+                    if !only_unseen || *count == 0 {
+                        *count += 1;
+                    }
                 }
             }
             RigidVar(name) | RigidAbleVar(name, _) => {
                 debug_assert!(!is_generated_name(name));
             }
             Type(_, tys) => {
-                stack.extend(tys);
+                stack.extend(tys.iter().map(|t| (t, false)));
             }
             Record(fields, ext) => {
-                stack.extend(fields.values().map(|f| f.as_inner()));
+                stack.extend(fields.values().map(|f| (f.as_inner(), false)));
                 ext_stack.push(ext);
             }
             TagUnion(tags, ext, _) => {
-                stack.extend(tags.values().flatten());
+                stack.extend(tags.values().flatten().map(|t| (t, false)));
                 ext_stack.push(ext);
             }
             RecursiveTagUnion(rec, tags, ext, _) => {
-                stack.push(rec);
-                stack.extend(tags.values().flatten());
+                stack.push((rec, false));
+                stack.extend(tags.values().flatten().map(|t| (t, false)));
                 ext_stack.push(ext);
             }
             Function(args, _lset, ret) => {
-                stack.extend(args);
-                stack.push(ret);
+                stack.extend(args.iter().map(|t| (t, false)));
+                stack.push((ret, false));
             }
-            Alias(_, _args, real, _) => {
-                // Since the arguments should always be captured in the real type,
-                // only look at the real type. Otherwise we might think a variable appears twice
-                // when it doesn't.
-                stack.push(real);
+            Alias(_, args, real, _) => {
+                // Then, count up any phantom args that were missed b/c they're not referenced in
+                // the real var. Set `only_unseen` so that we don not double-count vars that do
+                // appear in the real var.
+                stack.extend(args.iter().map(|t| (t, true)));
+
+                // First, count the occurrences in the real var
+                stack.push((real, false));
             }
             Infinite | Error => {}
             Range(_) => {}
