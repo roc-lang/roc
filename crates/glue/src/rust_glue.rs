@@ -1047,6 +1047,30 @@ pub struct {name} {{
                         for (field_name, field, accessor) in fields {
                             let getter_name = &accessor.getter;
                             let ret = type_name(*field, types);
+                            let returns_via_pointer = true;
+                            let body = if returns_via_pointer {
+                                format!(
+                                    r#"extern "C" {{
+            #[link_name = "roc__{getter_name}"]
+            fn getter(_: *mut {ret}, _: *const {name});
+        }}
+
+        let mut ret = core::mem::MaybeUninit::uninit();
+
+        getter(ret.as_mut_ptr(), self);
+
+        ret.assume_init()"#
+                                )
+                            } else {
+                                format!(
+                                    r#"extern "C" {{
+            #[link_name = "roc__{getter_name}"]
+            fn getter(_: *const {name}) -> {ret};
+        }}
+
+        getter(self)"#
+                                )
+                            };
 
                             add_decl(
                                 impls,
@@ -1059,12 +1083,7 @@ pub struct {name} {{
     pub unsafe fn get_{tag_name}_{field_name}(&self) -> {ret} {{
         debug_assert_eq!(self.discriminant(), {discriminant_name}::{tag_name});
 
-        extern "C" {{
-            #[link_name = "roc__{getter_name}"]
-            fn getter(_: *const {name}) -> {ret};
-        }}
-
-        getter(self)
+        {body}
     }}"#,
                                 ),
                             );
