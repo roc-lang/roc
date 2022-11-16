@@ -34,14 +34,22 @@
 //! there to avoid maintaining a separate script.
 
 #[macro_export]
+macro_rules! dbg_set {
+    ($flag:path) => {
+        if !cfg!(debug_assertions) {
+            false
+        } else {
+            let flag = std::env::var($flag);
+            !flag.is_err() && flag.as_deref() != Ok("0")
+        }
+    };
+}
+
+#[macro_export]
 macro_rules! dbg_do {
     ($flag:path, $expr:expr) => {
-        #[cfg(debug_assertions)]
-        {
-            let flag = std::env::var($flag);
-            if !flag.is_err() && flag.as_deref() != Ok("0") {
-                $expr
-            }
+        if $crate::dbg_set!($flag) {
+            $expr
         }
     };
 }
@@ -90,6 +98,15 @@ flags! {
     /// Instead, this flag is useful for checking that in general, introduction is correct, when
     /// chainging how defs are constrained.
     ROC_VERIFY_RIGID_LET_GENERALIZED
+
+    /// Verifies that an `occurs` check indeed only contains non-recursive types that need to be
+    /// fixed-up.
+    ///
+    /// This flag is disabled by default because an occurs check may pass through an inferred
+    /// partially-recursive structure if a part of that structure also has type errors. However, in
+    /// the presence of programs without type errors, occurs checks should always consist of only
+    /// non-recursive types, and this flag should pass.
+    ROC_VERIFY_OCCURS_RECURSION
 
     // ===Mono===
 

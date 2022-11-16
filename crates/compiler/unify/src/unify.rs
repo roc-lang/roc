@@ -1,6 +1,6 @@
 use bitflags::bitflags;
 use roc_collections::{VecMap, VecSet};
-use roc_debug_flags::dbg_do;
+use roc_debug_flags::{dbg_do, dbg_set, ROC_VERIFY_OCCURS_RECURSION};
 #[cfg(debug_assertions)]
 use roc_debug_flags::{ROC_PRINT_MISMATCHES, ROC_PRINT_UNIFICATIONS};
 use roc_error_macros::internal_error;
@@ -2615,7 +2615,22 @@ fn maybe_mark_union_recursive(env: &mut Env, union_var: Variable) {
         }) {
             return;
         } else {
-            internal_error!("recursive loop does not contain a tag union")
+            // We may have partially solved a recursive type, but still see an occurs, if the type
+            // has errors inside of it. As such, admit this; however, for well-typed programs, this
+            // case should never be observed. Set ROC_VERIFY_OCCURS_RECURSION to verify this branch
+            // is not reached for well-typed programs.
+            if dbg_set!(ROC_VERIFY_OCCURS_RECURSION)
+                || !chain.iter().any(|&var| {
+                    matches!(
+                        subs.get_content_without_compacting(var),
+                        Content::Structure(FlatType::RecursiveTagUnion(..))
+                    )
+                })
+            {
+                internal_error!("recursive loop does not contain a tag union")
+            }
+
+            return;
         }
     }
 }
