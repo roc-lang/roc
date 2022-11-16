@@ -64,8 +64,8 @@ This command will generate the documentation in the [`generated-docs`](generated
 
 ### Forgot to sign commits?
 
-View your commits on github, those without the "Verified" badge still  need to be signed.
-If any of those is a merge commit follow [these steps](https://stackoverflow.com/a/9958215/4200103).
+You can view your commits on github, those without the "Verified" badge still  need to be signed.
+If any of those is a merge commit, follow [these steps](https://stackoverflow.com/a/9958215/4200103) instead of the ones below.
 
 If you have only one commit, running `git commit --amend --no-edit -S` would sign the latest commit 🚀.
 
