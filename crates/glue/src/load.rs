@@ -190,7 +190,7 @@ pub fn load_types(
                         // the structs and fields.
                         //
                         // Store them as strings, because symbols won't be useful to glue generators!
-                        names.push(name.as_str(&interns).to_string());
+                        names.push(dbg!(name.as_str(&interns)).to_string());
                     }
 
                     glue_procs_by_layout.insert(layout, names.into_bump_slice());

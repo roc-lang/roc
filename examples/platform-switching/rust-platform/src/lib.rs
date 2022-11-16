@@ -97,6 +97,8 @@ pub unsafe extern "C" fn roc_send_signal(pid: libc::pid_t, sig: libc::c_int) -> 
 pub extern "C" fn rust_main() -> i32 {
     use glue::discriminant_Op::*;
 
+    println!("Let's do things!");
+
     let op: Op = unsafe {
         let mut mem = MaybeUninit::uninit();
 
@@ -105,10 +107,12 @@ pub extern "C" fn rust_main() -> i32 {
         mem.assume_init()
     };
 
-    match op.discriminant() {
+    match dbg!(op.discriminant()) {
         StdoutWrite => {
             let output: RocStr = unsafe { op.get_StdoutWrite_0() };
             // let _next = unsafe { op.get_StdoutWrite_1() };
+
+            dbg!(&output);
 
             if let Err(e) = std::io::stdout().write_all(output.as_bytes()) {
                 panic!("Writing to stdout failed! {:?}", e);
@@ -124,6 +128,8 @@ pub extern "C" fn rust_main() -> i32 {
         }
         Done => {}
     }
+
+    println!("Done!");
 
     // Exit code
     0

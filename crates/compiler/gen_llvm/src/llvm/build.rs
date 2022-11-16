@@ -4147,6 +4147,9 @@ pub fn build_procedures<'a, 'ctx, 'env>(
     let captures_niche = CapturesNiche::no_niche();
 
     for (symbol, top_level) in glue_layouts.getters.iter().copied() {
+        dbg!(symbol, unsafe {
+            std::mem::transmute::<Symbol, u64>(symbol)
+        });
         let it = top_level.arguments.iter().copied();
         let bytes =
             roc_alias_analysis::func_name_bytes_help(symbol, it, captures_niche, &top_level.result);
@@ -4180,7 +4183,7 @@ pub fn build_procedures<'a, 'ctx, 'env>(
             getter_fn,
             top_level.arguments,
             top_level.result,
-            getter_name,
+            dbg!(getter_name),
         );
     }
 }
