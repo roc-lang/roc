@@ -1,3 +1,5 @@
+use roc_module::symbol::Symbol;
+
 use crate::subs::Variable;
 
 /// A bound placed on a number because of its literal value.
@@ -302,6 +304,25 @@ impl IntLitWidth {
                 // i16 is a superset of u8, but i16 is not a superset of u16.
                 ((Signed, us), (Unsigned, lower_bound)) => us > lower_bound,
             }
+        }
+    }
+
+    pub const fn symbol(&self) -> Symbol {
+        match self {
+            IntLitWidth::U8 => Symbol::NUM_U8,
+            IntLitWidth::U16 => Symbol::NUM_U16,
+            IntLitWidth::U32 => Symbol::NUM_U32,
+            IntLitWidth::U64 => Symbol::NUM_U64,
+            IntLitWidth::U128 => Symbol::NUM_U128,
+            IntLitWidth::I8 => Symbol::NUM_I8,
+            IntLitWidth::I16 => Symbol::NUM_I16,
+            IntLitWidth::I32 => Symbol::NUM_I32,
+            IntLitWidth::I64 => Symbol::NUM_I64,
+            IntLitWidth::I128 => Symbol::NUM_I128,
+            IntLitWidth::Nat => Symbol::NUM_NAT,
+            IntLitWidth::F32 => Symbol::NUM_F32,
+            IntLitWidth::F64 => Symbol::NUM_F64,
+            IntLitWidth::Dec => Symbol::NUM_DEC,
         }
     }
 }

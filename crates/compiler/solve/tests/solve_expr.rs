@@ -8220,4 +8220,20 @@ mod solve_expr {
             "{} -> Task",
         )
     }
+
+    #[test]
+    fn choose_ranged_num_for_hash() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main =
+                    \h -> Hash.hash h 7
+                    #     ^^^^^^^^^
+                "#
+            ),
+        @"Hash#Hash.hash(1) : a, I64 -[[Hash.hashI64(12)]]-> a | a has Hasher"
+        )
+    }
 }
