@@ -10778,7 +10778,18 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
     let mut answer = Vec::new_in(arena);
     let mut stack = Vec::from_iter_in([layout], arena);
 
-    stack.push(layout);
+    macro_rules! handle_field_layouts {
+        ($field_layouts: expr) => {{
+            if $field_layouts.iter().any(|l| l.contains_function(arena)) {
+                let procs =
+                    generate_glue_procs_for_fields(home, ident_ids, arena, layout, $field_layouts);
+
+                answer.push((layout, procs));
+            }
+
+            stack.extend($field_layouts);
+        }};
+    }
 
     while let Some(layout) = stack.pop() {
         match layout {
@@ -10791,19 +10802,7 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
                 Builtin::List(element) => stack.push(*element),
             },
             Layout::Struct { field_layouts, .. } => {
-                if layout.contains_function(arena) {
-                    let procs = generate_glue_procs_for_fields(
-                        home,
-                        ident_ids,
-                        arena,
-                        layout,
-                        field_layouts,
-                    );
-
-                    answer.push((layout, procs));
-
-                    stack.extend(field_layouts);
-                }
+                handle_field_layouts!(field_layouts);
             }
             Layout::Boxed(boxed) => stack.push(*boxed),
             Layout::Union(tag_union) => match tag_union {
@@ -10812,12 +10811,12 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
                         stack.extend(tag.iter());
                     }
                 }
-                UnionLayout::NonNullableUnwrapped(fields) => {
-                    stack.extend(fields);
+                UnionLayout::NonNullableUnwrapped(field_layouts) => {
+                    handle_field_layouts!(field_layouts);
                 }
                 UnionLayout::NullableWrapped { other_tags, .. } => {
-                    for tag in other_tags {
-                        stack.extend(tag.iter());
+                    for field_layouts in other_tags {
+                        handle_field_layouts!(*field_layouts);
                     }
                 }
                 UnionLayout::NullableUnwrapped { other_fields, .. } => {
