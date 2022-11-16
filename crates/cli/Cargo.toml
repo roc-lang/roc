@@ -79,7 +79,7 @@ strum.workspace = true
 libloading.workspace = true
 signal-hook.workspace = true
 
-inkwell.workspace = true 
+inkwell.workspace = true
 
 # for now, uses unix/libc functions that windows does not support
 [target.'cfg(not(windows))'.dependencies]
