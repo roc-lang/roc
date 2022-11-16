@@ -1832,25 +1832,25 @@ fn derive_str(typ: &RocType, types: &Types, include_debug: bool) -> String {
         derives.push("Debug");
     }
 
-    if !cannot_derive_default(typ, types) {
-        derives.push("Default");
-    }
-
-    if !has_float(typ, types) {
-        derives.push("Eq");
-        derives.push("Ord");
-        derives.push("Hash");
-    }
-
-    if type_has_functions(typ) {
+    if !has_functions(typ, types) {
         derives.push("PartialEq");
         derives.push("PartialOrd");
+
+        if !has_float(typ, types) {
+            derives.push("Eq");
+            derives.push("Ord");
+            derives.push("Hash");
+        }
+
+        if !cannot_derive_default(typ, types) {
+            derives.push("Default");
+        }
     }
 
     format!("#[derive({})]", derives.join(", "))
 }
 
-fn type_has_functions(typ: &RocType, types: &Types) -> bool {
+fn has_functions(typ: &RocType, types: &Types) -> bool {
     match typ {
         RocType::RocStr
         | RocType::Bool
@@ -1864,7 +1864,7 @@ fn type_has_functions(typ: &RocType, types: &Types) -> bool {
             | RocTagUnion::NullableWrapped { tags, .. } => {
                 tags.iter().any(|(_, opt_payload_id)| {
                     if let Some(payload_id) = opt_payload_id {
-                        type_has_functions(types.get_type(payload_id), types)
+                        has_functions(types.get_type(payload_id), types)
                     } else {
                         false
                     }
@@ -1879,19 +1879,19 @@ fn type_has_functions(typ: &RocType, types: &Types) -> bool {
             }
             | RocTagUnion::NonNullableUnwrapped {
                 payload: type_id, ..
-            } => type_has_functions(type_id, types),
+            } => has_functions(type_id, types),
             RocTagUnion::SingleTagStruct {
                 payload: RocSingleTagPayload::HasNoClosures { payload_fields },
                 ..
             } => payload_fields
                 .iter()
-                .any(|payload_id| type_has_functions(types.get_type(payload_id), types)),
+                .any(|payload_id| has_functions(types.get_type(payload_id), types)),
             RocTagUnion::SingleTagStruct {
                 payload: RocSingleTagPayload::HasClosure { payload_getters },
                 ..
             } => payload_getters
                 .iter()
-                .any(|(payload_id, _)| type_has_functions(types.get_type(payload_id), types)),
+                .any(|(payload_id, _)| has_functions(types.get_type(payload_id), types)),
         },
         RocType::TagUnionPayload {
             fields:
@@ -1910,7 +1910,7 @@ fn type_has_functions(typ: &RocType, types: &Types) -> bool {
             ..
         } => fields
             .iter()
-            .any(|(_, type_id)| type_has_functions(types.get_type(type_id), types)),
+            .any(|(_, type_id)| has_functions(types.get_type(type_id), types)),
         RocType::TagUnionPayload {
             fields: RocStructFields::HasClosure { fields },
             ..
@@ -1920,11 +1920,10 @@ fn type_has_functions(typ: &RocType, types: &Types) -> bool {
             ..
         } => fields
             .iter()
-            .any(|(_, type_id, _)| type_has_functions(types.get_type(type_id), types)),
-        RocType::RecursivePointer(type_id) => type_has_functions(types.get_type(type_id), types),
+            .any(|(_, type_id, _)| has_functions(types.get_type(type_id), types)),
+        RocType::RecursivePointer(type_id) => has_functions(types.get_type(type_id), types),
         RocType::RocResult(id1, id2) | RocType::RocDict(id1, id2) => {
-            type_has_functions(types.get_type(id1), types)
-                || type_has_functions(types.get_type(id2), types)
+            has_functions(types.get_type(id1), types) || has_functions(types.get_type(id2), types)
         }
         RocType::Function(_) => true,
     }
