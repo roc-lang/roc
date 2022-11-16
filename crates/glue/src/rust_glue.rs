@@ -546,6 +546,7 @@ fn add_single_tag_struct(
                 }
             }
         }
+        RocSingleTagPayload::HasClosure { payload_getters } => todo!(),
     }
 
     // The Debug impl for the single-tag union
@@ -579,6 +580,7 @@ fn add_single_tag_struct(
 
             add_decl(impls, opt_impl, target_info, buf);
         }
+        RocSingleTagPayload::HasClosure { payload_getters } => todo!(),
     }
 }
 
@@ -1633,6 +1635,7 @@ pub struct {name} {{
                                     ));
                                         }
                                     }
+                                    RocStructFields::HasClosure { fields } => todo!(),
                                 }
 
                                 buf.join("\n")
@@ -1770,6 +1773,7 @@ fn add_struct(
 
             buf.push('}');
         }
+        RocStructFields::HasClosure { fields } => todo!(),
     }
 
     add_decl(impls, None, target_info, buf);
@@ -2273,6 +2277,7 @@ pub struct {name} {{
                             buf.push(format!(".field(&(&*{extra_deref}self.pointer).{label})"));
                         }
                     }
+                    RocStructFields::HasClosure { fields } => todo!(),
                 }
 
                 buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
@@ -2287,6 +2292,7 @@ pub struct {name} {{
                             buf.push(format!(".field(&(&*{extra_deref}self.pointer).f{label})"));
                         }
                     }
+                    RocStructFields::HasClosure { fields } => todo!(),
                 }
 
                 buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
@@ -2488,6 +2494,7 @@ fn tag_union_struct_help<'a>(
                 borrowed_ret_type,
             }
         }
+        RocStructFields::HasClosure { fields } => todo!(),
     }
 }
 

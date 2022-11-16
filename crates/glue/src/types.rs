@@ -597,7 +597,7 @@ enum RocTypeOrPending<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Accessors {
     // The name of the extern
-    getter: String,
+    pub getter: String,
     // TODO setter
 }
 
