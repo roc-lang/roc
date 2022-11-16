@@ -1051,7 +1051,7 @@ pub struct {name} {{
                             let body = if returns_via_pointer {
                                 format!(
                                     r#"extern "C" {{
-            #[link_name = "roc__{getter_name}"]
+            #[link_name = "{getter_name}"]
             fn getter(_: *mut {ret}, _: *const {name});
         }}
 
@@ -1064,7 +1064,7 @@ pub struct {name} {{
                             } else {
                                 format!(
                                     r#"extern "C" {{
-            #[link_name = "roc__{getter_name}"]
+            #[link_name = "{getter_name}"]
             fn getter(_: *const {name}) -> {ret};
         }}
 
@@ -1710,7 +1710,7 @@ pub struct {name} {{
                                         }
                                     }
                                     RocStructFields::HasClosure { fields: _ } => {
-                                        buf.push("TODO HAS CLOSURE".to_string());
+                                        buf.push("// TODO HAS CLOSURE".to_string());
                                     }
                                 }
 
@@ -1850,7 +1850,7 @@ fn add_struct(
             buf.push('}');
         }
         RocStructFields::HasClosure { fields: _ } => {
-            buf = format!("TODO HAS CLOSURE 2");
+            buf = format!("//TODO HAS CLOSURE 2");
         }
     }
 

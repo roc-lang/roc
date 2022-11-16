@@ -4146,8 +4146,6 @@ pub fn build_procedures<'a, 'ctx, 'env>(
 
     let captures_niche = CapturesNiche::no_niche();
 
-    let mut getter_names = Vec::with_capacity_in(glue_layouts.getters.len(), env.arena);
-
     for (symbol, top_level) in glue_layouts.getters.iter().copied() {
         let it = top_level.arguments.iter().copied();
         let bytes =
@@ -4163,7 +4161,7 @@ pub fn build_procedures<'a, 'ctx, 'env>(
         );
 
         // NOTE fake layout; it is only used for debug prints
-        let roc_main_fn = function_value_by_func_spec(
+        let getter_fn = function_value_by_func_spec(
             env,
             *func_spec,
             symbol,
@@ -4172,17 +4170,14 @@ pub fn build_procedures<'a, 'ctx, 'env>(
             &Layout::UNIT,
         );
 
-        let name = roc_main_fn.get_name().to_str().unwrap();
+        let name = getter_fn.get_name().to_str().unwrap();
+        let getter_name = symbol.as_str(&env.interns);
 
-        let getter_name = &format!("Getter{}", name);
-        let getter_name = env.arena.alloc_str(getter_name);
-        getter_names.push(&*getter_name);
-
-        // Add main to the module.
+        // Add the getter function to the module.
         let _ = expose_function_to_host_help_c_abi(
             env,
             name,
-            roc_main_fn,
+            getter_fn,
             top_level.arguments,
             top_level.result,
             getter_name,

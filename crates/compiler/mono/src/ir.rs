@@ -27,7 +27,7 @@ use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapsh
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
@@ -10762,6 +10762,8 @@ pub struct GlueLayouts<'a> {
     pub getters: std::vec::Vec<(Symbol, ProcLayout<'a>)>,
 }
 
+type GlueProcId = u16;
+
 pub struct GlueProc<'a> {
     pub name: Symbol,
     pub proc_layout: ProcLayout<'a>,
@@ -10770,13 +10772,14 @@ pub struct GlueProc<'a> {
 
 pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
     home: ModuleId,
-    ident_ids: &mut IdentIds,
+    interns: &mut Interns,
     arena: &'a Bump,
     layout_interner: &mut I,
     layout: Layout<'a>,
 ) -> Vec<'a, (Layout<'a>, Vec<'a, GlueProc<'a>>)> {
     let mut answer = Vec::new_in(arena);
     let mut stack = Vec::from_iter_in([layout], arena);
+    let mut next_unique_id = 0;
 
     macro_rules! handle_struct_field_layouts {
         ($field_layouts: expr) => {{
@@ -10786,7 +10789,8 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
             {
                 let procs = generate_glue_procs_for_struct_fields(
                     home,
-                    ident_ids,
+                    &mut next_unique_id,
+                    interns,
                     arena,
                     layout,
                     $field_layouts,
@@ -10807,7 +10811,8 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
             {
                 let procs = generate_glue_procs_for_tag_fields(
                     home,
-                    ident_ids,
+                    &mut next_unique_id,
+                    interns,
                     arena,
                     $tag_id,
                     layout,
@@ -10873,7 +10878,8 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
 
 fn generate_glue_procs_for_struct_fields<'a>(
     home: ModuleId,
-    ident_ids: &mut IdentIds,
+    next_unique_id: &mut GlueProcId,
+    interns: &mut Interns,
     arena: &'a Bump,
     unboxed_struct_layout: Layout<'a>,
     field_layouts: &'a [Layout<'a>],
@@ -10888,10 +10894,14 @@ fn generate_glue_procs_for_struct_fields<'a>(
             captures_niche: CapturesNiche::no_niche(),
         };
 
-        let symbol = Symbol::new(home, ident_ids.gen_unique());
+        let symbol = unique_glue_symbol(arena, next_unique_id, home, interns);
+
+        let ident_ids = interns.all_ident_ids.get_mut(&home).unwrap();
         let argument = Symbol::new(home, ident_ids.gen_unique());
         let unboxed = Symbol::new(home, ident_ids.gen_unique());
         let result = Symbol::new(home, ident_ids.gen_unique());
+
+        home.register_debug_idents(ident_ids);
 
         let ret_stmt = arena.alloc(Stmt::Ret(result));
 
@@ -10933,9 +10943,40 @@ fn generate_glue_procs_for_struct_fields<'a>(
     answer
 }
 
+fn unique_glue_symbol(
+    arena: &Bump,
+    next_unique_id: &mut GlueProcId,
+    home: ModuleId,
+    interns: &mut Interns,
+) -> Symbol {
+    let unique_id = *next_unique_id;
+
+    *next_unique_id = unique_id + 1;
+
+    // Turn unique_id into a Symbol without doing a heap allocation.
+    use std::fmt::Write;
+    let mut string = bumpalo::collections::String::with_capacity_in(32, arena);
+    let _result = write!(
+        &mut string,
+        "roc__getter_{}_{}",
+        home.to_ident_str(interns),
+        unique_id
+    );
+    debug_assert_eq!(_result, Ok(())); // This should never fail, but doesn't hurt to debug-check!
+
+    let ident_id = interns
+        .all_ident_ids
+        .get_mut(&home)
+        .unwrap()
+        .get_or_insert(string.into_bump_str());
+
+    Symbol::new(home, ident_id)
+}
+
 fn generate_glue_procs_for_tag_fields<'a>(
     home: ModuleId,
-    ident_ids: &mut IdentIds,
+    next_unique_id: &mut GlueProcId,
+    interns: &mut Interns,
     arena: &'a Bump,
     tag_id: TagIdIntType,
     unboxed_struct_layout: Layout<'a>,
@@ -10951,11 +10992,14 @@ fn generate_glue_procs_for_tag_fields<'a>(
             result: *field,
             captures_niche: CapturesNiche::no_niche(),
         };
+        let symbol = unique_glue_symbol(arena, next_unique_id, home, interns);
 
-        let symbol = Symbol::new(home, ident_ids.gen_unique());
+        let ident_ids = interns.all_ident_ids.get_mut(&home).unwrap();
         let argument = Symbol::new(home, ident_ids.gen_unique());
         let unboxed = Symbol::new(home, ident_ids.gen_unique());
         let result = Symbol::new(home, ident_ids.gen_unique());
+
+        home.register_debug_idents(ident_ids);
 
         let ret_stmt = arena.alloc(Stmt::Ret(result));
 

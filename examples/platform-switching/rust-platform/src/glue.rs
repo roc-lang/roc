@@ -17,6 +17,11 @@
 #![allow(clippy::needless_borrow)]
 #![allow(clippy::clone_on_copy)]
 
+type Op_StderrWrite = roc_std::RocStr;
+type Op_StdoutWrite = roc_std::RocStr;
+type TODO_roc_function_69 = roc_std::RocStr;
+type TODO_roc_function_70 = roc_std::RocStr;
+
 #[cfg(any(
     target_arch = "arm",
     target_arch = "aarch64",
@@ -54,12 +59,12 @@ pub struct Op {
     pointer: *mut union_Op,
 }
 
-type Op_StderrWrite = roc_std::RocStr; // TODO
-type Op_StdoutWrite = roc_std::RocStr; // TODO
-type TODO_roc_function_69 = roc_std::RocStr; // TODO
-type TODO_roc_function_70 = roc_std::RocStr; // TODO
 
-#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+#[cfg(any(
+    target_arch = "arm",
+    target_arch = "wasm32",
+    target_arch = "x86"
+))]
 #[repr(C)]
 union union_Op {
     StderrWrite: core::mem::ManuallyDrop<Op_StderrWrite>,
@@ -79,7 +84,12 @@ union union_Op {
     target_arch = "x86_64",
     target_arch = "x86_64"
 ))]
-#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+//TODO HAS CLOSURE 2
+
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "x86_64"
+))]
 #[repr(C)]
 union union_Op {
     StderrWrite: core::mem::ManuallyDrop<Op_StderrWrite>,
@@ -110,18 +120,28 @@ impl Op {
         if untagged.is_null() {
             None
         } else {
-            unsafe { Some(&*untagged.sub(1)) }
+            unsafe {
+                Some(&*untagged.sub(1))
+            }
         }
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_Op {
         // The discriminant is stored in the unused bytes at the end of the recursive pointer
         unsafe { core::mem::transmute::<u8, discriminant_Op>((self.pointer as u8) & 0b11) }
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
     /// Internal helper
     fn tag_discriminant(pointer: *mut union_Op, discriminant: discriminant_Op) -> *mut union_Op {
         // The discriminant is stored in the unused bytes at the end of the union pointer
@@ -131,7 +151,11 @@ impl Op {
         tagged as *mut union_Op
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
     /// Internal helper
     fn union_pointer(&self) -> *mut union_Op {
         // The discriminant is stored in the unused bytes at the end of the union pointer
@@ -164,11 +188,15 @@ impl Op {
         debug_assert_eq!(self.discriminant(), discriminant_Op::StderrWrite);
 
         extern "C" {
-            #[link_name = "roc__15"]
-            fn getter(_: *const Op) -> roc_std::RocStr;
+            #[link_name = "roc__getter__2"]
+            fn getter(_: *mut roc_std::RocStr, _: *const Op);
         }
 
-        getter(self)
+        let mut ret = core::mem::MaybeUninit::uninit();
+
+        getter(ret.as_mut_ptr(), self);
+
+        ret.assume_init()
     }
 
     #[cfg(any(
@@ -185,11 +213,15 @@ impl Op {
         debug_assert_eq!(self.discriminant(), discriminant_Op::StderrWrite);
 
         extern "C" {
-            #[link_name = "roc__19"]
-            fn getter(_: *const Op) -> TODO_roc_function_69;
+            #[link_name = "roc__getter__3"]
+            fn getter(_: *mut TODO_roc_function_69, _: *const Op);
         }
 
-        getter(self)
+        let mut ret = core::mem::MaybeUninit::uninit();
+
+        getter(ret.as_mut_ptr(), self);
+
+        ret.assume_init()
     }
 
     #[cfg(any(
@@ -201,28 +233,32 @@ impl Op {
     ))]
     /// Construct a tag named `StderrWrite`, with the appropriate payload
     pub fn StderrWrite(arg: Op_StderrWrite) -> Self {
-        let size = core::mem::size_of::<union_Op>();
-        let align = core::mem::align_of::<union_Op>() as u32;
+            let size = core::mem::size_of::<union_Op>();
+            let align = core::mem::align_of::<union_Op>() as u32;
 
-        unsafe {
-            let ptr = roc_std::roc_alloc_refcounted::<union_Op>();
+            unsafe {
+                let ptr = roc_std::roc_alloc_refcounted::<union_Op>();
 
-            *ptr = union_Op {
-                StderrWrite: core::mem::ManuallyDrop::new(arg),
-            };
+                *ptr = union_Op {
+                    StderrWrite: core::mem::ManuallyDrop::new(arg)
+                };
 
-            Self {
-                pointer: Self::tag_discriminant(ptr, discriminant_Op::StderrWrite),
+                Self {
+                    pointer: Self::tag_discriminant(ptr, discriminant_Op::StderrWrite),
+                }
             }
-        }
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
     /// Unsafely assume this `Op` has a `.discriminant()` of `StderrWrite` and convert it to `StderrWrite`'s payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `StderrWrite`.
-    pub unsafe fn into_StderrWrite(mut self) -> Op_StderrWrite {
-        debug_assert_eq!(self.discriminant(), discriminant_Op::StderrWrite);
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `StderrWrite`.
+            pub unsafe fn into_StderrWrite(mut self) -> Op_StderrWrite {
+                debug_assert_eq!(self.discriminant(), discriminant_Op::StderrWrite);
         let payload = {
             let ptr = (self.pointer as usize & !0b11) as *mut union_Op;
             let mut uninitialized = core::mem::MaybeUninit::uninit();
@@ -241,12 +277,16 @@ impl Op {
         payload
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
     /// Unsafely assume this `Op` has a `.discriminant()` of `StderrWrite` and return its payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `StderrWrite`.
-    pub unsafe fn as_StderrWrite(&self) -> &Op_StderrWrite {
-        debug_assert_eq!(self.discriminant(), discriminant_Op::StderrWrite);
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `StderrWrite`.
+            pub unsafe fn as_StderrWrite(&self) -> &Op_StderrWrite {
+                debug_assert_eq!(self.discriminant(), discriminant_Op::StderrWrite);
         let payload = {
             let ptr = (self.pointer as usize & !0b11) as *mut union_Op;
 
@@ -270,11 +310,15 @@ impl Op {
         debug_assert_eq!(self.discriminant(), discriminant_Op::StdoutWrite);
 
         extern "C" {
-            #[link_name = "roc__15"]
-            fn getter(_: *const Op) -> roc_std::RocStr;
+            #[link_name = "roc__getter__2"]
+            fn getter(_: *mut roc_std::RocStr, _: *const Op);
         }
 
-        getter(self)
+        let mut ret = core::mem::MaybeUninit::uninit();
+
+        getter(ret.as_mut_ptr(), self);
+
+        ret.assume_init()
     }
 
     #[cfg(any(
@@ -291,11 +335,15 @@ impl Op {
         debug_assert_eq!(self.discriminant(), discriminant_Op::StdoutWrite);
 
         extern "C" {
-            #[link_name = "roc__19"]
-            fn getter(_: *const Op) -> TODO_roc_function_70;
+            #[link_name = "roc__getter__3"]
+            fn getter(_: *mut TODO_roc_function_70, _: *const Op);
         }
 
-        getter(self)
+        let mut ret = core::mem::MaybeUninit::uninit();
+
+        getter(ret.as_mut_ptr(), self);
+
+        ret.assume_init()
     }
 
     #[cfg(any(
@@ -307,28 +355,32 @@ impl Op {
     ))]
     /// Construct a tag named `StdoutWrite`, with the appropriate payload
     pub fn StdoutWrite(arg: Op_StdoutWrite) -> Self {
-        let size = core::mem::size_of::<union_Op>();
-        let align = core::mem::align_of::<union_Op>() as u32;
+            let size = core::mem::size_of::<union_Op>();
+            let align = core::mem::align_of::<union_Op>() as u32;
 
-        unsafe {
-            let ptr = roc_std::roc_alloc_refcounted::<union_Op>();
+            unsafe {
+                let ptr = roc_std::roc_alloc_refcounted::<union_Op>();
 
-            *ptr = union_Op {
-                StdoutWrite: core::mem::ManuallyDrop::new(arg),
-            };
+                *ptr = union_Op {
+                    StdoutWrite: core::mem::ManuallyDrop::new(arg)
+                };
 
-            Self {
-                pointer: Self::tag_discriminant(ptr, discriminant_Op::StdoutWrite),
+                Self {
+                    pointer: Self::tag_discriminant(ptr, discriminant_Op::StdoutWrite),
+                }
             }
-        }
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
     /// Unsafely assume this `Op` has a `.discriminant()` of `StdoutWrite` and convert it to `StdoutWrite`'s payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `StdoutWrite`.
-    pub unsafe fn into_StdoutWrite(mut self) -> Op_StdoutWrite {
-        debug_assert_eq!(self.discriminant(), discriminant_Op::StdoutWrite);
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `StdoutWrite`.
+            pub unsafe fn into_StdoutWrite(mut self) -> Op_StdoutWrite {
+                debug_assert_eq!(self.discriminant(), discriminant_Op::StdoutWrite);
         let payload = {
             let ptr = (self.pointer as usize & !0b11) as *mut union_Op;
             let mut uninitialized = core::mem::MaybeUninit::uninit();
@@ -347,12 +399,16 @@ impl Op {
         payload
     }
 
-    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
     /// Unsafely assume this `Op` has a `.discriminant()` of `StdoutWrite` and return its payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `StdoutWrite`.
-    pub unsafe fn as_StdoutWrite(&self) -> &Op_StdoutWrite {
-        debug_assert_eq!(self.discriminant(), discriminant_Op::StdoutWrite);
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `StdoutWrite`.
+            pub unsafe fn as_StdoutWrite(&self) -> &Op_StdoutWrite {
+                debug_assert_eq!(self.discriminant(), discriminant_Op::StdoutWrite);
         let payload = {
             let ptr = (self.pointer as usize & !0b11) as *mut union_Op;
 
@@ -362,14 +418,20 @@ impl Op {
         &payload
     }
 
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "x86_64"
+    ))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_Op {
         // The discriminant is stored in the unused bytes at the end of the recursive pointer
         unsafe { core::mem::transmute::<u8, discriminant_Op>((self.pointer as u8) & 0b111) }
     }
 
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "x86_64"
+    ))]
     /// Internal helper
     fn tag_discriminant(pointer: *mut union_Op, discriminant: discriminant_Op) -> *mut union_Op {
         // The discriminant is stored in the unused bytes at the end of the union pointer
@@ -379,19 +441,25 @@ impl Op {
         tagged as *mut union_Op
     }
 
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "x86_64"
+    ))]
     /// Internal helper
     fn union_pointer(&self) -> *mut union_Op {
         // The discriminant is stored in the unused bytes at the end of the union pointer
         ((self.pointer as usize) & (!0b111 as usize)) as *mut union_Op
     }
 
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "x86_64"
+    ))]
     /// Unsafely assume this `Op` has a `.discriminant()` of `StderrWrite` and convert it to `StderrWrite`'s payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `StderrWrite`.
-    pub unsafe fn into_StderrWrite(mut self) -> Op_StderrWrite {
-        debug_assert_eq!(self.discriminant(), discriminant_Op::StderrWrite);
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `StderrWrite`.
+            pub unsafe fn into_StderrWrite(mut self) -> Op_StderrWrite {
+                debug_assert_eq!(self.discriminant(), discriminant_Op::StderrWrite);
         let payload = {
             let ptr = (self.pointer as usize & !0b111) as *mut union_Op;
             let mut uninitialized = core::mem::MaybeUninit::uninit();
@@ -410,12 +478,15 @@ impl Op {
         payload
     }
 
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "x86_64"
+    ))]
     /// Unsafely assume this `Op` has a `.discriminant()` of `StderrWrite` and return its payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `StderrWrite`.
-    pub unsafe fn as_StderrWrite(&self) -> &Op_StderrWrite {
-        debug_assert_eq!(self.discriminant(), discriminant_Op::StderrWrite);
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `StderrWrite`.
+            pub unsafe fn as_StderrWrite(&self) -> &Op_StderrWrite {
+                debug_assert_eq!(self.discriminant(), discriminant_Op::StderrWrite);
         let payload = {
             let ptr = (self.pointer as usize & !0b111) as *mut union_Op;
 
@@ -425,12 +496,15 @@ impl Op {
         &payload
     }
 
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "x86_64"
+    ))]
     /// Unsafely assume this `Op` has a `.discriminant()` of `StdoutWrite` and convert it to `StdoutWrite`'s payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `StdoutWrite`.
-    pub unsafe fn into_StdoutWrite(mut self) -> Op_StdoutWrite {
-        debug_assert_eq!(self.discriminant(), discriminant_Op::StdoutWrite);
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `StdoutWrite`.
+            pub unsafe fn into_StdoutWrite(mut self) -> Op_StdoutWrite {
+                debug_assert_eq!(self.discriminant(), discriminant_Op::StdoutWrite);
         let payload = {
             let ptr = (self.pointer as usize & !0b111) as *mut union_Op;
             let mut uninitialized = core::mem::MaybeUninit::uninit();
@@ -449,12 +523,15 @@ impl Op {
         payload
     }
 
-    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "x86_64"
+    ))]
     /// Unsafely assume this `Op` has a `.discriminant()` of `StdoutWrite` and return its payload.
-    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-    /// Panics in debug builds if the `.discriminant()` doesn't return `StdoutWrite`.
-    pub unsafe fn as_StdoutWrite(&self) -> &Op_StdoutWrite {
-        debug_assert_eq!(self.discriminant(), discriminant_Op::StdoutWrite);
+            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+            /// Panics in debug builds if the `.discriminant()` doesn't return `StdoutWrite`.
+            pub unsafe fn as_StdoutWrite(&self) -> &Op_StdoutWrite {
+                debug_assert_eq!(self.discriminant(), discriminant_Op::StdoutWrite);
         let payload = {
             let ptr = (self.pointer as usize & !0b111) as *mut union_Op;
 
@@ -483,23 +560,17 @@ impl Drop for Op {
 
             if needs_dealloc {
                 // Drop the payload first.
-                match self.discriminant() {
-                    discriminant_Op::Done => {}
-                    discriminant_Op::StderrWrite => unsafe {
-                        core::mem::ManuallyDrop::drop(&mut (&mut *self.union_pointer()).StderrWrite)
-                    },
-                    discriminant_Op::StdoutWrite => unsafe {
-                        core::mem::ManuallyDrop::drop(&mut (&mut *self.union_pointer()).StdoutWrite)
-                    },
-                }
+                            match self.discriminant() {
+                discriminant_Op::Done => {}
+                discriminant_Op::StderrWrite => unsafe { core::mem::ManuallyDrop::drop(&mut (&mut *self.union_pointer()).StderrWrite) },
+                discriminant_Op::StdoutWrite => unsafe { core::mem::ManuallyDrop::drop(&mut (&mut *self.union_pointer()).StdoutWrite) },
+            }
+
 
                 // Dealloc the pointer
-                let alignment =
-                    core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
+                let alignment = core::mem::align_of::<Self>().max(core::mem::align_of::<roc_std::Storage>());
 
-                unsafe {
-                    crate::roc_dealloc(storage.as_ptr().cast(), alignment as u32);
-                }
+                unsafe { crate::roc_dealloc(storage.as_ptr().cast(), alignment as u32); }
             } else {
                 // Write the storage back.
                 storage.set(new_storage);
@@ -519,19 +590,15 @@ impl PartialEq for Op {
         target_arch = "x86_64"
     ))]
     fn eq(&self, other: &Self) -> bool {
-        if self.discriminant() != other.discriminant() {
-            return false;
-        }
+            if self.discriminant() != other.discriminant() {
+                return false;
+            }
 
-        unsafe {
+            unsafe {
             match self.discriminant() {
                 discriminant_Op::Done => true,
-                discriminant_Op::StderrWrite => {
-                    (&*self.union_pointer()).StderrWrite == (&*other.union_pointer()).StderrWrite
-                }
-                discriminant_Op::StdoutWrite => {
-                    (&*self.union_pointer()).StdoutWrite == (&*other.union_pointer()).StdoutWrite
-                }
+                discriminant_Op::StderrWrite => (&*self.union_pointer()).StderrWrite == (&*other.union_pointer()).StderrWrite,
+                discriminant_Op::StdoutWrite => (&*self.union_pointer()).StdoutWrite == (&*other.union_pointer()).StdoutWrite,
             }
         }
     }
@@ -554,12 +621,8 @@ impl PartialOrd for Op {
         unsafe {
             match self.discriminant() {
                 discriminant_Op::Done => Some(core::cmp::Ordering::Equal),
-                discriminant_Op::StderrWrite => (&*self.union_pointer())
-                    .StderrWrite
-                    .partial_cmp(&(&*other.union_pointer()).StderrWrite),
-                discriminant_Op::StdoutWrite => (&*self.union_pointer())
-                    .StdoutWrite
-                    .partial_cmp(&(&*other.union_pointer()).StdoutWrite),
+                discriminant_Op::StderrWrite => (&*self.union_pointer()).StderrWrite.partial_cmp(&(&*other.union_pointer()).StderrWrite),
+                discriminant_Op::StdoutWrite => (&*self.union_pointer()).StdoutWrite.partial_cmp(&(&*other.union_pointer()).StdoutWrite),
             }
         }
     }
@@ -574,20 +637,16 @@ impl Ord for Op {
         target_arch = "x86_64"
     ))]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        match self.discriminant().cmp(&other.discriminant()) {
-            core::cmp::Ordering::Equal => {}
-            not_eq => return not_eq,
-        }
+            match self.discriminant().cmp(&other.discriminant()) {
+                core::cmp::Ordering::Equal => {}
+                not_eq => return not_eq,
+            }
 
-        unsafe {
+            unsafe {
             match self.discriminant() {
                 discriminant_Op::Done => core::cmp::Ordering::Equal,
-                discriminant_Op::StderrWrite => (&*self.union_pointer())
-                    .StderrWrite
-                    .cmp(&(&*other.union_pointer()).StderrWrite),
-                discriminant_Op::StdoutWrite => (&*self.union_pointer())
-                    .StdoutWrite
-                    .cmp(&(&*other.union_pointer()).StdoutWrite),
+                discriminant_Op::StderrWrite => (&*self.union_pointer()).StderrWrite.cmp(&(&*other.union_pointer()).StderrWrite),
+                discriminant_Op::StdoutWrite => (&*self.union_pointer()).StdoutWrite.cmp(&(&*other.union_pointer()).StdoutWrite),
             }
         }
     }
@@ -611,7 +670,7 @@ impl Clone for Op {
         }
 
         Self {
-            pointer: self.pointer,
+            pointer: self.pointer
         }
     }
 }
@@ -624,17 +683,16 @@ impl core::hash::Hash for Op {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        match self.discriminant() {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {        match self.discriminant() {
             discriminant_Op::Done => discriminant_Op::Done.hash(state),
             discriminant_Op::StderrWrite => unsafe {
-                discriminant_Op::StderrWrite.hash(state);
-                (&*self.union_pointer()).StderrWrite.hash(state);
-            },
+                    discriminant_Op::StderrWrite.hash(state);
+                    (&*self.union_pointer()).StderrWrite.hash(state);
+                },
             discriminant_Op::StdoutWrite => unsafe {
-                discriminant_Op::StdoutWrite.hash(state);
-                (&*self.union_pointer()).StdoutWrite.hash(state);
-            },
+                    discriminant_Op::StdoutWrite.hash(state);
+                    (&*self.union_pointer()).StdoutWrite.hash(state);
+                },
         }
     }
 }
@@ -653,8 +711,12 @@ impl core::fmt::Debug for Op {
         unsafe {
             match self.discriminant() {
                 discriminant_Op::Done => f.write_str("Done"),
-                discriminant_Op::StderrWrite => f.debug_tuple("StderrWrite").finish(),
-                discriminant_Op::StdoutWrite => f.debug_tuple("StdoutWrite").finish(),
+                discriminant_Op::StderrWrite => f.debug_tuple("StderrWrite")
+        // TODO HAS CLOSURE
+        .finish(),
+                discriminant_Op::StdoutWrite => f.debug_tuple("StdoutWrite")
+        // TODO HAS CLOSURE
+        .finish(),
             }
         }
     }

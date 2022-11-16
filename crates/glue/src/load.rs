@@ -151,7 +151,6 @@ pub fn load_types(
 
     for architecture in architectures {
         let mut interns = interns.clone(); // TODO there may be a way to avoid this.
-        let ident_ids = interns.all_ident_ids.get_mut(&home).unwrap();
         let target_info = TargetInfo {
             architecture,
             operating_system,
@@ -166,12 +165,18 @@ pub fn load_types(
                 .expect("Something weird ended up in the content");
 
             if layout.has_varying_stack_size(arena) {
+                let answer = generate_glue_procs(
+                    home,
+                    &mut interns,
+                    arena,
+                    &mut layout_interner.fork(),
+                    layout,
+                );
+
                 // Even though generate_glue_procs does more work than we need it to,
                 // it's important that we use it in order to make sure we get exactly
                 // the same names that mono::ir did for code gen!
-                for (layout, glue_procs) in
-                    generate_glue_procs(home, ident_ids, arena, &mut layout_interner.fork(), layout)
-                {
+                for (layout, glue_procs) in answer {
                     let mut names =
                         bumpalo::collections::Vec::with_capacity_in(glue_procs.len(), arena);
 
@@ -183,12 +188,9 @@ pub fn load_types(
                         // since they are getters and setters, we can know their types (from a
                         // TypeId perspective) deterministically based on knowing the types of
                         // the structs and fields.
-                        debug_assert_eq!(name.module_id(), home);
-
-                        let name_str = ident_ids.get_name(name.ident_id()).unwrap();
-
+                        //
                         // Store them as strings, because symbols won't be useful to glue generators!
-                        names.push(name_str.to_string());
+                        names.push(name.as_str(&interns).to_string());
                     }
 
                     glue_procs_by_layout.insert(layout, names.into_bump_slice());

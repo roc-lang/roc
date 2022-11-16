@@ -1350,7 +1350,7 @@ where
                 .map(|((label, field_var, field_layout), getter)| {
                     let type_id = add_type_help(env, field_layout, field_var, None, types);
                     let accessors = Accessors {
-                        getter: getter.to_string(),
+                        getter: getter.clone(),
                     };
 
                     (format!("{}", label), type_id, accessors)

@@ -2953,7 +2953,7 @@ fn finish_specialization<'a>(
     ModuleId::DERIVED_SYNTH.register_debug_idents(&derived_synth_ident_ids);
     all_ident_ids.insert(ModuleId::DERIVED_SYNTH, derived_synth_ident_ids);
 
-    let interns = Interns {
+    let mut interns = Interns {
         module_ids,
         all_ident_ids,
     };
@@ -2966,7 +2966,6 @@ fn finish_specialization<'a>(
         platform_path,
         platform_data,
         exec_mode,
-        ident_ids_by_module,
         ..
     } = state;
 
@@ -3032,14 +3031,14 @@ fn finish_specialization<'a>(
     let mut glue_getters = Vec::new();
 
     if let EntryPoint::Executable { layout, .. } = &entry_point {
-        let mut locked = ident_ids_by_module.lock();
-        let ident_ids = locked.get_mut(&module_id).unwrap();
+        // Expose glue for the platform, not for the app module!
+        let module_id = platform_data.unwrap().module_id;
         let ret = &layout.result;
 
         for layout in layout.arguments.iter().chain([ret]) {
             let all_glue_procs = roc_mono::ir::generate_glue_procs(
                 module_id,
-                ident_ids,
+                &mut interns,
                 arena,
                 &mut layout_interner,
                 *layout,
@@ -3053,7 +3052,7 @@ fn finish_specialization<'a>(
             procedures.extend(all_glue_procs.into_iter().flat_map(|(_, glue_procs)| {
                 glue_procs
                     .into_iter()
-                    .map(|glue_proc| ((glue_proc.name, glue_proc.proc_layout), glue_proc.proc))
+                    .map(|glue_proc| (((glue_proc.name), glue_proc.proc_layout), glue_proc.proc))
             }));
         }
     }
