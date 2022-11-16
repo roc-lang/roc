@@ -1007,7 +1007,10 @@ pub struct {name} {{
                             "arg".to_string()
                         };
                     }
-                    RocType::Struct { fields, name } => {
+                    RocType::Struct {
+                        fields: RocStructFields::HasNoClosure { fields },
+                        name,
+                    } => {
                         let answer = tag_union_struct_help(name, fields, *payload_id, types, false);
 
                         owned_ret = answer.owned_ret;
@@ -1017,7 +1020,10 @@ pub struct {name} {{
                         payload_args = answer.payload_args;
                         args_to_payload = answer.args_to_payload;
                     }
-                    RocType::TagUnionPayload { fields, name } => {
+                    RocType::TagUnionPayload {
+                        fields: RocStructFields::HasNoClosure { fields },
+                        name,
+                    } => {
                         let answer = tag_union_struct_help(name, fields, *payload_id, types, true);
 
                         owned_ret = answer.owned_ret;
@@ -1026,6 +1032,55 @@ pub struct {name} {{
                         borrowed_ret_type = answer.borrowed_ret_type;
                         payload_args = answer.payload_args;
                         args_to_payload = answer.args_to_payload;
+                    }
+                    RocType::Struct {
+                        fields: RocStructFields::HasClosure { fields: _ },
+                        name: _,
+                    } => {
+                        todo!("struct");
+                    }
+                    RocType::TagUnionPayload {
+                        fields: RocStructFields::HasClosure { fields },
+                        name: _, // TODO call this payload_struct_name and use it to define the struct...or don't define it at all, maybe, since there are only getters and setters?
+                    } => {
+                        // TODO don't generate op.into_StdoutWrite() - only getters/setters instead!
+                        for (field_name, field, accessor) in fields {
+                            let getter_name = &accessor.getter;
+                            let ret = type_name(*field, types);
+
+                            add_decl(
+                                impls,
+                                opt_impl.clone(),
+                                target_info,
+                                format!(
+                                    r#"/// Unsafely assume this `{name}` has a `.discriminant()` of `{tag_name}` and return its payload at index {field_name}.
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `{tag_name}`.
+    pub unsafe fn get_{tag_name}_{field_name}(&self) -> {ret} {{
+        debug_assert_eq!(self.discriminant(), {discriminant_name}::{tag_name});
+
+        extern "C" {{
+            #[link_name = "roc__{getter_name}"]
+            fn getter(_: *const {name}) -> {ret};
+        }}
+
+        getter(self)
+    }}"#,
+                                ),
+                            );
+                        }
+
+                        // TODO revise these - they're all copy/pasted from somewhere else
+                        owned_ret_type = type_name(*payload_id, types);
+                        borrowed_ret_type = format!("&{}", owned_ret_type);
+                        owned_ret = "payload".to_string();
+                        borrowed_ret = format!("&{owned_ret}");
+                        payload_args = format!("arg: {owned_ret_type}");
+                        args_to_payload = if cannot_derive_copy(payload_type, types) {
+                            "core::mem::ManuallyDrop::new(arg)".to_string()
+                        } else {
+                            "arg".to_string()
+                        };
                     }
                     RocType::Function(RocFn { .. }) => todo!(),
                 };
@@ -1094,7 +1149,7 @@ pub struct {name} {{
                         )
                     } else {
                         format!(
-                            r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{tag_name}` and convert it to `{tag_name}`'s payload.
+                            r#"/// Unsafely assume this `{name}` has a `.discriminant()` of `{tag_name}` and convert it to `{tag_name}`'s payload.
             /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
             /// Panics in debug builds if the `.discriminant()` doesn't return `{tag_name}`.
             pub unsafe fn into_{tag_name}({self_for_into}) -> {owned_ret_type} {{
@@ -1125,7 +1180,7 @@ pub struct {name} {{
                         )
                     } else {
                         format!(
-                            r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{tag_name}` and return its payload.
+                            r#"/// Unsafely assume this `{name}` has a `.discriminant()` of `{tag_name}` and return its payload.
             /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
             /// Panics in debug builds if the `.discriminant()` doesn't return `{tag_name}`.
             pub unsafe fn as_{tag_name}(&self) -> {borrowed_ret_type} {{
@@ -1635,7 +1690,9 @@ pub struct {name} {{
                                     ));
                                         }
                                     }
-                                    RocStructFields::HasClosure { fields: _ } => todo!(),
+                                    RocStructFields::HasClosure { fields: _ } => {
+                                        buf.push("TODO HAS CLOSURE".to_string());
+                                    }
                                 }
 
                                 buf.join("\n")
@@ -1773,7 +1830,9 @@ fn add_struct(
 
             buf.push('}');
         }
-        RocStructFields::HasClosure { fields: _ } => todo!(),
+        RocStructFields::HasClosure { fields: _ } => {
+            buf = format!("TODO HAS CLOSURE 2");
+        }
     }
 
     add_decl(impls, None, target_info, buf);
@@ -2024,7 +2083,10 @@ pub struct {name} {{
                 owned_ret = "payload".to_string();
                 borrowed_ret = format!("&{owned_ret}");
             }
-            RocType::Struct { fields, name } => {
+            RocType::Struct {
+                fields: RocStructFields::HasNoClosure { fields },
+                name,
+            } => {
                 let answer = tag_union_struct_help(name, fields, non_null_payload, types, false);
 
                 payload_args = answer.payload_args;
@@ -2034,7 +2096,10 @@ pub struct {name} {{
                 owned_ret_type = answer.owned_ret_type;
                 borrowed_ret_type = answer.borrowed_ret_type;
             }
-            RocType::TagUnionPayload { fields, name } => {
+            RocType::TagUnionPayload {
+                fields: RocStructFields::HasNoClosure { fields },
+                name,
+            } => {
                 let answer = tag_union_struct_help(name, fields, non_null_payload, types, true);
 
                 payload_args = answer.payload_args;
@@ -2043,6 +2108,18 @@ pub struct {name} {{
                 borrowed_ret = answer.borrowed_ret;
                 owned_ret_type = answer.owned_ret_type;
                 borrowed_ret_type = answer.borrowed_ret_type;
+            }
+            RocType::Struct {
+                fields: RocStructFields::HasClosure { fields: _ },
+                name: _,
+            } => {
+                todo!("ok struct!");
+            }
+            RocType::TagUnionPayload {
+                fields: RocStructFields::HasClosure { fields: _ },
+                name: _,
+            } => {
+                todo!("ok tag union payload!");
             }
             RocType::Function(RocFn { .. }) => todo!(),
         };
@@ -2119,7 +2196,7 @@ pub struct {name} {{
                 opt_impl.clone(),
                 target_info,
                 format!(
-                    r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{non_null_tag}` and convert it to `{non_null_tag}`'s payload.
+                    r#"/// Unsafely assume this `{name}` has a `.discriminant()` of `{non_null_tag}` and convert it to `{non_null_tag}`'s payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return {non_null_tag}.
     pub unsafe fn into_{non_null_tag}(self) -> {owned_ret_type} {{
@@ -2138,7 +2215,7 @@ pub struct {name} {{
             opt_impl.clone(),
             target_info,
             format!(
-                r#"/// Unsafely assume the given `{name}` has a `.discriminant()` of `{non_null_tag}` and return its payload.
+                r#"/// Unsafely assume this `{name}` has a `.discriminant()` of `{non_null_tag}` and return its payload.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `{non_null_tag}`.
     pub unsafe fn as_{non_null_tag}(&self) -> {borrowed_ret_type} {{
@@ -2366,135 +2443,130 @@ struct StructIngredients {
 
 fn tag_union_struct_help<'a>(
     name: &str,
-    fields: &RocStructFields,
+    fields: &[(String, TypeId)],
     payload_id: TypeId,
     types: &Types,
     is_tag_union_payload: bool,
 ) -> StructIngredients {
-    match fields {
-        RocStructFields::HasNoClosure { fields } => {
-            let mut ret_types = if is_tag_union_payload {
-                // This will be a tuple we create when iterating over the fields.
-                Vec::new()
-            } else {
-                vec![name.to_string()]
-            };
+    let mut ret_types = if is_tag_union_payload {
+        // This will be a tuple we create when iterating over the fields.
+        Vec::new()
+    } else {
+        vec![name.to_string()]
+    };
 
-            let mut ret_values = Vec::new();
+    let mut ret_values = Vec::new();
 
-            for (label, type_id) in fields.iter() {
-                let label = if is_tag_union_payload {
-                    // Tag union payload fields need "f" prefix
-                    // because they're numbers
-                    format!("f{}", label)
-                } else {
-                    escape_kw(format!("{}", label))
-                };
+    for (label, type_id) in fields.iter() {
+        let label = if is_tag_union_payload {
+            // Tag union payload fields need "f" prefix
+            // because they're numbers
+            format!("f{}", label)
+        } else {
+            escape_kw(format!("{}", label))
+        };
 
-                ret_values.push(format!("payload.{label}"));
+        ret_values.push(format!("payload.{label}"));
 
-                if is_tag_union_payload {
-                    // Build up the tuple we'll return.
-                    ret_types.push(type_name(*type_id, types));
+        if is_tag_union_payload {
+            // Build up the tuple we'll return.
+            ret_types.push(type_name(*type_id, types));
+        }
+    }
+
+    let payload_type_name = type_name(payload_id, types);
+    let payload_args = ret_types
+        .iter()
+        .enumerate()
+        .map(|(index, typ)| format!("arg{index}: {typ}"))
+        .collect::<Vec<String>>()
+        .join(", ");
+    let args_to_payload = if is_tag_union_payload {
+        let prefixed_fields = fields
+            .iter()
+            .enumerate()
+            .map(|(index, (label, _))| {
+                let mut indents = String::new();
+
+                for _ in 0..5 {
+                    indents.push_str(INDENT);
                 }
-            }
 
-            let payload_type_name = type_name(payload_id, types);
-            let payload_args = ret_types
+                // Tag union payload fields need "f" prefix
+                // because they're numbers
+                format!("{indents}f{label}: arg{index},")
+            })
+            .collect::<Vec<String>>()
+            .join("\n");
+
+        if cannot_derive_copy(types.get_type(payload_id), types) {
+            format!(
+        "core::mem::ManuallyDrop::new({payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}})",prefixed_fields)
+        } else {
+            format!(
+                "{payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}}",
+                prefixed_fields
+            )
+        }
+    } else {
+        "core::mem::ManuallyDrop::new(arg0)".to_string()
+    };
+    let owned_ret;
+    let borrowed_ret;
+    let owned_ret_type;
+    let borrowed_ret_type;
+
+    if ret_types.len() == 1 {
+        owned_ret_type = ret_types.join("");
+        borrowed_ret_type = format!("&{owned_ret_type}");
+
+        if is_tag_union_payload {
+            let ret_val = ret_values.first().unwrap();
+
+            owned_ret = format!("\n{INDENT}{INDENT}{ret_val}");
+            borrowed_ret = format!("\n{INDENT}{INDENT}&{ret_val}");
+        } else {
+            owned_ret = format!("\n{INDENT}{INDENT}payload");
+            // We already define `let payload = &...` so no need for an extra `&` here.
+            borrowed_ret = owned_ret.clone();
+        };
+    } else {
+        owned_ret_type = format!("({})", ret_types.join(", "));
+        borrowed_ret_type = format!(
+            "({})",
+            ret_types
                 .iter()
-                .enumerate()
-                .map(|(index, typ)| format!("arg{index}: {typ}"))
+                .map(|ret_type| { format!("&{ret_type}") })
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
+        owned_ret = {
+            let lines = ret_values
+                .iter()
+                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}{line}"))
                 .collect::<Vec<String>>()
                 .join(", ");
-            let args_to_payload = if is_tag_union_payload {
-                let prefixed_fields = fields
-                    .iter()
-                    .enumerate()
-                    .map(|(index, (label, _))| {
-                        let mut indents = String::new();
 
-                        for _ in 0..5 {
-                            indents.push_str(INDENT);
-                        }
+            format!("({lines}\n{INDENT}{INDENT})")
+        };
+        borrowed_ret = {
+            let lines = ret_values
+                .iter()
+                .map(|line| format!("\n{INDENT}{INDENT}{INDENT}&{line}"))
+                .collect::<Vec<String>>()
+                .join(", ");
 
-                        // Tag union payload fields need "f" prefix
-                        // because they're numbers
-                        format!("{indents}f{label}: arg{index},")
-                    })
-                    .collect::<Vec<String>>()
-                    .join("\n");
+            format!("({lines}\n{INDENT}{INDENT})")
+        };
+    }
 
-                if cannot_derive_copy(types.get_type(payload_id), types) {
-                    format!(
-        "core::mem::ManuallyDrop::new({payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}})",prefixed_fields)
-                } else {
-                    format!(
-                        "{payload_type_name} {{\n{}\n{INDENT}{INDENT}{INDENT}{INDENT}}}",
-                        prefixed_fields
-                    )
-                }
-            } else {
-                "core::mem::ManuallyDrop::new(arg0)".to_string()
-            };
-            let owned_ret;
-            let borrowed_ret;
-            let owned_ret_type;
-            let borrowed_ret_type;
-
-            if ret_types.len() == 1 {
-                owned_ret_type = ret_types.join("");
-                borrowed_ret_type = format!("&{owned_ret_type}");
-
-                if is_tag_union_payload {
-                    let ret_val = ret_values.first().unwrap();
-
-                    owned_ret = format!("\n{INDENT}{INDENT}{ret_val}");
-                    borrowed_ret = format!("\n{INDENT}{INDENT}&{ret_val}");
-                } else {
-                    owned_ret = format!("\n{INDENT}{INDENT}payload");
-                    // We already define `let payload = &...` so no need for an extra `&` here.
-                    borrowed_ret = owned_ret.clone();
-                };
-            } else {
-                owned_ret_type = format!("({})", ret_types.join(", "));
-                borrowed_ret_type = format!(
-                    "({})",
-                    ret_types
-                        .iter()
-                        .map(|ret_type| { format!("&{ret_type}") })
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                );
-                owned_ret = {
-                    let lines = ret_values
-                        .iter()
-                        .map(|line| format!("\n{INDENT}{INDENT}{INDENT}{line}"))
-                        .collect::<Vec<String>>()
-                        .join(", ");
-
-                    format!("({lines}\n{INDENT}{INDENT})")
-                };
-                borrowed_ret = {
-                    let lines = ret_values
-                        .iter()
-                        .map(|line| format!("\n{INDENT}{INDENT}{INDENT}&{line}"))
-                        .collect::<Vec<String>>()
-                        .join(", ");
-
-                    format!("({lines}\n{INDENT}{INDENT})")
-                };
-            }
-
-            StructIngredients {
-                payload_args,
-                args_to_payload,
-                owned_ret,
-                borrowed_ret,
-                owned_ret_type,
-                borrowed_ret_type,
-            }
-        }
-        RocStructFields::HasClosure { fields: _ } => todo!(),
+    StructIngredients {
+        payload_args,
+        args_to_payload,
+        owned_ret,
+        borrowed_ret,
+        owned_ret_type,
+        borrowed_ret_type,
     }
 }
 
