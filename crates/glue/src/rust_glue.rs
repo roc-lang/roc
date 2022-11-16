@@ -335,7 +335,13 @@ fn add_single_tag_struct(
                     let fields = payload_getters
                         .iter()
                         .map(|(type_id, getter)| {
-                            (String::new(), *type_id, Accessors { getter: *getter })
+                            (
+                                String::new(),
+                                *type_id,
+                                Accessors {
+                                    getter: getter.clone(),
+                                },
+                            )
                         })
                         .collect();
 

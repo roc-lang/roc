@@ -135,7 +135,6 @@ pub fn load_types(
     }
 
     let layout_interner = GlobalInterner::with_capacity(128);
-    let ident_ids = interns.all_ident_ids.get_mut(&home).unwrap();
 
     // Get the variables for all the exposed_to_host symbols
     let variables = (0..decls.len()).filter_map(|index| {
@@ -151,11 +150,13 @@ pub fn load_types(
     let mut types_and_targets = Vec::with_capacity(architectures.len());
 
     for architecture in architectures {
+        let mut interns = interns.clone(); // TODO there may be a way to avoid this.
+        let ident_ids = interns.all_ident_ids.get_mut(&home).unwrap();
         let target_info = TargetInfo {
             architecture,
             operating_system,
         };
-        let layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
+        let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
         let mut proc_names_by_layout = MutMap::default();
 
         // Populate glue getters/setters for all relevant variables
@@ -171,21 +172,23 @@ pub fn load_types(
                 for (layout, glue_procs) in
                     generate_glue_procs(home, ident_ids, arena, &mut layout_interner.fork(), layout)
                 {
-                    let names =
+                    let mut names =
                         bumpalo::collections::Vec::with_capacity_in(glue_procs.len(), arena);
 
                     // Record all the getter/setter names associated with this layout
                     for GlueProc { name, .. } in glue_procs {
-                        // Store them as strings, because symbols won't be useful to glue generators!
-                        let name_string =
-                            bumpalo::collections::String::from_str_in(name.as_str(&interns), arena);
-
                         // Given a struct layout (including lambda sets!) the offsets - and therefore
                         // getters/setters - are deterministic, so we can use layout as the hash key
-                        // for these getters/setters. We also only need to store the name because since
-                        // they are getters and setters, we can know their types (from a TypeId perspective)
-                        // deterministically based on knowing the types of the structs and fields.
-                        names.push(name_string.into_bump_str());
+                        // for these getters/setters. We also only need to store the name because
+                        // since they are getters and setters, we can know their types (from a
+                        // TypeId perspective) deterministically based on knowing the types of
+                        // the structs and fields.
+                        debug_assert_eq!(name.module_id(), home);
+
+                        let name_str = ident_ids.get_name(name.ident_id()).unwrap();
+
+                        // Store them as strings, because symbols won't be useful to glue generators!
+                        names.push(name_str.to_string());
                     }
 
                     proc_names_by_layout.insert(layout, names.into_bump_slice());
@@ -197,9 +200,8 @@ pub fn load_types(
             arena,
             subs,
             variables.clone(),
-            &interns,
-            &proc_names_by_layout,
-            home,
+            arena.alloc(interns),
+            proc_names_by_layout,
             layout_cache,
             target_info,
         );

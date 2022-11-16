@@ -9,7 +9,7 @@ use roc_builtins::bitcode::{
 use roc_collections::{MutMap, VecMap};
 use roc_module::{
     ident::TagName,
-    symbol::{Interns, ModuleId, Symbol},
+    symbol::{Interns, Symbol},
 };
 use roc_mono::layout::{
     cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
@@ -72,8 +72,7 @@ impl Types {
         subs: &'a Subs,
         variables: I,
         interns: &'a Interns,
-        glue_procs_by_layout: &'a MutMap<Layout<'a>, &'a [&'a str]>,
-        home: ModuleId,
+        glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
         layout_cache: LayoutCache<'a>,
         target: TargetInfo,
     ) -> Self {
@@ -261,11 +260,7 @@ impl Types {
                     }
                     // These are all listed explicitly so that if we ever add a new variant,
                     // we'll get an exhaustiveness error here.
-                    (SingleTagStruct { .. }, _)
-                    | (_, SingleTagStruct { .. })
-                    | (SingleTagStruct { .. }, _)
-                    | (_, SingleTagStruct { .. })
-                    | (NonNullableUnwrapped { .. }, _)
+                    (NonNullableUnwrapped { .. }, _)
                     | (_, NonNullableUnwrapped { .. })
                     | (Enumeration { .. }, _)
                     | (_, Enumeration { .. })
@@ -805,7 +800,7 @@ struct Env<'a> {
     arena: &'a Bump,
     subs: &'a Subs,
     layout_cache: LayoutCache<'a>,
-    glue_procs_by_layout: &'a MutMap<Layout<'a>, &'a [&'a str]>,
+    glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
     interns: &'a Interns,
     struct_names: Structs,
     enum_names: Enums,
@@ -820,7 +815,7 @@ impl<'a> Env<'a> {
         subs: &'a Subs,
         interns: &'a Interns,
         layout_cache: LayoutCache<'a>,
-        glue_procs_by_layout: &'a MutMap<Layout<'a>, &'a [&'a str]>,
+        glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
         target: TargetInfo,
     ) -> Self {
         Env {
@@ -1675,36 +1670,40 @@ fn single_tag_payload_fields<'a, 'b>(
     env: &mut Env<'a>,
     types: &mut Types,
 ) -> (&'b str, RocSingleTagPayload) {
-    let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
-    let field_type_ids =
-        payload_vars
-            .iter()
-            .zip(field_layouts.iter())
-            .map(|(field_var, field_layout)| {
-                add_type_help(env, *field_layout, *field_var, None, types)
-            });
-
     // There should be a glue_procs_by_layout entry iff this layout has a closure in it,
     // so we shouldn't need to separately check that. Howeevr, we still do a debug_assert
     // anyway just so we have some warning in case that relationship somehow didn't hold!
+    debug_assert_eq!(
+        env.glue_procs_by_layout.get(&layout).is_some(),
+        layout.contains_function(env.arena)
+    );
+
+    let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
+
     let payload = match env.glue_procs_by_layout.get(&layout) {
         Some(glue_procs) => {
-            debug_assert!(layout.contains_function(env.arena));
-
-            let payload_getters = field_type_ids
+            let payload_getters = payload_vars
+                .iter()
+                .zip(field_layouts.iter())
                 .zip(glue_procs.iter())
-                .map(|(type_id, getter_name)| (type_id, getter_name.to_string()))
+                .map(|((field_var, field_layout), getter_name)| {
+                    let type_id = add_type_help(env, *field_layout, *field_var, None, types);
+
+                    (type_id, getter_name.to_string())
+                })
                 .collect();
 
             RocSingleTagPayload::HasClosure { payload_getters }
         }
-        None => {
-            debug_assert!(!layout.contains_function(env.arena));
-
-            RocSingleTagPayload::HasNoClosure {
-                payload_fields: field_type_ids.collect(),
-            }
-        }
+        None => RocSingleTagPayload::HasNoClosure {
+            payload_fields: payload_vars
+                .iter()
+                .zip(field_layouts.iter())
+                .map(|(field_var, field_layout)| {
+                    add_type_help(env, *field_layout, *field_var, None, types)
+                })
+                .collect(),
+        },
     };
 
     (tag_name, payload)
