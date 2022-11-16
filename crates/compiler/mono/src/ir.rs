@@ -10778,11 +10778,42 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
     let mut answer = Vec::new_in(arena);
     let mut stack = Vec::from_iter_in([layout], arena);
 
-    macro_rules! handle_field_layouts {
+    macro_rules! handle_struct_field_layouts {
         ($field_layouts: expr) => {{
-            if $field_layouts.iter().any(|l| l.contains_function(arena)) {
-                let procs =
-                    generate_glue_procs_for_fields(home, ident_ids, arena, layout, $field_layouts);
+            if $field_layouts
+                .iter()
+                .any(|l| l.has_varying_stack_size(arena))
+            {
+                let procs = generate_glue_procs_for_struct_fields(
+                    home,
+                    ident_ids,
+                    arena,
+                    layout,
+                    $field_layouts,
+                );
+
+                answer.push((layout, procs));
+            }
+
+            stack.extend($field_layouts);
+        }};
+    }
+
+    macro_rules! handle_tag_field_layouts {
+        ($tag_id:expr, $union_layout:expr, $field_layouts: expr) => {{
+            if $field_layouts
+                .iter()
+                .any(|l| l.has_varying_stack_size(arena))
+            {
+                let procs = generate_glue_procs_for_tag_fields(
+                    home,
+                    ident_ids,
+                    arena,
+                    $tag_id,
+                    layout,
+                    $union_layout,
+                    $field_layouts,
+                );
 
                 answer.push((layout, procs));
             }
@@ -10802,21 +10833,26 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
                 Builtin::List(element) => stack.push(*element),
             },
             Layout::Struct { field_layouts, .. } => {
-                handle_field_layouts!(field_layouts);
+                handle_struct_field_layouts!(field_layouts);
             }
             Layout::Boxed(boxed) => stack.push(*boxed),
-            Layout::Union(tag_union) => match tag_union {
+            Layout::Union(union_layout) => match union_layout {
                 UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
                     for tag in tags {
                         stack.extend(tag.iter());
                     }
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    handle_field_layouts!(field_layouts);
+                    handle_tag_field_layouts!(0, union_layout, field_layouts);
                 }
-                UnionLayout::NullableWrapped { other_tags, .. } => {
-                    for field_layouts in other_tags {
-                        handle_field_layouts!(*field_layouts);
+                UnionLayout::NullableWrapped {
+                    other_tags,
+                    nullable_id,
+                } => {
+                    let tag_ids =
+                        (0..nullable_id).chain(nullable_id + 1..other_tags.len() as u16 + 1);
+                    for (i, field_layouts) in tag_ids.zip(other_tags) {
+                        handle_tag_field_layouts!(i, union_layout, *field_layouts);
                     }
                 }
                 UnionLayout::NullableUnwrapped { other_fields, .. } => {
@@ -10835,7 +10871,7 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
     answer
 }
 
-fn generate_glue_procs_for_fields<'a>(
+fn generate_glue_procs_for_struct_fields<'a>(
     home: ModuleId,
     ident_ids: &mut IdentIds,
     arena: &'a Bump,
@@ -10863,6 +10899,71 @@ fn generate_glue_procs_for_fields<'a>(
             index: index as u64,
             field_layouts,
             structure: unboxed,
+        };
+
+        let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
+
+        let unbox_expr = Expr::ExprUnbox { symbol: argument };
+
+        let unbox_stmt = Stmt::Let(
+            unboxed,
+            unbox_expr,
+            unboxed_struct_layout,
+            arena.alloc(field_get_stmt),
+        );
+
+        let proc = Proc {
+            name: LambdaName::no_niche(symbol),
+            args: arena.alloc([(boxed_struct_layout, argument)]),
+            body: unbox_stmt,
+            closure_data_layout: None,
+            ret_layout: *field,
+            is_self_recursive: SelfRecursive::NotSelfRecursive,
+            must_own_arguments: false,
+            host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+        };
+
+        answer.push(GlueProc {
+            name: symbol,
+            proc_layout,
+            proc,
+        });
+    }
+
+    answer
+}
+
+fn generate_glue_procs_for_tag_fields<'a>(
+    home: ModuleId,
+    ident_ids: &mut IdentIds,
+    arena: &'a Bump,
+    tag_id: TagIdIntType,
+    unboxed_struct_layout: Layout<'a>,
+    union_layout: UnionLayout<'a>,
+    field_layouts: &'a [Layout<'a>],
+) -> Vec<'a, GlueProc<'a>> {
+    let boxed_struct_layout = Layout::Boxed(arena.alloc(unboxed_struct_layout));
+    let mut answer = bumpalo::collections::Vec::with_capacity_in(field_layouts.len(), arena);
+
+    for (index, field) in field_layouts.iter().enumerate() {
+        let proc_layout = ProcLayout {
+            arguments: arena.alloc([boxed_struct_layout]),
+            result: *field,
+            captures_niche: CapturesNiche::no_niche(),
+        };
+
+        let symbol = Symbol::new(home, ident_ids.gen_unique());
+        let argument = Symbol::new(home, ident_ids.gen_unique());
+        let unboxed = Symbol::new(home, ident_ids.gen_unique());
+        let result = Symbol::new(home, ident_ids.gen_unique());
+
+        let ret_stmt = arena.alloc(Stmt::Ret(result));
+
+        let field_get_expr = Expr::UnionAtIndex {
+            structure: unboxed,
+            tag_id,
+            union_layout,
+            index: index as u64,
         };
 
         let field_get_stmt = Stmt::Let(result, field_get_expr, *field, ret_stmt);
