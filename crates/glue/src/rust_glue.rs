@@ -347,7 +347,7 @@ fn add_single_tag_struct(
                     }
                 }
             }
-            RocSingleTagPayload::HasNoClosures {
+            RocSingleTagPayload::HasNoClosure {
                 payload_fields: payloads,
             } => {
                 if payloads.is_empty() {
@@ -390,7 +390,7 @@ fn add_single_tag_struct(
 
     // the impl for the single-tag union itself
     match payload {
-        RocSingleTagPayload::HasNoClosures { payload_fields } => {
+        RocSingleTagPayload::HasNoClosure { payload_fields } => {
             let opt_impl = Some(format!("impl {name}"));
 
             if payload_fields.is_empty() {
@@ -544,7 +544,7 @@ fn add_single_tag_struct(
 
     // The Debug impl for the single-tag union
     match payload {
-        RocSingleTagPayload::HasNoClosures { payload_fields } => {
+        RocSingleTagPayload::HasNoClosure { payload_fields } => {
             let opt_impl = Some(format!("impl core::fmt::Debug for {name}"));
 
             let mut buf = "fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {"
@@ -1880,7 +1880,7 @@ fn has_functions(typ: &RocType, types: &Types) -> bool {
             payload: type_id, ..
         }) => has_functions(types.get_type(*type_id), types),
         RocType::TagUnion(RocTagUnion::SingleTagStruct {
-            payload: RocSingleTagPayload::HasNoClosures { payload_fields },
+            payload: RocSingleTagPayload::HasNoClosure { payload_fields },
             ..
         }) => payload_fields
             .iter()
@@ -2492,6 +2492,14 @@ fn cannot_derive_default(roc_type: &RocType, types: &Types) -> bool {
         | RocType::TagUnion { .. }
         | RocType::RocResult(_, _)
         | RocType::RecursivePointer { .. }
+        | RocType::Struct {
+            fields: RocStructFields::HasClosure { .. },
+            ..
+        }
+        | RocType::TagUnionPayload {
+            fields: RocStructFields::HasClosure { .. },
+            ..
+        }
         | RocType::Function(_) => true,
         RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
@@ -2501,10 +2509,16 @@ fn cannot_derive_default(roc_type: &RocType, types: &Types) -> bool {
             cannot_derive_default(types.get_type(*key_id), types)
                 || cannot_derive_default(types.get_type(*val_id), types)
         }
-        RocType::Struct { fields, .. } => fields
+        RocType::Struct {
+            fields: RocStructFields::HasNoClosure { fields },
+            ..
+        } => fields
             .iter()
             .any(|(_, type_id)| cannot_derive_default(types.get_type(*type_id), types)),
-        RocType::TagUnionPayload { fields, .. } => fields
+        RocType::TagUnionPayload {
+            fields: RocStructFields::HasNoClosure { fields },
+            ..
+        } => fields
             .iter()
             .any(|(_, type_id)| cannot_derive_default(types.get_type(*type_id), types)),
     }
@@ -2529,9 +2543,18 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
         | RocType::TagUnion(RocTagUnion::Recursive { .. })
         | RocType::RecursivePointer { .. }
         | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { .. }) => true,
-        RocType::TagUnion(RocTagUnion::SingleTagStruct { payload_fields, .. }) => payload_fields
+        RocType::TagUnion(RocTagUnion::SingleTagStruct {
+            payload: RocSingleTagPayload::HasNoClosure { payload_fields },
+            ..
+        }) => payload_fields
             .iter()
             .any(|type_id| cannot_derive_copy(types.get_type(*type_id), types)),
+        RocType::TagUnion(RocTagUnion::SingleTagStruct {
+            payload: RocSingleTagPayload::HasClosure { payload_getters },
+            ..
+        }) => payload_getters
+            .iter()
+            .any(|(type_id, _)| cannot_derive_copy(types.get_type(*type_id), types)),
         RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. }) => {
             tags.iter().any(|(_, payloads)| {
                 payloads
@@ -2543,9 +2566,12 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
             cannot_derive_copy(types.get_type(*ok_id), types)
                 || cannot_derive_copy(types.get_type(*err_id), types)
         }
-        RocType::Struct { fields, .. } => fields
+        RocType::Struct {
+            fields: RocStructFields::HasClosure { fields },
+            ..
+        } => fields
             .iter()
-            .any(|(_, type_id)| cannot_derive_copy(types.get_type(*type_id), types)),
+            .any(|(_, type_id, _)| cannot_derive_copy(types.get_type(*type_id), types)),
         RocType::TagUnionPayload { fields, .. } => fields
             .iter()
             .any(|(_, type_id)| cannot_derive_copy(types.get_type(*type_id), types)),
@@ -2600,7 +2626,7 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
             .iter()
             .any(|(_, type_id)| has_float_help(types.get_type(*type_id), types, do_not_recurse)),
         RocType::TagUnion(RocTagUnion::SingleTagStruct {
-            payload: RocSingleTagPayload::HasNoClosures { payload_fields },
+            payload: RocSingleTagPayload::HasNoClosure { payload_fields },
             ..
         }) => payload_fields
             .iter()

@@ -660,7 +660,7 @@ pub enum RocSingleTagPayload {
     HasClosure {
         payload_getters: Vec<(TypeId, String)>,
     },
-    HasNoClosures {
+    HasNoClosure {
         payload_fields: Vec<TypeId>,
     },
 }
@@ -1503,7 +1503,7 @@ fn add_tag_union<'a>(
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
                 tag_name: tag_name.to_string(),
-                payload: RocSingleTagPayload::HasNoClosures {
+                payload: RocSingleTagPayload::HasNoClosure {
                     // Builtins have no closures
                     payload_fields: vec![type_id],
                 },
@@ -1638,7 +1638,7 @@ fn single_tag_payload_fields<'a, 'b>(
         None => {
             debug_assert!(!layout.contains_function(env.arena));
 
-            RocSingleTagPayload::HasNoClosures {
+            RocSingleTagPayload::HasNoClosure {
                 payload_fields: field_type_ids.collect(),
             }
         }
