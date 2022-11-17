@@ -1195,37 +1195,33 @@ impl<'a> CodeSection<'a> {
             });
         }
         *cursor += 1;
-        let section_size = u32::parse((), module_bytes, cursor)?;
+        let section_size = u32::parse((), module_bytes, cursor)? as usize;
         let section_body_start = *cursor;
-        let count = u32::parse((), module_bytes, cursor)?;
-        let function_bodies_start = *cursor;
-        let next_section_start = section_body_start + section_size as usize;
+        let function_count = u32::parse((), module_bytes, cursor)?;
+        let next_section_start = section_body_start + section_size;
 
-        // preloaded_bytes starts at the function count, since that's considered the zero offset in the linker data.
-        // But when we finally write to file, we'll exclude the function count and write our own, including app fns.
-        let mut preloaded_bytes =
-            Vec::with_capacity_in(next_section_start - function_bodies_start, arena);
-        preloaded_bytes.extend_from_slice(&module_bytes[section_body_start..*cursor]);
+        // `bytes` must include the function count for linker offsets to be correct.
+        let mut bytes = Vec::with_capacity_in(section_size + section_size / 2, arena);
+        bytes.extend_from_slice(&module_bytes[section_body_start..*cursor]);
 
-        let mut preloaded_offsets = Vec::with_capacity_in(count as usize, arena);
+        let mut function_offsets = Vec::with_capacity_in(function_count as usize, arena);
 
         // While copying the code bytes, also note where each function starts & ends
         // Later we will use this for dead code elimination
         while *cursor < next_section_start {
             let fn_start = *cursor;
-            preloaded_offsets.push((fn_start - section_body_start) as u32);
+            function_offsets.push((fn_start - section_body_start) as u32);
             let fn_length = u32::parse((), module_bytes, cursor)? as usize;
             *cursor += fn_length;
-            preloaded_bytes.extend_from_slice(&module_bytes[fn_start..*cursor]);
+            bytes.extend_from_slice(&module_bytes[fn_start..*cursor]);
         }
-        preloaded_offsets.push((next_section_start - section_body_start) as u32);
 
-        debug_assert_eq!(preloaded_offsets.len(), 1 + count as usize);
+        debug_assert_eq!(function_offsets.len(), function_count as usize);
 
         Ok(CodeSection {
-            function_count: count,
-            bytes: preloaded_bytes,
-            function_offsets: preloaded_offsets,
+            function_count,
+            bytes,
+            function_offsets,
             dead_import_dummy_count: 0,
         })
     }

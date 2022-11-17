@@ -267,7 +267,7 @@ impl<'a> WasmModule<'a> {
             self.names.function_names[old_index].1 = new_name;
         }
 
-        // Relocate calls from to JS imports
+        // Relocate calls to JS imports
         // This must happen *before* we run dead code elimination on the code section,
         // so that byte offsets in the linking data will still be valid.
         for (new_index, &old_index) in live_import_fns.iter().enumerate() {
@@ -291,7 +291,11 @@ impl<'a> WasmModule<'a> {
         for (i, fn_index) in (fn_index_min..fn_index_max).enumerate() {
             if live_flags[fn_index as usize] {
                 let code_start = self.code.function_offsets[i] as usize;
-                let code_end = self.code.function_offsets[i + 1] as usize;
+                let code_end = if i < self.code.function_offsets.len() - 1 {
+                    self.code.function_offsets[i + 1] as usize
+                } else {
+                    self.code.bytes.len()
+                };
                 buffer.extend_from_slice(&self.code.bytes[code_start..code_end]);
             } else {
                 DUMMY_FUNCTION.serialize(&mut buffer);
@@ -367,7 +371,11 @@ impl<'a> WasmModule<'a> {
                 // Find where the function body is
                 let offset_index = fn_index - fn_index_min as usize;
                 let code_start = self.code.function_offsets[offset_index];
-                let code_end = self.code.function_offsets[offset_index + 1];
+                let code_end = if offset_index < self.code.function_offsets.len() - 1 {
+                    self.code.function_offsets[offset_index + 1]
+                } else {
+                    self.code.bytes.len() as u32
+                };
 
                 // For each call in the body
                 for (offset, symbol) in call_offsets_and_symbols.iter() {
