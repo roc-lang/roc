@@ -11772,14 +11772,19 @@ All branches in an `if` must have the same type!
     @r###"
     ── UNNECESSARY WILDCARD ────────────────────────────────── /code/proj/Main.roc ─
 
-    I see you annotated a wildcard in a place where it's not needed:
+    This type annotation has a wildcard type variable (`*`) that isn't
+    needed.
 
     4│      f : {} -> [A, B]*
                             ^
 
-    Tag unions that are constants, or the return values of functions, are
-    always inferred to be open by default! You can remove this annotation
-    safely.
+    Annotations for tag unions which are constants, or which are returned
+    from functions, work the same way with or without a `*` at the end. (The
+    `*` means something different when the tag union is an argument to a
+    function, though!)
+
+    You can safely remove this to make the code more concise without
+    changing what it means.
     "###
     );
 

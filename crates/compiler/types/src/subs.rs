@@ -798,8 +798,10 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             };
             write!(f, "FlexAble({}, {:?})", name, subs.get_subs_slice(*symbols))
         }
-        Content::RigidVar(name) => write!(f, "Rigid({:?})", name),
-        Content::RigidAbleVar(name, symbol) => write!(f, "RigidAble({:?}, {:?})", name, symbol),
+        Content::RigidVar(name) => write!(f, "Rigid({})", subs[*name].as_str()),
+        Content::RigidAbleVar(name, symbol) => {
+            write!(f, "RigidAble({}, {:?})", subs[*name].as_str(), symbol)
+        }
         Content::RecursionVar {
             structure,
             opt_name,
