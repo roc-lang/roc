@@ -11,7 +11,13 @@ mainTask =
     _ <- Task.await (Stdout.line "Trying out a simulation!")
 
     task = I2.stdoutLine "Hello there!"
-    sim = I2.simStdoutLine
+    sim =
+        line <- I2.simStdoutLine |> I2.simAwait
+
+        if line |> Str.endsWith "!" then
+            I2.simDone
+        else
+            I2.simFail SimFailure
 
     report = when I2.simulate sim task is
         Ok {} -> Stdout.line "Simulation passed!"

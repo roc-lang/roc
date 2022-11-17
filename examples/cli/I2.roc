@@ -122,9 +122,9 @@ simulateOp = \simOp, taskOp ->
 
         _ -> Err SimFailure
 
-simulate : SimTask2 * * fx, Task2 {} [] fx -> Result {} SimFailure
+simulate : SimTask2 {} * fx, Task2 {} [] fx -> Result {} SimFailure
 simulate = \@SimTask2 simFn, @Task2 taskFn ->
-    simulateOp (simFn \_ -> None) (taskFn \Ok {} -> None)
+    simulateOp (simFn \Ok {} -> None) (taskFn \Ok {} -> None)
 
 simAwait : SimTask2 a err fx, (a -> SimTask2 b err fx) -> SimTask2 b err fx
 simAwait = \@SimTask2 fromResult, fromOk ->
