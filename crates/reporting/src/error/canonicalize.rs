@@ -1017,9 +1017,20 @@ pub fn can_problem<'b>(
         }
         Problem::UnnecessaryOutputWildcard { region } => {
             doc = alloc.stack([
-                alloc.reflow("I see you annotated a wildcard in a place where it's not needed:"),
+                alloc.concat([
+                    alloc.reflow("This type annotation has a wildcard type variable ("),
+                    alloc.keyword("*"),
+                    alloc.reflow(") that isn't needed."),
+                ]),
                 alloc.region(lines.convert_region(region)),
-                alloc.reflow("Tag unions that are constants, or the return values of functions, are always inferred to be open by default! You can remove this annotation safely."),
+                alloc.concat([
+                    alloc.reflow("Annotations for tag unions which are constants, or which are returned from functions, work the same way with or without a "),
+                    alloc.keyword("*"),
+                    alloc.reflow(" at the end. (The "),
+                    alloc.keyword("*"),
+                    alloc.reflow(" means something different when the tag union is an argument to a function, though!)"),
+                ]),
+                alloc.reflow("You can safely remove this to make the code more concise without changing what it means."),
             ]);
             title = "UNNECESSARY WILDCARD".to_string();
             severity = Severity::Warning;
