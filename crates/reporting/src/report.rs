@@ -275,7 +275,7 @@ pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
 
 macro_rules! html_color {
     ($name: expr) => {
-        concat!("<span style='color: ", $name, "'>")
+        concat!("<span class='color-", $name, "'>")
     };
 }
 
@@ -287,8 +287,8 @@ pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
     magenta: html_color!("magenta"),
     cyan: html_color!("cyan"),
     white: html_color!("white"),
-    bold: "<span style='font-weight: bold'>",
-    underline: "<span style='text-decoration: underline'>",
+    bold: "<span class='bold'>",
+    underline: "<span class='underline'>",
     reset: "</span>",
     color_reset: "</span>",
 };
