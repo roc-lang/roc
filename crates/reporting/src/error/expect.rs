@@ -94,11 +94,13 @@ impl<'a> Renderer<'a> {
                 self.alloc
                     .text("When it failed, these variables had these values:"),
                 self.alloc.stack(it),
+                self.alloc.text(""), // Blank line at the end
             ])
         } else {
             self.alloc.stack([
                 self.alloc.text("This expectation failed:"),
                 self.alloc.region(line_col_region),
+                self.alloc.text(""), // Blank line at the end
             ])
         }
     }
