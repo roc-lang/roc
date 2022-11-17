@@ -2276,33 +2276,12 @@ impl<'a> Layout<'a> {
         env: &mut Env<'a, '_>,
         range: NumericRange,
     ) -> Cacheable<LayoutResult<'a>> {
-        use roc_types::num::IntLitWidth;
-
-        // If we chose the default int layout then the real var might have been `Num *`, or
-        // similar. In this case fix-up width if we need to. Choose I64 if the range says
-        // that the number will fit, otherwise choose the next-largest number layout.
-        //
         // We don't pass the range down because `RangedNumber`s are somewhat rare, they only
         // appear due to number literals, so no need to increase parameter list sizes.
-        let num_layout = match range {
-            NumericRange::IntAtLeastSigned(w) | NumericRange::NumAtLeastSigned(w) => {
-                [IntLitWidth::I64, IntLitWidth::I128]
-                    .iter()
-                    .find(|candidate| candidate.is_superset(&w, true))
-                    .expect("if number doesn't fit, should have been a type error")
-            }
-            NumericRange::IntAtLeastEitherSign(w) | NumericRange::NumAtLeastEitherSign(w) => [
-                IntLitWidth::I64,
-                IntLitWidth::U64,
-                IntLitWidth::I128,
-                IntLitWidth::U128,
-            ]
-            .iter()
-            .find(|candidate| candidate.is_superset(&w, false))
-            .expect("if number doesn't fit, should have been a type error"),
-        };
+        let num_layout = range.default_compilation_width();
+
         cacheable(Ok(Layout::int_literal_width_to_int(
-            *num_layout,
+            num_layout,
             env.target_info,
         )))
     }

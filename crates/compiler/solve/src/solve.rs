@@ -2960,12 +2960,13 @@ fn type_to_variable<'a>(
             _ => {
                 let abilities_slice =
                     SubsSlice::extend_new(&mut subs.symbol_names, abilities.sorted_iter().copied());
-                let flex_ability = subs.fresh(Descriptor {
-                    content: Content::FlexAbleVar(None, abilities_slice),
+
+                let flex_ability = register(
+                    subs,
                     rank,
-                    mark: Mark::NONE,
-                    copy: OptVariable::NONE,
-                });
+                    pools,
+                    Content::FlexAbleVar(None, abilities_slice),
+                );
 
                 let category = Category::OpaqueArg;
                 match unify(

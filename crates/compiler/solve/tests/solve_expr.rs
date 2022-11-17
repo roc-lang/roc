@@ -8197,4 +8197,65 @@ mod solve_expr {
         "###
         );
     }
+
+    #[test]
+    fn fix_recursion_under_alias_issue_4368() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [doIt] to "./platform"
+
+                Effect : [
+                    DoIt {} ({} -> Effect),
+                ]
+
+                Task := ({} -> Effect) -> Effect
+
+                doIt : {} -> Task
+                doIt = \{} ->
+                    @Task \toNext ->
+                        DoIt {} \{} -> (toNext {})
+                "#
+            ),
+            "{} -> Task",
+        )
+    }
+
+    #[test]
+    fn choose_ranged_num_for_hash() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main =
+                    \h -> Hash.hash h 7
+                    #     ^^^^^^^^^
+                "#
+            ),
+        @"Hash#Hash.hash(1) : a, I64 -[[Hash.hashI64(12)]]-> a | a has Hasher"
+        )
+    }
+
+    #[test]
+    fn generalize_inferred_opaque_variable_bound_to_ability_issue_4408() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [top] to "./platform"
+
+                MDict u := (List u) | u has Eq
+
+                bot : MDict k -> MDict k
+                bot = \@MDict data ->
+                    when {} is
+                        {} -> @MDict data
+
+                top : MDict v -> MDict v
+                top = \x -> bot x
+                "#
+            ),
+            "MDict v -> MDict v | v has Eq",
+        );
+    }
 }
