@@ -352,7 +352,7 @@ impl<'a> WasmModule<'a> {
         let mut live_flags = BitVec::repeat(false, called_fns.len());
         let mut next_pass_fns = BitVec::repeat(false, called_fns.len());
         let mut current_pass_fns = called_fns;
-        for index in exported_fns.filter(|i| *i < fn_index_max) {
+        for index in exported_fns {
             current_pass_fns.set(index as usize, true);
         }
 

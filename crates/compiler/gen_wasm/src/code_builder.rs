@@ -449,42 +449,43 @@ impl<'a> CodeBuilder<'a> {
 
         // Insertions are chunks of code we generated out-of-order.
         // Now insert them at the correct offsets.
-        {
-            let buffer = &mut module.code.bytes;
-            buffer.extend_from_slice(&self.inner_length);
-            buffer.extend_from_slice(&self.preamble);
+        let buffer = &mut module.code.bytes;
+        buffer.extend_from_slice(&self.inner_length);
+        buffer.extend_from_slice(&self.preamble);
 
-            let mut code_pos = 0;
-            for Insertion { at, start, end } in self.insertions.iter() {
-                buffer.extend_from_slice(&self.code[code_pos..*at]);
-                code_pos = *at;
-                buffer.extend_from_slice(&self.insert_bytes[*start..*end]);
-            }
-
-            buffer.extend_from_slice(&self.code[code_pos..self.code.len()]);
+        let code_offset = buffer.len();
+        let mut code_pos = 0;
+        for Insertion { at, start, end } in self.insertions.iter() {
+            buffer.extend_from_slice(&self.code[code_pos..*at]);
+            code_pos = *at;
+            buffer.extend_from_slice(&self.insert_bytes[*start..*end]);
         }
 
+        buffer.extend_from_slice(&self.code[code_pos..self.code.len()]);
+
         // Create linker relocations for calls to imported functions, whose indices may change during DCE.
-        {
-            let relocs = &mut module.reloc_code.entries;
-            let mut skip = 0;
-            for (reloc_code_pos, reloc_fn) in self.import_relocations.iter() {
-                let mut insertion_bytes = 0;
-                for (i, insertion) in self.insertions.iter().enumerate().skip(skip) {
-                    if insertion.at >= *reloc_code_pos {
-                        break;
-                    }
-                    insertion_bytes = insertion.end;
-                    skip = i;
+        let relocs = &mut module.reloc_code.entries;
+        let mut skip = 0;
+        for (reloc_code_pos, reloc_fn) in self.import_relocations.iter() {
+            let mut insertion_bytes = 0;
+            for (i, insertion) in self.insertions.iter().enumerate().skip(skip) {
+                if insertion.at >= *reloc_code_pos {
+                    break;
                 }
-                // Adjust for (1) the offset of this function in the Code section and (2) our own Insertions.
-                let offset = reloc_code_pos + fn_offset + insertion_bytes;
-                relocs.push(RelocationEntry::Index {
-                    type_id: IndexRelocType::FunctionIndexLeb,
-                    offset: offset as u32,
-                    symbol_index: *reloc_fn,
-                })
+                insertion_bytes = insertion.end;
+                skip = i;
             }
+            // Adjust for (1) the offset of this function in the Code section and (2) our own Insertions.
+            let offset = reloc_code_pos + code_offset + insertion_bytes;
+            let symbol_index = module
+                .linking
+                .find_imported_fn_sym_index(*reloc_fn)
+                .unwrap();
+            relocs.push(RelocationEntry::Index {
+                type_id: IndexRelocType::FunctionIndexLeb,
+                offset: offset as u32,
+                symbol_index,
+            });
         }
     }
 

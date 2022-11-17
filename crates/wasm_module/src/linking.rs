@@ -582,6 +582,20 @@ impl<'a> LinkingSection<'a> {
             })
     }
 
+    pub fn find_imported_fn_sym_index(&mut self, fn_index: u32) -> Result<u32, String> {
+        self.symbol_table
+            .iter_mut()
+            .position(|sym| match sym {
+                SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { flags, index, .. })
+                | SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, .. }) => {
+                    *flags & WASM_SYM_UNDEFINED != 0 && *index == fn_index
+                }
+                _ => false,
+            })
+            .map(|sym_index| sym_index as u32)
+            .ok_or_else(|| format!("Can't find fn #{} in host symbol table", fn_index))
+    }
+
     pub fn find_and_reindex_imported_fn(
         &mut self,
         old_fn_index: u32,
