@@ -2434,24 +2434,24 @@ fn count_generated_name_usages<'a>(
                 debug_assert!(!is_generated_name(name));
             }
             Type(_, tys) => {
-                stack.extend(tys.iter().map(|t| (t, false)));
+                stack.extend(tys.iter().map(|t| (t, only_unseen)));
             }
             Record(fields, ext) => {
-                stack.extend(fields.values().map(|f| (f.as_inner(), false)));
-                ext_stack.push(ext);
+                stack.extend(fields.values().map(|f| (f.as_inner(), only_unseen)));
+                ext_stack.push((ext, only_unseen));
             }
             TagUnion(tags, ext, _) => {
-                stack.extend(tags.values().flatten().map(|t| (t, false)));
-                ext_stack.push(ext);
+                stack.extend(tags.values().flatten().map(|t| (t, only_unseen)));
+                ext_stack.push((ext, only_unseen));
             }
             RecursiveTagUnion(rec, tags, ext, _) => {
-                stack.push((rec, false));
-                stack.extend(tags.values().flatten().map(|t| (t, false)));
-                ext_stack.push(ext);
+                stack.push((rec, only_unseen));
+                stack.extend(tags.values().flatten().map(|t| (t, only_unseen)));
+                ext_stack.push((ext, only_unseen));
             }
             Function(args, _lset, ret) => {
-                stack.extend(args.iter().map(|t| (t, false)));
-                stack.push((ret, false));
+                stack.extend(args.iter().map(|t| (t, only_unseen)));
+                stack.push((ret, only_unseen));
             }
             Alias(_, args, real, _) => {
                 // Then, count up any phantom args that were missed b/c they're not referenced in
@@ -2460,7 +2460,7 @@ fn count_generated_name_usages<'a>(
                 stack.extend(args.iter().map(|t| (t, true)));
 
                 // First, count the occurrences in the real var
-                stack.push((real, false));
+                stack.push((real, only_unseen));
             }
             Infinite | Error => {}
             Range(_) => {}
@@ -2472,14 +2472,16 @@ fn count_generated_name_usages<'a>(
 
 fn count_generated_name_usages_in_exts<'a>(
     usages: &mut VecMap<Lowercase, usize>,
-    exts: impl IntoIterator<Item = &'a TypeExt>,
+    exts: impl IntoIterator<Item = (&'a TypeExt, bool)>,
 ) {
-    for ext in exts {
+    for (ext, only_unseen) in exts {
         match ext {
             TypeExt::FlexOpen(name) => {
                 if is_generated_name(name) {
                     let count = usages.get_or_insert(name.clone(), || 0);
-                    *count += 1;
+                    if !only_unseen || *count == 0 {
+                        *count += 1;
+                    }
                 }
             }
             TypeExt::RigidOpen(name) => {
@@ -3102,13 +3104,13 @@ fn diff_tag_union<'b>(
     let gen_usages1 = {
         let mut usages = VecMap::default();
         count_generated_name_usages(&mut usages, fields1.values().flatten());
-        count_generated_name_usages_in_exts(&mut usages, [&ext1]);
+        count_generated_name_usages_in_exts(&mut usages, [(&ext1, false)]);
         usages
     };
     let gen_usages2 = {
         let mut usages = VecMap::default();
         count_generated_name_usages(&mut usages, fields2.values().flatten());
-        count_generated_name_usages_in_exts(&mut usages, [&ext2]);
+        count_generated_name_usages_in_exts(&mut usages, [(&ext2, false)]);
         usages
     };
 

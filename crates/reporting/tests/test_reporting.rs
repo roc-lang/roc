@@ -1330,7 +1330,7 @@ mod test_reporting {
 
     This `bar` value is a:
 
-        { bar : Int a }
+        { bar : Int * }
 
     But `f` needs its 1st argument to be:
 
@@ -1398,7 +1398,7 @@ mod test_reporting {
 
     This `Blue` tag application has the type:
 
-        [Blue (Frac a)]
+        [Blue (Frac *)]
 
     But `f` needs its 1st argument to be:
 
@@ -2788,7 +2788,7 @@ mod test_reporting {
 
     The argument is a record of type:
 
-        { y : Frac a }
+        { y : Frac * }
 
     But `f` needs its 1st argument to be:
 
