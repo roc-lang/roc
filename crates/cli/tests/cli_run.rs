@@ -1065,7 +1065,7 @@ mod cli_run {
 
                 This #UserApp.main value is a:
 
-                    Task.Task {} * [Write [Stdout]a]b
+                    Task.Task {} * [Write [Stdout]]
 
                 But the type annotation on main says it should be:
 
@@ -1086,7 +1086,7 @@ mod cli_run {
 
                 This #UserApp.main value is a:
 
-                    Task.Task {} * [Write [Stdout]a]b
+                    Task.Task {} * [Write [Stdout]]
 
                 But toEffect needs its 1st argument to be:
 
