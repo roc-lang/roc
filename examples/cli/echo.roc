@@ -1,6 +1,6 @@
 app "echo"
     packages { pf: "cli-platform/main.roc" }
-    imports [pf.Stdin, pf.Stdout, pf.Stderr, pf.Task.{ Task }, pf.Program.{ Program, ExitCode }, I2.{ Task2 }]
+    imports [pf.Stdout, pf.Stderr, pf.Task.{ Task }, pf.Program.{ Program, ExitCode }, I2.{ Task2 }]
     provides [main] to pf
 
 main : Program
