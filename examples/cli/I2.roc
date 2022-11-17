@@ -83,9 +83,9 @@ fileReadUtf8 = \path ->
 SimTask2 ok err fx := (Result ok err -> SimOp) -> SimOp
 
 SimOp : [
-    FileWriteUtf8 (Str, Str -> Bool) (Result {} [NotFound, Malformed]) (Str, Str -> SimOp),
-    FileReadUtf8 (Str -> Bool) (Result Str [NotFound, Malformed]) (Str -> SimOp),
-    StdoutLine (Str -> Bool) (Str -> SimOp),
+    FileWriteUtf8 (Result {} [NotFound, Malformed]) (Str, Str -> SimOp),
+    FileReadUtf8 (Result Str [NotFound, Malformed]) (Str -> SimOp),
+    StdoutLine (Str -> SimOp),
     StdinLine Str SimOp,
     None,
 ]
@@ -100,16 +100,16 @@ simulateOp : SimOp, Op -> Result {} SimFailure
 simulateOp = \simOp, taskOp ->
     when T simOp taskOp is
         T None None -> Ok {}
-        T (StdoutLine _validate lineToNext) (StdoutLine line toNext) ->
+        T (StdoutLine lineToNext) (StdoutLine line toNext) ->
             simulateOp (lineToNext line) (toNext {})
 
         T (StdinLine line next) (StdinLine lineToNext) ->
             simulateOp next (lineToNext line)
 
-        T (FileReadUtf8 _validate result pathToNext) (FileReadUtf8 path resultStrToNext) ->
+        T (FileReadUtf8 result pathToNext) (FileReadUtf8 path resultStrToNext) ->
              simulateOp (pathToNext path) (resultStrToNext result)
 
-        T (FileWriteUtf8 _validate result pathAndContentToNext) (FileWriteUtf8 path content resultToNext) ->
+        T (FileWriteUtf8 result pathAndContentToNext) (FileWriteUtf8 path content resultToNext) ->
              simulateOp (pathAndContentToNext path content) (resultToNext result)
 
         _ -> Err SimFailure
@@ -128,10 +128,10 @@ simAwait = \@SimTask2 fromResult, fromOk ->
 
             inner continue
 
-simStdoutLine : (Str -> Bool) -> SimTask2 Str * [Write [Stdout]]
-simStdoutLine = \validate ->
+simStdoutLine : SimTask2 Str * [Write [Stdout]]
+simStdoutLine =
     @SimTask2 \toNext ->
-        StdoutLine validate \line -> toNext (Ok line)
+        StdoutLine \line -> toNext (Ok line)
 
 simStdinLine : Str -> SimTask2 {} * [Read [Stdin]]
 simStdinLine = \line ->
@@ -142,22 +142,20 @@ simStdinLine = \line ->
 #
 # simFileWriteUtf8 :
 #     (Result {} [FileWriteErr [NotFound, Malformed]]),
-#     (Str, Str -> Bool)
 #     -> SimTask2 { path : Str, contents : Str } [FileWriteErr [NotFound, Malformed]] [Write [File]]
-# simFileWriteUtf8 = \result, validate ->
+# simFileWriteUtf8 = \result ->
 #     @SimTask2 \toNext ->
 #         # TODO instead of storing Result here, should we incorporate it into the toNext call instead of
 #         # always using Ok there? Not sure!
-#         FileWriteUtf8 validate (Result.mapErr result FileWriteErr) \path, contents ->
+#         FileWriteUtf8 (Result.mapErr result FileWriteErr) \path, contents ->
 #             toNext (Ok { path, contents })
 
 # simFileReadUtf8 :
 #     (Result Str [FileReadErr [NotFound, Malformed]]),
-#     (Str -> Bool)
 #     -> SimTask2 Str [FileReadErr [NotFound, Malformed]] [Read [File]]
-# simFileReadUtf8 = \result, validate ->
+# simFileReadUtf8 = \result ->
 #     @SimTask2 \toNext ->
 #         # TODO instead of storing Result here, should we incorporate it into the toNext call instead of
 #         # always using Ok there? Should SimTask2 even have a Result in this callback? Not sure!
-#         FileReadUtf8 validate (Result.mapErr result FileReadErr) \path ->
+#         FileReadUtf8 (Result.mapErr result FileReadErr) \path ->
 #             toNext (Ok path)
