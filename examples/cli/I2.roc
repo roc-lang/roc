@@ -11,7 +11,9 @@ interface I2 exposes [
     SimTask2,
     SimOp,
     SimFailure,
+    simSucceed,
     simFail,
+    simDone,
     simulate,
     simAwait,
     simStdoutLine,
@@ -91,6 +93,12 @@ SimOp : [
 ]
 
 SimFailure : [SimFailure] # TODO make real variaants
+
+simSucceed : ok -> SimTask2 ok * *
+simSucceed = \ok -> @SimTask2 \continue -> continue (Ok ok)
+
+simDone : SimTask2 {} * *
+simDone = @SimTask2 \_ -> None
 
 simFail : err -> SimTask2 * err *
 simFail = \err -> @SimTask2 \continue -> continue (Err err)
