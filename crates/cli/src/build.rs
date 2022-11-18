@@ -354,7 +354,7 @@ pub fn build_file<'a>(
                 problems
             } else {
                 todo!(
-                    "gracefully handle `ld` returning exit code {:?}",
+                    "gracefully handle `ld` (or `zig` in the case of wasm with --optimize) returning exit code {:?}",
                     exit_status.code()
                 );
             }

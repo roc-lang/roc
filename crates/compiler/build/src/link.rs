@@ -1,5 +1,4 @@
 use crate::target::{arch_str, target_zig_str};
-use const_format::concatcp;
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
@@ -61,71 +60,58 @@ pub fn link(
 }
 
 pub fn host_filename(target: &Triple, opt_level: OptLevel) -> Option<&'static str> {
-    match target {
-        Triple {
-            architecture: Architecture::Wasm32,
-            ..
-        } => {
-            use roc_target::OperatingSystem::*;
-
-            const WITHOUT_EXTENSION: &str = "wasm32";
-
-            let file_name = match roc_target::OperatingSystem::from(target.operating_system) {
-                Wasi => {
-                    // TODO wasm host extension should be something else ideally
-                    // .bc does not seem to work because
-                    //
-                    // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
-                    //
-                    // and zig does not currently emit `.a` webassembly static libraries
-                    if matches!(opt_level, OptLevel::Development) {
-                        concatcp!(WITHOUT_EXTENSION, ".wasm")
-                    } else {
-                        concatcp!(WITHOUT_EXTENSION, ".zig")
-                    }
-                }
-                Unix => concatcp!(WITHOUT_EXTENSION, ".o"),
-                Windows => concatcp!(WITHOUT_EXTENSION, ".obj"),
-            };
-
-            Some(file_name)
+    match roc_target::OperatingSystem::from(target.operating_system) {
+        roc_target::OperatingSystem::Wasi => {
+            // TODO wasm host extension should be something else ideally
+            // .bc does not seem to work because
+            //
+            // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
+            //
+            // and zig does not currently emit `.a` webassembly static libraries
+            if matches!(opt_level, OptLevel::Development) {
+                Some("wasm32.wasm")
+            } else {
+                Some("wasm32.zig")
+            }
         }
-        Triple {
-            operating_system: OperatingSystem::Linux,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some("linux-x64.o"),
-        Triple {
-            operating_system: OperatingSystem::Linux,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some("linux-arm64.o"),
-        Triple {
-            operating_system: OperatingSystem::Darwin,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some("macos-arm64.o"),
-        Triple {
-            operating_system: OperatingSystem::Darwin,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some("macos-x64.o"),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::X86_64,
-            ..
-        } => Some("windows-x64.obj"),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::X86_32(_),
-            ..
-        } => Some("windows-x86.obj"),
-        Triple {
-            operating_system: OperatingSystem::Windows,
-            architecture: Architecture::Aarch64(_),
-            ..
-        } => Some("windows-arm64.obj"),
-        _ => None,
+        _ => match target {
+            Triple {
+                operating_system: OperatingSystem::Linux,
+                architecture: Architecture::X86_64,
+                ..
+            } => Some("linux-x64.o"),
+            Triple {
+                operating_system: OperatingSystem::Linux,
+                architecture: Architecture::Aarch64(_),
+                ..
+            } => Some("linux-arm64.o"),
+            Triple {
+                operating_system: OperatingSystem::Darwin,
+                architecture: Architecture::Aarch64(_),
+                ..
+            } => Some("macos-arm64.o"),
+            Triple {
+                operating_system: OperatingSystem::Darwin,
+                architecture: Architecture::X86_64,
+                ..
+            } => Some("macos-x64.o"),
+            Triple {
+                operating_system: OperatingSystem::Windows,
+                architecture: Architecture::X86_64,
+                ..
+            } => Some("windows-x64.obj"),
+            Triple {
+                operating_system: OperatingSystem::Windows,
+                architecture: Architecture::X86_32(_),
+                ..
+            } => Some("windows-x86.obj"),
+            Triple {
+                operating_system: OperatingSystem::Windows,
+                architecture: Architecture::Aarch64(_),
+                ..
+            } => Some("windows-arm64.obj"),
+            _ => None,
+        },
     }
 }
 
