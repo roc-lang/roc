@@ -12,7 +12,7 @@ mainTask =
     Task.loop {} (\_ -> Task.map tick Step)
     |> Program.exit 0
 
-tick : Task.Task {} [] [Read [Stdin]*, Write [Stdout]*]*
+tick : Task.Task {} [] [Read [Stdin], Write [Stdout]]
 tick =
     shout <- Task.await Stdin.line
     Stdout.line (echo shout)
