@@ -540,6 +540,10 @@ pub fn build_swift_host_native(
         .arg("swiftc")
         .args(sources)
         .arg("-emit-object")
+        // `-module-name host` renames the .o file to "host" - otherwise you get an error like:
+        //   error: module name "legacy_macos-arm64" is not a valid identifier; use -module-name flag to specify an alternate name
+        .arg("-module-name")
+        .arg("host")
         .arg("-parse-as-library")
         .args(["-o", dest]);
 
