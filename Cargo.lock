@@ -4153,6 +4153,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "roc_wasm_interp"
+version = "0.1.0"
+dependencies = [
+ "bitvec 1.0.1",
+ "bumpalo",
+ "roc_wasm_module",
+]
+
+[[package]]
 name = "roc_wasm_module"
 version = "0.0.1"
 dependencies = [
