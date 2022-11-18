@@ -12,17 +12,24 @@ pub enum OperatingSystem {
     Wasi,
 }
 
+impl OperatingSystem {
+    pub const fn new(target: target_lexicon::OperatingSystem) -> Option<Self> {
+        match target {
+            target_lexicon::OperatingSystem::Windows => Some(OperatingSystem::Windows),
+            target_lexicon::OperatingSystem::Wasi => Some(OperatingSystem::Wasi),
+            target_lexicon::OperatingSystem::Linux => Some(OperatingSystem::Unix),
+            target_lexicon::OperatingSystem::MacOSX { .. } => Some(OperatingSystem::Unix),
+            target_lexicon::OperatingSystem::Darwin => Some(OperatingSystem::Unix),
+            target_lexicon::OperatingSystem::Unknown => Some(OperatingSystem::Unix),
+            _ => None,
+        }
+    }
+}
+
 impl From<target_lexicon::OperatingSystem> for OperatingSystem {
     fn from(target: target_lexicon::OperatingSystem) -> Self {
-        match target {
-            target_lexicon::OperatingSystem::Windows => OperatingSystem::Windows,
-            target_lexicon::OperatingSystem::Wasi => OperatingSystem::Wasi,
-            target_lexicon::OperatingSystem::Linux => OperatingSystem::Unix,
-            target_lexicon::OperatingSystem::MacOSX { .. } => OperatingSystem::Unix,
-            target_lexicon::OperatingSystem::Darwin => OperatingSystem::Unix,
-            target_lexicon::OperatingSystem::Unknown => OperatingSystem::Unix,
-            other => unreachable!("unsupported operating system {:?}", other),
-        }
+        Self::new(target)
+            .unwrap_or_else(|| unreachable!("unsupported operating system {:?}", target))
     }
 }
 

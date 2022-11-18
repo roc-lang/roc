@@ -1,4 +1,5 @@
 use crate::target::{arch_str, target_zig_str};
+use const_format::concatcp;
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
@@ -59,9 +60,9 @@ pub fn link(
     }
 }
 
-pub fn host_filename(target: &Triple, opt_level: OptLevel) -> Option<&'static str> {
-    match roc_target::OperatingSystem::from(target.operating_system) {
-        roc_target::OperatingSystem::Wasi => {
+const fn legacy_host_filename_ext(target: &Triple, opt_level: OptLevel) -> Option<&'static str> {
+    match roc_target::OperatingSystem::new(target.operating_system) {
+        Some(roc_target::OperatingSystem::Wasi) => {
             // TODO wasm host extension should be something else ideally
             // .bc does not seem to work because
             //
@@ -69,55 +70,101 @@ pub fn host_filename(target: &Triple, opt_level: OptLevel) -> Option<&'static st
             //
             // and zig does not currently emit `.a` webassembly static libraries
             if matches!(opt_level, OptLevel::Development) {
-                Some("wasm32.wasm")
+                Some("wasm")
             } else {
-                Some("wasm32.zig")
+                Some("zig")
             }
         }
-        _ => match target {
+        Some(_) => match target {
             Triple {
                 operating_system: OperatingSystem::Linux,
                 architecture: Architecture::X86_64,
                 ..
-            } => Some("linux-x64.o"),
+            } => Some("o"),
             Triple {
                 operating_system: OperatingSystem::Linux,
                 architecture: Architecture::Aarch64(_),
                 ..
-            } => Some("linux-arm64.o"),
+            } => Some("o"),
             Triple {
                 operating_system: OperatingSystem::Darwin,
                 architecture: Architecture::Aarch64(_),
                 ..
-            } => Some("macos-arm64.o"),
+            } => Some("o"),
             Triple {
                 operating_system: OperatingSystem::Darwin,
                 architecture: Architecture::X86_64,
                 ..
-            } => Some("macos-x64.o"),
+            } => Some("o"),
             Triple {
                 operating_system: OperatingSystem::Windows,
                 architecture: Architecture::X86_64,
                 ..
-            } => Some("windows-x64.obj"),
+            } => Some("obj"),
             Triple {
                 operating_system: OperatingSystem::Windows,
                 architecture: Architecture::X86_32(_),
                 ..
-            } => Some("windows-x86.obj"),
+            } => Some("obj"),
             Triple {
                 operating_system: OperatingSystem::Windows,
                 architecture: Architecture::Aarch64(_),
                 ..
-            } => Some("windows-arm64.obj"),
+            } => Some("obj"),
             _ => None,
         },
+        None => None,
     }
 }
 
-/// The surgical linker should use the same name format, but without the "legacy_" prefix
+const PRECOMPILED_HOST_EXT: &str = "rh1"; // Short for "roc host version 1" (so we can change format in the future)
+
+pub const fn precompiled_host_filename(target: &Triple) -> Option<&'static str> {
+    match target {
+        Triple {
+            operating_system: OperatingSystem::Linux,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(concatcp!("linux-x64", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Linux,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(concatcp!("linux-arm64", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(concatcp!("macos-arm64", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(concatcp!("macos-x64", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(concatcp!("windows-x64", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::X86_32(_),
+            ..
+        } => Some(concatcp!("windows-x86", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(concatcp!("windows-arm64", '.', PRECOMPILED_HOST_EXT)),
+        _ => None,
+    }
+}
+
+/// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
 pub fn legacy_host_filename(target: &Triple, opt_level: OptLevel) -> Option<String> {
-    host_filename(target, opt_level).map(|str| format!("legacy_{str}"))
+    let ext = legacy_host_filename_ext(target, opt_level)?;
+
+    Some(precompiled_host_filename(target)?.replace(PRECOMPILED_HOST_EXT, ext))
 }
 
 fn find_zig_str_path() -> PathBuf {

@@ -1,8 +1,8 @@
 use bumpalo::Bump;
 use roc_build::{
     link::{
-        host_filename, legacy_host_filename, link, preprocess_host_wasm32, rebuild_host, LinkType,
-        LinkingStrategy,
+        legacy_host_filename, link, precompiled_host_filename, preprocess_host_wasm32,
+        rebuild_host, LinkType, LinkingStrategy,
     },
     program::{self, CodeGenOptions, Problems},
 };
@@ -164,8 +164,9 @@ pub fn build_file<'a>(
         .collect();
 
     let preprocessed_host_path = match linking_strategy {
-        LinkingStrategy::Surgical | LinkingStrategy::Additive => host_input_path
-            .with_file_name(host_filename(target, code_gen_options.opt_level).unwrap()),
+        LinkingStrategy::Surgical | LinkingStrategy::Additive => {
+            host_input_path.with_file_name(precompiled_host_filename(target).unwrap())
+        }
         LinkingStrategy::Legacy => host_input_path
             .with_file_name(legacy_host_filename(target, code_gen_options.opt_level).unwrap()),
     };
