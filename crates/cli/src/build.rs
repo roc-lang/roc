@@ -364,12 +364,10 @@ pub fn build_file<'a>(
             if exit_status.success() {
                 problems
             } else {
-                let mut problems = problems;
-
-                // Add an error for `ld` failing
-                problems.errors += 1;
-
-                problems
+                todo!(
+                    "gracefully handle `ld` returning exit code {:?}",
+                    exit_status.code()
+                );
             }
         }
     };
