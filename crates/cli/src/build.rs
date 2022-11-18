@@ -1,6 +1,9 @@
 use bumpalo::Bump;
 use roc_build::{
-    link::{link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy},
+    link::{
+        host_filename, legacy_host_filename, link, preprocess_host_wasm32, rebuild_host, LinkType,
+        LinkingStrategy,
+    },
     program::{self, CodeGenOptions, Problems},
 };
 use roc_builtins::bitcode;
@@ -139,8 +142,7 @@ pub fn build_file<'a>(
     let host_input_path = if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point
     {
         cwd.join(platform_path)
-            .with_file_name("host")
-            .with_extension(host_extension)
+            .with_file_name(legacy_host_filename(target).unwrap())
     } else {
         unreachable!();
     };
@@ -170,12 +172,16 @@ pub fn build_file<'a>(
         })
         .collect();
 
-    let preprocessed_host_path = if emit_wasm {
-        host_input_path.with_file_name("preprocessedhost.o")
-    } else {
-        host_input_path.with_file_name("preprocessedhost")
+    let preprocessed_host_path = match linking_strategy {
+        LinkingStrategy::Surgical | LinkingStrategy::Additive => {
+            host_input_path.with_file_name(host_filename(target).unwrap())
+        }
+        LinkingStrategy::Legacy => {
+            host_input_path.with_file_name(legacy_host_filename(target).unwrap())
+        }
     };
 
+    // TODO can we not spawn the rebuild thread if we have a preprocessed host already?
     let rebuild_thread = spawn_rebuild_thread(
         code_gen_options.opt_level,
         linking_strategy,

@@ -59,6 +59,56 @@ pub fn link(
     }
 }
 
+pub const fn host_filename(target: &Triple) -> Result<&'static str, ()> {
+    match target {
+        Triple {
+            architecture: Architecture::Wasm32,
+            ..
+        } => Ok("wasm32"),
+        Triple {
+            operating_system: OperatingSystem::Linux,
+            architecture: Architecture::X86_64,
+            ..
+        } => Ok("linux-x64.o"),
+        Triple {
+            operating_system: OperatingSystem::Linux,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Ok("linux-arm64.o"),
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Ok("macos-arm64.o"),
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::X86_64,
+            ..
+        } => Ok("macos-x64.o"),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::X86_64,
+            ..
+        } => Ok("windows-x64.obj"),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::X86_32(_),
+            ..
+        } => Ok("windows-x86.obj"),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Ok("windows-arm64.obj"),
+        _ => Err(()),
+    }
+}
+
+/// The surgical linker should use the same name format, but without the "legacy_" prefix
+pub fn legacy_host_filename(target: &Triple) -> Result<String, ()> {
+    host_filename(target).map(|str| format!("legacy_{str}"))
+}
+
 fn find_zig_str_path() -> PathBuf {
     // First try using the lib path relative to the executable location.
     let lib_path_opt = get_lib_path();
@@ -528,27 +578,14 @@ pub fn rebuild_host(
         roc_target::OperatingSystem::Wasi => "",
     };
 
-    let object_extension = match os {
-        roc_target::OperatingSystem::Windows => "obj",
-        roc_target::OperatingSystem::Unix => "o",
-        roc_target::OperatingSystem::Wasi => "o",
-    };
-
-    let host_dest = if matches!(target.architecture, Architecture::Wasm32) {
-        if matches!(opt_level, OptLevel::Development) {
-            host_input_path.with_file_name("host.o")
+    let host_dest =
+        if shared_lib_path.is_none() || matches!(target.architecture, Architecture::Wasm32) {
+            host_input_path.with_file_name(legacy_host_filename(target).unwrap())
         } else {
-            host_input_path.with_file_name("host.bc")
-        }
-    } else if shared_lib_path.is_some() {
-        host_input_path
-            .with_file_name("dynhost")
-            .with_extension(executable_extension)
-    } else {
-        host_input_path
-            .with_file_name("host")
-            .with_extension(object_extension)
-    };
+            host_input_path
+                .with_file_name("dynhost")
+                .with_extension(executable_extension)
+        };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
     let env_home = env::var("HOME").unwrap_or_else(|_| "".to_string());
