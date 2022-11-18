@@ -1,5 +1,5 @@
 use bitvec::vec::BitVec;
-use bumpalo::collections::Vec;
+use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::ValueType;
 use std::iter::repeat;
 
@@ -32,6 +32,16 @@ Not clear if this would be better! Stack access pattern is pretty cache-friendly
 */
 
 impl<'a> CallStack<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        CallStack {
+            return_addrs: Vec::with_capacity_in(256, arena),
+            frame_offsets: Vec::with_capacity_in(256, arena),
+            locals_data: Vec::with_capacity_in(16 * 256, arena),
+            is_float: BitVec::new(),
+            is_64: BitVec::new(),
+        }
+    }
+
     /// On entering a Wasm call, save the return address, and make space for locals
     pub fn push_frame(&mut self, return_addr: u32, local_groups: &[(u32, ValueType)]) {
         self.return_addrs.push(return_addr);
@@ -86,24 +96,111 @@ impl<'a> CallStack<'a> {
         match value {
             Value::I32(x) => {
                 self.locals_data[index] = unsafe { std::mem::transmute(x as i64) };
-                self.is_float.set(index, false);
-                self.is_64.set(index, false);
+                debug_assert_eq!(self.is_64[index], false);
+                debug_assert_eq!(self.is_float[index], false);
             }
             Value::I64(x) => {
                 self.locals_data[index] = unsafe { std::mem::transmute(x) };
-                self.is_float.set(index, false);
-                self.is_64.set(index, true);
+                debug_assert_eq!(self.is_float[index], false);
+                debug_assert_eq!(self.is_64[index], true);
             }
             Value::F32(x) => {
                 self.locals_data[index] = x.to_bits() as u64;
-                self.is_float.set(index, true);
-                self.is_64.set(index, false);
+                debug_assert_eq!(self.is_float[index], true);
+                debug_assert_eq!(self.is_64[index], false);
             }
             Value::F64(x) => {
                 self.locals_data[index] = x.to_bits();
-                self.is_float.set(index, true);
-                self.is_64.set(index, true);
+                debug_assert_eq!(self.is_float[index], true);
+                debug_assert_eq!(self.is_64[index], true);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RETURN_ADDR: u32 = 0x12345;
+
+    fn test_get_set(call_stack: &mut CallStack<'_>, index: u32, value: Value) {
+        call_stack.set_local(index, value);
+        assert_eq!(call_stack.get_local(index), value);
+    }
+
+    fn setup(call_stack: &mut CallStack<'_>) {
+        call_stack.push_frame(0x11111, &[(1, ValueType::I32)]);
+        call_stack.push_frame(0x22222, &[(2, ValueType::I32)]);
+        call_stack.push_frame(0x33333, &[(3, ValueType::I32)]);
+        let current_frame_local_decls = [
+            (8, ValueType::I32),
+            (4, ValueType::I64),
+            (2, ValueType::F32),
+            (1, ValueType::F64),
+        ];
+        call_stack.push_frame(RETURN_ADDR, &current_frame_local_decls);
+    }
+
+    #[test]
+    fn test_all() {
+        let arena = Bump::new();
+        let mut call_stack = CallStack::new(&arena);
+        setup(&mut call_stack);
+
+        test_get_set(&mut call_stack, 0, Value::I32(123));
+        test_get_set(&mut call_stack, 8, Value::I64(123456));
+        test_get_set(&mut call_stack, 12, Value::F32(3.14));
+        test_get_set(&mut call_stack, 14, Value::F64(-1.1));
+
+        test_get_set(&mut call_stack, 0, Value::I32(i32::MIN));
+        test_get_set(&mut call_stack, 0, Value::I32(i32::MAX));
+
+        test_get_set(&mut call_stack, 8, Value::I64(i64::MIN));
+        test_get_set(&mut call_stack, 8, Value::I64(i64::MAX));
+
+        test_get_set(&mut call_stack, 12, Value::F32(f32::MIN));
+        test_get_set(&mut call_stack, 12, Value::F32(f32::MAX));
+
+        test_get_set(&mut call_stack, 14, Value::F64(f64::MIN));
+        test_get_set(&mut call_stack, 14, Value::F64(f64::MAX));
+
+        assert_eq!(call_stack.pop_frame(), RETURN_ADDR);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_type_error_i32() {
+        let arena = Bump::new();
+        let mut call_stack = CallStack::new(&arena);
+        setup(&mut call_stack);
+        test_get_set(&mut call_stack, 0, Value::F32(3.14));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_type_error_i64() {
+        let arena = Bump::new();
+        let mut call_stack = CallStack::new(&arena);
+        setup(&mut call_stack);
+        test_get_set(&mut call_stack, 8, Value::F32(3.14));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_type_error_f32() {
+        let arena = Bump::new();
+        let mut call_stack = CallStack::new(&arena);
+        setup(&mut call_stack);
+        test_get_set(&mut call_stack, 12, Value::I32(123));
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_type_error_f64() {
+        let arena = Bump::new();
+        let mut call_stack = CallStack::new(&arena);
+        setup(&mut call_stack);
+        test_get_set(&mut call_stack, 14, Value::I32(123));
     }
 }
