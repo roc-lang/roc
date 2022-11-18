@@ -31,11 +31,12 @@ roc_utils = { path = "../../utils" }
 
 wasi_libc_sys = { path = "../../wasi-libc-sys" }
 
+const_format.workspace = true
 bumpalo.workspace = true
 libloading.workspace = true
 tempfile.workspace = true
 target-lexicon.workspace = true
-inkwell.workspace = true 
+inkwell.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 serde_json = "1.0.85"

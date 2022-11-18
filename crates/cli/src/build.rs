@@ -107,28 +107,19 @@ pub fn build_file<'a>(
         }
     };
 
-    use target_lexicon::Architecture;
-    let emit_wasm = matches!(target.architecture, Architecture::Wasm32);
-
-    // TODO wasm host extension should be something else ideally
-    // .bc does not seem to work because
-    //
-    // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
-    //
-    // and zig does not currently emit `.a` webassembly static libraries
-    let (host_extension, app_extension, extension) = {
+    let (app_extension, extension) = {
         use roc_target::OperatingSystem::*;
 
         match roc_target::OperatingSystem::from(target.operating_system) {
             Wasi => {
                 if matches!(code_gen_options.opt_level, OptLevel::Development) {
-                    ("wasm", "wasm", Some("wasm"))
+                    ("wasm", Some("wasm"))
                 } else {
-                    ("zig", "bc", Some("wasm"))
+                    ("bc", Some("wasm"))
                 }
             }
-            Unix => ("o", "o", None),
-            Windows => ("obj", "obj", Some("exe")),
+            Unix => ("o", None),
+            Windows => ("obj", Some("exe")),
         }
     };
 
@@ -142,7 +133,7 @@ pub fn build_file<'a>(
     let host_input_path = if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point
     {
         cwd.join(platform_path)
-            .with_file_name(legacy_host_filename(target).unwrap())
+            .with_file_name(legacy_host_filename(target, code_gen_options.opt_level).unwrap())
     } else {
         unreachable!();
     };
@@ -173,12 +164,10 @@ pub fn build_file<'a>(
         .collect();
 
     let preprocessed_host_path = match linking_strategy {
-        LinkingStrategy::Surgical | LinkingStrategy::Additive => {
-            host_input_path.with_file_name(host_filename(target).unwrap())
-        }
-        LinkingStrategy::Legacy => {
-            host_input_path.with_file_name(legacy_host_filename(target).unwrap())
-        }
+        LinkingStrategy::Surgical | LinkingStrategy::Additive => host_input_path
+            .with_file_name(host_filename(target, code_gen_options.opt_level).unwrap()),
+        LinkingStrategy::Legacy => host_input_path
+            .with_file_name(legacy_host_filename(target, code_gen_options.opt_level).unwrap()),
     };
 
     // TODO can we not spawn the rebuild thread if we have a preprocessed host already?

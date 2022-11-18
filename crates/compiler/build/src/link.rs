@@ -1,4 +1,5 @@
 use crate::target::{arch_str, target_zig_str};
+use const_format::concatcp;
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
@@ -59,54 +60,78 @@ pub fn link(
     }
 }
 
-pub const fn host_filename(target: &Triple) -> Result<&'static str, ()> {
+pub fn host_filename(target: &Triple, opt_level: OptLevel) -> Option<&'static str> {
     match target {
         Triple {
             architecture: Architecture::Wasm32,
             ..
-        } => Ok("wasm32"),
+        } => {
+            use roc_target::OperatingSystem::*;
+
+            const WITHOUT_EXTENSION: &str = "wasm32";
+
+            let file_name = match roc_target::OperatingSystem::from(target.operating_system) {
+                Wasi => {
+                    // TODO wasm host extension should be something else ideally
+                    // .bc does not seem to work because
+                    //
+                    // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
+                    //
+                    // and zig does not currently emit `.a` webassembly static libraries
+                    if matches!(opt_level, OptLevel::Development) {
+                        concatcp!(WITHOUT_EXTENSION, ".wasm")
+                    } else {
+                        concatcp!(WITHOUT_EXTENSION, ".zig")
+                    }
+                }
+                Unix => concatcp!(WITHOUT_EXTENSION, ".o"),
+                Windows => concatcp!(WITHOUT_EXTENSION, ".obj"),
+            };
+
+            Some(file_name)
+        }
         Triple {
             operating_system: OperatingSystem::Linux,
             architecture: Architecture::X86_64,
             ..
-        } => Ok("linux-x64.o"),
+        } => Some("linux-x64.o"),
         Triple {
             operating_system: OperatingSystem::Linux,
             architecture: Architecture::Aarch64(_),
             ..
-        } => Ok("linux-arm64.o"),
+        } => Some("linux-arm64.o"),
         Triple {
             operating_system: OperatingSystem::Darwin,
             architecture: Architecture::Aarch64(_),
             ..
-        } => Ok("macos-arm64.o"),
+        } => Some("macos-arm64.o"),
         Triple {
             operating_system: OperatingSystem::Darwin,
             architecture: Architecture::X86_64,
             ..
-        } => Ok("macos-x64.o"),
+        } => Some("macos-x64.o"),
         Triple {
             operating_system: OperatingSystem::Windows,
             architecture: Architecture::X86_64,
             ..
-        } => Ok("windows-x64.obj"),
+        } => Some("windows-x64.obj"),
         Triple {
             operating_system: OperatingSystem::Windows,
             architecture: Architecture::X86_32(_),
             ..
-        } => Ok("windows-x86.obj"),
+        } => Some("windows-x86.obj"),
         Triple {
             operating_system: OperatingSystem::Windows,
             architecture: Architecture::Aarch64(_),
             ..
-        } => Ok("windows-arm64.obj"),
-        _ => Err(()),
+        } => Some("windows-arm64.obj"),
+        _ => None,
     }
 }
 
 /// The surgical linker should use the same name format, but without the "legacy_" prefix
-pub fn legacy_host_filename(target: &Triple) -> Result<String, ()> {
-    host_filename(target).map(|str| format!("legacy_{str}"))
+pub fn legacy_host_filename(target: &Triple, opt_level: OptLevel) -> Option<String> {
+    host_filename(target, opt_level).map(|str| format!("legacy_{str}"))
 }
 
 fn find_zig_str_path() -> PathBuf {
@@ -584,7 +609,7 @@ pub fn rebuild_host(
 
     let host_dest =
         if shared_lib_path.is_none() || matches!(target.architecture, Architecture::Wasm32) {
-            host_input_path.with_file_name(legacy_host_filename(target).unwrap())
+            host_input_path.with_file_name(legacy_host_filename(target, opt_level).unwrap())
         } else {
             host_input_path
                 .with_file_name("dynhost")
