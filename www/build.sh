@@ -13,10 +13,11 @@ rm -rf build/
 cp -r public/ build/
 
 # download fonts just-in-time so we don't have to bloat the repo with them.
-DESIGN_ASSETS_TARFILE="website-pack.tar.gz"
-DESIGN_ASSETS_DIR="design-assets-website-pack"
+DESIGN_ASSETS_COMMIT="4d949642ebc56ca455cf270b288382788bce5873"
+DESIGN_ASSETS_TARFILE="roc-lang-design-assets-4d94964.tar.gz"
+DESIGN_ASSETS_DIR="roc-lang-design-assets-4d94964"
 
-wget https://github.com/roc-lang/design-assets/archive/refs/tags/$DESIGN_ASSETS_TARFILE
+wget -O $DESIGN_ASSETS_TARFILE https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT
 tar -xzf $DESIGN_ASSETS_TARFILE
 mv $DESIGN_ASSETS_DIR/fonts build/
 rm -rf $DESIGN_ASSETS_TARFILE $DESIGN_ASSETS_DIR
