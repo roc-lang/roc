@@ -106,7 +106,6 @@ impl FlatEncodable {
                 FlatType::EmptyRecord => Ok(Key(FlatEncodableKey::Record(vec![]))),
                 FlatType::EmptyTagUnion => Ok(Key(FlatEncodableKey::TagUnion(vec![]))),
                 //
-                FlatType::Erroneous(_) => Err(Underivable),
                 FlatType::Func(..) => Err(Underivable),
             },
             Content::Alias(sym, _, real_var, _) => match sym {

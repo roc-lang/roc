@@ -30,6 +30,7 @@ use roc_load::Threading;
 use roc_module::symbol::IdentIds;
 use roc_types::subs::VarStore;
 use std::collections::HashSet;
+use std::env;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::PathBuf;
@@ -232,7 +233,7 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
                 if let Err(e) = input_outcome_res {
                     print_err(&e)
                 } else if let Ok(InputOutcome::Ignored) = input_outcome_res {
-                    println!("Input '{}' ignored!", ch);
+                    println!("\nInput '{}' ignored!", ch);
                 } else {
                     window.request_redraw()
                 }
@@ -479,6 +480,9 @@ fn begin_render_pass<'a>(
     })
 }
 
+const ROC_PROJECTS_FOLDER: &str = "roc-projects";
+const ROC_NEW_PROJECT_FOLDER: &str = "new-roc-project-1";
+
 fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathBuf, String) {
     if let Some(project_dir_path) = project_dir_path_opt {
         let mut ls_config = HashSet::new();
@@ -515,20 +519,22 @@ fn read_main_roc_file(project_dir_path_opt: Option<&Path>) -> (PathBuf, String) 
             init_new_roc_project(project_dir_path)
         }
     } else {
-        init_new_roc_project(Path::new("./new-roc-project"))
+        init_new_roc_project(&Path::new(ROC_PROJECTS_FOLDER).join(ROC_NEW_PROJECT_FOLDER))
     }
 }
 
 // returns path and content of app file
 fn init_new_roc_project(project_dir_path: &Path) -> (PathBuf, String) {
-    let orig_platform_path = Path::new("./examples/cli").join(PLATFORM_DIR_NAME);
+    let orig_platform_path = Path::new("examples")
+        .join("platform-switching")
+        .join(PLATFORM_DIR_NAME);
 
-    let roc_file_path = Path::new("./new-roc-project/main.roc");
+    let roc_file_path = Path::new(project_dir_path).join("main.roc");
 
     let project_platform_path = project_dir_path.join(PLATFORM_DIR_NAME);
 
     if !project_dir_path.exists() {
-        fs::create_dir(project_dir_path).expect("Failed to create dir for roc project.");
+        fs::create_dir_all(project_dir_path).expect("Failed to create dir for roc project.");
     }
 
     copy_roc_platform_if_not_exists(
@@ -537,9 +543,9 @@ fn init_new_roc_project(project_dir_path: &Path) -> (PathBuf, String) {
         project_dir_path,
     );
 
-    let code_str = create_roc_file_if_not_exists(project_dir_path, roc_file_path);
+    let code_str = create_roc_file_if_not_exists(project_dir_path, &roc_file_path);
 
-    (roc_file_path.to_path_buf(), code_str)
+    (roc_file_path, code_str)
 }
 
 // returns contents of file
@@ -576,9 +582,11 @@ fn copy_roc_platform_if_not_exists(
 ) {
     if !orig_platform_path.exists() && !project_platform_path.exists() {
         panic!(
-            r#"No roc file path was passed to the editor, I wanted to create a new roc project but I could not find the platform at {:?}.
-            Are you at the root of the roc repository?"#,
-            orig_platform_path
+            r#"No roc file path was passed to the editor, so I wanted to create a new roc project but I could not find the platform at {:?}.
+            Are you at the root of the roc repository?
+            My current directory is: {:?}"#,
+            orig_platform_path,
+            env::current_dir()
         );
     } else if !project_platform_path.exists() {
         copy(orig_platform_path, project_dir_path, &CopyOptions::new()).unwrap_or_else(|err|{

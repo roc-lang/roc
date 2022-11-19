@@ -14,10 +14,8 @@ pub fn space0_around_ee<'a, P, S, E>(
     indent_after_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
 where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Loc<S>, E>,
-    P: 'a,
+    S: 'a + Spaceable<'a>,
+    P: 'a + Parser<'a, Loc<S>, E>,
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
@@ -29,16 +27,32 @@ where
     )
 }
 
+pub fn space0_around_e_no_after_indent_check<'a, P, S, E>(
+    parser: P,
+    indent_before_problem: fn(Position) -> E,
+) -> impl Parser<'a, Loc<S>, E>
+where
+    S: 'a + Spaceable<'a>,
+    P: 'a + Parser<'a, Loc<S>, E>,
+    E: 'a + SpaceProblem,
+{
+    parser::map_with_arena(
+        and(
+            space0_e(indent_before_problem),
+            and(parser, space0_no_after_indent_check()),
+        ),
+        spaces_around_help,
+    )
+}
+
 pub fn space0_before_optional_after<'a, P, S, E>(
     parser: P,
     indent_before_problem: fn(Position) -> E,
     indent_after_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
 where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Loc<S>, E>,
-    P: 'a,
+    S: 'a + Spaceable<'a>,
+    P: 'a + Parser<'a, Loc<S>, E>,
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
@@ -64,8 +78,7 @@ fn spaces_around_help<'a, S>(
     ),
 ) -> Loc<S>
 where
-    S: Spaceable<'a>,
-    S: 'a,
+    S: 'a + Spaceable<'a>,
 {
     let (spaces_before, (loc_val, spaces_after)) = tuples;
 
@@ -97,10 +110,8 @@ pub fn space0_before_e<'a, P, S, E>(
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
 where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Loc<S>, E>,
-    P: 'a,
+    S: 'a + Spaceable<'a>,
+    P: 'a + Parser<'a, Loc<S>, E>,
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
@@ -122,10 +133,8 @@ pub fn space0_after_e<'a, P, S, E>(
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, Loc<S>, E>
 where
-    S: Spaceable<'a>,
-    S: 'a,
-    P: Parser<'a, Loc<S>, E>,
-    P: 'a,
+    S: 'a + Spaceable<'a>,
+    P: 'a + Parser<'a, Loc<S>, E>,
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
@@ -186,6 +195,38 @@ where
                 Ok((NoProgress, &[] as &[_], state))
             } else if column < min_indent {
                 Err((MadeProgress, indent_problem(state.pos()), state))
+            } else {
+                let comments_and_newlines = Vec::with_capacity_in(newlines, arena);
+                let spaces = eat_spaces(state, comments_and_newlines);
+
+                Ok((
+                    MadeProgress,
+                    spaces.comments_and_newlines.into_bump_slice(),
+                    spaces.state,
+                ))
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn space0_no_after_indent_check<'a, E>() -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
+where
+    E: 'a + SpaceProblem,
+{
+    move |arena, state: State<'a>, _min_indent: u32| match fast_eat_spaces(&state) {
+        FastSpaceState::HasTab(position) => Err((
+            MadeProgress,
+            E::space_problem(BadInputError::HasTab, position),
+            state,
+        )),
+        FastSpaceState::Good {
+            newlines,
+            consumed,
+            column: _,
+        } => {
+            if consumed == 0 {
+                Ok((NoProgress, &[] as &[_], state))
             } else {
                 let comments_and_newlines = Vec::with_capacity_in(newlines, arena);
                 let spaces = eat_spaces(state, comments_and_newlines);

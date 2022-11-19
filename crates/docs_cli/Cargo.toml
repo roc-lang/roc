@@ -4,6 +4,7 @@ version = "0.0.1"
 license = "UPL-1.0"
 authors = ["The Roc Contributors"]
 edition = "2021"
+description = "Provides a binary that is only used for static build servers."
 
 # This binary is only used on static build servers, e.g. Netlify.
 # Having its own (extremely minimal) CLI means docs can be generated
@@ -21,4 +22,4 @@ roc_docs = { path = "../docs" }
 clap = { version = "3.2.20", default-features = false, features = ["std", "color", "suggestions", "derive"] }
 
 [target.'cfg(windows)'.dependencies]
-libc = "0.2.135"
+libc.workspace = true 

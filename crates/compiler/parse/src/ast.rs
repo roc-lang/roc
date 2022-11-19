@@ -163,12 +163,18 @@ pub enum Expr<'a> {
 
     // String Literals
     Str(StrLiteral<'a>), // string without escapes in it
-    /// Look up exactly one field on a record, e.g. (expr).foo.
-    Access(&'a Expr<'a>, &'a str),
-    /// e.g. `.foo`
-    AccessorFunction(&'a str),
     /// eg 'b'
     SingleQuote(&'a str),
+
+    /// Look up exactly one field on a record, e.g. `x.foo`.
+    RecordAccess(&'a Expr<'a>, &'a str),
+    /// e.g. `.foo`
+    RecordAccessorFunction(&'a str),
+
+    /// Look up exactly one field on a tuple, e.g. `(x, y).1`.
+    TupleAccess(&'a Expr<'a>, &'a str),
+    /// e.g. `.1`
+    TupleAccessorFunction(&'a str),
 
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
@@ -179,6 +185,8 @@ pub enum Expr<'a> {
     },
 
     Record(Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>),
+
+    Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
 
     // Lookups
     Var {
@@ -661,6 +669,9 @@ pub enum Pattern<'a> {
     Underscore(&'a str),
     SingleQuote(&'a str),
 
+    /// A tuple pattern, e.g. (Just x, 1)
+    Tuple(Collection<'a, Loc<Pattern<'a>>>),
+
     /// A list pattern like [_, x, ..]
     List(Collection<'a, Loc<Pattern<'a>>>),
 
@@ -729,7 +740,8 @@ impl<'a> Pattern<'a> {
                     Pattern::Malformed(buf.into_bump_str())
                 }
             }
-            Ident::AccessorFunction(string) => Pattern::Malformed(string),
+            Ident::RecordAccessorFunction(string) => Pattern::Malformed(string),
+            Ident::TupleAccessorFunction(string) => Pattern::Malformed(string),
             Ident::Malformed(string, _problem) => Pattern::Malformed(string),
         }
     }

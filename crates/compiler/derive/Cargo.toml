@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Provides auto-derivers for builtin abilities like `Hash` and `Decode`."
 
 [dependencies]
 roc_collections = { path = "../collections" }
@@ -14,7 +15,7 @@ roc_module = { path = "../module" }
 roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_unify = { path = "../unify" }
-bumpalo = { version = "3.8.0", features = ["collections"] }
+bumpalo.workspace = true
 
 [features]
 default = []

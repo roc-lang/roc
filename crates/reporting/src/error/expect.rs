@@ -83,7 +83,7 @@ impl<'a> Renderer<'a> {
                 .zip(variables)
                 .zip(expressions)
                 .map(|((symbol, variable), expr)| {
-                    let (error_type, _) = subs.var_to_error_type(*variable, Polarity::OF_VALUE);
+                    let error_type = subs.var_to_error_type(*variable, Polarity::OF_VALUE);
                     self.render_lookup(*symbol, expr, error_type)
                 });
 
@@ -94,11 +94,13 @@ impl<'a> Renderer<'a> {
                 self.alloc
                     .text("When it failed, these variables had these values:"),
                 self.alloc.stack(it),
+                self.alloc.text(""), // Blank line at the end
             ])
         } else {
             self.alloc.stack([
                 self.alloc.text("This expectation failed:"),
                 self.alloc.region(line_col_region),
+                self.alloc.text(""), // Blank line at the end
             ])
         }
     }

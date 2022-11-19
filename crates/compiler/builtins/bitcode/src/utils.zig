@@ -22,6 +22,29 @@ extern fn roc_panic(c_ptr: *const anyopaque, tag_id: u32) callconv(.C) void;
 // should work just like libc memcpy (we can't assume libc is present)
 extern fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 
+extern fn kill(pid: c_int, sig: c_int) c_int;
+extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
+extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
+extern fn getppid() c_int;
+
+fn testing_roc_getppid() callconv(.C) c_int {
+    return getppid();
+}
+
+fn roc_getppid_windows_stub() callconv(.C) c_int {
+    return 0;
+}
+
+fn testing_roc_send_signal(pid: c_int, sig: c_int) callconv(.C) c_int {
+    return kill(pid, sig);
+}
+fn testing_roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) callconv(.C) c_int {
+    return shm_open(name, oflag, mode);
+}
+fn testing_roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) callconv(.C) *anyopaque {
+    return mmap(addr, length, prot, flags, fd, offset);
+}
+
 comptime {
     const builtin = @import("builtin");
     // During tests, use the testing allocators to satisfy these functions.
@@ -31,6 +54,13 @@ comptime {
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
         @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
         @export(testing_roc_memcpy, .{ .name = "roc_memcpy", .linkage = .Strong });
+
+        if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
+            @export(testing_roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
+            @export(testing_roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
+            @export(testing_roc_send_signal, .{ .name = "roc_send_signal", .linkage = .Strong });
+            @export(testing_roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
+        }
     }
 }
 

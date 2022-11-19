@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Tests Roc's generation of the mono intermediate representation."
 
 [[test]]
 name = "test_mono"
@@ -19,6 +20,8 @@ roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
 roc_reporting = { path = "../../reporting" }
 roc_tracing = { path = "../../tracing" }
+
 test_mono_macros = { path = "../test_mono_macros" }
-bumpalo = { version = "3.11.0", features = ["collections"] }
-indoc = "1.0.7"
+
+bumpalo.workspace = true
+indoc.workspace = true

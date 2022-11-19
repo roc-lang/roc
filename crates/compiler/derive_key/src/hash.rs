@@ -103,45 +103,31 @@ impl FlatHash {
                 FlatType::EmptyRecord => Ok(Key(FlatHashKey::Record(vec![]))),
                 FlatType::EmptyTagUnion => Ok(Key(FlatHashKey::TagUnion(vec![]))),
                 //
-                FlatType::Erroneous(_) => Err(Underivable),
                 FlatType::Func(..) => Err(Underivable),
             },
-            Content::Alias(sym, _, real_var, _) => match sym {
-                Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_ADD_U8))
-                }
-                Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_ADD_U16))
-                }
-                Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_ADD_U32))
-                }
-                Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_ADD_U64))
-                }
-                Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_ADD_U128))
-                }
-                Symbol::NUM_I8 | Symbol::NUM_SIGNED8 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_HASH_I8))
-                }
-                Symbol::NUM_I16 | Symbol::NUM_SIGNED16 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_HASH_I16))
-                }
-                Symbol::NUM_I32 | Symbol::NUM_SIGNED32 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_HASH_I32))
-                }
-                Symbol::NUM_I64 | Symbol::NUM_SIGNED64 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_HASH_I64))
-                }
-                Symbol::NUM_I128 | Symbol::NUM_SIGNED128 => {
-                    Ok(SingleLambdaSetImmediate(Symbol::HASH_HASH_I128))
-                }
+            Content::Alias(sym, _, real_var, _) => match num_symbol_to_hash_lambda(sym) {
+                Some(lambda) => Ok(lambda),
                 // NB: I believe it is okay to unwrap opaques here because derivers are only used
                 // by the backend, and the backend treats opaques like structural aliases.
-                _ => Self::from_var(subs, real_var),
+                None => Self::from_var(subs, real_var),
             },
-            Content::RangedNumber(_) => Err(Underivable),
+            Content::RangedNumber(range) => {
+                // Find the integer we're going to compile to, that'll tell us what lambda we
+                // should resolve to.
+                //
+                // Note that at this point, we don't need to update the underlying type variable.
+                // That's because
+                //
+                //   - If the type variable always had a ground constructor after solving, we would
+                //     have already refined the ranged number during obligation checking.
+                //
+                //   - If the type variable was generalized, then this branch is only reached
+                //     during monomorphization, at which point we always choose a default layout
+                //     for ranged numbers, without concern for reification to a ground type.
+                let chosen_width = range.default_compilation_width();
+                let lambda = num_symbol_to_hash_lambda(chosen_width.symbol()).unwrap();
+                Ok(lambda)
+            }
             //
             Content::RecursionVar { structure, .. } => Self::from_var(subs, structure),
             //
@@ -152,5 +138,42 @@ impl FlatHash {
             | Content::RigidAbleVar(_, _) => Err(UnboundVar),
             Content::LambdaSet(_) => Err(Underivable),
         }
+    }
+}
+
+const fn num_symbol_to_hash_lambda(symbol: Symbol) -> Option<FlatHash> {
+    use FlatHash::*;
+    match symbol {
+        Symbol::NUM_U8 | Symbol::NUM_UNSIGNED8 => {
+            Some(SingleLambdaSetImmediate(Symbol::HASH_ADD_U8))
+        }
+        Symbol::NUM_U16 | Symbol::NUM_UNSIGNED16 => {
+            Some(SingleLambdaSetImmediate(Symbol::HASH_ADD_U16))
+        }
+        Symbol::NUM_U32 | Symbol::NUM_UNSIGNED32 => {
+            Some(SingleLambdaSetImmediate(Symbol::HASH_ADD_U32))
+        }
+        Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 => {
+            Some(SingleLambdaSetImmediate(Symbol::HASH_ADD_U64))
+        }
+        Symbol::NUM_U128 | Symbol::NUM_UNSIGNED128 => {
+            Some(SingleLambdaSetImmediate(Symbol::HASH_ADD_U128))
+        }
+        Symbol::NUM_I8 | Symbol::NUM_SIGNED8 => {
+            Some(SingleLambdaSetImmediate(Symbol::HASH_HASH_I8))
+        }
+        Symbol::NUM_I16 | Symbol::NUM_SIGNED16 => {
+            Some(SingleLambdaSetImmediate(Symbol::HASH_HASH_I16))
+        }
+        Symbol::NUM_I32 | Symbol::NUM_SIGNED32 => {
+            Some(SingleLambdaSetImmediate(Symbol::HASH_HASH_I32))
+        }
+        Symbol::NUM_I64 | Symbol::NUM_SIGNED64 => {
+            Some(SingleLambdaSetImmediate(Symbol::HASH_HASH_I64))
+        }
+        Symbol::NUM_I128 | Symbol::NUM_SIGNED128 => {
+            Some(SingleLambdaSetImmediate(Symbol::HASH_HASH_I128))
+        }
+        _ => None,
     }
 }

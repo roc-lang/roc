@@ -1017,9 +1017,20 @@ pub fn can_problem<'b>(
         }
         Problem::UnnecessaryOutputWildcard { region } => {
             doc = alloc.stack([
-                alloc.reflow("I see you annotated a wildcard in a place where it's not needed:"),
+                alloc.concat([
+                    alloc.reflow("This type annotation has a wildcard type variable ("),
+                    alloc.keyword("*"),
+                    alloc.reflow(") that isn't needed."),
+                ]),
                 alloc.region(lines.convert_region(region)),
-                alloc.reflow("Tag unions that are constants, or the return values of functions, are always inferred to be open by default! You can remove this annotation safely."),
+                alloc.concat([
+                    alloc.reflow("Annotations for tag unions which are constants, or which are returned from functions, work the same way with or without a "),
+                    alloc.keyword("*"),
+                    alloc.reflow(" at the end. (The "),
+                    alloc.keyword("*"),
+                    alloc.reflow(" means something different when the tag union is an argument to a function, though!)"),
+                ]),
+                alloc.reflow("You can safely remove this to make the code more concise without changing what it means."),
             ]);
             title = "UNNECESSARY WILDCARD".to_string();
             severity = Severity::Warning;
@@ -1035,6 +1046,47 @@ pub fn can_problem<'b>(
                 ]),
             ]);
             title = "MULTIPLE LIST REST PATTERNS".to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::BadTypeArguments {
+            symbol,
+            region,
+            type_got,
+            alias_needs,
+            alias_kind,
+        } => {
+            let needed_arguments = if alias_needs == 1 {
+                alloc.reflow("1 type argument")
+            } else {
+                alloc
+                    .text(alias_needs.to_string())
+                    .append(alloc.reflow(" type arguments"))
+            };
+
+            let found_arguments = alloc.text(type_got.to_string());
+
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("The "),
+                    alloc.symbol_unqualified(symbol),
+                    alloc.reflow(" "),
+                    alloc.reflow(alias_kind.as_str()),
+                    alloc.reflow(" expects "),
+                    needed_arguments,
+                    alloc.reflow(", but it got "),
+                    found_arguments,
+                    alloc.reflow(" instead:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow("Are there missing parentheses?"),
+            ]);
+
+            title = if type_got > alias_needs {
+                "TOO MANY TYPE ARGUMENTS".to_string()
+            } else {
+                "TOO FEW TYPE ARGUMENTS".to_string()
+            };
+
             severity = Severity::RuntimeError;
         }
     };

@@ -34,8 +34,10 @@ impl<'a> Formattable for Expr<'a> {
             | Num(..)
             | NonBase10Int { .. }
             | SingleQuote(_)
-            | Access(_, _)
-            | AccessorFunction(_)
+            | RecordAccess(_, _)
+            | RecordAccessorFunction(_)
+            | TupleAccess(_, _)
+            | TupleAccessorFunction(_)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
@@ -106,6 +108,7 @@ impl<'a> Formattable for Expr<'a> {
             }
 
             Record(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
+            Tuple(fields) => fields.iter().any(|loc_field| loc_field.is_multiline()),
             RecordUpdate { fields, .. } => fields.iter().any(|loc_field| loc_field.is_multiline()),
         }
     }
@@ -380,6 +383,7 @@ impl<'a> Formattable for Expr<'a> {
                 fmt_if(buf, branches, final_else, self.is_multiline(), indent);
             }
             When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
+            Tuple(items) => fmt_collection(buf, indent, Braces::Round, *items, Newlines::No),
             List(items) => fmt_collection(buf, indent, Braces::Square, *items, Newlines::No),
             BinOps(lefts, right) => fmt_binops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
@@ -395,17 +399,30 @@ impl<'a> Formattable for Expr<'a> {
 
                 sub_expr.format_with_options(buf, Parens::InApply, newlines, indent);
             }
-            AccessorFunction(key) => {
+            RecordAccessorFunction(key) => {
                 buf.indent(indent);
                 buf.push('.');
                 buf.push_str(key);
             }
-            Access(expr, key) => {
+            RecordAccess(expr, key) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
                 buf.push('.');
                 buf.push_str(key);
             }
-            MalformedIdent(_, _) => {}
+            TupleAccessorFunction(key) => {
+                buf.indent(indent);
+                buf.push('.');
+                buf.push_str(key);
+            }
+            TupleAccess(expr, key) => {
+                expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+                buf.push('.');
+                buf.push_str(key);
+            }
+            MalformedIdent(str, _) => {
+                buf.indent(indent);
+                buf.push_str(str)
+            }
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}
         }
@@ -489,10 +506,10 @@ fn push_op(buf: &mut Buf, op: BinOp) {
 pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u16) {
     use roc_parse::ast::StrLiteral::*;
 
-    buf.indent(indent);
-    buf.push('"');
     match literal {
         PlainLine(string) => {
+            buf.indent(indent);
+            buf.push('"');
             // When a PlainLine contains '\n' or '"', format as a block string
             if string.contains('"') || string.contains('\n') {
                 buf.push_str("\"\"");
@@ -507,15 +524,21 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
             } else {
                 buf.push_str_allow_spaces(string);
             };
+            buf.push('"');
         }
         Line(segments) => {
+            buf.indent(indent);
+            buf.push('"');
             for seg in segments.iter() {
                 format_str_segment(seg, buf, 0)
             }
+            buf.push('"');
         }
         Block(lines) => {
             // Block strings will always be formatted with """ on new lines
-            buf.push_str("\"\"");
+            buf.ensure_ends_with_newline();
+            buf.indent(indent);
+            buf.push_str("\"\"\"");
             buf.newline();
 
             for segments in lines.iter() {
@@ -527,10 +550,9 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
                 buf.newline();
             }
             buf.indent(indent);
-            buf.push_str("\"\"");
+            buf.push_str("\"\"\"");
         }
     }
-    buf.push('"');
 }
 
 fn fmt_binops<'a, 'buf>(

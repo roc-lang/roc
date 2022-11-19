@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Provides type unification and solving primitives from the perspective of the compiler backend."
 
 [dependencies]
 roc_types = { path = "../types" }
@@ -14,4 +15,5 @@ roc_unify = { path = "../unify" }
 roc_solve = { path = "../solve" }
 roc_collections = { path = "../collections" }
 roc_error_macros = { path = "../../error_macros" }
-bumpalo = { version = "3.11.0", features = ["collections"] }
+
+bumpalo.workspace = true 

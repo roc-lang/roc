@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Roc's main intermediate representation (IR), which is responsible for monomorphization, defunctionalization, inserting ref-count instructions, and transforming a Roc program into a form that is easy to consume by a backend."
 
 [dependencies]
 roc_collections = { path = "../collections" }
@@ -24,7 +25,8 @@ roc_error_macros = {path="../../error_macros"}
 roc_debug_flags = {path="../debug_flags"}
 roc_tracing = { path = "../../tracing" }
 ven_pretty = { path = "../../vendor/pretty" }
-bumpalo = { version = "3.11.0", features = ["collections"] }
-hashbrown = { version = "0.12.3", features = [ "bumpalo" ] }
-static_assertions = "1.1.0"
-bitvec = "1.0.1"
+
+bumpalo.workspace = true
+hashbrown.workspace = true
+static_assertions.workspace = true
+bitvec.workspace = true

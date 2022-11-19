@@ -1,5 +1,6 @@
 use bumpalo::Bump;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, Threading};
+use roc_reporting::report::DEFAULT_PALETTE;
 use roc_target::TargetInfo;
 use std::path::Path;
 
@@ -9,6 +10,7 @@ pub fn load_module(src_file: &Path, threading: Threading) -> LoadedModule {
     let load_config = LoadConfig {
         target_info: TargetInfo::default_x86_64(), // editor only needs type info, so this is unused
         render: roc_reporting::report::RenderTarget::ColorTerminal,
+        palette: DEFAULT_PALETTE,
         threading,
         exec_mode: ExecutionMode::Check,
     };

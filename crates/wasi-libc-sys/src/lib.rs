@@ -1,3 +1,6 @@
+//! Provides a Rust wrapper for the WebAssembly libc, which is used when
+//! preprocessing hosts for use with the Wasm development back-end, and for the
+//! mock hosts we use in our Wasm tests.
 // Rust's libc crate doesn't support Wasm, so we provide an implementation from Zig
 // We define Rust signatures here as we need them, rather than trying to cover all of libc
 #[cfg(target_family = "wasm")]

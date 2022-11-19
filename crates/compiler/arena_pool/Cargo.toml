@@ -5,7 +5,7 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 repository = "https://github.com/roc-lang/roc"
 edition = "2021"
-description = "A CLI for Roc"
+description = "An implementation of an arena allocator designed for the compiler's workloads."
 
 [dependencies]
 roc_error_macros = { path = "../../error_macros" }

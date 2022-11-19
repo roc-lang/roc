@@ -75,3 +75,31 @@ section.source textarea {
   padding: 8px;
   margin-bottom: 16px;
 }
+
+.color-red {
+  color: red;
+}
+.color-green {
+  color: green;
+}
+.color-yellow {
+  color: yellow;
+}
+.color-blue {
+  color: blue;
+}
+.color-magenta {
+  color: magenta;
+}
+.color-cyan {
+  color: cyan;
+}
+.color-white {
+  color: white;
+}
+.bold {
+  font-weight: bold;
+}
+.underline {
+  text-decoration: underline;
+}

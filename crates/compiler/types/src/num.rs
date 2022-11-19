@@ -1,3 +1,5 @@
+use roc_module::symbol::Symbol;
+
 use crate::subs::Variable;
 
 /// A bound placed on a number because of its literal value.
@@ -36,7 +38,7 @@ impl NumericRange {
         width.signedness_and_width().1 >= at_least_width.signedness_and_width().1
     }
 
-    fn width(&self) -> IntLitWidth {
+    pub(crate) fn width(&self) -> IntLitWidth {
         use NumericRange::*;
         match self {
             IntAtLeastSigned(w)
@@ -119,6 +121,29 @@ impl NumericRange {
 
                 &ALL_INT_OR_FLOAT_VARIABLES[start..]
             }
+        }
+    }
+
+    /// Chooses the int width to compile this ranged number into.
+    /// I64 is chosen if the range says that the number will fit,
+    /// otherwise the next-largest number layout is chosen.
+    pub fn default_compilation_width(&self) -> IntLitWidth {
+        *match self {
+            NumericRange::IntAtLeastSigned(w) | NumericRange::NumAtLeastSigned(w) => {
+                [IntLitWidth::I64, IntLitWidth::I128]
+                    .iter()
+                    .find(|candidate| candidate.is_superset(w, true))
+                    .expect("if number doesn't fit, should have been a type error")
+            }
+            NumericRange::IntAtLeastEitherSign(w) | NumericRange::NumAtLeastEitherSign(w) => [
+                IntLitWidth::I64,
+                IntLitWidth::U64,
+                IntLitWidth::I128,
+                IntLitWidth::U128,
+            ]
+            .iter()
+            .find(|candidate| candidate.is_superset(w, false))
+            .expect("if number doesn't fit, should have been a type error"),
         }
     }
 }
@@ -279,6 +304,25 @@ impl IntLitWidth {
                 // i16 is a superset of u8, but i16 is not a superset of u16.
                 ((Signed, us), (Unsigned, lower_bound)) => us > lower_bound,
             }
+        }
+    }
+
+    pub const fn symbol(&self) -> Symbol {
+        match self {
+            IntLitWidth::U8 => Symbol::NUM_U8,
+            IntLitWidth::U16 => Symbol::NUM_U16,
+            IntLitWidth::U32 => Symbol::NUM_U32,
+            IntLitWidth::U64 => Symbol::NUM_U64,
+            IntLitWidth::U128 => Symbol::NUM_U128,
+            IntLitWidth::I8 => Symbol::NUM_I8,
+            IntLitWidth::I16 => Symbol::NUM_I16,
+            IntLitWidth::I32 => Symbol::NUM_I32,
+            IntLitWidth::I64 => Symbol::NUM_I64,
+            IntLitWidth::I128 => Symbol::NUM_I128,
+            IntLitWidth::Nat => Symbol::NUM_NAT,
+            IntLitWidth::F32 => Symbol::NUM_F32,
+            IntLitWidth::F64 => Symbol::NUM_F64,
+            IntLitWidth::Dec => Symbol::NUM_DEC,
         }
     }
 }

@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "The internal implementation of roc_load, separate from roc_load to support caching."
 
 [dependencies]
 roc_collections = { path = "../collections" }
@@ -28,13 +29,16 @@ roc_target = { path = "../roc_target" }
 roc_tracing = { path = "../../tracing" }
 roc_reporting = { path = "../../reporting" }
 roc_debug_flags = { path = "../debug_flags" }
+
 ven_pretty = { path = "../../vendor/pretty" }
-bumpalo = { version = "3.11.0", features = ["collections"] }
-parking_lot = "0.12"
-crossbeam = "0.8.2"
+
+bumpalo.workspace = true
+parking_lot.workspace = true
+crossbeam.workspace = true
 
 [dev-dependencies]
-pretty_assertions = "1.3.0"
-maplit = "1.0.2"
-indoc = "1.0.7"
 roc_test_utils = { path = "../../test_utils" }
+
+pretty_assertions.workspace = true
+indoc.workspace = true
+maplit.workspace = true

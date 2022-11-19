@@ -86,6 +86,7 @@ mod test_reporting {
             let load_config = LoadConfig {
                 target_info: roc_target::TargetInfo::default_x86_64(),
                 render: RenderTarget::Generic,
+                palette: DEFAULT_PALETTE,
                 threading: Threading::Single,
                 exec_mode: ExecutionMode::Check,
             };
@@ -202,6 +203,7 @@ mod test_reporting {
             home,
             interns,
             problems: can_problems,
+            mut types,
             ..
         } = can_expr(arena, expr_src)?;
         let mut subs = Subs::new_from_varstore(var_store);
@@ -217,7 +219,7 @@ mod test_reporting {
         let mut solve_aliases = roc_solve::solve::Aliases::default();
 
         for (name, alias) in output.aliases {
-            solve_aliases.insert(name, alias);
+            solve_aliases.insert(&mut types, name, alias);
         }
 
         let mut unify_problems = Vec::new();
@@ -225,6 +227,7 @@ mod test_reporting {
         let (_content, _subs) = infer_expr(
             subs,
             &mut unify_problems,
+            types,
             &constraints,
             &constraint,
             // Use `new_report_problem_as` in order to get proper derives.
@@ -1141,20 +1144,20 @@ mod test_reporting {
         @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-    This expression is used in an unexpected way:
+    This 1st argument to `f` has an unexpected type:
 
     7│      g = \x -> f [x]
-                      ^^^^^
+                        ^^^
 
-    This `f` call produces:
-
-        List List b
-
-    But you are trying to use it as:
+    The argument is a list of type:
 
         List b
 
-    Tip: The type annotation uses the type variable `b` to say that this
+    But `f` needs its 1st argument to be:
+
+        a
+
+    Tip: The type annotation uses the type variable `a` to say that this
     definition can produce any type of value. But in the body I see that
     it will only produce a `List` value of a single specific type. Maybe
     change the type annotation to be more specific? Maybe change the code
@@ -4851,6 +4854,7 @@ mod test_reporting {
 
     I am partway through parsing a `when` expression, but got stuck here:
 
+    4│      when Just 4 is
     5│          Just when ->
                      ^
 
@@ -4886,6 +4890,8 @@ mod test_reporting {
 
     I was partway through parsing a `when` expression, but I got stuck here:
 
+    4│      when 5 is
+    5│          1 -> 2
     6│          _
                  ^
 
@@ -5942,12 +5948,12 @@ All branches in an `if` must have the same type!
     here:
 
     4│      \( a
-                ^
+    5│
+    6│
+        ^
 
     I was expecting to see a closing parenthesis before this, so try
     adding a ) and see if that helps?
-
-    Note: I may be confused by indentation
     "###
     );
 
@@ -5965,7 +5971,9 @@ All branches in an `if` must have the same type!
     here:
 
     4│      \( a,
-                ^
+    5│
+    6│
+        ^
 
     I was expecting to see a closing parenthesis before this, so try
     adding a ) and see if that helps?
@@ -5986,17 +5994,17 @@ All branches in an `if` must have the same type!
     here:
 
     4│      \( a
-                ^
+    5│
+    6│
+        ^
 
     I was expecting to see a closing parenthesis before this, so try
     adding a ) and see if that helps?
-
-    Note: I may be confused by indentation
     "###
     );
 
     test_report!(
-        pattern_in_parens_indent_end,
+        unfinished_closure_pattern_in_parens,
         indoc!(
             r#"
             x = \( a
@@ -6004,17 +6012,15 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
-    ── NEED MORE INDENTATION ─────────── tmp/pattern_in_parens_indent_end/Test.roc ─
+    ── UNFINISHED FUNCTION ───── tmp/unfinished_closure_pattern_in_parens/Test.roc ─
 
-    I am partway through parsing a pattern in parentheses, but I got stuck
-    here:
+    I was partway through parsing a  function, but I got stuck here:
 
     4│      x = \( a
     5│      )
-            ^
+             ^
 
-    I need this parenthesis to be indented more. Try adding more spaces
-    before it!
+    I just saw a pattern, so I was expecting to see a -> next.
     "###
     );
 
@@ -11766,14 +11772,19 @@ All branches in an `if` must have the same type!
     @r###"
     ── UNNECESSARY WILDCARD ────────────────────────────────── /code/proj/Main.roc ─
 
-    I see you annotated a wildcard in a place where it's not needed:
+    This type annotation has a wildcard type variable (`*`) that isn't
+    needed.
 
     4│      f : {} -> [A, B]*
                             ^
 
-    Tag unions that are constants, or the return values of functions, are
-    always inferred to be open by default! You can remove this annotation
-    safely.
+    Annotations for tag unions which are constants, or which are returned
+    from functions, work the same way with or without a `*` at the end. (The
+    `*` means something different when the tag union is an argument to a
+    function, though!)
+
+    You can safely remove this to make the code more concise without
+    changing what it means.
     "###
     );
 
@@ -12409,5 +12420,41 @@ All branches in an `if` must have the same type!
                 _ -> ""
             "#
         )
+    );
+
+    test_report!(
+        polymorphic_recursion_forces_ungeneralized_type,
+        indoc!(
+            r#"
+            foo : a, Bool -> Str
+            foo = \in, b -> if b then "done" else bar in
+
+            bar = \_ -> foo {} Bool.true
+
+            foo "" Bool.false
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 1st argument to `foo` has an unexpected type:
+
+    9│      foo "" Bool.false
+                ^^
+
+    The argument is a string of type:
+
+        Str
+
+    But `foo` needs its 1st argument to be:
+
+        a
+
+    Tip: The type annotation uses the type variable `a` to say that this
+    definition can produce any type of value. But in the body I see that
+    it will only produce a `Str` value of a single specific type. Maybe
+    change the type annotation to be more specific? Maybe change the code
+    to be more general?
+    "###
     );
 }

@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Various representations and utilities for dealing with types in the Roc compiler."
 
 [dependencies]
 roc_collections = { path = "../collections" }
@@ -12,5 +13,8 @@ roc_module = { path = "../module" }
 roc_error_macros = {path="../../error_macros"}
 roc_debug_flags = {path="../debug_flags"}
 roc_serialize = {path="../serialize"}
-bumpalo = { version = "3.11.0", features = ["collections"] }
-static_assertions = "1.1.0"
+
+ven_pretty = { path = "../../vendor/pretty" }
+
+bumpalo.workspace = true
+static_assertions.workspace = true

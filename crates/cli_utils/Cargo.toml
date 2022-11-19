@@ -5,7 +5,7 @@ authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 repository = "https://github.com/roc-lang/roc"
 edition = "2021"
-description = "Shared code for cli tests and benchmarks"
+description = "Provides shared code for cli tests and benchmarks."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -15,6 +15,7 @@ roc_reporting = { path = "../reporting" }
 roc_load = { path = "../compiler/load" }
 roc_module = { path = "../compiler/module" }
 roc_utils = { path = "../utils" }
+
 bumpalo = { version = "3.8.0", features = ["collections"] }
 criterion = { git = "https://github.com/Anton-4/criterion.rs"}
 serde = { version = "1.0.130", features = ["derive"] }

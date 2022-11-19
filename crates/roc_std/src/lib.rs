@@ -1,3 +1,4 @@
+//! Provides Rust representations of Roc data structures.
 #![no_std]
 #![crate_type = "lib"]
 

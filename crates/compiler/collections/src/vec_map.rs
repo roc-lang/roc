@@ -6,14 +6,18 @@ pub struct VecMap<K, V> {
 
 impl<K, V> Default for VecMap<K, V> {
     fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<K, V> VecMap<K, V> {
+    pub const fn new() -> Self {
         Self {
             keys: Vec::new(),
             values: Vec::new(),
         }
     }
-}
 
-impl<K, V> VecMap<K, V> {
     pub fn len(&self) -> usize {
         debug_assert_eq!(self.keys.len(), self.values.len());
         self.keys.len()

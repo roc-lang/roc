@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Canonicalize a roc abstract syntax tree, resolving symbols, re-ordering definitions, and preparing a module for type inference."
 
 [dependencies]
 roc_collections = { path = "../collections" }
@@ -15,10 +16,11 @@ roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
 roc_serialize = { path = "../serialize" }
-bumpalo = { version = "3.11.0", features = ["collections"] }
-static_assertions = "1.1.0"
-bitvec = "1"
+
+bumpalo.workspace = true
+static_assertions.workspace = true
+bitvec.workspace = true
 
 [dev-dependencies]
-pretty_assertions = "1.3.0"
-indoc = "1.0.7"
+pretty_assertions.workspace = true
+indoc.workspace = true

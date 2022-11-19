@@ -1,3 +1,4 @@
+//! Command Line Interface (CLI) functionality for the Read-Evaluate-Print-Loop (REPL).
 mod cli_gen;
 mod colors;
 pub mod repl_state;

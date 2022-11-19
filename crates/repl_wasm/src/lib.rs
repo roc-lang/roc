@@ -1,3 +1,4 @@
+//! Provides a build of the REPL for the Roc website using WebAssembly.
 mod repl;
 
 //

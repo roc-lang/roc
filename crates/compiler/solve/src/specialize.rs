@@ -605,6 +605,7 @@ enum SpecializationTypeKey {
     SingleLambdaSetImmediate(Symbol),
 }
 
+#[derive(Debug)]
 enum SpecializeDecision {
     Specialize(SpecializationTypeKey),
     Drop,
@@ -714,10 +715,11 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
             let opaque_home = opaque.module_id();
             let external_specialized_lset =
                 phase.with_module_abilities_store(opaque_home, |abilities_store| {
-            let impl_key = roc_can::abilities::ImplKey {
-                opaque,
-                ability_member,
-            };
+                    let impl_key = roc_can::abilities::ImplKey {
+                        opaque,
+                        ability_member,
+                    };
+
                     let opt_specialization =
                         abilities_store.get_implementation(impl_key);
                     match opt_specialization {

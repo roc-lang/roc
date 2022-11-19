@@ -18,7 +18,7 @@ use roc_region::all::Loc;
 use roc_solve::solve::{self, Aliases};
 use roc_solve_problem::TypeError;
 use roc_types::subs::{Content, Subs, VarStore, Variable};
-use roc_types::types::Type;
+use roc_types::types::Types;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +31,7 @@ pub fn test_home() -> ModuleId {
 pub fn infer_expr(
     subs: Subs,
     problems: &mut Vec<TypeError>,
+    types: Types,
     constraints: &Constraints,
     constraint: &Constraint,
     pending_derives: PendingDerives,
@@ -41,6 +42,7 @@ pub fn infer_expr(
 ) -> (Content, Subs) {
     let (solved, _) = solve::run(
         ModuleId::ATTR,
+        types,
         constraints,
         problems,
         subs,
@@ -112,6 +114,7 @@ pub struct CanExprOut {
     pub var: Variable,
     pub constraint: Constraint,
     pub constraints: Constraints,
+    pub types: Types,
 }
 
 #[derive(Debug)]
@@ -140,12 +143,13 @@ pub fn can_expr_with<'a>(
         }
     };
 
+    let mut types = Types::new();
     let mut constraints = Constraints::new();
 
     let mut var_store = VarStore::default();
     let var = var_store.fresh();
-    let var_index = constraints.push_type(Type::Variable(var));
-    let expected = Expected::NoExpectation(var_index);
+    let var_index = constraints.push_variable(var);
+    let expected = constraints.push_expected_type(Expected::NoExpectation(var_index));
     let mut module_ids = ModuleIds::default();
 
     // ensure the Test module is accessible in our tests
@@ -173,6 +177,7 @@ pub fn can_expr_with<'a>(
     );
 
     let constraint = constrain_expr(
+        &mut types,
         &mut constraints,
         &mut roc_constrain::expr::Env {
             rigids: MutMap::default(),
@@ -202,6 +207,7 @@ pub fn can_expr_with<'a>(
         var,
         constraint,
         constraints,
+        types,
     })
 }
 

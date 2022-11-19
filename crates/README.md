@@ -10,9 +10,7 @@ cargo doc --package roc_ast --open
 
 ## `ast/` - `roc_ast`
 
-Code to represent the [Abstract Syntax Tree](https://en.wikipedia.org/wiki/Abstract_syntax_tree) as used by the editor.
-In contrast to the compiler, the types in this AST do not keep track of the location of the matching code in the source file.
-
+Code to represent the [Abstract Syntax Tree](https://en.wikipedia.org/wiki/Abstract_syntax_tree) as used by the editor. In contrast to the compiler, the types in this AST do not keep track of the location of the matching code in the source file.
 
 ## `cli/` - `roc_cli`
 
@@ -35,7 +33,7 @@ TODO explain what "compiler backend" is
 
 The compiler includes the following sub-crates;
 - `roc_alias_analysis` Performs analysis and optimizations to remove unneeded [reference counts](https://en.wikipedia.org/wiki/Reference_counting) at runtime, and supports in-place mutation.
-- `arena-pool` An implementation of an [arena allocator](https://mgravell.github.io/Pipelines.Sockets.Unofficial/docs/arenas.html) designed for the compiler's workloads.
+- `arena_pool` An implementation of an [arena allocator](https://mgravell.github.io/Pipelines.Sockets.Unofficial/docs/arenas.html) designed for the compiler's workloads.
 - `roc_build` Responsible for coordinating building and linking of a Roc app with its host.
 - `roc_builtins` provides the Roc functions and modules that are implicitly imported into every module. See [README.md](./compiler/builtins/README.md) for more information.
 - `roc_can` [Canonicalize](https://en.wikipedia.org/wiki/Canonicalization) a roc [abstract syntax tree](https://en.wikipedia.org/wiki/Abstract_syntax_tree), [resolving symbols](https://stackoverflow.com/a/1175493/4200103), [re-ordering definitions](https://www.oreilly.com/library/view/c-high-performance/9781787120952/546b5677-9157-4333-bc90-16db696436ac.xhtml), and preparing a module for [type inference](https://en.wikipedia.org/wiki/Type_inference).
@@ -146,3 +144,15 @@ These are files that were originally obtained somewhere else (e.g. crates.io) bu
 ## `wasi-libc-sys/` - `wasi_libc_sys`
 
 Provides a Rust wrapper for the WebAssembly test platform built on libc and is primarily used for testing purposes.
+
+# Building a Roc Application
+
+Below is a simplified diagram to illustrate how a Roc application and host are combined to build an executable file. 
+
+![Building a Roc Application using Rust](./building_a_roc_application.svg)
+
+# Roc Compiler Stages
+
+Below is a simplified diagram to illustrate the different stages of the Roc Compiler.
+
+![Roc Compiler Stages](./roc_compiler_stages.svg)

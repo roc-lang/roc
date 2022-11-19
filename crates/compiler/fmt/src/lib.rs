@@ -1,3 +1,4 @@
+//! The roc code formatter.
 #![warn(clippy::dbg_macro)]
 // See github.com/roc-lang/roc/issues/800 for discussion of the large_enum_variant check.
 #![allow(clippy::large_enum_variant)]
@@ -11,6 +12,11 @@ pub mod spaces;
 
 use bumpalo::{collections::String, Bump};
 use roc_parse::ast::Module;
+
+#[cfg(windows)]
+const NEWLINE: &str = "\r\n";
+#[cfg(not(windows))]
+const NEWLINE: &str = "\n";
 
 #[derive(Debug)]
 pub struct Ast<'a> {
@@ -98,7 +104,9 @@ impl<'a> Buf<'a> {
 
     pub fn newline(&mut self) {
         self.spaces_to_flush = 0;
-        self.text.push('\n');
+
+        self.text.push_str(NEWLINE);
+
         self.beginning_of_line = true;
     }
 
@@ -108,7 +116,7 @@ impl<'a> Buf<'a> {
         if self.spaces_to_flush > 0 {
             self.flush_spaces();
             self.newline();
-        } else if !self.text.ends_with('\n') {
+        } else if !self.text.ends_with('\n') && !self.text.is_empty() {
             self.newline()
         }
     }
@@ -182,14 +190,14 @@ fn fmt_text_eof(text: &mut bumpalo::collections::String<'_>) {
             // There's some whitespace at the end of this file, but the first
             // whitespace char after the last non-whitespace char isn't a newline.
             // So replace that whitespace char (and everything after it) with a newline.
-            text.replace_range(last_whitespace_index.., "\n");
+            text.replace_range(last_whitespace_index.., NEWLINE);
         }
         None => {
             debug_assert!(last_whitespace_index == text.len());
             debug_assert!(!text.ends_with(char::is_whitespace));
 
             // This doesn't end in whitespace at all, so add a newline.
-            text.push('\n');
+            text.push_str(NEWLINE);
         }
     }
 }

@@ -11,4 +11,4 @@ roc_collections = {path = "../collections"}
 roc_module = {path = "../module"}
 roc_mono = {path = "../mono"}
 roc_debug_flags = {path = "../debug_flags"}
-roc_error_macros = { path = "../../error_macros" }
+bumpalo.workspace = true

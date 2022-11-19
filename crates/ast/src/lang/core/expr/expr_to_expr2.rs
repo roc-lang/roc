@@ -278,7 +278,7 @@ pub fn expr_to_expr2<'a>(
             }
         }
 
-        Access(record_expr, field) => {
+        RecordAccess(record_expr, field) => {
             // TODO
             let region = ZERO;
             let (record_expr_id, output) = to_expr_id(env, scope, record_expr, region);
@@ -295,7 +295,7 @@ pub fn expr_to_expr2<'a>(
             )
         }
 
-        AccessorFunction(field) => (
+        RecordAccessorFunction(field) => (
             Expr2::Accessor {
                 function_var: env.var_store.fresh(),
                 record_var: env.var_store.fresh(),

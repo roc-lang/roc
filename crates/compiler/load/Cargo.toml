@@ -4,10 +4,10 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Used to load a .roc file and coordinate the compiler pipeline, including parsing, type checking, and code generation."
 
 [dependencies]
 roc_load_internal = { path = "../load_internal" }
-bumpalo = { version = "3.11.0", features = ["collections"] }
 roc_target = { path = "../roc_target" }
 roc_can = { path = "../can" }
 roc_types = { path = "../types" }
@@ -15,13 +15,16 @@ roc_module = { path = "../module" }
 roc_collections = { path = "../collections" }
 roc_reporting = { path = "../../reporting" }
 
+bumpalo.workspace = true 
+
 [build-dependencies]
 roc_builtins = { path = "../builtins" }
 roc_module = { path = "../module" }
 roc_reporting = { path = "../../reporting" }
 roc_target = { path = "../roc_target" }
 roc_can = { path = "../can" }
-bumpalo = { version = "3.11.0", features = ["collections"] }
+
+bumpalo.workspace = true 
 
 [target.'cfg(not(windows))'.build-dependencies]
 roc_load_internal = { path = "../load_internal" }

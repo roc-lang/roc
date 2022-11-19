@@ -4,12 +4,13 @@ version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
 edition = "2021"
+description = "Domain-specific collections created for the needs of the compiler."
 
 [dependencies]
-fnv = "1.0.7"
-im    = "15.0.0"
-im-rc = "15.0.0"
-wyhash = "0.5.0"
-bumpalo = { version = "3.11.0", features = ["collections"] }
-hashbrown = { version = "0.12.3", features = [ "bumpalo" ] }
-bitvec = "1"
+fnv.workspace = true
+im.workspace = true
+im-rc.workspace = true
+wyhash.workspace = true
+bumpalo.workspace = true
+hashbrown.workspace = true
+bitvec.workspace = true

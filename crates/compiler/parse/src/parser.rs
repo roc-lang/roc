@@ -108,7 +108,8 @@ impl_space_problem! {
     EAbility<'a>,
     PInParens<'a>,
     PRecord<'a>,
-    PList<'a>
+    PList<'a>,
+    ETuple<'a>
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,6 +361,7 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
+    Tuple(ETuple<'a>, Position),
     Str(EString<'a>, Position),
     SingleQuote(EString<'a>, Position),
     Number(ENumber, Position),
@@ -415,9 +417,42 @@ pub enum ERecord<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ETuple<'a> {
+    // Empty tuples are not allowed
+    Empty(Position),
+
+    // Single element tuples are not allowed
+    Single(Position),
+
+    End(Position),
+    Open(Position),
+
+    Updateable(Position),
+    Field(Position),
+    Colon(Position),
+    QuestionMark(Position),
+    Bar(Position),
+    Ampersand(Position),
+
+    Expr(&'a EExpr<'a>, Position),
+
+    Space(BadInputError, Position),
+
+    IndentOpen(Position),
+    IndentColon(Position),
+    IndentBar(Position),
+    IndentAmpersand(Position),
+    IndentEnd(Position),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EInParens<'a> {
     End(Position),
     Open(Position),
+
+    /// Empty parens, e.g. () is not allowed
+    Empty(Position),
+
     ///
     Expr(&'a EExpr<'a>, Position),
 
@@ -470,7 +505,6 @@ pub enum EWhen<'a> {
     Condition(&'a EExpr<'a>, Position),
     Branch(&'a EExpr<'a>, Position),
 
-    IndentIs(Position),
     IndentCondition(Position),
     IndentPattern(Position),
     IndentArrow(Position),
@@ -571,6 +605,7 @@ pub enum PList<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PInParens<'a> {
+    Empty(Position),
     End(Position),
     Open(Position),
     Pattern(&'a EPattern<'a>, Position),
@@ -869,13 +904,13 @@ where
     P1: Parser<'a, Before, E>,
     After: 'a,
     E: 'a,
-    F: Fn(&'a Bump, State<'a>, Progress, Before, u32) -> ParseResult<'a, After, E>,
+    F: Fn(&'a Bump, State<'a>, Progress, Before) -> ParseResult<'a, After, E>,
 {
     move |arena, state, min_indent| {
         parser
             .parse(arena, state, min_indent)
             .and_then(|(progress, output, next_state)| {
-                transform(arena, next_state, progress, output, min_indent)
+                transform(arena, next_state, progress, output)
             })
     }
 }
@@ -1376,6 +1411,64 @@ macro_rules! and {
     };
 }
 
+/// Similar to `and`, but we modify the min_indent of the second parser to be
+/// 1 greater than the line_indent() at the start of the first parser.
+#[macro_export]
+macro_rules! indented_seq {
+    ($p1:expr, $p2:expr) => {
+        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, _min_indent: u32| {
+            let start_indent = state.line_indent();
+
+            // TODO: we should account for min_indent here, but this doesn't currently work
+            // because min_indent is sometimes larger than it really should be, which is in turn
+            // due to uses of `increment_indent`.
+            //
+            // let p1_indent = std::cmp::max(start_indent, min_indent);
+
+            let p1_indent = start_indent;
+            let p2_indent = p1_indent + 1;
+
+            // We have to clone this because if the first parser passes and then
+            // the second one fails, we need to revert back to the original state.
+            let original_state = state.clone();
+
+            match $p1.parse(arena, state, p1_indent) {
+                Ok((p1, (), state)) => match $p2.parse(arena, state, p2_indent) {
+                    Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
+                    Err((p2, fail, _)) => Err((p1.or(p2), fail, original_state)),
+                },
+                Err((progress, fail, state)) => Err((progress, fail, state)),
+            }
+        }
+    };
+}
+
+/// Similar to `and`, but we modify the min_indent of the second parser to be
+/// 1 greater than the column() at the start of the first parser.
+#[macro_export]
+macro_rules! absolute_indented_seq {
+    ($p1:expr, $p2:expr) => {
+        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, _min_indent: u32| {
+            let start_indent = state.column();
+
+            let p1_indent = start_indent;
+            let p2_indent = p1_indent + 1;
+
+            // We have to clone this because if the first parser passes and then
+            // the second one fails, we need to revert back to the original state.
+            let original_state = state.clone();
+
+            match $p1.parse(arena, state, p1_indent) {
+                Ok((p1, out1, state)) => match $p2.parse(arena, state, p2_indent) {
+                    Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
+                    Err((p2, fail, _)) => Err((p1.or(p2), fail, original_state)),
+                },
+                Err((progress, fail, state)) => Err((progress, fail, state)),
+            }
+        }
+    };
+}
+
 #[macro_export]
 macro_rules! one_of {
     ($p1:expr, $p2:expr) => {
@@ -1450,6 +1543,16 @@ where
     move |arena, state, min_indent| parser.parse(arena, state, min_indent + 1)
 }
 
+pub fn line_min_indent<'a, P, T, X: 'a>(parser: P) -> impl Parser<'a, T, X>
+where
+    P: Parser<'a, T, X>,
+{
+    move |arena, state: State<'a>, min_indent| {
+        let min_indent = std::cmp::max(state.line_indent(), min_indent);
+        parser.parse(arena, state, min_indent)
+    }
+}
+
 pub fn absolute_column_min_indent<'a, P, T, X: 'a>(parser: P) -> impl Parser<'a, T, X>
 where
     P: Parser<'a, T, X>,
@@ -1517,28 +1620,25 @@ where
     }
 }
 
-pub fn parse_word1<'a, ToError, E>(
-    state: State<'a>,
-    min_indent: u32,
-    word: u8,
-    to_error: ToError,
-) -> ParseResult<'a, (), E>
+pub fn word1_indent<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
     E: 'a,
 {
     debug_assert_ne!(word, b'\n');
 
-    if min_indent > state.column() {
-        return Err((NoProgress, to_error(state.pos()), state));
-    }
-
-    match state.bytes().first() {
-        Some(x) if *x == word => {
-            let state = state.advance(1);
-            Ok((MadeProgress, (), state))
+    move |_arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        if min_indent > state.column() {
+            return Err((NoProgress, to_error(state.pos()), state));
         }
-        _ => Err((NoProgress, to_error(state.pos()), state)),
+
+        match state.bytes().first() {
+            Some(x) if *x == word => {
+                let state = state.advance(1);
+                Ok((MadeProgress, (), state))
+            }
+            _ => Err((NoProgress, to_error(state.pos()), state)),
+        }
     }
 }
 

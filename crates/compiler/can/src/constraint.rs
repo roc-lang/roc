@@ -8,11 +8,10 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
-use roc_types::types::{Category, PatternCategory, Type};
+use roc_types::types::{Category, PatternCategory, TypeTag, Types};
 
 pub struct Constraints {
     pub constraints: Vec<Constraint>,
-    pub types: Vec<Cell<Type>>,
     pub type_slices: Vec<TypeOrVar>,
     pub variables: Vec<Variable>,
     pub loc_symbols: Vec<(Symbol, Region)>,
@@ -60,12 +59,11 @@ impl Default for Constraints {
 
 pub type ExpectedTypeIndex = Index<Expected<TypeOrVar>>;
 pub type PExpectedTypeIndex = Index<PExpected<TypeOrVar>>;
-pub type TypeOrVar = EitherIndex<Cell<Type>, Variable>;
+pub type TypeOrVar = EitherIndex<TypeTag, Variable>;
 
 impl Constraints {
     pub fn new() -> Self {
         let constraints = Vec::new();
-        let mut types = Vec::new();
         let type_slices = Vec::with_capacity(16);
         let variables = Vec::new();
         let loc_symbols = Vec::new();
@@ -80,12 +78,6 @@ impl Constraints {
         let eq = Vec::new();
         let pattern_eq = Vec::new();
         let cycles = Vec::new();
-
-        types.extend([
-            Cell::new(Type::EmptyRec),
-            Cell::new(Type::EmptyTagUnion),
-            Cell::new(Type::Apply(Symbol::STR_STR, vec![], Region::zero())),
-        ]);
 
         categories.extend([
             Category::Record,
@@ -120,7 +112,6 @@ impl Constraints {
 
         Self {
             constraints,
-            types,
             type_slices,
             variables,
             loc_symbols,
@@ -138,9 +129,9 @@ impl Constraints {
         }
     }
 
-    pub const EMPTY_RECORD: Index<Cell<Type>> = Index::new(0);
-    pub const EMPTY_TAG_UNION: Index<Cell<Type>> = Index::new(1);
-    pub const STR: Index<Cell<Type>> = Index::new(2);
+    pub const EMPTY_RECORD: Index<Cell<Index<TypeTag>>> = Index::new(0);
+    pub const EMPTY_TAG_UNION: Index<Cell<Index<TypeTag>>> = Index::new(1);
+    pub const STR: Index<Cell<Index<TypeTag>>> = Index::new(2);
 
     pub const CATEGORY_RECORD: Index<Category> = Index::new(0);
     pub const CATEGORY_FOREIGNCALL: Index<Category> = Index::new(1);
@@ -170,18 +161,11 @@ impl Constraints {
     pub const PCATEGORY_CHARACTER: Index<PatternCategory> = Index::new(10);
 
     #[inline(always)]
-    pub fn push_type(&mut self, typ: Type) -> EitherIndex<Cell<Type>, Variable> {
-        match typ {
-            Type::EmptyRec => EitherIndex::from_left(Self::EMPTY_RECORD),
-            Type::EmptyTagUnion => EitherIndex::from_left(Self::EMPTY_TAG_UNION),
-            Type::Apply(Symbol::STR_STR, args, _) if args.is_empty() => {
-                EitherIndex::from_left(Self::STR)
-            }
-            Type::Variable(var) => Self::push_type_variable(var),
-            other => {
-                let index: Index<Cell<Type>> = Index::push_new(&mut self.types, Cell::new(other));
-                EitherIndex::from_left(index)
-            }
+    pub fn push_type(&mut self, types: &Types, typ: Index<TypeTag>) -> TypeOrVar {
+        if let TypeTag::Variable(var) = types[typ] {
+            Self::push_type_variable(var)
+        } else {
+            EitherIndex::from_left(typ)
         }
     }
 
@@ -193,7 +177,6 @@ impl Constraints {
         writeln!(buf, "Constraints statistics for module {:?}:", module_id)?;
 
         writeln!(buf, "   constraints length: {}:", self.constraints.len())?;
-        writeln!(buf, "   types length: {}:", self.types.len())?;
         writeln!(
             buf,
             "   let_constraints length: {}:",
@@ -203,6 +186,11 @@ impl Constraints {
         writeln!(buf, "   categories length: {}:", self.categories.len())?;
 
         Ok(buf)
+    }
+
+    #[inline(always)]
+    pub const fn push_variable(&self, var: Variable) -> TypeOrVar {
+        Self::push_type_variable(var)
     }
 
     #[inline(always)]
@@ -675,6 +663,22 @@ impl Constraints {
 
 roc_error_macros::assert_sizeof_default!(Constraint, 3 * 8);
 roc_error_macros::assert_sizeof_aarch64!(Constraint, 3 * 8);
+
+impl std::ops::Index<ExpectedTypeIndex> for Constraints {
+    type Output = Expected<TypeOrVar>;
+
+    fn index(&self, index: ExpectedTypeIndex) -> &Self::Output {
+        &self.expectations[index.index()]
+    }
+}
+
+impl std::ops::Index<PExpectedTypeIndex> for Constraints {
+    type Output = PExpected<TypeOrVar>;
+
+    fn index(&self, index: PExpectedTypeIndex) -> &Self::Output {
+        &self.pattern_expectations[index.index()]
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct Eq(

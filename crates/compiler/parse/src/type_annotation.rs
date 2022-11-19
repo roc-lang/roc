@@ -99,7 +99,7 @@ fn parse_type_alias_after_as<'a>() -> impl Parser<'a, TypeHeader<'a>, EType<'a>>
         space0_before_e(term(false), EType::TAsIndentStart),
         // TODO: introduce a better combinator for this.
         // `check_type_alias` doesn't need to modify the state or progress, but it needs to access `state.pos()`
-        |arena, state, progress, output, _min_indent| {
+        |arena, state, progress, output| {
             let res = check_type_alias(arena, output);
 
             match res {

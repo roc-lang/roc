@@ -1,3 +1,4 @@
+//! Supports evaluating `expect` and printing contextual information when they fail.
 #[cfg(not(windows))]
 use {
     roc_intern::GlobalInterner,
@@ -87,7 +88,7 @@ mod test {
     use pretty_assertions::assert_eq;
     use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult, run_roc_dylib};
     use roc_load::{ExecutionMode, LoadConfig, Threading};
-    use roc_reporting::report::RenderTarget;
+    use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
     use target_lexicon::Triple;
 
     use crate::run::expect_mono_module_to_dylib;
@@ -113,6 +114,7 @@ mod test {
         let load_config = LoadConfig {
             target_info,
             render: RenderTarget::ColorTerminal,
+            palette: DEFAULT_PALETTE,
             threading: Threading::Single,
             exec_mode: ExecutionMode::Test,
         };
@@ -180,7 +182,8 @@ mod test {
             // changes between test runs
             let p = actual.bytes().position(|c| c == b'\n').unwrap();
             let (_, x) = actual.split_at(p);
-            let x = x.trim_start();
+            let x = x.trim();
+            let expected = expected.trim_end();
 
             if x != expected {
                 println!("{}", x);
@@ -854,14 +857,14 @@ mod test {
                     First Str U8,
                     Next (List { item: Str, rest: NonEmpty }),
                 ]
-                
+
                 expect
                     nonEmpty =
                         a = "abcdefgh"
                         b = @NonEmpty (First "ijkl" 67u8)
                         c = Next [{ item: a, rest: b }]
                         @NonEmpty c
-                
+
                     when nonEmpty is
                         _ -> Bool.false
                 "#
@@ -869,7 +872,7 @@ mod test {
             indoc!(
                 r#"
                 This expectation failed:
-                
+
                  8│>  expect
                  9│>      nonEmpty =
                 10│>          a = "abcdefgh"
@@ -879,9 +882,9 @@ mod test {
                 14│>
                 15│>      when nonEmpty is
                 16│>          _ -> Bool.false
-                
+
                 When it failed, these variables had these values:
-                
+
                 nonEmpty : NonEmpty
                 nonEmpty = @NonEmpty (Next [{ item: "abcdefgh", rest: @NonEmpty (First "ijkl" 67) }])
                 "#

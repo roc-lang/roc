@@ -12,6 +12,16 @@ cd $SCRIPT_RELATIVE_DIR
 rm -rf build/
 cp -r public/ build/
 
+# download fonts just-in-time so we don't have to bloat the repo with them.
+DESIGN_ASSETS_COMMIT="4d949642ebc56ca455cf270b288382788bce5873"
+DESIGN_ASSETS_TARFILE="roc-lang-design-assets-4d94964.tar.gz"
+DESIGN_ASSETS_DIR="roc-lang-design-assets-4d94964"
+
+wget -O $DESIGN_ASSETS_TARFILE https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT
+tar -xzf $DESIGN_ASSETS_TARFILE
+mv $DESIGN_ASSETS_DIR/fonts build/
+rm -rf $DESIGN_ASSETS_TARFILE $DESIGN_ASSETS_DIR
+
 # grab the source code and copy it to Netlify's server; if it's not there, fail the build.
 pushd build
 wget https://github.com/roc-lang/roc/archive/www.tar.gz
@@ -40,7 +50,7 @@ mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
 mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
 
 # Manually add this tip to all the builtin docs.
-find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div style="padding: 1em;font-style: italic;line-height: 1.3em;"><strong>Tip:</strong> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
+find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div class="builtins-tip"><b>Tip:</b> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
 
 echo 'Generating CLI example platform docs...'
 # Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to

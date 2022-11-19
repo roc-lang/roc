@@ -7,12 +7,11 @@ use core::alloc::Layout;
 use core::ffi::c_void;
 use core::mem::MaybeUninit;
 use glue::Metadata;
-use libc;
 use roc_std::{RocDict, RocList, RocResult, RocStr};
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 use std::ffi::{CStr, OsStr};
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::Write;
 use std::os::raw::c_char;
 use std::path::Path;
 use std::time::Duration;
@@ -71,6 +70,41 @@ pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
         }
         _ => todo!(),
     }
+}
+
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_getppid() -> libc::pid_t {
+    libc::getppid()
+}
+
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_mmap(
+    addr: *mut libc::c_void,
+    len: libc::size_t,
+    prot: libc::c_int,
+    flags: libc::c_int,
+    fd: libc::c_int,
+    offset: libc::off_t,
+) -> *mut libc::c_void {
+    libc::mmap(addr, len, prot, flags, fd, offset)
+}
+
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_shm_open(
+    name: *const libc::c_char,
+    oflag: libc::c_int,
+    mode: libc::mode_t,
+) -> libc::c_int {
+    libc::shm_open(name, oflag, mode as libc::c_uint)
+}
+
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_send_signal(pid: libc::pid_t, sig: libc::c_int) -> libc::c_int {
+    libc::kill(pid, sig)
 }
 
 fn print_backtrace() {
@@ -254,7 +288,7 @@ pub extern "C" fn roc_fx_setCwd(roc_path: &RocList<u8>) -> RocResult<(), ()> {
 }
 
 #[no_mangle]
-pub extern "C" fn roc_fx_exePath(roc_str: &RocStr) -> RocResult<RocList<u8>, ()> {
+pub extern "C" fn roc_fx_exePath(_roc_str: &RocStr) -> RocResult<RocList<u8>, ()> {
     match std::env::current_exe() {
         Ok(path_buf) => RocResult::ok(os_str_to_roc_path(path_buf.as_path().as_os_str())),
         Err(_) => RocResult::err(()),
@@ -263,9 +297,9 @@ pub extern "C" fn roc_fx_exePath(roc_str: &RocStr) -> RocResult<RocList<u8>, ()>
 
 #[no_mangle]
 pub extern "C" fn roc_fx_stdinLine() -> RocStr {
-    use std::io::{self, BufRead};
+    use std::io::BufRead;
 
-    let stdin = io::stdin();
+    let stdin = std::io::stdin();
     let line1 = stdin.lock().lines().next().unwrap().unwrap();
 
     RocStr::from(line1.as_str())
@@ -281,7 +315,7 @@ pub extern "C" fn roc_fx_stdoutLine(line: &RocStr) {
 pub extern "C" fn roc_fx_stdoutWrite(text: &RocStr) {
     let string = text.as_str();
     print!("{}", string);
-    io::stdout().flush().unwrap();
+    std::io::stdout().flush().unwrap();
 }
 
 #[no_mangle]
@@ -294,7 +328,7 @@ pub extern "C" fn roc_fx_stderrLine(line: &RocStr) {
 pub extern "C" fn roc_fx_stderrWrite(text: &RocStr) {
     let string = text.as_str();
     eprint!("{}", string);
-    io::stderr().flush().unwrap();
+    std::io::stderr().flush().unwrap();
 }
 
 // #[no_mangle]
@@ -329,8 +363,6 @@ pub extern "C" fn roc_fx_fileWriteBytes(
 }
 
 fn write_slice(roc_path: &RocList<u8>, bytes: &[u8]) -> RocResult<(), WriteErr> {
-    use std::io::Write;
-
     match File::create(path_from_roc_path(roc_path)) {
         Ok(mut file) => match file.write_all(bytes) {
             Ok(()) => RocResult::ok(()),
@@ -344,18 +376,25 @@ fn write_slice(roc_path: &RocList<u8>, bytes: &[u8]) -> RocResult<(), WriteErr> 
     }
 }
 
-/// TODO: do this on Windows too. This may be trickier because it's unclear
-/// whether we want to use wide encoding (in which case we have to convert from
-/// &[u8] to &[u16] by converting UTF-8 to UTF-16) and then windows::OsStrExt::from_wide -
-/// https://doc.rust-lang.org/std/os/windows/ffi/trait.OsStringExt.html#tymethod.from_wide -
-/// or whether we want to try to set the Windows code page to UTF-8 instead.
 #[cfg(target_family = "unix")]
-fn path_from_roc_path(bytes: &RocList<u8>) -> &Path {
-    Path::new(os_str_from_list(bytes))
+fn path_from_roc_path(bytes: &RocList<u8>) -> Cow<'_, Path> {
+    use std::os::unix::ffi::OsStrExt;
+    let os_str = OsStr::from_bytes(bytes.as_slice());
+    Cow::Borrowed(Path::new(os_str))
 }
 
-pub fn os_str_from_list(bytes: &RocList<u8>) -> &OsStr {
-    std::os::unix::ffi::OsStrExt::from_bytes(bytes.as_slice())
+#[cfg(target_family = "windows")]
+fn path_from_roc_path(bytes: &RocList<u8>) -> Cow<'_, Path> {
+    use std::os::windows::ffi::OsStringExt;
+
+    let bytes = bytes.as_slice();
+    assert_eq!(bytes.len() % 2, 0);
+    let characters: &[u16] =
+        unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast(), bytes.len() / 2) };
+
+    let os_string = std::ffi::OsString::from_wide(characters);
+
+    Cow::Owned(std::path::PathBuf::from(os_string))
 }
 
 #[no_mangle]
@@ -424,11 +463,19 @@ pub extern "C" fn roc_fx_dirList(
 }
 
 #[cfg(target_family = "unix")]
-/// TODO convert from EncodeWide to RocPath on Windows
 fn os_str_to_roc_path(os_str: &OsStr) -> RocList<u8> {
     use std::os::unix::ffi::OsStrExt;
 
     RocList::from(os_str.as_bytes())
+}
+
+#[cfg(target_family = "windows")]
+fn os_str_to_roc_path(os_str: &OsStr) -> RocList<u8> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let bytes: Vec<_> = os_str.encode_wide().flat_map(|c| c.to_be_bytes()).collect();
+
+    RocList::from(bytes.as_slice())
 }
 
 #[no_mangle]

@@ -612,21 +612,23 @@ impl<'a> EdModel<'a> {
 
         write_to_file(self.file_path, &all_lines_str)?;
 
-        println!("save successful!");
+        println!("\nsave successful!");
 
         Ok(())
     }
 
     fn check_file(&mut self) -> EdResult<()> {
-        println!("Checking file (cargo run check <file>)...");
+        println!("\nChecking file (cargo run check <file>)...");
 
         let roc_file_str = path_to_string(self.file_path);
 
         let cmd_out = cargo()
             .arg("run")
+            .arg("--release")
             .arg("check")
             .arg(roc_file_str)
             .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
             .output()?;
 
         if !cmd_out.status.success() {
@@ -637,12 +639,13 @@ impl<'a> EdModel<'a> {
     }
 
     fn run_file(&mut self) -> EdResult<()> {
-        println!("Executing file (cargo run <file>)...");
+        println!("\nExecuting file (cargo run --release <file>)...");
 
         let roc_file_str = path_to_string(self.file_path);
 
         cargo()
             .arg("run")
+            .arg("--release")
             .arg(roc_file_str)
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())

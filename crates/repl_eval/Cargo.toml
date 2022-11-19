@@ -4,11 +4,12 @@ name = "roc_repl_eval"
 version = "0.0.1"
 authors = ["The Roc Contributors"]
 license = "UPL-1.0"
+description = "Provides the functionality for the REPL to evaluate Roc expressions."
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bumpalo = { version = "3.11.0", features = ["collections"] }
+bumpalo.workspace = true 
 
 roc_builtins = {path = "../compiler/builtins"}
 roc_can = {path = "../compiler/can"}

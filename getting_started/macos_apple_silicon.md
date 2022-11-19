@@ -2,6 +2,8 @@
 
 ## How to install Roc
 
+:warning: we do not yet support MacOS 13
+
 In order to develop in Roc, you need to install the Roc CLI,
 which includes the Roc compiler and various helpful utilities.
 
@@ -41,7 +43,7 @@ you need to install one or more of these platform language compilers, too.
 1. Install the Zig compiler, for apps with Zig-based platforms:
 
     ```sh
-    brew install zig
+    brew install zig@0.9.1
     ```
 
 1. Run examples:
