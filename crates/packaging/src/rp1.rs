@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use roc_parse::ast::Module;
 use roc_parse::header::PlatformHeader;
 use roc_parse::module::parse_header;
 use roc_parse::state::State;
@@ -7,9 +8,6 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use tar;
-use walkdir::DirEntry;
-
-use roc_parse::ast::Module;
 
 const EXTENSION: &str = "rp1";
 
@@ -89,51 +87,46 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
         Module::Platform {
             header: PlatformHeader { imports: _, .. },
         } => {
-            // TODO use header.imports to find dependencies to import.
-            // We don't need to bother with that at the moment, since
-            // we currently just slurp up the entire directory anyway.
-            // builder.append_path(path)?;
-
-            // Since this is a platform, we want all of its sources.
-            // TODO in the future, don't do this! Instead, just get the .roc files we need
-            // by traversing the root's imports, and then also get the precompiled hosts.
             use walkdir::WalkDir;
 
-            // Returns true iff we should keep the given directory entry, or else skip it
-            // (including not recursing into it, if it was a directory.) This lets us skip
-            // zig-cache, target, etc.
-            fn is_keeper(entry: &DirEntry) -> bool {
-                let path = entry.path();
+            let platform_dir = path.parent().unwrap();
 
-                // Ignore all hidden files and directories, and also ignore other .rp1 files
-                if path.starts_with(".")
-                    || path.extension().and_then(OsStr::to_str) == Some(EXTENSION)
+            // Add all the prebuild host files to the archive.
+            // These should all be in the same directory as the platform module.
+            for entry in std::fs::read_dir(platform_dir)? {
+                let path = entry?.path();
+
+                if [
+                    // surgical linker format
+                    Some("rh1"),
+                    // legacy linker formats
+                    Some("o"),
+                    Some("obj"),
+                    Some("wasm"),
+                    // optimized wasm builds compile to .zig for now,
+                    // because zig can't emit .bc for wasm yet.
+                    Some("zig"),
+                ]
+                .contains(&path.extension().and_then(OsStr::to_str))
                 {
-                    return false;
-                }
-
-                if path.is_dir() {
-                    let filename = entry.file_name().to_str();
-
-                    // Skip these. None of this will be necessary once we have
-                    // precompiled hosts, but for now, this is prudent!
-                    filename != Some("target") && filename != Some("zig-cache")
-                } else {
-                    // keep all other files
-                    true
+                    builder.append_path(path)?;
                 }
             }
 
-            for result in WalkDir::new(path.parent().unwrap())
+            // Recursively find all the .roc files and add them.
+            // TODO we can do this more efficiently by parsing the platform module and finding
+            // all of its dependencies. See below for a commented-out WIP sketch of this.
+            //
+            // The WalkDir approach is easier to implement, but has the downside of doing things
+            // like traversing target/ and zig-cache/ which can be large but will never have
+            // any .roc files in them!
+            for entry in WalkDir::new(path.parent().unwrap())
                 .into_iter()
-                .filter_entry(is_keeper)
+                .filter_entry(|entry| {
+                    entry.path().extension().and_then(OsStr::to_str) == Some("roc")
+                })
             {
-                match result {
-                    Ok(entry) => {
-                        builder.append_path(entry.path())?;
-                    }
-                    Err(_) => todo!(), // TODO gracefully handle error traversing directory
-                }
+                builder.append_path(entry?.path())?;
             }
 
             &[]
