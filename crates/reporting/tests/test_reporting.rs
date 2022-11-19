@@ -8645,38 +8645,23 @@ All branches in an `if` must have the same type!
             hash = \@Id n -> n
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        Something is off with the body of the `hash` definition:
+    Something is off with the body of the `hash` definition:
 
-        8│  hash : Id -> U32
-        9│  hash = \@Id n -> n
-                             ^
+    8│  hash : Id -> U32
+    9│  hash = \@Id n -> n
+                         ^
 
-        This `n` value is a:
+    This `n` value is a:
 
-            U64
+        U64
 
-        But the type annotation on `hash` says it should be:
+    But the type annotation on `hash` says it should be:
 
-            U32
-
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-        Something is off with this specialization of `hash`:
-
-        9│  hash = \@Id n -> n
-                   ^^^^^^^^^^^
-
-        This value is a declared specialization of type:
-
-            Id -> U32
-
-        But the type annotation on `hash` says it must match:
-
-            Id -> U64
-        "#
+        U32
+    "###
     );
 
     test_report!(

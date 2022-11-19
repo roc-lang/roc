@@ -2148,6 +2148,22 @@ impl Subs {
             }
         }
     }
+
+    pub fn dbg(&self, var: Variable) -> impl std::fmt::Debug + '_ {
+        SubsFmtContent(self.get_content_without_compacting(var), self)
+    }
+
+    /// Is this variable involved in an error?
+    pub fn is_error_var(&self, var: Variable) -> bool {
+        match self.get_content_without_compacting(var) {
+            Content::Error => true,
+            Content::FlexVar(Some(index)) => {
+                // Generated names for errors start with `#`
+                self[*index].as_str().starts_with('#')
+            }
+            _ => false,
+        }
+    }
 }
 
 #[inline(always)]
