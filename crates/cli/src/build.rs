@@ -173,6 +173,15 @@ pub fn build_file<'a>(
 
     // We don't need to spawn a rebuild thread when using a prebuilt host.
     let rebuild_thread = if prebuilt {
+        if !preprocessed_host_path.exists() {
+            eprintln!(
+                "\nSince I was run with --prebuilt-platform=true, I was expecting this file to exist:\n\n    {}\n\nHowever, it was not there!\n\nIf you have the platform's source code locally, you may be able to regenerate it by re-running this command with --prebuilt-platform=false\n",
+                preprocessed_host_path.to_string_lossy()
+            );
+
+            std::process::exit(1);
+        }
+
         if linking_strategy == LinkingStrategy::Surgical {
             // Copy preprocessed host to executable location.
             // The surgical linker will modify that copy in-place.
