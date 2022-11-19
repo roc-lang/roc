@@ -49,7 +49,7 @@ pub const CMD_GLUE: &str = "glue";
 pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
 
 pub const FLAG_DEBUG: &str = "debug";
-pub const FLAG_BUNDLE: &str = "bundle";
+pub const FLAG_TAR: &str = "tar";
 pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_MAX_THREADS: &str = "max-threads";
@@ -167,8 +167,8 @@ pub fn build_app<'a>() -> Command<'a> {
                     .required(false),
             )
             .arg(
-                Arg::new(FLAG_BUNDLE)
-                    .long(FLAG_BUNDLE)
+                Arg::new(FLAG_TAR)
+                    .long(FLAG_TAR)
                     .help("Create a .rp1 bundle for a package, so others can add it as a HTTPS dependency.")
                     .required(false),
             )
@@ -514,12 +514,12 @@ pub fn build(
             process::exit(1);
         }
 
-        if config == BuildConfig::BuildOnly && matches.is_present(FLAG_BUNDLE) {
+        if config == BuildConfig::BuildOnly && matches.is_present(FLAG_TAR) {
             let start_time = Instant::now();
 
             // Rather than building an executable or library, we're building
             // a rp1 bundle so this code can be distributed via a HTTPS
-            let filename = roc_packaging::rp1::build(path)?;
+            let filename = roc_packaging::tarball::build(path)?;
             let total_time = start_time.elapsed().as_millis();
             let created_path = path.with_file_name(&filename);
 

@@ -9,17 +9,17 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use tar;
 
-const EXTENSION: &str = "rp1";
-
-/// Given a path to a .roc file, write a .rp1 file to disk.
+/// Given a path to a .roc file, write a .tar file to disk.
 ///
-/// The .rp1 file will be in the same directory, and its filename
+/// The .tar file will be in the same directory, and its filename
 /// will be the hash of its contents. This function returns
-/// the name of that filename (including the .rp1 extension),
+/// the name of that filename (including the .tar extension),
 /// so the caller can obtain the path to the file by calling
 /// Path::with_file_name(returned_string) on the Path argument it provided.
 pub fn build(path_to_main: &Path) -> io::Result<String> {
-    let archive_bytes = build_compressed_archive(path_to_main)?;
+    let mut archive_bytes = Vec::new();
+
+    write_archive(path_to_main, &mut archive_bytes)?;
 
     // Now that we have our compressed archive, get its BLAKE3 hash
     // and base64url encode it. Use base64url encoding because:
@@ -28,8 +28,7 @@ pub fn build(path_to_main: &Path) -> io::Result<String> {
     let hash = base64_url::encode(blake3::hash(&archive_bytes).as_bytes());
     let mut filename = hash;
 
-    filename.push('.');
-    filename.push_str(EXTENSION);
+    filename.push_str(".tar");
 
     // Write the bytes to disk.
     {
@@ -52,30 +51,6 @@ pub fn build(path_to_main: &Path) -> io::Result<String> {
     }
 
     Ok(filename)
-}
-
-fn build_compressed_archive(path_to_main: &Path) -> io::Result<Vec<u8>> {
-    let mut buf = Vec::new();
-
-    if cfg!(debug_assertions) {
-        eprintln!("WARNING! The brotli compression we use takes *forever* to run in debug builds. Expect the following to take a super long time unless you re-run with `--release`!")
-    }
-
-    const BUFFER_SIZE: usize = 32 * 1_048_576; // MB
-    const BROTLI_QUALITY: u32 = 11; // 0 to 11; larger numbers compress more but take longer to run.
-    const BROTLI_WINDOW_SIZE: u32 = 22; // I don't know what this means, but the docs recommend 20-22
-
-    // As we write each archive entry to the buffer, compress it with brotli.
-    let writer = brotli::enc::writer::CompressorWriter::new(
-        &mut buf,
-        BUFFER_SIZE,
-        BROTLI_QUALITY,
-        BROTLI_WINDOW_SIZE,
-    );
-
-    write_archive(path_to_main, writer)?;
-
-    Ok(buf)
 }
 
 /// Write an uncompressed rp1 archive to the given writer.
@@ -136,8 +111,7 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
             for entry in WalkDir::new(path.parent().unwrap())
                 .into_iter()
                 .filter_entry(|entry| {
-                    //entry.path().extension().and_then(OsStr::to_str) == Some("roc")
-                    false
+                    entry.path().extension().and_then(OsStr::to_str) == Some("roc")
                 })
             {
                 builder.append_path(entry?.path())?;
