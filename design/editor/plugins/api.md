@@ -1,0 +1,3 @@
+- [Action state design document](https://docs.google.com/document/d/16qY4NGVOHu8mvInVD-ddTajZYSsFvFBvQON_hmyHGfo/edit?usp=drivesdk)
+- [Roc theme changer plugin concept study](https://gist.github.com/lukewilliamboswell/1b921641e7d68457ba88d81747c1bd44)
+- Plugin can register view (=UI) to editor; editor can use that view to render all occurrences of (a value of) that type.
