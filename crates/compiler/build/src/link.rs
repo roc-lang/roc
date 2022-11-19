@@ -119,7 +119,7 @@ const fn legacy_host_filename_ext(target: &Triple, opt_level: OptLevel) -> Optio
 
 const PRECOMPILED_HOST_EXT: &str = "rh1"; // Short for "roc host version 1" (so we can change format in the future)
 
-pub const fn precompiled_host_filename(target: &Triple) -> Option<&'static str> {
+pub const fn preprocessed_host_filename(target: &Triple) -> Option<&'static str> {
     match target {
         Triple {
             operating_system: OperatingSystem::Linux,
@@ -164,7 +164,7 @@ pub const fn precompiled_host_filename(target: &Triple) -> Option<&'static str> 
 pub fn legacy_host_filename(target: &Triple, opt_level: OptLevel) -> Option<String> {
     let ext = legacy_host_filename_ext(target, opt_level)?;
 
-    Some(precompiled_host_filename(target)?.replace(PRECOMPILED_HOST_EXT, ext))
+    Some(preprocessed_host_filename(target)?.replace(PRECOMPILED_HOST_EXT, ext))
 }
 
 fn find_zig_str_path() -> PathBuf {

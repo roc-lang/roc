@@ -77,7 +77,7 @@ pub fn build_and_preprocess_host(
     generate_dynamic_lib(target, &stub_dll_symbols, &stub_lib);
     rebuild_host(opt_level, target, host_input_path, Some(&stub_lib));
     let metadata = host_input_path.with_file_name("metadata");
-    // let prehost = host_input_path.with_file_name("preprocessedhost");
+    // let prehost = host_input_path.with_file_name(preprocessed_host_filename(target).unwrap());
 
     preprocess(
         target,
