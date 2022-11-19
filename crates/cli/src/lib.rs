@@ -514,7 +514,7 @@ pub fn build(
             process::exit(1);
         }
 
-        if matches.is_present(FLAG_BUNDLE) {
+        if config == BuildConfig::BuildOnly && matches.is_present(FLAG_BUNDLE) {
             let start_time = Instant::now();
 
             // Rather than building an executable or library, we're building
