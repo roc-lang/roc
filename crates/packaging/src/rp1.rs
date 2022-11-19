@@ -57,8 +57,15 @@ pub fn build(path_to_main: &Path) -> io::Result<String> {
 fn build_compressed_archive(path_to_main: &Path) -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
 
-    // As we write each archive entry to the buffer, LZ4 compress it.
-    let writer = lz4_flex::frame::FrameEncoder::new(&mut buf);
+    // As we write each archive entry to the buffer, compress it with brotli.
+    //
+    // How were these numbers chosen? The `brotli` crate docs give 4096 as
+    // the buffer size in the example, and then go on to say:
+    // > Rust brotli currently supports compression levels 0 - 11
+    // > They should be bitwise identical to the brotli C compression engine
+    // > at compression levels 0-9
+    // > Recommended lg_window_size is between 20 and 22
+    let writer = brotli::enc::writer::CompressorWriter::new(&mut buf, 4096, 11, 20);
 
     write_archive(path_to_main, writer)?;
 
@@ -123,7 +130,8 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
             for entry in WalkDir::new(path.parent().unwrap())
                 .into_iter()
                 .filter_entry(|entry| {
-                    entry.path().extension().and_then(OsStr::to_str) == Some("roc")
+                    //entry.path().extension().and_then(OsStr::to_str) == Some("roc")
+                    false
                 })
             {
                 builder.append_path(entry?.path())?;
