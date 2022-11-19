@@ -1517,6 +1517,7 @@ mod tests {
     use super::*;
 
     use indoc::indoc;
+    use roc_build::link::preprocessed_host_filename;
     use target_lexicon::Triple;
 
     const ELF64_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_elf64") as &[_];
@@ -1669,17 +1670,20 @@ mod tests {
             panic!("zig build-exe failed");
         }
 
+        let preprocessed_host_filename =
+            dir.join(preprocessed_host_filename(&Triple::host()).unwrap());
+
         preprocess_elf(
             target_lexicon::Endianness::Little,
             &dir.join("host"),
             &dir.join("metadata"),
-            &dir.join("preprocessedhost"),
+            &preprocessed_host_filename,
             &dir.join("libapp.so"),
             false,
             false,
         );
 
-        std::fs::copy(&dir.join("preprocessedhost"), &dir.join("final")).unwrap();
+        std::fs::copy(&preprocessed_host_filename, &dir.join("final")).unwrap();
 
         surgery_elf(
             &roc_app,
