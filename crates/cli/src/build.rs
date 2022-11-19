@@ -171,18 +171,27 @@ pub fn build_file<'a>(
             .with_file_name(legacy_host_filename(target, code_gen_options.opt_level).unwrap()),
     };
 
-    // TODO can we not spawn the rebuild thread if we have a preprocessed host already?
-    let rebuild_thread = spawn_rebuild_thread(
-        code_gen_options.opt_level,
-        linking_strategy,
-        prebuilt,
-        host_input_path.clone(),
-        preprocessed_host_path.clone(),
-        binary_path.clone(),
-        target,
-        exposed_values,
-        exposed_closure_types,
-    );
+    // We don't need to spawn a rebuild thread when using a prebuilt host.
+    let rebuild_thread = if prebuilt {
+        if linking_strategy == LinkingStrategy::Surgical {
+            // Copy preprocessed host to executable location.
+            // The surgical linker will modify that copy in-place.
+            std::fs::copy(&preprocessed_host_path, binary_path.as_path()).unwrap();
+        }
+
+        None
+    } else {
+        Some(spawn_rebuild_thread(
+            code_gen_options.opt_level,
+            linking_strategy,
+            host_input_path.clone(),
+            preprocessed_host_path.clone(),
+            binary_path.clone(),
+            target,
+            exposed_values,
+            exposed_closure_types,
+        ))
+    };
 
     let buf = &mut String::with_capacity(1024);
 
@@ -241,19 +250,24 @@ pub fn build_file<'a>(
         ConcurrentWithApp(JoinHandle<u128>),
     }
 
-    let rebuild_timing = if linking_strategy == LinkingStrategy::Additive {
-        let rebuild_duration = rebuild_thread
-            .join()
-            .expect("Failed to (re)build platform.");
-        if emit_timings && !prebuilt {
-            println!(
-                "Finished rebuilding the platform in {} ms\n",
-                rebuild_duration
-            );
+    let opt_rebuild_timing = if let Some(rebuild_thread) = rebuild_thread {
+        if linking_strategy == LinkingStrategy::Additive {
+            let rebuild_duration = rebuild_thread
+                .join()
+                .expect("Failed to (re)build platform.");
+            if emit_timings && !prebuilt {
+                println!(
+                    "Finished rebuilding the platform in {} ms\n",
+                    rebuild_duration
+                );
+            }
+
+            Some(HostRebuildTiming::BeforeApp(rebuild_duration))
+        } else {
+            Some(HostRebuildTiming::ConcurrentWithApp(rebuild_thread))
         }
-        HostRebuildTiming::BeforeApp(rebuild_duration)
     } else {
-        HostRebuildTiming::ConcurrentWithApp(rebuild_thread)
+        None
     };
 
     let (roc_app_bytes, code_gen_timing, expect_metadata) = program::gen_from_mono_module(
@@ -294,7 +308,7 @@ pub fn build_file<'a>(
         );
     }
 
-    if let HostRebuildTiming::ConcurrentWithApp(thread) = rebuild_timing {
+    if let Some(HostRebuildTiming::ConcurrentWithApp(thread)) = opt_rebuild_timing {
         let rebuild_duration = thread.join().expect("Failed to (re)build platform.");
         if emit_timings && !prebuilt {
             println!(
@@ -382,7 +396,6 @@ pub fn build_file<'a>(
 fn spawn_rebuild_thread(
     opt_level: OptLevel,
     linking_strategy: LinkingStrategy,
-    prebuilt: bool,
     host_input_path: PathBuf,
     preprocessed_host_path: PathBuf,
     binary_path: PathBuf,
@@ -392,51 +405,49 @@ fn spawn_rebuild_thread(
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
-        if !prebuilt {
-            // Printing to stderr because we want stdout to contain only the output of the roc program.
-            // We are aware of the trade-offs.
-            // `cargo run` follows the same approach
-            eprintln!("🔨 Rebuilding platform...");
-        }
+        // Printing to stderr because we want stdout to contain only the output of the roc program.
+        // We are aware of the trade-offs.
+        // `cargo run` follows the same approach
+        eprintln!("🔨 Rebuilding platform...");
 
         let rebuild_host_start = Instant::now();
 
-        if !prebuilt {
-            match linking_strategy {
-                LinkingStrategy::Additive => {
-                    let host_dest = rebuild_host(
-                        opt_level,
-                        &thread_local_target,
-                        host_input_path.as_path(),
-                        None,
-                    );
+        match linking_strategy {
+            LinkingStrategy::Additive => {
+                let host_dest = rebuild_host(
+                    opt_level,
+                    &thread_local_target,
+                    host_input_path.as_path(),
+                    None,
+                );
 
-                    preprocess_host_wasm32(host_dest.as_path(), &preprocessed_host_path);
-                }
-                LinkingStrategy::Surgical => {
-                    roc_linker::build_and_preprocess_host(
-                        opt_level,
-                        &thread_local_target,
-                        host_input_path.as_path(),
-                        preprocessed_host_path.as_path(),
-                        exported_symbols,
-                        exported_closure_types,
-                    );
-                }
-                LinkingStrategy::Legacy => {
-                    rebuild_host(
-                        opt_level,
-                        &thread_local_target,
-                        host_input_path.as_path(),
-                        None,
-                    );
-                }
+                preprocess_host_wasm32(host_dest.as_path(), &preprocessed_host_path);
+            }
+            LinkingStrategy::Surgical => {
+                roc_linker::build_and_preprocess_host(
+                    opt_level,
+                    &thread_local_target,
+                    host_input_path.as_path(),
+                    preprocessed_host_path.as_path(),
+                    exported_symbols,
+                    exported_closure_types,
+                );
+            }
+            LinkingStrategy::Legacy => {
+                rebuild_host(
+                    opt_level,
+                    &thread_local_target,
+                    host_input_path.as_path(),
+                    None,
+                );
             }
         }
+
         if linking_strategy == LinkingStrategy::Surgical {
             // Copy preprocessed host to executable location.
             std::fs::copy(preprocessed_host_path, binary_path.as_path()).unwrap();
         }
+
         let rebuild_host_end = rebuild_host_start.elapsed();
 
         rebuild_host_end.as_millis()
