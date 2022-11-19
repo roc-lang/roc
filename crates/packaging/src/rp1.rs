@@ -57,15 +57,21 @@ pub fn build(path_to_main: &Path) -> io::Result<String> {
 fn build_compressed_archive(path_to_main: &Path) -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
 
+    if cfg!(debug_assertions) {
+        eprintln!("WARNING! The brotli compression we use takes *forever* to run in debug builds. Expect the following to take a super long time unless you re-run with `--release`!")
+    }
+
+    const BUFFER_SIZE: usize = 32 * 1_048_576; // MB
+    const BROTLI_QUALITY: u32 = 11; // 0 to 11; larger numbers compress more but take longer to run.
+    const BROTLI_WINDOW_SIZE: u32 = 22; // I don't know what this means, but the docs recommend 20-22
+
     // As we write each archive entry to the buffer, compress it with brotli.
-    //
-    // How were these numbers chosen? The `brotli` crate docs give 4096 as
-    // the buffer size in the example, and then go on to say:
-    // > Rust brotli currently supports compression levels 0 - 11
-    // > They should be bitwise identical to the brotli C compression engine
-    // > at compression levels 0-9
-    // > Recommended lg_window_size is between 20 and 22
-    let writer = brotli::enc::writer::CompressorWriter::new(&mut buf, 4096, 11, 20);
+    let writer = brotli::enc::writer::CompressorWriter::new(
+        &mut buf,
+        BUFFER_SIZE,
+        BROTLI_QUALITY,
+        BROTLI_WINDOW_SIZE,
+    );
 
     write_archive(path_to_main, writer)?;
 
