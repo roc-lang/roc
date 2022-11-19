@@ -20,13 +20,9 @@
     #
     # This style-src hash is to permit the <style> in the favicon so it looks good in both light and
     # dark mode. Favicons can only do this using inline <style> tags, so this exception is needed!
-    #
-    # When changing the favicon's <style>, generate a new hash and put it here using:
-    #
-    #   $ echo -n "polygon {fill: #7d59dd;}@media (prefers-color-scheme: dark) {polygon {fill: #9c7bea;}}" | openssl dgst -sha256 -binary | openssl enc -base64
-    #
-    # Details on how this works: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy/style-src
-    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'unsafe-eval'; style-src 'sha256-LBYRCm8plH1PNnz1FlahQzgfRJUayryYlxVEGFwsTNo=';"
+    # In the past we tried doing this via a sha256 hash, which is supposedly possible but in practice
+    # always seemed to result in the browser rejecting everything, leaving the page unstyled.
+    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'unsafe-eval'; style-src 'unsafe-inline';"
     X-Content-Type-Options = "nosniff"
     # Firefox prefetch requires some cache-control to be set
     # See https://bugzilla.mozilla.org/show_bug.cgi?id=1527334
