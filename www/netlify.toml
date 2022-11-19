@@ -23,10 +23,10 @@
     #
     # When changing the favicon's <style>, generate a new hash and put it here using:
     #
-    #   $ echo -n "polygon {fill: #7d59dd;}@media (prefers-color-scheme: dark) {polygon {fill: #9c7bea;}}" | openssl dgst -sha256 -binary | openssl enc -base64
+    #   $ echo -n "polygon{fill:#7d59dd}@media (prefers-color-scheme: dark){polygon{fill:#9c7bea}}" | openssl dgst -sha256 -binary | openssl enc -base64
     #
     # Details on how this works: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy/style-src
-    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'unsafe-eval'; style-src 'self' 'sha256-LBYRCm8plH1PNnz1FlahQzgfRJUayryYlxVEGFwsTNo=';"
+    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'unsafe-eval'; style-src 'self' 'sha256-07CmErfGgav8i4u4UOrGznokE/Q4Cax2Kmj7zGcW4l8=';"
     X-Content-Type-Options = "nosniff"
     # Firefox prefetch requires some cache-control to be set
     # See https://bugzilla.mozilla.org/show_bug.cgi?id=1527334
