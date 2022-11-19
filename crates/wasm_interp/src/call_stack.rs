@@ -37,8 +37,8 @@ impl<'a> CallStack<'a> {
             return_addrs: Vec::with_capacity_in(256, arena),
             frame_offsets: Vec::with_capacity_in(256, arena),
             locals_data: Vec::with_capacity_in(16 * 256, arena),
-            is_float: BitVec::new(),
-            is_64: BitVec::new(),
+            is_float: BitVec::with_capacity(256),
+            is_64: BitVec::with_capacity(256),
         }
     }
 

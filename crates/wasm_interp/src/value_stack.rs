@@ -1,5 +1,5 @@
 use bitvec::vec::BitVec;
-use bumpalo::collections::Vec;
+use bumpalo::{collections::Vec, Bump};
 use std::fmt::Debug;
 
 use crate::Value;
@@ -14,6 +14,14 @@ struct ValueStack<'a> {
 }
 
 impl<'a> ValueStack<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        ValueStack {
+            bytes: Vec::with_capacity_in(1024, arena),
+            is_float: BitVec::with_capacity(1024),
+            is_64: BitVec::with_capacity(1024),
+        }
+    }
+
     pub fn push(&mut self, value: Value) {
         match value {
             Value::I32(x) => {
@@ -45,7 +53,7 @@ impl<'a> ValueStack<'a> {
         let size = if is_64 { 8 } else { 4 };
         let bytes_idx = self.bytes.len() - size;
         let value = self.get(is_64, is_float, bytes_idx);
-        self.bytes.truncate(size);
+        self.bytes.truncate(self.bytes.len() - size);
         value
     }
 
@@ -77,12 +85,53 @@ impl Debug for ValueStack<'_> {
         assert_eq!(self.is_64.len(), self.is_float.len());
         let iter_64 = self.is_64.iter().by_vals();
         let iter_float = self.is_float.iter().by_vals();
-        for (is_64, is_float) in iter_64.zip(iter_float) {
+        for (i, (is_64, is_float)) in iter_64.zip(iter_float).enumerate() {
             let value = self.get(is_64, is_float, index);
             index += if is_64 { 8 } else { 4 };
             value.fmt(f)?;
-            write!(f, ", ")?;
+            if i < self.is_64.len() - 1 {
+                write!(f, ", ")?;
+            }
         }
         write!(f, "]")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VALUES: [Value; 4] = [
+        Value::I32(123),
+        Value::I64(123456),
+        Value::F32(3.14),
+        Value::F64(-1.1),
+    ];
+
+    #[test]
+    fn test_push_pop() {
+        let arena = Bump::new();
+        let mut stack = ValueStack::new(&arena);
+
+        for val in VALUES {
+            stack.push(val);
+        }
+
+        for val in VALUES.iter().rev() {
+            let popped = stack.pop();
+            assert_eq!(popped, *val);
+        }
+    }
+
+    #[test]
+    fn test_debug_fmt() {
+        let arena = Bump::new();
+        let mut stack = ValueStack::new(&arena);
+
+        for val in VALUES {
+            stack.push(val);
+        }
+
+        assert_eq!(format!("{:?}", VALUES), format!("{:?}", stack));
     }
 }
