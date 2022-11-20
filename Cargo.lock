@@ -4008,7 +4008,6 @@ dependencies = [
  "pretty_assertions",
  "roc_parse",
  "tar",
- "tempfile",
  "ureq",
  "walkdir",
 ]
