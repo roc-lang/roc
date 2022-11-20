@@ -2192,19 +2192,21 @@ fn update<'a>(
 
             let mut work = MutSet::default();
 
+            // Register the package's path under its shorthand
+            // (e.g. for { pf: "blah" }, register that "pf" should resolve to "blah")
             {
                 let mut shorthands = (*state.arc_shorthands).lock();
 
-                for (shorthand, package_name) in header.packages.iter() {
-                    shorthands.insert(shorthand, *package_name);
+                for (shorthand, package_path) in header.packages.iter() {
+                    shorthands.insert(shorthand, *package_path);
                 }
+            }
 
-                if let Platform {
-                    config_shorthand, ..
-                } = header.header_for
-                {
-                    work.extend(state.dependencies.notify_package(config_shorthand));
-                }
+            if let Platform {
+                config_shorthand, ..
+            } = header.header_for
+            {
+                work.extend(state.dependencies.notify_package(config_shorthand));
             }
 
             match header.header_for {
