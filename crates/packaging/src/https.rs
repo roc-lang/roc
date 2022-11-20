@@ -28,6 +28,7 @@ pub struct PackageMetadata<'a> {
 ///     .tar.br
 const VALID_EXTENSION_SUFFIXES: [&str; 2] = [".gz", ".br"];
 
+#[derive(Debug)]
 pub enum UrlProblem {
     InvalidExtensionSuffix(String),
     MissingTarExt,
@@ -100,6 +101,7 @@ impl<'a> PackageMetadata<'a> {
     }
 }
 
+#[derive(Debug)]
 pub enum Problem {
     UnsupportedEncoding(String),
     InvalidContentHash {

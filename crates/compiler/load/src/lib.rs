@@ -107,8 +107,13 @@ pub fn load_and_monomorphize(
 ) -> Result<MonomorphizedModule<'_>, LoadMonomorphizedError<'_>> {
     use LoadResult::*;
 
-    let load_start =
-        LoadStart::from_path(arena, filename, load_config.render, load_config.palette)?;
+    let load_start = LoadStart::from_path(
+        arena,
+        filename,
+        load_config.render,
+        roc_cache_dir,
+        load_config.palette,
+    )?;
 
     match load(arena, load_start, exposed_types, load_config)? {
         Monomorphized(module) => Ok(module),
@@ -124,8 +129,13 @@ pub fn load_and_typecheck(
 ) -> Result<LoadedModule, LoadingProblem<'_>> {
     use LoadResult::*;
 
-    let load_start =
-        LoadStart::from_path(arena, filename, load_config.render, load_config.palette)?;
+    let load_start = LoadStart::from_path(
+        arena,
+        filename,
+        load_config.render,
+        roc_cache_dir,
+        load_config.palette,
+    )?;
 
     match load(arena, load_start, exposed_types, load_config)? {
         Monomorphized(_) => unreachable!(""),
