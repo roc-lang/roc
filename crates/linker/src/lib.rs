@@ -9,6 +9,7 @@ use roc_build::link::{rebuild_host, LinkType};
 use roc_error_macros::internal_error;
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::OptLevel;
+use roc_packaging::cache::RocCacheDir;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use std::cmp::Ordering;
 use std::mem;
@@ -102,7 +103,11 @@ pub fn link_preprocessed_host(
 }
 
 // Exposed function to load a platform file and generate a stub lib for it.
-pub fn generate_stub_lib(input_path: &Path, triple: &Triple) -> std::io::Result<i32> {
+pub fn generate_stub_lib(
+    input_path: &Path,
+    roc_cache_dir: RocCacheDir<'_>,
+    triple: &Triple,
+) -> std::io::Result<i32> {
     // Note: this should theoretically just be able to load the host, I think.
     // Instead, I am loading an entire app because that was simpler and had example code.
     // If this was expected to stay around for the the long term, we should change it.
@@ -114,6 +119,7 @@ pub fn generate_stub_lib(input_path: &Path, triple: &Triple) -> std::io::Result<
         arena,
         input_path.to_path_buf(),
         subs_by_module,
+        roc_cache_dir,
         LoadConfig {
             target_info,
             render: RenderTarget::Generic,

@@ -1,5 +1,4 @@
 use blake3::Hasher;
-use flate2;
 use std::io::{self, ErrorKind, Read, Write};
 
 // gzip should be the most widely supported, and brotli offers the highest compession.

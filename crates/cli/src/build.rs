@@ -12,6 +12,7 @@ use roc_load::{
     LoadingProblem, Threading,
 };
 use roc_mono::ir::OptLevel;
+use roc_packaging::cache::RocCacheDir;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::TargetInfo;
 use std::time::{Duration, Instant};
@@ -67,6 +68,7 @@ pub fn build_file<'a>(
     prebuilt: bool,
     threading: Threading,
     wasm_dev_stack_bytes: Option<u32>,
+    roc_cache_dir: RocCacheDir<'_>,
     order: BuildOrdering,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let compilation_start = Instant::now();
@@ -92,6 +94,7 @@ pub fn build_file<'a>(
         arena,
         app_module_path.clone(),
         subs_by_module,
+        roc_cache_dir,
         load_config,
     );
     let loaded = match load_result {
@@ -464,12 +467,13 @@ fn spawn_rebuild_thread(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn check_file(
-    arena: &Bump,
+pub fn check_file<'a>(
+    arena: &'a Bump,
     roc_file_path: PathBuf,
     emit_timings: bool,
+    roc_cache_dir: RocCacheDir<'_>,
     threading: Threading,
-) -> Result<(program::Problems, Duration), LoadingProblem> {
+) -> Result<(program::Problems, Duration), LoadingProblem<'a>> {
     let compilation_start = Instant::now();
 
     // only used for generating errors. We don't do code generation, so hardcoding should be fine
@@ -487,8 +491,13 @@ pub fn check_file(
         threading,
         exec_mode: ExecutionMode::Check,
     };
-    let mut loaded =
-        roc_load::load_and_typecheck(arena, roc_file_path, subs_by_module, load_config)?;
+    let mut loaded = roc_load::load_and_typecheck(
+        arena,
+        roc_file_path,
+        subs_by_module,
+        roc_cache_dir,
+        load_config,
+    )?;
 
     let buf = &mut String::with_capacity(1024);
 

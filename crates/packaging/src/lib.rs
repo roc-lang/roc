@@ -1,3 +1,3 @@
 pub mod cache;
-pub mod https;
+mod https;
 pub mod tarball;

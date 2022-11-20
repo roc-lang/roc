@@ -88,6 +88,7 @@ mod test {
     use pretty_assertions::assert_eq;
     use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult, run_roc_dylib};
     use roc_load::{ExecutionMode, LoadConfig, Threading};
+    use roc_packaging::cache::RocCacheDir;
     use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
     use target_lexicon::Triple;
 
@@ -124,6 +125,7 @@ mod test {
             source,
             src_dir.path().to_path_buf(),
             Default::default(),
+            RocCacheDir::Disallowed,
             load_config,
         )
         .unwrap();

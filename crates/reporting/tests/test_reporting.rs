@@ -15,6 +15,7 @@ mod test_reporting {
     use roc_can::expr::PendingDerives;
     use roc_load::{self, ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
+    use roc_packaging::cache::RocCacheDir;
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
         can_problem, parse_problem, type_problem, RenderTarget, Report, Severity, ANSI_STYLE_CODES,
@@ -90,8 +91,13 @@ mod test_reporting {
                 threading: Threading::Single,
                 exec_mode: ExecutionMode::Check,
             };
-            let result =
-                roc_load::load_and_typecheck(arena, full_file_path, exposed_types, load_config);
+            let result = roc_load::load_and_typecheck(
+                arena,
+                full_file_path,
+                exposed_types,
+                RocCacheDir::Disallowed,
+                load_config,
+            );
             drop(file);
 
             result
@@ -4392,7 +4398,7 @@ mod test_reporting {
 
     I encountered a tab character
 
-    4│      # comment with a 	
+    4│      # comment with a
                              ^
 
     Tab characters are not allowed.
@@ -5682,9 +5688,9 @@ All branches in an `if` must have the same type!
     4│      main = 5 -> 3
                      ^^
 
-    Looks like you are trying to define a function. 
+    Looks like you are trying to define a function.
 
-    In roc, functions are always written as a lambda, like 
+    In roc, functions are always written as a lambda, like
 
         increment = \n -> n + 1
     "###
@@ -9976,7 +9982,7 @@ All branches in an `if` must have the same type!
     Underscores are not allowed in identifier names:
 
     6│      f 1 _ 1
-      
+
 
     I recommend using camelCase, it is the standard in the Roc ecosystem.
     "###
@@ -10392,7 +10398,7 @@ All branches in an `if` must have the same type!
 
             u8 : [Good (List U8), Bad [DecodeProblem]]
 
-            fromBytes = 
+            fromBytes =
                 when u8 is
                     Good _ _ ->
                         Ok "foo"
@@ -10409,7 +10415,7 @@ All branches in an `if` must have the same type!
      6│>      when u8 is
      7│           Good _ _ ->
      8│               Ok "foo"
-     9│ 
+     9│
     10│           Bad _ ->
     11│               Ok "foo"
 
@@ -11152,7 +11158,7 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             x : U8
-            
+
             when x is
                 '☃' -> ""
                 _ -> ""
@@ -11699,7 +11705,7 @@ All branches in an `if` must have the same type!
         list_pattern_not_terminated,
         indoc!(
             r#"
-            when [] is 
+            when [] is
                 [1, 2, -> ""
             "#
         ),
@@ -11720,7 +11726,7 @@ All branches in an `if` must have the same type!
         list_pattern_weird_indent,
         indoc!(
             r#"
-            when [] is 
+            when [] is
                 [1, 2,
             3] -> ""
             "#

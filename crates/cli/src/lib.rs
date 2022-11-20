@@ -11,6 +11,7 @@ use roc_build::program::{CodeGenBackend, CodeGenOptions, Problems};
 use roc_error_macros::{internal_error, user_error};
 use roc_load::{ExpectMetadata, LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
+use roc_packaging::cache::RocCacheDir;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
@@ -356,6 +357,7 @@ pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     use roc_gen_llvm::llvm::build::LlvmBackendMode;
     use roc_load::{ExecutionMode, LoadConfig};
+    use roc_packaging::cache;
     use roc_target::TargetInfo;
 
     let start_time = Instant::now();
@@ -407,6 +409,9 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let target = &triple;
     let opt_level = opt_level;
     let target_info = TargetInfo::from(target);
+    let roc_cache_dir = cache::roc_cache_dir().unwrap_or_else(|| {
+        todo!("Gracefully handle not being able to find default Roc cache dir.")
+    });
 
     // Step 1: compile the app and generate the .o file
     let subs_by_module = Default::default();
@@ -419,9 +424,14 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         threading,
         exec_mode: ExecutionMode::Test,
     };
-    let loaded =
-        roc_load::load_and_monomorphize(arena, path.to_path_buf(), subs_by_module, load_config)
-            .unwrap();
+    let loaded = roc_load::load_and_monomorphize(
+        arena,
+        path.to_path_buf(),
+        subs_by_module,
+        RocCacheDir::Persistent(roc_cache_dir.as_path()),
+        load_config,
+    )
+    .unwrap();
 
     let mut loaded = loaded;
     let mut expectations = std::mem::take(&mut loaded.expectations);
@@ -487,6 +497,7 @@ pub fn build(
     matches: &ArgMatches,
     config: BuildConfig,
     triple: Triple,
+    roc_cache_dir: RocCacheDir<'_>,
     link_type: LinkType,
 ) -> io::Result<i32> {
     use build::build_file;
@@ -518,7 +529,7 @@ pub fn build(
             let start_time = Instant::now();
 
             // Rather than building an executable or library, we're building
-            // a rp1 bundle so this code can be distributed via a HTTPS
+            // a tarball so this code can be distributed via a HTTPS
             let filename = roc_packaging::tarball::build(path)?;
             let total_time = start_time.elapsed().as_millis();
             let created_path = path.with_file_name(&filename);
@@ -627,6 +638,7 @@ pub fn build(
         prebuilt,
         threading,
         wasm_dev_stack_bytes,
+        roc_cache_dir,
         build_ordering,
     );
 

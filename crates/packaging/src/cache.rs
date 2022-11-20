@@ -3,15 +3,28 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use roc_error_macros::internal_error;
 use tar::Archive;
+use tempfile::TempDir;
 
 use crate::https::{self, PackageMetadata, Problem};
 
 const MAX_DOWNLOAD_BYTES: u64 = 32 * 1_000_000_000; // GB
 const TARBALL_BUFFER_SIZE: usize = 16 * 1_000_000; // MB
 
-/// Look in the given cache dir to see if we already have an entry for the given URL. If we do,
-/// return its info. If we don't already have it, then:
+#[derive(Copy, Clone, Debug)]
+pub enum RocCacheDir<'a> {
+    /// Normal scenario: reading from the user's cache dir on disk
+    Persistent(&'a Path),
+    /// For tests and such; we don't want to write to the real cache during a test!
+    Temp(&'a TempDir),
+    /// Pretty much just for build.rs - we should never be downloading anything; blow up if we try!
+    Disallowed,
+}
+
+/// Accepts either a path to the Roc cache dir, or else a TempDir. If a TempDir, always download
+/// into that dir. If the cache dir on the filesystem, then look into it to see if we already
+/// have an entry for the given URL. If we do, return its info. If we don't already have it, then:
 ///
 /// - Download and decompress the compressed tarball from the given URL
 /// - Verify its bytes against the hash in the URL
@@ -20,23 +33,33 @@ const TARBALL_BUFFER_SIZE: usize = 16 * 1_000_000; // MB
 /// Returns the path to the installed package (which will be in the cache dir somewhere), as well
 /// as the requested root module filename (optionally specified via the URL fragment).
 pub fn install_package<'a>(
-    roc_cache_dir: Option<&Path>,
+    roc_cache_dir: RocCacheDir<'_>,
     url: &'a str,
 ) -> Result<(PathBuf, Option<&'a str>), Problem> {
     let metadata = PackageMetadata::try_from(url).map_err(Problem::UrlProblem)?;
-    let opt_dest_dir = match roc_cache_dir {
-        Some(dir) => {
-            let dest_dir = path_inside_cache(dir, metadata.cache_subfolder, metadata.content_hash);
+    let dest_dir = match roc_cache_dir {
+        RocCacheDir::Persistent(cache_dir) => {
+            let dest_dir =
+                path_inside_cache(cache_dir, metadata.cache_subfolder, metadata.content_hash);
 
             if dest_dir.exists() {
                 // If the cache dir exists already, we assume it has the correct contents
-                // (it's a cache, after all!) and don't download anything.
+                // (it's a cache, after all!) and return early without downloading anything.
                 return Ok((dest_dir, metadata.root_module_filename));
+            } else {
+                // Create the destination directory, since it didn't exist already.
+                fs::create_dir_all(&dest_dir).map_err(Problem::IoErr)?;
             }
 
-            Some(dest_dir)
+            dest_dir
         }
-        None => None,
+        RocCacheDir::Temp(temp_dir) => temp_dir.path().to_path_buf(),
+        RocCacheDir::Disallowed => {
+            internal_error!(
+                "Tried to download a package ({:?}) via RocCacheDir::Disallowed - which was explicitly used in order to disallow downloading packages in the current context!",
+                url
+            )
+        }
     };
 
     // Download the tarball into memory and verify it. Early return if it fails verification,
@@ -47,17 +70,6 @@ pub fn install_package<'a>(
         https::download_and_verify(url, metadata.content_hash, &mut buf, MAX_DOWNLOAD_BYTES)?;
 
         buf
-    };
-
-    // Create the destination directory if it didn't exist already.
-    // Default to unpacking into a tempdir if no cache dir was provided.
-    let dest_dir = match opt_dest_dir {
-        Some(dir) => {
-            fs::create_dir_all(&dir).map_err(Problem::IoErr)?;
-
-            dir
-        }
-        None => tempfile::tempdir().map_err(Problem::IoErr)?.into_path(),
     };
 
     Archive::new(tarball_bytes.as_slice())
@@ -80,6 +92,8 @@ const ROC_CACHE_DIR_NAME: &str = "Roc";
 // e.g. the "roc" in ~/.cache/roc
 const ROC_CACHE_DIR_NAME: &str = "roc";
 
+const ROC_VERSION: &str = include_str!("../../../version.txt");
+
 /// This looks up environment variables, so it should ideally be called once and then cached!
 ///
 /// Returns a path of the form cache_dir_path.join(ROC_CACHE_DIR_NAME) where cache_dir_path is:
@@ -92,14 +106,14 @@ const ROC_CACHE_DIR_NAME: &str = "roc";
 ///
 /// Returns None if XDG_CACHE_HOME is not set, and also we can't determine the home directory
 /// (or if %APPDATA% is missing on Windows) on this system.
-pub fn roc_cache_dir(roc_version: &str) -> Option<PathBuf> {
+pub fn roc_cache_dir() -> Option<PathBuf> {
     // Respect XDG, if the system appears to be using it.
     // https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
     match env::var_os("XDG_CACHE_HOME") {
         Some(xdg_cache_home) => Some(
             Path::new(&xdg_cache_home)
                 .join(ROC_CACHE_DIR_NAME)
-                .join(roc_version),
+                .join(ROC_VERSION),
         ),
         None => {
             #[cfg(windows)]

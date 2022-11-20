@@ -45,7 +45,6 @@ roc_collections = { path = "../compiler/collections" }
 roc_can = { path = "../compiler/can" }
 roc_docs = { path = "../docs" }
 roc_glue = { path = "../glue" }
-roc_packaging = { path = "../packaging" }
 roc_parse = { path = "../compiler/parse" }
 roc_region = { path = "../compiler/region" }
 roc_module = { path = "../compiler/module" }
@@ -55,6 +54,7 @@ roc_load = { path = "../compiler/load" }
 roc_build = { path = "../compiler/build" }
 roc_fmt = { path = "../compiler/fmt" }
 roc_target = { path = "../compiler/roc_target" }
+roc_packaging = { path = "../packaging" }
 roc_reporting = { path = "../reporting" }
 roc_error_macros = { path = "../error_macros" }
 roc_editor = { path = "../editor", optional = true }

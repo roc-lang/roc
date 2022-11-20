@@ -33,6 +33,7 @@ roc_parse = { path = "../compiler/parse" }
 roc_target = { path = "../compiler/roc_target" }
 roc_test_utils = { path = "../test_utils" }
 roc_solve = { path = "../compiler/solve" }
+roc_packaging = { path = "../packaging" }
 
 pretty_assertions.workspace = true
 indoc.workspace = true

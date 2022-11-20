@@ -36,7 +36,7 @@ use roc_mono::ir::{
 use roc_mono::layout::{
     CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, STLayoutInterner,
 };
-use roc_packaging::cache;
+use roc_packaging::cache::{self, RocCacheDir};
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
@@ -950,8 +950,6 @@ struct State<'a> {
 
 type CachedTypeState = Arc<Mutex<MutMap<ModuleId, TypeState>>>;
 
-const ROC_VERSION: &str = include_str!("../../../../version.txt");
-
 impl<'a> State<'a> {
     fn goal_phase(&self) -> Phase {
         self.exec_mode.goal_phase()
@@ -1211,7 +1209,7 @@ pub fn load_and_typecheck_str<'a>(
     target_info: TargetInfo,
     render: RenderTarget,
     palette: Palette,
-    roc_cache_dir: &Path,
+    roc_cache_dir: RocCacheDir<'_>,
     threading: Threading,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
@@ -1230,7 +1228,14 @@ pub fn load_and_typecheck_str<'a>(
         exec_mode: ExecutionMode::Check,
     };
 
-    match load(arena, load_start, exposed_types, cached_subs, load_config)? {
+    match load(
+        arena,
+        load_start,
+        exposed_types,
+        cached_subs,
+        roc_cache_dir,
+        load_config,
+    )? {
         Monomorphized(_) => unreachable!(""),
         TypeChecked(module) => Ok(module),
     }
@@ -1255,7 +1260,7 @@ impl<'a> LoadStart<'a> {
         arena: &'a Bump,
         filename: PathBuf,
         render: RenderTarget,
-        roc_cache_dir: &Path,
+        roc_cache_dir: RocCacheDir<'_>,
         palette: Palette,
     ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
@@ -1387,7 +1392,7 @@ impl<'a> LoadStart<'a> {
         arena: &'a Bump,
         filename: PathBuf,
         src: &'a str,
-        roc_cache_dir: &Path,
+        roc_cache_dir: RocCacheDir<'_>,
         src_dir: PathBuf,
     ) -> Result<Self, LoadingProblem<'a>> {
         let arc_modules = Arc::new(Mutex::new(PackageModuleIds::default()));
@@ -1487,6 +1492,7 @@ pub fn load<'a>(
     load_start: LoadStart<'a>,
     exposed_types: ExposedByModule,
     cached_types: MutMap<ModuleId, TypeState>,
+    roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     enum Threads {
@@ -1513,12 +1519,6 @@ pub fn load<'a>(
         }
     };
 
-    let roc_cache_dir = if let Some(dir) = cache::roc_cache_dir(ROC_VERSION) {
-        dir
-    } else {
-        return Err(LoadingProblem::CouldNotFindCacheDir);
-    };
-
     match threads {
         Threads::Single => load_single_threaded(
             arena,
@@ -1529,7 +1529,7 @@ pub fn load<'a>(
             load_config.render,
             load_config.palette,
             load_config.exec_mode,
-            &roc_cache_dir,
+            roc_cache_dir,
         ),
         Threads::Many(threads) => load_multi_threaded(
             arena,
@@ -1541,7 +1541,7 @@ pub fn load<'a>(
             load_config.palette,
             threads,
             load_config.exec_mode,
-            &roc_cache_dir,
+            roc_cache_dir,
         ),
     }
 }
@@ -1557,7 +1557,7 @@ pub fn load_single_threaded<'a>(
     render: RenderTarget,
     palette: Palette,
     exec_mode: ExecutionMode,
-    roc_cache_dir: &Path,
+    roc_cache_dir: RocCacheDir<'_>,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1618,7 +1618,7 @@ pub fn load_single_threaded<'a>(
             &worker_msg_rx,
             &msg_tx,
             &src_dir,
-            &roc_cache_dir,
+            roc_cache_dir,
             target_info,
         );
 
@@ -1813,7 +1813,7 @@ fn load_multi_threaded<'a>(
     palette: Palette,
     available_threads: usize,
     exec_mode: ExecutionMode,
-    roc_cache_dir: &Path,
+    roc_cache_dir: RocCacheDir<'_>,
 ) -> Result<LoadResult<'a>, LoadingProblem<'a>> {
     let LoadStart {
         arc_modules,
@@ -1980,7 +1980,7 @@ fn worker_task_step<'a>(
     worker_msg_rx: &crossbeam::channel::Receiver<WorkerMsg>,
     msg_tx: &MsgSender<'a>,
     src_dir: &Path,
-    roc_cache_dir: &Path,
+    roc_cache_dir: RocCacheDir<'_>,
     target_info: TargetInfo,
 ) -> Result<ControlFlow<(), ()>, LoadingProblem<'a>> {
     match worker_msg_rx.try_recv() {
@@ -2055,7 +2055,7 @@ fn worker_task<'a>(
     worker_msg_rx: crossbeam::channel::Receiver<WorkerMsg>,
     msg_tx: MsgSender<'a>,
     src_dir: &Path,
-    roc_cache_dir: &Path,
+    roc_cache_dir: RocCacheDir<'_>,
     target_info: TargetInfo,
 ) -> Result<(), LoadingProblem<'a>> {
     // Keep listening until we receive a Shutdown msg
@@ -3167,7 +3167,7 @@ fn load_platform_module<'a>(
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = Instant::now();
     let file_io_start = Instant::now();
-    let file = fs::read(dbg!(filename));
+    let file = fs::read(filename);
     let file_io_duration = file_io_start.elapsed();
 
     match file {
@@ -3304,7 +3304,7 @@ fn load_module<'a>(
     module_name: PQModuleName<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     arc_shorthands: Arc<Mutex<MutMap<&'a str, PackageName<'a>>>>,
-    roc_cache_dir: &Path,
+    roc_cache_dir: RocCacheDir<'_>,
     ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let module_start_time = Instant::now();
@@ -3492,7 +3492,7 @@ fn parse_header<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     src_bytes: &'a [u8],
-    roc_cache_dir: &Path,
+    roc_cache_dir: RocCacheDir<'_>,
     start_time: Instant,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let parse_start = Instant::now();
@@ -3731,7 +3731,7 @@ fn load_filename<'a>(
     opt_expected_module_name: Option<PackageQualified<'a, ModuleName>>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
-    roc_cache_dir: &Path,
+    roc_cache_dir: RocCacheDir<'_>,
     module_start_time: Instant,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let file_io_start = Instant::now();
@@ -3768,7 +3768,7 @@ fn load_from_str<'a>(
     src: &'a str,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
-    roc_cache_dir: &Path,
+    roc_cache_dir: RocCacheDir<'_>,
     module_start_time: Instant,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
     let file_io_start = Instant::now();
@@ -5638,7 +5638,7 @@ fn run_task<'a>(
     arena: &'a Bump,
     src_dir: &Path,
     msg_tx: MsgSender<'a>,
-    roc_cache_dir: &Path,
+    roc_cache_dir: RocCacheDir<'_>,
     target_info: TargetInfo,
 ) -> Result<(), LoadingProblem<'a>> {
     use BuildTask::*;

@@ -1,5 +1,6 @@
 use bumpalo::Bump;
 use roc_load::{ExecutionMode, LoadConfig, Threading};
+use roc_packaging::cache::{self, RocCacheDir};
 use roc_reporting::report::{Palette, Severity};
 use std::path::PathBuf;
 
@@ -53,12 +54,16 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
     let src_dir = PathBuf::from("fake/test/path");
     let (bytes_before_expr, module_src) = promote_expr_to_module(arena, defs, expr);
     let exposed_types = Default::default();
+    let roc_cache_dir = cache::roc_cache_dir().unwrap_or_else(|| {
+        todo!("Gracefully handle not being able to find default Roc cache dir.")
+    });
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         src_dir,
         exposed_types,
+        RocCacheDir::Persistent(roc_cache_dir.as_path()),
         LoadConfig {
             target_info,
             render: roc_reporting::report::RenderTarget::ColorTerminal,
