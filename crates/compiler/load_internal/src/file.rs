@@ -2264,17 +2264,19 @@ fn update<'a>(
             let mut header = header;
 
             if !header.module_id.is_builtin() {
-                extend_header_with_builtin(&mut header, ModuleId::NUM);
-                extend_header_with_builtin(&mut header, ModuleId::BOOL);
-                extend_header_with_builtin(&mut header, ModuleId::STR);
-                extend_header_with_builtin(&mut header, ModuleId::LIST);
-                extend_header_with_builtin(&mut header, ModuleId::RESULT);
-                extend_header_with_builtin(&mut header, ModuleId::DICT);
-                extend_header_with_builtin(&mut header, ModuleId::SET);
-                extend_header_with_builtin(&mut header, ModuleId::BOX);
-                extend_header_with_builtin(&mut header, ModuleId::ENCODE);
-                extend_header_with_builtin(&mut header, ModuleId::DECODE);
-                extend_header_with_builtin(&mut header, ModuleId::HASH);
+                let header = &mut header;
+
+                extend_header_with_builtin(header, ModuleId::NUM);
+                extend_header_with_builtin(header, ModuleId::BOOL);
+                extend_header_with_builtin(header, ModuleId::STR);
+                extend_header_with_builtin(header, ModuleId::LIST);
+                extend_header_with_builtin(header, ModuleId::RESULT);
+                extend_header_with_builtin(header, ModuleId::DICT);
+                extend_header_with_builtin(header, ModuleId::SET);
+                extend_header_with_builtin(header, ModuleId::BOX);
+                extend_header_with_builtin(header, ModuleId::ENCODE);
+                extend_header_with_builtin(header, ModuleId::DECODE);
+                extend_header_with_builtin(header, ModuleId::HASH);
             }
 
             state
