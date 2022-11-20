@@ -78,7 +78,6 @@ const ROC_CACHE_DIR_NAME: &str = "roc";
 ///
 /// Returns None if XDG_CACHE_HOME is not set, and also we can't determine the home directory
 /// (or if %APPDATA% is missing on Windows) on this system.
-#[cfg(not(test))]
 pub fn roc_cache_dir(roc_version: &str) -> Option<PathBuf> {
     // Respect XDG, if the system appears to be using it.
     // https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
@@ -106,11 +105,4 @@ pub fn roc_cache_dir(roc_version: &str) -> Option<PathBuf> {
             }
         }
     }
-}
-
-#[cfg(test)]
-pub fn roc_cache_dir(_: &str) -> Option<PathBuf> {
-    // Always use a tempdir during tests. We never want to write to the user's
-    // actual cache directory during tests!
-    Some(tempfile::temp_dir().unwrap())
 }

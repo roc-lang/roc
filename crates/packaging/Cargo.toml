@@ -23,5 +23,3 @@ bumpalo.workspace = true
 [dev-dependencies]
 pretty_assertions = "1.3.0"
 indoc = "1.0.7"
-
-tempfile.workspace = true
