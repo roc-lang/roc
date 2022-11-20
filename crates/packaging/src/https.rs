@@ -44,7 +44,7 @@ impl<'a> ValidUrl<'a> {
         };
 
         // Next, get the (optional) URL fragment, which must be a .roc filename
-        let (without_fragment, fragment) = match without_protocol.rsplit_once("#") {
+        let (without_fragment, fragment) = match without_protocol.rsplit_once('#') {
             Some((before_fragment, fragment)) => {
                 const EXT: &str = ".roc";
 
@@ -74,7 +74,7 @@ impl<'a> ValidUrl<'a> {
             }
         };
 
-        let (path, tarball_name) = match without_ext.rsplit_once("/") {
+        let (path, tarball_name) = match without_ext.rsplit_once('/') {
             Some((path, hash)) if !hash.is_empty() => (path, hash),
             _ => {
                 return Err(UrlProblem::MissingHash);
