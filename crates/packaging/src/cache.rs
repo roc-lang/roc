@@ -43,10 +43,10 @@ pub fn install_package<'a>(
         };
 
         // Create the destination directory and unpack the tarball into it.
-        fs::create_dir_all(dest_dir).map_err(Problem::IoErr)?;
+        fs::create_dir_all(&dest_dir).map_err(Problem::IoErr)?;
         Archive::new(tarball_bytes.as_slice())
-            .unpack(dest_dir)
-            .map_err(Problem::IoErr);
+            .unpack(&dest_dir)
+            .map_err(Problem::IoErr)?;
 
         // The package's files are now in the cache. We're done!
     }
