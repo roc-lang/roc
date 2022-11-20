@@ -1,8 +1,6 @@
 # Language Server
 
-This fork provides a simple Roc language server for interactive development.
-
-The language server is naive and incomplete, with rudimentary support for
+I put up a language server in this fork. It's not complete, and includes support for
 
 - Inline diagnostics
 - Hover support for get types of values
