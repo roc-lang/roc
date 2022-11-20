@@ -13,6 +13,8 @@ struct RocLs {
     registry: Mutex<Registry>,
 }
 
+impl std::panic::RefUnwindSafe for RocLs {}
+
 impl RocLs {
     pub fn new(client: Client) -> Self {
         Self {
@@ -48,7 +50,11 @@ impl RocLs {
         self.registry()
             .apply_change(DocumentChange::Modified(fi.clone(), text));
 
-        let diagnostics = self.registry().diagnostics(&fi);
+        let diagnostics = match std::panic::catch_unwind(|| self.registry().diagnostics(&fi)) {
+            Ok(ds) => ds,
+            Err(_) => return,
+        };
+
         self.client
             .publish_diagnostics(fi, diagnostics, Some(version))
             .await;
@@ -111,8 +117,10 @@ impl LanguageServer for RocLs {
             work_done_progress_params: _,
         } = params;
 
-        let hover = self.registry().hover(&text_document.uri, position);
-        Ok(hover)
+        match std::panic::catch_unwind(|| self.registry().hover(&text_document.uri, position)) {
+            Ok(h) => Ok(h),
+            Err(_) => Ok(None),
+        }
     }
 }
 

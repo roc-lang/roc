@@ -123,6 +123,7 @@ struct ModuleCache<'a> {
     pending_abilities: MutMap<ModuleId, PendingAbilitiesStore>,
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
+    checked: MutMap<ModuleId, CheckedModule>,
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations<'a>>>,
@@ -190,6 +191,7 @@ impl Default for ModuleCache<'_> {
             pending_abilities: Default::default(),
             constrained: Default::default(),
             typechecked: Default::default(),
+            checked: Default::default(),
             found_specializations: Default::default(),
             late_specializations: Default::default(),
             external_specializations_requested: Default::default(),
@@ -589,6 +591,7 @@ pub struct LoadedModule {
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub documentation: MutMap<ModuleId, ModuleDocumentation>,
     pub abilities_store: AbilitiesStore,
+    pub typechecked: MutMap<ModuleId, CheckedModule>,
 }
 
 impl LoadedModule {
@@ -663,6 +666,13 @@ pub struct TypeCheckedModule<'a> {
     pub solved_subs: Solved<Subs>,
     pub decls: Declarations,
     pub ident_ids: IdentIds,
+    pub abilities_store: AbilitiesStore,
+}
+
+#[derive(Debug)]
+pub struct CheckedModule {
+    pub solved_subs: Solved<Subs>,
+    pub decls: Declarations,
     pub abilities_store: AbilitiesStore,
 }
 
@@ -2555,6 +2565,14 @@ fn update<'a>(
                         .typechecked
                         .insert(module_id, typechecked);
                 } else {
+                    state.module_cache.checked.insert(
+                        module_id,
+                        CheckedModule {
+                            solved_subs,
+                            decls,
+                            abilities_store,
+                        },
+                    );
                     state.constrained_ident_ids.insert(module_id, ident_ids);
                     state.timings.insert(module_id, module_timing);
                 }
@@ -3097,13 +3115,16 @@ fn finish(
 
     let exposed_values = exposed_vars_by_symbol.iter().map(|x| x.0).collect();
 
+    let declarations_by_id = state.declarations_by_id;
+
     LoadedModule {
         module_id: state.root_id,
         interns,
         solved,
         can_problems: state.module_cache.can_problems,
         type_problems: state.module_cache.type_problems,
-        declarations_by_id: state.declarations_by_id,
+        declarations_by_id,
+        typechecked: state.module_cache.checked,
         dep_idents,
         exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,
