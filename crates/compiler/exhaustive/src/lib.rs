@@ -165,6 +165,7 @@ impl Error {
         match self {
             Error::Incomplete(region, _, _) => *region,
             Error::Redundant { branch_region, .. } => *branch_region,
+            Error::Unmatchable { branch_region, .. } => *branch_region,
         }
     }
 }

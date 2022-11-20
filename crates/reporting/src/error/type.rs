@@ -71,7 +71,7 @@ pub fn type_problem<'b>(
             symbol,
             overall_type,
         )),
-        UnexposedLookup(_, symbol) => {
+        UnexposedLookup(symbol) => {
             let title = "UNRECOGNIZED NAME".to_string();
             let doc = alloc
                 .stack(vec![alloc

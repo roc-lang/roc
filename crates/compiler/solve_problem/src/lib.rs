@@ -56,6 +56,10 @@ impl TypeError {
             TypeError::IngestedFileUnsupportedType(..) => Fatal,
         }
     }
+
+    pub fn region(&self) -> Option<Region> {
+        Some(Region::zero())
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

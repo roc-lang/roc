@@ -667,7 +667,7 @@ fn solve(
                         }
                     }
                     None => {
-                        problems.push(TypeError::UnexposedLookup(*region, *symbol));
+                        problems.push(TypeError::UnexposedLookup(*symbol));
 
                         state
                     }

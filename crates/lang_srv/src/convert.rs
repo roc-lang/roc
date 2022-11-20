@@ -72,7 +72,7 @@ pub(crate) mod diag {
     use std::path::Path;
 
     use roc_load::LoadingProblem;
-    use roc_region::all::LineInfo;
+    use roc_region::all::{LineInfo, Region};
     use roc_solve_problem::TypeError;
 
     use roc_reporting::report::{RocDocAllocator, Severity};
@@ -141,6 +141,12 @@ pub(crate) mod diag {
                 LoadingProblem::FormattedReport(report) => {
                     msg = report;
                 }
+                LoadingProblem::ImportCycle(_, _) => {
+                    msg = format!("Circular dependency between modules");
+                }
+                LoadingProblem::IncorrectModuleName(_) => {
+                    msg = format!("Incorrect module name");
+                }
             };
 
             Some(Diagnostic {
@@ -167,7 +173,10 @@ pub(crate) mod diag {
         type Feed = ProblemFmt<'a>;
 
         fn into_lsp_diagnostic(self, fmt: &'a ProblemFmt<'a>) -> Option<Diagnostic> {
-            let range = self.region().to_range(fmt.line_info);
+            let range = self
+                .region()
+                .unwrap_or_else(Region::zero)
+                .to_range(fmt.line_info);
 
             let report = roc_reporting::report::can_problem(
                 &fmt.alloc,
@@ -199,7 +208,10 @@ pub(crate) mod diag {
         type Feed = ProblemFmt<'a>;
 
         fn into_lsp_diagnostic(self, fmt: &'a ProblemFmt<'a>) -> Option<Diagnostic> {
-            let range = self.region().to_range(fmt.line_info);
+            let range = self
+                .region()
+                .unwrap_or_else(Region::zero)
+                .to_range(fmt.line_info);
 
             let report = roc_reporting::report::type_problem(
                 &fmt.alloc,
