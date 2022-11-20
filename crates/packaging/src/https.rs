@@ -10,6 +10,7 @@ use std::io::{self, ErrorKind, Read, Write};
 // let's try to avoid doing that.
 const ACCEPT_ENCODING: &str = "br, gzip, deflate";
 const BROTLI_BUFFER_BYTES: usize = 8 * 1_000_000; // MB
+const DOWNLOAD_CHUNK_SIZE: usize = 4096;
 
 pub struct ValidUrl<'a> {
     pub path: &'a str,
@@ -214,7 +215,7 @@ fn download<R: Read, W: Write>(
 /// Download the data from the reader into the writer, while hashing
 /// along the way, then return the base64url-enceoded hash once it's done.
 pub fn write_and_hash<R: Read, W: Write>(reader: &mut R, writer: &mut W) -> io::Result<String> {
-    let mut buf = Vec::with_capacity(4096);
+    let mut buf = Vec::with_capacity(DOWNLOAD_CHUNK_SIZE);
     let mut hasher = Hasher::new();
 
     loop {
@@ -224,10 +225,30 @@ pub fn write_and_hash<R: Read, W: Write>(reader: &mut R, writer: &mut W) -> io::
                 return Ok(base64_url::encode(hasher.finalize().as_bytes()));
             }
             Ok(_) => {
-                writer.write(buf.as_slice())?;
-
                 // Incorporate the bytes we just read into the hash.
                 hasher.update(&buf);
+
+                // Write all the bytes we just read until they've all been written.
+                {
+                    let mut to_write = buf.as_slice();
+
+                    loop {
+                        match writer.write(to_write) {
+                            Ok(0) => {
+                                // We wrote everything. All done writing!
+                                break;
+                            }
+                            Ok(bytes_written) => {
+                                // Advance the buffer so we don't write the same bytes again!
+                                to_write = &to_write[bytes_written..];
+                            }
+                            Err(err) if err.kind() == ErrorKind::Interrupted => {
+                                // No action needed, just retry on the next iteration of the loop.
+                            }
+                            Err(err) => return Err(err),
+                        }
+                    }
+                }
 
                 // Reset the buffer for the next read.
                 buf.clear();
