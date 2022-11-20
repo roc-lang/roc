@@ -12,10 +12,13 @@ const ACCEPT_ENCODING: &str = "br, gzip, deflate";
 const BROTLI_BUFFER_BYTES: usize = 8 * 1_000_000; // MB
 const DOWNLOAD_CHUNK_SIZE: usize = 4096;
 
-pub struct ValidUrl<'a> {
-    pub path: &'a str,
-    pub tarball_name: &'a str,
-    pub fragment: Option<&'a str>,
+pub struct PackageMetadata<'a> {
+    /// The BLAKE3 hash of the tarball's contents. Also the .tar filename on disk.
+    pub content_hash: &'a str,
+    /// On disk, this will be the subfolder inside the cache dir where the package lives
+    pub cache_subfolder: &'a str,
+    /// Other code will default this to main.roc, but this module isn't concerned with that default.
+    pub root_module_filename: Option<&'a str>,
 }
 
 /// Valid URLs must end in one of these:
@@ -33,8 +36,16 @@ pub enum UrlProblem {
     MissingHttps,
 }
 
-impl<'a> ValidUrl<'a> {
-    pub fn new(url: &'a str) -> Result<Self, UrlProblem> {
+impl<'a> TryFrom<&'a str> for PackageMetadata<'a> {
+    type Error = UrlProblem;
+
+    fn try_from(url: &'a str) -> Result<Self, Self::Error> {
+        PackageMetadata::new(url)
+    }
+}
+
+impl<'a> PackageMetadata<'a> {
+    fn new(url: &'a str) -> Result<Self, UrlProblem> {
         // First, verify that the URL starts with https://
         let without_protocol = match url.split_once("https://") {
             Some((_, without_protocol)) => without_protocol,
@@ -81,10 +92,10 @@ impl<'a> ValidUrl<'a> {
             }
         };
 
-        Ok(ValidUrl {
-            path,
-            tarball_name,
-            fragment,
+        Ok(PackageMetadata {
+            cache_subfolder: path,
+            content_hash: tarball_name,
+            root_module_filename: fragment,
         })
     }
 }
@@ -98,7 +109,7 @@ pub enum Problem {
     IoErr(io::Error),
     HttpErr(ureq::Error),
     UrlProblem(UrlProblem),
-    /// The Content-Length header of the response exceeded MAX_DOWNLOAD_SIZE
+    /// The Content-Length header of the response exceeded max_download_bytes
     DownloadTooBig(usize),
     InvalidContentLengthHeader,
     MissingContentLengthHeader,
@@ -108,11 +119,11 @@ pub enum Problem {
 /// Download and decompress the given URL, verifying its contents against the hash in the URL.
 /// Downloads it into a tempfile.
 pub fn download_and_verify<'a>(
-    url: &'a str,
+    url: &str,
+    content_hash: &str,
     dest: &mut impl Write,
     max_download_bytes: u64,
-) -> Result<ValidUrl<'a>, Problem> {
-    let valid_url = ValidUrl::new(url).map_err(Problem::UrlProblem)?;
+) -> Result<(), Problem> {
     let resp = ureq::get(url)
         .set("Accept-Encoding", ACCEPT_ENCODING)
         .call()
@@ -138,11 +149,11 @@ pub fn download_and_verify<'a>(
             let hash = download(encoding, &mut reader, dest)?;
 
             // The tarball name is the hash of its contents
-            if hash == valid_url.tarball_name {
-                Ok(valid_url)
+            if hash == content_hash {
+                Ok(())
             } else {
                 Err(Problem::InvalidContentHash {
-                    expected: valid_url.tarball_name.to_string(),
+                    expected: content_hash.to_string(),
                     actual: hash,
                 })
             }
