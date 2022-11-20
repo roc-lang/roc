@@ -2687,6 +2687,14 @@ fn update<'a>(
                         .typechecked
                         .insert(module_id, typechecked);
                 } else {
+                    state.module_cache.checked.insert(
+                        module_id,
+                        CheckedModule {
+                            solved_subs,
+                            decls,
+                            abilities_store,
+                        },
+                    );
                     state.constrained_ident_ids.insert(module_id, ident_ids);
                     state.timings.insert(module_id, module_timing);
                 }
@@ -3321,7 +3329,8 @@ fn finish(
         solved,
         can_problems: state.module_cache.can_problems,
         type_problems: state.module_cache.type_problems,
-        declarations_by_id: state.declarations_by_id,
+        declarations_by_id,
+        typechecked: state.module_cache.checked,
         dep_idents,
         exposed_aliases: exposed_aliases_by_symbol,
         exposed_values,

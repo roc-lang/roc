@@ -2,9 +2,10 @@ use std::collections::HashMap;
 
 use bumpalo::Bump;
 use roc_load::{LoadedModule, LoadingProblem};
-use roc_region::all::LineInfo;
+use roc_region::all::{LineInfo, Region};
 use roc_reporting::report::RocDocAllocator;
-use tower_lsp::lsp_types::{Diagnostic, Hover, HoverContents, MarkedString, Position, Url};
+use roc_types::subs::Variable;
+use tower_lsp::lsp_types::{Diagnostic, Hover, HoverContents, MarkedString, Position, Range, Url};
 
 use crate::convert::{
     diag::{IntoLspDiagnostic, ProblemFmt},
@@ -155,17 +156,49 @@ impl Document {
             self.line_info()
         };
 
-        let position = position.to_roc_position(line_info);
+        let region = position.to_roc_position(line_info);
 
         let module = match self.module() {
             Ok(module) => module,
-            Err(_) => return None,
+            Err(_) => {
+                return Some(Hover {
+                    contents: HoverContents::Scalar(MarkedString::String("bar".to_owned())),
+                    range: Some(Range::new(
+                        position,
+                        Position {
+                            line: position.line,
+                            character: position.character + 1,
+                        },
+                    )),
+                })
+            }
         };
 
-        let decls = module.declarations_by_id.get(&module.module_id).unwrap();
-        let (region, var) = roc_can::traverse::find_closest_type_at(position, decls)?;
+        let (subs, decls) = match module.typechecked.get_mut(&module.module_id) {
+            Some(m) => (&mut m.solved_subs, &m.decls),
+            None => match module.declarations_by_id.get(&module.module_id) {
+                Some(decls) => (&mut module.solved, decls),
+                None => {
+                    return Some(Hover {
+                        contents: HoverContents::Scalar(MarkedString::String(format!(
+                            "{:?}",
+                            (module.typechecked.keys().collect::<Vec<_>>())
+                        ))),
+                        range: Some(Range::new(
+                            position,
+                            Position {
+                                line: position.line,
+                                character: position.character + 1,
+                            },
+                        )),
+                    })
+                }
+            },
+        };
+        let (region, var) = roc_can::traverse::find_closest_type_at(region, decls)
+            .unwrap_or_else(|| (Region::new(region, region.bump_column(1)), Variable::NULL));
 
-        let subs = module.solved.inner_mut();
+        let subs = subs.inner_mut();
         let snapshot = subs.snapshot();
         let type_str = roc_types::pretty_print::name_and_print_var(
             var,

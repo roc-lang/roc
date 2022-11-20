@@ -3,4 +3,8 @@ app "rocLovesC"
     imports []
     provides [main] to pf
 
-main = "Roc <3 C!\n"
+main = foo B
+
+foo = \A -> "abcde"
+
+bar = ""
