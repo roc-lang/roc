@@ -62,16 +62,6 @@ fn single_to_list() {
         RocList::from_slice(&[1]),
         RocList<i64>
     );
-
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Set.toList (Set.single 1.0)
-            "#
-        ),
-        RocList::from_slice(&[1.0]),
-        RocList<f64>
-    );
 }
 
 #[test]

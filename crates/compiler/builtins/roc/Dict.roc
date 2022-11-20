@@ -96,9 +96,7 @@ Dict k v := {
     dataIndices : List Nat,
     data : List (T k v),
     size : Nat,
-}
-# TODO: re-add type definition one #4408 is fixed
-# | k has Hash & Eq
+} | k has Hash & Eq
 
 ## Return an empty dictionary.
 empty : Dict k v | k has Hash & Eq
@@ -457,13 +455,13 @@ insertAll = \xs, ys ->
 keepShared : Dict k v, Dict k v -> Dict k v | k has Hash & Eq
 keepShared = \xs, ys ->
     walk
-        ys
         xs
-        (\state, k, _ ->
-            if contains state k then
-                state
+        empty
+        (\state, k, v ->
+            if contains ys k then
+                insert state k v
             else
-                remove state k
+                state
         )
 
 ## Remove the key-value pairs in the first input that are also in the second

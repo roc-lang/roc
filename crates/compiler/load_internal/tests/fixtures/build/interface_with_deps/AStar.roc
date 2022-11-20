@@ -13,7 +13,7 @@ Model position :
     }
 
 
-initialModel : position -> Model position
+initialModel : position -> Model position | position has Hash & Eq
 initialModel = \start ->
     { evaluated : Set.empty
     , openSet : Set.single start
@@ -22,7 +22,7 @@ initialModel = \start ->
     }
 
 
-cheapestOpen : (position -> F64), Model position -> Result position [KeyNotFound] | position has Eq
+cheapestOpen : (position -> F64), Model position -> Result position [KeyNotFound] | position has Hash & Eq
 cheapestOpen = \costFunction, model ->
 
     folder = \resSmallestSoFar, position ->
@@ -47,7 +47,7 @@ cheapestOpen = \costFunction, model ->
 
 
 
-reconstructPath : Dict position position, position -> List position | position has Eq
+reconstructPath : Dict position position, position -> List position | position has Hash & Eq
 reconstructPath = \cameFrom, goal ->
     when Dict.get cameFrom goal is
         Err KeyNotFound ->
@@ -56,7 +56,7 @@ reconstructPath = \cameFrom, goal ->
         Ok next ->
             List.append (reconstructPath cameFrom next) goal
 
-updateCost : position, position, Model position -> Model position | position has Eq
+updateCost : position, position, Model position -> Model position | position has Hash & Eq
 updateCost = \current, neighbour, model ->
     newCameFrom = Dict.insert model.cameFrom neighbour current
 
@@ -80,12 +80,12 @@ updateCost = \current, neighbour, model ->
                 model
 
 
-findPath : { costFunction: (position, position -> F64), moveFunction: (position -> Set position), start : position, end : position } -> Result (List position) [KeyNotFound] | position has Eq
+findPath : { costFunction: (position, position -> F64), moveFunction: (position -> Set position), start : position, end : position } -> Result (List position) [KeyNotFound] | position has Hash & Eq
 findPath = \{ costFunction, moveFunction, start, end } ->
     astar costFunction moveFunction end (initialModel start)
 
 
-astar : (position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound], Ok (List position)] | position has Eq
+astar : (position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound], Ok (List position)] | position has Hash & Eq
 astar = \costFn, moveFn, goal, model ->
     when cheapestOpen (\position -> costFn goal position) model is
         Err _ ->

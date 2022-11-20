@@ -491,12 +491,12 @@ fn load_astar() {
     expect_types(
         loaded_module,
         hashmap! {
-            "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [KeyNotFound] | position has Eq",
-            "initialModel" => "position -> Model position",
-            "reconstructPath" => "Dict position position, position -> List position | position has Eq",
-            "updateCost" => "position, position, Model position -> Model position | position has Eq",
-            "cheapestOpen" => "(position -> F64), Model position -> Result position [KeyNotFound] | position has Eq",
-            "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound], Ok (List position)] | position has Eq",
+            "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [KeyNotFound] | position has Hash & Eq",
+            "initialModel" => "position -> Model position | position has Hash & Eq",
+            "reconstructPath" => "Dict position position, position -> List position | position has Hash & Eq",
+            "updateCost" => "position, position, Model position -> Model position | position has Hash & Eq",
+            "cheapestOpen" => "(position -> F64), Model position -> Result position [KeyNotFound] | position has Hash & Eq",
+            "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound], Ok (List position)] | position has Hash & Eq",
         },
     );
 }

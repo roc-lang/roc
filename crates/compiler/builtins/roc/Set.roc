@@ -19,17 +19,18 @@ interface Set
         Bool.{ Bool, Eq },
         Dict.{ Dict },
         Num.{ Nat },
-        Hash.{ Hasher, Hash },
+        Hash.{ Hash },
     ]
 
+# We should have this line above the next has.
+# It causes the formatter to fail currently.
+# | k has Hash & Eq
 Set k := Dict.Dict k {}
-    # TODO: re-add type definition one #4408 is fixed
-    # | k has Hash & Eq
-    has [
-            Eq {
-                isEq,
-            },
-        ]
+     has [
+         Eq {
+             isEq,
+         },
+     ]
 
 isEq : Set k, Set k -> Bool | k has Hash & Eq
 isEq = \_, _ -> Bool.true
@@ -42,9 +43,6 @@ single : k -> Set k | k has Hash & Eq
 single = \key ->
     Dict.single key {} |> @Set
 
-## Make sure never to insert a *NaN* to a [Set]! Because *NaN* is defined to be
-## unequal to *NaN*, adding a *NaN* results in an entry that can never be
-## retrieved or removed from the [Set].
 insert : Set k, k -> Set k | k has Hash & Eq
 insert = \@Set dict, key ->
     Dict.insert dict key {} |> @Set

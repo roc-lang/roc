@@ -384,7 +384,7 @@ fn insert_all() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn insert_all_prefer_first() {
+fn insert_all_prefer_second() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -396,7 +396,7 @@ fn insert_all_prefer_first() {
             Dict.values myDict
             "#
         ),
-        RocList::from_slice(&[100]),
+        RocList::from_slice(&[200]),
         RocList<i64>
     );
 }
