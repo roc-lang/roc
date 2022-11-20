@@ -20,37 +20,51 @@ const TARBALL_BUFFER_SIZE: usize = 16 * 1_000_000; // MB
 /// Returns the path to the installed package (which will be in the cache dir somewhere), as well
 /// as the requested root module filename (optionally specified via the URL fragment).
 pub fn install_package<'a>(
-    roc_cache_dir: &Path,
+    roc_cache_dir: Option<&Path>,
     url: &'a str,
 ) -> Result<(PathBuf, Option<&'a str>), Problem> {
     let metadata = PackageMetadata::try_from(url).map_err(Problem::UrlProblem)?;
-    let dest_dir = path_inside_cache(
-        roc_cache_dir,
-        metadata.cache_subfolder,
-        metadata.content_hash,
-    );
+    let opt_dest_dir = match roc_cache_dir {
+        Some(dir) => {
+            let dest_dir = path_inside_cache(dir, metadata.cache_subfolder, metadata.content_hash);
 
-    // If it exists already, we assume it has the correct contents (it's a cache, after all!)
-    // and don't download anything.
-    if !dest_dir.exists() {
-        // Download the tarball into memory and verify it. Early return if it fails verification.
-        let tarball_bytes = {
-            let mut buf = Vec::with_capacity(TARBALL_BUFFER_SIZE);
+            if dest_dir.exists() {
+                // If the cache dir exists already, we assume it has the correct contents
+                // (it's a cache, after all!) and don't download anything.
+                return Ok((dest_dir, metadata.root_module_filename));
+            }
 
-            https::download_and_verify(url, metadata.content_hash, &mut buf, MAX_DOWNLOAD_BYTES)?;
+            Some(dest_dir)
+        }
+        None => None,
+    };
 
-            buf
-        };
+    // Download the tarball into memory and verify it. Early return if it fails verification,
+    // before we would create any directories in the cache.
+    let tarball_bytes = {
+        let mut buf = Vec::with_capacity(TARBALL_BUFFER_SIZE);
 
-        // Create the destination directory and unpack the tarball into it.
-        fs::create_dir_all(&dest_dir).map_err(Problem::IoErr)?;
-        Archive::new(tarball_bytes.as_slice())
-            .unpack(&dest_dir)
-            .map_err(Problem::IoErr)?;
+        https::download_and_verify(url, metadata.content_hash, &mut buf, MAX_DOWNLOAD_BYTES)?;
 
-        // The package's files are now in the cache. We're done!
-    }
+        buf
+    };
 
+    // Create the destination directory if it didn't exist already.
+    // Default to unpacking into a tempdir if no cache dir was provided.
+    let dest_dir = match opt_dest_dir {
+        Some(dir) => {
+            fs::create_dir_all(&dir).map_err(Problem::IoErr)?;
+
+            dir
+        }
+        None => tempfile::tempdir().map_err(Problem::IoErr)?.into_path(),
+    };
+
+    Archive::new(tarball_bytes.as_slice())
+        .unpack(&dest_dir)
+        .map_err(Problem::IoErr)?;
+
+    // The package's files are now in the cache. We're done!
     Ok((dest_dir, metadata.root_module_filename))
 }
 
