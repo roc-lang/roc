@@ -118,7 +118,7 @@ pub enum Problem {
 
 /// Download and decompress the given URL, verifying its contents against the hash in the URL.
 /// Downloads it into a tempfile.
-pub fn download_and_verify<'a>(
+pub fn download_and_verify(
     url: &str,
     content_hash: &str,
     dest: &mut impl Write,
