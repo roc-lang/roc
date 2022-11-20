@@ -1,12 +1,6 @@
 use blake3::Hasher;
-use brotli_decompressor;
-use core::slice::SlicePattern;
 use flate2;
-use std::fs::File;
 use std::io::{self, ErrorKind, Read, Write};
-use std::path::Path;
-
-use crate::tarball;
 
 // gzip should be the most widely supported, and brotli offers the highest compession.
 // flate2 gets us both gzip and deflate, so there's no harm in offering deflate too.
@@ -15,14 +9,12 @@ use crate::tarball;
 // We can consider supporting more, but that would bloat the `roc` binary more, so
 // let's try to avoid doing that.
 const ACCEPT_ENCODING: &str = "br, gzip, deflate";
-
-const TARBALL_BUFFER_BYTES: usize = 8 * 1_000_000; // MB
 const BROTLI_BUFFER_BYTES: usize = 8 * 1_000_000; // MB
 
 pub struct ValidUrl<'a> {
-    path: &'a str,
-    tarball_name: &'a str,
-    fragment: Option<&'a str>,
+    pub path: &'a str,
+    pub tarball_name: &'a str,
+    pub fragment: Option<&'a str>,
 }
 
 /// Valid URLs must end in one of these:
@@ -31,7 +23,6 @@ pub struct ValidUrl<'a> {
 ///     .tar.gz
 ///     .tar.br
 const VALID_EXTENSION_SUFFIXES: [&str; 2] = [".gz", ".br"];
-const EXPECTED_HASH_LENGTH: usize = 5;
 
 pub enum UrlProblem {
     InvalidExtensionSuffix(String),
@@ -97,134 +88,154 @@ impl<'a> ValidUrl<'a> {
     }
 }
 
-pub fn get(url: &str, dest: &Path) -> io::Result<Vec<u8>> {
-    let (mut file, hash) = download_tarball(url, dest)?;
-
-    file.read_to_end(&mut bytes).unwrap();
-
-    let expected_hash = todo!();
+pub enum Problem {
+    UnsupportedEncoding(String),
+    InvalidContentHash {
+        expected: String,
+        actual: String,
+    },
+    IoErr(io::Error),
+    HttpErr(ureq::Error),
+    UrlProblem(UrlProblem),
+    /// The Content-Length header of the response exceeded MAX_DOWNLOAD_SIZE
+    DownloadTooBig(usize),
+    InvalidContentLengthHeader,
+    MissingContentLengthHeader,
+    MissingContentEncodingHeader,
 }
 
-/// Download and decompress the given URL
-fn download_tarball(url: &str, dest: &Path) -> io::Result<File> {
-    let result = ureq::get(url)
+/// Download and decompress the given URL, verifying its contents against the hash in the URL.
+/// Downloads it into a tempfile.
+pub fn download_and_verify<'a>(
+    url: &'a str,
+    dest: &mut impl Write,
+    max_download_bytes: u64,
+) -> Result<ValidUrl<'a>, Problem> {
+    let valid_url = ValidUrl::new(url).map_err(Problem::UrlProblem)?;
+    let resp = ureq::get(url)
         .set("Accept-Encoding", ACCEPT_ENCODING)
-        .call();
+        .call()
+        .map_err(Problem::HttpErr)?;
 
-    match result {
-        Ok(resp) => {
-            let mut bytes;
-            let encoding;
-
-            match (
-                resp.header("Content-Length").map(str::parse),
-                resp.header("Content-Encoding"),
-            ) {
-                (Some(Ok(len)), Some(content_encoding)) => {
-                    bytes = Vec::with_capacity(len);
-                    encoding = content_encoding.to_string();
-                }
-                (_, _) => todo!(),
+    match (
+        resp.header("Content-Length").map(str::parse),
+        resp.header("Content-Encoding"),
+    ) {
+        (Some(Ok(content_len)), Some(content_encoding)) => {
+            if content_len as u64 > max_download_bytes {
+                return Err(Problem::DownloadTooBig(content_len));
             }
+            let encoding = content_encoding.try_into()?;
 
             // Use .take to prevent a malicious server from sending back bytes
-            // until we exhaust system resources!
-            let tarball_reader = resp.into_reader().take(10_000_000);
-
-            // Download the tarball into a tempfile, which we will return; the caller can
-            // move it once it's been verified.
-            let mut tarball_dest = tempfile::tempfile()?;
-
-            match encoding.trim().to_lowercase().as_str() {
-                "br" => {
-                    let brotli_reader =
-                        brotli_decompressor::Decompressor::new(tarball_reader, BROTLI_BUFFER_BYTES);
-
-                    let downloader = Downloader::new(brotli_reader, tarball_dest);
-
-                    downloader.read_to_end(buf)
-                }
-                _ => {
-                    // We don't support other encodings, including mutliple encodings (although
-                    // the spec for the HTTP header permits a comma-separated list.
-                }
-            }
+            // until system resources are exhausted!
+            let mut reader = resp.into_reader().take(max_download_bytes);
 
             // The server can respond with multiple encodings, per
             // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding
+            // ...but we don't support that.
+            let hash = download(encoding, &mut reader, dest)?;
 
-            Ok(tempfile)
-        }
-        Err(_) => todo!(),
-    }
-}
-
-/// Downloads a file while also computing a hash of its contents.
-struct Downloader<R: Read, W: Write> {
-    hasher: Hasher,
-    reader: R,
-    writer: W,
-}
-
-impl<R: Read, W: Write> Downloader<R, W> {
-    pub fn new(reader: R, writer: W) -> Self {
-        Self {
-            reader,
-            writer,
-            hasher: blake3::Hasher::new(),
-        }
-    }
-
-    /// Download the data from the reader into the writer, while hashing
-    /// along the way, then return the base64url-enceoded hash once it's done.
-    pub fn run(&mut self, buf_size: usize) -> io::Result<String> {
-        let mut buf = Vec::with_capacity(buf_size);
-        let reader = &mut self.reader;
-        let writer = &mut self.writer;
-        let hasher = &mut self.hasher;
-
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => {
-                    break;
-                }
-                Ok(bytes_read) => {
-                    writer.write(buf.as_slice())?;
-
-                    // Incorporate the bytes we just read into the hash.
-                    hasher.update(&buf);
-
-                    // Reset the buffer for the next read.
-                    buf.clear();
-                }
-                Err(e) if e.kind() == ErrorKind::Interrupted => continue,
-                Err(e) => return Err(e),
+            // The tarball name is the hash of its contents
+            if hash == valid_url.tarball_name {
+                Ok(valid_url)
+            } else {
+                Err(Problem::InvalidContentHash {
+                    expected: valid_url.tarball_name.to_string(),
+                    actual: hash,
+                })
             }
         }
-
-        Ok(base64_url::encode(hasher.finalize().as_bytes()))
+        (Some(Err(_)), _) => {
+            // The Content-Length header wasn't an integer
+            Err(Problem::InvalidContentLengthHeader)
+        }
+        (None, _) => Err(Problem::MissingContentLengthHeader),
+        (_, None) => Err(Problem::MissingContentEncodingHeader),
     }
 }
 
-impl<R: Read, W: Write> Read for Downloader<R, W> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let initial_buf_len = buf.len();
-        let bytes_read = self.reader.read(buf)?;
+/// The content encodings we support
+enum Encoding {
+    Gzip,
+    Brotli,
+    Deflate,
+}
 
-        // Update the hasher with the bytes we just read.
-        self.hasher
-            .update(&buf[initial_buf_len..initial_buf_len.checked_add(bytes_read).unwrap()]);
+impl TryFrom<&str> for Encoding {
+    type Error = Problem;
 
-        Ok(bytes_read)
+    fn try_from(content_encoding: &str) -> Result<Self, Self::Error> {
+        use Encoding::*;
+
+        // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding#directives
+        match content_encoding {
+            "br" => Ok(Brotli),
+            "gzip" => Ok(Gzip),
+            "deflate" => Ok(Deflate),
+            other => {
+                // We don't support other encodings, including mutliple encodings (although
+                // the spec for the HTTP header permits a comma-separated list.
+                Err(Problem::UnsupportedEncoding(other.to_string()))
+            }
+        }
     }
 }
 
-impl<R: Read, W: Write> Write for Downloader<R, W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.writer.write(buf)
-    }
+/// Read from the given reader, decompress the bytes using the given Content-Encoding string,
+/// write them to the given writer, and return the base64url-encoded BLAKE3 hash of what was written.
+/// This both writes and hashes incrementally as it reads, so the only extra work that's done
+/// at the end is base64url-encoding the final hash.
+fn download<R: Read, W: Write>(
+    encoding: Encoding,
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<String, Problem> {
+    match encoding {
+        Encoding::Brotli => {
+            let mut brotli_reader = brotli::Decompressor::new(reader, BROTLI_BUFFER_BYTES);
 
-    fn flush(&mut self) -> io::Result<()> {
-        self.writer.flush()
+            write_and_hash(&mut brotli_reader, writer).map_err(Problem::IoErr)
+        }
+        Encoding::Gzip => {
+            // Note: GzDecoder::new immediately parses the gzip header (so, calls read())
+            let mut gzip_reader = flate2::read::GzDecoder::new(reader);
+
+            write_and_hash(&mut gzip_reader, writer).map_err(Problem::IoErr)
+        }
+        Encoding::Deflate => {
+            let mut deflate_reader = flate2::read::DeflateDecoder::new(reader);
+
+            write_and_hash(&mut deflate_reader, writer).map_err(Problem::IoErr)
+        }
+    }
+}
+
+/// Download the data from the reader into the writer, while hashing
+/// along the way, then return the base64url-enceoded hash once it's done.
+pub fn write_and_hash<R: Read, W: Write>(reader: &mut R, writer: &mut W) -> io::Result<String> {
+    let mut buf = Vec::with_capacity(4096);
+    let mut hasher = Hasher::new();
+
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => {
+                // We ran out of bytes to read, so we're done!
+                return Ok(base64_url::encode(hasher.finalize().as_bytes()));
+            }
+            Ok(_) => {
+                writer.write(buf.as_slice())?;
+
+                // Incorporate the bytes we just read into the hash.
+                hasher.update(&buf);
+
+                // Reset the buffer for the next read.
+                buf.clear();
+            }
+            Err(err) if err.kind() == ErrorKind::Interrupted => {
+                // No action needed, just retry on the next iteration of the loop.
+            }
+            Err(err) => return Err(err),
+        }
     }
 }
