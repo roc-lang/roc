@@ -37,6 +37,7 @@ use roc_mono::ir::{
 use roc_mono::layout::{
     CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, STLayoutInterner,
 };
+use roc_packaging::https::PackageMetadata;
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
@@ -3121,8 +3122,13 @@ fn finish(
     }
 }
 
-/// Load a `platform` module
-fn load_platform_module<'a>(
+enum PackageSrc<'a> {
+    Filesystem(&'a Path),
+    Url(PackageMetadata<'a>),
+}
+
+/// Load a `platform` module from disk
+fn load_platform_module_from_disk<'a>(
     arena: &'a Bump,
     filename: &Path,
     shorthand: &'a str,
@@ -3132,7 +3138,7 @@ fn load_platform_module<'a>(
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = Instant::now();
     let file_io_start = Instant::now();
-    let file = fs::read(filename);
+    let file = fs::read(dbg!(filename));
     let file_io_duration = file_io_start.elapsed();
 
     match file {
@@ -3605,17 +3611,29 @@ fn parse_header<'a>(
                         shorthand,
                         package_name:
                             Loc {
-                                value: package_name,
+                                value: package_path,
                                 ..
                             },
                         ..
                     }) = opt_base_package
                     {
-                        // check whether we can find a `platform` module file
-                        let platform_module_path = app_file_dir.join(package_name.to_str());
+                        let src = package_path.to_str();
+
+                        // check whether we can find a `platform` module file on disk
+                        let platform_module_path = if src.starts_with("https://") {
+                            // If this is a HTTPS package, synchronously download it
+                            // to the cache before proceeding.
+
+                            // TODO we should do this async; however, with the current
+                            // architecture of fie.rs (which doesn't use async/await),
+                            // this would be very difficult!
+                            todo!()
+                        } else {
+                            app_file_dir.join(src)
+                        };
 
                         if platform_module_path.as_path().exists() {
-                            let load_platform_module_msg = load_platform_module(
+                            let load_platform_module_msg = load_platform_module_from_disk(
                                 arena,
                                 &platform_module_path,
                                 shorthand,

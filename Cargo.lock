@@ -3940,6 +3940,7 @@ dependencies = [
  "roc_late_solve",
  "roc_module",
  "roc_mono",
+ "roc_packaging",
  "roc_parse",
  "roc_problem",
  "roc_region",
