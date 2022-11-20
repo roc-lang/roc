@@ -3122,11 +3122,6 @@ fn finish(
     }
 }
 
-enum PackageSrc<'a> {
-    Filesystem(&'a Path),
-    Url(PackageMetadata<'a>),
-}
-
 /// Load a `platform` module from disk
 fn load_platform_module_from_disk<'a>(
     arena: &'a Bump,
