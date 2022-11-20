@@ -133,6 +133,14 @@ fn macho_dylib_header(triple: &Triple, commands: Commands) -> [u8; 8 * 4] {
     buffer
 }
 
+fn bstring16(string: &str) -> [u8; 16] {
+    let mut result = [0; 16];
+
+    result[..string.len()].copy_from_slice(string.as_bytes());
+
+    result
+}
+
 type vm_prot_t = u32;
 
 #[repr(C)]
@@ -153,8 +161,8 @@ struct Section64 {
 }
 
 impl Section64 {
-    fn to_bytes(&self) -> [u8; std::mem::size_of::<Self>()] {
-        let mut buffer = arrayvec::ArrayVec::new();
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
 
         buffer.extend(self.sectname);
         buffer.extend(self.segname);
@@ -170,7 +178,44 @@ impl Section64 {
         buffer.extend(self.reserved2.to_le_bytes());
         buffer.extend(self.reserved3.to_le_bytes());
 
-        buffer.into_inner().unwrap()
+        buffer
+    }
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct DyldCommand {
+    rebase_off: u32,
+    rebase_size: u32,
+    bind_off: u32,
+    bind_size: u32,
+    weak_bind_off: u32,
+    weak_bind_size: u32,
+    lazy_bind_off: u32,
+    lazy_bind_size: u32,
+    export_off: u32,
+    export_size: u32,
+}
+
+impl DyldCommand {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+
+        buffer.extend(0x80000022u32.to_le_bytes());
+        buffer.extend(0x30u32.to_le_bytes());
+
+        buffer.extend(self.rebase_off.to_le_bytes());
+        buffer.extend(self.rebase_size.to_le_bytes());
+        buffer.extend(self.bind_off.to_le_bytes());
+        buffer.extend(self.bind_size.to_le_bytes());
+        buffer.extend(self.weak_bind_off.to_le_bytes());
+        buffer.extend(self.weak_bind_size.to_le_bytes());
+        buffer.extend(self.lazy_bind_off.to_le_bytes());
+        buffer.extend(self.lazy_bind_size.to_le_bytes());
+        buffer.extend(self.export_off.to_le_bytes());
+        buffer.extend(self.export_size.to_le_bytes());
+
+        buffer
     }
 }
 
@@ -223,18 +268,6 @@ impl SegmentCommand64 {
     }
 }
 
-union lc_str<'a> {
-    offset: u32,
-    ptr: &'a str,
-}
-
-struct dylib {
-    name: lc_str<'static>,
-    timestamp: u32,
-    current_version: u32,
-    compatibility_version: u32,
-}
-
 fn dylib_id_command(
     name: &str,
     timestamp: u32,
@@ -242,7 +275,7 @@ fn dylib_id_command(
     compatibility_version: u32,
 ) -> Vec<u8> {
     dylib_command(
-        0x0d,
+        mach_object::LC_ID_DYLIB,
         name,
         timestamp,
         current_version,
@@ -257,7 +290,7 @@ fn dylib_load_command(
     compatibility_version: u32,
 ) -> Vec<u8> {
     dylib_command(
-        0x0c,
+        mach_object::LC_LOAD_DYLIB,
         name,
         timestamp,
         current_version,
@@ -294,6 +327,69 @@ fn dylib_command(
     buffer.push(0);
 
     let padding = size - buffer.len();
+    buffer.extend(std::iter::repeat(0).take(padding));
+
+    buffer
+}
+
+fn export_trie(input: &[(u32, &str)]) -> Vec<u8> {
+    let mut buffer = Vec::new();
+
+    // Terminal size(0)
+    buffer.push(0);
+
+    // Child count(1)
+    buffer.push(1);
+
+    // Node label("_")
+    buffer.extend(b"_\0");
+
+    // Node offset(5)
+    buffer.push(5);
+    assert_eq!(buffer.len(), 5);
+
+    // Terminal size(0)
+    buffer.push(0);
+
+    //
+
+    // Child count(n)
+    debug_assert!(input.len() < 128);
+    buffer.push(input.len() as u8);
+
+    let mut offset_base = buffer.len();
+    for (_, name) in input {
+        offset_base += name.len() + 1; // null-terminated
+
+        offset_base += 1; // will become variable with LEB128
+    }
+
+    for (i, (_address, name)) in input.iter().enumerate() {
+        // Node label("name")
+        buffer.extend(name.as_bytes());
+        buffer.push(0); // null-terminated
+
+        // Node offset
+        buffer.push((offset_base + 5 * i) as u8);
+    }
+
+    for _ in input {
+        // Terminal size (number of words)
+        buffer.push(11);
+
+        // Flags
+        buffer.push(0);
+
+        // Symbol offset(-8) I think this means an export without a definition
+        buffer.extend([0x80, 0x80, 0x80, 0x80, 0xf0, 0xff, 0xff, 0xff, 0xff, 0x01]);
+
+        // Child count(0)
+        buffer.push(0);
+    }
+
+    // commands round up to a multiple of 8 (when targetting 64-bit)
+    // string must be null-terminated
+    let padding = next_multiple_of(buffer.len(), 8) - buffer.len();
     buffer.extend(std::iter::repeat(0).take(padding));
 
     buffer
@@ -388,6 +484,34 @@ mod test {
         assert_eq!(actual_str, expected);
     }
 
+    const STRINGS: &[&str] = &[
+        "__mh_execute_header",
+        "_roc__mainForHost_1_Decode_DecodeError_caller",
+        "_roc__mainForHost_1_Decode_DecodeError_result_size",
+        //        "_roc__mainForHost_1_Decode_DecodeError_size",
+        //        "_roc__mainForHost_1_Decode_DecodeResult_caller",
+        //        "_roc__mainForHost_1_Decode_DecodeResult_result_size",
+        //        "_roc__mainForHost_1_Decode_DecodeResult_size",
+        //        "_roc__mainForHost_1_Decode_Decoder_caller",
+        //        "_roc__mainForHost_1_Decode_Decoder_result_size",
+        //        "_roc__mainForHost_1_Decode_Decoder_size",
+        //        "_roc__mainForHost_1_Dict_Dict_caller",
+        //        "_roc__mainForHost_1_Dict_Dict_result_size",
+        //        "_roc__mainForHost_1_Dict_Dict_size",
+        //        "_roc__mainForHost_1_Dict_LowLevelHasher_caller",
+        //        "_roc__mainForHost_1_Dict_LowLevelHasher_result_size",
+        //        "_roc__mainForHost_1_Dict_LowLevelHasher_size",
+        //        "_roc__mainForHost_1_Encode_Encoder_caller",
+        //        "_roc__mainForHost_1_Encode_Encoder_result_size",
+        //        "_roc__mainForHost_1_Encode_Encoder_size",
+        //        "_roc__mainForHost_1_Set_Set_caller",
+        //        "_roc__mainForHost_1_Set_Set_result_size",
+        //        "_roc__mainForHost_1_Set_Set_size",
+        //        "_roc__mainForHost_1_exposed",
+        //        "_roc__mainForHost_1_exposed_generic",
+        //        "_roc__mainForHost_size",
+    ];
+
     #[test]
     fn running_example() {
         let mut bytes = Vec::new();
@@ -401,18 +525,20 @@ mod test {
         };
 
         let commands = Commands {
-            count: 0x3,
-            size: 0x48 + 0x30 + 0x38,
+            count: 5 + 2 + 1,
+            size: 5 * 0x48 + 0x30 + 0x38 + 0x30,
         };
 
         bytes.extend_from_slice(macho_dylib_header(&triple, commands).as_slice());
 
+        //
+
         let command = SegmentCommand64 {
             cmd: 0x19,
             cmdsize: 0x48,
-            segname: *b"__PAGEZERO\0\0\0\0\0\0",
+            segname: bstring16("__PAGEZERO"),
             vmaddr: 0,
-            vmsize: 0,
+            vmsize: 0x0000000100000000,
             fileoff: 0,
             filesize: 0,
             maxprot: 0,
@@ -423,13 +549,121 @@ mod test {
 
         bytes.extend(command.with_segments(&[]));
 
+        //
+
+        let command = SegmentCommand64 {
+            cmd: 0x19,
+            cmdsize: 0x48,
+            segname: bstring16("__TEXT"),
+            vmaddr: 0,
+            vmsize: 0x1000,
+            fileoff: 0,
+            filesize: 0x1000,
+            maxprot: 5,  // TODO why?
+            initprot: 5, // TODO why?
+            nsects: 0,
+            flags: 0,
+        };
+
+        bytes.extend(command.with_segments(&[]));
+
+        //
+
+        let command = SegmentCommand64 {
+            cmd: 0x19,
+            cmdsize: 0x48,
+            segname: bstring16("__DATA_CONST"),
+            vmaddr: 0x0000000100001000,
+            vmsize: 0x1000,
+            fileoff: 0x1000,
+            filesize: 0x1000,
+            maxprot: 0,
+            initprot: 0,
+            nsects: 0,
+            flags: 0,
+        };
+
+        bytes.extend(command.with_segments(&[]));
+
+        //
+
+        let command = SegmentCommand64 {
+            cmd: 0x19,
+            cmdsize: 0x48,
+            segname: bstring16("__DATA"),
+            vmaddr: 0x0000000100002000,
+            vmsize: 0x1000,
+            fileoff: 0x2000,
+            filesize: 0x1000,
+            maxprot: 0,
+            initprot: 0,
+            nsects: 0,
+            flags: 0,
+        };
+
+        bytes.extend(command.with_segments(&[]));
+
+        //
+
+        let command = SegmentCommand64 {
+            cmd: 0x19,
+            cmdsize: 0x48,
+            segname: bstring16("__LINKEDIT"),
+            vmaddr: 0x0000000100003000,
+            vmsize: 0x1000,
+            fileoff: 0x3000,
+            filesize: 0x1000,
+            maxprot: 0,
+            initprot: 0,
+            nsects: 0,
+            flags: 0,
+        };
+
+        bytes.extend(command.with_segments(&[]));
+
         bytes.extend(dylib_id_command("librocthing.dylib", 0x2, 0x10000, 0x10000));
+
         bytes.extend(dylib_load_command(
             "/usr/lib/libSystem.B.dylib",
             0x2,
             0x05016401,
             0x10000,
         ));
+
+        let trie = export_trie(&[(1234, "_mh_execute_header"), (5678, "xxx"), (9090, "yyy")]);
+        let export_size = trie.len() as u32;
+
+        let dyld_info_only = DyldCommand {
+            rebase_off: 0x3000,
+            rebase_size: 0x8,
+            bind_off: 0x3008,
+            bind_size: 0x18,
+            weak_bind_off: 0x00,
+            weak_bind_size: 0x00,
+            lazy_bind_off: 0x3020,
+            lazy_bind_size: 0x00,
+            export_off: 0x3020,
+            export_size,
+        };
+
+        bytes.extend(dyld_info_only.to_bytes());
+
+        let delta = 0x3000 - bytes.len();
+        bytes.extend(std::iter::repeat(0).take(delta));
+
+        // rebase
+        bytes.extend(std::iter::repeat(0).take(0x8));
+
+        // binding
+
+        let a = bytes.len();
+        bytes.extend([0x11, 0x51, 0x40]);
+        bytes.extend(b"dyld_stub_binder\0");
+        bytes.extend([0x72, 0x00, 0x90, 0x00]);
+        assert_eq!(bytes.len() - a, 0x18);
+
+        // export
+        bytes.extend(trie);
 
         std::fs::write("/tmp/test.dylib", &bytes);
     }

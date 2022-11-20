@@ -4042,6 +4042,7 @@ dependencies = [
  "mach_object",
  "memmap2 0.5.7",
  "object 0.29.0",
+ "radix_trie",
  "roc_build",
  "roc_collections",
  "roc_error_macros",
