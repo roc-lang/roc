@@ -3122,7 +3122,7 @@ fn finish(
 }
 
 /// Load a `platform` module from disk
-fn load_platform_module_from_disk<'a>(
+fn load_platform_module<'a>(
     arena: &'a Bump,
     filename: &Path,
     shorthand: &'a str,
@@ -3627,7 +3627,7 @@ fn parse_header<'a>(
                         };
 
                         if platform_module_path.as_path().exists() {
-                            let load_platform_module_msg = load_platform_module_from_disk(
+                            let load_platform_module_msg = load_platform_module(
                                 arena,
                                 &platform_module_path,
                                 shorthand,
