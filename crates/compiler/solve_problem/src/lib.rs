@@ -31,6 +31,12 @@ pub enum TypeError {
     },
 }
 
+impl TypeError {
+    pub fn region(&self) -> Option<Region> {
+        Some(Region::zero())
+    }
+}
+
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Unfulfilled {
     /// No claimed implementation of an ability for an opaque type.
