@@ -2047,3 +2047,39 @@ fn issue_4077_fixed_fixpoint() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn unify_types_with_fixed_fixpoints_outside_fixing_region() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Input := [
+                FromJob Job (List Str),
+            ]
+
+            Job := [
+                Job (List Input)
+            ]
+
+            job : List Input -> Job
+            job = \inputs ->
+                @Job (Job inputs)
+
+            helloWorld : Job
+            helloWorld =
+                @Job ( Job [ @Input (FromJob greeting []) ] )
+
+            greeting : Job
+            greeting =
+                job []
+
+            main = (\_ -> "OKAY") helloWorld
+            "#
+        ),
+        RocStr::from("OKAY"),
+        RocStr
+    );
+}

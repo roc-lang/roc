@@ -8283,4 +8283,41 @@ mod solve_expr {
             "MDict v -> MDict v | v has Eq",
         );
     }
+
+    #[test]
+    fn unify_types_with_fixed_fixpoints_outside_fixing_region() {
+        infer_queries!(indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Input := [
+                FromJob Job
+            ]
+
+            Job := [
+                Job (List Input)
+            ]
+
+            job : List Input -> Job
+            job = \inputs ->
+                @Job (Job inputs)
+
+            helloWorld : Job
+            helloWorld =
+                @Job ( Job [ @Input (FromJob greeting) ] )
+                #            ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+            greeting : Job
+            greeting =
+                job []
+
+            main = (\_ -> "Which platform am I running on now?\n") helloWorld
+            "#
+        ),
+        @r###"
+        @Input (FromJob greeting) : [FromJob ([Job (List [FromJob a])] as a)]
+        "###
+        print_only_under_alias: true
+        )
+    }
 }

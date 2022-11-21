@@ -2814,8 +2814,13 @@ fn unify_shared_tags_merge_new<M: MetaCollector>(
     new_ext_var: Variable,
     recursion_var: Rec,
 ) -> Outcome<M> {
-    let was_fixed = env.was_fixed(ctx.first) || env.was_fixed(ctx.second);
-    if was_fixed {
+    if env.was_fixed(ctx.first) && env.was_fixed(ctx.second) {
+        // Both of the tags we're looking at were just involved in fixpoint-fixing, so their types
+        // should be aligned. As such, do not attempt to unify them and update the recursion
+        // pointer again.
+        debug_assert!(env
+            .subs
+            .equivalent_without_compacting(ctx.first, ctx.second));
         return Default::default();
     }
 
