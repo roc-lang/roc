@@ -12,6 +12,7 @@ use roc_error_macros::{internal_error, user_error};
 use roc_load::{ExpectMetadata, LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
+use roc_packaging::tarball::Compression;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
@@ -50,7 +51,7 @@ pub const CMD_GLUE: &str = "glue";
 pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
 
 pub const FLAG_DEBUG: &str = "debug";
-pub const FLAG_TAR: &str = "tar";
+pub const FLAG_BUNDLE: &str = "bundle";
 pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_MAX_THREADS: &str = "max-threads";
@@ -168,9 +169,11 @@ pub fn build_app<'a>() -> Command<'a> {
                     .required(false),
             )
             .arg(
-                Arg::new(FLAG_TAR)
-                    .long(FLAG_TAR)
-                    .help("Create a .tar archive of a package, so others can add it as a HTTPS dependency.")
+                Arg::new(FLAG_BUNDLE)
+                    .long(FLAG_BUNDLE)
+                    .help("Create an archive of a package (for example, a .tar, .tar.gz, or .tar.br file), so others can add it as a HTTPS dependency.")
+                    .conflicts_with(FLAG_TARGET)
+                    .possible_values([".tar", ".tar.gz", ".tar.br"])
                     .required(false),
             )
             .arg(
@@ -510,29 +513,53 @@ pub fn build(
 
             // TODO these should use roc_reporting to display nicer error messages.
             match matches.value_source(ROC_FILE) {
-                        Some(ValueSource::DefaultValue) => {
-                            eprintln!(
-                                "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
-                                DEFAULT_ROC_FILENAME
-                            )
-                        }
-                        _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
-                    }
+                Some(ValueSource::DefaultValue) => {
+                    eprintln!(
+                        "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
+                        DEFAULT_ROC_FILENAME
+                    )
+                }
+                _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
+            }
 
             process::exit(1);
         }
 
-        if config == BuildConfig::BuildOnly && matches.is_present(FLAG_TAR) {
+        if config == BuildConfig::BuildOnly && matches.is_present(FLAG_BUNDLE) {
             let start_time = Instant::now();
+
+            let compression =
+                Compression::try_from(matches.value_of(FLAG_BUNDLE).unwrap()).unwrap();
+
+            // Print a note of advice. This is mainly here because brotli takes so long but produces
+            // such smaller output files; the idea is to encourage people to wait for brotli,
+            // so that downloads go faster. The compression only happens once, but the network
+            // transfer and decompression will happen many more times!
+            match compression {
+                Compression::Brotli => {
+                    println!("Compressing with Brotli at maximum quality level…\n\n(Note: Brotli compression can take awhile! Using --{FLAG_BUNDLE} .tar.gz takes less time, but usually produces a significantly larger output file. Brotli is generally worth the up-front wait if this is a file people will be downloading!)\n");
+                }
+                Compression::Gzip => {
+                    println!("Compressing with gzip at minimum quality…\n\n(Note: Gzip usually runs faster than Brotli but typically produces significantly larger output files. Consider using --{FLAG_BUNDLE} .tar.br if this is a file people will be downloading!)\n");
+                }
+                Compression::Uncompressed => {
+                    println!("Building .tar archive without compression…\n\n(Note: Compression takes more time to run but typically produces much smaller output files. Consider using --{FLAG_BUNDLE} .tar.br if this is a file people will be downloading!)\n");
+                }
+            }
 
             // Rather than building an executable or library, we're building
             // a tarball so this code can be distributed via a HTTPS
-            let filename = roc_packaging::tarball::build(path)?;
-            let total_time = start_time.elapsed().as_millis();
+            let filename = roc_packaging::tarball::build(path, compression)?;
+            let total_time_ms = start_time.elapsed().as_millis();
+            let total_time = if total_time_ms > 1000 {
+                format!("{}s {}ms", total_time_ms / 1000, total_time_ms % 1000)
+            } else {
+                format!("{total_time_ms} ms")
+            };
             let created_path = path.with_file_name(&filename);
 
             println!(
-                "\nBundled \x1B[33m{}\x1B[39m and its dependent files into the following archive in {total_time} ms:\n\n\t\x1B[33m{}\x1B[39m\n\nTo distribute this archive as a package, upload this to some URL and then add it as a dependency with:\n\n\t\x1B[32m\"https://your-url-goes-here/{filename}\"\x1B[39m\n",
+                "\nBundled \x1B[33m{}\x1B[39m and its dependent files into the following archive in {total_time}:\n\n\t\x1B[33m{}\x1B[39m\n\nTo distribute this archive as a package, upload this to some URL and then add it as a dependency with:\n\n\t\x1B[32m\"https://your-url-goes-here/{filename}\"\x1B[39m\n",
                 path.to_string_lossy(),
                 created_path.to_string_lossy()
             );

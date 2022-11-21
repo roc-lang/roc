@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use flate2::write::GzEncoder;
 use roc_parse::ast::Module;
 use roc_parse::header::PlatformHeader;
 use roc_parse::module::parse_header;
@@ -9,6 +10,38 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use tar;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Compression {
+    Brotli,
+    Gzip,
+    Uncompressed,
+}
+impl Compression {
+    const fn file_ext(&self) -> &'static str {
+        match self {
+            Compression::Brotli => ".tar.br",
+            Compression::Gzip => ".tar.gz",
+            Compression::Uncompressed => ".tar",
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a str> for Compression {
+    type Error = ();
+
+    fn try_from(extension: &'a str) -> Result<Self, Self::Error> {
+        if extension.ends_with(".br") {
+            Ok(Compression::Brotli)
+        } else if extension.ends_with(".gz") {
+            Ok(Compression::Gzip)
+        } else if extension.ends_with(".tar") {
+            Ok(Compression::Uncompressed)
+        } else {
+            Err(())
+        }
+    }
+}
+
 /// Given a path to a .roc file, write a .tar file to disk.
 ///
 /// The .tar file will be in the same directory, and its filename
@@ -16,7 +49,7 @@ use tar;
 /// the name of that filename (including the .tar extension),
 /// so the caller can obtain the path to the file by calling
 /// Path::with_file_name(returned_string) on the Path argument it provided.
-pub fn build(path_to_main: &Path) -> io::Result<String> {
+pub fn build(path_to_main: &Path, compression: Compression) -> io::Result<String> {
     let mut archive_bytes = Vec::new();
 
     write_archive(path_to_main, &mut archive_bytes)?;
@@ -28,7 +61,7 @@ pub fn build(path_to_main: &Path) -> io::Result<String> {
     let hash = base64_url::encode(blake3::hash(&archive_bytes).as_bytes());
     let mut filename = hash;
 
-    filename.push_str(".tar");
+    filename.push_str(compression.file_ext());
 
     // Write the bytes to disk.
     {
@@ -41,13 +74,21 @@ pub fn build(path_to_main: &Path) -> io::Result<String> {
             );
         });
 
-        file.write_all(&archive_bytes).unwrap_or_else(|err| {
-            panic!(
-                "Unable to write to {} - error was: {:?}",
-                dest_path.to_string_lossy(),
-                err
-            );
-        });
+        match compression {
+            Compression::Brotli => {
+                brotli::BrotliCompress(
+                    &mut archive_bytes.as_slice(),
+                    &mut file,
+                    &Default::default(),
+                )?;
+            }
+            Compression::Gzip => {
+                let mut encoder = GzEncoder::new(&mut file, flate2::Compression::fast());
+                encoder.write_all(&archive_bytes)?;
+                encoder.finish()?;
+            }
+            Compression::Uncompressed => file.write_all(&archive_bytes)?,
+        };
     }
 
     Ok(filename)
