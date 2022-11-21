@@ -262,6 +262,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
             main_fn_index,
             &main_fn_layout.result,
         );
+        called_fns.push(true);
 
         module.eliminate_dead_code(env.arena, called_fns);
 
