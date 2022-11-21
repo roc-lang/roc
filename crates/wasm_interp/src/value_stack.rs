@@ -7,7 +7,7 @@ use crate::Value;
 /// Memory-efficient Struct-of-Arrays storage for the value stack.
 /// Pack the values and their types as densely as possible,
 /// to get better cache usage, at the expense of some extra logic.
-struct ValueStack<'a> {
+pub struct ValueStack<'a> {
     bytes: Vec<'a, u8>,
     is_float: BitVec,
     is_64: BitVec,
