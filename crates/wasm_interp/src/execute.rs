@@ -17,16 +17,23 @@ pub struct ExecutionState<'a> {
     pub call_stack: CallStack<'a>,
 
     pub value_stack: ValueStack<'a>,
+
+    pub globals: Vec<'a, Value>,
+
     program_counter: usize,
 }
 
 impl<'a> ExecutionState<'a> {
-    pub fn new(arena: &'a Bump, memory_pages: u32, program_counter: usize) -> Self {
+    pub fn new<G>(arena: &'a Bump, memory_pages: u32, program_counter: usize, globals: G) -> Self
+    where
+        G: IntoIterator<Item = Value>,
+    {
         let mem_bytes = memory_pages * MemorySection::PAGE_SIZE;
         ExecutionState {
             memory: Vec::with_capacity_in(mem_bytes as usize, arena),
             call_stack: CallStack::new(arena),
             value_stack: ValueStack::new(arena),
+            globals: Vec::from_iter_in(globals, arena),
             program_counter,
         }
     }
@@ -101,10 +108,12 @@ impl<'a> ExecutionState<'a> {
                 self.call_stack.set_local(index, value);
             }
             GETGLOBAL => {
-                todo!("{:?}", op_code);
+                let index = self.fetch_immediate_u32(module);
+                self.value_stack.push(self.globals[index as usize]);
             }
             SETGLOBAL => {
-                todo!("{:?}", op_code);
+                let index = self.fetch_immediate_u32(module);
+                self.globals[index as usize] = self.value_stack.pop();
             }
             I32LOAD => {
                 todo!("{:?}", op_code);

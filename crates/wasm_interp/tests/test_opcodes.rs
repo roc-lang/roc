@@ -8,12 +8,6 @@ const DEFAULT_MEMORY_PAGES: u32 = 1;
 const DEFAULT_PROGRAM_COUNTER: usize = 0;
 
 // #[test]
-// fn test_unreachable() {}
-
-// #[test]
-// fn test_nop() {}
-
-// #[test]
 // fn test_block() {}
 
 // #[test]
@@ -55,7 +49,7 @@ const DEFAULT_PROGRAM_COUNTER: usize = 0;
 #[test]
 fn test_set_get_local() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER);
+    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
     let mut module = WasmModule::new(&arena);
 
     let local_decls = [
@@ -84,7 +78,7 @@ fn test_set_get_local() {
 #[test]
 fn test_tee_get_local() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER);
+    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
     let mut module = WasmModule::new(&arena);
 
     let local_decls = [
@@ -111,11 +105,34 @@ fn test_tee_get_local() {
     assert_eq!(state.value_stack.pop(), Value::I32(12345));
 }
 
-// #[test]
-// fn test_getglobal() {}
+#[test]
+fn test_global() {
+    let arena = Bump::new();
+    let mut state = ExecutionState::new(
+        &arena,
+        DEFAULT_MEMORY_PAGES,
+        DEFAULT_PROGRAM_COUNTER,
+        [Value::F64(1.11), Value::I32(222), Value::F64(3.33)],
+    );
+    let mut module = WasmModule::new(&arena);
 
-// #[test]
-// fn test_setglobal() {}
+    module.code.bytes.push(OpCode::GETGLOBAL as u8);
+    module.code.bytes.encode_u32(1);
+    module.code.bytes.push(OpCode::I32CONST as u8);
+    module.code.bytes.encode_i32(555);
+    module.code.bytes.push(OpCode::SETGLOBAL as u8);
+    module.code.bytes.encode_u32(1);
+    module.code.bytes.push(OpCode::GETGLOBAL as u8);
+    module.code.bytes.encode_u32(1);
+
+    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module);
+    assert_eq!(state.value_stack.len(), 2);
+    assert_eq!(state.value_stack.pop(), Value::I32(555));
+    assert_eq!(state.value_stack.pop(), Value::I32(222));
+}
 
 // #[test]
 // fn test_i32load() {}
@@ -195,7 +212,7 @@ fn test_tee_get_local() {
 #[test]
 fn test_i32const() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER);
+    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
@@ -208,7 +225,7 @@ fn test_i32const() {
 #[test]
 fn test_i64const() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER);
+    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::I64CONST as u8);
@@ -221,7 +238,7 @@ fn test_i64const() {
 #[test]
 fn test_f32const() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER);
+    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::F32CONST as u8);
@@ -234,7 +251,7 @@ fn test_f32const() {
 #[test]
 fn test_f64const() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER);
+    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::F64CONST as u8);
@@ -358,7 +375,7 @@ fn test_f64const() {
 #[test]
 fn test_i32add() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER);
+    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
@@ -376,7 +393,7 @@ fn test_i32add() {
 #[test]
 fn test_i32sub() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER);
+    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
@@ -394,7 +411,7 @@ fn test_i32sub() {
 #[test]
 fn test_i32mul() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER);
+    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
