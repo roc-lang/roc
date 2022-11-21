@@ -20,6 +20,7 @@ base64-url = "1.4.13"
 reqwest = { version = "0.11.13", features = [ "blocking", "rustls-tls" ] }
 
 bumpalo.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 pretty_assertions = "1.3.0"

@@ -1,15 +1,11 @@
+use crate::https::{self, PackageMetadata, Problem};
+use roc_error_macros::internal_error;
 use std::{
     env, fs,
     path::{Path, PathBuf},
 };
 
-use roc_error_macros::internal_error;
-use tar::Archive;
-
-use crate::https::{self, PackageMetadata, Problem};
-
 const MAX_DOWNLOAD_BYTES: u64 = 32 * 1_000_000_000; // GB
-const TARBALL_BUFFER_SIZE: usize = 16 * 1_000_000; // MB
 
 #[derive(Copy, Clone, Debug)]
 pub enum RocCacheDir<'a> {
@@ -37,21 +33,43 @@ pub fn install_package<'a>(
     url: &'a str,
 ) -> Result<(PathBuf, Option<&'a str>), Problem> {
     let metadata = PackageMetadata::try_from(url).map_err(Problem::InvalidUrl)?;
-    let dest_dir = match roc_cache_dir {
+    match roc_cache_dir {
         RocCacheDir::Persistent(cache_dir) => {
-            let dest_dir =
-                path_inside_cache(cache_dir, metadata.cache_subfolder, metadata.content_hash);
+            // e.g. ~/.cache/roc/example.com/roc-packages/
+            let parent_dir = cache_dir.join(metadata.cache_subfolder);
+            // e.g. ~/.cache/roc/example.com/roc-packages/jDRlAFAA3738vu3-vMpLUoyxtA86Z7CaZneoOKrihbE
+            let dest_dir = parent_dir.join(metadata.content_hash);
 
             if dest_dir.exists() {
                 // If the cache dir exists already, we assume it has the correct contents
-                // (it's a cache, after all!) and return early without downloading anything.
-                return Ok((dest_dir, metadata.root_module_filename));
+                // (it's a cache, after all!) and return without downloading anything.
+                Ok((dest_dir, metadata.root_module_filename))
             } else {
-                // Create the destination directory, since it didn't exist already.
-                fs::create_dir_all(&dest_dir).map_err(Problem::IoErr)?;
-            }
+                // Download into a tempdir; only move it to dest_dir if hash verification passes.
+                let tempdir = tempfile::tempdir().map_err(Problem::IoErr)?;
+                let tempdir_path = tempdir.path();
+                let hash = https::download_and_hash(url, tempdir_path, MAX_DOWNLOAD_BYTES)?;
 
-            dest_dir
+                // Download the tarball into memory and verify it.
+                // The tarball name is the hash of its contents.
+                if hash == metadata.content_hash {
+                    // Now that we've verified the hash, rename the tempdir to the real dir.
+
+                    // Create the destination dir's parent dir, since it may not exist yet.
+                    fs::create_dir_all(parent_dir).map_err(Problem::IoErr)?;
+
+                    // This should be super cheap - just an inode change.
+                    fs::rename(tempdir_path, &dest_dir).map_err(Problem::IoErr)?;
+
+                    // The package's files are now in the cache. We're done!
+                    Ok((dest_dir, metadata.root_module_filename))
+                } else {
+                    Err(Problem::InvalidContentHash {
+                        expected: metadata.content_hash.to_string(),
+                        actual: hash,
+                    })
+                }
+            }
         }
         RocCacheDir::Disallowed => {
             internal_error!(
@@ -60,29 +78,8 @@ pub fn install_package<'a>(
             )
         }
         #[cfg(test)]
-        RocCacheDir::Temp(temp_dir) => temp_dir.path().to_path_buf(),
-    };
-
-    // Download the tarball into memory and verify it. Early return if it fails verification,
-    // before we would create any directories in the cache.
-    let tarball_bytes = {
-        let mut buf = Vec::with_capacity(TARBALL_BUFFER_SIZE);
-
-        https::download_and_verify(url, metadata.content_hash, &mut buf, MAX_DOWNLOAD_BYTES)?;
-
-        buf
-    };
-
-    Archive::new(tarball_bytes.as_slice())
-        .unpack(&dest_dir)
-        .map_err(Problem::IoErr)?;
-
-    // The package's files are now in the cache. We're done!
-    Ok((dest_dir, metadata.root_module_filename))
-}
-
-fn path_inside_cache(roc_cache_dir: &Path, cache_subfolder: &str, content_hash: &str) -> PathBuf {
-    roc_cache_dir.join(cache_subfolder).join(content_hash)
+        RocCacheDir::Temp(temp_dir) => Ok((temp_dir.path().to_path_buf(), None)),
+    }
 }
 
 #[cfg(windows)]
