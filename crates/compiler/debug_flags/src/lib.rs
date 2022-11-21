@@ -79,6 +79,9 @@ flags! {
     /// Only use this in single-threaded mode!
     ROC_PRINT_UNIFICATIONS
 
+    /// Prints types whose ability impls failed to be derived.
+    ROC_PRINT_UNDERIVABLE
+
     /// Prints traces of unspecialized lambda set compaction
     ROC_TRACE_COMPACTION
 

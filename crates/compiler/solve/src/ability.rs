@@ -1,6 +1,8 @@
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
 use roc_collections::{VecMap, VecSet};
+#[cfg(debug_assertions)]
+use roc_debug_flags::{dbg_do, ROC_PRINT_UNDERIVABLE};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -309,12 +311,18 @@ impl ObligationCache {
             Some(Err(NotDerivable {
                 var: failure_var,
                 context,
-            })) => Some(if failure_var == var {
-                UnderivableReason::SurfaceNotDerivable(context)
-            } else {
-                let error_type = subs.var_to_error_type(failure_var, Polarity::OF_VALUE);
-                UnderivableReason::NestedNotDerivable(error_type, context)
-            }),
+            })) => {
+                dbg_do!(ROC_PRINT_UNDERIVABLE, {
+                    eprintln!("❌ derived {:?} of {:?}", ability, subs.dbg(failure_var));
+                });
+
+                Some(if failure_var == var {
+                    UnderivableReason::SurfaceNotDerivable(context)
+                } else {
+                    let error_type = subs.var_to_error_type(failure_var, Polarity::OF_VALUE);
+                    UnderivableReason::NestedNotDerivable(error_type, context)
+                })
+            }
             None => Some(UnderivableReason::NotABuiltin),
         };
 
@@ -498,18 +506,6 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
-    fn visit_rigid_able(var: Variable, abilities: &[Symbol]) -> Result<(), NotDerivable> {
-        if abilities != [Self::ABILITY] {
-            Err(NotDerivable {
-                var,
-                context: NotDerivableContext::UnboundVar,
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    #[inline(always)]
     fn visit_recursion(var: Variable) -> Result<Descend, NotDerivable> {
         Err(NotDerivable {
             var,
@@ -659,7 +655,12 @@ trait DerivableVisitor {
                     subs.set_content(var, Content::FlexAbleVar(opt_name, merged_abilites));
                 }
                 RigidAbleVar(_, abilities) => {
-                    Self::visit_rigid_able(var, subs.get_subs_slice(abilities))?
+                    if !subs.get_subs_slice(abilities).contains(&Self::ABILITY) {
+                        return Err(NotDerivable {
+                            var,
+                            context: NotDerivableContext::NoContext,
+                        });
+                    }
                 }
                 RecursionVar {
                     structure,
