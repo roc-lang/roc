@@ -4,6 +4,7 @@ mod value_stack;
 
 // Exposed for testing only. Should eventually become private.
 pub use call_stack::CallStack;
+pub use execute::ExecutionState;
 pub use value_stack::ValueStack;
 
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -8,6 +8,7 @@ use crate::Value;
 /// Struct-of-Arrays storage for the call stack.
 /// Type info is packed to avoid wasting space on padding.
 /// However we store 64 bits for every local, even 32-bit values, for easy random access.
+#[derive(Debug)]
 pub struct CallStack<'a> {
     /// return addresses (one entry per frame)
     return_addrs: Vec<'a, u32>,
