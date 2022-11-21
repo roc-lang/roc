@@ -7,7 +7,6 @@ use std::process::Command;
 
 use roc_builtins::bitcode::IntWidth;
 use roc_collections::{MutMap, MutSet};
-use roc_gen_wasm::wasm_module::WasmModule;
 use roc_module::ident::{ForeignSymbol, ModuleName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{
@@ -19,6 +18,7 @@ use roc_mono::ir::{
     UpdateModeId,
 };
 use roc_mono::layout::{Builtin, CapturesNiche, LambdaName, Layout, STLayoutInterner};
+use roc_wasm_module::WasmModule;
 use wasm3::{Environment, Module};
 
 const LINKING_TEST_HOST_WASM: &str = "build/wasm_linking_test_host.wasm";
@@ -252,7 +252,7 @@ fn test_linking_without_dce() {
         ]
     );
 
-    let (final_module, _called_preload_fns, _roc_main_index) =
+    let (final_module, _called_fns, _roc_main_index) =
         roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
 
     let mut buffer = Vec::with_capacity(final_module.size());
@@ -309,10 +309,10 @@ fn test_linking_with_dce() {
 
     assert!(&host_module.names.function_names.is_empty());
 
-    let (mut final_module, called_preload_fns, _roc_main_index) =
+    let (mut final_module, called_fns, _roc_main_index) =
         roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
 
-    final_module.eliminate_dead_code(env.arena, called_preload_fns);
+    final_module.eliminate_dead_code(env.arena, called_fns);
 
     let mut buffer = Vec::with_capacity(final_module.size());
     final_module.serialize(&mut buffer);

@@ -1,4 +1,3 @@
-pub mod code_builder;
 pub mod linking;
 pub mod opcodes;
 pub mod parse;
@@ -7,14 +6,13 @@ pub mod serialize;
 
 use std::iter::repeat;
 
-pub use code_builder::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
 pub use linking::{OffsetRelocType, RelocationEntry, SymInfo};
+use opcodes::OpCode;
+use roc_error_macros::internal_error;
 pub use sections::{ConstExpr, Export, ExportType, Global, GlobalType, Signature};
 
 use bitvec::vec::BitVec;
 use bumpalo::{collections::Vec, Bump};
-
-use crate::DEBUG_SETTINGS;
 
 use self::linking::{IndexRelocType, LinkingSection, RelocationSection, WasmObjectSymbol};
 use self::parse::{Parse, ParseError};
@@ -23,7 +21,10 @@ use self::sections::{
     ImportDesc, ImportSection, MemorySection, NameSection, OpaqueSection, Section, SectionId,
     TableSection, TypeSection,
 };
-use self::serialize::{SerialBuffer, Serialize};
+pub use self::serialize::{SerialBuffer, Serialize};
+
+pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
+pub const FRAME_ALIGNMENT_BYTES: i32 = 16;
 
 /// A representation of the WebAssembly binary file format
 /// https://webassembly.github.io/spec/core/binary/modules.html
@@ -131,7 +132,7 @@ impl<'a> WasmModule<'a> {
         if function.signatures.is_empty() {
             module_errors.push_str("Missing Function section\n");
         }
-        if code.preloaded_bytes.is_empty() {
+        if code.bytes.is_empty() {
             module_errors.push_str("Missing Code section\n");
         }
         if linking.symbol_table.is_empty() {
@@ -176,17 +177,17 @@ impl<'a> WasmModule<'a> {
         })
     }
 
-    pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_host_fns: BitVec<usize>) {
+    pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_fns: BitVec<usize>) {
         if DEBUG_SETTINGS.skip_dead_code_elim {
             return;
         }
         //
-        // Mark all live host functions
+        // Mark all live functions
         //
 
         let import_count = self.import.imports.len();
-        let host_fn_min = import_count as u32 + self.code.dead_import_dummy_count;
-        let host_fn_max = host_fn_min + self.code.preloaded_count;
+        let fn_index_min = import_count as u32 + self.code.dead_import_dummy_count;
+        let fn_index_max = called_fns.len() as u32;
 
         // All functions exported to JS must be kept alive
         let exported_fns = self
@@ -212,13 +213,13 @@ impl<'a> WasmModule<'a> {
         );
 
         // Trace callees of the live functions, and mark those as live too
-        let live_flags = self.trace_live_host_functions(
+        let live_flags = self.trace_live_functions(
             arena,
-            called_host_fns,
+            called_fns,
             exported_fns,
             indirect_callees_and_signatures,
-            host_fn_min,
-            host_fn_max,
+            fn_index_min,
+            fn_index_max,
         );
 
         //
@@ -266,9 +267,9 @@ impl<'a> WasmModule<'a> {
             self.names.function_names[old_index].1 = new_name;
         }
 
-        // Relocate calls from host to JS imports
+        // Relocate calls to JS imports
         // This must happen *before* we run dead code elimination on the code section,
-        // so that byte offsets in the host's linking data will still be valid.
+        // so that byte offsets in the linking data will still be valid.
         for (new_index, &old_index) in live_import_fns.iter().enumerate() {
             if new_index == old_index {
                 continue;
@@ -277,49 +278,41 @@ impl<'a> WasmModule<'a> {
                 .linking
                 .find_and_reindex_imported_fn(old_index as u32, new_index as u32)
                 .unwrap();
-            self.reloc_code.apply_relocs_u32(
-                &mut self.code.preloaded_bytes,
-                sym_index,
-                new_index as u32,
-            );
-        }
-
-        // Relocate calls from Roc app to JS imports
-        for code_builder in self.code.code_builders.iter_mut() {
-            code_builder.apply_import_relocs(&live_import_fns);
+            self.reloc_code
+                .apply_relocs_u32(&mut self.code.bytes, sym_index, new_index as u32);
         }
 
         //
-        // Dead code elimination. Replace dead functions with tiny dummies.
+        // Code section: Replace dead functions with tiny dummies.
         // Live function indices are unchanged, so no relocations are needed.
         //
-        let dummy = CodeBuilder::dummy(arena);
-        let mut dummy_bytes = Vec::with_capacity_in(dummy.size(), arena);
-        dummy.serialize(&mut dummy_bytes);
-
-        let mut buffer = Vec::with_capacity_in(self.code.preloaded_bytes.len(), arena);
-        self.code.preloaded_count.serialize(&mut buffer);
-        for (i, fn_index) in (host_fn_min..host_fn_max).enumerate() {
+        let mut buffer = Vec::with_capacity_in(self.code.bytes.len(), arena);
+        self.code.function_count.serialize(&mut buffer);
+        for (i, fn_index) in (fn_index_min..fn_index_max).enumerate() {
             if live_flags[fn_index as usize] {
-                let code_start = self.code.preloaded_offsets[i] as usize;
-                let code_end = self.code.preloaded_offsets[i + 1] as usize;
-                buffer.extend_from_slice(&self.code.preloaded_bytes[code_start..code_end]);
+                let code_start = self.code.function_offsets[i] as usize;
+                let code_end = if i < self.code.function_offsets.len() - 1 {
+                    self.code.function_offsets[i + 1] as usize
+                } else {
+                    self.code.bytes.len()
+                };
+                buffer.extend_from_slice(&self.code.bytes[code_start..code_end]);
             } else {
-                buffer.extend_from_slice(&dummy_bytes);
+                DUMMY_FUNCTION.serialize(&mut buffer);
             }
         }
 
-        self.code.preloaded_bytes = buffer;
+        self.code.bytes = buffer;
     }
 
-    fn trace_live_host_functions<I: Iterator<Item = u32>>(
+    fn trace_live_functions<I: Iterator<Item = u32>>(
         &self,
         arena: &'a Bump,
-        called_host_fns: BitVec<usize>,
+        called_fns: BitVec<usize>,
         exported_fns: I,
         indirect_callees_and_signatures: Vec<'a, (u32, u32)>,
-        host_fn_min: u32,
-        host_fn_max: u32,
+        fn_index_min: u32,
+        fn_index_max: u32,
     ) -> BitVec<usize> {
         let reloc_len = self.reloc_code.entries.len();
 
@@ -356,10 +349,10 @@ impl<'a> WasmModule<'a> {
         );
 
         // Loop variables for the main loop below
-        let mut live_flags = BitVec::repeat(false, called_host_fns.len());
-        let mut next_pass_fns = BitVec::repeat(false, called_host_fns.len());
-        let mut current_pass_fns = called_host_fns;
-        for index in exported_fns.filter(|i| *i < host_fn_max) {
+        let mut live_flags = BitVec::repeat(false, called_fns.len());
+        let mut next_pass_fns = BitVec::repeat(false, called_fns.len());
+        let mut current_pass_fns = called_fns;
+        for index in exported_fns {
             current_pass_fns.set(index as usize, true);
         }
 
@@ -371,14 +364,18 @@ impl<'a> WasmModule<'a> {
             // For each live function in the current pass
             for fn_index in current_pass_fns.iter_ones() {
                 // Skip JS imports and Roc functions
-                if fn_index < host_fn_min as usize || fn_index >= host_fn_max as usize {
+                if fn_index < fn_index_min as usize || fn_index >= fn_index_max as usize {
                     continue;
                 }
 
                 // Find where the function body is
-                let offset_index = fn_index - host_fn_min as usize;
-                let code_start = self.code.preloaded_offsets[offset_index];
-                let code_end = self.code.preloaded_offsets[offset_index + 1];
+                let offset_index = fn_index - fn_index_min as usize;
+                let code_start = self.code.function_offsets[offset_index];
+                let code_end = if offset_index < self.code.function_offsets.len() - 1 {
+                    self.code.function_offsets[offset_index + 1]
+                } else {
+                    self.code.bytes.len() as u32
+                };
 
                 // For each call in the body
                 for (offset, symbol) in call_offsets_and_symbols.iter() {
@@ -422,11 +419,8 @@ impl<'a> WasmModule<'a> {
         self.linking
             .find_internal_symbol(sym_name)
             .map(|sym_index| {
-                self.reloc_code.apply_relocs_u32(
-                    &mut self.code.preloaded_bytes,
-                    sym_index as u32,
-                    value,
-                );
+                self.reloc_code
+                    .apply_relocs_u32(&mut self.code.bytes, sym_index as u32, value);
 
                 sym_index as u32
             })
@@ -493,11 +487,8 @@ impl<'a> WasmModule<'a> {
                 .unwrap();
 
             // Update calls to use the app function instead of the host import
-            self.reloc_code.apply_relocs_u32(
-                &mut self.code.preloaded_bytes,
-                host_sym_index,
-                app_fn_index,
-            );
+            self.reloc_code
+                .apply_relocs_u32(&mut self.code.bytes, host_sym_index, app_fn_index);
 
             if swap_import_index != host_import_index {
                 // get the name using the old host import index because we already swapped it!
@@ -511,7 +502,7 @@ impl<'a> WasmModule<'a> {
 
                 // Update calls to the swapped JS import
                 self.reloc_code.apply_relocs_u32(
-                    &mut self.code.preloaded_bytes,
+                    &mut self.code.bytes,
                     swap_sym_index,
                     host_fn_index as u32,
                 );
@@ -593,3 +584,123 @@ impl<'a> WasmModule<'a> {
         )
     }
 }
+
+/*******************************************************************
+ *
+ * Common types & utility functions
+ *
+ *******************************************************************/
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LocalId(pub u32);
+
+/// Wasm value type. (Rust representation matches Wasm encoding)
+#[repr(u8)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum ValueType {
+    I32 = 0x7f,
+    I64 = 0x7e,
+    F32 = 0x7d,
+    F64 = 0x7c,
+}
+
+impl Serialize for ValueType {
+    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
+        buffer.append_u8(*self as u8);
+    }
+}
+
+impl From<u8> for ValueType {
+    fn from(x: u8) -> Self {
+        match x {
+            0x7f => Self::I32,
+            0x7e => Self::I64,
+            0x7d => Self::F32,
+            0x7c => Self::F64,
+            _ => internal_error!("Invalid ValueType 0x{:02x}", x),
+        }
+    }
+}
+
+/// Wasm memory alignment for load/store instructions.
+/// Rust representation matches Wasm encoding.
+/// It's an error to specify alignment higher than the "natural" alignment of the instruction
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd)]
+pub enum Align {
+    Bytes1 = 0,
+    Bytes2 = 1,
+    Bytes4 = 2,
+    Bytes8 = 3,
+}
+
+impl Align {
+    /// Calculate the largest possible alignment for a load/store at a given stack frame offset
+    /// Assumes the stack frame is aligned to at least 8 bytes
+    pub fn from_stack_offset(max_align: Align, offset: u32) -> Align {
+        if (max_align == Align::Bytes8) && (offset & 7 == 0) {
+            return Align::Bytes8;
+        }
+        if (max_align >= Align::Bytes4) && (offset & 3 == 0) {
+            return Align::Bytes4;
+        }
+        if (max_align >= Align::Bytes2) && (offset & 1 == 0) {
+            return Align::Bytes2;
+        }
+        Align::Bytes1
+    }
+}
+
+impl From<u32> for Align {
+    fn from(x: u32) -> Align {
+        match x {
+            1 => Align::Bytes1,
+            2 => Align::Bytes2,
+            4 => Align::Bytes4,
+            _ => {
+                if x.count_ones() == 1 {
+                    Align::Bytes8 // Max value supported by any Wasm instruction
+                } else {
+                    internal_error!("Cannot align to {} bytes", x);
+                }
+            }
+        }
+    }
+}
+
+/// Round up to alignment_bytes (which must be a power of 2)
+#[macro_export]
+macro_rules! round_up_to_alignment {
+    ($unaligned: expr, $alignment_bytes: expr) => {
+        if $alignment_bytes <= 1 {
+            $unaligned
+        } else if $alignment_bytes.count_ones() != 1 {
+            internal_error!(
+                "Cannot align to {} bytes. Not a power of 2.",
+                $alignment_bytes
+            );
+        } else {
+            let mut aligned = $unaligned;
+            aligned += $alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
+            aligned &= !$alignment_bytes + 1; // mask with a flag that has upper bits 1, lower bits 0
+            aligned
+        }
+    };
+}
+
+/// Bytes for a dummy function with just a single `unreachable` instruction.
+/// Used in dead code elimination to replace unused functions.
+const DUMMY_FUNCTION: [u8; 3] = [
+    0,                         // number of local variable declarations
+    OpCode::UNREACHABLE as u8, // panic if we were wrong to eliminate!
+    OpCode::END as u8,         // end of function (required for validation)
+];
+
+// TODO: make this an environment variable
+pub struct WasmDebugSettings {
+    pub skip_dead_code_elim: bool,
+}
+
+pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
+    skip_dead_code_elim: false && cfg!(debug_assertions),
+};

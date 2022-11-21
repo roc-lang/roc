@@ -204,7 +204,7 @@ impl SkipBytes for String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wasm_module::parse::decode_u32;
+    use crate::parse::decode_u32;
 
     #[test]
     fn test_decode_u32() {

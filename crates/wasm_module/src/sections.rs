@@ -4,11 +4,13 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
 
+use crate::DUMMY_FUNCTION;
+
 use super::linking::{LinkingSection, SymInfo, WasmObjectSymbol};
 use super::opcodes::OpCode;
 use super::parse::{Parse, ParseError, SkipBytes};
 use super::serialize::{SerialBuffer, Serialize, MAX_SIZE_ENCODED_U32};
-use super::{CodeBuilder, ValueType};
+use super::ValueType;
 
 /*******************************************************************
  *
@@ -525,8 +527,8 @@ impl<'a> Serialize for FunctionSection<'a> {
  *
  * Table section
  *
- * Defines tables used for indirect references to host memory.
- * The table *contents* are elsewhere, in the ElementSection.
+ * Defines tables used for indirect references to external code or data.
+ * The table *contents* are in the ElementSection.
  *
  *******************************************************************/
 
@@ -1168,20 +1170,17 @@ impl<'a> Serialize for ElementSection<'a> {
 
 #[derive(Debug)]
 pub struct CodeSection<'a> {
-    pub preloaded_count: u32,
-    pub preloaded_bytes: Vec<'a, u8>,
+    pub function_count: u32,
+    pub bytes: Vec<'a, u8>,
     /// The start of each preloaded function
-    pub preloaded_offsets: Vec<'a, u32>,
+    pub function_offsets: Vec<'a, u32>,
     /// Dead imports are replaced with dummy functions in CodeSection
     pub dead_import_dummy_count: u32,
-    pub code_builders: Vec<'a, CodeBuilder<'a>>,
 }
 
 impl<'a> CodeSection<'a> {
     pub fn size(&self) -> usize {
-        let builders_size: usize = self.code_builders.iter().map(|cb| cb.size()).sum();
-
-        MAX_SIZE_SECTION_HEADER + self.preloaded_bytes.len() + builders_size
+        MAX_SIZE_SECTION_HEADER + self.bytes.len()
     }
 
     pub fn parse(
@@ -1196,39 +1195,34 @@ impl<'a> CodeSection<'a> {
             });
         }
         *cursor += 1;
-        let section_size = u32::parse((), module_bytes, cursor)?;
+        let section_size = u32::parse((), module_bytes, cursor)? as usize;
         let section_body_start = *cursor;
-        let count = u32::parse((), module_bytes, cursor)?;
-        let function_bodies_start = *cursor;
-        let next_section_start = section_body_start + section_size as usize;
+        let function_count = u32::parse((), module_bytes, cursor)?;
+        let next_section_start = section_body_start + section_size;
 
-        // preloaded_bytes starts at the function count, since that's considered the zero offset in the linker data.
-        // But when we finally write to file, we'll exclude the function count and write our own, including app fns.
-        let mut preloaded_bytes =
-            Vec::with_capacity_in(next_section_start - function_bodies_start, arena);
-        preloaded_bytes.extend_from_slice(&module_bytes[section_body_start..*cursor]);
+        // `bytes` must include the function count for linker offsets to be correct.
+        let mut bytes = Vec::with_capacity_in(section_size + section_size / 2, arena);
+        bytes.extend_from_slice(&module_bytes[section_body_start..*cursor]);
 
-        let mut preloaded_offsets = Vec::with_capacity_in(count as usize, arena);
+        let mut function_offsets = Vec::with_capacity_in(function_count as usize, arena);
 
         // While copying the code bytes, also note where each function starts & ends
         // Later we will use this for dead code elimination
         while *cursor < next_section_start {
             let fn_start = *cursor;
-            preloaded_offsets.push((fn_start - section_body_start) as u32);
+            function_offsets.push((fn_start - section_body_start) as u32);
             let fn_length = u32::parse((), module_bytes, cursor)? as usize;
             *cursor += fn_length;
-            preloaded_bytes.extend_from_slice(&module_bytes[fn_start..*cursor]);
+            bytes.extend_from_slice(&module_bytes[fn_start..*cursor]);
         }
-        preloaded_offsets.push((next_section_start - section_body_start) as u32);
 
-        debug_assert_eq!(preloaded_offsets.len(), 1 + count as usize);
+        debug_assert_eq!(function_offsets.len(), function_count as usize);
 
         Ok(CodeSection {
-            preloaded_count: count,
-            preloaded_bytes,
-            preloaded_offsets,
+            function_count,
+            bytes,
+            function_offsets,
             dead_import_dummy_count: 0,
-            code_builders: Vec::with_capacity_in(0, arena),
         })
     }
 }
@@ -1236,26 +1230,17 @@ impl<'a> CodeSection<'a> {
 impl<'a> Serialize for CodeSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         let header_indices = write_section_header(buffer, SectionId::Code);
-        buffer.encode_u32(
-            self.dead_import_dummy_count + self.preloaded_count + self.code_builders.len() as u32,
-        );
+        buffer.encode_u32(self.dead_import_dummy_count + self.function_count);
 
         // Insert dummy functions, requested by our linking logic.
         // This helps to minimise the number of functions we need to move around during linking.
-        let arena = self.code_builders[0].arena;
-        let dummy = CodeBuilder::dummy(arena);
         for _ in 0..self.dead_import_dummy_count {
-            dummy.serialize(buffer);
+            DUMMY_FUNCTION.serialize(buffer);
         }
 
-        // host + builtin functions
-        let first_fn_start = self.preloaded_offsets[0] as usize;
-        buffer.append_slice(&self.preloaded_bytes[first_fn_start..]);
-
-        // Roc functions
-        for code_builder in self.code_builders.iter() {
-            code_builder.serialize(buffer);
-        }
+        // real functions
+        let first_fn_start = self.function_offsets[0] as usize;
+        buffer.append_slice(&self.bytes[first_fn_start..]);
 
         update_section_size(buffer, header_indices);
     }
