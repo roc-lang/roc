@@ -1,4 +1,5 @@
 use blake3::Hasher;
+use reqwest::Method;
 use std::io::{self, ErrorKind, Read, Write};
 
 use crate::tarball::Compression;
@@ -111,12 +112,10 @@ pub enum Problem {
         actual: String,
     },
     IoErr(io::Error),
-    HttpErr(ureq::Error),
+    HttpErr(reqwest::Error),
     InvalidUrl(UrlProblem),
     /// The Content-Length header of the response exceeded max_download_bytes
-    DownloadTooBig(usize),
-    InvalidContentLengthHeader,
-    MissingContentLengthHeader,
+    DownloadTooBig(u64),
 }
 
 /// Download and decompress the given URL, verifying its contents against the hash in the URL.
