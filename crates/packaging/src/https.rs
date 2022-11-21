@@ -103,6 +103,7 @@ impl<'a> PackageMetadata<'a> {
 #[derive(Debug)]
 pub enum Problem {
     UnsupportedEncoding(String),
+    MultipleEncodings(String),
     InvalidContentHash {
         expected: String,
         actual: String,
@@ -187,9 +188,14 @@ impl TryFrom<&str> for Encoding {
             "gzip" => Ok(Gzip),
             "deflate" => Ok(Deflate),
             other => {
-                // We don't support other encodings, including mutliple encodings (although
-                // the spec for the HTTP header permits a comma-separated list.
-                Err(Problem::UnsupportedEncoding(other.to_string()))
+                if other.contains(',') {
+                    // We don't support mutliple encodings (although the spec for the HTTP header
+                    // permits a comma-separated list)
+                    Err(Problem::MultipleEncodings(other.to_string()))
+                } else {
+                    // We don't support other encodings
+                    Err(Problem::UnsupportedEncoding(other.to_string()))
+                }
             }
         }
     }
