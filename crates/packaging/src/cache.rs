@@ -36,7 +36,7 @@ pub fn install_package<'a>(
     roc_cache_dir: RocCacheDir<'_>,
     url: &'a str,
 ) -> Result<(PathBuf, Option<&'a str>), Problem> {
-    let metadata = PackageMetadata::try_from(url).map_err(Problem::UrlProblem)?;
+    let metadata = PackageMetadata::try_from(url).map_err(Problem::InvalidUrl)?;
     let dest_dir = match roc_cache_dir {
         RocCacheDir::Persistent(cache_dir) => {
             let dest_dir =

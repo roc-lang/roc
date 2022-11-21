@@ -109,7 +109,7 @@ pub enum Problem {
     },
     IoErr(io::Error),
     HttpErr(ureq::Error),
-    UrlProblem(UrlProblem),
+    InvalidUrl(UrlProblem),
     /// The Content-Length header of the response exceeded max_download_bytes
     DownloadTooBig(usize),
     InvalidContentLengthHeader,
