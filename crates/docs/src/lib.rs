@@ -453,9 +453,6 @@ fn render_sidebar<'a, I: Iterator<Item = (&'a ModuleDocumentation, Vec<String>)>
 
 pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
     let arena = Bump::new();
-    let roc_cache_dir = cache::roc_cache_dir().unwrap_or_else(|| {
-        todo!("Gracefully handle not being able to find default Roc cache dir.")
-    });
     let mut modules = Vec::with_capacity(filenames.len());
 
     for filename in filenames {
@@ -470,7 +467,7 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
             &arena,
             filename,
             Default::default(),
-            RocCacheDir::Persistent(roc_cache_dir.as_path()),
+            RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
             load_config,
         ) {
             Ok(loaded) => modules.push(loaded),

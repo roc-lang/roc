@@ -107,30 +107,38 @@ const ROC_VERSION: &str = include_str!("../../../version.txt");
 ///
 /// Returns None if XDG_CACHE_HOME is not set, and also we can't determine the home directory
 /// (or if %APPDATA% is missing on Windows) on this system.
-pub fn roc_cache_dir() -> Option<PathBuf> {
+pub fn roc_cache_dir() -> PathBuf {
     // Respect XDG, if the system appears to be using it.
     // https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
     match env::var_os("XDG_CACHE_HOME") {
-        Some(xdg_cache_home) => Some(
-            Path::new(&xdg_cache_home)
-                .join(ROC_CACHE_DIR_NAME)
-                .join(ROC_VERSION),
-        ),
+        Some(xdg_cache_home) => Path::new(&xdg_cache_home)
+            .join(ROC_CACHE_DIR_NAME)
+            .join(ROC_VERSION),
         None => {
             #[cfg(windows)]
             {
                 // e.g. %APPDATA%\\Roc
-                Some(Path::new(&env::var_os("APPDATA")?).join(ROC_CACHE_DIR_NAME))
+                if let Some(appdata) =
+                    // CSIDL_APPDATA is the same as APPDATA, according to:
+                    // https://learn.microsoft.com/en-us/windows/deployment/usmt/usmt-recognized-environment-variables
+                    env::var_os("APPDATA").or_else(|| env::var_os("CSIDL_APPDATA"))
+                {
+                    Path::new(&appdata).join(ROC_CACHE_DIR_NAME)
+                } else {
+                    eprintln!("roc needs either the %APPDATA% or else the %XDG_CACHE_HOME% environment variables set. Please set one of these environment variables and re-run roc!");
+                    std::process::exit(1);
+                }
             }
 
             #[cfg(unix)]
             {
                 // e.g. $HOME/.cache/roc
-                Some(
-                    Path::new(&env::var_os("HOME")?)
-                        .join(".cache")
-                        .join(ROC_CACHE_DIR_NAME),
-                )
+                if let Some(home) = env::var_os("HOME") {
+                    Path::new(&home).join(".cache").join(ROC_CACHE_DIR_NAME)
+                } else {
+                    eprintln!("roc needs either the $HOME or else the $XDG_CACHE_HOME environment variables set. Please set one of these environment variables and re-run roc!");
+                    std::process::exit(1);
+                }
             }
         }
     }

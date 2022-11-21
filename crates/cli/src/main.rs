@@ -34,15 +34,11 @@ fn main() -> io::Result<()> {
     let exit_code = match matches.subcommand() {
         None => {
             if matches.is_present(ROC_FILE) {
-                let roc_cache_dir = cache::roc_cache_dir().unwrap_or_else(|| {
-                    todo!("Gracefully handle not being able to find default Roc cache dir.")
-                });
-
                 build(
                     &matches,
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host(),
-                    RocCacheDir::Persistent(roc_cache_dir.as_path()),
+                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
                 )
             } else {
@@ -53,15 +49,11 @@ fn main() -> io::Result<()> {
         }
         Some((CMD_RUN, matches)) => {
             if matches.is_present(ROC_FILE) {
-                let roc_cache_dir = cache::roc_cache_dir().unwrap_or_else(|| {
-                    todo!("Gracefully handle not being able to find default Roc cache dir.")
-                });
-
                 build(
                     matches,
                     BuildConfig::BuildAndRun,
                     Triple::host(),
-                    RocCacheDir::Persistent(roc_cache_dir.as_path()),
+                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
                 )
             } else {
@@ -81,15 +73,11 @@ fn main() -> io::Result<()> {
         }
         Some((CMD_DEV, matches)) => {
             if matches.is_present(ROC_FILE) {
-                let roc_cache_dir = cache::roc_cache_dir().unwrap_or_else(|| {
-                    todo!("Gracefully handle not being able to find default Roc cache dir.")
-                });
-
                 build(
                     matches,
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host(),
-                    RocCacheDir::Persistent(roc_cache_dir.as_path()),
+                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
                 )
             } else {
@@ -113,21 +101,14 @@ fn main() -> io::Result<()> {
         Some((CMD_GEN_STUB_LIB, matches)) => {
             let input_path = Path::new(matches.value_of_os(ROC_FILE).unwrap());
             let target: Target = matches.value_of_t(FLAG_TARGET).unwrap_or_default();
-            let roc_cache_dir = cache::roc_cache_dir().unwrap_or_else(|| {
-                todo!("Gracefully handle not being able to find default Roc cache dir.")
-            });
-
             roc_linker::generate_stub_lib(
                 input_path,
-                RocCacheDir::Persistent(roc_cache_dir.as_path()),
+                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 &target.to_triple(),
             )
         }
         Some((CMD_BUILD, matches)) => {
             let target: Target = matches.value_of_t(FLAG_TARGET).unwrap_or_default();
-            let roc_cache_dir = cache::roc_cache_dir().unwrap_or_else(|| {
-                todo!("Gracefully handle not being able to find default Roc cache dir.")
-            });
             let link_type = match (
                 matches.is_present(FLAG_LIB),
                 matches.is_present(FLAG_NO_LINK),
@@ -142,7 +123,7 @@ fn main() -> io::Result<()> {
                 matches,
                 BuildConfig::BuildOnly,
                 target.to_triple(),
-                RocCacheDir::Persistent(roc_cache_dir.as_path()),
+                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 link_type,
             )?)
         }
@@ -152,9 +133,6 @@ fn main() -> io::Result<()> {
             let emit_timings = matches.is_present(FLAG_TIME);
             let filename = matches.value_of_os(ROC_FILE).unwrap();
             let roc_file_path = PathBuf::from(filename);
-            let roc_cache_dir = cache::roc_cache_dir().unwrap_or_else(|| {
-                todo!("Gracefully handle not being able to find default Roc cache dir.")
-            });
             let threading = match matches
                 .value_of(roc_cli::FLAG_MAX_THREADS)
                 .and_then(|s| s.parse::<usize>().ok())
@@ -169,7 +147,7 @@ fn main() -> io::Result<()> {
                 &arena,
                 roc_file_path,
                 emit_timings,
-                RocCacheDir::Persistent(roc_cache_dir.as_path()),
+                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 threading,
             ) {
                 Ok((problems, total_time)) => {

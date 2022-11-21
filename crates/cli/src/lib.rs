@@ -409,9 +409,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let target = &triple;
     let opt_level = opt_level;
     let target_info = TargetInfo::from(target);
-    let roc_cache_dir = cache::roc_cache_dir().unwrap_or_else(|| {
-        todo!("Gracefully handle not being able to find default Roc cache dir.")
-    });
 
     // Step 1: compile the app and generate the .o file
     let subs_by_module = Default::default();
@@ -428,7 +425,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         arena,
         path.to_path_buf(),
         subs_by_module,
-        RocCacheDir::Persistent(roc_cache_dir.as_path()),
+        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         load_config,
     )
     .unwrap();

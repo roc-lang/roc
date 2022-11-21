@@ -128,13 +128,9 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     println!("Loading file {:?}...", file_path_str);
 
     let file_path = Path::new(&file_path_str);
-    let roc_cache_dir = cache::roc_cache_dir().unwrap_or_else(|| {
-        todo!("Gracefully handle not being able to find default Roc cache dir.")
-    });
-
     let loaded_module = load_module(
         file_path,
-        RocCacheDir::Persistent(roc_cache_dir.as_path()),
+        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         Threading::AllAvailable,
     );
 
