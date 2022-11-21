@@ -53,7 +53,7 @@ pub fn build(path_to_main: &Path) -> io::Result<String> {
     Ok(filename)
 }
 
-/// Write an uncompressed rp1 archive to the given writer.
+/// Write an uncompressed tar archive to the given writer.
 fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
     let root_dir = if let Some(parent) = path.parent() {
         parent

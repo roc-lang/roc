@@ -170,7 +170,7 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(FLAG_TAR)
                     .long(FLAG_TAR)
-                    .help("Create a .rp1 bundle for a package, so others can add it as a HTTPS dependency.")
+                    .help("Create a .tar archive of a package, so others can add it as a HTTPS dependency.")
                     .required(false),
             )
             .arg(
@@ -532,7 +532,7 @@ pub fn build(
             let created_path = path.with_file_name(&filename);
 
             println!(
-                "\nBundled \x1B[33m{}\x1B[39m and its dependent files into the following file in {total_time} ms:\n\n\t\x1B[33m{}\x1B[39m\n\nTo distribute this bundle as a package, upload this to some URL and then add it as a dependency with:\n\n\t\x1B[32m\"https://your-url-goes-here/{filename}\"\x1B[39m\n",
+                "\nBundled \x1B[33m{}\x1B[39m and its dependent files into the following archive in {total_time} ms:\n\n\t\x1B[33m{}\x1B[39m\n\nTo distribute this archive as a package, upload this to some URL and then add it as a dependency with:\n\n\t\x1B[32m\"https://your-url-goes-here/{filename}\"\x1B[39m\n",
                 path.to_string_lossy(),
                 created_path.to_string_lossy()
             );

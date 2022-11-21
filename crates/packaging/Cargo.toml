@@ -11,7 +11,7 @@ description = "Functionality for packaging Roc source code - e.g. for distributi
 roc_parse = { path = "../compiler/parse" }
 roc_error_macros = { path = "../error_macros" }
 
-tar = "0.4.38" # used for `roc build --tar` so .rp1 files can hold multiple other files
+tar = "0.4.38" # used for `roc build --tar`
 brotli = "3.3.4" # used for decompressing tarballs over HTTPS, if the server supports brotli
 flate2 = "1.0.24"
 walkdir = "2.3.2"
