@@ -1,5 +1,5 @@
 app "echo"
-    packages { pf: "cli-platform/main.roc" }
+    packages { pf: "https://roc-alpha.netlify.app/jDRlAFAA3738vu3-vMpLUoyxtA86Z7CaZneoOKrihbE.tar.br" }
     imports [pf.Stdin, pf.Stdout, pf.Task.{ Task }, pf.Program.{ Program, ExitCode }]
     provides [main] to pf
 
