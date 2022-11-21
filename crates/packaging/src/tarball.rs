@@ -1,3 +1,4 @@
+use brotli::enc::BrotliEncoderParams;
 use bumpalo::Bump;
 use flate2::write::GzEncoder;
 use roc_parse::ast::Module;
@@ -79,7 +80,11 @@ pub fn build(path_to_main: &Path, compression: Compression) -> io::Result<String
                 brotli::BrotliCompress(
                     &mut archive_bytes.as_slice(),
                     &mut file,
-                    &Default::default(),
+                    &BrotliEncoderParams {
+                        quality: 11,
+                        use_dictionary: true,
+                        ..Default::default()
+                    },
                 )?;
             }
             Compression::Gzip => {
