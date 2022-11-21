@@ -1815,7 +1815,6 @@ fn constrain_function_def(
                     signature_closure_type_index,
                 ))
             };
-            let signature_index = constraints.push_type(types, signature);
             let cons = [
                 constraints.let_constraint(
                     [],

@@ -312,8 +312,8 @@ pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> 
             .parse(arena, state, min_indent)
             .and_then(|(progress, text, next_state)| match text {
                 StrLiteral::PlainLine(text) => Ok((progress, PackageName(text), next_state)),
-                StrLiteral::Line(_) => Err((progress, EPackageName::Escapes(pos), next_state)),
-                StrLiteral::Block(_) => Err((progress, EPackageName::Multiline(pos), next_state)),
+                StrLiteral::Line(_) => Err((progress, EPackageName::Escapes(pos))),
+                StrLiteral::Block(_) => Err((progress, EPackageName::Multiline(pos))),
             })
     }
 }

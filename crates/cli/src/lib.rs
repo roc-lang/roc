@@ -645,8 +645,8 @@ pub fn build(
                     roc_run(&arena, opt_level, triple, args, bytes, expect_metadata)
                 }
                 BuildAndRunIfNoErrors => {
-                    debug_assert!(
-                        problems.errors == 0,
+                    debug_assert_eq!(
+                        problems.errors, 0,
                         "if there are errors, they should have been returned as an error variant"
                     );
                     if problems.warnings > 0 {
