@@ -5,7 +5,6 @@ use std::{
 
 use roc_error_macros::internal_error;
 use tar::Archive;
-use tempfile::TempDir;
 
 use crate::https::{self, PackageMetadata, Problem};
 
@@ -16,10 +15,11 @@ const TARBALL_BUFFER_SIZE: usize = 16 * 1_000_000; // MB
 pub enum RocCacheDir<'a> {
     /// Normal scenario: reading from the user's cache dir on disk
     Persistent(&'a Path),
-    /// For tests and such; we don't want to write to the real cache during a test!
-    Temp(&'a TempDir),
-    /// Pretty much just for build.rs - we should never be downloading anything; blow up if we try!
+    /// For build.rs and tests where we never want be downloading anything - yell loudly if we try!
     Disallowed,
+    /// For tests only; we don't want to write to the real cache during a test!
+    #[cfg(test)]
+    Temp(&'a tempfile::TempDir),
 }
 
 /// Accepts either a path to the Roc cache dir, or else a TempDir. If a TempDir, always download
@@ -53,13 +53,14 @@ pub fn install_package<'a>(
 
             dest_dir
         }
-        RocCacheDir::Temp(temp_dir) => temp_dir.path().to_path_buf(),
         RocCacheDir::Disallowed => {
             internal_error!(
                 "Tried to download a package ({:?}) via RocCacheDir::Disallowed - which was explicitly used in order to disallow downloading packages in the current context!",
                 url
             )
         }
+        #[cfg(test)]
+        RocCacheDir::Temp(temp_dir) => temp_dir.path().to_path_buf(),
     };
 
     // Download the tarball into memory and verify it. Early return if it fails verification,
