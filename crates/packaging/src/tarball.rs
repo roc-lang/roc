@@ -55,6 +55,15 @@ pub fn build(path_to_main: &Path) -> io::Result<String> {
 
 /// Write an uncompressed rp1 archive to the given writer.
 fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
+    let root_dir = if let Some(parent) = path.parent() {
+        parent
+    } else {
+        eprintln!(
+            "{} is a directory, not a .roc file. Please specify a .roc file!",
+            path.to_string_lossy()
+        );
+        std::process::exit(1);
+    };
     let mut builder = tar::Builder::new(writer);
     let arena = Bump::new();
     let mut buf = Vec::new();
@@ -77,11 +86,9 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
         } => {
             use walkdir::WalkDir;
 
-            let platform_dir = path.parent().unwrap();
-
-            // Add all the prebuild host files to the archive.
+            // Add all the prebuilt host files to the archive.
             // These should all be in the same directory as the platform module.
-            for entry in std::fs::read_dir(platform_dir)? {
+            for entry in std::fs::read_dir(root_dir)? {
                 let path = entry?.path();
 
                 if [
@@ -97,7 +104,13 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
                 ]
                 .contains(&path.extension().and_then(OsStr::to_str))
                 {
-                    builder.append_path(path)?;
+                    builder.append_path_with_name(
+                        &path,
+                        // Store it without the root path, so that (for example) we don't store
+                        // `examples/cli/main.roc` and therefore end up with the root of the tarball
+                        // being an `examples/cli/` dir instead of having `main.roc` in the root.
+                        path.strip_prefix(root_dir).unwrap(),
+                    )?;
                 }
             }
 
@@ -108,13 +121,28 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
             // The WalkDir approach is easier to implement, but has the downside of doing things
             // like traversing target/ and zig-cache/ which can be large but will never have
             // any .roc files in them!
-            for entry in WalkDir::new(path.parent().unwrap())
-                .into_iter()
-                .filter_entry(|entry| {
-                    entry.path().extension().and_then(OsStr::to_str) == Some("roc")
-                })
-            {
-                builder.append_path(entry?.path())?;
+            for entry in WalkDir::new(root_dir).into_iter().filter_entry(|entry| {
+                let path = entry.path();
+
+                // We already got the prebuilt host files, so the only other things
+                // we care about are .roc files.
+                path.is_dir() || path.extension().and_then(OsStr::to_str) == Some("roc")
+            }) {
+                let entry = entry?;
+
+                // Only include files, not directories or symlinks.
+                // Symlinks may not work on Windows, and directories will get automatically
+                // added based on the paths of the files inside anyway. (In fact, if we don't
+                // filter out directories in this step, then empty ones will end up getting added!)
+                if entry.path().is_file() {
+                    builder.append_path_with_name(
+                        entry.path(),
+                        // Store it without the root path, so that (for example) we don't store
+                        // `examples/cli/main.roc` and therefore end up with the root of the tarball
+                        // being an `examples/cli/` dir instead of having `main.roc` in the root.
+                        entry.path().strip_prefix(root_dir).unwrap(),
+                    )?;
+                }
             }
 
             &[]
