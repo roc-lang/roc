@@ -70,10 +70,10 @@ pub fn build_app_binary<'a>(
     host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> std::vec::Vec<u8> {
-    let (mut wasm_module, called_preload_fns, _) =
+    let (mut wasm_module, called_fns, _) =
         build_app_module(env, interns, host_module, procedures);
 
-    wasm_module.eliminate_dead_code(env.arena, called_preload_fns);
+    wasm_module.eliminate_dead_code(env.arena, called_fns);
 
     let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
     wasm_module.serialize(&mut buffer);
@@ -185,11 +185,11 @@ pub fn build_app_module<'a>(
         }
     }
 
-    let (module, called_preload_fns) = backend.finalize();
+    let (module, called_fns) = backend.finalize();
     let main_function_index =
         maybe_main_fn_index.expect("The app must expose at least one value to the host");
 
-    (module, called_preload_fns, main_function_index)
+    (module, called_fns, main_function_index)
 }
 
 pub struct CopyMemoryConfig {

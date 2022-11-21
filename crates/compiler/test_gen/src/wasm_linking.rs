@@ -252,7 +252,7 @@ fn test_linking_without_dce() {
         ]
     );
 
-    let (final_module, _called_preload_fns, _roc_main_index) =
+    let (final_module, _called_fns, _roc_main_index) =
         roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
 
     let mut buffer = Vec::with_capacity(final_module.size());
@@ -309,10 +309,10 @@ fn test_linking_with_dce() {
 
     assert!(&host_module.names.function_names.is_empty());
 
-    let (mut final_module, called_preload_fns, _roc_main_index) =
+    let (mut final_module, called_fns, _roc_main_index) =
         roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
 
-    final_module.eliminate_dead_code(env.arena, called_preload_fns);
+    final_module.eliminate_dead_code(env.arena, called_fns);
 
     let mut buffer = Vec::with_capacity(final_module.size());
     final_module.serialize(&mut buffer);
