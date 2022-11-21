@@ -238,7 +238,11 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - In the file explorer, auto-close subtree after unused for certain time.
 - Ability to right click error message > "create github issue".
 - Record (locally) all steps performed by editor + logs and make them searchable for user. The user should be able to scrub through these steps.
-
+- clustering of search results (rg like) based on statistics of result; amount of spaces, avg word length, amount of numbers...
+- Search engine to answer questions about your code base, logs, all intermediary values. Examples: search for "xy" in a string, search for xy in a variable name, show all intermediary values of index variable...
+- When a stacktrace is shown in the logs, highlight all lines of code in the editor that are in the stacktrace.
+- Double-click to select all child expressions of parent: [example](https://twitter.com/disconcision/status/1587156531203678208?s=20&t=GySrwPVnMB6rDKFqRuUcBw).
+- We should encourage users to ask editor something in the command window; e.g. "hide all types", "List docs", "switch light mode"... If the questions can not be matched to existing actions, the user should be given the option to share the question with editor developers so the action can be created or mapped to an existing action.
 
 #### Autocomplete
 
@@ -291,6 +295,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
   - Users with large private code bases could (re)train a publicly available error recovery model to experience benefits without having to share their code.
   - It could be useful to a user who is creating a function to show them the most similar function (type signature, name, comment) in a public+their private database. Say I was using a web framework and I just created a function that has a multipart form as argument, it would be great to have an example instantly available.
     - A simpler start for this idea without user data gathering: how the user a code snippet that is most similar to what they are currently writing. Snippets can be aggregated from examples, tests, docstrings at zero cost to the package/platform authors.
+    - Train ML model to rank snippets by likely usefulness to user.
     - See [codata](https://www.codota.com/code/java/classes/okhttp3.OkHttpClient) for inspiration on a snippet/example finder.
 - Fuzzy natural language based setting adjustment in search bar or with voice input: increase font size, enable autosave, switch to light theme...
 - Detect deviation of best practices, example case: alert developer when they are defining a color inline (rgb(30,30,30)) while all colors have been previously imported from a single file. See also [Codota](https://www.codota.com).
@@ -301,6 +306,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Chatbot that can answer questions about the code base.
 - Smart navigation assistant to help you navigate with fuzzy text: take me to the false-interpreter's platform.
 - select some code (x='a'\ny='b') > Open transform command window > Type: concat chars > AI adds line: `concatenated = Char.concat 'a' 'b'`
+- Use terminal output to predict suggestions for files to navigate to.
 
 ## Testing
 
@@ -339,24 +345,6 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - Inclusion of step-by-step tutrials in Roc libraries, platforms or business specific code.
 - Having to set up your own website for a tutorial can be a lot of work, making it easy to make quality tutorials would make for a more delightful experience.
 
-## General Plugin Ideas
-
-### Ideas
-
-- Plugin to translate linux commands like curl to Roc code
-- Plugin to view diff between two texts
-- Plugin to present codebase to new developer or walk co-worker through a problem. Records sequence of filenames and line numbers.
-- A Logbook plugin. I've found that writing down steps and thoughts when you're implementing or debugging something can be really useful for later.
-If we make an integrated terminal, we can automatically add executed commands to this logbook. This plugin could have a publish button so you can produce useful "blogs" for others with minimal effort.
-
-### Inspiration
-
-- [Boop](https://github.com/IvanMathy/Boop) scriptable scratchpad for developers. Contains collection of useful conversions: json formatting, url encoding, encode to base64...
-- [processing](https://processing.org) Interactive editor, dragging left or right with mouse to change values. Instant results.
-- [flowistry](https://github.com/willcrichton/flowistry) easily track all named values in a certain expression throughout your program.
-- Match blocks of assembly with lines of code: [link](https://twitter.com/dgryski/status/1547952259828330498).
-- [livelits](https://hazel.org/build/livelits/) inline interactive plugin blocks
-
 ## High performance
 
 ### Inspiration
@@ -378,12 +366,6 @@ If we make an integrated terminal, we can automatically add executed commands to
 
 - [Duolingo](https://www.duolingo.com) app to learn languages
 - [Khan academy](https://www.khanacademy.org/) free quality education for everyone
-
-## Security
-
-- Remove permissions if plugin has not been used for a long time.
-- Log plugin actions that require a permission.
-- Show plugin that is currently using a permission, e.g. roc-core is reading from folder /gitrepos/hello in status bar and with a scrollable log.
 
 ## Accessibility
 
