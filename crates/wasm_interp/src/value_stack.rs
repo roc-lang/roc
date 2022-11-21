@@ -1,6 +1,7 @@
 use bitvec::vec::BitVec;
 use bumpalo::{collections::Vec, Bump};
-use std::fmt::Debug;
+use roc_wasm_module::ValueType;
+use std::{fmt::Debug, mem::size_of};
 
 use crate::Value;
 
@@ -11,6 +12,17 @@ pub struct ValueStack<'a> {
     bytes: Vec<'a, u8>,
     is_float: BitVec,
     is_64: BitVec,
+}
+
+macro_rules! pop_bytes {
+    ($ty: ty, $bytes: expr) => {{
+        const SIZE: usize = size_of::<$ty>();
+        let bytes_idx = $bytes.len() - SIZE;
+        let mut b = [0; SIZE];
+        b.copy_from_slice(&$bytes[bytes_idx..][..SIZE]);
+        $bytes.truncate(bytes_idx);
+        <$ty>::from_ne_bytes(b)
+    }};
 }
 
 impl<'a> ValueStack<'a> {
@@ -53,7 +65,7 @@ impl<'a> ValueStack<'a> {
         let size = if is_64 { 8 } else { 4 };
         let bytes_idx = self.bytes.len() - size;
         let value = self.get(is_64, is_float, bytes_idx);
-        self.bytes.truncate(self.bytes.len() - size);
+        self.bytes.truncate(bytes_idx);
         value
     }
 
@@ -75,6 +87,59 @@ impl<'a> ValueStack<'a> {
                 Value::I32(i32::from_ne_bytes(b))
             }
         }
+    }
+
+    pub fn pop_i32(&mut self) -> i32 {
+        match (self.is_float.pop(), self.is_64.pop()) {
+            (Some(false), Some(false)) => pop_bytes!(i32, self.bytes),
+            (Some(is_float), Some(is_64)) => panic!(
+                "Expected I32 but found {:?}",
+                type_from_flags(is_float, is_64)
+            ),
+            _ => panic!("Expected I32 but value stack was empty"),
+        }
+    }
+
+    pub fn pop_i64(&mut self) -> i64 {
+        match (self.is_float.pop(), self.is_64.pop()) {
+            (Some(false), Some(true)) => pop_bytes!(i64, self.bytes),
+            (Some(is_float), Some(is_64)) => panic!(
+                "Expected I64 but found {:?}",
+                type_from_flags(is_float, is_64)
+            ),
+            _ => panic!("Expected I64 but value stack was empty"),
+        }
+    }
+
+    pub fn pop_f32(&mut self) -> f32 {
+        match (self.is_float.pop(), self.is_64.pop()) {
+            (Some(true), Some(false)) => pop_bytes!(f32, self.bytes),
+            (Some(is_float), Some(is_64)) => panic!(
+                "Expected F32 but found {:?}",
+                type_from_flags(is_float, is_64)
+            ),
+            _ => panic!("Expected F32 but value stack was empty"),
+        }
+    }
+
+    pub fn pop_f64(&mut self) -> f64 {
+        match (self.is_float.pop(), self.is_64.pop()) {
+            (Some(true), Some(true)) => pop_bytes!(f64, self.bytes),
+            (Some(is_float), Some(is_64)) => panic!(
+                "Expected F64 but found {:?}",
+                type_from_flags(is_float, is_64)
+            ),
+            _ => panic!("Expected F64 but value stack was empty"),
+        }
+    }
+}
+
+fn type_from_flags(is_float: bool, is_64: bool) -> ValueType {
+    match (is_float, is_64) {
+        (false, false) => ValueType::I32,
+        (false, true) => ValueType::I64,
+        (true, false) => ValueType::F32,
+        (true, true) => ValueType::F64,
     }
 }
 

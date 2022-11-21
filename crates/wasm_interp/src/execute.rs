@@ -1,23 +1,42 @@
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::opcodes::OpCode;
+use roc_wasm_module::parse::Parse;
+use roc_wasm_module::sections::MemorySection;
 use roc_wasm_module::WasmModule;
 
 use crate::call_stack::CallStack;
 use crate::value_stack::ValueStack;
+use crate::Value;
 
+#[derive(Debug)]
 pub struct ExecutionState<'a> {
+    #[allow(dead_code)]
     memory: Vec<'a, u8>,
+
+    #[allow(dead_code)]
     call_stack: CallStack<'a>,
-    value_stack: ValueStack<'a>,
+
+    pub value_stack: ValueStack<'a>,
     program_counter: usize,
 }
 
 impl<'a> ExecutionState<'a> {
-    fn next(&mut self, module: WasmModule<'a>) {
+    pub fn new(arena: &'a Bump, memory_pages: u32, program_counter: usize) -> Self {
+        let mem_bytes = memory_pages * MemorySection::PAGE_SIZE;
+        ExecutionState {
+            memory: Vec::with_capacity_in(mem_bytes as usize, arena),
+            call_stack: CallStack::new(arena),
+            value_stack: ValueStack::new(arena),
+            program_counter,
+        }
+    }
+
+    pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) {
         use OpCode::*;
 
         let op_code = OpCode::from(module.code.bytes[self.program_counter]);
         self.program_counter += 1;
+
         match op_code {
             UNREACHABLE => {
                 unreachable!("WebAssembly tried to execute an `unreachable` instruction.");
@@ -153,16 +172,24 @@ impl<'a> ExecutionState<'a> {
                 todo!("{:?}", op_code);
             }
             I32CONST => {
-                todo!("{:?}", op_code);
+                let value = i32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
+                self.value_stack.push(Value::I32(value));
             }
             I64CONST => {
-                todo!("{:?}", op_code);
+                let value = i64::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
+                self.value_stack.push(Value::I64(value));
             }
             F32CONST => {
-                todo!("{:?}", op_code);
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&module.code.bytes[self.program_counter..][..4]);
+                self.value_stack.push(Value::F32(f32::from_le_bytes(bytes)));
+                self.program_counter += 4;
             }
             F64CONST => {
-                todo!("{:?}", op_code);
+                let mut bytes = [0; 8];
+                bytes.copy_from_slice(&module.code.bytes[self.program_counter..][..8]);
+                self.value_stack.push(Value::F64(f64::from_le_bytes(bytes)));
+                self.program_counter += 8;
             }
             I32EQZ => {
                 todo!("{:?}", op_code);
@@ -279,13 +306,19 @@ impl<'a> ExecutionState<'a> {
                 todo!("{:?}", op_code);
             }
             I32ADD => {
-                todo!("{:?}", op_code);
+                let x = self.value_stack.pop_i32();
+                let y = self.value_stack.pop_i32();
+                self.value_stack.push(Value::I32(y + x));
             }
             I32SUB => {
-                todo!("{:?}", op_code);
+                let x = self.value_stack.pop_i32();
+                let y = self.value_stack.pop_i32();
+                self.value_stack.push(Value::I32(y - x));
             }
             I32MUL => {
-                todo!("{:?}", op_code);
+                let x = self.value_stack.pop_i32();
+                let y = self.value_stack.pop_i32();
+                self.value_stack.push(Value::I32(y * x));
             }
             I32DIVS => {
                 todo!("{:?}", op_code);
