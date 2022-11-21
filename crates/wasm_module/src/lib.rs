@@ -50,6 +50,26 @@ pub struct WasmModule<'a> {
 impl<'a> WasmModule<'a> {
     pub const WASM_VERSION: u32 = 1;
 
+    pub fn new(arena: &'a Bump) -> Self {
+        WasmModule {
+            types: TypeSection::new(arena),
+            import: ImportSection::new(arena),
+            function: FunctionSection::new(arena),
+            table: TableSection::new(),
+            memory: MemorySection::new(arena, 0),
+            global: GlobalSection::new(arena),
+            export: ExportSection::new(arena),
+            start: OpaqueSection::new(),
+            element: ElementSection::new(arena),
+            code: CodeSection::new(arena),
+            data: DataSection::new(arena),
+            linking: LinkingSection::new(arena),
+            reloc_code: RelocationSection::new(arena, "reloc.CODE"),
+            reloc_data: RelocationSection::new(arena, "reloc.DATA"),
+            names: NameSection::new(arena),
+        }
+    }
+
     /// Create entries in the Type and Function sections for a function signature
     pub fn add_function_signature(&mut self, signature: Signature<'a>) {
         let index = self.types.insert(signature);
