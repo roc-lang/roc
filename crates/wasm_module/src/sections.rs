@@ -610,6 +610,7 @@ pub struct TableSection {
 impl TableSection {
     const ID: SectionId = SectionId::Table;
 
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         TableSection {
             function_table: TableType {
