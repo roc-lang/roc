@@ -1,6 +1,8 @@
 use blake3::Hasher;
 use std::io::{self, ErrorKind, Read, Write};
 
+use crate::tarball::Compression;
+
 // gzip should be the most widely supported, and brotli offers the highest compession.
 // flate2 gets us both gzip and deflate, so there's no harm in offering deflate too.
 //
@@ -115,7 +117,6 @@ pub enum Problem {
     DownloadTooBig(usize),
     InvalidContentLengthHeader,
     MissingContentLengthHeader,
-    MissingContentEncodingHeader,
 }
 
 /// Download and decompress the given URL, verifying its contents against the hash in the URL.
@@ -131,15 +132,14 @@ pub fn download_and_verify(
         .call()
         .map_err(Problem::HttpErr)?;
 
-    match (
-        resp.header("Content-Length").map(str::parse),
-        resp.header("Content-Encoding"),
-    ) {
-        (Some(Ok(content_len)), Some(content_encoding)) => {
+    match resp.header("Content-Length").map(str::parse) {
+        Some(Ok(content_len)) => {
             if content_len as u64 > max_download_bytes {
                 return Err(Problem::DownloadTooBig(content_len));
             }
-            let encoding = content_encoding.try_into()?;
+
+            let content_encoding = resp.header("Content-Encoding").unwrap_or_default();
+            let encoding = Encoding::new(content_encoding, url)?;
 
             // Use .take to prevent a malicious server from sending back bytes
             // until system resources are exhausted!
@@ -160,12 +160,11 @@ pub fn download_and_verify(
                 })
             }
         }
-        (Some(Err(_)), _) => {
+        Some(Err(_)) => {
             // The Content-Length header wasn't an integer
             Err(Problem::InvalidContentLengthHeader)
         }
-        (None, _) => Err(Problem::MissingContentLengthHeader),
-        (_, None) => Err(Problem::MissingContentEncodingHeader),
+        None => Err(Problem::MissingContentLengthHeader),
     }
 }
 
@@ -174,12 +173,11 @@ enum Encoding {
     Gzip,
     Brotli,
     Deflate,
+    Uncompressed,
 }
 
-impl TryFrom<&str> for Encoding {
-    type Error = Problem;
-
-    fn try_from(content_encoding: &str) -> Result<Self, Self::Error> {
+impl Encoding {
+    pub fn new(content_encoding: &str, url: &str) -> Result<Self, Problem> {
         use Encoding::*;
 
         // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding#directives
@@ -187,6 +185,21 @@ impl TryFrom<&str> for Encoding {
             "br" => Ok(Brotli),
             "gzip" => Ok(Gzip),
             "deflate" => Ok(Deflate),
+            "" => {
+                // There was no Content-Encoding header, but we can infer the encoding
+                // from the file extension in the URL.
+                let end_of_ext = url.rfind('#').unwrap_or_else(|| url.len());
+
+                // Drop the URL fragment when determining file extension
+                match url[0..end_of_ext].rsplit_once(".") {
+                    Some((_, after_dot)) => match Compression::from_file_ext(after_dot) {
+                        Some(Compression::Brotli) => Ok(Self::Brotli),
+                        Some(Compression::Gzip) => Ok(Self::Gzip),
+                        Some(Compression::Uncompressed) | None => Ok(Self::Uncompressed),
+                    },
+                    None => Ok(Uncompressed),
+                }
+            }
             other => {
                 if other.contains(',') {
                     // We don't support mutliple encodings (although the spec for the HTTP header
@@ -227,6 +240,7 @@ fn download<R: Read, W: Write>(
 
             write_and_hash(&mut deflate_reader, writer).map_err(Problem::IoErr)
         }
+        Encoding::Uncompressed => write_and_hash(reader, writer).map_err(Problem::IoErr),
     }
 }
 

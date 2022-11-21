@@ -17,12 +17,22 @@ pub enum Compression {
     Gzip,
     Uncompressed,
 }
+
 impl Compression {
     const fn file_ext(&self) -> &'static str {
         match self {
             Compression::Brotli => ".tar.br",
             Compression::Gzip => ".tar.gz",
             Compression::Uncompressed => ".tar",
+        }
+    }
+
+    pub fn from_file_ext(ext: &str) -> Option<Self> {
+        match ext {
+            "tar" => Some(Self::Uncompressed),
+            "tar.gz" => Some(Self::Gzip),
+            "tar.br" => Some(Self::Brotli),
+            _ => None,
         }
     }
 }
