@@ -2,7 +2,7 @@
 
 use bumpalo::Bump;
 use roc_wasm_interp::{ExecutionState, Value};
-use roc_wasm_module::{opcodes::OpCode, SerialBuffer, WasmModule};
+use roc_wasm_module::{opcodes::OpCode, SerialBuffer, ValueType, WasmModule};
 
 const DEFAULT_MEMORY_PAGES: u32 = 1;
 const DEFAULT_PROGRAM_COUNTER: usize = 0;
@@ -52,14 +52,64 @@ const DEFAULT_PROGRAM_COUNTER: usize = 0;
 // #[test]
 // fn test_select() {}
 
-// #[test]
-// fn test_getlocal() {}
+#[test]
+fn test_set_get_local() {
+    let arena = Bump::new();
+    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER);
+    let mut module = WasmModule::new(&arena);
 
-// #[test]
-// fn test_setlocal() {}
+    let local_decls = [
+        (1, ValueType::F32),
+        (1, ValueType::F64),
+        (1, ValueType::I32),
+        (1, ValueType::I64),
+    ];
+    state.call_stack.push_frame(0x1234, &local_decls);
 
-// #[test]
-// fn test_teelocal() {}
+    module.code.bytes.push(OpCode::I32CONST as u8);
+    module.code.bytes.encode_i32(12345);
+    module.code.bytes.push(OpCode::SETLOCAL as u8);
+    module.code.bytes.encode_u32(2);
+
+    module.code.bytes.push(OpCode::GETLOCAL as u8);
+    module.code.bytes.encode_u32(2);
+
+    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module);
+    assert_eq!(state.value_stack.len(), 1);
+    assert_eq!(state.value_stack.pop(), Value::I32(12345));
+}
+
+#[test]
+fn test_tee_get_local() {
+    let arena = Bump::new();
+    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER);
+    let mut module = WasmModule::new(&arena);
+
+    let local_decls = [
+        (1, ValueType::F32),
+        (1, ValueType::F64),
+        (1, ValueType::I32),
+        (1, ValueType::I64),
+    ];
+    state.call_stack.push_frame(0x1234, &local_decls);
+
+    module.code.bytes.push(OpCode::I32CONST as u8);
+    module.code.bytes.encode_i32(12345);
+    module.code.bytes.push(OpCode::TEELOCAL as u8);
+    module.code.bytes.encode_u32(2);
+
+    module.code.bytes.push(OpCode::GETLOCAL as u8);
+    module.code.bytes.encode_u32(2);
+
+    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module);
+    assert_eq!(state.value_stack.len(), 2);
+    assert_eq!(state.value_stack.pop(), Value::I32(12345));
+    assert_eq!(state.value_stack.pop(), Value::I32(12345));
+}
 
 // #[test]
 // fn test_getglobal() {}

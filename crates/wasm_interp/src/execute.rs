@@ -14,7 +14,7 @@ pub struct ExecutionState<'a> {
     memory: Vec<'a, u8>,
 
     #[allow(dead_code)]
-    call_stack: CallStack<'a>,
+    pub call_stack: CallStack<'a>,
 
     pub value_stack: ValueStack<'a>,
     program_counter: usize,
@@ -29,6 +29,10 @@ impl<'a> ExecutionState<'a> {
             value_stack: ValueStack::new(arena),
             program_counter,
         }
+    }
+
+    fn fetch_immediate_u32(&mut self, module: &WasmModule<'a>) -> u32 {
+        u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap()
     }
 
     pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) {
@@ -82,13 +86,19 @@ impl<'a> ExecutionState<'a> {
                 todo!("{:?}", op_code);
             }
             GETLOCAL => {
-                todo!("{:?}", op_code);
+                let index = self.fetch_immediate_u32(module);
+                let value = self.call_stack.get_local(index);
+                self.value_stack.push(value);
             }
             SETLOCAL => {
-                todo!("{:?}", op_code);
+                let index = self.fetch_immediate_u32(module);
+                let value = self.value_stack.pop();
+                self.call_stack.set_local(index, value);
             }
             TEELOCAL => {
-                todo!("{:?}", op_code);
+                let index = self.fetch_immediate_u32(module);
+                let value = self.value_stack.peek();
+                self.call_stack.set_local(index, value);
             }
             GETGLOBAL => {
                 todo!("{:?}", op_code);
