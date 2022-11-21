@@ -97,23 +97,23 @@ impl<'a> CallStack<'a> {
         match value {
             Value::I32(x) => {
                 self.locals_data[index] = unsafe { std::mem::transmute(x as i64) };
-                debug_assert_eq!(self.is_64[index], false);
-                debug_assert_eq!(self.is_float[index], false);
+                debug_assert!(!self.is_64[index]);
+                debug_assert!(!self.is_float[index]);
             }
             Value::I64(x) => {
                 self.locals_data[index] = unsafe { std::mem::transmute(x) };
-                debug_assert_eq!(self.is_float[index], false);
-                debug_assert_eq!(self.is_64[index], true);
+                debug_assert!(!self.is_float[index]);
+                debug_assert!(self.is_64[index]);
             }
             Value::F32(x) => {
                 self.locals_data[index] = x.to_bits() as u64;
-                debug_assert_eq!(self.is_float[index], true);
-                debug_assert_eq!(self.is_64[index], false);
+                debug_assert!(self.is_float[index]);
+                debug_assert!(!self.is_64[index]);
             }
             Value::F64(x) => {
                 self.locals_data[index] = x.to_bits();
-                debug_assert_eq!(self.is_float[index], true);
-                debug_assert_eq!(self.is_64[index], true);
+                debug_assert!(self.is_float[index]);
+                debug_assert!(self.is_64[index]);
             }
         }
     }
@@ -131,9 +131,12 @@ mod tests {
     }
 
     fn setup(call_stack: &mut CallStack<'_>) {
+        // Push a other few frames before the test frame, just to make the scenario more typical.
         call_stack.push_frame(0x11111, &[(1, ValueType::I32)]);
         call_stack.push_frame(0x22222, &[(2, ValueType::I32)]);
         call_stack.push_frame(0x33333, &[(3, ValueType::I32)]);
+
+        // Create a test call frame with local variables of every type
         let current_frame_local_decls = [
             (8, ValueType::I32),
             (4, ValueType::I64),
@@ -151,7 +154,7 @@ mod tests {
 
         test_get_set(&mut call_stack, 0, Value::I32(123));
         test_get_set(&mut call_stack, 8, Value::I64(123456));
-        test_get_set(&mut call_stack, 12, Value::F32(3.14));
+        test_get_set(&mut call_stack, 12, Value::F32(1.01));
         test_get_set(&mut call_stack, 14, Value::F64(-1.1));
 
         test_get_set(&mut call_stack, 0, Value::I32(i32::MIN));
@@ -175,7 +178,7 @@ mod tests {
         let arena = Bump::new();
         let mut call_stack = CallStack::new(&arena);
         setup(&mut call_stack);
-        test_get_set(&mut call_stack, 0, Value::F32(3.14));
+        test_get_set(&mut call_stack, 0, Value::F32(1.01));
     }
 
     #[test]
@@ -184,7 +187,7 @@ mod tests {
         let arena = Bump::new();
         let mut call_stack = CallStack::new(&arena);
         setup(&mut call_stack);
-        test_get_set(&mut call_stack, 8, Value::F32(3.14));
+        test_get_set(&mut call_stack, 8, Value::F32(1.01));
     }
 
     #[test]

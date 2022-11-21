@@ -169,7 +169,7 @@ mod tests {
     const VALUES: [Value; 4] = [
         Value::I32(123),
         Value::I64(123456),
-        Value::F32(3.14),
+        Value::F32(1.01),
         Value::F64(-1.1),
     ];
 
