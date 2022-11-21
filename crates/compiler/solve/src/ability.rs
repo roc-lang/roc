@@ -1,8 +1,9 @@
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
 use roc_collections::{VecMap, VecSet};
+use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
-use roc_debug_flags::{dbg_do, ROC_PRINT_UNDERIVABLE};
+use roc_debug_flags::ROC_PRINT_UNDERIVABLE;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
