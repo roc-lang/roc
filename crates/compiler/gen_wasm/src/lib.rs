@@ -70,8 +70,7 @@ pub fn build_app_binary<'a>(
     host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> std::vec::Vec<u8> {
-    let (mut wasm_module, called_fns, _) =
-        build_app_module(env, interns, host_module, procedures);
+    let (mut wasm_module, called_fns, _) = build_app_module(env, interns, host_module, procedures);
 
     wasm_module.eliminate_dead_code(env.arena, called_fns);
 
