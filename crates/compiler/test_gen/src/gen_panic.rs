@@ -7,7 +7,7 @@ use crate::helpers::llvm::expect_runtime_error_panic;
 use crate::helpers::wasm::expect_runtime_error_panic;
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic = r#"User crash with message: "hello crash""#]
 fn crash_literal() {
     expect_runtime_error_panic!(indoc!(
@@ -20,7 +20,7 @@ fn crash_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic = r#"User crash with message: "hello crash""#]
 fn crash_variable() {
     expect_runtime_error_panic!(indoc!(
@@ -35,7 +35,7 @@ fn crash_variable() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic = r#"User crash with message: "turns out this was fallible""#]
 fn crash_in_call() {
     expect_runtime_error_panic!(indoc!(
@@ -55,7 +55,7 @@ fn crash_in_call() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic = r#"User crash with message: "no new even primes""#]
 fn crash_in_passed_closure() {
     expect_runtime_error_panic!(indoc!(

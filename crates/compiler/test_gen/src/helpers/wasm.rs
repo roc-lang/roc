@@ -194,7 +194,7 @@ where
 
     let parsed = Module::parse(&env, &wasm_bytes[..]).expect("Unable to parse module");
     let mut module = rt.load_module(parsed).expect("Unable to load module");
-    let panic_msg: Rc<Mutex<Option<i32>>> = Default::default();
+    let panic_msg: Rc<Mutex<Option<(i32, u32)>>> = Default::default();
     link_module(&mut module, panic_msg.clone());
 
     let test_wrapper = module
@@ -203,11 +203,18 @@ where
 
     match test_wrapper.call() {
         Err(e) => {
-            if let Some(msg_ptr) = *panic_msg.lock().unwrap() {
+            if let Some((msg_ptr, tag)) = *panic_msg.lock().unwrap() {
                 let memory: &[u8] = get_memory(&rt);
                 let msg = RocStr::decode(memory, msg_ptr as _);
 
-                Err(format!("Roc failed with message: \"{}\"", msg))
+                dbg!(tag);
+                let msg = match tag {
+                    0 => format!(r#"Roc failed with message: "{}""#, msg),
+                    1 => format!(r#"User crash with message: "{}""#, msg),
+                    tag => format!(r#"Got an invald panic tag: "{}""#, tag),
+                };
+
+                Err(msg)
             } else {
                 Err(format!("{}", e))
             }
@@ -253,7 +260,7 @@ where
     let parsed = Module::parse(&env, wasm_bytes).expect("Unable to parse module");
     let mut module = rt.load_module(parsed).expect("Unable to load module");
 
-    let panic_msg: Rc<Mutex<Option<i32>>> = Default::default();
+    let panic_msg: Rc<Mutex<Option<(i32, u32)>>> = Default::default();
     link_module(&mut module, panic_msg.clone());
 
     let expected_len = num_refcounts as i32;
@@ -316,13 +323,13 @@ fn read_i32(memory: &[u8], ptr: usize) -> i32 {
     i32::from_le_bytes(bytes)
 }
 
-fn link_module(module: &mut Module, panic_msg: Rc<Mutex<Option<i32>>>) {
+fn link_module(module: &mut Module, panic_msg: Rc<Mutex<Option<(i32, u32)>>>) {
     let try_link_panic = module.link_closure(
         "env",
         "send_panic_msg_to_rust",
-        move |_call_context, msg_ptr: i32| {
+        move |_call_context, (msg_ptr, tag): (i32, u32)| {
             let mut w = panic_msg.lock().unwrap();
-            *w = Some(msg_ptr);
+            *w = Some((msg_ptr, tag));
             Ok(())
         },
     );

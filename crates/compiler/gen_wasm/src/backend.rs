@@ -718,7 +718,7 @@ impl<'a> WasmBackend<'a> {
             Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the wasm backend"),
 
             Stmt::RuntimeError(msg) => self.stmt_runtime_error(msg),
-            Stmt::Crash(_, _) => todo!(),
+            Stmt::Crash(sym, _) => self.stmt_crash(*sym),
         }
     }
 
@@ -1010,6 +1010,16 @@ impl<'a> WasmBackend<'a> {
         // load the pointer
         self.storage
             .load_symbols(&mut self.code_builder, &[msg_sym]);
+        self.code_builder.i32_const(tag_id);
+        self.call_host_fn_after_loading_args("roc_panic", 2, false);
+
+        self.code_builder.unreachable_();
+    }
+
+    pub fn stmt_crash(&mut self, msg: Symbol) {
+        let tag_id = 1;
+        // load the pointer
+        self.storage.load_symbols(&mut self.code_builder, &[msg]);
         self.code_builder.i32_const(tag_id);
         self.call_host_fn_after_loading_args("roc_panic", 2, false);
 
