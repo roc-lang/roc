@@ -2,7 +2,7 @@
 
 use crate::subs::{
     self, AliasVariables, Content, FlatType, GetSubsSlice, Label, Subs, SubsIndex, UnionLabels,
-    UnionTags, UnsortedUnionLabels, Variable,
+    UnsortedUnionLabels, Variable,
 };
 use crate::types::{
     name_type_var, name_type_var_with_hint, AbilitySet, Polarity, RecordField, Uls,
@@ -100,45 +100,6 @@ fn find_names_needed(
 ) {
     use crate::subs::Content::*;
     use crate::subs::FlatType::*;
-
-    while let Err((recursive, _chain)) = subs.occurs(variable) {
-        let rec_var = subs.fresh_unnamed_flex_var();
-        let content = subs.get_content_without_compacting(recursive);
-
-        match content {
-            Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
-                let ext_var = *ext_var;
-
-                let mut new_tags = MutMap::default();
-
-                for (name_index, slice_index) in tags.iter_all() {
-                    let slice = subs[slice_index];
-
-                    let mut new_vars = Vec::new();
-                    for var_index in slice {
-                        let var = subs[var_index];
-                        new_vars.push(if var == recursive { rec_var } else { var });
-                    }
-
-                    new_tags.insert(subs[name_index].clone(), new_vars);
-                }
-
-                let mut x: Vec<_> = new_tags.into_iter().collect();
-                x.sort();
-
-                let union_tags = UnionTags::insert_into_subs(subs, x);
-
-                let flat_type = FlatType::RecursiveTagUnion(rec_var, union_tags, ext_var);
-                subs.set_content(recursive, Content::Structure(flat_type));
-            }
-            _ => panic!(
-                "unfixable recursive type in roc_types::pretty_print {:?} {:?} {:?}",
-                recursive,
-                variable,
-                subs.dbg(recursive)
-            ),
-        }
-    }
 
     match &subs.get_content_without_compacting(variable).clone() {
         RecursionVar { opt_name: None, .. } | FlexVar(None) => {
