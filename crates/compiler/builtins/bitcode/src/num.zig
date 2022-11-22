@@ -4,7 +4,7 @@ const math = std.math;
 const RocList = @import("list.zig").RocList;
 const RocStr = @import("str.zig").RocStr;
 const WithOverflow = @import("utils.zig").WithOverflow;
-const roc_panic = @import("utils.zig").panic;
+const roc_panic = @import("panic.zig").panic_help;
 
 pub fn NumParseResult(comptime T: type) type {
     // on the roc side we sort by alignment; putting the errorcode last
