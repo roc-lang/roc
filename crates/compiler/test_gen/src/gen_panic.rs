@@ -55,7 +55,8 @@ fn crash_in_call() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm"))]
+// wasm: blocked on "compiling function underran the stack" in wasm3
 #[should_panic = r#"User crash with message: "no new even primes""#]
 fn crash_in_passed_closure() {
     expect_runtime_error_panic!(indoc!(
