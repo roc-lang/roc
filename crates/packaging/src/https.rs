@@ -24,9 +24,9 @@ pub struct PackageMetadata<'a> {
 
 /// Valid URLs must end in one of these:
 ///
-///     .tar
-///     .tar.gz
-///     .tar.br
+/// - .tar
+/// - .tar.gz
+/// - .tar.br
 const VALID_EXTENSION_SUFFIXES: [&str; 2] = [".gz", ".br"];
 
 #[derive(Debug)]
