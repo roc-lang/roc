@@ -126,7 +126,9 @@ pub fn roc_cache_dir() -> PathBuf {
                     // https://learn.microsoft.com/en-us/windows/deployment/usmt/usmt-recognized-environment-variables
                     env::var_os("APPDATA").or_else(|| env::var_os("CSIDL_APPDATA"))
                 {
-                    Path::new(&appdata).join(ROC_CACHE_DIR_NAME)
+                    Path::new(&appdata)
+                        .join(ROC_CACHE_DIR_NAME)
+                        .join(ROC_VERSION)
                 } else {
                     eprintln!("roc needs either the %APPDATA% or else the %XDG_CACHE_HOME% environment variables set. Please set one of these environment variables and re-run roc!");
                     std::process::exit(1);
@@ -137,7 +139,10 @@ pub fn roc_cache_dir() -> PathBuf {
             {
                 // e.g. $HOME/.cache/roc
                 if let Some(home) = env::var_os("HOME") {
-                    Path::new(&home).join(".cache").join(ROC_CACHE_DIR_NAME)
+                    Path::new(&home)
+                        .join(".cache")
+                        .join(ROC_CACHE_DIR_NAME)
+                        .join(ROC_VERSION)
                 } else {
                     eprintln!("roc needs either the $HOME or else the $XDG_CACHE_HOME environment variables set. Please set one of these environment variables and re-run roc!");
                     std::process::exit(1);
