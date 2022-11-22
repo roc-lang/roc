@@ -284,7 +284,7 @@ pub fn exportAddOrPanic(comptime T: type, comptime name: []const u8) void {
         fn func(self: T, other: T) callconv(.C) T {
             const result = addWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                roc_panic("integer addition overflowed!", 1);
+                roc_panic("integer addition overflowed!", 0);
                 unreachable;
             } else {
                 return result.value;
@@ -343,7 +343,7 @@ pub fn exportSubOrPanic(comptime T: type, comptime name: []const u8) void {
         fn func(self: T, other: T) callconv(.C) T {
             const result = subWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                roc_panic("integer subtraction overflowed!", 1);
+                roc_panic("integer subtraction overflowed!", 0);
                 unreachable;
             } else {
                 return result.value;
@@ -451,7 +451,7 @@ pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []con
         fn func(self: T, other: T) callconv(.C) T {
             const result = @call(.{ .modifier = always_inline }, mulWithOverflow, .{ T, W, self, other });
             if (result.has_overflowed) {
-                roc_panic("integer multiplication overflowed!", 1);
+                roc_panic("integer multiplication overflowed!", 0);
                 unreachable;
             } else {
                 return result.value;

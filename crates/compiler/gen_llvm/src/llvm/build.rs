@@ -195,6 +195,7 @@ impl std::convert::TryFrom<u32> for PanicTagId {
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(PanicTagId::RocPanic),
+            1 => Ok(PanicTagId::UserPanic),
             _ => Err(()),
         }
     }

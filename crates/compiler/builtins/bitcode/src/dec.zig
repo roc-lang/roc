@@ -233,7 +233,7 @@ pub const RocDec = extern struct {
         const answer = RocDec.addWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            roc_panic("Decimal addition overflowed!", 1);
+            roc_panic("Decimal addition overflowed!", 0);
             unreachable;
         } else {
             return answer.value;
@@ -265,7 +265,7 @@ pub const RocDec = extern struct {
         const answer = RocDec.subWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            roc_panic("Decimal subtraction overflowed!", 1);
+            roc_panic("Decimal subtraction overflowed!", 0);
             unreachable;
         } else {
             return answer.value;
@@ -329,7 +329,7 @@ pub const RocDec = extern struct {
         const answer = RocDec.mulWithOverflow(self, other);
 
         if (answer.has_overflowed) {
-            roc_panic("Decimal multiplication overflowed!", 1);
+            roc_panic("Decimal multiplication overflowed!", 0);
             unreachable;
         } else {
             return answer.value;
