@@ -126,7 +126,7 @@ pub fn build_zig_host_native(
 
         // TODO in the future when we have numbered releases, this
         // can go in ~/.cache/roc instead of writing it to a tempdir every time.
-        let builtins_host_file = tempfile::tempfile().unwrap();
+        let builtins_host_file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(builtins_host_file.path(), builtins_bytes)
             .expect("failed to write host builtins object to tempfile");
 
