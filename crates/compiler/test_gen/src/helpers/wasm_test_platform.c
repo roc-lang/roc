@@ -123,12 +123,11 @@ void roc_dealloc(void *ptr, unsigned int alignment)
 
 //--------------------------
 
-extern void send_panic_msg_to_rust(char* msg, int len);
+extern void send_panic_msg_to_rust(void* msg);
 
-void roc_panic(char *msg, unsigned int tag_id)
+void roc_panic(void* msg, unsigned int tag_id)
 {
-    int len = strlen(msg);
-    send_panic_msg_to_rust(msg, len);
+    send_panic_msg_to_rust(msg);
     exit(101);
 }
 

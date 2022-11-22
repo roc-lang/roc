@@ -5,6 +5,7 @@ use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::DEBUG_SETTINGS;
 use roc_load::{ExecutionMode, LoadConfig, Threading};
 use roc_reporting::report::DEFAULT_PALETTE_HTML;
+use roc_std::RocStr;
 use roc_wasm_module::{Export, ExportType};
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -193,7 +194,7 @@ where
 
     let parsed = Module::parse(&env, &wasm_bytes[..]).expect("Unable to parse module");
     let mut module = rt.load_module(parsed).expect("Unable to load module");
-    let panic_msg: Rc<Mutex<Option<(i32, i32)>>> = Default::default();
+    let panic_msg: Rc<Mutex<Option<i32>>> = Default::default();
     link_module(&mut module, panic_msg.clone());
 
     let test_wrapper = module
@@ -202,10 +203,9 @@ where
 
     match test_wrapper.call() {
         Err(e) => {
-            if let Some((msg_ptr, msg_len)) = *panic_msg.lock().unwrap() {
+            if let Some(msg_ptr) = *panic_msg.lock().unwrap() {
                 let memory: &[u8] = get_memory(&rt);
-                let msg_bytes = &memory[msg_ptr as usize..][..msg_len as usize];
-                let msg = std::str::from_utf8(msg_bytes).unwrap();
+                let msg = RocStr::decode(memory, msg_ptr as _);
 
                 Err(format!("Roc failed with message: \"{}\"", msg))
             } else {
@@ -253,7 +253,7 @@ where
     let parsed = Module::parse(&env, wasm_bytes).expect("Unable to parse module");
     let mut module = rt.load_module(parsed).expect("Unable to load module");
 
-    let panic_msg: Rc<Mutex<Option<(i32, i32)>>> = Default::default();
+    let panic_msg: Rc<Mutex<Option<i32>>> = Default::default();
     link_module(&mut module, panic_msg.clone());
 
     let expected_len = num_refcounts as i32;
@@ -316,13 +316,13 @@ fn read_i32(memory: &[u8], ptr: usize) -> i32 {
     i32::from_le_bytes(bytes)
 }
 
-fn link_module(module: &mut Module, panic_msg: Rc<Mutex<Option<(i32, i32)>>>) {
+fn link_module(module: &mut Module, panic_msg: Rc<Mutex<Option<i32>>>) {
     let try_link_panic = module.link_closure(
         "env",
         "send_panic_msg_to_rust",
-        move |_call_context, args: (i32, i32)| {
+        move |_call_context, msg_ptr: i32| {
             let mut w = panic_msg.lock().unwrap();
-            *w = Some(args);
+            *w = Some(msg_ptr);
             Ok(())
         },
     );
