@@ -1,3 +1,5 @@
+use crate::Serialize;
+
 use super::parse::{Parse, ParseError, SkipBytes};
 
 #[repr(u8)]
@@ -493,5 +495,11 @@ impl SkipBytes for OpCode {
             }
         }
         Ok(())
+    }
+}
+
+impl Serialize for OpCode {
+    fn serialize<T: crate::SerialBuffer>(&self, buffer: &mut T) {
+        (*self as u8).serialize(buffer)
     }
 }

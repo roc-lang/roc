@@ -35,11 +35,56 @@ fn default_state<'a>(arena: &'a Bump) -> ExecutionState {
 // #[test]
 // fn test_brtable() {}
 
-// #[test]
-// fn test_return() {}
+#[test]
+fn test_call_return() {
+    let arena = Bump::new();
+    let mut state = default_state(&arena);
+    let mut module = WasmModule::new(&arena);
 
-// #[test]
-// fn test_call() {}
+    let buffer = &mut module.code.bytes;
+
+    // Function 0
+    let func0_offset = buffer.len() as u32;
+    module.code.function_offsets.push(func0_offset);
+    buffer.encode_u32(4); // function byte length
+    buffer.encode_u32(0); // no locals
+    let func0_first_instruction = buffer.len();
+    OpCode::CALL.serialize(buffer);
+    buffer.encode_u32(1); // call function 1
+    OpCode::END.serialize(buffer);
+
+    // Function 1
+    let func1_offset = buffer.len() as u32;
+    module.code.function_offsets.push(func1_offset);
+    buffer.encode_u32(6); // function byte length
+    buffer.encode_u32(0); // no locals
+    OpCode::I32CONST.serialize(buffer);
+    buffer.encode_i32(12345);
+    OpCode::END.serialize(buffer);
+
+    state.program_counter = func0_first_instruction;
+
+    println!("{:02x?}", &module.code.bytes[state.program_counter..]);
+    dbg!(&state.value_stack);
+
+    state.execute_next_instruction(&module); // [func0] call 1
+    println!("{:02x?}", &module.code.bytes[state.program_counter..]);
+    dbg!(&state.value_stack);
+
+    state.execute_next_instruction(&module); // [func1] i32.const
+    println!("{:02x?}", &module.code.bytes[state.program_counter..]);
+    dbg!(&state.value_stack); //panic
+
+    state.execute_next_instruction(&module); // [func1] end
+    println!("{:02x?}", &module.code.bytes[state.program_counter..]);
+    dbg!(&state.value_stack);
+
+    state.execute_next_instruction(&module); // [func0] end
+    println!("{:02x?}", &module.code.bytes[state.program_counter..]);
+    dbg!(&state.value_stack);
+
+    assert_eq!(state.value_stack.peek(), Value::I32(12345));
+}
 
 // #[test]
 // fn test_callindirect() {}
@@ -65,7 +110,7 @@ fn test_set_get_local() {
         (1u32, ValueType::I64),
     ]
     .serialize(&mut buffer);
-    state.call_stack.push_frame(0x1234, &buffer, &mut cursor);
+    state.call_stack.push_frame(0x1234, 0, &buffer, &mut cursor);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
     module.code.bytes.encode_i32(12345);
@@ -97,7 +142,7 @@ fn test_tee_get_local() {
         (1u32, ValueType::I64),
     ]
     .serialize(&mut buffer);
-    state.call_stack.push_frame(0x1234, &buffer, &mut cursor);
+    state.call_stack.push_frame(0x1234, 0, &buffer, &mut cursor);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
     module.code.bytes.encode_i32(12345);

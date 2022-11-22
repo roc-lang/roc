@@ -8,6 +8,11 @@ use crate::call_stack::CallStack;
 use crate::value_stack::ValueStack;
 use crate::Value;
 
+pub enum Action {
+    Continue,
+    Break,
+}
+
 #[derive(Debug)]
 pub struct ExecutionState<'a> {
     #[allow(dead_code)]
@@ -20,7 +25,9 @@ pub struct ExecutionState<'a> {
 
     pub globals: Vec<'a, Value>,
 
-    program_counter: usize,
+    pub program_counter: usize,
+
+    block_depth: u32,
 }
 
 impl<'a> ExecutionState<'a> {
@@ -35,6 +42,7 @@ impl<'a> ExecutionState<'a> {
             value_stack: ValueStack::new(arena),
             globals: Vec::from_iter_in(globals, arena),
             program_counter,
+            block_depth: 0,
         }
     }
 
@@ -42,7 +50,7 @@ impl<'a> ExecutionState<'a> {
         u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap()
     }
 
-    pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) {
+    pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) -> Action {
         use OpCode::*;
 
         let op_code = OpCode::from(module.code.bytes[self.program_counter]);
@@ -54,9 +62,11 @@ impl<'a> ExecutionState<'a> {
             }
             NOP => {}
             BLOCK => {
+                self.block_depth += 1;
                 todo!("{:?}", op_code);
             }
             LOOP => {
+                self.block_depth += 1;
                 todo!("{:?}", op_code);
             }
             IF => {
@@ -66,7 +76,16 @@ impl<'a> ExecutionState<'a> {
                 todo!("{:?}", op_code);
             }
             END => {
-                todo!("{:?}", op_code);
+                if self.block_depth == 0 {
+                    // implicit RETURN at end of function
+                    if let Some(pc) = self.call_stack.pop_frame() {
+                        self.program_counter = pc as usize;
+                    } else {
+                        return Action::Break;
+                    }
+                } else {
+                    self.block_depth -= 1;
+                }
             }
             BR => {
                 todo!("{:?}", op_code);
@@ -78,23 +97,35 @@ impl<'a> ExecutionState<'a> {
                 todo!("{:?}", op_code);
             }
             RETURN => {
-                self.program_counter = self.call_stack.pop_frame() as usize;
+                if let Some(pc) = self.call_stack.pop_frame() {
+                    self.program_counter = pc as usize;
+                } else {
+                    return Action::Break;
+                }
             }
             CALL => {
                 let index = self.fetch_immediate_u32(module) as usize;
+
                 let return_addr = self.program_counter as u32;
                 self.program_counter = module.code.function_offsets[index] as usize;
+
+                let return_block_depth = self.block_depth;
+                self.block_depth = 0;
+
+                let _function_byte_length =
+                    u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
                 self.call_stack.push_frame(
                     return_addr,
+                    return_block_depth,
                     &module.code.bytes,
                     &mut self.program_counter,
-                )
+                );
             }
             CALLINDIRECT => {
                 todo!("{:?}", op_code);
             }
             DROP => {
-                todo!("{:?}", op_code);
+                self.value_stack.pop();
             }
             SELECT => {
                 todo!("{:?}", op_code);
@@ -599,5 +630,6 @@ impl<'a> ExecutionState<'a> {
                 todo!("{:?}", op_code);
             }
         }
+        Action::Continue
     }
 }
