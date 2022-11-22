@@ -2303,20 +2303,19 @@ fn update<'a>(
                 }
             }
 
-            if let Platform {
-                config_shorthand, ..
-            } = header.header_for
-            {
-                work.extend(state.dependencies.notify_package(config_shorthand));
-            }
-
             match header.header_for {
                 App { to_platform } => {
                     debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                     state.platform_path = PlatformPath::Valid(to_platform);
                 }
-                Platform { main_for_host, .. } => {
+                Platform {
+                    main_for_host,
+                    config_shorthand,
+                    ..
+                } => {
                     debug_assert!(matches!(state.platform_data, None));
+
+                    work.extend(state.dependencies.notify_package(config_shorthand));
 
                     state.platform_data = Some(PlatformData {
                         module_id: header.module_id,
