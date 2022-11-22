@@ -3349,7 +3349,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
         builder.position_at_end(entry);
 
-        let wrapped_layout = roc_result_layout(env.arena, return_layout, env.target_info);
+        let wrapped_layout = roc_call_result_layout(env.arena, return_layout, env.target_info);
         call_roc_function(env, roc_function, &wrapped_layout, arguments_for_call)
     } else {
         call_roc_function(env, roc_function, &return_layout, arguments_for_call)
@@ -3379,7 +3379,8 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     // a tagged union to indicate to the test loader that a panic occurred.
     // especially when running 32-bit binaries on a 64-bit machine, there
     // does not seem to be a smarter solution
-    let wrapper_return_type = roc_result_type(env, basic_type_from_layout(env, &return_layout));
+    let wrapper_return_type =
+        roc_call_result_type(env, basic_type_from_layout(env, &return_layout));
 
     let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
     for layout in arguments {
@@ -3768,7 +3769,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 
     let return_type = match env.mode {
         LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest | LlvmBackendMode::CliTest => {
-            roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
+            roc_call_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
         }
 
         LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev => {
@@ -3889,6 +3890,21 @@ pub fn get_panic_msg_ptr<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerVa
     global.as_pointer_value()
 }
 
+/// Pointer to the panic tag.
+/// Only non-zero values must be written into here.
+pub fn get_panic_tag_ptr<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
+    let i64_typ = env.context.i64_type();
+
+    let global_name = "roc_panic_msg_tag";
+    let global = env.module.get_global(global_name).unwrap_or_else(|| {
+        let global = env.module.add_global(i64_typ, None, global_name);
+        global.set_initializer(&i64_typ.const_zero());
+        global
+    });
+
+    global.as_pointer_value()
+}
+
 fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
@@ -3900,7 +3916,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let return_type = basic_type_from_layout(env, &return_layout);
-    let call_result_type = roc_result_type(env, return_type.as_basic_type_enum());
+    let call_result_type = roc_call_result_type(env, return_type.as_basic_type_enum());
     let result_alloca = builder.build_alloca(call_result_type, "result");
 
     let then_block = context.append_basic_block(parent, "then_block");
@@ -3937,16 +3953,16 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
 
         // RocStr* global
         let error_msg_ptr = get_panic_msg_ptr(env);
+        // i64* global
+        let error_tag_ptr = get_panic_tag_ptr(env);
 
         let return_value = {
             let v1 = call_result_type.const_zero();
 
-            // flag is non-zero, indicating failure
-            let flag = context.i64_type().const_int(1, false);
+            // tag must be non-zero, indicating failure
+            let tag = builder.build_load(error_tag_ptr, "load_panic_tag");
 
-            let v2 = builder
-                .build_insert_value(v1, flag, 0, "set_error")
-                .unwrap();
+            let v2 = builder.build_insert_value(v1, tag, 0, "set_error").unwrap();
 
             let v3 = builder
                 .build_insert_value(v2, error_msg_ptr, 1, "set_exception")
@@ -3979,7 +3995,7 @@ fn make_exception_catcher<'a, 'ctx, 'env>(
     function_value
 }
 
-fn roc_result_layout<'a>(
+fn roc_call_result_layout<'a>(
     arena: &'a Bump,
     return_layout: Layout<'a>,
     target_info: TargetInfo,
@@ -3989,14 +4005,14 @@ fn roc_result_layout<'a>(
     Layout::struct_no_name_order(arena.alloc(elements))
 }
 
-fn roc_result_type<'a, 'ctx, 'env>(
+fn roc_call_result_type<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     return_type: BasicTypeEnum<'ctx>,
 ) -> StructType<'ctx> {
     env.context.struct_type(
         &[
             env.context.i64_type().into(),
-            env.context.i8_type().ptr_type(AddressSpace::Generic).into(),
+            zig_str_type(env).ptr_type(AddressSpace::Generic).into(),
             return_type,
         ],
         false,
@@ -4011,7 +4027,7 @@ fn make_good_roc_result<'a, 'ctx, 'env>(
     let context = env.context;
     let builder = env.builder;
 
-    let v1 = roc_result_type(env, basic_type_from_layout(env, &return_layout)).const_zero();
+    let v1 = roc_call_result_type(env, basic_type_from_layout(env, &return_layout)).const_zero();
 
     let v2 = builder
         .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
@@ -4058,7 +4074,8 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
         }
     };
 
-    let wrapper_return_type = roc_result_type(env, basic_type_from_layout(env, &return_layout));
+    let wrapper_return_type =
+        roc_call_result_type(env, basic_type_from_layout(env, &return_layout));
 
     // argument_types.push(wrapper_return_type.ptr_type(AddressSpace::Generic).into());
 

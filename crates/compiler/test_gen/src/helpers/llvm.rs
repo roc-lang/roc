@@ -544,7 +544,10 @@ macro_rules! assert_wasm_evals_to {
 }
 
 #[allow(dead_code)]
-pub fn try_run_lib_function<T>(main_fn_name: &str, lib: &libloading::Library) -> Result<T, String> {
+pub fn try_run_lib_function<T>(
+    main_fn_name: &str,
+    lib: &libloading::Library,
+) -> Result<T, (String, u32)> {
     unsafe {
         let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<T>)> = lib
             .get(main_fn_name.as_bytes())
@@ -594,7 +597,11 @@ macro_rules! assert_llvm_evals_to {
                 #[cfg(windows)]
                 std::mem::forget(given);
             }
-            Err(msg) => panic!("Roc failed with message: \"{}\"", msg),
+            Err((msg, tag)) => match tag {
+                0 => panic!(r#"Roc failed with message: "{}""#, msg),
+                1 => panic!(r#"User crash with message: "{}""#, msg),
+                _ => panic!(r#"Got an invalid panic tag: "{}""#, tag),
+            },
         }
 
         // artificially extend the lifetime of `lib`

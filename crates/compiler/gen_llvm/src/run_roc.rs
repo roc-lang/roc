@@ -32,13 +32,13 @@ impl<T: Default> Default for RocCallResult<T> {
     }
 }
 
-impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
+impl<T: Sized> From<RocCallResult<T>> for Result<T, (String, u32)> {
     fn from(call_result: RocCallResult<T>) -> Self {
         match call_result.tag {
             0 => Ok(unsafe { call_result.value.assume_init() }),
-            _ => Err({
+            n => Err({
                 let msg: &RocStr = unsafe { &*call_result.error_msg };
-                msg.as_str().to_owned()
+                (msg.as_str().to_owned(), (n - 1) as _)
             }),
         }
     }
