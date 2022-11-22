@@ -3465,6 +3465,10 @@ fn constraint_recursive_function(
             rigid_info.constraints.push({
                 // Solve the body of the recursive function, making sure it lines up with the
                 // signature.
+                //
+                // This happens when we're checking that the def of a recursive function actually
+                // aligns with what the (mutually-)recursive signature says, so finish
+                // generalization of the function.
                 let rigids = new_rigid_variables;
                 let flex = def_pattern_state
                     .vars
@@ -3474,7 +3478,16 @@ fn constraint_recursive_function(
                 constraints.let_constraint(
                     rigids,
                     flex,
-                    [], // no headers introduced (at this level)
+                    // Although we will have already introduced the headers of the def in the
+                    // outermost scope when we introduced the rigid variables, we now re-introduce
+                    // them to force an occurs check and appropriate fixing, since we might end up
+                    // inferring recursive types at inference variable points. E.g.
+                    //
+                    //   f : _ -> _
+                    //   f = \F c -> F (List.map f c)
+                    //
+                    // TODO: I (Ayaz) believe we can considerably simplify all this.
+                    def_pattern_state.headers.clone(),
                     def_con,
                     Constraint::True,
                 )
