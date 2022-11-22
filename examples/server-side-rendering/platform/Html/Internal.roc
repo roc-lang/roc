@@ -176,8 +176,7 @@ appendRenderedStaticAttr = \{ buffer, styles }, attr ->
 # -------------------------------
 #   TRANSLATE STATE TYPE
 # -------------------------------
-# translate : Html c, (p -> c), (c -> p) -> Html p # TODO: use this type signature when it no longer triggers a type checker bug
-translate : Html _, (_ -> _), (_ -> _) -> Html _
+translate : Html c, (p -> c), (c -> p) -> Html p
 translate = \node, parentToChild, childToParent ->
     when node is
         Text jsIndex content ->
@@ -194,8 +193,7 @@ translate = \node, parentToChild, childToParent ->
 
         None -> None
 
-# translateLazy : LazyCallback c, (p -> c), (c -> p) -> LazyCallback p # TODO: use this type signature when it no longer triggers a type checker bug
-translateLazy : LazyCallback _, (_ -> _), (_ -> _) -> LazyCallback _
+translateLazy : LazyCallback c, (p -> c), (c -> p) -> LazyCallback p
 translateLazy = \childCallback, parentToChild, childToParent ->
     \parentCacheValue ->
         childCacheValue =
@@ -208,8 +206,7 @@ translateLazy = \childCallback, parentToChild, childToParent ->
             state: childToParent state,
         }
 
-# translateAttr : Attribute c, (p -> c), (c -> p) -> Attribute p
-translateAttr : Attribute _, (_ -> _), (_ -> _) -> Attribute p
+translateAttr : Attribute c, (p -> c), (c -> p) -> Attribute p
 translateAttr = \attr, parentToChild, childToParent ->
     when attr is
         EventListener eventName accessors (NotRendered childHandler) ->
@@ -222,8 +219,7 @@ translateAttr = \attr, parentToChild, childToParent ->
         DomProp k v -> DomProp k v
         Style k v -> Style k v
 
-# translateHandler : Handler c, (p -> c), (c -> p) -> Handler p
-translateHandler : Handler _, (_ -> _), (_ -> _) -> Handler _
+translateHandler : Handler c, (p -> c), (c -> p) -> Handler p
 translateHandler = \childHandler, parentToChild, childToParent ->
     when childHandler is
         @Handler (Normal childFn) ->
@@ -535,12 +531,9 @@ diffAndUpdateDom = \newHandlers, oldNode, newNode ->
 # It recurses over a recursive data type with a type variable, accumulating effects along the way.
 # The type checker is not quite ready to deal with that yet, so some code is commented out.
 #
-# createSubTree :Effect { newHandlers : HandlerLookup state, renderedNodes : List (Html state) },
-#     Html state
-#     -> Effect { newHandlers : HandlerLookup state, renderedNodes : List (Html state) }
-createSubTree :Effect { newHandlers : HandlerLookup _, renderedNodes : List (Html _) },
-    Html _
-    -> Effect { newHandlers : HandlerLookup _, renderedNodes : List (Html _) }
+createSubTree :Effect { newHandlers : HandlerLookup state, renderedNodes : List (Html state) },
+    Html state
+    -> Effect { newHandlers : HandlerLookup state, renderedNodes : List (Html state) }
 createSubTree = \previousEffects, node ->
     { newHandlers, renderedNodes } <- previousEffects |> Effect.after
     when node is
