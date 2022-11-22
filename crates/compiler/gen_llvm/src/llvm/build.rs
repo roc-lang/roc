@@ -185,7 +185,7 @@ pub struct Env<'a, 'ctx, 'env> {
 
 #[repr(u32)]
 pub enum PanicTagId {
-    NullTerminatedString = 0,
+    RocPanic = 0,
 }
 
 impl std::convert::TryFrom<u32> for PanicTagId {
@@ -193,7 +193,7 @@ impl std::convert::TryFrom<u32> for PanicTagId {
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(PanicTagId::NullTerminatedString),
+            0 => Ok(PanicTagId::RocPanic),
             _ => Err(()),
         }
     }
@@ -5529,7 +5529,7 @@ pub(crate) fn throw_exception<'a, 'ctx, 'env>(
 
     let str = build_string_literal(env, parent, message);
 
-    env.call_panic(str, PanicTagId::NullTerminatedString);
+    env.call_panic(str, PanicTagId::RocPanic);
 
     builder.build_unreachable();
 }

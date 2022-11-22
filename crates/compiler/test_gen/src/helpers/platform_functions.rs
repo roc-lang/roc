@@ -43,7 +43,7 @@ pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
     use std::os::raw::c_char;
 
     match PanicTagId::try_from(tag_id) {
-        Ok(PanicTagId::NullTerminatedString) => {
+        Ok(PanicTagId::RocPanic) => {
             let slice = CStr::from_ptr(c_ptr as *const c_char);
             let string = slice.to_str().unwrap();
             eprintln!("Roc hit a panic: {}", string);
