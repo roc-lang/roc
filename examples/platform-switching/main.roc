@@ -8,17 +8,4 @@ app "rocLovesPlatforms"
     imports []
     provides [main] to pf
 
-Html state : [
-    Element (List (Html state)),
-]
-
-translateStatic : Html _ -> Html _
-translateStatic = \node ->
-    when node is
-        Element children ->
-            newChildren = List.map children translateStatic
-
-            Element newChildren
-
-main = when translateStatic (Element []) is
-    _ -> ""
+main = "Which platform am I running on now?\n"
