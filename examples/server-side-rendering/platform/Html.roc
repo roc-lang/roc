@@ -5,6 +5,8 @@ interface Html
         Attribute,
         renderStatic,
         renderStaticWithoutDocType,
+        translate,
+        translateStatic,
         text,
         # lazy,TODO
         none,
@@ -132,6 +134,9 @@ element = Html.Internal.element
 text = Html.Internal.text
 # lazy = Html.Internal.lazy TODO
 none = Html.Internal.none
+
+translate = Html.Internal.translate
+translateStatic = Html.Internal.translateStatic
 
 ## Render a static Html node to a string, for saving to disk or sending over a network
 ##
