@@ -119,7 +119,7 @@ macro_rules! run_jit_function {
 
                 $transform(success)
             }
-            Err(error_msg) => {
+            Err((error_msg, _)) => {
                 eprintln!("This Roc code crashed with: \"{error_msg}\"");
 
                 Expr::MalformedClosure
