@@ -176,10 +176,10 @@ impl Encoding {
             "" => {
                 // There was no Content-Encoding header, but we can infer the encoding
                 // from the file extension in the URL.
-                let end_of_ext = url.rfind('#').unwrap_or_else(|| url.len());
+                let end_of_ext = url.rfind('#').unwrap_or(url.len());
 
                 // Drop the URL fragment when determining file extension
-                match url[0..end_of_ext].rsplit_once(".") {
+                match url[0..end_of_ext].rsplit_once('.') {
                     Some((_, after_dot)) => match Compression::from_file_ext(after_dot) {
                         Some(Compression::Brotli) => Ok(Self::Brotli),
                         Some(Compression::Gzip) => Ok(Self::Gzip),

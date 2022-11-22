@@ -43,6 +43,7 @@ fn load<'a>(
 }
 
 /// Load using only a single thread; used when compiling to webassembly
+#[allow(clippy::too_many_arguments)]
 pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
