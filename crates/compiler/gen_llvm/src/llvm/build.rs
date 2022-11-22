@@ -750,7 +750,7 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         }
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
-        Str(str_literal) => build_string_literal(env, parent, &str_literal),
+        Str(str_literal) => build_string_literal(env, parent, str_literal),
     }
 }
 
@@ -3927,11 +3927,8 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
     {
         builder.position_at_end(catch_block);
 
-        let error_msg_ptr = {
-            // RocStr* global
-            let ptr_roc_str = get_panic_msg_ptr(env);
-            ptr_roc_str
-        };
+        // RocStr* global
+        let error_msg_ptr = get_panic_msg_ptr(env);
 
         let return_value = {
             let v1 = call_result_type.const_zero();
@@ -5520,30 +5517,6 @@ fn define_global_str_literal<'a, 'ctx, 'env>(
 
             global
         }
-    }
-}
-
-fn define_global_error_str<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    message: &str,
-) -> inkwell::values::GlobalValue<'ctx> {
-    let module = env.module;
-
-    // hash the name so we don't re-define existing messages
-    let name = {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        message.hash(&mut hasher);
-        let hash = hasher.finish();
-
-        format!("_Error_message_{}", hash)
-    };
-
-    match module.get_global(&name) {
-        Some(current) => current,
-        None => unsafe { env.builder.build_global_string(message, name.as_str()) },
     }
 }
 

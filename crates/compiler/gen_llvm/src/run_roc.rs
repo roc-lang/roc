@@ -1,6 +1,4 @@
-use std::ffi::CStr;
 use std::mem::MaybeUninit;
-use std::os::raw::c_char;
 
 use roc_std::RocStr;
 
