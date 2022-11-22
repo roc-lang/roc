@@ -96,12 +96,12 @@ impl<'a> CallStack<'a> {
         let index = (frame_offset + local_index) as usize;
         match value {
             Value::I32(x) => {
-                self.locals_data[index] = unsafe { std::mem::transmute(x as i64) };
+                self.locals_data[index] = u64::from_ne_bytes((x as i64).to_ne_bytes());
                 debug_assert!(!self.is_64[index]);
                 debug_assert!(!self.is_float[index]);
             }
             Value::I64(x) => {
-                self.locals_data[index] = unsafe { std::mem::transmute(x) };
+                self.locals_data[index] = u64::from_ne_bytes((x).to_ne_bytes());
                 debug_assert!(!self.is_float[index]);
                 debug_assert!(self.is_64[index]);
             }
