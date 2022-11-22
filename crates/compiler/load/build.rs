@@ -72,6 +72,7 @@ fn write_types_for_module_dummy(output_path: &Path) {
 fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path: &Path) {
     use roc_can::module::TypeState;
     use roc_load_internal::file::{LoadingProblem, Threading};
+    use roc_reporting::cli::report_problems;
 
     let arena = Bump::new();
     let src_dir = PathBuf::from(".");
@@ -90,7 +91,7 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
         Threading::AllAvailable,
     );
 
-    let module = match res_module {
+    let mut module = match res_module {
         Ok(v) => v,
         Err(LoadingProblem::FormattedReport(report)) => {
             panic!("{}", report);
@@ -100,8 +101,16 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
         }
     };
 
-    if module.total_problems() > 0 {
-        panic!("Problems were found! Refusing to build cached subs.\nTry building with {}=1 to see them.", ROC_SKIP_SUBS_CACHE);
+    let problems = report_problems(
+        module.total_problems(),
+        &module.sources,
+        &module.interns,
+        &mut module.can_problems,
+        &mut module.type_problems,
+    );
+
+    if problems.errors + problems.warnings > 0 {
+        panic!("Problems were found! Refusing to build cached subs.");
     }
 
     let subs = module.solved.into_inner();
