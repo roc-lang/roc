@@ -186,6 +186,7 @@ pub struct Env<'a, 'ctx, 'env> {
 #[repr(u32)]
 pub enum PanicTagId {
     RocPanic = 0,
+    UserPanic = 1,
 }
 
 impl std::convert::TryFrom<u32> for PanicTagId {
@@ -2715,7 +2716,13 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let zero = env.context.i64_type().const_zero();
             zero.into()
         }
-        Crash(_, _) => todo!(),
+        Crash(sym, _) => {
+            throw_user_exception(env, scope, parent, sym);
+
+            // unused value (must return a BasicValue)
+            let zero = env.context.i64_type().const_zero();
+            zero.into()
+        }
     }
 }
 
@@ -5533,6 +5540,19 @@ pub(crate) fn throw_exception<'a, 'ctx, 'env>(
     env.call_panic(str, PanicTagId::RocPanic);
 
     builder.build_unreachable();
+}
+
+pub(crate) fn throw_user_exception<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &mut Scope<'a, 'ctx>,
+    parent: FunctionValue<'ctx>,
+    message: &Symbol,
+) {
+    let msg_val = load_symbol(scope, message);
+
+    env.call_panic(msg_val, PanicTagId::UserPanic);
+
+    env.builder.build_unreachable();
 }
 
 fn get_foreign_symbol<'a, 'ctx, 'env>(
