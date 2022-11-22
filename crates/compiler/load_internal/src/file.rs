@@ -916,7 +916,7 @@ struct State<'a> {
 
     /// From now on, these will be used by multiple threads; time to make an Arc<Mutex<_>>!
     pub arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
-    pub arc_shorthands: Arc<Mutex<MutMap<&'a str, Shorthand<'a>>>>,
+    pub arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
     #[allow(unused)]
     pub derived_module: SharedDerivedModule,
 
@@ -1085,7 +1085,7 @@ enum BuildTask<'a> {
     LoadModule {
         module_name: PQModuleName<'a>,
         module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-        shorthands: Arc<Mutex<MutMap<&'a str, Shorthand<'a>>>>,
+        shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
         ident_ids_by_module: SharedIdentIdsByModule,
     },
     Parse {
@@ -2253,9 +2253,9 @@ fn update<'a>(
             {
                 let mut shorthands = (*state.arc_shorthands).lock();
 
-                for (shorthand_name, package_name) in header.packages.iter() {
+                for (shorthand, package_name) in header.packages.iter() {
                     let package_str = package_name.as_str();
-                    let shorthand = if package_str.starts_with("https://") {
+                    let shorthand_path = if package_str.starts_with("https://") {
                         let url = package_str;
 
                         match PackageMetadata::try_from(url) {
@@ -2268,10 +2268,9 @@ fn update<'a>(
                                 let root_module = root_module_dir
                                     .join(url_metadata.root_module_filename.unwrap_or("main.roc"));
 
-                                Shorthand::FromHttpsUrl {
+                                ShorthandPath::FromHttpsUrl {
                                     root_module_dir,
                                     root_module,
-                                    url,
                                 }
                             }
                             Err(url_err) => {
@@ -2280,8 +2279,7 @@ fn update<'a>(
                         }
                     } else {
                         // This wasn't a URL, so it must be a filesystem path.
-                        let relative_path = package_str;
-                        let root_module: PathBuf = src_dir.join(relative_path);
+                        let root_module: PathBuf = src_dir.join(package_str);
                         let root_module_dir = root_module.parent().unwrap_or_else(|| {
                                 if root_module.is_file() {
                                     // Files must have parents!
@@ -2295,14 +2293,13 @@ fn update<'a>(
                                 }
                             }).into();
 
-                        Shorthand::RelativeToSrc {
+                        ShorthandPath::RelativeToSrc {
                             root_module_dir,
                             root_module,
-                            relative_path,
                         }
                     };
 
-                    shorthands.insert(shorthand_name, shorthand);
+                    shorthands.insert(shorthand, shorthand_path);
                 }
             }
 
@@ -3089,9 +3086,9 @@ fn finish_specialization<'a>(
             ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
                 use PlatformPath::*;
                 let platform_path = match platform_path {
-                    Valid(To::ExistingPackage(shorthand_name)) => {
-                        match (*state.arc_shorthands).lock().get(shorthand_name) {
-                            Some(shorthand) => shorthand.root_module().to_path_buf(),
+                    Valid(To::ExistingPackage(shorthand)) => {
+                        match (*state.arc_shorthands).lock().get(shorthand) {
+                            Some(shorthand_path) => shorthand_path.root_module().to_path_buf(),
                             None => unreachable!(),
                         }
                     }
@@ -3369,7 +3366,7 @@ fn load_module<'a>(
     src_dir: &Path,
     module_name: PQModuleName<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    arc_shorthands: Arc<Mutex<MutMap<&'a str, Shorthand<'a>>>>,
+    arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
     roc_cache_dir: RocCacheDir<'_>,
     ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
@@ -3434,40 +3431,36 @@ fn load_module<'a>(
 }
 
 #[derive(Debug)]
-enum Shorthand<'a> {
+enum ShorthandPath {
     /// e.g. "/home/rtfeldman/.cache/roc/0.1.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz"
     FromHttpsUrl {
         /// e.g. "/home/rtfeldman/.cache/roc/0.1.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz"
         root_module_dir: PathBuf,
         /// e.g. "/home/rtfeldman/.cache/roc/0.1.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz/main.roc"
         root_module: PathBuf,
-        /// e.g. "https://roc-lang.org/blah/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz.tar.br"
-        url: &'a str,
     },
     RelativeToSrc {
         /// e.g. "/home/rtfeldman/my-roc-code/examples/cli/cli-platform/"
         root_module_dir: PathBuf,
         /// e.g. "/home/rtfeldman/my-roc-code/examples/cli/cli-platform/main.roc"
         root_module: PathBuf,
-        /// what the user originally wrote, e.g. "examples/cli/cli-platform/main.roc"
-        relative_path: &'a str,
     },
 }
 
-impl<'a> Shorthand<'a> {
+impl ShorthandPath {
     pub fn root_module(&self) -> &Path {
         match self {
-            Shorthand::FromHttpsUrl { root_module, .. }
-            | Shorthand::RelativeToSrc { root_module, .. } => root_module.as_path(),
+            ShorthandPath::FromHttpsUrl { root_module, .. }
+            | ShorthandPath::RelativeToSrc { root_module, .. } => root_module.as_path(),
         }
     }
 
     pub fn root_module_dir(&self) -> &Path {
         match self {
-            Shorthand::FromHttpsUrl {
+            ShorthandPath::FromHttpsUrl {
                 root_module_dir, ..
             }
-            | Shorthand::RelativeToSrc {
+            | ShorthandPath::RelativeToSrc {
                 root_module_dir, ..
             } => root_module_dir.as_path(),
         }
@@ -3477,7 +3470,7 @@ impl<'a> Shorthand<'a> {
 fn module_name_to_path<'a>(
     src_dir: &Path,
     module_name: &PQModuleName<'a>,
-    arc_shorthands: Arc<Mutex<MutMap<&'a str, Shorthand<'a>>>>,
+    arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
 ) -> (PathBuf, Option<&'a str>) {
     let mut filename;
     let opt_shorthand;
@@ -3492,11 +3485,11 @@ fn module_name_to_path<'a>(
                 filename.push(part);
             }
         }
-        PQModuleName::Qualified(shorthand_name, name) => {
-            opt_shorthand = Some(*shorthand_name);
+        PQModuleName::Qualified(shorthand, name) => {
+            opt_shorthand = Some(*shorthand);
             let shorthands = arc_shorthands.lock();
             filename = shorthands
-                .get(shorthand_name)
+                .get(shorthand)
                 .expect("All shorthands should have been validated by now.")
                 .root_module_dir()
                 .to_path_buf();
