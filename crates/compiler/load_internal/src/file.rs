@@ -708,6 +708,7 @@ pub struct MonomorphizedModule<'a> {
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
     pub expectations: VecMap<ModuleId, Expectations>,
+    pub uses_prebuilt_platform: bool,
 }
 
 /// Values used to render expect output
@@ -867,6 +868,7 @@ enum PlatformPath<'a> {
 struct PlatformData {
     module_id: ModuleId,
     provides: Symbol,
+    is_prebuilt: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2301,42 +2303,62 @@ fn update<'a>(
 
                     shorthands.insert(shorthand, shorthand_path);
                 }
-            }
 
-            match header.header_for {
-                App { to_platform } => {
-                    debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
-                    state.platform_path = PlatformPath::Valid(to_platform);
-                }
-                Platform {
-                    main_for_host,
-                    config_shorthand,
-                    ..
-                } => {
-                    debug_assert!(matches!(state.platform_data, None));
-
-                    work.extend(state.dependencies.notify_package(config_shorthand));
-
-                    state.platform_data = Some(PlatformData {
-                        module_id: header.module_id,
-                        provides: main_for_host,
-                    });
-
-                    if header.is_root_module {
+                match header.header_for {
+                    App { to_platform } => {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
-                        state.platform_path = PlatformPath::RootIsPlatformModule;
+                        state.platform_path = PlatformPath::Valid(to_platform);
                     }
-                }
-                Builtin { .. } | Interface => {
-                    if header.is_root_module {
-                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
-                        state.platform_path = PlatformPath::RootIsInterface;
+                    Platform {
+                        main_for_host,
+                        config_shorthand,
+                        ..
+                    } => {
+                        debug_assert!(matches!(state.platform_data, None));
+
+                        work.extend(state.dependencies.notify_package(config_shorthand));
+
+                        let is_prebuilt = if header.is_root_module {
+                            debug_assert!(matches!(
+                                state.platform_path,
+                                PlatformPath::NotSpecified
+                            ));
+                            state.platform_path = PlatformPath::RootIsPlatformModule;
+
+                            // If the root module is a platform, then the platform is the very
+                            // thing we're rebuilding!
+                            false
+                        } else {
+                            // platforms from HTTPS URLs are always prebuilt
+                            matches!(
+                                shorthands.get(config_shorthand),
+                                Some(ShorthandPath::FromHttpsUrl { .. })
+                            )
+                        };
+
+                        state.platform_data = Some(PlatformData {
+                            module_id: header.module_id,
+                            provides: main_for_host,
+                            is_prebuilt,
+                        });
                     }
-                }
-                Hosted { .. } => {
-                    if header.is_root_module {
-                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
-                        state.platform_path = PlatformPath::RootIsHosted;
+                    Builtin { .. } | Interface => {
+                        if header.is_root_module {
+                            debug_assert!(matches!(
+                                state.platform_path,
+                                PlatformPath::NotSpecified
+                            ));
+                            state.platform_path = PlatformPath::RootIsInterface;
+                        }
+                    }
+                    Hosted { .. } => {
+                        if header.is_root_module {
+                            debug_assert!(matches!(
+                                state.platform_path,
+                                PlatformPath::NotSpecified
+                            ));
+                            state.platform_path = PlatformPath::RootIsHosted;
+                        }
                     }
                 }
             }
@@ -3092,7 +3114,7 @@ fn finish_specialization<'a>(
                         }
                     }
                     Valid(To::NewPackage(p_or_p)) => {
-                        panic!("This use case of `to` (`to {}`) is deprecated. Always use a package shorthand name with `to`!", p_or_p.to_str());
+                        panic!("This usage of `to` (`to {}`) is deprecated. Always use a package shorthand name with `to`!", p_or_p.to_str());
                     }
                     other => {
                         let buf = to_missing_platform_report(state.root_id, other);
@@ -3138,6 +3160,13 @@ fn finish_specialization<'a>(
         None => current_dir().unwrap().join(DEFAULT_APP_OUTPUT_PATH).into(),
     };
 
+    let uses_prebuilt_platform = match platform_data {
+        Some(data) => data.is_prebuilt,
+        // If there's no platform data (e.g. because we're building an interface module)
+        // then there's no prebuilt platform either!
+        None => false,
+    };
+
     Ok(MonomorphizedModule {
         can_problems,
         type_problems,
@@ -3153,6 +3182,7 @@ fn finish_specialization<'a>(
         sources,
         timings: state.timings,
         toplevel_expects,
+        uses_prebuilt_platform,
     })
 }
 
