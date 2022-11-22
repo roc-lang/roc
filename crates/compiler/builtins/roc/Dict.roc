@@ -13,6 +13,7 @@ interface Dict
         remove,
         update,
         walk,
+        walkUntil,
         toList,
         fromList,
         keys,
@@ -189,6 +190,21 @@ clear = \@Dict { metadata, dataIndices, data } ->
 walk : Dict k v, state, (state, k, v -> state) -> state | k has Hash & Eq
 walk = \@Dict { data }, initialState, transform ->
     List.walk data initialState (\state, T k v -> transform state k v)
+
+## Same as [Dict.walk], except you can stop walking early.
+##
+## ## Performance Details
+##
+## Compared to [Dict.walk], this can potentially visit fewer elements (which can
+## improve performance) at the cost of making each step take longer.
+## However, the added cost to each step is extremely small, and can easily
+## be outweighed if it results in skipping even a small number of elements.
+##
+## As such, it is typically better for performance to use this over [Dict.walk]
+## if returning `Break` earlier than the last element is expected to be common.
+walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state | k has Hash & Eq
+walkUntil = \@Dict { data }, initialState, transform ->
+    List.walkUntil data initialState (\state, T k v -> transform state k v)
 
 ## Get the value for a given key. If there is a value for the specified key it
 ## will return [Ok value], otherwise return [Err KeyNotFound].

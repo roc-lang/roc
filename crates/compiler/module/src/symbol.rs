@@ -1409,20 +1409,21 @@ define_builtins! {
         9 DICT_REMOVE: "remove"
 
         10 DICT_WALK: "walk"
-        11 DICT_FROM_LIST: "fromList"
-        12 DICT_TO_LIST: "toList"
-        13 DICT_KEYS: "keys"
-        14 DICT_VALUES: "values"
+        11 DICT_WALK_UNTIL: "walkUntil"
+        12 DICT_FROM_LIST: "fromList"
+        13 DICT_TO_LIST: "toList"
+        14 DICT_KEYS: "keys"
+        15 DICT_VALUES: "values"
 
-        15 DICT_INSERT_ALL: "insertAll" // union
-        16 DICT_KEEP_SHARED: "keepShared" // intersection
-        17 DICT_REMOVE_ALL: "removeAll" // difference
+        16 DICT_INSERT_ALL: "insertAll" // union
+        17 DICT_KEEP_SHARED: "keepShared" // intersection
+        18 DICT_REMOVE_ALL: "removeAll" // difference
 
-        18 DICT_WITH_CAPACITY: "withCapacity"
-        19 DICT_CAPACITY: "capacity"
-        20 DICT_UPDATE: "update"
+        19 DICT_WITH_CAPACITY: "withCapacity"
+        20 DICT_CAPACITY: "capacity"
+        21 DICT_UPDATE: "update"
 
-        21 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
+        22 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
@@ -1437,10 +1438,11 @@ define_builtins! {
         9 SET_TO_LIST: "toList"
         10 SET_FROM_LIST: "fromList"
         11 SET_WALK: "walk"
-        12 SET_WALK_USER_FUNCTION: "#walk_user_function"
-        13 SET_CONTAINS: "contains"
-        14 SET_TO_DICT: "toDict"
-        15 SET_CAPACITY: "capacity"
+        12 SET_WALK_UNTIL: "walkUntil"
+        13 SET_WALK_USER_FUNCTION: "#walk_user_function"
+        14 SET_CONTAINS: "contains"
+        15 SET_TO_DICT: "toDict"
+        16 SET_CAPACITY: "capacity"
     }
     10 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" exposed_apply_type=true // the Box.Box opaque type

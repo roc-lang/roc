@@ -33,7 +33,15 @@ Set k := Dict.Dict k {}
      ]
 
 isEq : Set k, Set k -> Bool | k has Hash & Eq
-isEq = \_, _ -> Bool.true
+isEq = \xs, ys ->
+    if len xs != len ys then
+        Bool.false
+    else
+        walkUntil xs Bool.true \_, elem ->
+            if contains ys elem then
+                Continue Bool.true
+            else
+                Break Bool.false
 
 ## An empty set.
 empty : Set k | k has Hash & Eq
@@ -114,3 +122,57 @@ difference = \@Set dict1, @Set dict2 ->
 walk : Set k, state, (state, k -> state) -> state | k has Hash & Eq
 walk = \@Set dict, state, step ->
     Dict.walk dict state (\s, k, _ -> step s k)
+
+walkUntil : Set k, state, (state, k -> [Continue state, Break state]) -> state | k has Hash & Eq
+walkUntil = \@Set dict, state, step ->
+    Dict.walkUntil dict state (\s, k, _ -> step s k)
+
+expect
+    first =
+        single "Keep Me"
+        |> insert "And Me"
+        |> insert "Remove Me"
+
+    second =
+        single "Remove Me"
+        |> insert "I do nothing..."
+
+    expected =
+        single "Keep Me"
+        |> insert "And Me"
+
+    difference first second == expected
+
+expect
+    first =
+        single "Keep Me"
+        |> insert "And Me"
+        |> insert "Remove Me"
+
+    second =
+        single "Remove Me"
+        |> insert "I do nothing..."
+
+    expected =
+        single "Keep Me"
+        |> insert "And Me"
+
+    difference first second == expected
+
+expect
+    first =
+        single 1
+        |> insert 2
+
+    second =
+        single 1
+        |> insert 3
+        |> insert 4
+
+    expected =
+        single 1
+        |> insert 2
+        |> insert 3
+        |> insert 4
+
+    union first second == expected
