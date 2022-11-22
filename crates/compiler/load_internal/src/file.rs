@@ -3113,9 +3113,7 @@ fn finish_specialization<'a>(
                             None => unreachable!(),
                         }
                     }
-                    Valid(To::NewPackage(p_or_p)) => {
-                        panic!("This usage of `to` (`to {}`) is deprecated. Always use a package shorthand name with `to`!", p_or_p.to_str());
-                    }
+                    Valid(To::NewPackage(p_or_p)) => PathBuf::from(p_or_p.as_str()),
                     other => {
                         let buf = to_missing_platform_report(state.root_id, other);
                         return Err(LoadingProblem::FormattedReport(buf));
