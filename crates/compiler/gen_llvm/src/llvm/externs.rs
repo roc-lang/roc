@@ -193,7 +193,7 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
         // already been defined by the builtins, which rely on it.
         let fn_val = module.get_function("roc_panic").unwrap();
         let mut params = fn_val.get_param_iter();
-        let ptr_arg = params.next().unwrap();
+        let roc_str_arg = params.next().unwrap();
 
         // in debug mode, this is assumed to be NullTerminatedString
         let _tag_id_arg = params.next().unwrap();
@@ -210,8 +210,17 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
 
         builder.position_at_end(entry);
 
-        // write our error message pointer
-        env.builder.build_store(get_panic_msg_ptr(env), ptr_arg);
+        let loaded_roc_str = match env.target_info.ptr_width() {
+            roc_target::PtrWidth::Bytes4 => roc_str_arg,
+            // On 64-bit we pass RocStrs by reference internally
+            roc_target::PtrWidth::Bytes8 => {
+                builder.build_load(roc_str_arg.into_pointer_value(), "load_roc_str")
+            }
+        };
+
+        // write our error message to the RocStr pointer
+        env.builder
+            .build_store(get_panic_msg_ptr(env), loaded_roc_str);
 
         build_longjmp_call(env);
 

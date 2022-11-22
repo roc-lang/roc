@@ -2,13 +2,15 @@ use std::ffi::CStr;
 use std::mem::MaybeUninit;
 use std::os::raw::c_char;
 
+use roc_std::RocStr;
+
 /// This must have the same size as the repr() of RocCallResult!
 pub const ROC_CALL_RESULT_DISCRIMINANT_SIZE: usize = std::mem::size_of::<u64>();
 
 #[repr(C)]
 pub struct RocCallResult<T> {
     tag: u64,
-    error_msg: *mut c_char,
+    error_msg: *mut RocStr,
     value: MaybeUninit<T>,
 }
 
@@ -37,9 +39,8 @@ impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
         match call_result.tag {
             0 => Ok(unsafe { call_result.value.assume_init() }),
             _ => Err({
-                let raw = unsafe { CStr::from_ptr(call_result.error_msg) };
-
-                raw.to_str().unwrap().to_owned()
+                let msg: &RocStr = unsafe { &*call_result.error_msg };
+                msg.as_str().to_owned()
             }),
         }
     }

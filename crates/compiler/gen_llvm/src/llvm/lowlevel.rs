@@ -1557,7 +1557,7 @@ fn throw_on_overflow<'a, 'ctx, 'env>(
 
     bd.position_at_end(throw_block);
 
-    throw_exception(env, message);
+    throw_exception(env, parent, message);
 
     bd.position_at_end(then_block);
 
@@ -2005,6 +2005,7 @@ fn int_neg_raise_on_overflow<'a, 'ctx, 'env>(
 
     throw_exception(
         env,
+        parent,
         "integer negation overflowed because its argument is the minimum value",
     );
 
@@ -2035,6 +2036,7 @@ fn int_abs_raise_on_overflow<'a, 'ctx, 'env>(
 
     throw_exception(
         env,
+        parent,
         "integer absolute overflowed because its argument is the minimum value",
     );
 

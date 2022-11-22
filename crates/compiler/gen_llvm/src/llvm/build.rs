@@ -344,7 +344,7 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         )
     }
 
-    pub fn call_panic(&self, message: PointerValue<'ctx>, tag_id: PanicTagId) {
+    pub fn call_panic(&self, message: BasicValueEnum<'ctx>, tag_id: PanicTagId) {
         let function = self.module.get_function("roc_panic").unwrap();
         let tag_id = self
             .context
@@ -2626,7 +2626,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
-                        throw_exception(env, "An expectation failed!");
+                        throw_exception(env, parent, "An expectation failed!");
                     }
                 }
             } else {
@@ -2688,7 +2688,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
-                        throw_exception(env, "An expectation failed!");
+                        throw_exception(env, parent, "An expectation failed!");
                     }
                 }
             } else {
@@ -2709,7 +2709,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
         }
 
         RuntimeError(error_msg) => {
-            throw_exception(env, error_msg);
+            throw_exception(env, parent, error_msg);
 
             // unused value (must return a BasicValue)
             let zero = env.context.i64_type().const_zero();
@@ -3867,14 +3867,14 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
     }
 }
 
-/// Pointer to pointer of the panic message.
+/// Pointer to RocStr which is the panic message.
 pub fn get_panic_msg_ptr<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
-    let ptr_to_u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    let str_typ = zig_str_type(env);
 
-    let global_name = "roc_panic_msg_ptr";
+    let global_name = "roc_panic_msg_str";
     let global = env.module.get_global(global_name).unwrap_or_else(|| {
-        let global = env.module.add_global(ptr_to_u8_ptr, None, global_name);
-        global.set_initializer(&ptr_to_u8_ptr.const_zero());
+        let global = env.module.add_global(str_typ, None, global_name);
+        global.set_initializer(&str_typ.const_zero());
         global
     });
 
@@ -3927,12 +3927,10 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
     {
         builder.position_at_end(catch_block);
 
-        let error_msg = {
-            // u8**
-            let ptr_int_ptr = get_panic_msg_ptr(env);
-
-            // u8* again
-            builder.build_load(ptr_int_ptr, "ptr_int")
+        let error_msg_ptr = {
+            // RocStr* global
+            let ptr_roc_str = get_panic_msg_ptr(env);
+            ptr_roc_str
         };
 
         let return_value = {
@@ -3946,7 +3944,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
                 .unwrap();
 
             let v3 = builder
-                .build_insert_value(v2, error_msg, 1, "set_exception")
+                .build_insert_value(v2, error_msg_ptr, 1, "set_exception")
                 .unwrap();
             v3
         };
@@ -5549,23 +5547,16 @@ fn define_global_error_str<'a, 'ctx, 'env>(
     }
 }
 
-pub(crate) fn throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, message: &str) {
+pub(crate) fn throw_exception<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    message: &str,
+) {
     let builder = env.builder;
 
-    // define the error message as a global
-    // (a hash is used such that the same value is not defined repeatedly)
-    let error_msg_global = define_global_error_str(env, message);
+    let str = build_string_literal(env, parent, message);
 
-    let cast = env
-        .builder
-        .build_bitcast(
-            error_msg_global.as_pointer_value(),
-            env.context.i8_type().ptr_type(AddressSpace::Generic),
-            "cast_void",
-        )
-        .into_pointer_value();
-
-    env.call_panic(cast, PanicTagId::NullTerminatedString);
+    env.call_panic(str, PanicTagId::NullTerminatedString);
 
     builder.build_unreachable();
 }
