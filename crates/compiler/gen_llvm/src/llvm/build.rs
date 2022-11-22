@@ -2718,7 +2718,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             zero.into()
         }
         Crash(sym, _) => {
-            throw_user_exception(env, scope, parent, sym);
+            throw_user_exception(env, scope, sym);
 
             // unused value (must return a BasicValue)
             let zero = env.context.i64_type().const_zero();
@@ -5563,7 +5563,6 @@ pub(crate) fn throw_exception<'a, 'ctx, 'env>(
 pub(crate) fn throw_user_exception<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &mut Scope<'a, 'ctx>,
-    parent: FunctionValue<'ctx>,
     message: &Symbol,
 ) {
     let msg_val = load_symbol(scope, message);
