@@ -51,6 +51,10 @@ pub fn install_package<'a>(
                 Ok((dest_dir, root_module_filename))
             } else {
                 // Download into a tempdir; only move it to dest_dir if hash verification passes.
+                println!(
+                    "Downloading \u{001b}[36m{url}\u{001b}[0m\n    into {}\n",
+                    cache_dir.display()
+                );
                 let tempdir = tempfile::tempdir().map_err(Problem::IoErr)?;
                 let tempdir_path = tempdir.path();
                 let downloaded_hash =
