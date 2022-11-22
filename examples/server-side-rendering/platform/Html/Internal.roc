@@ -7,7 +7,6 @@ interface Html.Internal
         Handler,
         element,
         text,
-        # lazy, TODO
         none,
         translate,
         translateStatic,
@@ -50,15 +49,12 @@ Html state : [
     None,
     Text MaybeJsIndex Str,
     Element Str MaybeJsIndex Nat (List (Attribute state)) (List (Html state)),
-    Lazy (Result { state, node : Html state } [NotCached] -> { state, node : Html state }),
 ]
 
 MaybeJsIndex : [
     NotRendered, # There's no JavaScript index for virtual nodes not yet rendered to the DOM
     Rendered Nat, # Index of the corresponding real DOM node in the JavaScript `nodes` array
 ]
-
-LazyCallback state : Result { state, node : Html state } [NotCached] -> { state, node : Html state }
 
 Attribute state : [
     EventListener Str (List CyclicStructureAccessor) (MaybeRenderedHandler state),
@@ -102,9 +98,6 @@ element = \tagName ->
 text : Str -> Html state
 text = \content -> Text NotRendered content
 
-# TODO: causes stack overflow in compiler
-# lazy : (Result { state, node : Html state } [NotCached] -> { state, node : Html state }) -> Html state
-# lazy = \f -> Lazy f
 none : Html state
 none = None
 
@@ -113,7 +106,6 @@ nodeSize = \node ->
     when node is
         Text _ content -> Str.countUtf8Bytes content
         Element _ _ size _ _ -> size
-        Lazy _ -> 0 # Ignore Lazy for buffer size estimate. renderStatic might have to reallocate, but that's OK.
         None -> 0
 
 attrSize : Attribute state -> Nat
@@ -153,7 +145,6 @@ appendRenderedStatic = \buffer, node ->
 
             "\(withChildren)</\(name)>"
 
-        # Lazy can only be constructed in virtual DOM, not static
         None -> buffer
 
 appendRenderedStaticAttr : { buffer : Str, styles : Str }, Attribute [] -> { buffer : Str, styles : Str }
@@ -188,23 +179,7 @@ translate = \node, parentToChild, childToParent ->
 
             Element name jsIndex size newAttrs newChildren
 
-        Lazy childCallback ->
-            Lazy (translateLazy childCallback parentToChild childToParent)
-
         None -> None
-
-translateLazy : LazyCallback c, (p -> c), (c -> p) -> LazyCallback p
-translateLazy = \childCallback, parentToChild, childToParent ->
-    \parentCacheValue ->
-        childCacheValue =
-            parentCacheValue
-            |> Result.map \v -> { state: parentToChild v.state, node: translate v.node childToParent parentToChild }
-        { node, state } = childCallback childCacheValue
-
-        {
-            node: translate node parentToChild childToParent,
-            state: childToParent state,
-        }
 
 translateAttr : Attribute c, (p -> c), (c -> p) -> Attribute p
 translateAttr = \attr, parentToChild, childToParent ->
@@ -248,12 +223,6 @@ translateStatic = \node ->
 
             Element name jsIndex size newAttrs newChildren
 
-        # TODO: Triggers a stack overflow in the compiler. I think in type checking.
-        # That's a pity because if someone used Lazy, it's probably worth server-side rendering.
-        # Lazy callback ->
-        #     { node: dynamicNode } = callback (Err NotCached)
-        #     translateStatic dynamicNode
-        Lazy _ -> None
         None -> None
 
 keepStaticAttr : Attribute _ -> Result (Attribute *) {}
@@ -517,9 +486,6 @@ diffAndUpdateDom = \newHandlers, oldNode, newNode ->
         { oldNode: Element _ _ _ _ _, newNode: Element _ _ _ _ _ } ->
             todo #  TODO: debug message for framework dev
 
-        { oldNode: Lazy oldCallback, newNode: Lazy newCallback } ->
-            todo
-
         { oldNode: None, newNode: None } ->
             todo
 
@@ -556,11 +522,6 @@ createSubTree = \previousEffects, node ->
                 newHandlers: newHandlersKids,
                 renderedNodes: List.append renderedNodes (Element name jsIndex size renderedAttrs renderedNodesKids),
             }
-
-        Lazy callback ->
-            createSubTree
-                (Effect.always { newHandlers, renderedNodes })
-                (callback (Err NotCached)).node
 
         Text _ content ->
             Effect.createTextNode content
