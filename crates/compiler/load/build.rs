@@ -4,9 +4,6 @@ use std::path::{Path, PathBuf};
 use bumpalo::Bump;
 use roc_module::symbol::ModuleId;
 
-#[cfg(not(windows))]
-const ROC_SKIP_SUBS_CACHE: &str = "ROC_SKIP_SUBS_CACHE";
-
 const SKIP_SUBS_CACHE: bool = {
     match option_env!("ROC_SKIP_SUBS_CACHE") {
         Some(s) => s.len() == 1 && s.as_bytes()[0] == b'1',

@@ -1,7 +1,7 @@
 use bumpalo::Bump;
 use roc_build::{
     link::{link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy},
-    program::{self, CodeGenOptions, Problems},
+    program::{self, CodeGenOptions},
 };
 use roc_builtins::bitcode;
 use roc_load::{
@@ -9,7 +9,10 @@ use roc_load::{
     LoadingProblem, Threading,
 };
 use roc_mono::ir::OptLevel;
-use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
+use roc_reporting::{
+    cli::Problems,
+    report::{RenderTarget, DEFAULT_PALETTE},
+};
 use roc_target::TargetInfo;
 use std::time::{Duration, Instant};
 use std::{path::PathBuf, thread::JoinHandle};
@@ -456,7 +459,7 @@ pub fn check_file(
     roc_file_path: PathBuf,
     emit_timings: bool,
     threading: Threading,
-) -> Result<(program::Problems, Duration), LoadingProblem> {
+) -> Result<(Problems, Duration), LoadingProblem> {
     let compilation_start = Instant::now();
 
     // only used for generating errors. We don't do code generation, so hardcoding should be fine
