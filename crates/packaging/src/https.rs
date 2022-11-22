@@ -156,7 +156,7 @@ pub fn download_and_hash(
 }
 
 /// The content encodings we support
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Encoding {
     Gzip,
     Brotli,
@@ -202,6 +202,17 @@ impl Encoding {
     }
 }
 
+#[test]
+fn encoding_from_tar_br() {
+    let actual = Encoding::new(
+        "",
+        "https://example.com/jDRlAFAA3738vu3-vMpLUoyxtA86Z7CaZneoOKrihbE.tar.br",
+    )
+    .unwrap();
+
+    assert_eq!(Encoding::Brotli, actual);
+}
+
 fn hash_and_unpack(dest_dir: &Path, reader: impl Read) -> Result<String, Problem> {
     let mut hash_reader = HashReader::new(reader);
 
@@ -227,7 +238,6 @@ fn decompress_into(
     encoding: Encoding,
     reader: impl Read,
 ) -> Result<String, Problem> {
-    let encoding = Encoding::Brotli;
     match encoding {
         Encoding::Brotli => hash_and_unpack(
             dest_dir,

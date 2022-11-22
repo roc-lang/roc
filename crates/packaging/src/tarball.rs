@@ -30,8 +30,8 @@ impl Compression {
     pub fn from_file_ext(ext: &str) -> Option<Self> {
         match ext {
             "tar" => Some(Self::Uncompressed),
-            "tar.gz" => Some(Self::Gzip),
-            "tar.br" => Some(Self::Brotli),
+            "gz" => Some(Self::Gzip),
+            "br" => Some(Self::Brotli),
             _ => None,
         }
     }
