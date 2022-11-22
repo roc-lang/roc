@@ -66,6 +66,12 @@ pub unsafe extern "C" fn roc_panic(msg: &RocStr, tag_id: u32) {
             print_backtrace();
             std::process::exit(1);
         }
+        1 => {
+            eprintln!("The program crashed with:\n\n\t{}\n", msg.as_str());
+
+            print_backtrace();
+            std::process::exit(1);
+        }
         _ => todo!(),
     }
 }
