@@ -133,7 +133,9 @@ fn find_names_needed(
             }
             _ => panic!(
                 "unfixable recursive type in roc_types::pretty_print {:?} {:?} {:?}",
-                recursive, variable, content
+                recursive,
+                variable,
+                subs.dbg(recursive)
             ),
         }
     }
