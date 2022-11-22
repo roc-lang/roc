@@ -202,7 +202,10 @@ pub fn helper(
         app_o_file.clone(),
         // Long term we probably want a smarter way to link in zig builtins.
         // With the current method all methods are kept and it adds about 100k to all outputs.
-        &[app_o_file.to_str().unwrap(), &builtins_host_file.path()],
+        &[
+            app_o_file.to_str().unwrap(),
+            builtins_host_file.path().to_str().unwrap(),
+        ],
         LinkType::Dylib,
     )
     .expect("failed to link dynamic library");
