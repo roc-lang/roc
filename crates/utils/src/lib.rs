@@ -102,7 +102,7 @@ pub fn first_last_index_of<T: ::std::fmt::Debug + std::cmp::Eq>(
 }
 
 // get the path of the lib folder
-// runtime dependencies like zig files, builtin_host.o are put in the lib folder
+// runtime dependencies like zig files, Windows dylib builds, are put in the lib folder
 pub fn get_lib_path() -> Option<PathBuf> {
     let exe_relative_str_path_opt = std::env::current_exe().ok();
 

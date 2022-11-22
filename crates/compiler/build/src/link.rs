@@ -118,18 +118,24 @@ pub fn build_zig_host_native(
         // with LLVM, the builtins are already part of the roc app,
         // but with the dev backend, they are missing. To minimize work,
         // we link them as part of the host executable
-        let builtins_obj = if target.contains("windows") {
-            bitcode::get_builtins_windows_obj_path()
+        let builtins_bytes = if target.contains("windows") {
+            bitcode::HOST_WINDOWS
         } else {
-            bitcode::get_builtins_host_obj_path()
+            bitcode::HOST_UNIX
         };
+
+        // TODO in the future when we have numbered releases, this
+        // can go in ~/.cache/roc instead of writing it to a tempdir every time.
+        let builtins_host_file = tempfile::tempfile().unwrap();
+        std::fs::write(builtins_host_file.path(), builtins_bytes)
+            .expect("failed to write host builtins object to tempfile");
 
         zig_cmd.args([
             "build-exe",
             "-fPIE",
             "-rdynamic", // make sure roc_alloc and friends are exposed
             shared_lib_path.to_str().unwrap(),
-            &builtins_obj,
+            builtins_host_file.path(),
         ]);
     } else {
         zig_cmd.args(["build-obj", "-fPIC"]);
@@ -292,11 +298,22 @@ pub fn build_zig_host_native(
         .env("PATH", &env_path)
         .env("HOME", &env_home);
     if let Some(shared_lib_path) = shared_lib_path {
+        let builtins_host_file = tempfile::NamedTempFile::new().unwrap();
+
+        #[cfg(windows)]
+        let native_bitcode = bitcode::HOST_WINDOWS;
+
+        #[cfg(not(windows))]
+        let native_bitcode = bitcode::HOST_UNIX;
+
+        std::fs::write(builtins_host_file.path(), native_bitcode)
+            .expect("failed to write host builtins object to tempfile");
+
         zig_cmd.args(&[
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            &bitcode::get_builtins_host_obj_path(),
+            builtins_host_file.path().to_str().unwrap(),
         ]);
     } else {
         zig_cmd.args(&["build-obj"]);
@@ -429,6 +446,10 @@ pub fn build_c_host_native(
                 );
             }
             _ => {
+                let builtins_host_file = tempfile::NamedTempFile::new().unwrap();
+                std::fs::write(builtins_host_file.path(), bitcode::HOST_UNIX)
+                    .expect("failed to write host builtins object to tempfile");
+
                 clang_cmd.args([
                     shared_lib_path.to_str().unwrap(),
                     // This line is commented out because
@@ -436,7 +457,7 @@ pub fn build_c_host_native(
                     // linking the built-ins led to a surgical linker bug for
                     // optimized builds. Disabling until it is needed for dev
                     // builds.
-                    // &bitcode::get_builtins_host_obj_path(),
+                    // builtins_host_file.path().to_str().unwrap(),
                     "-fPIE",
                     "-pie",
                     "-lm",
@@ -1353,10 +1374,14 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
             (but seems to be an unofficial API)
     */
 
+    let builtins_host_file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(builtins_host_file.path(), bitcode::HOST_WASM)
+        .expect("failed to write host builtins object to tempfile");
+
     let mut zig_cmd = zig();
     let args = &[
         "wasm-ld",
-        &bitcode::get_builtins_wasm32_obj_path(),
+        builtins_host_file.path().to_str().unwrap(),
         host_input,
         WASI_LIBC_PATH,
         WASI_COMPILER_RT_PATH, // builtins need __multi3, __udivti3, __fixdfti

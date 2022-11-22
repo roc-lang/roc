@@ -193,17 +193,16 @@ pub fn helper(
         .expect("failed to build output object");
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
-    // std::fs::copy(&app_o_file, "/tmp/app.o").unwrap();
+    let builtins_host_file = tempfile::tempfile().unwrap();
+    std::fs::write(builtins_host_file.path(), bitcode::HOST_UNIX)
+        .expect("failed to write host builtins object to tempfile");
 
     let (mut child, dylib_path) = link(
         &target,
         app_o_file.clone(),
         // Long term we probably want a smarter way to link in zig builtins.
         // With the current method all methods are kept and it adds about 100k to all outputs.
-        &[
-            app_o_file.to_str().unwrap(),
-            &bitcode::get_builtins_host_obj_path(),
-        ],
+        &[app_o_file.to_str().unwrap(), &builtins_host_file.path()],
         LinkType::Dylib,
     )
     .expect("failed to link dynamic library");

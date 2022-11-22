@@ -100,9 +100,13 @@ fn build_wasm_test_host() {
     let mut outfile = PathBuf::from(&out_dir).join(PLATFORM_FILENAME);
     outfile.set_extension("wasm");
 
+    let builtins_host_file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(builtins_host_file.path(), bitcode::HOST_WASM)
+        .expect("failed to write host builtins object to tempfile");
+
     run_zig(&[
         "wasm-ld",
-        &bitcode::get_builtins_wasm32_obj_path(),
+        builtins_host_file.path().to_str().unwrap(),
         platform_path.to_str().unwrap(),
         WASI_COMPILER_RT_PATH,
         WASI_LIBC_PATH,
