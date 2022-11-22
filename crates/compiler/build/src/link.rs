@@ -119,9 +119,29 @@ pub fn build_zig_host_native(
         // but with the dev backend, they are missing. To minimize work,
         // we link them as part of the host executable
         let builtins_bytes = if target.contains("windows") {
-            bitcode::HOST_WINDOWS
+            #[cfg(windows)]
+            {
+                bitcode::HOST_WINDOWS
+            }
+
+            #[cfg(not(windows))]
+            {
+                panic!(
+                    "Building shared libraries for other operating systemes is not supported yet!"
+                );
+            }
         } else {
-            bitcode::HOST_UNIX
+            #[cfg(unix)]
+            {
+                bitcode::HOST_UNIX
+            }
+
+            #[cfg(not(unix))]
+            {
+                panic!(
+                    "Building shared libraries for other operating systemes is not supported yet!"
+                );
+            }
         };
 
         // TODO in the future when we have numbered releases, this
