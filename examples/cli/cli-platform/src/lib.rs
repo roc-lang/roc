@@ -58,12 +58,10 @@ pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+pub unsafe extern "C" fn roc_panic(msg: &RocStr, tag_id: u32) {
     match tag_id {
         0 => {
-            let slice = CStr::from_ptr(c_ptr as *const c_char);
-            let string = slice.to_str().unwrap();
-            eprintln!("Roc crashed with:\n\n\t{}\n", string);
+            eprintln!("Roc crashed with:\n\n\t{}\n", msg.as_str());
 
             print_backtrace();
             std::process::exit(1);
