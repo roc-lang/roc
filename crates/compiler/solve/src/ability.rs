@@ -13,7 +13,7 @@ use roc_types::subs::{
     instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, SubsSlice,
     Variable,
 };
-use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, Polarity};
+use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, Polarity, Types};
 use roc_unify::unify::{Env, MustImplementConstraints};
 use roc_unify::unify::{MustImplementAbility, Obligated};
 
@@ -53,6 +53,7 @@ pub struct PendingDerivesTable(
 impl PendingDerivesTable {
     pub fn new(
         subs: &mut Subs,
+        types: &mut Types,
         aliases: &mut Aliases,
         pending_derives: PendingDerives,
         problems: &mut Vec<TypeError>,
@@ -74,6 +75,7 @@ impl PendingDerivesTable {
                 let derive_key = RequestedDeriveKey { opaque, ability };
 
                 // Neither rank nor pools should matter here.
+                let typ = types.from_old_type(&typ);
                 let opaque_var = type_to_var(
                     subs,
                     Rank::toplevel(),
@@ -81,8 +83,9 @@ impl PendingDerivesTable {
                     abilities_store,
                     obligation_cache,
                     &mut Pools::default(),
+                    types,
                     aliases,
-                    &typ,
+                    typ,
                 );
                 let real_var = match subs.get_content_without_compacting(opaque_var) {
                     Content::Alias(_, _, real_var, AliasKind::Opaque) => real_var,

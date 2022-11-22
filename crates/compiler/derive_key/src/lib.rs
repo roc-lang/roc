@@ -71,7 +71,7 @@ pub enum Derived {
 }
 
 /// The builtin ability member to derive.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum DeriveBuiltin {
     ToEncoder,
     Decoder,

@@ -1007,6 +1007,26 @@ fn to_expr_in_parens_report<'a>(
             expr,
             pos,
         ),
+        EInParens::Empty(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow("I am partway through parsing a parenthesized expression or tuple:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow(r"I was expecting to see an expression next."),
+                    alloc.reflow(r"Note, Roc doesn't use '()' as a null type."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "EMPTY PARENTHESES".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
         EInParens::End(pos) | EInParens::IndentEnd(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
@@ -1527,7 +1547,7 @@ fn to_unexpected_arrow_report<'a>(
         ),
         alloc.concat([
             alloc.reflow(r"It makes sense to see arrows around here, "),
-            alloc.reflow(r"so I suspect it is something earlier."),
+            alloc.reflow(r"so I suspect it is something earlier. "),
             alloc.reflow(
                 r"Maybe this pattern is indented a bit farther from the previous patterns?",
             ),
@@ -2062,6 +2082,27 @@ fn to_pattern_in_parens_report<'a>(
                 filename,
                 doc,
                 title: "UNFINISHED PARENTHESES".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
+        PInParens::Empty(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow("I am partway through parsing a parenthesized pattern or tuple:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow(r"I was expecting to see a pattern next."),
+                    alloc.reflow(r"Note, Roc doesn't use '()' as a null type."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "EMPTY PARENTHESES".to_string(),
                 severity: Severity::RuntimeError,
             }
         }

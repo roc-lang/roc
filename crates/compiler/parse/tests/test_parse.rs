@@ -80,6 +80,11 @@ mod test_parse {
                     assert!(res == "pass" || res == "fail", "a pass or fail filename was neither \"pass\" nor \"fail\", but rather: {:?}", res);
                     let res_dir = base.join(&res);
                     for file in list(&res_dir) {
+                        if file.ends_with(".expr.formatted.roc") {
+                            // These are written by fmt tests for verification. Ignore them!
+                            continue;
+                        }
+
                         let test = if let Some(test) = file.strip_suffix(".roc") {
                             test
                         } else if let Some(test) = file.strip_suffix(".result-ast") {
@@ -162,6 +167,7 @@ mod test_parse {
         pass/equals_with_spaces.expr,
         pass/equals.expr,
         pass/expect_fx.module,
+        pass/multiline_tuple_with_comments.expr,
         pass/expect.expr,
         pass/float_with_underscores.expr,
         pass/full_app_header_trailing_commas.header,
@@ -279,6 +285,7 @@ mod test_parse {
         pass/underscore_backpassing.expr,
         pass/underscore_in_assignment_pattern.expr,
         pass/var_else.expr,
+        pass/tuple_accessor_function.expr,
         pass/var_if.expr,
         pass/var_is.expr,
         pass/var_minus_two.expr,
@@ -303,6 +310,10 @@ mod test_parse {
         pass/where_clause_on_newline.expr,
         pass/zero_float.expr,
         pass/zero_int.expr,
+        pass/basic_tuple.expr,
+        pass/when_with_tuples.expr,
+        pass/when_with_tuple_in_record.expr,
+        pass/annotated_tuple_destructure.expr,
     }
 
     fn snapshot_test(
@@ -334,7 +345,7 @@ mod test_parse {
             )
         };
 
-        if std::env::var("ROC_PARSER_SNAPSHOT_TEST_OVERWRITE").is_ok() {
+        if std::env::var("ROC_SNAPSHOT_TEST_OVERWRITE").is_ok() {
             std::fs::write(&result_path, actual_result).unwrap();
         } else {
             let expected_result = std::fs::read_to_string(&result_path).unwrap_or_else(|e| {
@@ -342,7 +353,7 @@ mod test_parse {
                     "Error opening test output file {}:\n\
                         {:?}
                         Supposing the file is missing, consider running the tests with:\n\
-                        `env ROC_PARSER_SNAPSHOT_TEST_OVERWRITE=1 cargo test ...`\n\
+                        `env ROC_SNAPSHOT_TEST_OVERWRITE=1 cargo test ...`\n\
                         and committing the file that creates.",
                     result_path.display(),
                     e
@@ -835,7 +846,7 @@ mod test_parse {
             Ok((_, _, _state)) => {
                 // dbg!(_state);
             }
-            Err((_, _fail, _state)) => {
+            Err((_, _fail)) => {
                 // dbg!(_fail, _state);
                 panic!("Failed to parse!");
             }

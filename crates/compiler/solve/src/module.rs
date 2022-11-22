@@ -10,7 +10,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_solve_problem::TypeError;
 use roc_types::subs::{Content, ExposedTypesStorageSubs, FlatType, StorageSubs, Subs, Variable};
-use roc_types::types::{Alias, MemberImpl};
+use roc_types::types::{Alias, MemberImpl, Types};
 
 /// A marker that a given Subs has been solved.
 /// The only way to obtain a Solved<Subs> is by running the solver on it.
@@ -56,6 +56,7 @@ pub struct SolvedModule {
 #[allow(clippy::too_many_arguments)] // TODO: put params in a context/env var
 pub fn run_solve(
     home: ModuleId,
+    types: Types,
     constraints: &Constraints,
     constraint: ConstraintSoa,
     rigid_variables: RigidVariables,
@@ -85,6 +86,7 @@ pub fn run_solve(
     // Run the solver to populate Subs.
     let (solved_subs, solved_env) = solve::run(
         home,
+        types,
         constraints,
         &mut problems,
         subs,

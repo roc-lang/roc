@@ -159,7 +159,7 @@ where
         if state.column() >= min_indent {
             Ok((NoProgress, (), state))
         } else {
-            Err((NoProgress, indent_problem(state.pos()), state))
+            Err((NoProgress, indent_problem(state.pos())))
         }
     }
 }
@@ -184,7 +184,6 @@ where
         FastSpaceState::HasTab(position) => Err((
             MadeProgress,
             E::space_problem(BadInputError::HasTab, position),
-            state,
         )),
         FastSpaceState::Good {
             newlines,
@@ -194,7 +193,7 @@ where
             if consumed == 0 {
                 Ok((NoProgress, &[] as &[_], state))
             } else if column < min_indent {
-                Err((MadeProgress, indent_problem(state.pos()), state))
+                Err((MadeProgress, indent_problem(state.pos())))
             } else {
                 let comments_and_newlines = Vec::with_capacity_in(newlines, arena);
                 let spaces = eat_spaces(state, comments_and_newlines);
@@ -218,7 +217,6 @@ where
         FastSpaceState::HasTab(position) => Err((
             MadeProgress,
             E::space_problem(BadInputError::HasTab, position),
-            state,
         )),
         FastSpaceState::Good {
             newlines,

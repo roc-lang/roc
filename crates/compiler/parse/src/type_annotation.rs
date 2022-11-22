@@ -104,7 +104,7 @@ fn parse_type_alias_after_as<'a>() -> impl Parser<'a, TypeHeader<'a>, EType<'a>>
 
             match res {
                 Ok(header) => Ok((progress, header, state)),
-                Err(err) => Err((progress, EType::TInlineAlias(err, state.pos()), state)),
+                Err(err) => Err((progress, EType::TInlineAlias(err, state.pos()))),
             }
         },
     )
@@ -242,11 +242,13 @@ where
     F: Fn(Position) -> E,
     E: 'a,
 {
-    move |arena, state: State<'a>, min_indent: u32| match crate::ident::tag_name()
-        .parse(arena, state, min_indent)
-    {
+    move |arena, state: State<'a>, min_indent: u32| match crate::ident::tag_name().parse(
+        arena,
+        state.clone(),
+        min_indent,
+    ) {
         Ok(good) => Ok(good),
-        Err((progress, _, state)) => Err((progress, to_problem(state.pos()), state)),
+        Err((progress, _)) => Err((progress, to_problem(state.pos()))),
     }
 }
 
@@ -645,14 +647,15 @@ fn concrete_type<'a>() -> impl Parser<'a, TypeAnnotation<'a>, ETypeApply> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let initial_bytes = state.bytes();
 
-        match crate::ident::concrete_type().parse(arena, state, min_indent) {
+        match crate::ident::concrete_type().parse(arena, state.clone(), min_indent) {
             Ok((_, (module_name, type_name), state)) => {
                 let answer = TypeAnnotation::Apply(module_name, type_name, &[]);
 
                 Ok((MadeProgress, answer, state))
             }
-            Err((NoProgress, _, state)) => Err((NoProgress, ETypeApply::End(state.pos()), state)),
-            Err((MadeProgress, _, mut state)) => {
+            Err((NoProgress, _)) => Err((NoProgress, ETypeApply::End(state.pos()))),
+            Err((MadeProgress, _)) => {
+                let mut state = state.clone();
                 // we made some progress, but ultimately failed.
                 // that means a malformed type name
                 let chomped = crate::ident::chomp_malformed(state.bytes());
@@ -671,18 +674,20 @@ fn concrete_type<'a>() -> impl Parser<'a, TypeAnnotation<'a>, ETypeApply> {
 fn parse_type_variable<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
-    move |arena, state: State<'a>, min_indent: u32| match crate::ident::lowercase_ident()
-        .parse(arena, state, min_indent)
-    {
+    move |arena, state: State<'a>, min_indent: u32| match crate::ident::lowercase_ident().parse(
+        arena,
+        state.clone(),
+        min_indent,
+    ) {
         Ok((_, name, state)) => {
             if name == "has" && stop_at_surface_has {
-                Err((NoProgress, EType::TEnd(state.pos()), state))
+                Err((NoProgress, EType::TEnd(state.pos())))
             } else {
                 let answer = TypeAnnotation::BoundVariable(name);
 
                 Ok((MadeProgress, answer, state))
             }
         }
-        Err((progress, _, state)) => Err((progress, EType::TBadTypeVariable(state.pos()), state)),
+        Err((progress, _)) => Err((progress, EType::TBadTypeVariable(state.pos()))),
     }
 }

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use bumpalo::Bump;
 use roc_module::symbol::ModuleId;
 
+#[cfg(not(windows))]
 const ROC_SKIP_SUBS_CACHE: &str = "ROC_SKIP_SUBS_CACHE";
 
 const SKIP_SUBS_CACHE: bool = {
@@ -85,6 +86,7 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
         Default::default(),
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
+        roc_reporting::report::DEFAULT_PALETTE,
         Threading::AllAvailable,
     );
 

@@ -134,7 +134,7 @@ impl<'a> Formattable for TypeDef<'a> {
 
                 if !self.is_multiline() {
                     debug_assert_eq!(members.len(), 1);
-                    buf.push_str(" ");
+                    buf.spaces(1);
                     members[0].format_with_options(
                         buf,
                         Parens::NotNeeded,

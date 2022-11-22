@@ -8,6 +8,7 @@ use crate::{
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Braces {
+    Round,
     Square,
     Curly,
 }
@@ -22,11 +23,13 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
     <T as ExtractSpaces<'a>>::Item: Formattable,
 {
     let start = match braces {
+        Braces::Round => '(',
         Braces::Curly => '{',
         Braces::Square => '[',
     };
 
     let end = match braces {
+        Braces::Round => ')',
         Braces::Curly => '}',
         Braces::Square => ']',
     };

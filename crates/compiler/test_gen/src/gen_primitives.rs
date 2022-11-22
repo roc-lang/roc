@@ -2513,7 +2513,7 @@ fn function_malformed_pattern() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = "Hit an erroneous type when creating a layout for")]
+#[ignore = "causes alias analysis panics, should roc_panic"]
 fn call_invalid_layout() {
     assert_evals_to!(
         indoc!(
@@ -4025,25 +4025,6 @@ fn mutually_recursive_captures() {
             "#
         ),
         RocStr::from("foo"),
-        RocStr
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn monomorphization_sees_polymorphic_recursion() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            foo : a, Bool -> Str
-            foo = \in, b -> if b then "done" else bar in
-
-            bar = \_ -> foo {} Bool.true
-
-            foo "" Bool.false
-            "#
-        ),
-        RocStr::from("done"),
         RocStr
     );
 }

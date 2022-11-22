@@ -12,7 +12,6 @@ roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_target = { path = "../roc_target" }
 roc_utils = { path = "../../utils" }
-lazy_static = "1.4.0"
 
 [build-dependencies]
 # dunce can be removed once ziglang/zig#5109 is fixed

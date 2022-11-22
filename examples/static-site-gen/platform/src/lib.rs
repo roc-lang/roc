@@ -113,17 +113,24 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 }
 
 fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
-    let input_dir = PathBuf::from(input_dirname)
-        .canonicalize()
-        .map_err(|e| format!("{}: {}", input_dirname, e))?;
+
+
+    let input_dir = 
+        strip_windows_prefix(
+            PathBuf::from(input_dirname)
+            .canonicalize()
+            .map_err(|e| format!("{}: {}", input_dirname, e))?
+        );
 
     let output_dir = {
         let dir = PathBuf::from(output_dirname);
         if !dir.exists() {
             fs::create_dir(&dir).unwrap();
         }
-        dir.canonicalize()
+        strip_windows_prefix(
+            dir.canonicalize()
             .map_err(|e| format!("{}: {}", output_dirname, e))?
+        )
     };
 
     if !input_dir.exists() {
@@ -150,7 +157,7 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
                 num_successes += 1;
             }
             Err(e) => {
-                eprintln!("{}", e);
+                eprintln!("Failed to process file:\n\n  ({:?})with error:\n\n  {}", &input_file, e);
                 num_errors += 1;
             }
         }
@@ -169,6 +176,7 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
 }
 
 fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Result<(), String> {
+
     match input_file.extension() {
         Some(s) if s.eq("md".into()) => {}
         _ => return Err("Only .md files are supported".into()),
@@ -217,4 +225,16 @@ fn find_files(dir: &Path, file_paths: &mut Vec<PathBuf>) -> std::io::Result<()> 
         }
     }
     Ok(())
+}
+
+/// On windows, the path is prefixed with `\\?\`, the "verbatim" prefix.
+/// Such a path does not works as an argument to `zig` and other command line tools,
+/// and there seems to be no good way to strip it. So we resort to some string manipulation.
+pub fn strip_windows_prefix(path_buf: PathBuf) -> std::path::PathBuf {
+    #[cfg(not(windows))]
+    return path_buf;
+
+    let path_str = path_buf.display().to_string();
+
+    std::path::Path::new(path_str.trim_start_matches(r"\\?\")).to_path_buf()
 }

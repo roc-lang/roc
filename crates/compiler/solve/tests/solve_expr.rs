@@ -108,6 +108,7 @@ mod solve_expr {
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
                 roc_reporting::report::RenderTarget::Generic,
+                roc_reporting::report::DEFAULT_PALETTE,
             );
 
             dir.close()?;
@@ -8195,5 +8196,128 @@ mod solve_expr {
         accum : [A, B, C] -[[accum(0)]]-> [Blue, Green, Orange, Yellow]*
         "###
         );
+    }
+
+    #[test]
+    fn inferred_fixed_fixpoints() {
+        infer_queries!(
+            indoc!(
+                r#"
+                 app "test" provides [job] to "./platform"
+
+                 F : [Bar, FromG G]
+                 G : [G {lst : List F}]
+
+                 job : { lst : List F } -> G
+                 job = \config -> G config
+                 #^^^{-1}
+                 #      ^^^^^^    ^^^^^^^^
+                 "#
+            ),
+        @r###"
+        job : { lst : List [Bar, FromG a] } -[[job(0)]]-> [G { lst : List [Bar, FromG a] }] as a
+        config : { lst : List [Bar, FromG ([G { lst : List [Bar, FromG a] }] as a)] }
+        G config : [G { lst : List [Bar, FromG a] }] as a
+        "###
+        print_only_under_alias: true
+        );
+    }
+
+    #[test]
+    fn fix_recursion_under_alias_issue_4368() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [doIt] to "./platform"
+
+                Effect : [
+                    DoIt {} ({} -> Effect),
+                ]
+
+                Task := ({} -> Effect) -> Effect
+
+                doIt : {} -> Task
+                doIt = \{} ->
+                    @Task \toNext ->
+                        DoIt {} \{} -> (toNext {})
+                "#
+            ),
+            "{} -> Task",
+        );
+    }
+
+    #[test]
+    fn choose_ranged_num_for_hash() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main =
+                    \h -> Hash.hash h 7
+                    #     ^^^^^^^^^
+                "#
+            ),
+        @"Hash#Hash.hash(1) : a, I64 -[[Hash.hashI64(12)]]-> a | a has Hasher"
+        )
+    }
+
+    #[test]
+    fn generalize_inferred_opaque_variable_bound_to_ability_issue_4408() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [top] to "./platform"
+
+                MDict u := (List u) | u has Eq
+
+                bot : MDict k -> MDict k
+                bot = \@MDict data ->
+                    when {} is
+                        {} -> @MDict data
+
+                top : MDict v -> MDict v
+                top = \x -> bot x
+                "#
+            ),
+            "MDict v -> MDict v | v has Eq",
+        );
+    }
+
+    #[test]
+    fn unify_types_with_fixed_fixpoints_outside_fixing_region() {
+        infer_queries!(indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Input := [
+                FromJob Job
+            ]
+
+            Job := [
+                Job (List Input)
+            ]
+
+            job : List Input -> Job
+            job = \inputs ->
+                @Job (Job inputs)
+
+            helloWorld : Job
+            helloWorld =
+                @Job ( Job [ @Input (FromJob greeting) ] )
+                #            ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+            greeting : Job
+            greeting =
+                job []
+
+            main = (\_ -> "Which platform am I running on now?\n") helloWorld
+            "#
+        ),
+        @r###"
+        @Input (FromJob greeting) : [FromJob ([Job (List [FromJob a])] as a)]
+        "###
+        print_only_under_alias: true
+        )
     }
 }

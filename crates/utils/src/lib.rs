@@ -107,6 +107,9 @@ pub fn get_lib_path() -> Option<PathBuf> {
     let exe_relative_str_path_opt = std::env::current_exe().ok();
 
     if let Some(exe_relative_str_path) = exe_relative_str_path_opt {
+        #[cfg(windows)]
+        let exe_relative_str_path = strip_windows_prefix(&exe_relative_str_path);
+
         let mut curr_parent_opt = exe_relative_str_path.parent();
 
         // this differs for regular build and nix releases, so we check in multiple spots.
@@ -128,7 +131,20 @@ pub fn get_lib_path() -> Option<PathBuf> {
     None
 }
 
-// get the Path of the root of the repository
+#[cfg(windows)]
+use std::path::Path;
+
+/// On windows, the path is prefixed with `\\?\`, the "verbatim" prefix.
+/// Such a path does not works as an argument to `zig` and other command line tools,
+/// and there seems to be no good way to strip it. So we resort to some string manipulation.
+#[cfg(windows)]
+pub fn strip_windows_prefix(path_buf: &Path) -> PathBuf {
+    let path_str = path_buf.display().to_string();
+
+    Path::new(path_str.trim_start_matches(r"\\?\")).to_path_buf()
+}
+
+/// get the Path of the root of the repository
 pub fn root_dir() -> PathBuf {
     let mut path = env::current_exe().ok().unwrap();
 
@@ -161,6 +177,21 @@ pub fn cargo() -> Command {
         Command::new(command_str)
     } else {
         panic!("I could not find the cargo command.\nVisit https://rustup.rs/ to install cargo.",)
+    }
+}
+
+/// Gives a friendly error if rustup is not installed.
+/// Also makes it easy to track where we use rustup in the codebase.
+pub fn rustup() -> Command {
+    // on windows, we need the version of cargo installed by rustup. The meaning of `cargo` is
+    // different within a process that runs rust. So we need to explicitly refer to where
+    // rustup put the binary
+    let command_str = "rustup";
+
+    if check_command_available(command_str) {
+        Command::new(command_str)
+    } else {
+        panic!("I could not find the rustup command.\nVisit https://rustup.rs/ to install rustup.",)
     }
 }
 

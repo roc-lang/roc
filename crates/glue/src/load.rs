@@ -3,7 +3,7 @@ use crate::types::{Env, Types};
 use bumpalo::Bump;
 use roc_intern::GlobalInterner;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
-use roc_reporting::report::RenderTarget;
+use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::{Architecture, OperatingSystem, TargetInfo};
 use std::fs::File;
 use std::io::{self, ErrorKind, Write};
@@ -100,6 +100,7 @@ pub fn load_types(
         LoadConfig {
             target_info,
             render: RenderTarget::Generic,
+            palette: DEFAULT_PALETTE,
             threading,
             exec_mode: ExecutionMode::Check,
         },

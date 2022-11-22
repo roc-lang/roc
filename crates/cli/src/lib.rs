@@ -18,6 +18,7 @@ use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
+use strum::{EnumIter, IntoEnumIterator, IntoStaticStr};
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
     Architecture, Environment, OperatingSystem, Triple, Vendor, X86_32Architecture,
@@ -151,8 +152,10 @@ pub fn build_app<'a>() -> Command<'a> {
                 Arg::new(FLAG_TARGET)
                     .long(FLAG_TARGET)
                     .help("Choose a different target")
-                    .default_value(Target::default().as_str())
-                    .possible_values(Target::OPTIONS)
+                    .default_value(Target::default().into())
+                    .possible_values(Target::iter().map(|target| {
+                        Into::<&'static str>::into(target)
+                    }))
                     .required(false),
             )
             .arg(
@@ -289,14 +292,16 @@ pub fn build_app<'a>() -> Command<'a> {
                 Arg::new(FLAG_TARGET)
                     .long(FLAG_TARGET)
                     .help("Choose a different target")
-                    .default_value(Target::default().as_str())
-                    .possible_values(Target::OPTIONS)
+                    .default_value(Target::default().into())
+                    .possible_values(Target::iter().map(|target| {
+                        Into::<&'static str>::into(target)
+                    }))
                     .required(false),
             )
         )
         .trailing_var_arg(true)
         .arg(flag_optimize)
-            .arg(flag_max_threads.clone())
+        .arg(flag_max_threads.clone())
         .arg(flag_opt_size)
         .arg(flag_dev)
         .arg(flag_debug)
@@ -403,6 +408,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         target_info,
         // TODO: expose this from CLI?
         render: roc_reporting::report::RenderTarget::ColorTerminal,
+        palette: roc_reporting::report::DEFAULT_PALETTE,
         threading,
         exec_mode: ExecutionMode::Test,
     };
@@ -639,8 +645,8 @@ pub fn build(
                     roc_run(&arena, opt_level, triple, args, bytes, expect_metadata)
                 }
                 BuildAndRunIfNoErrors => {
-                    debug_assert!(
-                        problems.errors == 0,
+                    debug_assert_eq!(
+                        problems.errors, 0,
                         "if there are errors, they should have been returned as an error variant"
                     );
                     if problems.warnings > 0 {
@@ -1149,12 +1155,17 @@ fn run_with_wasmer<I: Iterator<Item = S>, S: AsRef<[u8]>>(_wasm_path: &std::path
     println!("Running wasm files is not supported on this target.");
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, EnumIter, IntoStaticStr, PartialEq, Eq)]
 pub enum Target {
+    #[strum(serialize = "system")]
     System,
+    #[strum(serialize = "linux32")]
     Linux32,
+    #[strum(serialize = "linux64")]
     Linux64,
+    #[strum(serialize = "windows64")]
     Windows64,
+    #[strum(serialize = "wasm32")]
     Wasm32,
 }
 
@@ -1165,27 +1176,6 @@ impl Default for Target {
 }
 
 impl Target {
-    const fn as_str(&self) -> &'static str {
-        use Target::*;
-
-        match self {
-            System => "system",
-            Linux32 => "linux32",
-            Linux64 => "linux64",
-            Windows64 => "windows64",
-            Wasm32 => "wasm32",
-        }
-    }
-
-    /// NOTE keep up to date!
-    const OPTIONS: &'static [&'static str] = &[
-        Target::System.as_str(),
-        Target::Linux32.as_str(),
-        Target::Linux64.as_str(),
-        Target::Windows64.as_str(),
-        Target::Wasm32.as_str(),
-    ];
-
     pub fn to_triple(self) -> Triple {
         use Target::*;
 
@@ -1231,7 +1221,7 @@ impl From<&Target> for Triple {
 
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
+        write!(f, "{}", Into::<&'static str>::into(self))
     }
 }
 

@@ -640,14 +640,17 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 is_negative,
             },
             Expr::Str(a) => Expr::Str(a.remove_spaces(arena)),
-            Expr::Access(a, b) => Expr::Access(arena.alloc(a.remove_spaces(arena)), b),
-            Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
+            Expr::RecordAccess(a, b) => Expr::RecordAccess(arena.alloc(a.remove_spaces(arena)), b),
+            Expr::RecordAccessorFunction(a) => Expr::RecordAccessorFunction(a),
+            Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.remove_spaces(arena)), b),
+            Expr::TupleAccessorFunction(a) => Expr::TupleAccessorFunction(a),
             Expr::List(a) => Expr::List(a.remove_spaces(arena)),
             Expr::RecordUpdate { update, fields } => Expr::RecordUpdate {
                 update: arena.alloc(update.remove_spaces(arena)),
                 fields: fields.remove_spaces(arena),
             },
             Expr::Record(a) => Expr::Record(a.remove_spaces(arena)),
+            Expr::Tuple(a) => Expr::Tuple(a.remove_spaces(arena)),
             Expr::Var { module_name, ident } => Expr::Var { module_name, ident },
             Expr::Underscore(a) => Expr::Underscore(a),
             Expr::Tag(a) => Expr::Tag(a),
@@ -750,6 +753,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::SpaceAfter(a, _) => a.remove_spaces(arena),
             Pattern::SingleQuote(a) => Pattern::SingleQuote(a),
             Pattern::List(pats) => Pattern::List(pats.remove_spaces(arena)),
+            Pattern::Tuple(pats) => Pattern::Tuple(pats.remove_spaces(arena)),
             Pattern::ListRest => Pattern::ListRest,
         }
     }

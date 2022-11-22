@@ -447,6 +447,7 @@ pub fn to_pattern2<'a>(
             unreachable!("should have been handled in RecordDestructure");
         }
 
+        Tuple(..) => todo!(),
         List(..) => todo!(),
         ListRest => todo!(),
 

@@ -20,7 +20,7 @@ pub fn positive_number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, ENumber>
             }
             _ => {
                 // this is not a number at all
-                Err((Progress::NoProgress, ENumber::End, state))
+                Err((Progress::NoProgress, ENumber::End))
             }
         }
     }
@@ -38,7 +38,7 @@ pub fn number_literal<'a>() -> impl Parser<'a, NumLiteral<'a>, ENumber> {
             }
             _ => {
                 // this is not a number at all
-                Err((Progress::NoProgress, ENumber::End, state))
+                Err((Progress::NoProgress, ENumber::End))
             }
         }
     }
@@ -89,12 +89,12 @@ fn chomp_number_dec<'a>(
 
     if is_negative && chomped == 0 {
         // we're probably actually looking at unary negation here
-        return Err((Progress::NoProgress, ENumber::End, state));
+        return Err((Progress::NoProgress, ENumber::End));
     }
 
     if !bytes.first().copied().unwrap_or_default().is_ascii_digit() {
         // we're probably actually looking at unary negation here
-        return Err((Progress::NoProgress, ENumber::End, state));
+        return Err((Progress::NoProgress, ENumber::End));
     }
 
     let string =

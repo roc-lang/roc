@@ -1,9 +1,17 @@
 [toolchain]
-channel = "1.61.0" # make sure to update the rust version in Earthfile as well
-# channel = "nightly-2022-04-03" # nightly to be able to use unstable features
+# How to update version:
+#  - update `channel = "RUST_VERSION"`
+#  - to update the nightly version:
+#     - Find the latest nightly release that matches RUST_VERSION here: https://github.com/oxalica/rust-overlay/tree/master/manifests/nightly/2022
+#     - update `channel = "nightly-OLD_DATE"` below
+#     - update nightly-OLD_DATE in .github/workflows/windows.yml
+#     - update nightly-OLD_DATE in crates/compiler/build/src/link.rs
+
+channel = "1.64.0" # check ^^^ when changing this
+# 
+# channel = "nightly-2022-08-06" # 1.64 nightly to be able to use unstable features
 profile = "default"
 components = [
     # for usages of rust-analyzer or similar tools inside `nix develop`
     "rust-src"
 ]
-targets = [ "x86_64-unknown-linux-gnu" ]

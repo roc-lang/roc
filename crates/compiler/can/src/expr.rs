@@ -596,6 +596,9 @@ pub fn canonicalize_expr<'a>(
                 }
             }
         }
+        ast::Expr::Tuple(_fields) => {
+            todo!("canonicalize tuple");
+        }
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
@@ -918,7 +921,7 @@ pub fn canonicalize_expr<'a>(
 
             (expr, output)
         }
-        ast::Expr::Access(record_expr, field) => {
+        ast::Expr::RecordAccess(record_expr, field) => {
             let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, record_expr);
 
             (
@@ -932,7 +935,7 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::AccessorFunction(field) => (
+        ast::Expr::RecordAccessorFunction(field) => (
             Accessor(AccessorData {
                 name: scope.gen_unique_symbol(),
                 function_var: var_store.fresh(),
@@ -944,6 +947,8 @@ pub fn canonicalize_expr<'a>(
             }),
             Output::default(),
         ),
+        ast::Expr::TupleAccess(_record_expr, _field) => todo!("handle TupleAccess"),
+        ast::Expr::TupleAccessorFunction(_) => todo!("handle TupleAccessorFunction"),
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -2065,7 +2070,7 @@ fn flatten_str_literal<'a>(
 pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
     match expr {
         ast::Expr::Var { .. } => true,
-        ast::Expr::Access(sub_expr, _) => is_valid_interpolation(sub_expr),
+        ast::Expr::RecordAccess(sub_expr, _) => is_valid_interpolation(sub_expr),
         _ => false,
     }
 }

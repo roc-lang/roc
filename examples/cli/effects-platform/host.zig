@@ -35,7 +35,11 @@ extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
 extern fn realloc(c_ptr: [*]align(Align) u8, size: usize) callconv(.C) ?*anyopaque;
 extern fn free(c_ptr: [*]align(Align) u8) callconv(.C) void;
 extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
-extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
+extern fn memset(dst: [*]u8, value: i32, size: usize) void;
+extern fn kill(pid: c_int, sig: c_int) c_int;
+extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
+extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
+extern fn getppid() c_int;
 
 const DEBUG: bool = false;
 
@@ -85,13 +89,12 @@ export fn roc_memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void {
     return memset(dst, value, size);
 }
 
-extern fn kill(pid: c_int, sig: c_int) c_int;
-extern fn shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
-extern fn mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
-extern fn getppid() c_int;
-
 fn roc_getppid() callconv(.C) c_int {
     return getppid();
+}
+
+fn roc_getppid_windows_stub() callconv(.C) c_int {
+    return 0;
 }
 
 fn roc_send_signal(pid: c_int, sig: c_int) callconv(.C) c_int {
@@ -110,6 +113,10 @@ comptime {
         @export(roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
         @export(roc_send_signal, .{ .name = "roc_send_signal", .linkage = .Strong });
         @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
+    }
+
+    if (builtin.os.tag == .windows) {
+        @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .Strong });
     }
 }
 

@@ -1772,13 +1772,6 @@ checksum = "adab1eaa3408fb7f0c777a73e7465fd5656136fc93b670eb6df3c88c2c1344e3"
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-dependencies = [
- "inkwell 0.1.0 (git+https://github.com/roc-lang/inkwell?branch=master)",
-]
-
-[[package]]
-name = "inkwell"
-version = "0.1.0"
 source = "git+https://github.com/roc-lang/inkwell?branch=master#accd406858a40ca2a1463ff77d79f3c5e4c96f4e"
 dependencies = [
  "either",
@@ -3281,10 +3274,10 @@ dependencies = [
 name = "roc_alias_analysis"
 version = "0.0.1"
 dependencies = [
+ "bumpalo",
  "morphic_lib",
  "roc_collections",
  "roc_debug_flags",
- "roc_error_macros",
  "roc_module",
  "roc_mono",
 ]
@@ -3322,7 +3315,7 @@ name = "roc_build"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "inkwell 0.1.0",
+ "inkwell",
  "libloading",
  "roc_builtins",
  "roc_can",
@@ -3356,7 +3349,6 @@ name = "roc_builtins"
 version = "0.0.1"
 dependencies = [
  "dunce",
- "lazy_static",
  "roc_collections",
  "roc_module",
  "roc_region",
@@ -3396,7 +3388,7 @@ dependencies = [
  "criterion",
  "errno",
  "indoc",
- "inkwell 0.1.0",
+ "inkwell",
  "libc",
  "libloading",
  "mimalloc",
@@ -3429,6 +3421,7 @@ dependencies = [
  "roc_utils",
  "serial_test",
  "signal-hook",
+ "strum",
  "target-lexicon",
  "tempfile",
  "ven_pretty",
@@ -3649,7 +3642,7 @@ name = "roc_gen_llvm"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "inkwell 0.1.0",
+ "inkwell",
  "morphic_lib",
  "roc_alias_analysis",
  "roc_builtins",
@@ -3678,6 +3671,7 @@ dependencies = [
  "roc_mono",
  "roc_std",
  "roc_target",
+ "roc_wasm_module",
 ]
 
 [[package]]
@@ -3826,7 +3820,6 @@ name = "roc_module"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "lazy_static",
  "roc_collections",
  "roc_error_macros",
  "roc_ident",
@@ -3904,7 +3897,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "const_format",
- "inkwell 0.1.0",
+ "inkwell",
  "libloading",
  "roc_build",
  "roc_builtins",
@@ -3954,7 +3947,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "indoc",
- "inkwell 0.1.0",
+ "inkwell",
  "libc",
  "libloading",
  "pretty_assertions",
@@ -4135,6 +4128,7 @@ dependencies = [
  "roc_region",
  "roc_serialize",
  "static_assertions",
+ "ven_pretty",
 ]
 
 [[package]]
@@ -4156,6 +4150,15 @@ name = "roc_utils"
 version = "0.0.1"
 dependencies = [
  "snafu",
+]
+
+[[package]]
+name = "roc_wasm_module"
+version = "0.0.1"
+dependencies = [
+ "bitvec 1.0.1",
+ "bumpalo",
+ "roc_error_macros",
 ]
 
 [[package]]
@@ -4738,6 +4741,9 @@ name = "strum"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "063e6045c0e62079840579a7e47a355ae92f60eb74daaf156fb1e84ba164e63f"
+dependencies = [
+ "strum_macros",
+]
 
 [[package]]
 name = "strum_macros"
@@ -4815,7 +4821,6 @@ dependencies = [
  "bumpalo",
  "indoc",
  "insta",
- "lazy_static",
  "pretty_assertions",
  "roc_builtins",
  "roc_can",
@@ -4841,7 +4846,7 @@ dependencies = [
  "bumpalo",
  "criterion",
  "indoc",
- "inkwell 0.1.0",
+ "inkwell",
  "lazy_static",
  "libc",
  "libloading",
@@ -4868,6 +4873,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "roc_utils",
+ "roc_wasm_module",
  "target-lexicon",
  "tempfile",
  "wasi_libc_sys",

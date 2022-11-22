@@ -30,6 +30,11 @@ extern fn getppid() c_int;
 fn testing_roc_getppid() callconv(.C) c_int {
     return getppid();
 }
+
+fn roc_getppid_windows_stub() callconv(.C) c_int {
+    return 0;
+}
+
 fn testing_roc_send_signal(pid: c_int, sig: c_int) callconv(.C) c_int {
     return kill(pid, sig);
 }

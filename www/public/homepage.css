@@ -13,29 +13,3 @@ li {
         margin: 24px auto;
     }
 }
-
-/* Used on on the different-names page. */
-
-th, td {
-    text-align: left;
-    padding-right: 24px;
-}
-
-#different-names-body a, #different-names-body li {
-    font-family: monospace;
-    font-size: 16px;
-}
-
-#different-names-body li {
-    display: inline;
-}
-
-#different-names-body li:not(:last-of-type)::after {
-    /* This is injected via CSS for accessibility, so to a screen reader it's a normal <li> */
-    content: ",";
-}
-
-#different-names-body ul {
-    padding: 0;
-    list-style-type: none;
-}
