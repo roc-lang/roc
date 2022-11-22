@@ -1660,7 +1660,7 @@ pub enum Stmt<'a> {
     Crash(Symbol, CrashTag),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrashTag {
     User,
 }
