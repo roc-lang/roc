@@ -32,27 +32,33 @@ pub fn install_package<'a>(
     roc_cache_dir: RocCacheDir<'_>,
     url: &'a str,
 ) -> Result<(PathBuf, Option<&'a str>), Problem> {
-    let metadata = PackageMetadata::try_from(url).map_err(Problem::InvalidUrl)?;
+    let PackageMetadata {
+        cache_subfolder,
+        content_hash,
+        root_module_filename,
+    } = PackageMetadata::try_from(url).map_err(Problem::InvalidUrl)?;
+
     match roc_cache_dir {
         RocCacheDir::Persistent(cache_dir) => {
             // e.g. ~/.cache/roc/example.com/roc-packages/
-            let parent_dir = cache_dir.join(metadata.cache_subfolder);
+            let parent_dir = cache_dir.join(cache_subfolder);
             // e.g. ~/.cache/roc/example.com/roc-packages/jDRlAFAA3738vu3-vMpLUoyxtA86Z7CaZneoOKrihbE
-            let dest_dir = parent_dir.join(metadata.content_hash);
+            let dest_dir = parent_dir.join(content_hash);
 
             if dest_dir.exists() {
                 // If the cache dir exists already, we assume it has the correct contents
                 // (it's a cache, after all!) and return without downloading anything.
-                Ok((dest_dir, metadata.root_module_filename))
+                Ok((dest_dir, root_module_filename))
             } else {
                 // Download into a tempdir; only move it to dest_dir if hash verification passes.
                 let tempdir = tempfile::tempdir().map_err(Problem::IoErr)?;
                 let tempdir_path = tempdir.path();
-                let hash = https::download_and_hash(url, tempdir_path, MAX_DOWNLOAD_BYTES)?;
+                let downloaded_hash =
+                    https::download_and_hash(url, tempdir_path, MAX_DOWNLOAD_BYTES)?;
 
                 // Download the tarball into memory and verify it.
                 // The tarball name is the hash of its contents.
-                if hash == metadata.content_hash {
+                if downloaded_hash == content_hash {
                     // Now that we've verified the hash, rename the tempdir to the real dir.
 
                     // Create the destination dir's parent dir, since it may not exist yet.
@@ -62,11 +68,11 @@ pub fn install_package<'a>(
                     fs::rename(tempdir_path, &dest_dir).map_err(Problem::IoErr)?;
 
                     // The package's files are now in the cache. We're done!
-                    Ok((dest_dir, metadata.root_module_filename))
+                    Ok((dest_dir, root_module_filename))
                 } else {
                     Err(Problem::InvalidContentHash {
-                        expected: metadata.content_hash.to_string(),
-                        actual: hash,
+                        expected: content_hash.to_string(),
+                        actual: downloaded_hash,
                     })
                 }
             }
