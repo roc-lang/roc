@@ -1,5 +1,7 @@
 use core::ffi::c_void;
 
+use roc_std::RocStr;
+
 /// # Safety
 /// The Roc application needs this.
 #[no_mangle]
@@ -36,7 +38,7 @@ pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
 /// # Safety
 /// The Roc application needs this.
 #[no_mangle]
-pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+pub unsafe fn roc_panic(msg: &RocStr, tag_id: u32) {
     use roc_gen_llvm::llvm::build::PanicTagId;
 
     use std::ffi::CStr;
@@ -44,9 +46,11 @@ pub unsafe fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
 
     match PanicTagId::try_from(tag_id) {
         Ok(PanicTagId::RocPanic) => {
-            let slice = CStr::from_ptr(c_ptr as *const c_char);
-            let string = slice.to_str().unwrap();
-            eprintln!("Roc hit a panic: {}", string);
+            eprintln!("Roc hit a panic: {}", msg);
+            std::process::exit(1);
+        }
+        Ok(PanicTagId::UserPanic) => {
+            eprintln!("User panic: {}", msg);
             std::process::exit(1);
         }
         Err(_) => unreachable!(),
