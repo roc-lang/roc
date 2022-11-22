@@ -2005,7 +2005,8 @@ fn match_list() {
 }
 
 #[mono_test]
-fn foo1() {
+#[ignore = "https://github.com/roc-lang/roc/issues/4561"]
+fn recursive_function_and_union_with_inference_hole() {
     let _tracing_guards = roc_tracing::setup_tracing!();
 
     indoc!(
