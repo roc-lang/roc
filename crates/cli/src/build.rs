@@ -342,10 +342,12 @@ pub fn build_file<'a>(
                 app_o_file.to_str().unwrap(),
             ];
 
-            let str_host_obj_path = bitcode::get_builtins_host_obj_path();
+            let builtins_host_file = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(builtins_host_file.path(), bitcode::HOST_UNIX)
+                .expect("failed to write host builtins object to tempfile");
 
             if matches!(code_gen_options.backend, program::CodeGenBackend::Assembly) {
-                inputs.push(&str_host_obj_path);
+                inputs.push(builtins_host_file.path().to_str().unwrap());
             }
 
             let (mut child, _) =  // TODO use lld

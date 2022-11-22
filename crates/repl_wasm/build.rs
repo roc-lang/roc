@@ -23,10 +23,14 @@ fn main() {
     pre_linked_binary_path.extend(["pre_linked_binary"]);
     pre_linked_binary_path.set_extension("o");
 
+    let builtins_host_file = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(builtins_host_file.path(), bitcode::HOST_WASM)
+        .expect("failed to write host builtins object to tempfile");
+
     let output = Command::new(&zig_executable())
         .args([
             "wasm-ld",
-            &bitcode::get_builtins_wasm32_obj_path(),
+            builtins_host_file.path().to_str().unwrap(),
             platform_obj.to_str().unwrap(),
             WASI_COMPILER_RT_PATH,
             WASI_LIBC_PATH,

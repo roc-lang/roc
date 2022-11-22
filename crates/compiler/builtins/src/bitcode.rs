@@ -1,40 +1,17 @@
 use roc_module::symbol::Symbol;
 use roc_target::TargetInfo;
-use roc_utils::get_lib_path;
 use std::ops::Index;
 
-const LIB_DIR_ERROR: &str = "Failed to find the lib directory. Did you copy the roc binary without also copying the lib directory?\nIf you built roc from source, the lib dir should be in target/release.\nIf not, the lib dir should be included in the release tar.gz file.";
-
-pub fn get_builtins_host_obj_path() -> String {
-    let builtins_host_path = get_lib_path().expect(LIB_DIR_ERROR).join("builtins-host.o");
-
-    builtins_host_path
-        .into_os_string()
-        .into_string()
-        .expect("Failed to convert builtins_host_path to str")
-}
-
-pub fn get_builtins_windows_obj_path() -> String {
-    let builtins_host_path = get_lib_path()
-        .expect(LIB_DIR_ERROR)
-        .join("builtins-windows-x86_64.obj");
-
-    builtins_host_path
-        .into_os_string()
-        .into_string()
-        .expect("Failed to convert builtins_host_path to str")
-}
-
-pub fn get_builtins_wasm32_obj_path() -> String {
-    let builtins_wasm32_path = get_lib_path()
-        .expect(LIB_DIR_ERROR)
-        .join("builtins-wasm32.o");
-
-    builtins_wasm32_path
-        .into_os_string()
-        .into_string()
-        .expect("Failed to convert builtins_wasm32_path to str")
-}
+pub const HOST_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bitcode/builtins-wasm32.o"));
+// TODO: in the future, we should use Zig's cross-compilation to generate and store these
+// for all targets, so that we can do cross-compilation!
+#[cfg(unix)]
+pub const HOST_UNIX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bitcode/builtins-host.o"));
+#[cfg(windows)]
+pub const HOST_WINDOWS: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/bitcode/builtins-windows-x86_64.obj"
+));
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct IntrinsicName {
