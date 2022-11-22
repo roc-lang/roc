@@ -17,7 +17,7 @@ pub struct PackageMetadata<'a> {
     /// The BLAKE3 hash of the tarball's contents. Also the .tar filename on disk.
     pub content_hash: &'a str,
     /// On disk, this will be the subfolder inside the cache dir where the package lives
-    pub cache_subfolder: &'a str,
+    pub cache_subdir: &'a str,
     /// Other code will default this to main.roc, but this module isn't concerned with that default.
     pub root_module_filename: Option<&'a str>,
 }
@@ -95,7 +95,7 @@ impl<'a> PackageMetadata<'a> {
         };
 
         Ok(PackageMetadata {
-            cache_subfolder: path,
+            cache_subdir: path,
             content_hash: tarball_name,
             root_module_filename: fragment,
         })

@@ -33,7 +33,7 @@ pub fn install_package<'a>(
     url: &'a str,
 ) -> Result<(PathBuf, Option<&'a str>), Problem> {
     let PackageMetadata {
-        cache_subfolder,
+        cache_subdir,
         content_hash,
         root_module_filename,
     } = PackageMetadata::try_from(url).map_err(Problem::InvalidUrl)?;
@@ -41,7 +41,7 @@ pub fn install_package<'a>(
     match roc_cache_dir {
         RocCacheDir::Persistent(cache_dir) => {
             // e.g. ~/.cache/roc/example.com/roc-packages/
-            let parent_dir = cache_dir.join(cache_subfolder);
+            let parent_dir = cache_dir.join(cache_subdir);
             // e.g. ~/.cache/roc/example.com/roc-packages/jDRlAFAA3738vu3-vMpLUoyxtA86Z7CaZneoOKrihbE
             let dest_dir = parent_dir.join(content_hash);
 
