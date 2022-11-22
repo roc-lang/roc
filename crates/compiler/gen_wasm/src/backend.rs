@@ -1128,45 +1128,7 @@ impl<'a> WasmBackend<'a> {
                         let (local_id, offset) =
                             location.local_and_offset(self.storage.stack_frame_pointer);
 
-                        let len = string.len();
-                        if len < 12 {
-                            // Construct the bytes of the small string
-                            let mut bytes = [0; 12];
-                            bytes[0..len].clone_from_slice(string.as_bytes());
-                            bytes[11] = 0x80 | (len as u8);
-
-                            // Transform into two integers, to minimise number of instructions
-                            let bytes_split: &([u8; 8], [u8; 4]) =
-                                unsafe { std::mem::transmute(&bytes) };
-                            let int64 = i64::from_le_bytes(bytes_split.0);
-                            let int32 = i32::from_le_bytes(bytes_split.1);
-
-                            // Write the integers to memory
-                            self.code_builder.get_local(local_id);
-                            self.code_builder.i64_const(int64);
-                            self.code_builder.i64_store(Align::Bytes4, offset);
-                            self.code_builder.get_local(local_id);
-                            self.code_builder.i32_const(int32);
-                            self.code_builder.i32_store(Align::Bytes4, offset + 8);
-                        } else {
-                            let bytes = string.as_bytes();
-                            let elements_addr = self.store_bytes_in_data_section(bytes);
-
-                            // ptr
-                            self.code_builder.get_local(local_id);
-                            self.code_builder.i32_const(elements_addr as i32);
-                            self.code_builder.i32_store(Align::Bytes4, offset);
-
-                            // len
-                            self.code_builder.get_local(local_id);
-                            self.code_builder.i32_const(string.len() as i32);
-                            self.code_builder.i32_store(Align::Bytes4, offset + 4);
-
-                            // capacity
-                            self.code_builder.get_local(local_id);
-                            self.code_builder.i32_const(string.len() as i32);
-                            self.code_builder.i32_store(Align::Bytes4, offset + 8);
-                        };
+                        self.expr_string_literal(string, local_id, offset);
                     }
                     // Bools and bytes should not be stored in the stack frame
                     Literal::Bool(_) | Literal::Byte(_) => invalid_error(),
@@ -1174,6 +1136,47 @@ impl<'a> WasmBackend<'a> {
             }
 
             _ => invalid_error(),
+        };
+    }
+
+    fn expr_string_literal(&mut self, string: &str, local_id: LocalId, offset: u32) {
+        let len = string.len();
+        if len < 12 {
+            // Construct the bytes of the small string
+            let mut bytes = [0; 12];
+            bytes[0..len].clone_from_slice(string.as_bytes());
+            bytes[11] = 0x80 | (len as u8);
+
+            // Transform into two integers, to minimise number of instructions
+            let bytes_split: &([u8; 8], [u8; 4]) = unsafe { std::mem::transmute(&bytes) };
+            let int64 = i64::from_le_bytes(bytes_split.0);
+            let int32 = i32::from_le_bytes(bytes_split.1);
+
+            // Write the integers to memory
+            self.code_builder.get_local(local_id);
+            self.code_builder.i64_const(int64);
+            self.code_builder.i64_store(Align::Bytes4, offset);
+            self.code_builder.get_local(local_id);
+            self.code_builder.i32_const(int32);
+            self.code_builder.i32_store(Align::Bytes4, offset + 8);
+        } else {
+            let bytes = string.as_bytes();
+            let elements_addr = self.store_bytes_in_data_section(bytes);
+
+            // ptr
+            self.code_builder.get_local(local_id);
+            self.code_builder.i32_const(elements_addr as i32);
+            self.code_builder.i32_store(Align::Bytes4, offset);
+
+            // len
+            self.code_builder.get_local(local_id);
+            self.code_builder.i32_const(string.len() as i32);
+            self.code_builder.i32_store(Align::Bytes4, offset + 4);
+
+            // capacity
+            self.code_builder.get_local(local_id);
+            self.code_builder.i32_const(string.len() as i32);
+            self.code_builder.i32_store(Align::Bytes4, offset + 8);
         };
     }
 
