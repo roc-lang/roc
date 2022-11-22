@@ -158,6 +158,10 @@ pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) 
                 stack.push(default_branch.1);
             }
 
+            Crash(sym, _) => {
+                result.insert(*sym);
+            }
+
             RuntimeError(_) => {}
         }
     }
@@ -1240,6 +1244,19 @@ impl<'a, 'i> Context<'a, 'i> {
                 (expect, b_live_vars)
             }
 
+            Crash(x, _) => {
+                let info = self.get_var_info(*x);
+
+                let mut live_vars = MutSet::default();
+                live_vars.insert(*x);
+
+                if info.reference && !info.consume {
+                    (self.add_inc(*x, 1, stmt), live_vars)
+                } else {
+                    (stmt, live_vars)
+                }
+            }
+
             RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
         }
     }
@@ -1408,6 +1425,11 @@ pub fn collect_stmt(
 
             vars.extend(collect_stmt(default_branch.1, jp_live_vars, vars.clone()));
 
+            vars
+        }
+
+        Crash(m, _) => {
+            vars.insert(*m);
             vars
         }
 

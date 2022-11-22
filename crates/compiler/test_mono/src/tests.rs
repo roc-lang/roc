@@ -2030,3 +2030,16 @@ fn recursive_function_and_union_with_inference_hole() {
         "#
     )
 }
+
+#[mono_test]
+fn crash() {
+    indoc!(
+        r#"
+        app "test" provides [getInfallible] to "./platform"
+
+        getInfallible = \result -> when result is
+            Ok x -> x
+            _ -> crash "turns out this was fallible"
+        "#
+    )
+}

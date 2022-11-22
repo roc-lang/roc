@@ -718,6 +718,7 @@ impl<'a> WasmBackend<'a> {
             Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the wasm backend"),
 
             Stmt::RuntimeError(msg) => self.stmt_runtime_error(msg),
+            Stmt::Crash(_, _) => todo!(),
         }
     }
 

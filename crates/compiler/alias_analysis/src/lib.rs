@@ -645,6 +645,14 @@ fn stmt_spec<'a>(
 
             builder.add_terminate(block, type_id)
         }
+        Crash(msg, _) => {
+            // Model this as a foreign call rather than TERMINATE because
+            // we want ownership of the message.
+            let result_type =
+                layout_spec(env, builder, interner, layout, &WhenRecursive::Unreachable)?;
+
+            builder.add_unknown_with(block, &[env.symbols[msg]], result_type)
+        }
     }
 }
 

@@ -241,7 +241,7 @@ fn function_s<'a, 'i>(
             }
         }
 
-        Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
+        Ret(_) | Jump(_, _) | RuntimeError(_) | Crash(..) => stmt,
     }
 }
 
@@ -535,7 +535,9 @@ fn function_d_main<'a, 'i>(
 
             (arena.alloc(new_join), found)
         }
-        Ret(_) | Jump(_, _) | RuntimeError(_) => (stmt, has_live_var(&env.jp_live_vars, stmt, x)),
+        Ret(_) | Jump(_, _) | RuntimeError(_) | Crash(..) => {
+            (stmt, has_live_var(&env.jp_live_vars, stmt, x))
+        }
     }
 }
 
@@ -696,7 +698,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             arena.alloc(expect)
         }
 
-        Ret(_) | Jump(_, _) | RuntimeError(_) => {
+        Ret(_) | Jump(_, _) | RuntimeError(_) | Crash(..) => {
             // terminals
             stmt
         }
@@ -761,6 +763,7 @@ fn has_live_var<'a>(jp_live_vars: &JPLiveVarMap, stmt: &'a Stmt<'a>, needle: Sym
         Jump(id, arguments) => {
             arguments.iter().any(|s| *s == needle) || jp_live_vars[id].contains(&needle)
         }
+        Crash(m, _) => *m == needle,
         RuntimeError(_) => false,
     }
 }

@@ -1611,6 +1611,7 @@ pub fn cond<'a>(
 }
 
 pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
     Let(Symbol, Expr<'a>, Layout<'a>, &'a Stmt<'a>),
@@ -1656,6 +1657,12 @@ pub enum Stmt<'a> {
     },
     Jump(JoinPointId, &'a [Symbol]),
     RuntimeError(&'a str),
+    Crash(Symbol, CrashTag),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CrashTag {
+    User,
 }
 
 /// in the block below, symbol `scrutinee` is assumed be be of shape `tag_id`
@@ -2304,6 +2311,7 @@ impl<'a> Stmt<'a> {
             }
 
             RuntimeError(s) => alloc.text(format!("Error {}", s)),
+            Crash(s, _src) => alloc.text(format!("Crash {:?}", s)),
 
             Join {
                 id,
@@ -5562,7 +5570,20 @@ pub fn with_hole<'a>(
         }
         TypedHole(_) => Stmt::RuntimeError("Hit a blank"),
         RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(e.runtime_message())),
-        Crash { .. } => todo!(),
+        Crash { msg, ret_var: _ } => {
+            let msg_sym = env.unique_symbol();
+            let stmt = Stmt::Crash(msg_sym, CrashTag::User);
+
+            with_hole(
+                env,
+                msg.value,
+                Variable::STR,
+                procs,
+                layout_cache,
+                msg_sym,
+                env.arena.alloc(stmt),
+            )
+        }
     }
 }
 
@@ -7020,6 +7041,7 @@ fn substitute_in_stmt_help<'a>(
         }
 
         RuntimeError(_) => None,
+        Crash(msg, tag) => substitute(subs, *msg).map(|new| &*arena.alloc(Crash(new, *tag))),
     }
 }
 

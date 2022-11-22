@@ -2715,6 +2715,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let zero = env.context.i64_type().const_zero();
             zero.into()
         }
+        Crash(_, _) => todo!(),
     }
 }
 
