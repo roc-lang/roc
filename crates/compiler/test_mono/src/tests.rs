@@ -2003,3 +2003,29 @@ fn match_list() {
         "#
     )
 }
+
+#[mono_test]
+fn foo1() {
+    let _tracing_guards = roc_tracing::setup_tracing!();
+
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Html state : [
+            Element (List (Html state)),
+        ]
+
+        translateStatic : Html _ -> Html _
+        translateStatic = \node ->
+            when node is
+                Element children ->
+                    newChildren = List.map children translateStatic
+
+                    Element newChildren
+
+        main = when translateStatic (Element []) is
+            _ -> ""
+        "#
+    )
+}

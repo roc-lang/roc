@@ -3,16 +3,12 @@ use roc_error_macros::internal_error;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_load::{EntryPoint, ExpectMetadata, LoadedModule, MonomorphizedModule};
-use roc_module::symbol::{Interns, ModuleId};
 use roc_mono::ir::OptLevel;
-use roc_region::all::LineInfo;
-use roc_reporting::cli::report_problems;
-use roc_solve_problem::TypeError;
+use roc_reporting::cli::{report_problems, Problems};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use roc_collections::all::MutMap;
 #[cfg(feature = "target-wasm32")]
 use roc_collections::all::MutSet;
 
