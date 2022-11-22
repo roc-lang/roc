@@ -5571,18 +5571,16 @@ pub fn with_hole<'a>(
         TypedHole(_) => Stmt::RuntimeError("Hit a blank"),
         RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(e.runtime_message())),
         Crash { msg, ret_var: _ } => {
-            let msg_sym = env.unique_symbol();
-            let stmt = Stmt::Crash(msg_sym, CrashTag::User);
-
-            with_hole(
+            let msg_sym = possible_reuse_symbol_or_specialize(
                 env,
-                msg.value,
-                Variable::STR,
                 procs,
                 layout_cache,
-                msg_sym,
-                env.arena.alloc(stmt),
-            )
+                &msg.value,
+                Variable::STR,
+            );
+            let stmt = Stmt::Crash(msg_sym, CrashTag::User);
+
+            assign_to_symbol(env, procs, layout_cache, Variable::STR, *msg, msg_sym, stmt)
         }
     }
 }
