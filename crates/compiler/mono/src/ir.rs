@@ -71,6 +71,16 @@ roc_error_macros::assert_sizeof_non_wasm!(ProcLayout, 8 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(Call, 9 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(CallType, 7 * 8);
 
+fn runtime_error<'a>(env: &mut Env<'a, '_>, msg: &'a str) -> Stmt<'a> {
+    let sym = env.unique_symbol();
+    Stmt::Let(
+        sym,
+        Expr::Literal(Literal::Str(msg)),
+        Layout::Builtin(Builtin::Str),
+        env.arena.alloc(Stmt::Crash(sym, CrashTag::Roc)),
+    )
+}
+
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr, $context_msg:expr) => {
         match $layout_result {
@@ -84,15 +94,17 @@ macro_rules! return_on_layout_error_help {
     ($env:expr, $error:expr, $context_msg:expr) => {{
         match $error {
             LayoutProblem::UnresolvedTypeVar(_) => {
-                return Stmt::RuntimeError(
+                return runtime_error(
+                    $env,
                     $env.arena
                         .alloc(format!("UnresolvedTypeVar: {}", $context_msg,)),
-                );
+                )
             }
             LayoutProblem::Erroneous => {
-                return Stmt::RuntimeError(
+                return runtime_error(
+                    $env,
                     $env.arena.alloc(format!("Erroneous: {}", $context_msg,)),
-                );
+                )
             }
         }
     }};
@@ -1662,6 +1674,7 @@ pub enum Stmt<'a> {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrashTag {
+    Roc,
     User,
 }
 
