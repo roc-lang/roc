@@ -346,16 +346,36 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         )
     }
 
-    pub fn call_panic(&self, message: BasicValueEnum<'ctx>, tag_id: PanicTagId) {
+    pub fn call_panic(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        message: BasicValueEnum<'ctx>,
+        tag_id: PanicTagId,
+    ) {
         let function = self.module.get_function("roc_panic").unwrap();
         let tag_id = self
             .context
             .i32_type()
             .const_int(tag_id as u32 as u64, false);
 
+        let msg = match env.target_info.ptr_width() {
+            PtrWidth::Bytes4 => {
+                // we need to pass the message by reference, but we currently hold the value.
+                let alloca = env
+                    .builder
+                    .build_alloca(message.get_type(), "alloca_panic_msg");
+                env.builder.build_store(alloca, message);
+                alloca.into()
+            }
+            PtrWidth::Bytes8 => {
+                // string is already held by reference
+                message
+            }
+        };
+
         let call = self
             .builder
-            .build_call(function, &[message.into(), tag_id.into()], "roc_panic");
+            .build_call(function, &[msg.into(), tag_id.into()], "roc_panic");
 
         call.set_call_convention(C_CALL_CONV);
     }
@@ -5555,7 +5575,7 @@ pub(crate) fn throw_exception<'a, 'ctx, 'env>(
 
     let str = build_string_literal(env, parent, message);
 
-    env.call_panic(str, PanicTagId::RocPanic);
+    env.call_panic(env, str, PanicTagId::RocPanic);
 
     builder.build_unreachable();
 }
@@ -5567,7 +5587,7 @@ pub(crate) fn throw_user_exception<'a, 'ctx, 'env>(
 ) {
     let msg_val = load_symbol(scope, message);
 
-    env.call_panic(msg_val, PanicTagId::UserPanic);
+    env.call_panic(env, msg_val, PanicTagId::UserPanic);
 
     env.builder.build_unreachable();
 }
