@@ -23,6 +23,7 @@ members = [
     "crates/linker",
     "crates/wasi-libc-sys",
     "crates/wasm_module",
+    "crates/wasm_interp",
 ]
 exclude = [
     "ci/benchmarks/bench-runner",

@@ -220,6 +220,14 @@ pub struct TypeSection<'a> {
 }
 
 impl<'a> TypeSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        TypeSection {
+            arena,
+            bytes: Vec::new_in(arena),
+            offsets: Vec::new_in(arena),
+        }
+    }
+
     /// Find a matching signature or insert a new one. Return the index.
     pub fn insert(&mut self, signature: Signature<'a>) -> u32 {
         let mut sig_bytes = Vec::with_capacity_in(signature.param_types.len() + 4, self.arena);
@@ -425,6 +433,12 @@ pub struct ImportSection<'a> {
 impl<'a> ImportSection<'a> {
     const ID: SectionId = SectionId::Import;
 
+    pub fn new(arena: &'a Bump) -> Self {
+        ImportSection {
+            imports: Vec::new_in(arena),
+        }
+    }
+
     pub fn size(&self) -> usize {
         self.imports.iter().map(|imp| imp.size()).sum()
     }
@@ -488,6 +502,12 @@ pub struct FunctionSection<'a> {
 }
 
 impl<'a> FunctionSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        FunctionSection {
+            signatures: Vec::new_in(arena),
+        }
+    }
+
     pub fn add_sig(&mut self, sig_id: u32) {
         self.signatures.push(sig_id);
     }
@@ -589,6 +609,16 @@ pub struct TableSection {
 
 impl TableSection {
     const ID: SectionId = SectionId::Table;
+
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        TableSection {
+            function_table: TableType {
+                ref_type: RefType::Func,
+                limits: Limits::Min(0),
+            },
+        }
+    }
 
     pub fn size(&self) -> usize {
         let section_id_bytes = 1;
@@ -880,6 +910,13 @@ pub struct GlobalSection<'a> {
 }
 
 impl<'a> GlobalSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        GlobalSection {
+            count: 0,
+            bytes: Vec::new_in(arena),
+        }
+    }
+
     pub fn parse_u32_at_index(&self, index: u32) -> Result<u32, ParseError> {
         let mut cursor = 0;
         for _ in 0..index {
@@ -960,6 +997,12 @@ pub struct ExportSection<'a> {
 
 impl<'a> ExportSection<'a> {
     const ID: SectionId = SectionId::Export;
+
+    pub fn new(arena: &'a Bump) -> Self {
+        ExportSection {
+            exports: Vec::new_in(arena),
+        }
+    }
 
     pub fn append(&mut self, export: Export<'a>) {
         self.exports.push(export);
@@ -1086,6 +1129,12 @@ pub struct ElementSection<'a> {
 impl<'a> ElementSection<'a> {
     const ID: SectionId = SectionId::Element;
 
+    pub fn new(arena: &'a Bump) -> Self {
+        ElementSection {
+            segments: Vec::new_in(arena),
+        }
+    }
+
     /// Get a table index for a function (equivalent to a function pointer)
     /// The function will be inserted into the table if it's not already there.
     /// This index is what the call_indirect instruction expects.
@@ -1179,6 +1228,15 @@ pub struct CodeSection<'a> {
 }
 
 impl<'a> CodeSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        CodeSection {
+            function_count: 0,
+            bytes: Vec::new_in(arena),
+            function_offsets: Vec::new_in(arena),
+            dead_import_dummy_count: 0,
+        }
+    }
+
     pub fn size(&self) -> usize {
         MAX_SIZE_SECTION_HEADER + self.bytes.len()
     }
@@ -1329,6 +1387,14 @@ pub struct DataSection<'a> {
 impl<'a> DataSection<'a> {
     const ID: SectionId = SectionId::Data;
 
+    pub fn new(arena: &'a Bump) -> Self {
+        DataSection {
+            end_addr: 0,
+            count: 0,
+            bytes: Vec::new_in(arena),
+        }
+    }
+
     pub fn size(&self) -> usize {
         MAX_SIZE_SECTION_HEADER + self.bytes.len()
     }
@@ -1394,6 +1460,10 @@ pub struct OpaqueSection<'a> {
 }
 
 impl<'a> OpaqueSection<'a> {
+    pub fn new() -> Self {
+        OpaqueSection { bytes: &[] }
+    }
+
     pub fn size(&self) -> usize {
         self.bytes.len()
     }
@@ -1464,7 +1534,7 @@ impl<'a> NameSection<'a> {
         self.function_names.push((index, name));
     }
 
-    pub fn empty(arena: &'a Bump) -> Self {
+    pub fn new(arena: &'a Bump) -> Self {
         NameSection {
             function_names: bumpalo::vec![in arena],
         }
@@ -1502,12 +1572,12 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
 
         // If we're already past the end of the preloaded file then there is no Name section
         if *cursor >= module_bytes.len() {
-            return Ok(Self::empty(arena));
+            return Ok(Self::new(arena));
         }
 
         // Custom section ID
         if module_bytes[*cursor] != Self::ID as u8 {
-            return Ok(Self::empty(arena));
+            return Ok(Self::new(arena));
         }
         *cursor += 1;
 
@@ -1520,7 +1590,7 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
             // This is a different Custom section. This host has no debug info.
             // Not a parse error, just an empty section.
             *cursor = cursor_start;
-            return Ok(Self::empty(arena));
+            return Ok(Self::new(arena));
         }
 
         // Find function names subsection
