@@ -380,7 +380,6 @@ mod solve_expr {
         let known_specializations = abilities_store.iter_declared_implementations().filter_map(
             |(impl_key, member_impl)| match member_impl {
                 MemberImpl::Impl(impl_symbol) => {
-                    dbg!(impl_symbol);
                     let specialization = abilities_store.specialization_info(*impl_symbol).expect(
                         "declared implementations should be resolved conclusively after solving",
                     );
@@ -8319,5 +8318,49 @@ mod solve_expr {
         "###
         print_only_under_alias: true
         )
+    }
+
+    #[test]
+    fn impl_ability_for_opaque_with_lambda_sets() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [isEqQ] to "./platform"
+
+                Q := [ F (Str -> Str), G ] has [Eq { isEq: isEqQ }]
+
+                isEqQ = \@Q q1, @Q q2 -> when T q1 q2 is
+                #^^^^^{-1}
+                    T (F _) (F _) -> Bool.true
+                    T G G -> Bool.true
+                    _ -> Bool.false
+                "#
+            ),
+        @"isEqQ : Q, Q -[[isEqQ(0)]]-> Bool"
+        );
+    }
+
+    #[test]
+    fn impl_ability_for_opaque_with_lambda_sets_material() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Q := ({} -> Str) has [Eq {isEq: isEqQ}]
+
+                isEqQ = \@Q f1, @Q f2 -> (f1 {} == f2 {})
+                #^^^^^{-1}
+
+                main = isEqQ (@Q \{} -> "a") (@Q \{} -> "a")
+                #      ^^^^^
+                "#
+            ),
+        @r###"
+        isEqQ : ({} -[[]]-> Str), ({} -[[]]-> Str) -[[isEqQ(2)]]-> [False, True]
+        isEqQ : ({} -[[6(6), 7(7)]]-> Str), ({} -[[6(6), 7(7)]]-> Str) -[[isEqQ(2)]]-> [False, True]
+        "###
+        print_only_under_alias: true
+        );
     }
 }
