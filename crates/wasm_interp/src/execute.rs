@@ -78,10 +78,17 @@ impl<'a> ExecutionState<'a> {
                 todo!("{:?}", op_code);
             }
             RETURN => {
-                todo!("{:?}", op_code);
+                self.program_counter = self.call_stack.pop_frame() as usize;
             }
             CALL => {
-                todo!("{:?}", op_code);
+                let index = self.fetch_immediate_u32(module) as usize;
+                let return_addr = self.program_counter as u32;
+                self.program_counter = module.code.function_offsets[index] as usize;
+                self.call_stack.push_frame(
+                    return_addr,
+                    &module.code.bytes,
+                    &mut self.program_counter,
+                )
             }
             CALLINDIRECT => {
                 todo!("{:?}", op_code);

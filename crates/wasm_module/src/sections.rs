@@ -1221,7 +1221,7 @@ impl<'a> Serialize for ElementSection<'a> {
 pub struct CodeSection<'a> {
     pub function_count: u32,
     pub bytes: Vec<'a, u8>,
-    /// The start of each preloaded function
+    /// The start of each function
     pub function_offsets: Vec<'a, u32>,
     /// Dead imports are replaced with dummy functions in CodeSection
     pub dead_import_dummy_count: u32,

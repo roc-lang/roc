@@ -1,6 +1,6 @@
 use bitvec::vec::BitVec;
 use bumpalo::{collections::Vec, Bump};
-use roc_wasm_module::ValueType;
+use roc_wasm_module::{parse::Parse, ValueType};
 use std::iter::repeat;
 
 use crate::Value;
@@ -44,13 +44,16 @@ impl<'a> CallStack<'a> {
     }
 
     /// On entering a Wasm call, save the return address, and make space for locals
-    pub fn push_frame(&mut self, return_addr: u32, local_groups: &[(u32, ValueType)]) {
+    pub fn push_frame(&mut self, return_addr: u32, code_bytes: &[u8], pc: &mut usize) {
         self.return_addrs.push(return_addr);
         let frame_offset = self.is_64.len();
         self.frame_offsets.push(frame_offset as u32);
         let mut total = 0;
-        for (num_locals, ty) in local_groups {
-            let n = *num_locals as usize;
+        // Parse local variable declarations in the function header. They're grouped by type.
+        let group_count = u32::parse((), code_bytes, pc).unwrap();
+        for _ in 0..group_count {
+            let (group_size, ty) = <(u32, ValueType)>::parse((), code_bytes, pc).unwrap();
+            let n = group_size as usize;
             total += n;
             self.is_64
                 .extend(repeat(matches!(ty, ValueType::I64 | ValueType::F64)).take(n));
@@ -121,6 +124,8 @@ impl<'a> CallStack<'a> {
 
 #[cfg(test)]
 mod tests {
+    use roc_wasm_module::Serialize;
+
     use super::*;
 
     const RETURN_ADDR: u32 = 0x12345;
@@ -131,19 +136,28 @@ mod tests {
     }
 
     fn setup(call_stack: &mut CallStack<'_>) {
+        let mut buffer = vec![];
+        let mut cursor = 0;
+
         // Push a other few frames before the test frame, just to make the scenario more typical.
-        call_stack.push_frame(0x11111, &[(1, ValueType::I32)]);
-        call_stack.push_frame(0x22222, &[(2, ValueType::I32)]);
-        call_stack.push_frame(0x33333, &[(3, ValueType::I32)]);
+        [(1u32, ValueType::I32)].serialize(&mut buffer);
+        call_stack.push_frame(0x11111, &buffer, &mut cursor);
+
+        [(2u32, ValueType::I32)].serialize(&mut buffer);
+        call_stack.push_frame(0x22222, &buffer, &mut cursor);
+
+        [(3u32, ValueType::I32)].serialize(&mut buffer);
+        call_stack.push_frame(0x33333, &buffer, &mut cursor);
 
         // Create a test call frame with local variables of every type
-        let current_frame_local_decls = [
-            (8, ValueType::I32),
-            (4, ValueType::I64),
-            (2, ValueType::F32),
-            (1, ValueType::F64),
-        ];
-        call_stack.push_frame(RETURN_ADDR, &current_frame_local_decls);
+        [
+            (8u32, ValueType::I32),
+            (4u32, ValueType::I64),
+            (2u32, ValueType::F32),
+            (1u32, ValueType::F64),
+        ]
+        .serialize(&mut buffer);
+        call_stack.push_frame(RETURN_ADDR, &buffer, &mut cursor);
     }
 
     #[test]

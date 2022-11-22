@@ -2,7 +2,7 @@
 
 use bumpalo::Bump;
 use roc_wasm_interp::{ExecutionState, Value};
-use roc_wasm_module::{opcodes::OpCode, SerialBuffer, ValueType, WasmModule};
+use roc_wasm_module::{opcodes::OpCode, SerialBuffer, Serialize, ValueType, WasmModule};
 
 fn default_state<'a>(arena: &'a Bump) -> ExecutionState {
     let pages = 1;
@@ -56,13 +56,16 @@ fn test_set_get_local() {
     let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
 
-    let local_decls = [
-        (1, ValueType::F32),
-        (1, ValueType::F64),
-        (1, ValueType::I32),
-        (1, ValueType::I64),
-    ];
-    state.call_stack.push_frame(0x1234, &local_decls);
+    let mut buffer = vec![];
+    let mut cursor = 0;
+    [
+        (1u32, ValueType::F32),
+        (1u32, ValueType::F64),
+        (1u32, ValueType::I32),
+        (1u32, ValueType::I64),
+    ]
+    .serialize(&mut buffer);
+    state.call_stack.push_frame(0x1234, &buffer, &mut cursor);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
     module.code.bytes.encode_i32(12345);
@@ -85,13 +88,16 @@ fn test_tee_get_local() {
     let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
 
-    let local_decls = [
-        (1, ValueType::F32),
-        (1, ValueType::F64),
-        (1, ValueType::I32),
-        (1, ValueType::I64),
-    ];
-    state.call_stack.push_frame(0x1234, &local_decls);
+    let mut buffer = vec![];
+    let mut cursor = 0;
+    [
+        (1u32, ValueType::F32),
+        (1u32, ValueType::F64),
+        (1u32, ValueType::I32),
+        (1u32, ValueType::I64),
+    ]
+    .serialize(&mut buffer);
+    state.call_stack.push_frame(0x1234, &buffer, &mut cursor);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
     module.code.bytes.encode_i32(12345);
