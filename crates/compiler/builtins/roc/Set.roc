@@ -105,7 +105,7 @@ fromList : List k -> Set k | k has Hash & Eq
 fromList = \list ->
     initial = @Set (Dict.withCapacity (List.len list))
 
-    List.walk list initial \set, key -> Set.insert set key
+    List.walk list initial insert
 
 union : Set k, Set k -> Set k | k has Hash & Eq
 union = \@Set dict1, @Set dict2 ->
@@ -176,3 +176,30 @@ expect
         |> insert 4
 
     union first second == expected
+
+expect
+    base =
+        single "Remove Me"
+        |> insert "Keep Me"
+        |> insert "And Me"
+
+    expected =
+        single "Keep Me"
+        |> insert "And Me"
+
+    remove base "Remove Me" == expected
+
+expect
+    x =
+        single 0
+        |> insert 1
+        |> insert 2
+        |> insert 3
+        |> insert 4
+        |> insert 5
+        |> insert 6
+        |> insert 7
+        |> insert 8
+        |> insert 9
+
+    x == fromList (toList x)

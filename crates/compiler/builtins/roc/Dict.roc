@@ -801,33 +801,12 @@ expect
     && (get dict "g" == Ok 6)
     && (get dict "h" == Ok 7)
 
-# These are equivalent to the Set tests that are panicking for some reason.
 expect
-    actual =
-        empty
-        |> insert "foo" {}
-        |> insert "bar" {}
-        |> insert "foo" {}
-        |> insert "baz" {}
-
-    expected =
-        empty
-        |> insert "foo" {}
-        |> insert "bar" {}
-        |> insert "baz" {}
-
-    toList expected == toList actual
-
-expect
-    actual =
-        empty
-        |> insert "foo" {}
-        |> insert "bar" {}
-        |> insert "foo" {}
-        |> insert "baz" {}
-        |> len
-
-    actual == 3
+    Dict.empty
+    |> Dict.insert "Some" "Value"
+    |> Dict.remove "Some"
+    |> Dict.len
+    |> Bool.isEq 0
 
 # We have decided not to expose the standard roc hashing algorithm.
 # This is to avoid external dependence and the need for versioning.
