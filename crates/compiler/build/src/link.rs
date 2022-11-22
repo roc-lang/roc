@@ -60,9 +60,14 @@ pub fn link(
     }
 }
 
-const fn legacy_host_filename_ext(target: &Triple, opt_level: OptLevel) -> Option<&'static str> {
-    match roc_target::OperatingSystem::new(target.operating_system) {
-        Some(roc_target::OperatingSystem::Wasi) => {
+const fn legacy_host_filename_ext(
+    os: roc_target::OperatingSystem,
+    opt_level: OptLevel,
+) -> &'static str {
+    use roc_target::OperatingSystem::*;
+
+    match os {
+        Wasi => {
             // TODO wasm host extension should be something else ideally
             // .bc does not seem to work because
             //
@@ -70,50 +75,13 @@ const fn legacy_host_filename_ext(target: &Triple, opt_level: OptLevel) -> Optio
             //
             // and zig does not currently emit `.a` webassembly static libraries
             if matches!(opt_level, OptLevel::Development) {
-                Some("wasm")
+                "wasm"
             } else {
-                Some("zig")
+                "zig"
             }
         }
-        Some(_) => match target {
-            Triple {
-                operating_system: OperatingSystem::Linux,
-                architecture: Architecture::X86_64,
-                ..
-            } => Some("o"),
-            Triple {
-                operating_system: OperatingSystem::Linux,
-                architecture: Architecture::Aarch64(_),
-                ..
-            } => Some("o"),
-            Triple {
-                operating_system: OperatingSystem::Darwin,
-                architecture: Architecture::Aarch64(_),
-                ..
-            } => Some("o"),
-            Triple {
-                operating_system: OperatingSystem::Darwin,
-                architecture: Architecture::X86_64,
-                ..
-            } => Some("o"),
-            Triple {
-                operating_system: OperatingSystem::Windows,
-                architecture: Architecture::X86_64,
-                ..
-            } => Some("obj"),
-            Triple {
-                operating_system: OperatingSystem::Windows,
-                architecture: Architecture::X86_32(_),
-                ..
-            } => Some("obj"),
-            Triple {
-                operating_system: OperatingSystem::Windows,
-                architecture: Architecture::Aarch64(_),
-                ..
-            } => Some("obj"),
-            _ => None,
-        },
-        None => None,
+        Unix => "o",
+        Windows => "obj",
     }
 }
 
@@ -162,7 +130,8 @@ pub const fn preprocessed_host_filename(target: &Triple) -> Option<&'static str>
 
 /// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
 pub fn legacy_host_filename(target: &Triple, opt_level: OptLevel) -> Option<String> {
-    let ext = legacy_host_filename_ext(target, opt_level)?;
+    let os = roc_target::OperatingSystem::new(target.operating_system)?;
+    let ext = legacy_host_filename_ext(os, opt_level);
 
     Some(preprocessed_host_filename(target)?.replace(PRECOMPILED_HOST_EXT, ext))
 }
