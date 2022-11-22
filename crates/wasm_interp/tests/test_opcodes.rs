@@ -4,8 +4,12 @@ use bumpalo::Bump;
 use roc_wasm_interp::{ExecutionState, Value};
 use roc_wasm_module::{opcodes::OpCode, SerialBuffer, ValueType, WasmModule};
 
-const DEFAULT_MEMORY_PAGES: u32 = 1;
-const DEFAULT_PROGRAM_COUNTER: usize = 0;
+fn default_state<'a>(arena: &'a Bump) -> ExecutionState {
+    let pages = 1;
+    let program_counter = 0;
+    let globals = [];
+    ExecutionState::new(&arena, pages, program_counter, globals)
+}
 
 // #[test]
 // fn test_block() {}
@@ -49,7 +53,7 @@ const DEFAULT_PROGRAM_COUNTER: usize = 0;
 #[test]
 fn test_set_get_local() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
+    let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
 
     let local_decls = [
@@ -78,7 +82,7 @@ fn test_set_get_local() {
 #[test]
 fn test_tee_get_local() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
+    let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
 
     let local_decls = [
@@ -108,12 +112,10 @@ fn test_tee_get_local() {
 #[test]
 fn test_global() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(
-        &arena,
-        DEFAULT_MEMORY_PAGES,
-        DEFAULT_PROGRAM_COUNTER,
-        [Value::F64(1.11), Value::I32(222), Value::F64(3.33)],
-    );
+    let mut state = default_state(&arena);
+    state
+        .globals
+        .extend_from_slice(&[Value::F64(1.11), Value::I32(222), Value::F64(3.33)]);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::GETGLOBAL as u8);
@@ -212,7 +214,7 @@ fn test_global() {
 #[test]
 fn test_i32const() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
+    let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
@@ -225,7 +227,7 @@ fn test_i32const() {
 #[test]
 fn test_i64const() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
+    let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::I64CONST as u8);
@@ -238,7 +240,7 @@ fn test_i64const() {
 #[test]
 fn test_f32const() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
+    let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::F32CONST as u8);
@@ -251,7 +253,7 @@ fn test_f32const() {
 #[test]
 fn test_f64const() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
+    let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::F64CONST as u8);
@@ -375,7 +377,7 @@ fn test_f64const() {
 #[test]
 fn test_i32add() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
+    let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
@@ -393,7 +395,7 @@ fn test_i32add() {
 #[test]
 fn test_i32sub() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
+    let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
@@ -411,7 +413,7 @@ fn test_i32sub() {
 #[test]
 fn test_i32mul() {
     let arena = Bump::new();
-    let mut state = ExecutionState::new(&arena, DEFAULT_MEMORY_PAGES, DEFAULT_PROGRAM_COUNTER, []);
+    let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
