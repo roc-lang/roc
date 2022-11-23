@@ -8363,4 +8363,37 @@ mod solve_expr {
         print_only_under_alias: true
         );
     }
+
+    #[test]
+    fn infer_concrete_type_with_inference_var() {
+        infer_queries!(indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+
+            f : _ -> {}
+            f = \_ -> f {}
+            #^{-1}
+            "#
+        ),
+        @r###"
+        f : {} -[[f(0)]]-> {}
+        "###
+        )
+    }
+
+    #[test]
+    fn solve_inference_var_in_annotation_requiring_recursion_fix() {
+        infer_queries!(indoc!(
+            r#"
+            app "test" provides [translateStatic] to "./platform"
+
+            translateStatic : _ -> _
+            translateStatic = \Element c ->
+            #^^^^^^^^^^^^^^^{-1}
+                Element (List.map c translateStatic)
+            "#
+        ),
+        @"translateStatic : [Element (List a)] as a -[[translateStatic(0)]]-> [Element (List b)]* as b"
+        )
+    }
 }

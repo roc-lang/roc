@@ -621,6 +621,7 @@ fn run_in_place(
     state.env
 }
 
+#[derive(Debug)]
 enum Work<'a> {
     Constraint {
         env: &'a Env,
