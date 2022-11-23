@@ -39,8 +39,8 @@ use roc_debug_flags::dbg_do;
 use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc, OptLevel,
-    ProcLayout,
+    BranchInfo, CallType, CrashTag, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc,
+    OptLevel, ProcLayout,
 };
 use roc_mono::layout::{
     Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, RawFunctionLayout,
@@ -181,24 +181,6 @@ pub struct Env<'a, 'ctx, 'env> {
     pub target_info: TargetInfo,
     pub mode: LlvmBackendMode,
     pub exposed_to_host: MutSet<Symbol>,
-}
-
-#[repr(u32)]
-pub enum PanicTagId {
-    RocPanic = 0,
-    UserPanic = 1,
-}
-
-impl std::convert::TryFrom<u32> for PanicTagId {
-    type Error = ();
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(PanicTagId::RocPanic),
-            1 => Ok(PanicTagId::UserPanic),
-            _ => Err(()),
-        }
-    }
 }
 
 impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
@@ -350,13 +332,10 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         &self,
         env: &Env<'a, 'ctx, 'env>,
         message: BasicValueEnum<'ctx>,
-        tag_id: PanicTagId,
+        tag: CrashTag,
     ) {
         let function = self.module.get_function("roc_panic").unwrap();
-        let tag_id = self
-            .context
-            .i32_type()
-            .const_int(tag_id as u32 as u64, false);
+        let tag_id = self.context.i32_type().const_int(tag as u32 as u64, false);
 
         let msg = match env.target_info.ptr_width() {
             PtrWidth::Bytes4 => {
@@ -2648,7 +2627,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
-                        throw_exception(env, parent, "An expectation failed!");
+                        throw_internal_exception(env, parent, "An expectation failed!");
                     }
                 }
             } else {
@@ -2710,7 +2689,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
-                        throw_exception(env, parent, "An expectation failed!");
+                        throw_internal_exception(env, parent, "An expectation failed!");
                     }
                 }
             } else {
@@ -2730,15 +2709,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             )
         }
 
-        RuntimeError(error_msg) => {
-            throw_exception(env, parent, error_msg);
-
-            // unused value (must return a BasicValue)
-            let zero = env.context.i64_type().const_zero();
-            zero.into()
-        }
-        Crash(sym, _) => {
-            throw_user_exception(env, scope, sym);
+        Crash(sym, tag) => {
+            throw_exception(env, scope, sym, *tag);
 
             // unused value (must return a BasicValue)
             let zero = env.context.i64_type().const_zero();
@@ -5566,7 +5538,7 @@ fn define_global_str_literal<'a, 'ctx, 'env>(
     }
 }
 
-pub(crate) fn throw_exception<'a, 'ctx, 'env>(
+pub(crate) fn throw_internal_exception<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     parent: FunctionValue<'ctx>,
     message: &str,
@@ -5575,19 +5547,20 @@ pub(crate) fn throw_exception<'a, 'ctx, 'env>(
 
     let str = build_string_literal(env, parent, message);
 
-    env.call_panic(env, str, PanicTagId::RocPanic);
+    env.call_panic(env, str, CrashTag::Roc);
 
     builder.build_unreachable();
 }
 
-pub(crate) fn throw_user_exception<'a, 'ctx, 'env>(
+pub(crate) fn throw_exception<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &mut Scope<'a, 'ctx>,
     message: &Symbol,
+    tag: CrashTag,
 ) {
     let msg_val = load_symbol(scope, message);
 
-    env.call_panic(env, msg_val, PanicTagId::UserPanic);
+    env.call_panic(env, msg_val, tag);
 
     env.builder.build_unreachable();
 }

@@ -161,8 +161,6 @@ pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) 
             Crash(sym, _) => {
                 result.insert(*sym);
             }
-
-            RuntimeError(_) => {}
         }
     }
 
@@ -1257,7 +1255,7 @@ impl<'a, 'i> Context<'a, 'i> {
                 }
             }
 
-            RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
+            Refcounting(_, _) => (stmt, MutSet::default()),
         }
     }
 }
@@ -1432,8 +1430,6 @@ pub fn collect_stmt(
             vars.insert(*m);
             vars
         }
-
-        RuntimeError(_) => vars,
     }
 }
 

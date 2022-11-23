@@ -235,7 +235,7 @@ fn run_expect_pure<'a, W: std::io::Write>(
 
     let sequence = ExpectSequence::new(shared_memory.ptr.cast());
 
-    let result: Result<(), (String, u32)> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
+    let result: Result<(), (String, _)> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
 
     let shared_memory_ptr: *const u8 = shared_memory.ptr.cast();
 
@@ -305,7 +305,7 @@ fn run_expect_fx<'a, W: std::io::Write>(
 
             child_memory.set_shared_buffer(lib);
 
-            let result: Result<(), (String, u32)> =
+            let result: Result<(), (String, _)> =
                 try_run_jit_function!(lib, expect.name, (), |v: ()| v);
 
             if let Err((msg, _)) = result {

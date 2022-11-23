@@ -1,5 +1,6 @@
 use std::mem::MaybeUninit;
 
+use roc_mono::ir::CrashTag;
 use roc_std::RocStr;
 
 /// This must have the same size as the repr() of RocCallResult!
@@ -32,13 +33,18 @@ impl<T: Default> Default for RocCallResult<T> {
     }
 }
 
-impl<T: Sized> From<RocCallResult<T>> for Result<T, (String, u32)> {
+impl<T: Sized> From<RocCallResult<T>> for Result<T, (String, CrashTag)> {
     fn from(call_result: RocCallResult<T>) -> Self {
         match call_result.tag {
             0 => Ok(unsafe { call_result.value.assume_init() }),
             n => Err({
                 let msg: &RocStr = unsafe { &*call_result.error_msg };
-                (msg.as_str().to_owned(), (n - 1) as _)
+                let tag = (n - 1) as u32;
+                let tag = tag
+                    .try_into()
+                    .unwrap_or_else(|_| panic!("received illegal tag: {tag}"));
+
+                (msg.as_str().to_owned(), tag)
             }),
         }
     }

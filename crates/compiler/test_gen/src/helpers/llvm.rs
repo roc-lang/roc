@@ -8,7 +8,7 @@ use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
-use roc_mono::ir::OptLevel;
+use roc_mono::ir::{CrashTag, OptLevel};
 use roc_region::all::LineInfo;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_utils::zig;
@@ -547,7 +547,7 @@ macro_rules! assert_wasm_evals_to {
 pub fn try_run_lib_function<T>(
     main_fn_name: &str,
     lib: &libloading::Library,
-) -> Result<T, (String, u32)> {
+) -> Result<T, (String, CrashTag)> {
     unsafe {
         let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<T>)> = lib
             .get(main_fn_name.as_bytes())
@@ -568,6 +568,7 @@ macro_rules! assert_llvm_evals_to {
         use bumpalo::Bump;
         use inkwell::context::Context;
         use roc_gen_llvm::llvm::build::LlvmBackendMode;
+        use roc_mono::ir::CrashTag;
 
         let arena = Bump::new();
         let context = Context::create();
@@ -598,9 +599,8 @@ macro_rules! assert_llvm_evals_to {
                 std::mem::forget(given);
             }
             Err((msg, tag)) => match tag {
-                0 => panic!(r#"Roc failed with message: "{}""#, msg),
-                1 => panic!(r#"User crash with message: "{}""#, msg),
-                _ => panic!(r#"Got an invalid panic tag: "{}""#, tag),
+                CrashTag::Roc => panic!(r#"Roc failed with message: "{}""#, msg),
+                CrashTag::User => panic!(r#"User crash with message: "{}""#, msg),
             },
         }
 

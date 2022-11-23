@@ -8,8 +8,8 @@ use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, HelperOp, REFCOUNT_MAX};
 use roc_mono::ir::{
-    BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Param, Proc,
-    ProcLayout, Stmt,
+    BranchInfo, CallType, CrashTag, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc,
+    Param, Proc, ProcLayout, Stmt,
 };
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_std::RocDec;
@@ -717,8 +717,7 @@ impl<'a> WasmBackend<'a> {
             Stmt::Expect { .. } => todo!("expect is not implemented in the wasm backend"),
             Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the wasm backend"),
 
-            Stmt::RuntimeError(msg) => self.stmt_runtime_error(msg),
-            Stmt::Crash(sym, _) => self.stmt_crash(*sym),
+            Stmt::Crash(sym, tag) => self.stmt_crash(*sym, *tag),
         }
     }
 
@@ -1016,11 +1015,10 @@ impl<'a> WasmBackend<'a> {
         self.code_builder.unreachable_();
     }
 
-    pub fn stmt_crash(&mut self, msg: Symbol) {
-        let tag_id = 1;
+    pub fn stmt_crash(&mut self, msg: Symbol, tag: CrashTag) {
         // load the pointer
         self.storage.load_symbols(&mut self.code_builder, &[msg]);
-        self.code_builder.i32_const(tag_id);
+        self.code_builder.i32_const(tag as _);
         self.call_host_fn_after_loading_args("roc_panic", 2, false);
 
         self.code_builder.unreachable_();
