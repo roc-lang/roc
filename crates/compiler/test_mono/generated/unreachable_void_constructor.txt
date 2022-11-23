@@ -6,7 +6,7 @@ procedure Test.0 ():
     let Test.6 : Int1 = CallByName Bool.2;
     if Test.6 then
         let Test.8 : Str = "voided tag constructor is unreachable";
-        Crash `#UserApp.IdentId(8)`
+        Crash Test.8
     else
         let Test.5 : Str = "abc";
         ret Test.5;

@@ -9,7 +9,7 @@ procedure Test.1 (Test.2):
     else
         dec Test.2;
         let Test.9 : Str = "turns out this was fallible";
-        Crash `#UserApp.IdentId(9)`
+        Crash Test.9
 
 procedure Test.0 ():
     let Test.13 : U64 = 78i64;

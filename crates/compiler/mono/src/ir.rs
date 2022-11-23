@@ -2338,7 +2338,7 @@ impl<'a> Stmt<'a> {
                 }
             }
 
-            Crash(s, _src) => alloc.text(format!("Crash {:?}", s)),
+            Crash(s, _src) => alloc.text("Crash ").append(symbol_to_doc(alloc, *s)),
 
             Join {
                 id,
