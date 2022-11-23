@@ -1874,6 +1874,10 @@ pub(crate) fn sort_can_defs(
         }
     }
 
+    if !dbgs.conditions.is_empty() {
+        declarations.push(Declaration::Expects(dbgs));
+    }
+
     if !expects.conditions.is_empty() {
         declarations.push(Declaration::Expects(expects));
     }
