@@ -23,14 +23,8 @@ fn main() {
     pre_linked_binary_path.extend(["pre_linked_binary"]);
     pre_linked_binary_path.set_extension("o");
 
-    let builtins_host_tempfile = tempfile::Builder::new()
-        .prefix("host_bitcode")
-        .suffix(".wasm")
-        .rand_bytes(5)
-        .tempfile()
-        .unwrap();
-    std::fs::write(builtins_host_tempfile.path(), bitcode::HOST_WASM)
-        .expect("failed to write host builtins object to tempfile");
+    let builtins_host_tempfile =
+        bitcode::host_wasm_tempfile().expect("failed to write host builtins object to tempfile");
 
     let output = Command::new(&zig_executable())
         .args([
