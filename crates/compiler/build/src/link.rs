@@ -197,7 +197,7 @@ pub fn build_zig_host_native(
             "build-exe",
             // "-fPIE", PIE seems to fail on windows
             shared_lib_path.to_str().unwrap(),
-            builtins_host_path,
+            builtins_host_path.to_str().unwrap(),
         ]);
     } else {
         zig_cmd.args(&["build-obj"]);
