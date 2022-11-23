@@ -952,24 +952,17 @@ fn fix_values_captured_in_closure_expr(
         Expect {
             loc_condition,
             loc_continuation,
-            lookups_in_cond: _,
-        } => {
-            fix_values_captured_in_closure_expr(
-                &mut loc_condition.value,
-                no_capture_symbols,
-                closure_captures,
-            );
-            fix_values_captured_in_closure_expr(
-                &mut loc_continuation.value,
-                no_capture_symbols,
-                closure_captures,
-            );
+            ..
         }
-
-        ExpectFx {
+        | ExpectFx {
             loc_condition,
             loc_continuation,
-            lookups_in_cond: _,
+            ..
+        }
+        | Dbg {
+            loc_condition,
+            loc_continuation,
+            ..
         } => {
             fix_values_captured_in_closure_expr(
                 &mut loc_condition.value,

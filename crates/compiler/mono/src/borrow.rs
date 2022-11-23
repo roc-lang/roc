@@ -937,6 +937,8 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         ListIsUnique => arena.alloc_slice_copy(&[borrowed]),
 
+        Dbg => arena.alloc_slice_copy(&[borrowed]),
+
         BoxExpr | UnboxExpr => {
             unreachable!("These lowlevel operations are turned into mono Expr's")
         }

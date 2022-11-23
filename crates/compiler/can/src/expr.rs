@@ -240,6 +240,12 @@ pub enum Expr {
         lookups_in_cond: Vec<ExpectLookup>,
     },
 
+    Dbg {
+        loc_condition: Box<Loc<Expr>>,
+        loc_continuation: Box<Loc<Expr>>,
+        variable: Variable,
+    },
+
     /// Rendered as empty box in editor
     TypedHole(Variable),
 
@@ -294,6 +300,8 @@ impl Expr {
             }
             Self::Expect { .. } => Category::Expect,
             Self::ExpectFx { .. } => Category::Expect,
+
+            Self::Dbg { .. } => Category::Expect,
 
             // these nodes place no constraints on the expression's type
             Self::TypedHole(_) | Self::RuntimeError(..) => Category::Unknown,
@@ -1826,6 +1834,28 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             }
         }
 
+        Dbg {
+            loc_condition,
+            loc_continuation,
+            variable,
+        } => {
+            let loc_condition = Loc {
+                region: loc_condition.region,
+                value: inline_calls(var_store, loc_condition.value),
+            };
+
+            let loc_continuation = Loc {
+                region: loc_continuation.region,
+                value: inline_calls(var_store, loc_continuation.value),
+            };
+
+            Dbg {
+                loc_condition: Box::new(loc_condition),
+                loc_continuation: Box::new(loc_continuation),
+                variable,
+            }
+        }
+
         LetRec(defs, loc_expr, mark) => {
             let mut new_defs = Vec::with_capacity(defs.len());
 
@@ -2739,6 +2769,9 @@ fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
                 loc_continuation, ..
             }
             | Expr::ExpectFx {
+                loc_continuation, ..
+            }
+            | Expr::Dbg {
                 loc_continuation, ..
             } => {
                 stack.push(&loc_continuation.value);

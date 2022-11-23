@@ -1696,6 +1696,10 @@ fn format_category<'b>(
             alloc.concat([this_is, alloc.text(" an expectation")]),
             alloc.text(" of type:"),
         ),
+        Dbg => (
+            alloc.concat([this_is, alloc.text(" a dbg statement")]),
+            alloc.text(" of type:"),
+        ),
     }
 }
 

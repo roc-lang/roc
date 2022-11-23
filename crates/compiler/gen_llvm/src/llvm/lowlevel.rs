@@ -1119,6 +1119,25 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 ptr.into()
             }
         },
+        Dbg => {
+            // now what
+            arguments!(condition);
+
+            let region = roc_region::all::Region::zero(); // todo
+
+            crate::llvm::expect::clone_to_shared_memory(
+                env,
+                scope,
+                layout_ids,
+                args[0],
+                region,
+                &[],
+            );
+
+            crate::llvm::expect::send_dbg(env);
+
+            condition
+        }
     }
 }
 

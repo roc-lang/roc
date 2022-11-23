@@ -611,6 +611,16 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             lookups_in_cond: lookups_in_cond.to_vec(),
         },
 
+        Dbg {
+            loc_condition,
+            loc_continuation,
+            variable,
+        } => Dbg {
+            loc_condition: Box::new(loc_condition.map(|e| go_help!(e))),
+            loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
+            variable: sub!(*variable),
+        },
+
         TypedHole(v) => TypedHole(sub!(*v)),
 
         RuntimeError(err) => RuntimeError(err.clone()),
