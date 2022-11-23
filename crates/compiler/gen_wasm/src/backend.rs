@@ -987,34 +987,6 @@ impl<'a> WasmBackend<'a> {
         self.stmt(rc_stmt);
     }
 
-    pub fn stmt_runtime_error(&mut self, msg: &'a str) {
-        let msg_sym = self.create_symbol("panic_str");
-        let msg_storage = self.storage.allocate_var(
-            self.env.layout_interner,
-            Layout::Builtin(Builtin::Str),
-            msg_sym,
-            StoredVarKind::Variable,
-        );
-
-        // Store the message as a RocStr on the stack
-        let (local_id, offset) = match msg_storage {
-            StoredValue::StackMemory { location, .. } => {
-                location.local_and_offset(self.storage.stack_frame_pointer)
-            }
-            _ => internal_error!("String must always have stack memory"),
-        };
-        self.expr_string_literal(msg, local_id, offset);
-
-        let tag_id = 0;
-        // load the pointer
-        self.storage
-            .load_symbols(&mut self.code_builder, &[msg_sym]);
-        self.code_builder.i32_const(tag_id);
-        self.call_host_fn_after_loading_args("roc_panic", 2, false);
-
-        self.code_builder.unreachable_();
-    }
-
     pub fn stmt_crash(&mut self, msg: Symbol, tag: CrashTag) {
         // load the pointer
         self.storage.load_symbols(&mut self.code_builder, &[msg]);
