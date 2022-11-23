@@ -124,7 +124,7 @@ pub fn build_zig_host_native(
             "-fPIE",
             "-rdynamic", // make sure roc_alloc and friends are exposed
             shared_lib_path.to_str().unwrap(),
-            builtins_host_path,
+            builtins_host_path.to_str().unwrap(),
         ]);
     } else {
         zig_cmd.args(["build-obj", "-fPIC"]);
