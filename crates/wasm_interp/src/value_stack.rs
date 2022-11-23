@@ -1,9 +1,7 @@
 use bitvec::vec::BitVec;
 use bumpalo::{collections::Vec, Bump};
-use roc_wasm_module::ValueType;
+use roc_wasm_module::{Value, ValueType};
 use std::{fmt::Debug, mem::size_of};
-
-use crate::Value;
 
 /// Memory-efficient Struct-of-Arrays storage for the value stack.
 /// Pack the values and their types as densely as possible,

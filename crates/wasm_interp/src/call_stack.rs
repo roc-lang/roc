@@ -1,9 +1,7 @@
 use bitvec::vec::BitVec;
 use bumpalo::{collections::Vec, Bump};
-use roc_wasm_module::{parse::Parse, ValueType};
+use roc_wasm_module::{parse::Parse, Value, ValueType};
 use std::iter::repeat;
-
-use crate::Value;
 
 /// Struct-of-Arrays storage for the call stack.
 /// Type info is packed to avoid wasting space on padding.

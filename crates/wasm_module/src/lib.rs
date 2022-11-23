@@ -658,6 +658,14 @@ impl Parse<()> for (u32, ValueType) {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Value {
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
+}
+
 /// Wasm memory alignment for load/store instructions.
 /// Rust representation matches Wasm encoding.
 /// It's an error to specify alignment higher than the "natural" alignment of the instruction

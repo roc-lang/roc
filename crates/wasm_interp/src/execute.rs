@@ -2,6 +2,7 @@ use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::opcodes::OpCode;
 use roc_wasm_module::parse::Parse;
 use roc_wasm_module::sections::MemorySection;
+use roc_wasm_module::Value;
 use roc_wasm_module::WasmModule;
 
 use crate::call_stack::CallStack;
