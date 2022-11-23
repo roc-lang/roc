@@ -339,6 +339,11 @@ pub enum ValueDef<'a> {
         body_expr: &'a Loc<Expr<'a>>,
     },
 
+    Dbg {
+        condition: &'a Loc<Expr<'a>>,
+        preceding_comment: Region,
+    },
+
     Expect {
         condition: &'a Loc<Expr<'a>>,
         preceding_comment: Region,
