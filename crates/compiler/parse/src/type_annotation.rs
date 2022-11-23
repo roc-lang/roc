@@ -322,29 +322,24 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
 fn record_type<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
-    use crate::type_annotation::TypeAnnotation::*;
-
-    (move |arena, state, min_indent| {
-        let (_, fields, state) = collection_trailing_sep_e!(
-            // word1_check_indent!(b'{', TRecord::Open, min_indent, TRecord::IndentOpen),
-            word1(b'{', ETypeRecord::Open),
-            loc!(record_type_field()),
-            word1(b',', ETypeRecord::End),
-            // word1_check_indent!(b'}', TRecord::End, min_indent, TRecord::IndentEnd),
-            word1(b'}', ETypeRecord::End),
-            ETypeRecord::Open,
-            ETypeRecord::IndentEnd,
-            AssignedField::SpaceBefore
-        )
-        .parse(arena, state, min_indent)?;
-
-        let field_term = specialize_ref(ETypeRecord::Type, term(stop_at_surface_has));
-        let (_, ext, state) = optional(allocated(field_term)).parse(arena, state, min_indent)?;
-
-        let result = Record { fields, ext };
-
-        Ok((MadeProgress, result, state))
-    })
+    map!(
+        and!(
+            collection_trailing_sep_e!(
+                word1(b'{', ETypeRecord::Open),
+                loc!(record_type_field()),
+                word1(b',', ETypeRecord::End),
+                word1(b'}', ETypeRecord::End),
+                ETypeRecord::Open,
+                ETypeRecord::IndentEnd,
+                AssignedField::SpaceBefore
+            ),
+            optional(allocated(specialize_ref(
+                ETypeRecord::Type,
+                term(stop_at_surface_has)
+            )))
+        ),
+        |(fields, ext)| { TypeAnnotation::Record { fields, ext } }
+    )
     .trace("type_annotation:record_type")
 }
 
