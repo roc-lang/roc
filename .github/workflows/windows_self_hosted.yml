@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v2
 
       - name: Build tests --release without running. Twice for zig lld-link error.
-        run: cargo test --locked --release --no-run -p roc_cli || cargo test --locked --release --no-run -p roc_cli
+        run: cargo test --locked --release --no-run -p roc_cli ; cargo test --locked --release --no-run -p roc_cli
 
       - name: Run tests.
         run: cargo test --locked --release -p roc_cli
