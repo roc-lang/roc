@@ -42,13 +42,18 @@ impl<'a> Renderer<'a> {
         }
     }
 
+    fn render_expr(&'a self, error_type: ErrorType) -> RocDocBuilder<'a> {
+        use crate::error::r#type::error_type_to_doc;
+
+        error_type_to_doc(&self.alloc, error_type)
+    }
+
     fn render_lookup(
         &'a self,
         symbol: Symbol,
         expr: &Expr<'_>,
         error_type: ErrorType,
     ) -> RocDocBuilder<'a> {
-        use crate::error::r#type::error_type_to_doc;
         use roc_fmt::annotation::Formattable;
 
         let mut buf = roc_fmt::Buf::new_in(self.arena);
@@ -58,7 +63,7 @@ impl<'a> Renderer<'a> {
             self.alloc
                 .symbol_unqualified(symbol)
                 .append(" : ")
-                .append(error_type_to_doc(&self.alloc, error_type)),
+                .append(self.render_expr(error_type)),
             self.alloc
                 .symbol_unqualified(symbol)
                 .append(" = ")
@@ -168,38 +173,31 @@ impl<'a> Renderer<'a> {
     pub fn render_dbg<W>(
         &self,
         writer: &mut W,
-        subs: &mut Subs,
-        symbols: &[Symbol],
-        variables: &[Variable],
         expressions: &[Expr<'_>],
         expect_region: Option<Region>,
-        failure_region: Region,
+        dbg_expr_region: Region,
     ) -> std::io::Result<()>
     where
         W: std::io::Write,
     {
-        use crate::report::Report;
+        let line_col_region = self.to_line_col_region(expect_region, dbg_expr_region);
+        write!(
+            writer,
+            "[{} {}:{}] = ",
+            self.filename.display(),
+            line_col_region.start.line,
+            line_col_region.start.column
+        )?;
 
-        let line_col_region = self.to_line_col_region(expect_region, failure_region);
-        let doc = self.render_lookups(subs, line_col_region, symbols, variables, expressions);
+        let expr = expressions[0];
 
-        let report = Report {
-            title: "DBG".into(),
-            doc,
-            filename: self.filename.clone(),
-            severity: crate::report::Severity::RuntimeError,
-        };
+        let mut buf = roc_fmt::Buf::new_in(self.arena);
+        {
+            use roc_fmt::annotation::Formattable;
+            expr.format(&mut buf, 0);
+        }
 
-        let mut buf = String::new();
-
-        report.render(
-            self.render_target,
-            &mut buf,
-            &self.alloc,
-            &crate::report::DEFAULT_PALETTE,
-        );
-
-        write!(writer, "{}", buf)
+        write!(writer, "{}", buf.as_str())
     }
 
     pub fn render_panic<W>(

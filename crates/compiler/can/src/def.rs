@@ -1554,7 +1554,7 @@ pub(crate) fn sort_can_defs_new(
 ) -> (Declarations, Output) {
     let CanDefs {
         defs,
-        dbgs,
+        dbgs: _,
         expects,
         expects_fx,
         def_ordering,

@@ -2416,7 +2416,7 @@ fn update<'a>(
                 .type_problems
                 .insert(module_id, solved_module.problems);
 
-            let should_include_expects = !loc_expects.is_empty() && {
+            let should_include_expects = (!loc_expects.is_empty() || !loc_dbgs.is_empty()) && {
                 let modules = state.arc_modules.lock();
                 modules
                     .package_eq(module_id, state.root_id)

@@ -512,7 +512,7 @@ fn render_dbg_failure<'a>(
         ability_info: current.ability_info,
     };
 
-    let (symbols, variables) = split_expect_lookups(subs, &[current]);
+    let (_symbols, variables) = split_expect_lookups(subs, &[current]);
 
     let (offset, expressions) = crate::get_values(
         target_info,
@@ -525,15 +525,7 @@ fn render_dbg_failure<'a>(
         &variables,
     );
 
-    renderer.render_dbg(
-        writer,
-        subs,
-        &symbols,
-        &variables,
-        &expressions,
-        expect_region,
-        failure_region,
-    )?;
+    renderer.render_dbg(writer, &expressions, expect_region, failure_region)?;
 
     Ok(offset)
 }
