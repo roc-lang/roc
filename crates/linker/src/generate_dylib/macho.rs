@@ -332,7 +332,92 @@ fn dylib_command(
     buffer
 }
 
-fn export_trie(input: &[(u32, &str)]) -> Vec<u8> {
+struct SymtabCommand {
+    symoff: u32,
+    nsyms: u32,
+    stroff: u32,
+    strsize: u32,
+}
+
+impl SymtabCommand {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+
+        buffer.extend(mach_object::LC_SYMTAB.to_le_bytes());
+        buffer.extend((std::mem::size_of::<Self>() as u32).to_le_bytes());
+
+        buffer.extend(self.symoff.to_le_bytes());
+        buffer.extend(self.nsyms.to_le_bytes());
+        buffer.extend(self.stroff.to_le_bytes());
+        buffer.extend(self.strsize.to_le_bytes());
+
+        buffer
+    }
+}
+
+struct Nlist64 {
+    string_table_offset: u32,
+    n_type: u8,
+    n_sect: u8,
+    n_desc: u16,
+    n_value: u64,
+}
+
+impl Nlist64 {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+
+        buffer.extend(self.string_table_offset.to_le_bytes());
+        buffer.extend(self.n_type.to_le_bytes());
+        buffer.extend(self.n_sect.to_le_bytes());
+        buffer.extend(self.n_desc.to_le_bytes());
+        buffer.extend(self.n_value.to_le_bytes());
+
+        buffer
+    }
+}
+
+fn trivial_symbol_table<'a>(input: impl Iterator<Item = &'a str>) -> Vec<u8> {
+    let mut buffer = Vec::new();
+
+    let mut string_table_offset = 1u32;
+
+    for string in input {
+        let list = Nlist64 {
+            string_table_offset,
+            n_type: 0x0f,
+            n_sect: 0,
+            n_desc: 0,
+            n_value: 0,
+        };
+
+        buffer.extend(list.to_bytes());
+
+        string_table_offset += 1 + string.len() as u32 + 1;
+    }
+
+    buffer
+}
+
+fn trivial_string_table<'a>(input: impl Iterator<Item = &'a str>) -> Vec<u8> {
+    let mut buffer = Vec::new();
+
+    // always start with a NULL byte, so index 0 into the string table is the empty string
+    buffer.push(0);
+
+    for string in input {
+        buffer.push(b'_');
+        buffer.extend(string.as_bytes());
+        buffer.push(0);
+    }
+
+    let padding = next_multiple_of(buffer.len(), 8) - buffer.len();
+    buffer.extend(std::iter::repeat(0).take(padding));
+
+    buffer
+}
+
+fn export_trie(input: &[&str]) -> Vec<u8> {
     let mut buffer = Vec::new();
 
     // Terminal size(0)
@@ -358,13 +443,13 @@ fn export_trie(input: &[(u32, &str)]) -> Vec<u8> {
     buffer.push(input.len() as u8);
 
     let mut offset_base = buffer.len();
-    for (_, name) in input {
+    for name in input {
         offset_base += name.len() + 1; // null-terminated
 
         offset_base += 1; // will become variable with LEB128
     }
 
-    for (i, (_address, name)) in input.iter().enumerate() {
+    for (i, name) in input.iter().enumerate() {
         // Node label("name")
         buffer.extend(name.as_bytes());
         buffer.push(0); // null-terminated
@@ -525,8 +610,8 @@ mod test {
         };
 
         let commands = Commands {
-            count: 5 + 2 + 1,
-            size: 5 * 0x48 + 0x30 + 0x38 + 0x30,
+            count: 5 + 2 + 1 + 1,
+            size: 5 * 0x48 + 0x30 + 0x38 + 0x30 + (6 * 4),
         };
 
         bytes.extend_from_slice(macho_dylib_header(&triple, commands).as_slice());
@@ -630,7 +715,25 @@ mod test {
             0x10000,
         ));
 
-        let trie = export_trie(&[(1234, "_mh_execute_header"), (5678, "xxx"), (9090, "yyy")]);
+        let symbols = [
+            "_mh_execute_header",
+            "roc__mainForHost_1_Encode_Encoder_size",
+            "yyy",
+        ];
+
+        let symbol_table = trivial_symbol_table(symbols.iter().copied());
+        let string_table = trivial_string_table(symbols.iter().copied());
+
+        let symtab = SymtabCommand {
+            symoff: 0x3308,
+            nsyms: symbols.len() as u32,
+            stroff: 0x34ac,
+            strsize: string_table.len() as u32,
+        };
+
+        bytes.extend(symtab.to_bytes());
+
+        let trie = export_trie(&symbols);
         let export_size = trie.len() as u32;
 
         let dyld_info_only = DyldCommand {
@@ -664,6 +767,14 @@ mod test {
 
         // export
         bytes.extend(trie);
+
+        let delta = symtab.symoff as usize - bytes.len();
+        bytes.extend(std::iter::repeat(0).take(delta));
+        bytes.extend(symbol_table);
+
+        let delta = symtab.stroff as usize - bytes.len();
+        bytes.extend(std::iter::repeat(0).take(delta));
+        bytes.extend(string_table);
 
         std::fs::write("/tmp/test.dylib", &bytes);
     }
