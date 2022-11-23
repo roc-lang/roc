@@ -613,14 +613,19 @@ pub fn rebuild_host(
         roc_target::OperatingSystem::Wasi => "",
     };
 
-    let host_dest =
-        if shared_lib_path.is_none() || matches!(target.architecture, Architecture::Wasm32) {
-            host_input_path.with_file_name(legacy_host_filename(target, opt_level).unwrap())
+    let host_dest = if matches!(target.architecture, Architecture::Wasm32) {
+        if matches!(opt_level, OptLevel::Development) {
+            host_input_path.with_extension("o")
         } else {
-            host_input_path
-                .with_file_name("dynhost")
-                .with_extension(executable_extension)
-        };
+            host_input_path.with_extension("bc")
+        }
+    } else if shared_lib_path.is_some() {
+        host_input_path
+            .with_file_name("dynhost")
+            .with_extension(executable_extension)
+    } else {
+        host_input_path.with_file_name(legacy_host_filename(target, opt_level).unwrap())
+    };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
     let env_home = env::var("HOME").unwrap_or_else(|_| "".to_string());
