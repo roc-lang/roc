@@ -4,19 +4,17 @@ use roc_error_macros::internal_error;
 use std::path::Path;
 use std::process::Command;
 use target_lexicon::Triple;
-use tempfile::Builder;
 
 // TODO: Eventually do this from scratch and in memory instead of with ld.
 pub fn create_dylib_macho(
     custom_names: &[String],
     triple: &Triple,
 ) -> object::read::Result<Vec<u8>> {
-    let dummy_obj_file = Builder::new()
+    let dummy_obj_file = tempfile::Builder::new()
         .prefix("roc_lib")
         .suffix(".o")
         .tempfile()
         .unwrap_or_else(|e| internal_error!("{}", e));
-    let dummy_obj_file = dummy_obj_file.path();
     let tmp = tempfile::tempdir().unwrap_or_else(|e| internal_error!("{}", e));
     let dummy_lib_file = tmp.path().to_path_buf().with_file_name("libapp.so");
 
@@ -47,7 +45,7 @@ pub fn create_dylib_macho(
     }
 
     std::fs::write(
-        dummy_obj_file,
+        dummy_obj_file.path(),
         out_object.write().expect("failed to build output object"),
     )
     .expect("failed to write object to file");
@@ -70,12 +68,16 @@ pub fn create_dylib_macho(
         .args([
             ld_flag_soname,
             dummy_lib_file.file_name().unwrap().to_str().unwrap(),
-            dummy_obj_file.to_str().unwrap(),
+            dummy_obj_file.path().to_str().unwrap(),
             "-o",
             dummy_lib_file.to_str().unwrap(),
         ])
         .output()
         .unwrap();
+
+    // Extend the lifetime of the tempfile so it doesn't get dropped
+    // (and thus deleted) before the linker process is done using it!
+    let _ = dummy_obj_file;
 
     if !output.status.success() {
         match std::str::from_utf8(&output.stderr) {

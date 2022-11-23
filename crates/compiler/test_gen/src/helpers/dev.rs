@@ -193,13 +193,13 @@ pub fn helper(
         .expect("failed to build output object");
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
-    let builtins_host_file = tempfile::Builder::new()
+    let builtins_host_tempfile = tempfile::Builder::new()
         .prefix("host_bitcode")
         .suffix(".o")
         .rand_bytes(5)
         .tempfile()
         .unwrap();
-    std::fs::write(builtins_host_file.path(), bitcode::HOST_UNIX)
+    std::fs::write(builtins_host_tempfile.path(), bitcode::HOST_UNIX)
         .expect("failed to write host builtins object to tempfile");
 
     let (mut child, dylib_path) = link(
@@ -209,13 +209,17 @@ pub fn helper(
         // With the current method all methods are kept and it adds about 100k to all outputs.
         &[
             app_o_file.to_str().unwrap(),
-            builtins_host_file.path().to_str().unwrap(),
+            builtins_host_tempfile.path().to_str().unwrap(),
         ],
         LinkType::Dylib,
     )
     .expect("failed to link dynamic library");
 
     child.wait().unwrap();
+
+    // Extend the lifetime of the tempfile so it doesn't get dropped
+    // (and thus deleted) before the linking process is done using it!
+    let _ = builtins_host_tempfile;
 
     // Load the dylib
     let path = dylib_path.as_path().to_str().unwrap();

@@ -1417,19 +1417,19 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
             (but seems to be an unofficial API)
     */
 
-    let builtins_host_file = tempfile::Builder::new()
+    let builtins_host_tempfile = tempfile::Builder::new()
         .prefix("host_bitcode")
         .suffix(".wasm")
         .rand_bytes(5)
         .tempfile()
         .unwrap();
-    std::fs::write(builtins_host_file.path(), bitcode::HOST_WASM)
+    std::fs::write(builtins_host_tempfile.path(), bitcode::HOST_WASM)
         .expect("failed to write host builtins object to tempfile");
 
     let mut zig_cmd = zig();
     let args = &[
         "wasm-ld",
-        builtins_host_file.path().to_str().unwrap(),
+        builtins_host_tempfile.path().to_str().unwrap(),
         host_input,
         WASI_LIBC_PATH,
         WASI_COMPILER_RT_PATH, // builtins need __multi3, __udivti3, __fixdfti
@@ -1446,7 +1446,11 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
     // println!("\npreprocess_host_wasm32");
     // println!("zig {}\n", args.join(" "));
 
-    run_build_command(zig_cmd, output_file, 0)
+    run_build_command(zig_cmd, output_file, 0);
+
+    // Extend the lifetime of the tempfile so it doesn't get dropped
+    // (and thus deleted) before the Zig process is done using it!
+    let _ = builtins_host_tempfile;
 }
 
 fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_counter: usize) {

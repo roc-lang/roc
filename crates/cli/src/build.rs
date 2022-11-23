@@ -14,7 +14,6 @@ use roc_target::TargetInfo;
 use std::time::{Duration, Instant};
 use std::{path::PathBuf, thread::JoinHandle};
 use target_lexicon::Triple;
-use tempfile::Builder;
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     use std::fmt::Write;
@@ -328,7 +327,7 @@ pub fn build_file<'a>(
             problems
         }
         (LinkingStrategy::Legacy, _) => {
-            let app_o_file = Builder::new()
+            let app_o_file = tempfile::Builder::new()
                 .prefix("roc_app")
                 .suffix(&format!(".{}", app_extension))
                 .tempfile()
@@ -342,26 +341,30 @@ pub fn build_file<'a>(
                 app_o_file.to_str().unwrap(),
             ];
 
-            let builtins_host_file = tempfile::Builder::new()
+            let builtins_host_tempfile = tempfile::Builder::new()
                 .prefix("host_bitcode")
                 .suffix(".o")
                 .rand_bytes(5)
                 .tempfile()
                 .unwrap();
-            std::fs::write(builtins_host_file.path(), bitcode::HOST_UNIX)
+            std::fs::write(builtins_host_tempfile.path(), bitcode::HOST_UNIX)
                 .expect("failed to write host builtins object to tempfile");
 
             if matches!(code_gen_options.backend, program::CodeGenBackend::Assembly) {
-                inputs.push(builtins_host_file.path().to_str().unwrap());
+                inputs.push(builtins_host_tempfile.path().to_str().unwrap());
             }
 
             let (mut child, _) =  // TODO use lld
-            link(target, binary_path.clone(), &inputs, link_type)
-                .map_err(|_| todo!("gracefully handle `ld` failing to spawn."))?;
+                link(target, binary_path.clone(), &inputs, link_type)
+                    .map_err(|_| todo!("gracefully handle `ld` failing to spawn."))?;
 
             let exit_status = child
                 .wait()
                 .map_err(|_| todo!("gracefully handle error after `ld` spawned"))?;
+
+            // Extend the lifetime of the tempfile so it doesn't get dropped
+            // (and thus deleted) before the child process is done using it!
+            let _ = builtins_host_tempfile;
 
             if exit_status.success() {
                 problems
