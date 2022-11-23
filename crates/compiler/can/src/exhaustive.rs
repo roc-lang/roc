@@ -367,6 +367,33 @@ impl SketchedPattern {
 
                 RenderAs::Tag | RenderAs::Guard => internal_error!(),
             },
+            SketchedPattern::List(arity, elems) => {
+                let inner = match arity {
+                    ListArity::Exact(_) => f.intersperse(
+                        elems.iter().map(|p| p.to_doc(interns, f)),
+                        f.text(",").append(f.space()),
+                    ),
+                    &ListArity::Slice(num_before, num_after) => {
+                        let mut all_patterns = elems.iter().map(|p| p.to_doc(interns, f));
+
+                        let spread = f.text("..");
+                        let comma_space = f.text(",").append(f.space());
+
+                        let mut list = f.intersperse(
+                            all_patterns.by_ref().take(num_before).chain([spread]),
+                            comma_space.clone(),
+                        );
+
+                        if num_after > 0 {
+                            let after = all_patterns;
+                            list = f.intersperse([list].into_iter().chain(after), comma_space);
+                        }
+
+                        list
+                    }
+                };
+                f.concat([f.text("["), inner, f.text("]")])
+            }
         }
     }
 }
@@ -856,7 +883,7 @@ fn build_args_opts(
 
     let args_opts = args.into_iter().fold(base, |args_opts, arg| {
         let next_args_opts = sketch_variable_help(ctx, arg);
-        let all_args_opts = next_args_opts
+        next_args_opts
             .into_iter()
             .flat_map(|next_arg| {
                 let mut args_opts = args_opts.clone();
@@ -866,12 +893,10 @@ fn build_args_opts(
 
                 args_opts
             })
-            .collect();
-
-        all_args_opts
+            .collect()
     });
 
-    args_opts.into_iter().map(move |args| build_pattern(args))
+    args_opts.into_iter().map(build_pattern)
 }
 
 fn sketch_variable_help(ctx: &mut Ctx, var: Variable) -> Vec<SketchedPattern> {
@@ -978,8 +1003,9 @@ fn sketch_variable_help(ctx: &mut Ctx, var: Variable) -> Vec<SketchedPattern> {
                     })
                     .collect()
             }
-            FlatType::FunctionOrTagUnion(tag, _, ext) => {
-                let ctor_pattern = SketchedPattern::Ctor(ctx.subs[tag].clone(), vec![]);
+            FlatType::FunctionOrTagUnion(tags, _, ext) => {
+                let ctor_pattern =
+                    SketchedPattern::Ctor(ctx.subs.get_subs_slice(tags)[0].clone(), vec![]);
                 match ctx.subs.get_content_without_compacting(ext) {
                     Content::Structure(FlatType::TagUnion(tags, _)) if tags.is_empty() => {
                         vec![ctor_pattern, SketchedPattern::Anything]
@@ -1002,7 +1028,6 @@ fn sketch_variable_help(ctx: &mut Ctx, var: Variable) -> Vec<SketchedPattern> {
                 };
                 vec![SketchedPattern::KnownCtor(union, tag_id, vec![])]
             }
-            FlatType::Erroneous(_) => vec![SketchedPattern::Anything],
             FlatType::EmptyTagUnion => vec![],
         },
         Content::LambdaSet(_) => internal_error!("unreachable"),

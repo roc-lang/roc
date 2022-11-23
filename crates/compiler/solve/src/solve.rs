@@ -1544,7 +1544,7 @@ fn solve(
 
                         // Case 1: unify error types, but don't check exhaustiveness.
                         // Case 2: run exhaustiveness to check for redundant branches.
-                        check_pattern_exhaustiveness = !already_have_error;
+                        should_check_exhaustiveness = !already_have_error;
                     }
                     Failure(..) => {
                         // Rollback and check for almost-equality.
@@ -1567,7 +1567,7 @@ fn solve(
 
                         if almost_eq {
                             // Case 3: almost equal, check exhaustiveness.
-                            check_pattern_exhaustiveness = true;
+                            should_check_exhaustiveness = true;
                         } else {
                             // Case 4: incompatible types, report type error.
                             // Re-run first failed unification to get the type diff.
@@ -1609,7 +1609,7 @@ fn solve(
                                     };
 
                                     problems.push(problem);
-                                    check_pattern_exhaustiveness = false;
+                                    should_check_exhaustiveness = false;
                                 }
                                 _ => internal_error!("Must be failure"),
                             }
@@ -1620,7 +1620,7 @@ fn solve(
                 let sketched_rows = constraints.sketched_rows[sketched_rows.index()].clone();
 
                 // Check exhaustiveness of the patterns, relative to the condition type.
-                if check_pattern_exhaustiveness {
+                if should_check_exhaustiveness {
                     use roc_can::exhaustive::{check, ExhaustiveSummary};
 
                     // If the condition type likely comes from an positive-position value (e.g. a
@@ -1690,26 +1690,18 @@ fn solve(
                         // Otherwise there were type errors deeper in the pattern; we will have
                         // already reported them.
                     }
-                    for redundant_mark in redundancies {
-                        redundant_mark.set_redundant(subs);
-                    }
-
-                    // Store the errors.
-                    problems.extend(errors.into_iter().map(TypeError::Exhaustive));
 
                     // Check exhaustiveness of the condition type, relative to the patterns.
-                    {
-                        let ExhaustiveSummary {
-                            errors,
-                            exhaustive: _,
-                            redundancies: _,
-                        } = check_without_non_exhaustive_rows(
-                            subs,
-                            branches_var,
-                            sketched_condition_rows,
-                            context,
-                        );
-
+                    if let Ok(ExhaustiveSummary {
+                        errors,
+                        exhaustive: _,
+                        redundancies: _,
+                    }) = check_without_non_exhaustive_rows(
+                        subs,
+                        branches_var,
+                        sketched_condition_rows,
+                        context,
+                    ) {
                         // Store the errors.
                         problems.extend(errors.into_iter().map(TypeError::ConditionExhaustive));
                     }
