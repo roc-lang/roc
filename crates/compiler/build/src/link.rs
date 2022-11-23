@@ -90,6 +90,10 @@ const PRECOMPILED_HOST_EXT: &str = "rh1"; // Short for "roc host version 1" (so 
 pub const fn preprocessed_host_filename(target: &Triple) -> Option<&'static str> {
     match target {
         Triple {
+            architecture: Architecture::Wasm32,
+            ..
+        } => Some(concatcp!("wasm32", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
             operating_system: OperatingSystem::Linux,
             architecture: Architecture::X86_64,
             ..
