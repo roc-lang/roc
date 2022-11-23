@@ -107,19 +107,27 @@ pub fn build_file<'a>(
         }
     };
 
-    let (app_extension, extension) = {
+    let (app_extension, extension, host_filename) = {
         use roc_target::OperatingSystem::*;
 
         match roc_target::OperatingSystem::from(target.operating_system) {
             Wasi => {
                 if matches!(code_gen_options.opt_level, OptLevel::Development) {
-                    ("wasm", Some("wasm"))
+                    ("wasm", Some("wasm"), "host.zig".to_string())
                 } else {
-                    ("bc", Some("wasm"))
+                    ("bc", Some("wasm"), "host.zig".to_string())
                 }
             }
-            Unix => ("o", None),
-            Windows => ("obj", Some("exe")),
+            Unix => (
+                "o",
+                None,
+                legacy_host_filename(target, code_gen_options.opt_level).unwrap(),
+            ),
+            Windows => (
+                "obj",
+                Some("exe"),
+                legacy_host_filename(target, code_gen_options.opt_level).unwrap(),
+            ),
         }
     };
 
@@ -132,8 +140,7 @@ pub fn build_file<'a>(
 
     let host_input_path = if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point
     {
-        cwd.join(platform_path)
-            .with_file_name(legacy_host_filename(target, code_gen_options.opt_level).unwrap())
+        cwd.join(platform_path).with_file_name(host_filename)
     } else {
         unreachable!();
     };
