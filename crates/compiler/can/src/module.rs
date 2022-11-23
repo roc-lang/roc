@@ -3,7 +3,9 @@ use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
-use crate::expr::{ClosureData, Declarations, ExpectLookup, Expr, Output, PendingDerives};
+use crate::expr::{
+    ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
+};
 use crate::pattern::{BindingsFromPattern, Pattern};
 use crate::scope::Scope;
 use bumpalo::Bump;
@@ -131,6 +133,7 @@ pub struct Module {
     pub rigid_variables: RigidVariables,
     pub abilities_store: PendingAbilitiesStore,
     pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
+    pub loc_dbgs: VecMap<Symbol, DbgLookup>,
 }
 
 #[derive(Debug, Default)]
@@ -153,6 +156,7 @@ pub struct ModuleOutput {
     pub pending_derives: PendingDerives,
     pub scope: Scope,
     pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
+    pub loc_dbgs: VecMap<Symbol, DbgLookup>,
 }
 
 fn validate_generate_with<'a>(
@@ -776,7 +780,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let loc_expects = declarations.expects();
+    let collected = declarations.expects();
 
     ModuleOutput {
         scope,
@@ -789,7 +793,8 @@ pub fn canonicalize_module_defs<'a>(
         problems: env.problems,
         symbols_from_requires,
         pending_derives,
-        loc_expects,
+        loc_expects: collected.expects,
+        loc_dbgs: collected.dbgs,
     }
 }
 

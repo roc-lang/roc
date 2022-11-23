@@ -358,6 +358,14 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                 region: loc_expr.region,
             })
         }
+        Dbg(condition, continuation) => {
+            let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
+            let desugared_continuation = &*arena.alloc(desugar_expr(arena, continuation));
+            arena.alloc(Loc {
+                value: Dbg(desugared_condition, desugared_continuation),
+                region: loc_expr.region,
+            })
+        }
     }
 }
 

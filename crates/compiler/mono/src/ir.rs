@@ -6551,9 +6551,9 @@ pub fn from_can<'a>(
             loc_condition,
             loc_continuation,
             variable,
+            symbol: dbg_symbol,
         } => {
             let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
-            let dbg_symbol = env.unique_symbol();
 
             let call = crate::ir::Call {
                 call_type: CallType::LowLevel {

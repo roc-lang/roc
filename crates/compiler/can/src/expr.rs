@@ -244,6 +244,7 @@ pub enum Expr {
         loc_condition: Box<Loc<Expr>>,
         loc_continuation: Box<Loc<Expr>>,
         variable: Variable,
+        symbol: Symbol,
     },
 
     /// Rendered as empty box in editor
@@ -257,6 +258,14 @@ pub enum Expr {
 pub struct ExpectLookup {
     pub symbol: Symbol,
     pub var: Variable,
+    pub ability_info: Option<SpecializationId>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DbgLookup {
+    pub symbol: Symbol,
+    pub var: Variable,
+    pub region: Region,
     pub ability_info: Option<SpecializationId>,
 }
 
@@ -1035,6 +1044,33 @@ pub fn canonicalize_expr<'a>(
                     loc_condition: Box::new(loc_condition),
                     loc_continuation: Box::new(loc_continuation),
                     lookups_in_cond,
+                },
+                output,
+            )
+        }
+        ast::Expr::Dbg(condition, continuation) => {
+            let mut output = Output::default();
+
+            let (loc_condition, output1) =
+                canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
+
+            let (loc_continuation, output2) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                continuation.region,
+                &continuation.value,
+            );
+
+            output.union(output1);
+            output.union(output2);
+
+            (
+                Dbg {
+                    loc_condition: Box::new(loc_condition),
+                    loc_continuation: Box::new(loc_continuation),
+                    variable: var_store.fresh(),
+                    symbol: scope.gen_unique_symbol(),
                 },
                 output,
             )
@@ -1838,6 +1874,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
             loc_condition,
             loc_continuation,
             variable,
+            symbol,
         } => {
             let loc_condition = Loc {
                 region: loc_condition.region,
@@ -1853,6 +1890,7 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
                 loc_condition: Box::new(loc_condition),
                 loc_continuation: Box::new(loc_continuation),
                 variable,
+                symbol,
             }
         }
 
@@ -2582,9 +2620,10 @@ impl Declarations {
             })
     }
 
-    pub fn expects(&self) -> VecMap<Region, Vec<ExpectLookup>> {
+    pub fn expects(&self) -> ExpectCollector {
         let mut collector = ExpectCollector {
             expects: VecMap::default(),
+            dbgs: VecMap::default(),
         };
 
         let var = Variable::EMPTY_RECORD;
@@ -2617,7 +2656,7 @@ impl Declarations {
             }
         }
 
-        collector.expects
+        collector
     }
 }
 
@@ -2897,8 +2936,9 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
     loc_expr
 }
 
-struct ExpectCollector {
-    expects: VecMap<Region, Vec<ExpectLookup>>,
+pub struct ExpectCollector {
+    pub expects: VecMap<Region, Vec<ExpectLookup>>,
+    pub dbgs: VecMap<Symbol, DbgLookup>,
 }
 
 impl crate::traverse::Visitor for ExpectCollector {
@@ -2916,6 +2956,21 @@ impl crate::traverse::Visitor for ExpectCollector {
             } => {
                 self.expects
                     .insert(loc_condition.region, lookups_in_cond.to_vec());
+            }
+            Expr::Dbg {
+                loc_condition,
+                variable,
+                symbol,
+                ..
+            } => {
+                let lookup = DbgLookup {
+                    symbol: *symbol,
+                    var: *variable,
+                    region: loc_condition.region,
+                    ability_info: None,
+                };
+
+                self.dbgs.insert(*symbol, lookup);
             }
             _ => (),
         }

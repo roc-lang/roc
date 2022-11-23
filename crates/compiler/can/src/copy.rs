@@ -615,10 +615,12 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             loc_condition,
             loc_continuation,
             variable,
+            symbol,
         } => Dbg {
             loc_condition: Box::new(loc_condition.map(|e| go_help!(e))),
             loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
             variable: sub!(*variable),
+            symbol: *symbol,
         },
 
         TypedHole(v) => TypedHole(sub!(*v)),

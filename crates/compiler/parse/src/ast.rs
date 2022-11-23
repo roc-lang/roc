@@ -208,6 +208,7 @@ pub enum Expr<'a> {
     Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
+    Dbg(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)

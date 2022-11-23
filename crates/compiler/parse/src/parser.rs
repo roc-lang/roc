@@ -354,6 +354,7 @@ pub enum EExpr<'a> {
     If(EIf<'a>, Position),
 
     Expect(EExpect<'a>, Position),
+    Dbg(EExpect<'a>, Position),
 
     Closure(EClosure<'a>, Position),
     Underscore(Position),

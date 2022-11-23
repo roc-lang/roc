@@ -416,6 +416,44 @@ pub fn render_expects_in_memory<'a>(
     )
 }
 
+pub fn render_dbgs_in_memory<'a>(
+    writer: &mut impl std::io::Write,
+    arena: &'a Bump,
+    expectations: &mut VecMap<ModuleId, Expectations>,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    memory: &ExpectMemory,
+) -> std::io::Result<usize> {
+    let shared_ptr = memory.ptr;
+
+    let frame = ExpectFrame::at_offset(shared_ptr, ExpectSequence::START_OFFSET);
+    let module_id = frame.module_id;
+
+    let data = expectations.get_mut(&module_id).unwrap();
+    let filename = data.path.to_owned();
+    let source = std::fs::read_to_string(&data.path).unwrap();
+
+    let renderer = Renderer::new(
+        arena,
+        interns,
+        RenderTarget::ColorTerminal,
+        module_id,
+        filename,
+        &source,
+    );
+
+    render_dbg_failure(
+        writer,
+        &renderer,
+        arena,
+        expectations,
+        interns,
+        layout_interner,
+        shared_ptr,
+        ExpectSequence::START_OFFSET,
+    )
+}
+
 fn split_expect_lookups(subs: &Subs, lookups: &[ExpectLookup]) -> (Vec<Symbol>, Vec<Variable>) {
     lookups
         .iter()
@@ -435,6 +473,69 @@ fn split_expect_lookups(subs: &Subs, lookups: &[ExpectLookup]) -> (Vec<Symbol>, 
             },
         )
         .unzip()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_dbg_failure<'a>(
+    writer: &mut impl std::io::Write,
+    renderer: &Renderer,
+    arena: &'a Bump,
+    expectations: &mut VecMap<ModuleId, Expectations>,
+    interns: &'a Interns,
+    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    start: *const u8,
+    offset: usize,
+) -> std::io::Result<usize> {
+    // we always run programs as the host
+    let target_info = (&target_lexicon::Triple::host()).into();
+
+    let frame = ExpectFrame::at_offset(start, offset);
+    let module_id = frame.module_id;
+
+    let failure_region = frame.region;
+    let dbg_symbol = unsafe { std::mem::transmute::<_, Symbol>(failure_region) };
+    let expect_region = Some(Region::zero());
+
+    let data = expectations.get_mut(&module_id).unwrap();
+
+    let current = match data.dbgs.get(&dbg_symbol) {
+        None => panic!("region {failure_region:?} not in list of expects"),
+        Some(current) => current,
+    };
+    let failure_region = current.region;
+
+    let subs = arena.alloc(&mut data.subs);
+
+    let current = ExpectLookup {
+        symbol: current.symbol,
+        var: current.var,
+        ability_info: current.ability_info,
+    };
+
+    let (symbols, variables) = split_expect_lookups(subs, &[current]);
+
+    let (offset, expressions) = crate::get_values(
+        target_info,
+        arena,
+        subs,
+        interns,
+        layout_interner,
+        start,
+        frame.start_offset,
+        &variables,
+    );
+
+    renderer.render_dbg(
+        writer,
+        subs,
+        &symbols,
+        &variables,
+        &expressions,
+        expect_region,
+        failure_region,
+    )?;
+
+    Ok(offset)
 }
 
 #[allow(clippy::too_many_arguments)]

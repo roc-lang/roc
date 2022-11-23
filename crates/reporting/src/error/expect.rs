@@ -164,6 +164,44 @@ impl<'a> Renderer<'a> {
         write!(writer, "{}", buf)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_dbg<W>(
+        &self,
+        writer: &mut W,
+        subs: &mut Subs,
+        symbols: &[Symbol],
+        variables: &[Variable],
+        expressions: &[Expr<'_>],
+        expect_region: Option<Region>,
+        failure_region: Region,
+    ) -> std::io::Result<()>
+    where
+        W: std::io::Write,
+    {
+        use crate::report::Report;
+
+        let line_col_region = self.to_line_col_region(expect_region, failure_region);
+        let doc = self.render_lookups(subs, line_col_region, symbols, variables, expressions);
+
+        let report = Report {
+            title: "DBG".into(),
+            doc,
+            filename: self.filename.clone(),
+            severity: crate::report::Severity::RuntimeError,
+        };
+
+        let mut buf = String::new();
+
+        report.render(
+            self.render_target,
+            &mut buf,
+            &self.alloc,
+            &crate::report::DEFAULT_PALETTE,
+        );
+
+        write!(writer, "{}", buf)
+    }
+
     pub fn render_panic<W>(
         &self,
         writer: &mut W,

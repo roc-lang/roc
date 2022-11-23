@@ -1123,7 +1123,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             // now what
             arguments!(condition);
 
-            let region = roc_region::all::Region::zero(); // todo
+            let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(args[0]) };
 
             crate::llvm::expect::clone_to_shared_memory(
                 env,
@@ -1131,7 +1131,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 layout_ids,
                 args[0],
                 region,
-                &[],
+                &[args[0]],
             );
 
             crate::llvm::expect::send_dbg(env);

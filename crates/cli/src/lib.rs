@@ -1000,7 +1000,15 @@ fn roc_dev_native(
                     SIGUSR2 => {
                         // this is the signal we use for a dbg
 
-                        println!("I need to dbg something");
+                        roc_repl_expect::run::render_dbgs_in_memory(
+                            &mut writer,
+                            arena,
+                            &mut expectations,
+                            &interns,
+                            &layout_interner,
+                            &memory,
+                        )
+                        .unwrap();
                     }
                     _ => println!("received signal {}", sig),
                 }

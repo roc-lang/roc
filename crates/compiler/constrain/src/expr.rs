@@ -660,6 +660,7 @@ pub fn constrain_expr(
             loc_condition,
             loc_continuation,
             variable,
+            symbol: _,
         } => {
             let dbg_type = constraints.push_variable(*variable);
             let expected_dbg = constraints.push_expected_type(Expected::NoExpectation(dbg_type));

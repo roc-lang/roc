@@ -291,6 +291,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             variable,
             loc_condition,
             loc_continuation,
+            symbol: _,
         } => {
             visitor.visit_expr(&loc_condition.value, loc_condition.region, *variable);
             visitor.visit_expr(

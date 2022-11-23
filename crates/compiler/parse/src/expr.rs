@@ -327,6 +327,7 @@ fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, E
         loc!(specialize(EExpr::If, if_expr_help(options))),
         loc!(specialize(EExpr::When, when::expr_help(options))),
         loc!(specialize(EExpr::Expect, expect_help(options))),
+        loc!(specialize(EExpr::Dbg, dbg_help(options))),
         loc!(specialize(EExpr::Closure, closure_help(options))),
         loc!(expr_operator_chain(options)),
         fail_expr_start_e()
@@ -1912,6 +1913,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::If(_, _)
         | Expr::When(_, _)
         | Expr::Expect(_, _)
+        | Expr::Dbg(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict { .. }
         | Expr::RecordUpdate { .. }
@@ -2325,6 +2327,36 @@ fn expect_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpe
         let (_, loc_cont, state) = parse_cont.parse(arena, state, min_indent)?;
 
         let expr = Expr::Expect(arena.alloc(condition), arena.alloc(loc_cont));
+
+        Ok((MadeProgress, expr, state))
+    }
+}
+
+fn dbg_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
+    move |arena: &'a Bump, state: State<'a>, min_indent| {
+        let start_column = state.column();
+
+        let (_, _, state) =
+            parser::keyword_e(keyword::DBG, EExpect::Dbg).parse(arena, state, min_indent)?;
+
+        let (_, condition, state) = space0_before_e(
+            specialize_ref(
+                EExpect::Condition,
+                set_min_indent(start_column + 1, expr_start(options)),
+            ),
+            EExpect::IndentCondition,
+        )
+        .parse(arena, state, start_column + 1)
+        .map_err(|(_, f)| (MadeProgress, f))?;
+
+        let parse_cont = specialize_ref(
+            EExpect::Continuation,
+            space0_before_e(loc_expr(), EExpr::IndentEnd),
+        );
+
+        let (_, loc_cont, state) = parse_cont.parse(arena, state, min_indent)?;
+
+        let expr = Expr::Dbg(arena.alloc(condition), arena.alloc(loc_cont));
 
         Ok((MadeProgress, expr, state))
     }
