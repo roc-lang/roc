@@ -323,13 +323,20 @@ pub fn build_zig_host_native(
         .env("PATH", &env_path)
         .env("HOME", &env_home);
     if let Some(shared_lib_path) = shared_lib_path {
+        let native_bitcode;
+        let builtins_ext;
+
         #[cfg(windows)]
-        let native_bitcode = bitcode::HOST_WINDOWS;
-        let builtins_ext = ".obj";
+        {
+            native_bitcode = bitcode::HOST_WINDOWS;
+            builtins_ext = ".obj";
+        }
 
         #[cfg(unix)]
-        let native_bitcode = bitcode::HOST_UNIX;
-        let builtins_ext = ".o";
+        {
+            native_bitcode = bitcode::HOST_UNIX;
+            builtins_ext = ".o";
+        }
 
         let builtins_host_file = tempfile::Builder::new()
             .prefix("host_bitcode")
