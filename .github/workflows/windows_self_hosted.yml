@@ -1,6 +1,6 @@
 on: [pull_request]
 
-name: Test windows build
+name: Test windows self-hosted
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -10,7 +10,7 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  windows-cargo-build:
+  windows-self-hosted:
     name: windows-cargo-build
     runs-on: [self-hosted, Windows]
     env:
