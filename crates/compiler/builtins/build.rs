@@ -138,7 +138,7 @@ pub fn get_lib_dir() -> PathBuf {
     let dir = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("bitcode");
 
     // create dir if it does not exist
-    fs::create_dir_all(&dir).expect("Failed to make lib dir.");
+    fs::create_dir_all(&dir).expect("Failed to make $OUT_DIR/bitcode dir.");
 
     dir
 }
