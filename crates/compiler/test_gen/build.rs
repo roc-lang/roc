@@ -100,7 +100,12 @@ fn build_wasm_test_host() {
     let mut outfile = PathBuf::from(&out_dir).join(PLATFORM_FILENAME);
     outfile.set_extension("wasm");
 
-    let builtins_host_file = tempfile::NamedTempFile::new().unwrap();
+    let builtins_host_file = tempfile::Builder::new()
+        .prefix("host_bitcode")
+        .suffix(".wasm")
+        .rand_bytes(5)
+        .tempfile()
+        .unwrap();
     std::fs::write(builtins_host_file.path(), bitcode::HOST_WASM)
         .expect("failed to write host builtins object to tempfile");
 
