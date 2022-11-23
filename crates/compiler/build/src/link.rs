@@ -118,10 +118,10 @@ pub fn build_zig_host_native(
         // with LLVM, the builtins are already part of the roc app,
         // but with the dev backend, they are missing. To minimize work,
         // we link them as part of the host executable
-        let builtins_bytes = if target.contains("windows") {
+        let (builtins_bytes, builtins_ext) = if target.contains("windows") {
             #[cfg(windows)]
             {
-                bitcode::HOST_WINDOWS
+                (bitcode::HOST_WINDOWS, ".obj")
             }
 
             #[cfg(not(windows))]
@@ -133,7 +133,7 @@ pub fn build_zig_host_native(
         } else {
             #[cfg(unix)]
             {
-                bitcode::HOST_UNIX
+                (bitcode::HOST_UNIX, ".o")
             }
 
             #[cfg(not(unix))]
@@ -146,7 +146,12 @@ pub fn build_zig_host_native(
 
         // TODO in the future when we have numbered releases, this
         // can go in ~/.cache/roc instead of writing it to a tempdir every time.
-        let builtins_host_file = tempfile::NamedTempFile::new().unwrap();
+        let builtins_host_file = tempfile::Builder::new()
+            .prefix("host_bitcode")
+            .suffix(builtins_ext)
+            .rand_bytes(5)
+            .tempfile()
+            .unwrap();
         std::fs::write(builtins_host_file.path(), builtins_bytes)
             .expect("failed to write host builtins object to tempfile");
 
@@ -318,14 +323,20 @@ pub fn build_zig_host_native(
         .env("PATH", &env_path)
         .env("HOME", &env_home);
     if let Some(shared_lib_path) = shared_lib_path {
-        let builtins_host_file = tempfile::NamedTempFile::new().unwrap();
-
         #[cfg(windows)]
         let native_bitcode = bitcode::HOST_WINDOWS;
+        let builtins_ext = ".obj";
 
-        #[cfg(not(windows))]
+        #[cfg(unix)]
         let native_bitcode = bitcode::HOST_UNIX;
+        let builtins_ext = ".o";
 
+        let builtins_host_file = tempfile::Builder::new()
+            .prefix("host_bitcode")
+            .suffix(builtins_ext)
+            .rand_bytes(5)
+            .tempfile()
+            .unwrap();
         std::fs::write(builtins_host_file.path(), native_bitcode)
             .expect("failed to write host builtins object to tempfile");
 
@@ -466,7 +477,12 @@ pub fn build_c_host_native(
                 );
             }
             _ => {
-                let builtins_host_file = tempfile::NamedTempFile::new().unwrap();
+                let builtins_host_file = tempfile::Builder::new()
+                    .prefix("host_bitcode")
+                    .suffix(".o")
+                    .rand_bytes(5)
+                    .tempfile()
+                    .unwrap();
                 std::fs::write(builtins_host_file.path(), bitcode::HOST_UNIX)
                     .expect("failed to write host builtins object to tempfile");
 
@@ -1394,7 +1410,12 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
             (but seems to be an unofficial API)
     */
 
-    let builtins_host_file = tempfile::NamedTempFile::new().unwrap();
+    let builtins_host_file = tempfile::Builder::new()
+        .prefix("host_bitcode")
+        .suffix(".wasm")
+        .rand_bytes(5)
+        .tempfile()
+        .unwrap();
     std::fs::write(builtins_host_file.path(), bitcode::HOST_WASM)
         .expect("failed to write host builtins object to tempfile");
 

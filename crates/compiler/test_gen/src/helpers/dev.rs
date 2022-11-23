@@ -193,7 +193,12 @@ pub fn helper(
         .expect("failed to build output object");
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
-    let builtins_host_file = tempfile::NamedTempFile::new().unwrap();
+    let builtins_host_file = tempfile::Builder::new()
+        .prefix("host_bitcode")
+        .suffix(".o")
+        .rand_bytes(5)
+        .tempfile()
+        .unwrap();
     std::fs::write(builtins_host_file.path(), bitcode::HOST_UNIX)
         .expect("failed to write host builtins object to tempfile");
 
