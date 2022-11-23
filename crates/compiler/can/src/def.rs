@@ -1600,25 +1600,6 @@ pub(crate) fn sort_can_defs_new(
         declarations.push_expect_fx(preceding_comment, name, Loc::at(region, condition));
     }
 
-    let it = dbgs
-        .conditions
-        .into_iter()
-        .zip(dbgs.regions)
-        .zip(dbgs.preceding_comment);
-
-    for ((condition, region), preceding_comment) in it {
-        // an `dbg` does not have a user-defined name, but we'll need a name to call the function we generate
-        let name = scope.gen_unique_symbol();
-        let variable = var_store.fresh();
-
-        declarations.push_dbg(
-            preceding_comment,
-            name,
-            variable,
-            Loc::at(region, condition),
-        );
-    }
-
     for (symbol, alias) in aliases.into_iter() {
         output.aliases.insert(symbol, alias);
     }

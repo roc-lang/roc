@@ -2348,24 +2348,6 @@ pub fn constrain_decls(
 
                 constraint = constraints.let_constraint([], [], [], expect_constraint, constraint)
             }
-            Dbg => {
-                let loc_expr = &declarations.expressions[index];
-                let variable = &declarations.variables[index];
-
-                let dbg_type = constraints.push_variable(*variable);
-                let expected = constraints.push_expected_type(Expected::NoExpectation(dbg_type));
-
-                let expect_constraint = constrain_expr(
-                    types,
-                    constraints,
-                    &mut env,
-                    loc_expr.region,
-                    &loc_expr.value,
-                    expected,
-                );
-
-                constraint = constraints.let_constraint([], [], [], expect_constraint, constraint)
-            }
             Function(function_def_index) => {
                 constraint = constrain_function_def(
                     types,
