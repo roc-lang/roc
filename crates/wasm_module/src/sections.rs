@@ -256,6 +256,12 @@ impl<'a> TypeSection<'a> {
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
     }
+
+    pub fn look_up_arg_count(&self, sig_index: u32) -> u32 {
+        let mut offset = self.offsets[sig_index as usize];
+        offset += 1; // separator
+        u32::parse((), &self.bytes, &mut offset).unwrap()
+    }
 }
 
 impl<'a> Section<'a> for TypeSection<'a> {

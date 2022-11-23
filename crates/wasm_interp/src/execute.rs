@@ -1,7 +1,7 @@
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::opcodes::OpCode;
 use roc_wasm_module::parse::Parse;
-use roc_wasm_module::sections::MemorySection;
+use roc_wasm_module::sections::{ImportDesc, MemorySection};
 use roc_wasm_module::Value;
 use roc_wasm_module::{ExportType, WasmModule};
 
@@ -23,6 +23,7 @@ pub struct ExecutionState<'a> {
     pub globals: Vec<'a, Value>,
     pub program_counter: usize,
     block_depth: u32,
+    import_signatures: Vec<'a, u32>,
 }
 
 impl<'a> ExecutionState<'a> {
@@ -38,6 +39,7 @@ impl<'a> ExecutionState<'a> {
             globals: Vec::from_iter_in(globals, arena),
             program_counter,
             block_depth: 0,
+            import_signatures: Vec::new_in(arena),
         }
     }
 
@@ -54,6 +56,16 @@ impl<'a> ExecutionState<'a> {
         })?;
 
         let globals = module.global.initial_values(arena);
+
+        // Gather imported function signatures into a vector, for simpler lookup
+        let import_signatures = {
+            let imports_iter = module.import.imports.iter();
+            let sig_iter = imports_iter.filter_map(|imp| match imp.description {
+                ImportDesc::Func { signature_index } => Some(signature_index),
+                _ => None,
+            });
+            Vec::from_iter_in(sig_iter, arena)
+        };
 
         let program_counter = {
             let mut export_iter = module.export.exports.iter();
@@ -82,11 +94,22 @@ impl<'a> ExecutionState<'a> {
             globals,
             program_counter,
             block_depth: 0,
+            import_signatures,
         })
     }
 
     fn fetch_immediate_u32(&mut self, module: &WasmModule<'a>) -> u32 {
         u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap()
+    }
+
+    fn do_return(&mut self) -> Action {
+        if let Some((return_addr, block_depth)) = self.call_stack.pop_frame() {
+            self.program_counter = return_addr as usize;
+            self.block_depth = block_depth;
+            return Action::Continue;
+        } else {
+            return Action::Break;
+        }
     }
 
     pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) -> Action {
@@ -117,11 +140,7 @@ impl<'a> ExecutionState<'a> {
             END => {
                 if self.block_depth == 0 {
                     // implicit RETURN at end of function
-                    if let Some(pc) = self.call_stack.pop_frame() {
-                        self.program_counter = pc as usize;
-                    } else {
-                        return Action::Break;
-                    }
+                    return self.do_return();
                 } else {
                     self.block_depth -= 1;
                 }
@@ -136,26 +155,18 @@ impl<'a> ExecutionState<'a> {
                 todo!("{:?}", op_code);
             }
             RETURN => {
-                if let Some(pc) = self.call_stack.pop_frame() {
-                    self.program_counter = pc as usize;
-                } else {
-                    return Action::Break;
-                }
+                return self.do_return();
             }
             CALL => {
                 let index = self.fetch_immediate_u32(module) as usize;
-                /*
-                arguments:
-                    based on `index`, check if it's an import or internal
-                        internal => function section => signature index
-                        import => imports section => signature index
-                    signature index => type section => type def
-                    type def => number of args (just trust the types are OK!)
 
-                    (cache all of this in a Vec<'a, u32>, one entry per function)
-
-                    pop that number of args off the stack and put them in locals instead
-                */
+                let signature_index = if index < self.import_signatures.len() {
+                    self.import_signatures[index]
+                } else {
+                    let internal_fn_index = index - self.import_signatures.len();
+                    module.function.signatures[internal_fn_index]
+                };
+                let arg_count = module.types.look_up_arg_count(signature_index);
 
                 let return_addr = self.program_counter as u32;
                 self.program_counter = module.code.function_offsets[index] as usize;
@@ -168,6 +179,8 @@ impl<'a> ExecutionState<'a> {
                 self.call_stack.push_frame(
                     return_addr,
                     return_block_depth,
+                    arg_count,
+                    &mut self.value_stack,
                     &module.code.bytes,
                     &mut self.program_counter,
                 );

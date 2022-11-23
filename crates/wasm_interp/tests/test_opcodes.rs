@@ -1,8 +1,10 @@
 #![cfg(test)]
 
-use bumpalo::Bump;
-use roc_wasm_interp::{ExecutionState, Value};
-use roc_wasm_module::{opcodes::OpCode, SerialBuffer, Serialize, ValueType, WasmModule};
+use bumpalo::{collections::Vec, Bump};
+use roc_wasm_interp::{Action, ExecutionState, ValueStack};
+use roc_wasm_module::{
+    opcodes::OpCode, SerialBuffer, Serialize, Signature, Value, ValueType, WasmModule,
+};
 
 fn default_state<'a>(arena: &'a Bump) -> ExecutionState {
     let pages = 1;
@@ -36,10 +38,16 @@ fn default_state<'a>(arena: &'a Bump) -> ExecutionState {
 // fn test_brtable() {}
 
 #[test]
-fn test_call_return() {
+fn test_call_return_no_args() {
     let arena = Bump::new();
     let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
+    let sig = || Signature {
+        param_types: Vec::new_in(&arena),
+        ret_type: Some(ValueType::I32),
+    };
+    module.add_function_signature(sig());
+    module.add_function_signature(sig());
 
     let buffer = &mut module.code.bytes;
 
@@ -64,26 +72,63 @@ fn test_call_return() {
 
     state.program_counter = func0_first_instruction;
 
-    println!("{:02x?}", &module.code.bytes[state.program_counter..]);
-    dbg!(&state.value_stack);
-
     state.execute_next_instruction(&module); // [func0] call 1
-    println!("{:02x?}", &module.code.bytes[state.program_counter..]);
-    dbg!(&state.value_stack);
-
     state.execute_next_instruction(&module); // [func1] i32.const
-    println!("{:02x?}", &module.code.bytes[state.program_counter..]);
-    dbg!(&state.value_stack); //panic
-
     state.execute_next_instruction(&module); // [func1] end
-    println!("{:02x?}", &module.code.bytes[state.program_counter..]);
-    dbg!(&state.value_stack);
-
     state.execute_next_instruction(&module); // [func0] end
-    println!("{:02x?}", &module.code.bytes[state.program_counter..]);
-    dbg!(&state.value_stack);
 
     assert_eq!(state.value_stack.peek(), Value::I32(12345));
+}
+
+#[test]
+fn test_call_return_with_args() {
+    let arena = Bump::new();
+    let mut state = default_state(&arena);
+    let mut module = WasmModule::new(&arena);
+
+    // Function 0: calculate 2+2
+    let func0_offset = module.code.bytes.len() as u32;
+    module.code.function_offsets.push(func0_offset);
+    module.add_function_signature(Signature {
+        param_types: bumpalo::vec![in &arena;],
+        ret_type: Some(ValueType::I32),
+    });
+    [
+        0, // no locals
+        OpCode::I32CONST as u8,
+        2,
+        OpCode::I32CONST as u8,
+        2,
+        OpCode::CALL as u8,
+        1,
+        OpCode::END as u8,
+    ]
+    .serialize(&mut module.code.bytes);
+    let func0_first_instruction = func0_offset + 2;
+
+    // Function 1: add two numbers
+    let func1_offset = module.code.bytes.len() as u32;
+    module.code.function_offsets.push(func1_offset);
+    module.add_function_signature(Signature {
+        param_types: bumpalo::vec![in &arena; ValueType::I32, ValueType::I32],
+        ret_type: Some(ValueType::I32),
+    });
+    [
+        0, // no locals
+        OpCode::GETLOCAL as u8,
+        0,
+        OpCode::GETLOCAL as u8,
+        1,
+        OpCode::I32ADD as u8,
+        OpCode::END as u8,
+    ]
+    .serialize(&mut module.code.bytes);
+
+    state.program_counter = func0_first_instruction as usize;
+
+    while let Action::Continue = state.execute_next_instruction(&module) {}
+
+    assert_eq!(state.value_stack.peek(), Value::I32(4));
 }
 
 // #[test]
@@ -100,6 +145,7 @@ fn test_set_get_local() {
     let arena = Bump::new();
     let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
+    let mut vs = ValueStack::new(&arena);
 
     let mut buffer = vec![];
     let mut cursor = 0;
@@ -110,7 +156,9 @@ fn test_set_get_local() {
         (1u32, ValueType::I64),
     ]
     .serialize(&mut buffer);
-    state.call_stack.push_frame(0x1234, 0, &buffer, &mut cursor);
+    state
+        .call_stack
+        .push_frame(0x1234, 0, 0, &mut vs, &buffer, &mut cursor);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
     module.code.bytes.encode_i32(12345);
@@ -132,6 +180,7 @@ fn test_tee_get_local() {
     let arena = Bump::new();
     let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
+    let mut vs = ValueStack::new(&arena);
 
     let mut buffer = vec![];
     let mut cursor = 0;
@@ -142,7 +191,9 @@ fn test_tee_get_local() {
         (1u32, ValueType::I64),
     ]
     .serialize(&mut buffer);
-    state.call_stack.push_frame(0x1234, 0, &buffer, &mut cursor);
+    state
+        .call_stack
+        .push_frame(0x1234, 0, 0, &mut vs, &buffer, &mut cursor);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
     module.code.bytes.encode_i32(12345);
