@@ -163,13 +163,8 @@ pub fn build_file<'a>(
         })
         .collect();
 
-    let preprocessed_host_path = match linking_strategy {
-        LinkingStrategy::Surgical | LinkingStrategy::Additive => {
-            host_input_path.with_file_name(preprocessed_host_filename(target).unwrap())
-        }
-        LinkingStrategy::Legacy => host_input_path
-            .with_file_name(legacy_host_filename(target, code_gen_options.opt_level).unwrap()),
-    };
+    let preprocessed_host_path =
+        host_input_path.with_file_name(preprocessed_host_filename(target).unwrap());
 
     // We don't need to spawn a rebuild thread when using a prebuilt host.
     let rebuild_thread = if prebuilt {
@@ -180,12 +175,6 @@ pub fn build_file<'a>(
             );
 
             std::process::exit(1);
-        }
-
-        if linking_strategy == LinkingStrategy::Surgical {
-            // Copy preprocessed host to executable location.
-            // The surgical linker will modify that copy in-place.
-            std::fs::copy(&preprocessed_host_path, binary_path.as_path()).unwrap();
         }
 
         None
@@ -201,6 +190,12 @@ pub fn build_file<'a>(
             exposed_closure_types,
         ))
     };
+
+    if linking_strategy == LinkingStrategy::Surgical {
+        // Copy preprocessed host to executable location.
+        // The surgical linker will modify that copy in-place.
+        std::fs::copy(&preprocessed_host_path, binary_path.as_path()).unwrap();
+    }
 
     let buf = &mut String::with_capacity(1024);
 
@@ -441,6 +436,9 @@ fn spawn_rebuild_thread(
                     exported_symbols,
                     exported_closure_types,
                 );
+
+                // Copy preprocessed host to executable location.
+                std::fs::copy(preprocessed_host_path, binary_path.as_path()).unwrap();
             }
             LinkingStrategy::Legacy => {
                 rebuild_host(
@@ -452,14 +450,7 @@ fn spawn_rebuild_thread(
             }
         }
 
-        if linking_strategy == LinkingStrategy::Surgical {
-            // Copy preprocessed host to executable location.
-            std::fs::copy(preprocessed_host_path, binary_path.as_path()).unwrap();
-        }
-
-        let rebuild_host_end = rebuild_host_start.elapsed();
-
-        rebuild_host_end.as_millis()
+        rebuild_host_start.elapsed().as_millis()
     })
 }
 

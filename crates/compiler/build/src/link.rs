@@ -134,7 +134,7 @@ pub const fn preprocessed_host_filename(target: &Triple) -> Option<&'static str>
 
 /// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
 pub fn legacy_host_filename(target: &Triple, opt_level: OptLevel) -> Option<String> {
-    let os = roc_target::OperatingSystem::new(target.operating_system)?;
+    let os = roc_target::OperatingSystem::from(target.operating_system);
     let ext = legacy_host_filename_ext(os, opt_level);
 
     Some(preprocessed_host_filename(target)?.replace(PRECOMPILED_HOST_EXT, ext))
