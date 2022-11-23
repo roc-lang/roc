@@ -341,14 +341,18 @@ pub fn build_file<'a>(
                 app_o_file.to_str().unwrap(),
             ];
 
-            let builtins_host_tempfile = tempfile::Builder::new()
-                .prefix("host_bitcode")
-                .suffix(".o")
-                .rand_bytes(5)
-                .tempfile()
-                .unwrap();
-            std::fs::write(builtins_host_tempfile.path(), bitcode::HOST_UNIX)
-                .expect("failed to write host builtins object to tempfile");
+            let builtins_host_tempfile = {
+                #[cfg(unix)]
+                {
+                    bitcode::host_unix_tempfile()
+                }
+
+                #[cfg(windows)]
+                {
+                    bitcode::host_windows_tempfile()
+                }
+            }
+            .expect("failed to write host builtins object to tempfile");
 
             if matches!(code_gen_options.backend, program::CodeGenBackend::Assembly) {
                 inputs.push(builtins_host_tempfile.path().to_str().unwrap());
