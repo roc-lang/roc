@@ -3,11 +3,10 @@ use roc_wasm_module::opcodes::OpCode;
 use roc_wasm_module::parse::Parse;
 use roc_wasm_module::sections::MemorySection;
 use roc_wasm_module::Value;
-use roc_wasm_module::WasmModule;
+use roc_wasm_module::{ExportType, WasmModule};
 
 use crate::call_stack::CallStack;
 use crate::value_stack::ValueStack;
-use crate::Value;
 
 pub enum Action {
     Continue,
@@ -19,15 +18,10 @@ pub struct ExecutionState<'a> {
     #[allow(dead_code)]
     memory: Vec<'a, u8>,
 
-    #[allow(dead_code)]
     pub call_stack: CallStack<'a>,
-
     pub value_stack: ValueStack<'a>,
-
     pub globals: Vec<'a, Value>,
-
     pub program_counter: usize,
-
     block_depth: u32,
 }
 
@@ -45,6 +39,50 @@ impl<'a> ExecutionState<'a> {
             program_counter,
             block_depth: 0,
         }
+    }
+
+    pub fn for_module(
+        arena: &'a Bump,
+        module: &WasmModule<'a>,
+        start_fn_name: &str,
+    ) -> Result<Self, String> {
+        let mem_bytes = module.memory.min_bytes().map_err(|e| {
+            format!(
+                "Error parsing Memory section at offset 0x{:x}:\n{}",
+                e.offset, e.message
+            )
+        })?;
+
+        let globals = module.global.initial_values(arena);
+
+        let program_counter = {
+            let mut export_iter = module.export.exports.iter();
+            let start_fn_index = export_iter
+                .find_map(|ex| {
+                    if ex.ty == ExportType::Func && ex.name == start_fn_name {
+                        Some(ex.index)
+                    } else {
+                        None
+                    }
+                })
+                .ok_or(format!(
+                    "I couldn't find an exported function '{}' in this WebAssembly module",
+                    start_fn_name
+                ))?;
+            let internal_fn_index = start_fn_index as usize - module.import.function_count();
+            let mut cursor = module.code.function_offsets[internal_fn_index] as usize;
+            let _start_fn_byte_length = u32::parse((), &module.code.bytes, &mut cursor);
+            cursor
+        };
+
+        Ok(ExecutionState {
+            memory: Vec::with_capacity_in(mem_bytes as usize, arena),
+            call_stack: CallStack::new(arena),
+            value_stack: ValueStack::new(arena),
+            globals,
+            program_counter,
+            block_depth: 0,
+        })
     }
 
     fn fetch_immediate_u32(&mut self, module: &WasmModule<'a>) -> u32 {
@@ -106,6 +144,18 @@ impl<'a> ExecutionState<'a> {
             }
             CALL => {
                 let index = self.fetch_immediate_u32(module) as usize;
+                /*
+                arguments:
+                    based on `index`, check if it's an import or internal
+                        internal => function section => signature index
+                        import => imports section => signature index
+                    signature index => type section => type def
+                    type def => number of args (just trust the types are OK!)
+
+                    (cache all of this in a Vec<'a, u32>, one entry per function)
+
+                    pop that number of args off the stack and put them in locals instead
+                */
 
                 let return_addr = self.program_counter as u32;
                 self.program_counter = module.code.function_offsets[index] as usize;
