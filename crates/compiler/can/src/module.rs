@@ -615,6 +615,7 @@ pub fn canonicalize_module_defs<'a>(
             }
             Expectation => { /* ignore */ }
             ExpectationFx => { /* ignore */ }
+            Dbg => { /* ignore */ }
         }
     }
 
@@ -757,15 +758,7 @@ pub fn canonicalize_module_defs<'a>(
             MutualRecursion { .. } => {
                 // the declarations of this group will be treaded individually by later iterations
             }
-            Expectation => {
-                let loc_expr = &mut declarations.expressions[index];
-                fix_values_captured_in_closure_expr(
-                    &mut loc_expr.value,
-                    &mut fix_closures_no_capture_symbols,
-                    &mut fix_closures_closure_captures,
-                );
-            }
-            ExpectationFx => {
+            Expectation | ExpectationFx | Dbg => {
                 let loc_expr = &mut declarations.expressions[index];
                 fix_values_captured_in_closure_expr(
                     &mut loc_expr.value,

@@ -57,6 +57,12 @@ pub fn walk_decls<V: Visitor>(visitor: &mut V, decls: &Declarations) {
 
                 visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
             }
+            Dbg => {
+                let loc_condition = &decls.expressions[index];
+                let expr_var = decls.variables[index];
+
+                visitor.visit_expr(&loc_condition.value, loc_condition.region, expr_var);
+            }
             Function(function_index)
             | Recursive(function_index)
             | TailRecursive(function_index) => {

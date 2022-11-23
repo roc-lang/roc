@@ -2398,6 +2398,25 @@ impl Declarations {
         index
     }
 
+    pub fn push_dbg(
+        &mut self,
+        preceding_comment: Region,
+        name: Symbol,
+        variable: Variable,
+        loc_expr: Loc<Expr>,
+    ) -> usize {
+        let index = self.declarations.len();
+
+        self.declarations.push(DeclarationTag::Dbg);
+        self.variables.push(variable);
+        self.symbols.push(Loc::at(preceding_comment, name));
+        self.annotations.push(None);
+
+        self.expressions.push(loc_expr);
+
+        index
+    }
+
     pub fn push_value_def(
         &mut self,
         symbol: Loc<Symbol>,
@@ -2572,6 +2591,10 @@ impl Declarations {
                 MutualRecursion { .. } => {
                     // the self of this group will be treaded individually by later iterations
                 }
+                Dbg => {
+                    let loc_expr = &self.expressions[index];
+                    collector.visit_expr(&loc_expr.value, loc_expr.region, var);
+                }
                 Expectation => {
                     let loc_expr =
                         toplevel_expect_to_inline_expect_pure(self.expressions[index].clone());
@@ -2598,6 +2621,7 @@ pub enum DeclarationTag {
     Value,
     Expectation,
     ExpectationFx,
+    Dbg,
     Function(Index<Loc<FunctionDef>>),
     Recursive(Index<Loc<FunctionDef>>),
     TailRecursive(Index<Loc<FunctionDef>>),
@@ -2615,7 +2639,7 @@ impl DeclarationTag {
         match self {
             Function(_) | Recursive(_) | TailRecursive(_) => 1,
             Value => 1,
-            Expectation | ExpectationFx => 1,
+            Expectation | ExpectationFx | Dbg => 1,
             Destructure(_) => 1,
             MutualRecursion { length, .. } => length as usize + 1,
         }
