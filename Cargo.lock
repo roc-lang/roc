@@ -3993,6 +3993,7 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_utils",
+ "tempfile",
  "wasi_libc_sys",
  "wasm-bindgen",
  "wasm-bindgen-futures",

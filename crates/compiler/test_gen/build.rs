@@ -100,9 +100,12 @@ fn build_wasm_test_host() {
     let mut outfile = PathBuf::from(&out_dir).join(PLATFORM_FILENAME);
     outfile.set_extension("wasm");
 
+    let builtins_host_tempfile =
+        bitcode::host_wasm_tempfile().expect("failed to write host builtins object to tempfile");
+
     run_zig(&[
         "wasm-ld",
-        &bitcode::get_builtins_wasm32_obj_path(),
+        builtins_host_tempfile.path().to_str().unwrap(),
         platform_path.to_str().unwrap(),
         WASI_COMPILER_RT_PATH,
         WASI_LIBC_PATH,
@@ -111,6 +114,10 @@ fn build_wasm_test_host() {
         "--no-entry",
         "--relocatable",
     ]);
+
+    // Extend the lifetime of the tempfile so it doesn't get dropped
+    // (and thus deleted) before the Zig process is done using it!
+    let _ = builtins_host_tempfile;
 }
 
 fn build_wasm_platform(out_dir: &str, source_path: &str) -> PathBuf {
