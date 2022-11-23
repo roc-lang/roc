@@ -527,6 +527,13 @@ pub enum TypeAnnotation<'a> {
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
     },
 
+    Tuple {
+        fields: Collection<'a, Loc<TypeAnnotation<'a>>>,
+        /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
+        /// This is None if it's a closed record annotation like `{ name: Str }`.
+        ext: Option<&'a Loc<TypeAnnotation<'a>>>,
+    },
+
     /// A tag union, e.g. `[
     TagUnion {
         /// The row type variable in an open tag union, e.g. the `a` in `[Foo, Bar]a`.

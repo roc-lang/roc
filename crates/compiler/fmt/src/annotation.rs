@@ -176,6 +176,15 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 annot.is_multiline() || has_clauses.iter().any(|has| has.is_multiline())
             }
 
+            Tuple { fields, ext } => {
+                match ext {
+                    Some(ann) if ann.value.is_multiline() => return true,
+                    _ => {}
+                }
+
+                fields.items.iter().any(|field| field.value.is_multiline())
+            }
+
             Record { fields, ext } => {
                 match ext {
                     Some(ann) if ann.value.is_multiline() => return true,
@@ -291,6 +300,14 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 
             TagUnion { tags, ext } => {
                 fmt_collection(buf, indent, Braces::Square, *tags, newlines);
+
+                if let Some(loc_ext_ann) = *ext {
+                    loc_ext_ann.value.format(buf, indent);
+                }
+            }
+
+            Tuple { fields, ext } => {
+                fmt_collection(buf, indent, Braces::Round, *fields, newlines);
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);
