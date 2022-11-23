@@ -380,7 +380,6 @@ mod solve_expr {
         let known_specializations = abilities_store.iter_declared_implementations().filter_map(
             |(impl_key, member_impl)| match member_impl {
                 MemberImpl::Impl(impl_symbol) => {
-                    dbg!(impl_symbol);
                     let specialization = abilities_store.specialization_info(*impl_symbol).expect(
                         "declared implementations should be resolved conclusively after solving",
                     );
@@ -8318,6 +8317,23 @@ mod solve_expr {
         @Input (FromJob greeting) : [FromJob ([Job (List [FromJob a])] as a)]
         "###
         print_only_under_alias: true
+        )
+    }
+
+    #[test]
+    fn infer_concrete_type_with_inference_var() {
+        infer_queries!(indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+
+            f : _ -> {}
+            f = \_ -> f {}
+            #^{-1}
+            "#
+        ),
+        @r###"
+        f : {} -[[f(0)]]-> {}
+        "###
         )
     }
 }

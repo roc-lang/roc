@@ -2003,3 +2003,30 @@ fn match_list() {
         "#
     )
 }
+
+#[mono_test]
+#[ignore = "https://github.com/roc-lang/roc/issues/4561"]
+fn recursive_function_and_union_with_inference_hole() {
+    let _tracing_guards = roc_tracing::setup_tracing!();
+
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Html state : [
+            Element (List (Html state)),
+        ]
+
+        translateStatic : Html _ -> Html _
+        translateStatic = \node ->
+            when node is
+                Element children ->
+                    newChildren = List.map children translateStatic
+
+                    Element newChildren
+
+        main = when translateStatic (Element []) is
+            _ -> ""
+        "#
+    )
+}
