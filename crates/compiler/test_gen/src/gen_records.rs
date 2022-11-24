@@ -1031,7 +1031,9 @@ fn call_with_bad_record_runtime_error() {
             "#
         ),
         true,
-        bool
+        bool,
+        |x| x,
+        true // ignore type errors
     )
 }
 
