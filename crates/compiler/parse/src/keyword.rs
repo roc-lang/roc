@@ -4,6 +4,7 @@ pub const ELSE: &str = "else";
 pub const WHEN: &str = "when";
 pub const AS: &str = "as";
 pub const IS: &str = "is";
+pub const DBG: &str = "dbg";
 pub const EXPECT: &str = "expect";
 pub const EXPECT_FX: &str = "expect-fx";
 

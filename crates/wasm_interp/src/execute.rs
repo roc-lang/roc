@@ -1,37 +1,118 @@
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::opcodes::OpCode;
 use roc_wasm_module::parse::Parse;
-use roc_wasm_module::sections::MemorySection;
-use roc_wasm_module::WasmModule;
+use roc_wasm_module::sections::{ImportDesc, MemorySection};
+use roc_wasm_module::Value;
+use roc_wasm_module::{ExportType, WasmModule};
 
 use crate::call_stack::CallStack;
 use crate::value_stack::ValueStack;
-use crate::Value;
+
+pub enum Action {
+    Continue,
+    Break,
+}
 
 #[derive(Debug)]
 pub struct ExecutionState<'a> {
     #[allow(dead_code)]
     memory: Vec<'a, u8>,
 
-    #[allow(dead_code)]
-    call_stack: CallStack<'a>,
-
+    pub call_stack: CallStack<'a>,
     pub value_stack: ValueStack<'a>,
-    program_counter: usize,
+    pub globals: Vec<'a, Value>,
+    pub program_counter: usize,
+    block_depth: u32,
+    import_signatures: Vec<'a, u32>,
 }
 
 impl<'a> ExecutionState<'a> {
-    pub fn new(arena: &'a Bump, memory_pages: u32, program_counter: usize) -> Self {
+    pub fn new<G>(arena: &'a Bump, memory_pages: u32, program_counter: usize, globals: G) -> Self
+    where
+        G: IntoIterator<Item = Value>,
+    {
         let mem_bytes = memory_pages * MemorySection::PAGE_SIZE;
         ExecutionState {
             memory: Vec::with_capacity_in(mem_bytes as usize, arena),
             call_stack: CallStack::new(arena),
             value_stack: ValueStack::new(arena),
+            globals: Vec::from_iter_in(globals, arena),
             program_counter,
+            block_depth: 0,
+            import_signatures: Vec::new_in(arena),
         }
     }
 
-    pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) {
+    pub fn for_module(
+        arena: &'a Bump,
+        module: &WasmModule<'a>,
+        start_fn_name: &str,
+    ) -> Result<Self, String> {
+        let mem_bytes = module.memory.min_bytes().map_err(|e| {
+            format!(
+                "Error parsing Memory section at offset 0x{:x}:\n{}",
+                e.offset, e.message
+            )
+        })?;
+
+        let globals = module.global.initial_values(arena);
+
+        // Gather imported function signatures into a vector, for simpler lookup
+        let import_signatures = {
+            let imports_iter = module.import.imports.iter();
+            let sig_iter = imports_iter.filter_map(|imp| match imp.description {
+                ImportDesc::Func { signature_index } => Some(signature_index),
+                _ => None,
+            });
+            Vec::from_iter_in(sig_iter, arena)
+        };
+
+        let program_counter = {
+            let mut export_iter = module.export.exports.iter();
+            let start_fn_index = export_iter
+                .find_map(|ex| {
+                    if ex.ty == ExportType::Func && ex.name == start_fn_name {
+                        Some(ex.index)
+                    } else {
+                        None
+                    }
+                })
+                .ok_or(format!(
+                    "I couldn't find an exported function '{}' in this WebAssembly module",
+                    start_fn_name
+                ))?;
+            let internal_fn_index = start_fn_index as usize - module.import.function_count();
+            let mut cursor = module.code.function_offsets[internal_fn_index] as usize;
+            let _start_fn_byte_length = u32::parse((), &module.code.bytes, &mut cursor);
+            cursor
+        };
+
+        Ok(ExecutionState {
+            memory: Vec::with_capacity_in(mem_bytes as usize, arena),
+            call_stack: CallStack::new(arena),
+            value_stack: ValueStack::new(arena),
+            globals,
+            program_counter,
+            block_depth: 0,
+            import_signatures,
+        })
+    }
+
+    fn fetch_immediate_u32(&mut self, module: &WasmModule<'a>) -> u32 {
+        u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap()
+    }
+
+    fn do_return(&mut self) -> Action {
+        if let Some((return_addr, block_depth)) = self.call_stack.pop_frame() {
+            self.program_counter = return_addr as usize;
+            self.block_depth = block_depth;
+            Action::Continue
+        } else {
+            Action::Break
+        }
+    }
+
+    pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) -> Action {
         use OpCode::*;
 
         let op_code = OpCode::from(module.code.bytes[self.program_counter]);
@@ -43,9 +124,11 @@ impl<'a> ExecutionState<'a> {
             }
             NOP => {}
             BLOCK => {
+                self.block_depth += 1;
                 todo!("{:?}", op_code);
             }
             LOOP => {
+                self.block_depth += 1;
                 todo!("{:?}", op_code);
             }
             IF => {
@@ -55,7 +138,12 @@ impl<'a> ExecutionState<'a> {
                 todo!("{:?}", op_code);
             }
             END => {
-                todo!("{:?}", op_code);
+                if self.block_depth == 0 {
+                    // implicit RETURN at end of function
+                    return self.do_return();
+                } else {
+                    self.block_depth -= 1;
+                }
             }
             BR => {
                 todo!("{:?}", op_code);
@@ -67,34 +155,67 @@ impl<'a> ExecutionState<'a> {
                 todo!("{:?}", op_code);
             }
             RETURN => {
-                todo!("{:?}", op_code);
+                return self.do_return();
             }
             CALL => {
-                todo!("{:?}", op_code);
+                let index = self.fetch_immediate_u32(module) as usize;
+
+                let signature_index = if index < self.import_signatures.len() {
+                    self.import_signatures[index]
+                } else {
+                    let internal_fn_index = index - self.import_signatures.len();
+                    module.function.signatures[internal_fn_index]
+                };
+                let arg_count = module.types.look_up_arg_count(signature_index);
+
+                let return_addr = self.program_counter as u32;
+                self.program_counter = module.code.function_offsets[index] as usize;
+
+                let return_block_depth = self.block_depth;
+                self.block_depth = 0;
+
+                let _function_byte_length =
+                    u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
+                self.call_stack.push_frame(
+                    return_addr,
+                    return_block_depth,
+                    arg_count,
+                    &mut self.value_stack,
+                    &module.code.bytes,
+                    &mut self.program_counter,
+                );
             }
             CALLINDIRECT => {
                 todo!("{:?}", op_code);
             }
             DROP => {
-                todo!("{:?}", op_code);
+                self.value_stack.pop();
             }
             SELECT => {
                 todo!("{:?}", op_code);
             }
             GETLOCAL => {
-                todo!("{:?}", op_code);
+                let index = self.fetch_immediate_u32(module);
+                let value = self.call_stack.get_local(index);
+                self.value_stack.push(value);
             }
             SETLOCAL => {
-                todo!("{:?}", op_code);
+                let index = self.fetch_immediate_u32(module);
+                let value = self.value_stack.pop();
+                self.call_stack.set_local(index, value);
             }
             TEELOCAL => {
-                todo!("{:?}", op_code);
+                let index = self.fetch_immediate_u32(module);
+                let value = self.value_stack.peek();
+                self.call_stack.set_local(index, value);
             }
             GETGLOBAL => {
-                todo!("{:?}", op_code);
+                let index = self.fetch_immediate_u32(module);
+                self.value_stack.push(self.globals[index as usize]);
             }
             SETGLOBAL => {
-                todo!("{:?}", op_code);
+                let index = self.fetch_immediate_u32(module);
+                self.globals[index as usize] = self.value_stack.pop();
             }
             I32LOAD => {
                 todo!("{:?}", op_code);
@@ -573,5 +694,6 @@ impl<'a> ExecutionState<'a> {
                 todo!("{:?}", op_code);
             }
         }
+        Action::Continue
     }
 }

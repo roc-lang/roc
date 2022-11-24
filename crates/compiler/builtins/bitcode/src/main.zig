@@ -172,6 +172,7 @@ comptime {
         exportUtilsFn(expect.expectFailedStartSharedBuffer, "expect_failed_start_shared_buffer");
         exportUtilsFn(expect.expectFailedStartSharedFile, "expect_failed_start_shared_file");
         exportUtilsFn(expect.expectFailedFinalize, "expect_failed_finalize");
+        exportUtilsFn(expect.sendDbg, "send_dbg");
 
         // sets the buffer used for expect failures
         @export(expect.setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .Weak });

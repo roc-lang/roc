@@ -3529,6 +3529,7 @@ pub enum Category {
     AbilityMemberSpecialization(Symbol),
 
     Expect,
+    Dbg,
     Unknown,
 }
 

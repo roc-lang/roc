@@ -447,7 +447,7 @@ fn optional_field_when_use_default_nested() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn optional_field_when_no_use_default() {
+fn optional_field_destructure_module() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -468,15 +468,15 @@ fn optional_field_when_no_use_default() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn optional_field_when_no_use_default_nested() {
+fn optional_field_destructure_expr() {
     assert_evals_to!(
         indoc!(
             r#"
-                f = \r ->
+                fn = \r ->
                     { x ? 10, y } = r
                     x + y
 
-                f { x: 4, y: 9 }
+                fn { x: 4, y: 9 }
                 "#
         ),
         13,
@@ -1056,9 +1056,9 @@ fn update_record_that_is_a_thunk() {
             app "test" provides [main] to "./platform"
 
             main = Num.toStr fromOriginal.birds
-            
+
             original = { birds: 5, iguanas: 7, zebras: 2, goats: 1 }
-            
+
             fromOriginal = { original & birds: 4, iguanas: 3 }
             "#
         ),
@@ -1076,9 +1076,9 @@ fn update_record_that_is_a_thunk_single_field() {
             app "test" provides [main] to "./platform"
 
             main = Num.toStr fromOriginal.birds
-            
+
             original = { birds: 5 }
-            
+
             fromOriginal = { original & birds: 4 }
             "#
         ),

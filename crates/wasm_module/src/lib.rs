@@ -642,6 +642,30 @@ impl From<u8> for ValueType {
     }
 }
 
+impl Parse<()> for ValueType {
+    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let byte = u8::parse((), bytes, cursor)?;
+        Ok(ValueType::from(byte))
+    }
+}
+
+// A group of local variable declarations
+impl Parse<()> for (u32, ValueType) {
+    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let count = u32::parse((), bytes, cursor)?;
+        let ty = ValueType::parse((), bytes, cursor)?;
+        Ok((count, ty))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Value {
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
+}
+
 /// Wasm memory alignment for load/store instructions.
 /// Rust representation matches Wasm encoding.
 /// It's an error to specify alignment higher than the "natural" alignment of the instruction

@@ -158,7 +158,7 @@ impl LlvmBackendMode {
         }
     }
 
-    fn runs_expects(self) -> bool {
+    pub(crate) fn runs_expects(self) -> bool {
         match self {
             LlvmBackendMode::Binary => false,
             LlvmBackendMode::BinaryDev => true,
