@@ -14,10 +14,10 @@ fn crash_literal() {
     assert_evals_to!(
         indoc!(
             r#"
-        app "test" provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
-        main = if Bool.true then crash "hello crash" else 1u8
-        "#
+            main = if Bool.true then crash "hello crash" else 1u8
+            "#
         ),
         1u8,
         u8
@@ -31,12 +31,12 @@ fn crash_variable() {
     assert_evals_to!(
         indoc!(
             r#"
-        app "test" provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
-        main =
-            msg = "hello crash"
-            if Bool.true then crash msg else 1u8
-        "#
+            main =
+                msg = "hello crash"
+                if Bool.true then crash msg else 1u8
+            "#
         ),
         1u8,
         u8
@@ -50,17 +50,17 @@ fn crash_in_call() {
     assert_evals_to!(
         indoc!(
             r#"
-        app "test" provides [main] to "./platform"
+            app "test" provides [main] to "./platform"
 
-        getInfallible = \result -> when result is
-            Ok x -> x
-            _ -> crash "turns out this was fallible"
+            getInfallible = \result -> when result is
+                Ok x -> x
+                _ -> crash "turns out this was fallible"
 
-        main =
-            x : [Ok U64, Err Str]
-            x = Err ""
-            getInfallible x
-        "#
+            main =
+                x : [Ok U64, Err Str]
+                x = Err ""
+                getInfallible x
+            "#
         ),
         1u64,
         u64
