@@ -106,9 +106,9 @@ impl<'a> ExecutionState<'a> {
         if let Some((return_addr, block_depth)) = self.call_stack.pop_frame() {
             self.program_counter = return_addr as usize;
             self.block_depth = block_depth;
-            return Action::Continue;
+            Action::Continue
         } else {
-            return Action::Break;
+            Action::Break
         }
     }
 

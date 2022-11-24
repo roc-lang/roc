@@ -6,11 +6,11 @@ use roc_wasm_module::{
     opcodes::OpCode, SerialBuffer, Serialize, Signature, Value, ValueType, WasmModule,
 };
 
-fn default_state<'a>(arena: &'a Bump) -> ExecutionState {
+fn default_state(arena: &Bump) -> ExecutionState {
     let pages = 1;
     let program_counter = 0;
     let globals = [];
-    ExecutionState::new(&arena, pages, program_counter, globals)
+    ExecutionState::new(arena, pages, program_counter, globals)
 }
 
 // #[test]

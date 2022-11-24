@@ -36,6 +36,10 @@ impl<'a> ValueStack<'a> {
         self.is_64.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.is_64.is_empty()
+    }
+
     pub fn push(&mut self, value: Value) {
         match value {
             Value::I32(x) => {
