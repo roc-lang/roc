@@ -10,8 +10,7 @@ pub enum Either<First, Second> {
     Second(Second),
 }
 
-pub type ParseResult<'a, Output, Error> =
-    Result<(Progress, Output, State<'a>), (Progress, Error, State<'a>)>;
+pub type ParseResult<'a, Output, Error> = Result<(Progress, Output, State<'a>), (Progress, Error)>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Progress {
@@ -851,7 +850,7 @@ where
 
         let (progress, value, state) = match &res {
             Ok((progress, result, state)) => (progress, Ok(result), state),
-            Err((progress, error, state)) => (progress, Err(error), state),
+            Err((progress, error)) => (progress, Err(error), state),
         };
 
         println!(
@@ -924,7 +923,7 @@ where
         let width = keyword.len();
 
         if !state.bytes().starts_with(keyword.as_bytes()) {
-            return Err((NoProgress, if_error(state.pos()), state));
+            return Err((NoProgress, if_error(state.pos())));
         }
 
         // the next character should not be an identifier character
@@ -938,7 +937,7 @@ where
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
-            Some(_) => Err((NoProgress, if_error(state.pos()), state)),
+            Some(_) => Err((NoProgress, if_error(state.pos()))),
         }
     }
 }
@@ -955,6 +954,8 @@ where
     Error: 'a,
 {
     move |arena, state: State<'a>, min_indent: u32| {
+        let original_state = state.clone();
+
         let start_bytes_len = state.bytes().len();
 
         match parser.parse(arena, state, min_indent) {
@@ -968,10 +969,10 @@ where
                 buf.push(first_output);
 
                 loop {
-                    match delimiter.parse(arena, state, min_indent) {
+                    match delimiter.parse(arena, state.clone(), min_indent) {
                         Ok((_, (), next_state)) => {
                             // If the delimiter passed, check the element parser.
-                            match parser.parse(arena, next_state, min_indent) {
+                            match parser.parse(arena, next_state.clone(), min_indent) {
                                 Ok((element_progress, next_output, next_state)) => {
                                     // in practice, we want elements to make progress
                                     debug_assert_eq!(element_progress, MadeProgress);
@@ -979,28 +980,28 @@ where
                                     state = next_state;
                                     buf.push(next_output);
                                 }
-                                Err((_, fail, state)) => {
+                                Err((_, fail)) => {
                                     // If the delimiter parsed, but the following
                                     // element did not, that's a fatal error.
                                     let progress = Progress::from_lengths(
                                         start_bytes_len,
-                                        state.bytes().len(),
+                                        next_state.bytes().len(),
                                     );
 
-                                    return Err((progress, fail, state));
+                                    return Err((progress, fail));
                                 }
                             }
                         }
-                        Err((delim_progress, fail, old_state)) => match delim_progress {
-                            MadeProgress => return Err((MadeProgress, fail, old_state)),
-                            NoProgress => return Ok((NoProgress, buf, old_state)),
+                        Err((delim_progress, fail)) => match delim_progress {
+                            MadeProgress => return Err((MadeProgress, fail)),
+                            NoProgress => return Ok((NoProgress, buf, state)),
                         },
                     }
                 }
             }
-            Err((element_progress, fail, new_state)) => match element_progress {
-                MadeProgress => Err((MadeProgress, fail, new_state)),
-                NoProgress => Ok((NoProgress, Vec::new_in(arena), new_state)),
+            Err((element_progress, fail)) => match element_progress {
+                MadeProgress => Err((MadeProgress, fail)),
+                NoProgress => Ok((NoProgress, Vec::new_in(arena), original_state)),
             },
         }
     }
@@ -1018,6 +1019,7 @@ where
     Error: 'a,
 {
     move |arena, state: State<'a>, min_indent: u32| {
+        let original_state = state.clone();
         let start_bytes_len = state.bytes().len();
 
         match parser.parse(arena, state, min_indent) {
@@ -1030,10 +1032,10 @@ where
                 buf.push(first_output);
 
                 loop {
-                    match delimiter.parse(arena, state, min_indent) {
+                    match delimiter.parse(arena, state.clone(), min_indent) {
                         Ok((_, (), next_state)) => {
                             // If the delimiter passed, check the element parser.
-                            match parser.parse(arena, next_state, min_indent) {
+                            match parser.parse(arena, next_state.clone(), min_indent) {
                                 Ok((element_progress, next_output, next_state)) => {
                                     // in practice, we want elements to make progress
                                     debug_assert_eq!(element_progress, MadeProgress);
@@ -1041,27 +1043,27 @@ where
                                     state = next_state;
                                     buf.push(next_output);
                                 }
-                                Err((_, _fail, old_state)) => {
+                                Err((_, _fail)) => {
                                     // If the delimiter parsed, but the following
                                     // element did not, that means we saw a trailing comma
                                     let progress = Progress::from_lengths(
                                         start_bytes_len,
-                                        old_state.bytes().len(),
+                                        next_state.bytes().len(),
                                     );
-                                    return Ok((progress, buf, old_state));
+                                    return Ok((progress, buf, next_state));
                                 }
                             }
                         }
-                        Err((delim_progress, fail, old_state)) => match delim_progress {
-                            MadeProgress => return Err((MadeProgress, fail, old_state)),
-                            NoProgress => return Ok((NoProgress, buf, old_state)),
+                        Err((delim_progress, fail)) => match delim_progress {
+                            MadeProgress => return Err((MadeProgress, fail)),
+                            NoProgress => return Ok((NoProgress, buf, state)),
                         },
                     }
                 }
             }
-            Err((element_progress, fail, new_state)) => match element_progress {
-                MadeProgress => Err((MadeProgress, fail, new_state)),
-                NoProgress => Ok((NoProgress, Vec::new_in(arena), new_state)),
+            Err((element_progress, fail)) => match element_progress {
+                MadeProgress => Err((MadeProgress, fail)),
+                NoProgress => Ok((NoProgress, Vec::new_in(arena), original_state)),
             },
         }
     }
@@ -1090,6 +1092,7 @@ where
                 buf.push(first_output);
 
                 loop {
+                    let old_state = state.clone();
                     match delimiter.parse(arena, state, min_indent) {
                         Ok((_, (), next_state)) => {
                             // If the delimiter passed, check the element parser.
@@ -1098,16 +1101,16 @@ where
                                     state = next_state;
                                     buf.push(next_output);
                                 }
-                                Err((_, fail, state)) => {
-                                    return Err((MadeProgress, fail, state));
+                                Err((_, fail)) => {
+                                    return Err((MadeProgress, fail));
                                 }
                             }
                         }
-                        Err((delim_progress, fail, old_state)) => {
+                        Err((delim_progress, fail)) => {
                             match delim_progress {
                                 MadeProgress => {
                                     // fail if the delimiter made progress
-                                    return Err((MadeProgress, fail, old_state));
+                                    return Err((MadeProgress, fail));
                                 }
                                 NoProgress => {
                                     let progress = Progress::from_lengths(
@@ -1121,7 +1124,7 @@ where
                     }
                 }
             }
-            Err((fail_progress, fail, new_state)) => Err((fail_progress, fail, new_state)),
+            Err((fail_progress, fail)) => Err((fail_progress, fail)),
         }
     }
 }
@@ -1140,6 +1143,7 @@ where
     Error: 'a,
 {
     move |arena, state: State<'a>, min_indent: u32| {
+        let original_state = state.clone();
         let start_bytes_len = state.bytes().len();
 
         match parser.parse(arena, state, min_indent) {
@@ -1151,27 +1155,28 @@ where
                 buf.push(first_output);
 
                 loop {
+                    let old_state = state.clone();
                     match delimiter.parse(arena, state, min_indent) {
                         Ok((_, (), next_state)) => {
                             // If the delimiter passed, check the element parser.
-                            match parser.parse(arena, next_state, min_indent) {
+                            match parser.parse(arena, next_state.clone(), min_indent) {
                                 Ok((_, next_output, next_state)) => {
                                     state = next_state;
                                     buf.push(next_output);
                                 }
-                                Err((MadeProgress, fail, state)) => {
-                                    return Err((MadeProgress, fail, state));
+                                Err((MadeProgress, fail)) => {
+                                    return Err((MadeProgress, fail));
                                 }
-                                Err((NoProgress, _fail, state)) => {
-                                    return Err((NoProgress, to_element_error(state.pos()), state));
+                                Err((NoProgress, _fail)) => {
+                                    return Err((NoProgress, to_element_error(next_state.pos())));
                                 }
                             }
                         }
-                        Err((delim_progress, fail, old_state)) => {
+                        Err((delim_progress, fail)) => {
                             match delim_progress {
                                 MadeProgress => {
                                     // fail if the delimiter made progress
-                                    return Err((MadeProgress, fail, old_state));
+                                    return Err((MadeProgress, fail));
                                 }
                                 NoProgress => {
                                     let progress = Progress::from_lengths(
@@ -1186,10 +1191,8 @@ where
                 }
             }
 
-            Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
-            Err((NoProgress, _fail, state)) => {
-                Err((NoProgress, to_element_error(state.pos()), state))
-            }
+            Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
+            Err((NoProgress, _fail)) => Err((NoProgress, to_element_error(original_state.pos()))),
         }
     }
 }
@@ -1201,7 +1204,7 @@ pub fn fail_when_progress<T, E>(
     state: State<'_>,
 ) -> ParseResult<'_, T, E> {
     match progress {
-        MadeProgress => Err((MadeProgress, fail, state)),
+        MadeProgress => Err((MadeProgress, fail)),
         NoProgress => Ok((NoProgress, value, state)),
     }
 }
@@ -1218,7 +1221,7 @@ where
 
         match parser.parse(arena, state, min_indent) {
             Ok((progress, out1, state)) => Ok((progress, Some(out1), state)),
-            Err((_, _, _)) => {
+            Err((_, _)) => {
                 // NOTE this will backtrack
                 // TODO can we get rid of some of the potential backtracking?
                 Ok((NoProgress, None, original_state))
@@ -1257,16 +1260,14 @@ macro_rules! loc {
 #[macro_export]
 macro_rules! skip_first {
     ($p1:expr, $p2:expr) => {
-        move |arena, state: $crate::state::State<'a>, min_indent: u32| {
-            let original_state = state.clone();
-
-            match $p1.parse(arena, state, min_indent) {
-                Ok((p1, _, state)) => match $p2.parse(arena, state, min_indent) {
-                    Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
-                    Err((p2, fail, _)) => Err((p1.or(p2), fail, original_state)),
-                },
-                Err((progress, fail, _)) => Err((progress, fail, original_state)),
-            }
+        move |arena, state: $crate::state::State<'a>, min_indent: u32| match $p1
+            .parse(arena, state, min_indent)
+        {
+            Ok((p1, _, state)) => match $p2.parse(arena, state, min_indent) {
+                Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
+                Err((p2, fail)) => Err((p1.or(p2), fail)),
+            },
+            Err((progress, fail)) => Err((progress, fail)),
         }
     };
 }
@@ -1276,16 +1277,14 @@ macro_rules! skip_first {
 #[macro_export]
 macro_rules! skip_second {
     ($p1:expr, $p2:expr) => {
-        move |arena, state: $crate::state::State<'a>, min_indent: u32| {
-            let original_state = state.clone();
-
-            match $p1.parse(arena, state, min_indent) {
-                Ok((p1, out1, state)) => match $p2.parse(arena, state, min_indent) {
-                    Ok((p2, _, state)) => Ok((p1.or(p2), out1, state)),
-                    Err((p2, fail, _)) => Err((p1.or(p2), fail, original_state)),
-                },
-                Err((progress, fail, _)) => Err((progress, fail, original_state)),
-            }
+        move |arena, state: $crate::state::State<'a>, min_indent: u32| match $p1
+            .parse(arena, state, min_indent)
+        {
+            Ok((p1, out1, state)) => match $p2.parse(arena, state, min_indent) {
+                Ok((p2, _, state)) => Ok((p1.or(p2), out1, state)),
+                Err((p2, fail)) => Err((p1.or(p2), fail)),
+            },
+            Err((progress, fail)) => Err((progress, fail)),
         }
     };
 }
@@ -1381,6 +1380,23 @@ macro_rules! succeed {
     };
 }
 
+pub fn fail_when<'a, T, T2, E, F, P>(f: F, p: P) -> impl Parser<'a, T, E>
+where
+    T: 'a,
+    T2: 'a,
+    E: 'a,
+    F: Fn(Position) -> E,
+    P: Parser<'a, T2, E>,
+{
+    move |arena: &'a bumpalo::Bump, state: State<'a>, min_indent: u32| {
+        let original_state = state.clone();
+        match p.parse(arena, state, min_indent) {
+            Ok((_, _, _)) => Err((MadeProgress, f(original_state.pos()))),
+            Err((progress, err)) => Err((progress, err)),
+        }
+    }
+}
+
 pub fn fail<'a, T, E, F>(f: F) -> impl Parser<'a, T, E>
 where
     T: 'a,
@@ -1388,25 +1404,21 @@ where
     F: Fn(Position) -> E,
 {
     move |_arena: &'a bumpalo::Bump, state: State<'a>, _min_indent: u32| {
-        Err((NoProgress, f(state.pos()), state))
+        Err((NoProgress, f(state.pos())))
     }
 }
 
 #[macro_export]
 macro_rules! and {
     ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
-            // We have to clone this because if the first parser passes and then
-            // the second one fails, we need to revert back to the original state.
-            let original_state = state.clone();
-
-            match $p1.parse(arena, state, min_indent) {
-                Ok((p1, out1, state)) => match $p2.parse(arena, state, min_indent) {
-                    Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
-                    Err((p2, fail, _)) => Err((p1.or(p2), fail, original_state)),
-                },
-                Err((progress, fail, state)) => Err((progress, fail, state)),
-            }
+        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| match $p1
+            .parse(arena, state, min_indent)
+        {
+            Ok((p1, out1, state)) => match $p2.parse(arena, state, min_indent) {
+                Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
+                Err((p2, fail)) => Err((p1.or(p2), fail)),
+            },
+            Err((progress, fail)) => Err((progress, fail)),
         }
     };
 }
@@ -1428,16 +1440,12 @@ macro_rules! indented_seq {
             let p1_indent = start_indent;
             let p2_indent = p1_indent + 1;
 
-            // We have to clone this because if the first parser passes and then
-            // the second one fails, we need to revert back to the original state.
-            let original_state = state.clone();
-
             match $p1.parse(arena, state, p1_indent) {
                 Ok((p1, (), state)) => match $p2.parse(arena, state, p2_indent) {
                     Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
-                    Err((p2, fail, _)) => Err((p1.or(p2), fail, original_state)),
+                    Err((p2, fail)) => Err((p1.or(p2), fail)),
                 },
-                Err((progress, fail, state)) => Err((progress, fail, state)),
+                Err((progress, fail)) => Err((progress, fail)),
             }
         }
     };
@@ -1454,16 +1462,12 @@ macro_rules! absolute_indented_seq {
             let p1_indent = start_indent;
             let p2_indent = p1_indent + 1;
 
-            // We have to clone this because if the first parser passes and then
-            // the second one fails, we need to revert back to the original state.
-            let original_state = state.clone();
-
             match $p1.parse(arena, state, p1_indent) {
                 Ok((p1, out1, state)) => match $p2.parse(arena, state, p2_indent) {
                     Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
-                    Err((p2, fail, _)) => Err((p1.or(p2), fail, original_state)),
+                    Err((p2, fail)) => Err((p1.or(p2), fail)),
                 },
-                Err((progress, fail, state)) => Err((progress, fail, state)),
+                Err((progress, fail)) => Err((progress, fail)),
             }
         }
     };
@@ -1477,8 +1481,8 @@ macro_rules! one_of {
 
             match $p1.parse(arena, state, min_indent) {
                 valid @ Ok(_) => valid,
-                Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
-                Err((NoProgress, _, _)) => $p2.parse(arena, original_state, min_indent),
+                Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
+                Err((NoProgress, _)) => $p2.parse(arena, original_state, min_indent),
             }
         }
     };
@@ -1494,12 +1498,14 @@ macro_rules! one_of {
 #[macro_export]
 macro_rules! maybe {
     ($p1:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| match $p1
-            .parse(arena, state, min_indent)
-        {
-            Ok((progress, value, state)) => Ok((progress, Some(value), state)),
-            Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
-            Err((NoProgress, _, state)) => Ok((NoProgress, None, state)),
+        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
+            let original_state = state.clone();
+
+            match $p1.parse(arena, state, min_indent) {
+                Ok((progress, value, state)) => Ok((progress, Some(value), state)),
+                Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
+                Err((NoProgress, _)) => Ok((NoProgress, None, original_state)),
+            }
         }
     };
 }
@@ -1508,11 +1514,12 @@ macro_rules! maybe {
 macro_rules! one_of_with_error {
     ($toerror:expr; $p1:expr) => {
         move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
+            let original_state = state.clone();
 
             match $p1.parse(arena, state, min_indent) {
                 valid @ Ok(_) => valid,
-                Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state )),
-                Err((NoProgress, _, state)) => Err((MadeProgress, $toerror(state.pos()), state)),
+                Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
+                Err((NoProgress, _)) => Err((MadeProgress, $toerror(original_state.pos()))),
             }
         }
     };
@@ -1569,24 +1576,11 @@ where
     P: Parser<'a, T, X>,
     Y: 'a,
 {
-    move |a, s, min_indent| match parser.parse(a, s, min_indent) {
-        Ok(t) => Ok(t),
-        Err((p, error, s)) => Err((p, map_error(error, s.pos()), s)),
-    }
-}
-
-/// Like `specialize`, except the error function receives a Region representing the begin/end of the error
-pub fn specialize_region<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
-where
-    F: Fn(X, Region) -> Y,
-    P: Parser<'a, T, X>,
-    Y: 'a,
-{
-    move |a, s: State<'a>, min_indent: u32| {
-        let start = s.pos();
-        match parser.parse(a, s, min_indent) {
+    move |a, state: State<'a>, min_indent| {
+        let original_state = state.clone();
+        match parser.parse(a, state, min_indent) {
             Ok(t) => Ok(t),
-            Err((p, error, s)) => Err((p, map_error(error, Region::new(start, s.pos())), s)),
+            Err((p, error)) => Err((p, map_error(error, original_state.pos()))),
         }
     }
 }
@@ -1598,9 +1592,12 @@ where
     Y: 'a,
     X: 'a,
 {
-    move |a, s, min_indent| match parser.parse(a, s, min_indent) {
-        Ok(t) => Ok(t),
-        Err((p, error, s)) => Err((p, map_error(a.alloc(error), s.pos()), s)),
+    move |a, state: State<'a>, min_indent| {
+        let original_state = state.clone();
+        match parser.parse(a, state, min_indent) {
+            Ok(t) => Ok(t),
+            Err((p, error)) => Err((p, map_error(a.alloc(error), original_state.pos()))),
+        }
     }
 }
 
@@ -1616,7 +1613,7 @@ where
             let state = state.advance(1);
             Ok((MadeProgress, (), state))
         }
-        _ => Err((NoProgress, to_error(state.pos()), state)),
+        _ => Err((NoProgress, to_error(state.pos()))),
     }
 }
 
@@ -1629,7 +1626,7 @@ where
 
     move |_arena: &'a Bump, state: State<'a>, min_indent: u32| {
         if min_indent > state.column() {
-            return Err((NoProgress, to_error(state.pos()), state));
+            return Err((NoProgress, to_error(state.pos())));
         }
 
         match state.bytes().first() {
@@ -1637,7 +1634,7 @@ where
                 let state = state.advance(1);
                 Ok((MadeProgress, (), state))
             }
-            _ => Err((NoProgress, to_error(state.pos()), state)),
+            _ => Err((NoProgress, to_error(state.pos()))),
         }
     }
 }
@@ -1657,7 +1654,7 @@ where
             let state = state.advance(2);
             Ok((MadeProgress, (), state))
         } else {
-            Err((NoProgress, to_error(state.pos()), state))
+            Err((NoProgress, to_error(state.pos())))
         }
     }
 }
@@ -1683,7 +1680,7 @@ where
             let state = state.advance(3);
             Ok((MadeProgress, (), state))
         } else {
-            Err((NoProgress, to_error(state.pos()), state))
+            Err((NoProgress, to_error(state.pos())))
         }
     }
 }
@@ -1728,6 +1725,8 @@ macro_rules! zero_or_more {
         move |arena, state: State<'a>, min_indent: u32| {
             use bumpalo::collections::Vec;
 
+            let original_state = state.clone();
+
             let start_bytes_len = state.bytes().len();
 
             match $parser.parse(arena, state, min_indent) {
@@ -1738,16 +1737,17 @@ macro_rules! zero_or_more {
                     buf.push(first_output);
 
                     loop {
+                        let old_state = state.clone();
                         match $parser.parse(arena, state, min_indent) {
                             Ok((_, next_output, next_state)) => {
                                 state = next_state;
                                 buf.push(next_output);
                             }
-                            Err((fail_progress, fail, old_state)) => {
+                            Err((fail_progress, fail)) => {
                                 match fail_progress {
                                     MadeProgress => {
                                         // made progress on an element and then failed; that's an error
-                                        return Err((MadeProgress, fail, old_state));
+                                        return Err((MadeProgress, fail));
                                     }
                                     NoProgress => {
                                         // the next element failed with no progress
@@ -1760,16 +1760,16 @@ macro_rules! zero_or_more {
                         }
                     }
                 }
-                Err((fail_progress, fail, new_state)) => {
+                Err((fail_progress, fail)) => {
                     match fail_progress {
                         MadeProgress => {
                             // made progress on an element and then failed; that's an error
-                            Err((MadeProgress, fail, new_state))
+                            Err((MadeProgress, fail))
                         }
                         NoProgress => {
                             // the first element failed (with no progress), but that's OK
                             // because we only need to parse 0 elements
-                            Ok((NoProgress, Vec::new_in(arena), new_state))
+                            Ok((NoProgress, Vec::new_in(arena), original_state))
                         }
                     }
                 }
@@ -1792,15 +1792,16 @@ macro_rules! one_or_more {
                     buf.push(first_output);
 
                     loop {
+                        let old_state = state.clone();
                         match $parser.parse(arena, state, min_indent) {
                             Ok((_, next_output, next_state)) => {
                                 state = next_state;
                                 buf.push(next_output);
                             }
-                            Err((NoProgress, _, old_state)) => {
+                            Err((NoProgress, _)) => {
                                 return Ok((MadeProgress, buf, old_state));
                             }
-                            Err((MadeProgress, fail, old_state)) => {
+                            Err((MadeProgress, fail)) => {
                                 return Err((MadeProgress, fail, old_state));
                             }
                         }
@@ -1826,19 +1827,22 @@ macro_rules! debug {
 #[macro_export]
 macro_rules! either {
     ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| match $p1
-            .parse(arena, state, min_indent)
-        {
-            Ok((progress, output, state)) => {
-                Ok((progress, $crate::parser::Either::First(output), state))
-            }
-            Err((NoProgress, _, state)) => match $p2.parse(arena, state, min_indent) {
+        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
+            let original_state = state.clone();
+            match $p1.parse(arena, state, min_indent) {
                 Ok((progress, output, state)) => {
-                    Ok((progress, $crate::parser::Either::Second(output), state))
+                    Ok((progress, $crate::parser::Either::First(output), state))
                 }
-                Err((progress, fail, state)) => Err((progress, fail, state)),
-            },
-            Err((MadeProgress, fail, state)) => Err((MadeProgress, fail, state)),
+                Err((NoProgress, _)) => {
+                    match $p2.parse(arena, original_state.clone(), min_indent) {
+                        Ok((progress, output, state)) => {
+                            Ok((progress, $crate::parser::Either::Second(output), state))
+                        }
+                        Err((progress, fail)) => Err((progress, fail)),
+                    }
+                }
+                Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
+            }
         }
     };
 }
@@ -1900,12 +1904,10 @@ where
     P: Parser<'a, Val, Error>,
     Error: 'a,
 {
-    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        let old_state = state.clone();
-
-        match parser.parse(arena, state, min_indent) {
-            Ok((_, a, s1)) => Ok((NoProgress, a, s1)),
-            Err((_, f, _)) => Err((NoProgress, f, old_state)),
-        }
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| match parser
+        .parse(arena, state, min_indent)
+    {
+        Ok((_, a, s1)) => Ok((NoProgress, a, s1)),
+        Err((_, f)) => Err((NoProgress, f)),
     }
 }

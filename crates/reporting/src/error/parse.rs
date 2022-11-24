@@ -1547,7 +1547,7 @@ fn to_unexpected_arrow_report<'a>(
         ),
         alloc.concat([
             alloc.reflow(r"It makes sense to see arrows around here, "),
-            alloc.reflow(r"so I suspect it is something earlier."),
+            alloc.reflow(r"so I suspect it is something earlier. "),
             alloc.reflow(
                 r"Maybe this pattern is indented a bit farther from the previous patterns?",
             ),

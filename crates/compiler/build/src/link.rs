@@ -188,6 +188,7 @@ pub fn build_zig_host_native(
     target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
+    builtins_host_path: &Path,
 ) -> Command {
     let mut zig_cmd = zig();
     zig_cmd
@@ -199,18 +200,12 @@ pub fn build_zig_host_native(
         // with LLVM, the builtins are already part of the roc app,
         // but with the dev backend, they are missing. To minimize work,
         // we link them as part of the host executable
-        let builtins_obj = if target.contains("windows") {
-            bitcode::get_builtins_windows_obj_path()
-        } else {
-            bitcode::get_builtins_host_obj_path()
-        };
-
         zig_cmd.args([
             "build-exe",
             "-fPIE",
             "-rdynamic", // make sure roc_alloc and friends are exposed
             shared_lib_path.to_str().unwrap(),
-            &builtins_obj,
+            builtins_host_path.to_str().unwrap(),
         ]);
     } else {
         zig_cmd.args(["build-obj", "-fPIC"]);
@@ -266,6 +261,7 @@ pub fn build_zig_host_native(
     target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
+    builtins_host_path: &Path,
 ) -> Command {
     // to prevent `clang failed with stderr: zig: error: unable to make temporary file: No such file or directory`
     let env_userprofile = env::var("USERPROFILE").unwrap_or_else(|_| "".to_string());
@@ -282,7 +278,7 @@ pub fn build_zig_host_native(
             "build-exe",
             // "-fPIE", PIE seems to fail on windows
             shared_lib_path.to_str().unwrap(),
-            &bitcode::get_builtins_windows_obj_path(),
+            builtins_host_path.to_str().unwrap(),
         ]);
     } else {
         zig_cmd.args(&["build-obj"]);
@@ -325,6 +321,7 @@ pub fn build_zig_host_native(
     _target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
+    builtins_host_path: &Path,
     // For compatibility with the non-macOS def above. Keep these in sync.
 ) -> Command {
     use serde_json::Value;
@@ -377,7 +374,7 @@ pub fn build_zig_host_native(
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            &bitcode::get_builtins_host_obj_path(),
+            builtins_host_path.to_str().unwrap(),
         ]);
     } else {
         zig_cmd.args(&["build-obj"]);
@@ -481,6 +478,7 @@ pub fn build_c_host_native(
     sources: &[&str],
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
+    builtins_host_path: &Path,
 ) -> Command {
     let mut clang_cmd = clang();
     clang_cmd
@@ -507,6 +505,7 @@ pub fn build_c_host_native(
                     get_target_str(target),
                     opt_level,
                     Some(shared_lib_path),
+                    builtins_host_path,
                 );
             }
             _ => {
@@ -517,7 +516,7 @@ pub fn build_c_host_native(
                     // linking the built-ins led to a surgical linker bug for
                     // optimized builds. Disabling until it is needed for dev
                     // builds.
-                    // &bitcode::get_builtins_host_obj_path(),
+                    // builtins_host_path,
                     "-fPIE",
                     "-pie",
                     "-lm",
@@ -631,6 +630,19 @@ pub fn rebuild_host(
     let env_home = env::var("HOME").unwrap_or_else(|_| "".to_string());
     let env_cpath = env::var("CPATH").unwrap_or_else(|_| "".to_string());
 
+    let builtins_host_tempfile = {
+        #[cfg(windows)]
+        {
+            bitcode::host_windows_tempfile()
+        }
+
+        #[cfg(unix)]
+        {
+            bitcode::host_unix_tempfile()
+        }
+    }
+    .expect("failed to write host builtins object to tempfile");
+
     if zig_host_src.exists() {
         // Compile host.zig
 
@@ -668,6 +680,7 @@ pub fn rebuild_host(
                 get_target_str(target),
                 opt_level,
                 shared_lib_path,
+                builtins_host_tempfile.path(),
             ),
             Architecture::X86_32(_) => build_zig_host_native(
                 &env_path,
@@ -678,8 +691,8 @@ pub fn rebuild_host(
                 "i386-linux-musl",
                 opt_level,
                 shared_lib_path,
+                builtins_host_tempfile.path(),
             ),
-
             Architecture::Aarch64(_) => build_zig_host_native(
                 &env_path,
                 &env_home,
@@ -689,11 +702,12 @@ pub fn rebuild_host(
                 target_zig_str(target),
                 opt_level,
                 shared_lib_path,
+                builtins_host_tempfile.path(),
             ),
             _ => internal_error!("Unsupported architecture {:?}", target.architecture),
         };
 
-        run_build_command(zig_cmd, "host.zig", 0)
+        run_build_command(zig_cmd, "host.zig", 0);
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
@@ -756,6 +770,7 @@ pub fn rebuild_host(
                 &[c_host_src.to_str().unwrap()],
                 opt_level,
                 shared_lib_path,
+                builtins_host_tempfile.path(),
             );
 
             run_build_command(clang_cmd, "host.c", 0);
@@ -810,6 +825,7 @@ pub fn rebuild_host(
                 ],
                 opt_level,
                 shared_lib_path,
+                builtins_host_tempfile.path(),
             );
             run_build_command(clang_cmd, "host.c", 0);
         } else {
@@ -822,6 +838,7 @@ pub fn rebuild_host(
                 &[c_host_src.to_str().unwrap()],
                 opt_level,
                 shared_lib_path,
+                builtins_host_tempfile.path(),
             );
 
             run_build_command(clang_cmd, "host.c", 0);
@@ -857,6 +874,7 @@ pub fn rebuild_host(
             &[c_host_src.to_str().unwrap()],
             opt_level,
             shared_lib_path,
+            builtins_host_tempfile.path(),
         );
 
         run_build_command(clang_cmd, "host.c", 0);
@@ -877,6 +895,10 @@ pub fn rebuild_host(
 
         run_build_command(swiftc_cmd, "host.swift", 0);
     }
+
+    // Extend the lifetime of the tempfile so it doesn't get dropped
+    // (and thus deleted) before the build process is done using it!
+    let _ = builtins_host_tempfile;
 
     host_dest
 }
@@ -1430,10 +1452,13 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
             (but seems to be an unofficial API)
     */
 
+    let builtins_host_tempfile =
+        bitcode::host_wasm_tempfile().expect("failed to write host builtins object to tempfile");
+
     let mut zig_cmd = zig();
     let args = &[
         "wasm-ld",
-        &bitcode::get_builtins_wasm32_obj_path(),
+        builtins_host_tempfile.path().to_str().unwrap(),
         host_input,
         WASI_LIBC_PATH,
         WASI_COMPILER_RT_PATH, // builtins need __multi3, __udivti3, __fixdfti
@@ -1450,7 +1475,11 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
     // println!("\npreprocess_host_wasm32");
     // println!("zig {}\n", args.join(" "));
 
-    run_build_command(zig_cmd, output_file, 0)
+    run_build_command(zig_cmd, output_file, 0);
+
+    // Extend the lifetime of the tempfile so it doesn't get dropped
+    // (and thus deleted) before the Zig process is done using it!
+    let _ = builtins_host_tempfile;
 }
 
 fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_counter: usize) {

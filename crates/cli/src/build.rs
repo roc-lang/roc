@@ -4,7 +4,7 @@ use roc_build::{
         legacy_host_filename, link, preprocess_host_wasm32, preprocessed_host_filename,
         rebuild_host, LinkType, LinkingStrategy,
     },
-    program::{self, CodeGenOptions, Problems},
+    program::{self, CodeGenOptions},
 };
 use roc_builtins::bitcode;
 use roc_load::{
@@ -12,12 +12,14 @@ use roc_load::{
     LoadingProblem, Threading,
 };
 use roc_mono::ir::OptLevel;
-use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
+use roc_reporting::{
+    cli::Problems,
+    report::{RenderTarget, DEFAULT_PALETTE},
+};
 use roc_target::TargetInfo;
 use std::time::{Duration, Instant};
 use std::{path::PathBuf, thread::JoinHandle};
 use target_lexicon::Triple;
-use tempfile::Builder;
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     use std::fmt::Write;
@@ -352,7 +354,7 @@ pub fn build_file<'a>(
             problems
         }
         (LinkingStrategy::Legacy, _) => {
-            let app_o_file = Builder::new()
+            let app_o_file = tempfile::Builder::new()
                 .prefix("roc_app")
                 .suffix(&format!(".{}", app_extension))
                 .tempfile()
@@ -366,10 +368,21 @@ pub fn build_file<'a>(
                 app_o_file.to_str().unwrap(),
             ];
 
-            let str_host_obj_path = bitcode::get_builtins_host_obj_path();
+            let builtins_host_tempfile = {
+                #[cfg(unix)]
+                {
+                    bitcode::host_unix_tempfile()
+                }
+
+                #[cfg(windows)]
+                {
+                    bitcode::host_windows_tempfile()
+                }
+            }
+            .expect("failed to write host builtins object to tempfile");
 
             if matches!(code_gen_options.backend, program::CodeGenBackend::Assembly) {
-                inputs.push(&str_host_obj_path);
+                inputs.push(builtins_host_tempfile.path().to_str().unwrap());
             }
 
             let (mut child, _) = link(target, binary_path.clone(), &inputs, link_type)
@@ -378,6 +391,10 @@ pub fn build_file<'a>(
             let exit_status = child
                 .wait()
                 .map_err(|_| todo!("gracefully handle error after `ld` spawned"))?;
+
+            // Extend the lifetime of the tempfile so it doesn't get dropped
+            // (and thus deleted) before the child process is done using it!
+            let _ = builtins_host_tempfile;
 
             if exit_status.success() {
                 problems
@@ -466,7 +483,7 @@ pub fn check_file(
     roc_file_path: PathBuf,
     emit_timings: bool,
     threading: Threading,
-) -> Result<(program::Problems, Duration), LoadingProblem> {
+) -> Result<(Problems, Duration), LoadingProblem> {
     let compilation_start = Instant::now();
 
     // only used for generating errors. We don't do code generation, so hardcoding should be fine

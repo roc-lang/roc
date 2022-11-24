@@ -6,8 +6,9 @@ use std::fmt::Debug;
 /// In practice, this saves space, since small numbers used more often than large numbers.
 /// Of course there is a price for this - an encoded U32 can be up to 5 bytes wide.
 pub const MAX_SIZE_ENCODED_U32: usize = 5;
+pub const MAX_SIZE_ENCODED_U64: usize = 10;
 
-pub(super) trait Serialize {
+pub trait Serialize {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T);
 }
 

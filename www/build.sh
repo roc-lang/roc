@@ -13,20 +13,14 @@ rm -rf build/
 cp -r public/ build/
 
 # download fonts just-in-time so we don't have to bloat the repo with them.
-mkdir build/fonts
-pushd build/fonts
+DESIGN_ASSETS_COMMIT="4d949642ebc56ca455cf270b288382788bce5873"
+DESIGN_ASSETS_TARFILE="roc-lang-design-assets-4d94964.tar.gz"
+DESIGN_ASSETS_DIR="roc-lang-design-assets-4d94964"
 
-wget -O PermanentMarker.woff2 https://fonts.gstatic.com/s/permanentmarker/v16/Fh4uPib9Iyv2ucM6pGQMWimMp004La2Cf5b6jlg.woff2
-wget -O MerriweatherExt.woff2 https://fonts.gstatic.com/s/merriweather/v30/u-440qyriQwlOrhSvowK_l5-ciZMdeX3rsHo.woff2
-wget -O Merriweather.woff2 https://fonts.gstatic.com/s/merriweather/v30/u-440qyriQwlOrhSvowK_l5-fCZMdeX3rg.woff2
-wget -O MerriweatherSansExt.woff https://fonts.gstatic.com/s/merriweathersans/v22/2-cO9IRs1JiJN1FRAMjTN5zd9vgsFF_5asQTb6hZ2JKZou4Vh-sBzRRXnKOrnx4.woff
-wget -O MerriweatherSans.woff  https://fonts.gstatic.com/s/merriweathersans/v22/2-cO9IRs1JiJN1FRAMjTN5zd9vgsFF_5asQTb6hZ2JKZou4ViesBzRRXnKOr.woff 
-wget -O LatoExt.woff2 https://fonts.gstatic.com/s/lato/v23/S6uyw4BMUTPHjxAwXiWtFCfQ7A.woff2
-wget -O Lato.woff2 https://fonts.gstatic.com/s/lato/v23/S6uyw4BMUTPHjx4wXiWtFCc.woff2
-wget -O SourceCodeProExt.woff https://fonts.gstatic.com/s/sourcecodepro/v22/HI_diYsKILxRpg3hIP6sJ7fM7PqPMcMnZFqUwX28DMyQtMdrSlcZZJmOpwVS.woff
-wget -O SourceCodePro.woff https://fonts.gstatic.com/s/sourcecodepro/v22/HI_diYsKILxRpg3hIP6sJ7fM7PqPMcMnZFqUwX28DMyQtMlrSlcZZJmOpw.woff
-
-popd
+wget -O $DESIGN_ASSETS_TARFILE https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT
+tar -xzf $DESIGN_ASSETS_TARFILE
+mv $DESIGN_ASSETS_DIR/fonts build/
+rm -rf $DESIGN_ASSETS_TARFILE $DESIGN_ASSETS_DIR
 
 # grab the source code and copy it to Netlify's server; if it's not there, fail the build.
 pushd build

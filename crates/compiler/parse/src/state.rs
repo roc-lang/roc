@@ -58,9 +58,9 @@ impl<'a> State<'a> {
         &self,
         indent: u32,
         e: impl Fn(Position) -> E,
-    ) -> Result<u32, (Progress, E, State<'a>)> {
+    ) -> Result<u32, (Progress, E)> {
         if self.column() < indent {
-            Err((Progress::NoProgress, e(self.pos()), self.clone()))
+            Err((Progress::NoProgress, e(self.pos())))
         } else {
             Ok(std::cmp::max(indent, self.line_indent()))
         }

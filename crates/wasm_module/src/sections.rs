@@ -4,11 +4,13 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
 
+use crate::DUMMY_FUNCTION;
+
 use super::linking::{LinkingSection, SymInfo, WasmObjectSymbol};
 use super::opcodes::OpCode;
 use super::parse::{Parse, ParseError, SkipBytes};
 use super::serialize::{SerialBuffer, Serialize, MAX_SIZE_ENCODED_U32};
-use super::{CodeBuilder, ValueType};
+use super::ValueType;
 
 /*******************************************************************
  *
@@ -218,6 +220,14 @@ pub struct TypeSection<'a> {
 }
 
 impl<'a> TypeSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        TypeSection {
+            arena,
+            bytes: Vec::new_in(arena),
+            offsets: Vec::new_in(arena),
+        }
+    }
+
     /// Find a matching signature or insert a new one. Return the index.
     pub fn insert(&mut self, signature: Signature<'a>) -> u32 {
         let mut sig_bytes = Vec::with_capacity_in(signature.param_types.len() + 4, self.arena);
@@ -423,6 +433,12 @@ pub struct ImportSection<'a> {
 impl<'a> ImportSection<'a> {
     const ID: SectionId = SectionId::Import;
 
+    pub fn new(arena: &'a Bump) -> Self {
+        ImportSection {
+            imports: Vec::new_in(arena),
+        }
+    }
+
     pub fn size(&self) -> usize {
         self.imports.iter().map(|imp| imp.size()).sum()
     }
@@ -486,6 +502,12 @@ pub struct FunctionSection<'a> {
 }
 
 impl<'a> FunctionSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        FunctionSection {
+            signatures: Vec::new_in(arena),
+        }
+    }
+
     pub fn add_sig(&mut self, sig_id: u32) {
         self.signatures.push(sig_id);
     }
@@ -525,8 +547,8 @@ impl<'a> Serialize for FunctionSection<'a> {
  *
  * Table section
  *
- * Defines tables used for indirect references to host memory.
- * The table *contents* are elsewhere, in the ElementSection.
+ * Defines tables used for indirect references to external code or data.
+ * The table *contents* are in the ElementSection.
  *
  *******************************************************************/
 
@@ -587,6 +609,16 @@ pub struct TableSection {
 
 impl TableSection {
     const ID: SectionId = SectionId::Table;
+
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        TableSection {
+            function_table: TableType {
+                ref_type: RefType::Func,
+                limits: Limits::Min(0),
+            },
+        }
+    }
 
     pub fn size(&self) -> usize {
         let section_id_bytes = 1;
@@ -878,6 +910,13 @@ pub struct GlobalSection<'a> {
 }
 
 impl<'a> GlobalSection<'a> {
+    pub fn new(arena: &'a Bump) -> Self {
+        GlobalSection {
+            count: 0,
+            bytes: Vec::new_in(arena),
+        }
+    }
+
     pub fn parse_u32_at_index(&self, index: u32) -> Result<u32, ParseError> {
         let mut cursor = 0;
         for _ in 0..index {
@@ -958,6 +997,12 @@ pub struct ExportSection<'a> {
 
 impl<'a> ExportSection<'a> {
     const ID: SectionId = SectionId::Export;
+
+    pub fn new(arena: &'a Bump) -> Self {
+        ExportSection {
+            exports: Vec::new_in(arena),
+        }
+    }
 
     pub fn append(&mut self, export: Export<'a>) {
         self.exports.push(export);
@@ -1084,6 +1129,12 @@ pub struct ElementSection<'a> {
 impl<'a> ElementSection<'a> {
     const ID: SectionId = SectionId::Element;
 
+    pub fn new(arena: &'a Bump) -> Self {
+        ElementSection {
+            segments: Vec::new_in(arena),
+        }
+    }
+
     /// Get a table index for a function (equivalent to a function pointer)
     /// The function will be inserted into the table if it's not already there.
     /// This index is what the call_indirect instruction expects.
@@ -1168,20 +1219,26 @@ impl<'a> Serialize for ElementSection<'a> {
 
 #[derive(Debug)]
 pub struct CodeSection<'a> {
-    pub preloaded_count: u32,
-    pub preloaded_bytes: Vec<'a, u8>,
+    pub function_count: u32,
+    pub bytes: Vec<'a, u8>,
     /// The start of each preloaded function
-    pub preloaded_offsets: Vec<'a, u32>,
+    pub function_offsets: Vec<'a, u32>,
     /// Dead imports are replaced with dummy functions in CodeSection
     pub dead_import_dummy_count: u32,
-    pub code_builders: Vec<'a, CodeBuilder<'a>>,
 }
 
 impl<'a> CodeSection<'a> {
-    pub fn size(&self) -> usize {
-        let builders_size: usize = self.code_builders.iter().map(|cb| cb.size()).sum();
+    pub fn new(arena: &'a Bump) -> Self {
+        CodeSection {
+            function_count: 0,
+            bytes: Vec::new_in(arena),
+            function_offsets: Vec::new_in(arena),
+            dead_import_dummy_count: 0,
+        }
+    }
 
-        MAX_SIZE_SECTION_HEADER + self.preloaded_bytes.len() + builders_size
+    pub fn size(&self) -> usize {
+        MAX_SIZE_SECTION_HEADER + self.bytes.len()
     }
 
     pub fn parse(
@@ -1196,39 +1253,34 @@ impl<'a> CodeSection<'a> {
             });
         }
         *cursor += 1;
-        let section_size = u32::parse((), module_bytes, cursor)?;
+        let section_size = u32::parse((), module_bytes, cursor)? as usize;
         let section_body_start = *cursor;
-        let count = u32::parse((), module_bytes, cursor)?;
-        let function_bodies_start = *cursor;
-        let next_section_start = section_body_start + section_size as usize;
+        let function_count = u32::parse((), module_bytes, cursor)?;
+        let next_section_start = section_body_start + section_size;
 
-        // preloaded_bytes starts at the function count, since that's considered the zero offset in the linker data.
-        // But when we finally write to file, we'll exclude the function count and write our own, including app fns.
-        let mut preloaded_bytes =
-            Vec::with_capacity_in(next_section_start - function_bodies_start, arena);
-        preloaded_bytes.extend_from_slice(&module_bytes[section_body_start..*cursor]);
+        // `bytes` must include the function count for linker offsets to be correct.
+        let mut bytes = Vec::with_capacity_in(section_size + section_size / 2, arena);
+        bytes.extend_from_slice(&module_bytes[section_body_start..*cursor]);
 
-        let mut preloaded_offsets = Vec::with_capacity_in(count as usize, arena);
+        let mut function_offsets = Vec::with_capacity_in(function_count as usize, arena);
 
         // While copying the code bytes, also note where each function starts & ends
         // Later we will use this for dead code elimination
         while *cursor < next_section_start {
             let fn_start = *cursor;
-            preloaded_offsets.push((fn_start - section_body_start) as u32);
+            function_offsets.push((fn_start - section_body_start) as u32);
             let fn_length = u32::parse((), module_bytes, cursor)? as usize;
             *cursor += fn_length;
-            preloaded_bytes.extend_from_slice(&module_bytes[fn_start..*cursor]);
+            bytes.extend_from_slice(&module_bytes[fn_start..*cursor]);
         }
-        preloaded_offsets.push((next_section_start - section_body_start) as u32);
 
-        debug_assert_eq!(preloaded_offsets.len(), 1 + count as usize);
+        debug_assert_eq!(function_offsets.len(), function_count as usize);
 
         Ok(CodeSection {
-            preloaded_count: count,
-            preloaded_bytes,
-            preloaded_offsets,
+            function_count,
+            bytes,
+            function_offsets,
             dead_import_dummy_count: 0,
-            code_builders: Vec::with_capacity_in(0, arena),
         })
     }
 }
@@ -1236,26 +1288,17 @@ impl<'a> CodeSection<'a> {
 impl<'a> Serialize for CodeSection<'a> {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         let header_indices = write_section_header(buffer, SectionId::Code);
-        buffer.encode_u32(
-            self.dead_import_dummy_count + self.preloaded_count + self.code_builders.len() as u32,
-        );
+        buffer.encode_u32(self.dead_import_dummy_count + self.function_count);
 
         // Insert dummy functions, requested by our linking logic.
         // This helps to minimise the number of functions we need to move around during linking.
-        let arena = self.code_builders[0].arena;
-        let dummy = CodeBuilder::dummy(arena);
         for _ in 0..self.dead_import_dummy_count {
-            dummy.serialize(buffer);
+            DUMMY_FUNCTION.serialize(buffer);
         }
 
-        // host + builtin functions
-        let first_fn_start = self.preloaded_offsets[0] as usize;
-        buffer.append_slice(&self.preloaded_bytes[first_fn_start..]);
-
-        // Roc functions
-        for code_builder in self.code_builders.iter() {
-            code_builder.serialize(buffer);
-        }
+        // real functions
+        let first_fn_start = self.function_offsets[0] as usize;
+        buffer.append_slice(&self.bytes[first_fn_start..]);
 
         update_section_size(buffer, header_indices);
     }
@@ -1344,6 +1387,14 @@ pub struct DataSection<'a> {
 impl<'a> DataSection<'a> {
     const ID: SectionId = SectionId::Data;
 
+    pub fn new(arena: &'a Bump) -> Self {
+        DataSection {
+            end_addr: 0,
+            count: 0,
+            bytes: Vec::new_in(arena),
+        }
+    }
+
     pub fn size(&self) -> usize {
         MAX_SIZE_SECTION_HEADER + self.bytes.len()
     }
@@ -1409,6 +1460,10 @@ pub struct OpaqueSection<'a> {
 }
 
 impl<'a> OpaqueSection<'a> {
+    pub fn new() -> Self {
+        OpaqueSection { bytes: &[] }
+    }
+
     pub fn size(&self) -> usize {
         self.bytes.len()
     }
@@ -1479,7 +1534,7 @@ impl<'a> NameSection<'a> {
         self.function_names.push((index, name));
     }
 
-    pub fn empty(arena: &'a Bump) -> Self {
+    pub fn new(arena: &'a Bump) -> Self {
         NameSection {
             function_names: bumpalo::vec![in arena],
         }
@@ -1517,12 +1572,12 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
 
         // If we're already past the end of the preloaded file then there is no Name section
         if *cursor >= module_bytes.len() {
-            return Ok(Self::empty(arena));
+            return Ok(Self::new(arena));
         }
 
         // Custom section ID
         if module_bytes[*cursor] != Self::ID as u8 {
-            return Ok(Self::empty(arena));
+            return Ok(Self::new(arena));
         }
         *cursor += 1;
 
@@ -1535,7 +1590,7 @@ impl<'a> Parse<&'a Bump> for NameSection<'a> {
             // This is a different Custom section. This host has no debug info.
             // Not a parse error, just an empty section.
             *cursor = cursor_start;
-            return Ok(Self::empty(arena));
+            return Ok(Self::new(arena));
         }
 
         // Find function names subsection

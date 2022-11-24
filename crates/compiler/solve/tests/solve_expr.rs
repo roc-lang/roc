@@ -380,7 +380,6 @@ mod solve_expr {
         let known_specializations = abilities_store.iter_declared_implementations().filter_map(
             |(impl_key, member_impl)| match member_impl {
                 MemberImpl::Impl(impl_symbol) => {
-                    dbg!(impl_symbol);
                     let specialization = abilities_store.specialization_info(*impl_symbol).expect(
                         "declared implementations should be resolved conclusively after solving",
                     );
@@ -8199,6 +8198,31 @@ mod solve_expr {
     }
 
     #[test]
+    fn inferred_fixed_fixpoints() {
+        infer_queries!(
+            indoc!(
+                r#"
+                 app "test" provides [job] to "./platform"
+
+                 F : [Bar, FromG G]
+                 G : [G {lst : List F}]
+
+                 job : { lst : List F } -> G
+                 job = \config -> G config
+                 #^^^{-1}
+                 #      ^^^^^^    ^^^^^^^^
+                 "#
+            ),
+        @r###"
+        job : { lst : List [Bar, FromG a] } -[[job(0)]]-> [G { lst : List [Bar, FromG a] }] as a
+        config : { lst : List [Bar, FromG ([G { lst : List [Bar, FromG a] }] as a)] }
+        G config : [G { lst : List [Bar, FromG a] }] as a
+        "###
+        print_only_under_alias: true
+        );
+    }
+
+    #[test]
     fn fix_recursion_under_alias_issue_4368() {
         infer_eq_without_problem(
             indoc!(
@@ -8218,7 +8242,7 @@ mod solve_expr {
                 "#
             ),
             "{} -> Task",
-        )
+        );
     }
 
     #[test]
@@ -8257,5 +8281,75 @@ mod solve_expr {
             ),
             "MDict v -> MDict v | v has Eq",
         );
+    }
+
+    #[test]
+    fn unify_types_with_fixed_fixpoints_outside_fixing_region() {
+        infer_queries!(indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Input := [
+                FromJob Job
+            ]
+
+            Job := [
+                Job (List Input)
+            ]
+
+            job : List Input -> Job
+            job = \inputs ->
+                @Job (Job inputs)
+
+            helloWorld : Job
+            helloWorld =
+                @Job ( Job [ @Input (FromJob greeting) ] )
+                #            ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+            greeting : Job
+            greeting =
+                job []
+
+            main = (\_ -> "Which platform am I running on now?\n") helloWorld
+            "#
+        ),
+        @r###"
+        @Input (FromJob greeting) : [FromJob ([Job (List [FromJob a])] as a)]
+        "###
+        print_only_under_alias: true
+        )
+    }
+
+    #[test]
+    fn infer_concrete_type_with_inference_var() {
+        infer_queries!(indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+
+            f : _ -> {}
+            f = \_ -> f {}
+            #^{-1}
+            "#
+        ),
+        @r###"
+        f : {} -[[f(0)]]-> {}
+        "###
+        )
+    }
+
+    #[test]
+    fn solve_inference_var_in_annotation_requiring_recursion_fix() {
+        infer_queries!(indoc!(
+            r#"
+            app "test" provides [translateStatic] to "./platform"
+
+            translateStatic : _ -> _
+            translateStatic = \Element c ->
+            #^^^^^^^^^^^^^^^{-1}
+                Element (List.map c translateStatic)
+            "#
+        ),
+        @"translateStatic : [Element (List a)] as a -[[translateStatic(0)]]-> [Element (List b)]* as b"
+        )
     }
 }

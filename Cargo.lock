@@ -3672,6 +3672,7 @@ dependencies = [
  "roc_mono",
  "roc_std",
  "roc_target",
+ "roc_wasm_module",
 ]
 
 [[package]]
@@ -3993,6 +3994,7 @@ dependencies = [
  "roc_target",
  "roc_types",
  "roc_utils",
+ "tempfile",
  "wasi_libc_sys",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -4150,6 +4152,24 @@ name = "roc_utils"
 version = "0.0.1"
 dependencies = [
  "snafu",
+]
+
+[[package]]
+name = "roc_wasm_interp"
+version = "0.1.0"
+dependencies = [
+ "bitvec 1.0.1",
+ "bumpalo",
+ "roc_wasm_module",
+]
+
+[[package]]
+name = "roc_wasm_module"
+version = "0.0.1"
+dependencies = [
+ "bitvec 1.0.1",
+ "bumpalo",
+ "roc_error_macros",
 ]
 
 [[package]]
@@ -4864,6 +4884,7 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "roc_utils",
+ "roc_wasm_module",
  "target-lexicon",
  "tempfile",
  "wasi_libc_sys",
