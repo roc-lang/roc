@@ -4393,16 +4393,20 @@ mod test_reporting {
     test_report!(
         comment_with_tab,
         "# comment with a \t\n4",
-        @r###"
-    ── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            &format!(
+                r###"── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
 
-    I encountered a tab character
+I encountered a tab character
 
-    4│      # comment with a
-                             ^
+4│      # comment with a {}
+                         ^
 
-    Tab characters are not allowed.
-    "###
+Tab characters are not allowed."###,
+                "\t"
+            )
+        )
     );
 
     // TODO bad error message
@@ -5680,23 +5684,27 @@ All branches in an `if` must have the same type!
             main = 5 -> 3
             "#
         ),
-        @r###"
-    ── UNKNOWN OPERATOR ───────────────────────────── tmp/wild_case_arrow/Test.roc ─
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            &format!(
+                r###"── UNKNOWN OPERATOR ───────────────────────────── tmp/wild_case_arrow/Test.roc ─
 
-    This looks like an operator, but it's not one I recognize!
+This looks like an operator, but it's not one I recognize!
 
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      main = 5 -> 3
-                     ^^
+1│  app "test" provides [main] to "./platform"
+2│
+3│  main =
+4│      main = 5 -> 3
+                 ^^
 
-    Looks like you are trying to define a function.
+Looks like you are trying to define a function.{}
 
-    In roc, functions are always written as a lambda, like
+In roc, functions are always written as a lambda, like{}
 
-        increment = \n -> n + 1
-    "###
+    increment = \n -> n + 1"###,
+                ' ', ' '
+            )
+        )
     );
 
     #[test]
@@ -9965,16 +9973,21 @@ All branches in an `if` must have the same type!
             f 1 _ 1
             "#
         ),
-        @r###"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            &format!(
+                r###"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    Underscores are not allowed in identifier names:
+Underscores are not allowed in identifier names:
 
-    6│      f 1 _ 1
+6│      f 1 _ 1
+{}
 
-
-    I recommend using camelCase, it is the standard in the Roc ecosystem.
-    "###
+I recommend using camelCase. It's the standard style in Roc code!
+"###,
+                "  " // TODO make the reporter not insert extraneous spaces here in the first place!
+            ),
+        )
     );
 
     test_report!(
