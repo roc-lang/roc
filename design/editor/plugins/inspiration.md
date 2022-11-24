@@ -1,0 +1,5 @@
+- [Hazel Livelits](https://hazel.org/papers/livelits-paper.pdf) interactive plugins, see GIF's [here](https://twitter.com/disconcision/status/1408155781120376833).
+- [Boop](https://github.com/IvanMathy/Boop) scriptable scratchpad for developers. Contains collection of useful conversions: json formatting, url encoding, encode to base64...
+- [processing](https://processing.org) Interactive editor, dragging left or right with mouse to change values. Instant results.
+- [flowistry](https://github.com/willcrichton/flowistry) easily track all named values in a certain expression throughout your program.
+- Match blocks of assembly with lines of code: [link](https://twitter.com/dgryski/status/1547952259828330498).

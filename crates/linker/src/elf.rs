@@ -1576,7 +1576,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn zig_host_app_help(dir: &Path) {
+    fn zig_host_app_help(dir: &Path, target: &Triple) {
         let host_zig = indoc!(
             r#"
             const std = @import("std");
@@ -1670,8 +1670,7 @@ mod tests {
             panic!("zig build-exe failed");
         }
 
-        let preprocessed_host_filename =
-            dir.join(preprocessed_host_filename(&Triple::host()).unwrap());
+        let preprocessed_host_filename = dir.join(preprocessed_host_filename(target).unwrap());
 
         preprocess_elf(
             target_lexicon::Endianness::Little,
@@ -1697,10 +1696,12 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn zig_host_app() {
+        use std::str::FromStr;
+
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
 
-        zig_host_app_help(dir);
+        zig_host_app_help(dir, &Triple::from_str("x86_64-unknown-linux-musl").unwrap());
 
         let output = std::process::Command::new(&dir.join("final"))
             .current_dir(dir)

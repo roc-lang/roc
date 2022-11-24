@@ -14,6 +14,7 @@ path = "src/tests.rs"
 roc_builtins = { path = "../builtins" }
 roc_utils = { path = "../../utils" }
 wasi_libc_sys = { path = "../../wasi-libc-sys" }
+tempfile.workspace = true
 
 [dev-dependencies]
 roc_gen_llvm = { path = "../gen_llvm" }
@@ -40,6 +41,7 @@ roc_target = { path = "../roc_target" }
 roc_error_macros = { path = "../../error_macros" }
 roc_std = { path = "../../roc_std"  }
 roc_debug_flags = {path="../debug_flags"}
+roc_wasm_module = {path="../../wasm_module"}
 
 bumpalo.workspace = true
 libc.workspace = true

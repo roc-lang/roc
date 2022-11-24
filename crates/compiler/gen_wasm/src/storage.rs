@@ -6,9 +6,10 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Layout, STLayoutInterner};
 
+use crate::code_builder::{CodeBuilder, VmSymbolState};
 use crate::layout::{CallConv, ReturnMethod, StackMemoryFormat, WasmLayout};
-use crate::wasm_module::{Align, CodeBuilder, LocalId, ValueType, VmSymbolState};
-use crate::{copy_memory, round_up_to_alignment, CopyMemoryConfig, PTR_TYPE};
+use crate::{copy_memory, CopyMemoryConfig, PTR_TYPE};
+use roc_wasm_module::{round_up_to_alignment, Align, LocalId, ValueType};
 
 pub enum StoredVarKind {
     Variable,
@@ -592,7 +593,7 @@ impl<'a> Storage<'a> {
             | StoredValue::Local {
                 value_type, size, ..
             } => {
-                use crate::wasm_module::Align::*;
+                use roc_wasm_module::Align::*;
                 code_builder.get_local(to_ptr);
                 self.load_symbols(code_builder, &[from_symbol]);
                 match (value_type, size) {
@@ -666,7 +667,7 @@ impl<'a> Storage<'a> {
             | StoredValue::Local {
                 value_type, size, ..
             } => {
-                use crate::wasm_module::Align::*;
+                use roc_wasm_module::Align::*;
 
                 if let AddressValue::NotLoaded(from_ptr) = from_addr {
                     code_builder.get_local(from_ptr);

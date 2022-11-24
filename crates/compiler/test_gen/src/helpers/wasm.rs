@@ -2,10 +2,10 @@ use super::RefCount;
 use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
-use roc_gen_wasm::wasm_module::{Export, ExportType};
 use roc_gen_wasm::DEBUG_SETTINGS;
 use roc_load::{ExecutionMode, LoadConfig, Threading};
 use roc_reporting::report::DEFAULT_PALETTE_HTML;
+use roc_wasm_module::{Export, ExportType};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -138,10 +138,11 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         )
     });
 
-    let (mut module, called_preload_fns, main_fn_index) =
+    let (mut module, mut called_fns, main_fn_index) =
         roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
 
     T::insert_wrapper(arena, &mut module, TEST_WRAPPER_NAME, main_fn_index);
+    called_fns.push(true);
 
     // Export the initialiser function for refcount tests
     let init_refcount_idx = module
@@ -158,7 +159,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         index: init_refcount_idx,
     });
 
-    module.eliminate_dead_code(env.arena, called_preload_fns);
+    module.eliminate_dead_code(env.arena, called_fns);
 
     let mut app_module_bytes = std::vec::Vec::with_capacity(module.size());
     module.serialize(&mut app_module_bytes);

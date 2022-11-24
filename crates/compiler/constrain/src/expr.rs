@@ -1815,7 +1815,6 @@ fn constrain_function_def(
                     signature_closure_type_index,
                 ))
             };
-            let signature_index = constraints.push_type(types, signature);
             let cons = [
                 constraints.let_constraint(
                     [],
@@ -3308,8 +3307,6 @@ fn constraint_recursive_function(
 
             let loc_pattern = Loc::at(loc_symbol.region, Pattern::Identifier(loc_symbol.value));
 
-            flex_info.vars.extend(new_infer_variables);
-
             let signature_index = constraints.push_type(types, signature);
 
             let annotation_expected = constraints.push_expected_type(FromAnnotation(
@@ -3433,14 +3430,38 @@ fn constraint_recursive_function(
             let def_con = constraints.exists(vars, and_constraint);
 
             rigid_info.vars.extend(&new_rigid_variables);
+            flex_info.vars.extend(&new_infer_variables);
 
-            rigid_info.constraints.push(constraints.let_constraint(
-                new_rigid_variables,
-                def_pattern_state.vars,
-                [], // no headers introduced (at this level)
-                def_con,
-                Constraint::True,
-            ));
+            rigid_info.constraints.push({
+                // Solve the body of the recursive function, making sure it lines up with the
+                // signature.
+                //
+                // This happens when we're checking that the def of a recursive function actually
+                // aligns with what the (mutually-)recursive signature says, so finish
+                // generalization of the function.
+                let rigids = new_rigid_variables;
+                let flex = def_pattern_state
+                    .vars
+                    .into_iter()
+                    .chain(new_infer_variables);
+
+                constraints.let_constraint(
+                    rigids,
+                    flex,
+                    // Although we will have already introduced the headers of the def in the
+                    // outermost scope when we introduced the rigid variables, we now re-introduce
+                    // them to force an occurs check and appropriate fixing, since we might end up
+                    // inferring recursive types at inference variable points. E.g.
+                    //
+                    //   f : _ -> _
+                    //   f = \F c -> F (List.map f c)
+                    //
+                    // TODO: I (Ayaz) believe we can considerably simplify all this.
+                    def_pattern_state.headers.clone(),
+                    def_con,
+                    Constraint::True,
+                )
+            });
             rigid_info.def_types.extend(def_pattern_state.headers);
         }
     }

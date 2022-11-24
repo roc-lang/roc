@@ -846,7 +846,7 @@ mod test_parse {
             Ok((_, _, _state)) => {
                 // dbg!(_state);
             }
-            Err((_, _fail, _state)) => {
+            Err((_, _fail)) => {
                 // dbg!(_fail, _state);
                 panic!("Failed to parse!");
             }

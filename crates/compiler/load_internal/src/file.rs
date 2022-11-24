@@ -5047,11 +5047,11 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
     let parse_start = Instant::now();
     let source = header.parse_state.original_bytes();
     let parse_state = header.parse_state;
-    let parsed_defs = match module_defs().parse(arena, parse_state, 0) {
+    let parsed_defs = match module_defs().parse(arena, parse_state.clone(), 0) {
         Ok((_, success, _state)) => success,
-        Err((_, fail, state)) => {
+        Err((_, fail)) => {
             return Err(LoadingProblem::ParsingFailed(
-                fail.into_file_error(header.module_path, &state),
+                fail.into_file_error(header.module_path, &parse_state),
             ));
         }
     };

@@ -1,4 +1,4 @@
-use super::serialize::MAX_SIZE_ENCODED_U32;
+use super::serialize::{MAX_SIZE_ENCODED_U32, MAX_SIZE_ENCODED_U64};
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
@@ -86,6 +86,43 @@ impl Parse<()> for i32 {
                 message: format!(
                     "Failed to decode i32 as LEB-128 from bytes: {:2x?}",
                     &bytes[*cursor..][..MAX_SIZE_ENCODED_U32]
+                ),
+            }),
+        }
+    }
+}
+
+/// Decode a signed 64-bit integer from the provided buffer in LEB-128 format
+/// Return the integer itself and the offset after it ends
+fn decode_i64(bytes: &[u8]) -> Result<(i64, usize), ()> {
+    let mut value = 0;
+    let mut shift = 0;
+    for (i, byte) in bytes.iter().take(MAX_SIZE_ENCODED_U64).enumerate() {
+        value |= ((byte & 0x7f) as i64) << shift;
+        if (byte & 0x80) == 0 {
+            let is_negative = byte & 0x40 != 0;
+            if shift < MAX_SIZE_ENCODED_U64 && is_negative {
+                value |= -1 << shift;
+            }
+            return Ok((value, i + 1));
+        }
+        shift += 7;
+    }
+    Err(())
+}
+
+impl Parse<()> for i64 {
+    fn parse(_ctx: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        match decode_i64(&bytes[*cursor..]) {
+            Ok((value, len)) => {
+                *cursor += len;
+                Ok(value)
+            }
+            Err(()) => Err(ParseError {
+                offset: *cursor,
+                message: format!(
+                    "Failed to decode i64 as LEB-128 from bytes: {:2x?}",
+                    &bytes[*cursor..][..MAX_SIZE_ENCODED_U64]
                 ),
             }),
         }
@@ -204,7 +241,7 @@ impl SkipBytes for String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wasm_module::parse::decode_u32;
+    use crate::parse::decode_u32;
 
     #[test]
     fn test_decode_u32() {

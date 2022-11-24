@@ -4,7 +4,7 @@ use roc_build::{
         legacy_host_filename, link, preprocess_host_wasm32, preprocessed_host_filename,
         rebuild_host, LinkType, LinkingStrategy,
     },
-    program::{self, CodeGenOptions, Problems},
+    program::{self, CodeGenOptions},
 };
 use roc_builtins::bitcode;
 use roc_load::{
@@ -13,12 +13,14 @@ use roc_load::{
 };
 use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
-use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
+use roc_reporting::{
+    cli::Problems,
+    report::{RenderTarget, DEFAULT_PALETTE},
+};
 use roc_target::TargetInfo;
 use std::time::{Duration, Instant};
 use std::{path::PathBuf, thread::JoinHandle};
 use target_lexicon::Triple;
-use tempfile::Builder;
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     use std::fmt::Write;
@@ -110,19 +112,27 @@ pub fn build_file<'a>(
         }
     };
 
-    let (app_extension, extension) = {
+    let (app_extension, extension, host_filename) = {
         use roc_target::OperatingSystem::*;
 
         match roc_target::OperatingSystem::from(target.operating_system) {
             Wasi => {
                 if matches!(code_gen_options.opt_level, OptLevel::Development) {
-                    ("wasm", Some("wasm"))
+                    ("wasm", Some("wasm"), "host.zig".to_string())
                 } else {
-                    ("bc", Some("wasm"))
+                    ("bc", Some("wasm"), "host.zig".to_string())
                 }
             }
-            Unix => ("o", None),
-            Windows => ("obj", Some("exe")),
+            Unix => (
+                "o",
+                None,
+                legacy_host_filename(target, code_gen_options.opt_level).unwrap(),
+            ),
+            Windows => (
+                "obj",
+                Some("exe"),
+                legacy_host_filename(target, code_gen_options.opt_level).unwrap(),
+            ),
         }
     };
 
@@ -135,8 +145,7 @@ pub fn build_file<'a>(
 
     let host_input_path = if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point
     {
-        cwd.join(platform_path)
-            .with_file_name(legacy_host_filename(target, code_gen_options.opt_level).unwrap())
+        cwd.join(platform_path).with_file_name(host_filename)
     } else {
         unreachable!();
     };
@@ -166,19 +175,18 @@ pub fn build_file<'a>(
         })
         .collect();
 
-    let preprocessed_host_path = match linking_strategy {
-        LinkingStrategy::Surgical | LinkingStrategy::Additive => {
-            host_input_path.with_file_name(preprocessed_host_filename(target).unwrap())
-        }
-        LinkingStrategy::Legacy => host_input_path
-            .with_file_name(legacy_host_filename(target, code_gen_options.opt_level).unwrap()),
+    let preprocessed_host_path = if linking_strategy == LinkingStrategy::Legacy {
+        host_input_path
+            .with_file_name(legacy_host_filename(target, code_gen_options.opt_level).unwrap())
+    } else {
+        host_input_path.with_file_name(preprocessed_host_filename(target).unwrap())
     };
 
     // We don't need to spawn a rebuild thread when using a prebuilt host.
-    let rebuild_thread = if prebuilt || loaded.uses_prebuilt_platform {
+    let rebuild_thread = if prebuilt {
         if !preprocessed_host_path.exists() {
             eprintln!(
-                "\nSince I was run with --prebuilt-platform=true, I was expecting this file to exist:\n\n    {}\n\nHowever, it was not there!\n\nIf you have the platform's source code locally, you may be able to regenerate it by re-running this command with --prebuilt-platform=false\n",
+                "\nBecause I was run with --prebuilt-platform=true, I was expecting this file to exist:\n\n    {}\n\nHowever, it was not there!\n\nIf you have the platform's source code locally, you may be able to regenerate it by re-running this command with --prebuilt-platform=false\n",
                 preprocessed_host_path.to_string_lossy()
             );
 
@@ -350,7 +358,7 @@ pub fn build_file<'a>(
             problems
         }
         (LinkingStrategy::Legacy, _) => {
-            let app_o_file = Builder::new()
+            let app_o_file = tempfile::Builder::new()
                 .prefix("roc_app")
                 .suffix(&format!(".{}", app_extension))
                 .tempfile()
@@ -364,10 +372,21 @@ pub fn build_file<'a>(
                 app_o_file.to_str().unwrap(),
             ];
 
-            let str_host_obj_path = bitcode::get_builtins_host_obj_path();
+            let builtins_host_tempfile = {
+                #[cfg(unix)]
+                {
+                    bitcode::host_unix_tempfile()
+                }
+
+                #[cfg(windows)]
+                {
+                    bitcode::host_windows_tempfile()
+                }
+            }
+            .expect("failed to write host builtins object to tempfile");
 
             if matches!(code_gen_options.backend, program::CodeGenBackend::Assembly) {
-                inputs.push(&str_host_obj_path);
+                inputs.push(builtins_host_tempfile.path().to_str().unwrap());
             }
 
             let (mut child, _) = link(target, binary_path.clone(), &inputs, link_type)
@@ -376,6 +395,10 @@ pub fn build_file<'a>(
             let exit_status = child
                 .wait()
                 .map_err(|_| todo!("gracefully handle error after `ld` spawned"))?;
+
+            // Extend the lifetime of the tempfile so it doesn't get dropped
+            // (and thus deleted) before the child process is done using it!
+            let _ = builtins_host_tempfile;
 
             if exit_status.success() {
                 problems
@@ -444,6 +467,10 @@ fn spawn_rebuild_thread(
                     exported_symbols,
                     exported_closure_types,
                 );
+
+                // Copy preprocessed host to executable location.
+                // The surgical linker will modify that copy in-place.
+                std::fs::copy(&preprocessed_host_path, binary_path.as_path()).unwrap();
             }
             LinkingStrategy::Legacy => {
                 rebuild_host(
@@ -455,14 +482,7 @@ fn spawn_rebuild_thread(
             }
         }
 
-        if linking_strategy == LinkingStrategy::Surgical {
-            // Copy preprocessed host to executable location.
-            std::fs::copy(preprocessed_host_path, binary_path.as_path()).unwrap();
-        }
-
-        let rebuild_host_end = rebuild_host_start.elapsed();
-
-        rebuild_host_end.as_millis()
+        rebuild_host_start.elapsed().as_millis()
     })
 }
 
@@ -473,7 +493,7 @@ pub fn check_file<'a>(
     emit_timings: bool,
     roc_cache_dir: RocCacheDir<'_>,
     threading: Threading,
-) -> Result<(program::Problems, Duration), LoadingProblem<'a>> {
+) -> Result<(Problems, Duration), LoadingProblem<'a>> {
     let compilation_start = Instant::now();
 
     // only used for generating errors. We don't do code generation, so hardcoding should be fine

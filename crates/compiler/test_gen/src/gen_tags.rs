@@ -1642,7 +1642,7 @@ fn issue_2777_default_branch_codegen() {
     not(target_family = "windows"),
     any(feature = "gen-llvm", feature = "gen-wasm")
 ))]
-#[should_panic(expected = "Erroneous")]
+#[should_panic(expected = r#"Roc failed with message: "Tag Foo was part of a type error!""#)]
 fn issue_2900_unreachable_pattern() {
     assert_evals_to!(
         indoc!(
@@ -1846,7 +1846,7 @@ fn alignment_i128() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[should_panic(expected = r#"Roc failed with message: "Erroneous: Expr::Closure""#)]
+#[ignore = "causes alias analysis panics, should roc_panic"]
 fn error_type_in_tag_union_payload() {
     assert_evals_to!(
         indoc!(
@@ -2019,6 +2019,67 @@ fn dispatch_tag_union_function_inferred() {
             "#
         ),
         RocStr::from("okay"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_4077_fixed_fixpoint() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Input : [FromProjectSource, FromJob Job]
+
+            Job : [Job { inputs : List Input }]
+
+            job : { inputs : List Input } -> Job
+            job = \config -> Job config
+
+            main =
+                when job { inputs: [] } is
+                    _ -> "OKAY"
+            "#
+        ),
+        RocStr::from("OKAY"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn unify_types_with_fixed_fixpoints_outside_fixing_region() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Input := [
+                FromJob Job (List Str),
+            ]
+
+            Job := [
+                Job (List Input)
+            ]
+
+            job : List Input -> Job
+            job = \inputs ->
+                @Job (Job inputs)
+
+            helloWorld : Job
+            helloWorld =
+                @Job ( Job [ @Input (FromJob greeting []) ] )
+
+            greeting : Job
+            greeting =
+                job []
+
+            main = (\_ -> "OKAY") helloWorld
+            "#
+        ),
+        RocStr::from("OKAY"),
         RocStr
     );
 }

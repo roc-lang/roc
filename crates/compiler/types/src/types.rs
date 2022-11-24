@@ -585,8 +585,9 @@ impl Types {
     /// # Safety
     ///
     /// May only be called if `var` is known to represent the type at `index`.
-    pub unsafe fn emplace_variable(&mut self, index: Index<TypeTag>, var: Variable) {
-        self.tags[index.index()] = TypeTag::Variable(var);
+    #[must_use]
+    pub unsafe fn emplace_variable(&mut self, index: Index<TypeTag>, var: Variable) -> TypeTag {
+        std::mem::replace(&mut self.tags[index.index()], TypeTag::Variable(var))
     }
 
     fn reserve_type_tags(&mut self, length: usize) -> Slice<TypeTag> {

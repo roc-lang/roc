@@ -1,51 +1,23 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use core::panic;
+use roc_wasm_module::linking::IndexRelocType;
+
 use roc_error_macros::internal_error;
-
 use roc_module::symbol::Symbol;
-
-use super::opcodes::{OpCode, OpCode::*};
-use super::serialize::{SerialBuffer, Serialize};
-use crate::{
-    round_up_to_alignment, DEBUG_SETTINGS, FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
+use roc_wasm_module::opcodes::{OpCode, OpCode::*};
+use roc_wasm_module::serialize::SerialBuffer;
+use roc_wasm_module::{
+    round_up_to_alignment, Align, LocalId, RelocationEntry, ValueType, WasmModule,
+    FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
 };
+
+use crate::DEBUG_SETTINGS;
 
 macro_rules! log_instruction {
     ($($x: expr),+) => {
         if DEBUG_SETTINGS.instructions { println!($($x,)*); }
     };
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LocalId(pub u32);
-
-/// Wasm value type. (Rust representation matches Wasm encoding)
-#[repr(u8)]
-#[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub enum ValueType {
-    I32 = 0x7f,
-    I64 = 0x7e,
-    F32 = 0x7d,
-    F64 = 0x7c,
-}
-
-impl Serialize for ValueType {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_u8(*self as u8);
-    }
-}
-
-impl From<u8> for ValueType {
-    fn from(x: u8) -> Self {
-        match x {
-            0x7f => Self::I32,
-            0x7e => Self::I64,
-            0x7d => Self::F32,
-            0x7c => Self::F64,
-            _ => internal_error!("Invalid ValueType 0x{:02x}", x),
-        }
-    }
 }
 
 const BLOCK_NO_RESULT: u8 = 0x40;
@@ -62,52 +34,6 @@ struct VmBlock<'a> {
 impl std::fmt::Debug for VmBlock<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("{:?} {:?}", self.opcode, self.value_stack))
-    }
-}
-
-/// Wasm memory alignment for load/store instructions.
-/// Rust representation matches Wasm encoding.
-/// It's an error to specify alignment higher than the "natural" alignment of the instruction
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd)]
-pub enum Align {
-    Bytes1 = 0,
-    Bytes2 = 1,
-    Bytes4 = 2,
-    Bytes8 = 3,
-}
-
-impl Align {
-    /// Calculate the largest possible alignment for a load/store at a given stack frame offset
-    /// Assumes the stack frame is aligned to at least 8 bytes
-    pub fn from_stack_offset(max_align: Align, offset: u32) -> Align {
-        if (max_align == Align::Bytes8) && (offset & 7 == 0) {
-            return Align::Bytes8;
-        }
-        if (max_align >= Align::Bytes4) && (offset & 3 == 0) {
-            return Align::Bytes4;
-        }
-        if (max_align >= Align::Bytes2) && (offset & 1 == 0) {
-            return Align::Bytes2;
-        }
-        Align::Bytes1
-    }
-}
-
-impl From<u32> for Align {
-    fn from(x: u32) -> Align {
-        match x {
-            1 => Align::Bytes1,
-            2 => Align::Bytes2,
-            4 => Align::Bytes4,
-            _ => {
-                if x.count_ones() == 1 {
-                    Align::Bytes8 // Max value supported by any Wasm instruction
-                } else {
-                    internal_error!("Cannot align to {} bytes", x);
-                }
-            }
-        }
     }
 }
 
@@ -184,12 +110,6 @@ pub struct CodeBuilder<'a> {
     import_relocations: Vec<'a, (usize, u32)>,
 }
 
-impl<'a> Serialize for CodeBuilder<'a> {
-    fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
-        self.serialize_without_relocs(buffer);
-    }
-}
-
 #[allow(clippy::new_without_default)]
 impl<'a> CodeBuilder<'a> {
     pub fn new(arena: &'a Bump) -> Self {
@@ -212,29 +132,16 @@ impl<'a> CodeBuilder<'a> {
         }
     }
 
-    /**********************************************************
+    pub fn clear(&mut self) {
+        self.code.clear();
+        self.insertions.clear();
+        self.insert_bytes.clear();
+        self.preamble.clear();
+        self.inner_length.clear();
+        self.import_relocations.clear();
 
-        LINKING
-
-    ***********************************************************/
-
-    /// Build a dummy function with just a single `unreachable` instruction
-    pub fn dummy(arena: &'a Bump) -> Self {
-        let mut builder = Self::new(arena);
-        builder.unreachable_();
-        builder.build_fn_header_and_footer(&[], 0, None);
-        builder
-    }
-
-    pub fn apply_import_relocs(&mut self, live_import_fns: &[usize]) {
-        for (code_index, fn_index) in self.import_relocations.iter() {
-            for (new_index, old_index) in live_import_fns.iter().enumerate() {
-                if *fn_index as usize == *old_index {
-                    self.code
-                        .overwrite_padded_u32(*code_index, new_index as u32);
-                }
-            }
-        }
+        self.vm_block_stack.truncate(1);
+        self.vm_block_stack[0].value_stack.clear();
     }
 
     /**********************************************************
@@ -534,19 +441,52 @@ impl<'a> CodeBuilder<'a> {
     }
 
     /// Serialize all byte vectors in the right order
-    /// Also update relocation offsets relative to the base offset (code section body start)
-    pub fn serialize_without_relocs<T: SerialBuffer>(&self, buffer: &mut T) {
-        buffer.append_slice(&self.inner_length);
-        buffer.append_slice(&self.preamble);
+    /// Insert relocations for imported functions
+    pub fn insert_into_module(&self, module: &mut WasmModule<'a>) {
+        let fn_offset = module.code.bytes.len();
+        module.code.function_count += 1;
+        module.code.function_offsets.push(fn_offset as u32);
 
+        // Insertions are chunks of code we generated out-of-order.
+        // Now insert them at the correct offsets.
+        let buffer = &mut module.code.bytes;
+        buffer.extend_from_slice(&self.inner_length);
+        buffer.extend_from_slice(&self.preamble);
+
+        let code_offset = buffer.len();
         let mut code_pos = 0;
         for Insertion { at, start, end } in self.insertions.iter() {
-            buffer.append_slice(&self.code[code_pos..(*at)]);
-            buffer.append_slice(&self.insert_bytes[*start..*end]);
+            buffer.extend_from_slice(&self.code[code_pos..*at]);
             code_pos = *at;
+            buffer.extend_from_slice(&self.insert_bytes[*start..*end]);
         }
 
-        buffer.append_slice(&self.code[code_pos..self.code.len()]);
+        buffer.extend_from_slice(&self.code[code_pos..self.code.len()]);
+
+        // Create linker relocations for calls to imported functions, whose indices may change during DCE.
+        let relocs = &mut module.reloc_code.entries;
+        let mut skip = 0;
+        for (reloc_code_pos, reloc_fn) in self.import_relocations.iter() {
+            let mut insertion_bytes = 0;
+            for (i, insertion) in self.insertions.iter().enumerate().skip(skip) {
+                if insertion.at >= *reloc_code_pos {
+                    break;
+                }
+                insertion_bytes = insertion.end;
+                skip = i;
+            }
+            // Adjust for (1) the offset of this function in the Code section and (2) our own Insertions.
+            let offset = reloc_code_pos + code_offset + insertion_bytes;
+            let symbol_index = module
+                .linking
+                .find_imported_fn_sym_index(*reloc_fn)
+                .unwrap();
+            relocs.push(RelocationEntry::Index {
+                type_id: IndexRelocType::FunctionIndexLeb,
+                offset: offset as u32,
+                symbol_index,
+            });
+        }
     }
 
     /**********************************************************

@@ -17,7 +17,16 @@
     # unsafe-eval is needed for wasm compilation in the repl to work on Safari and Chrome;
     # otherwise they block it.
     # TODO figure out how to tell Netlify to apply that policy only to the repl, not to everything.
-    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'unsafe-eval';"
+    #
+    # This style-src hash is to permit the <style> in the favicon so it looks good in both light and
+    # dark mode. Favicons can only do this using inline <style> tags, so this exception is needed!
+    #
+    # When changing the favicon's <style>, generate a new hash and put it here using:
+    #
+    #   $ echo -n "polygon{fill:#7d59dd}@media (prefers-color-scheme: dark){polygon{fill:#9c7bea}}" | openssl dgst -sha256 -binary | openssl enc -base64
+    #
+    # Details on how this works: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Security-Policy/style-src
+    Content-Security-Policy = "default-src 'self'; img-src *; script-src 'self' 'unsafe-eval'; style-src 'self' 'sha256-07CmErfGgav8i4u4UOrGznokE/Q4Cax2Kmj7zGcW4l8=';"
     X-Content-Type-Options = "nosniff"
     # Firefox prefetch requires some cache-control to be set
     # See https://bugzilla.mozilla.org/show_bug.cgi?id=1527334

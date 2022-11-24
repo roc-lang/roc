@@ -1,10 +1,9 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 
-use super::parse::parse_fixed_size_items;
+use super::parse::{parse_fixed_size_items, Parse, ParseError, SkipBytes};
 use super::sections::SectionId;
 use super::serialize::{overwrite_padded_i32, overwrite_padded_u32};
-use crate::wasm_module::parse::{Parse, ParseError, SkipBytes};
 
 /*******************************************************************
  *
@@ -159,7 +158,7 @@ pub struct RelocationSection<'a> {
 }
 
 impl<'a> RelocationSection<'a> {
-    fn new(arena: &'a Bump, name: &'a str) -> Self {
+    pub(crate) fn new(arena: &'a Bump, name: &'a str) -> Self {
         RelocationSection {
             name,
             target_section_index: 0,
@@ -581,6 +580,20 @@ impl<'a> LinkingSection<'a> {
                     target_name
                 )
             })
+    }
+
+    pub fn find_imported_fn_sym_index(&mut self, fn_index: u32) -> Result<u32, String> {
+        self.symbol_table
+            .iter_mut()
+            .position(|sym| match sym {
+                SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { flags, index, .. })
+                | SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, .. }) => {
+                    *flags & WASM_SYM_UNDEFINED != 0 && *index == fn_index
+                }
+                _ => false,
+            })
+            .map(|sym_index| sym_index as u32)
+            .ok_or_else(|| format!("Can't find fn #{} in host symbol table", fn_index))
     }
 
     pub fn find_and_reindex_imported_fn(
