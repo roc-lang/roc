@@ -32,7 +32,6 @@ main =
     Task.attempt task \result ->
         when result is
             Ok {} -> Stdout.line "Successfully wrote a string to out.txt"
-
             Err err ->
                 msg =
                     when err is
