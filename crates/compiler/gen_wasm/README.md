@@ -208,3 +208,18 @@ The diagram below illustrates this process.
 &nbsp;
 
 ![Diagram showing how host-to-app calls are linked.](./docs/host-to-app-calls.svg)
+
+## Tips for debugging Wasm code generation
+
+In general, WebAssembly runtimes often have terrible error messages. Especially command-line ones. And most especially Wasm3, which we use nonetheless because it's fast.
+
+- Install the WABT (WebAssembly Binary Toolkit)
+  - We have a debug setting to dump out the test binary. In `gen_wasm/src/lib.rs`, set `DEBUG_LOG_SETTINGS.keep_test_binary` to `true`
+  - Run `wasm-validate` to make sure the module is valid WebAssembly
+  - Use `wasm-objdump` with options `-d`, `-x`, or `-s` depending on the issue
+- Browsers are **much** better for debugging Wasm than any of the command line tools.
+  - I highly recommend this, even if you are more comfortable with the command line than the browser!
+  - Browsers have by far the best error messages and debugging tools. There is nothing comparable on the command line.
+  - We have a web page that can run gen_wasm unit tests:
+      crates/compiler/test_gen/src/helpers/debug-wasm-test.html
+  - The page itself contains instructions explaining how to open the browser debug tools. No web dev background should be required. If there's something useful missing, let Brian Carroll know or add him as a reviewer on a PR.
