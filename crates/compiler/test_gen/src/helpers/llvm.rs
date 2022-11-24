@@ -662,29 +662,6 @@ macro_rules! assert_evals_to {
     }};
 }
 
-#[allow(unused_macros)]
-macro_rules! expect_runtime_error_panic {
-    ($src:expr) => {{
-        #[cfg(feature = "gen-llvm-wasm")]
-        $crate::helpers::llvm::assert_wasm_evals_to!(
-            $src,
-            false, // fake value/type for eval
-            bool,
-            $crate::helpers::llvm::identity,
-            true // ignore problems
-        );
-
-        #[cfg(not(feature = "gen-llvm-wasm"))]
-        $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src,
-            false, // fake value/type for eval
-            bool,
-            $crate::helpers::llvm::identity,
-            true // ignore problems
-        );
-    }};
-}
-
 #[allow(dead_code)]
 pub fn identity<T>(value: T) -> T {
     value
@@ -696,5 +673,3 @@ pub(crate) use assert_evals_to;
 pub(crate) use assert_llvm_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_wasm_evals_to;
-#[allow(unused_imports)]
-pub(crate) use expect_runtime_error_panic;

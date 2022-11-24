@@ -397,19 +397,6 @@ macro_rules! assert_evals_to {
     }};
 }
 
-#[allow(unused_macros)]
-macro_rules! expect_runtime_error_panic {
-    ($src:expr) => {{
-        $crate::helpers::wasm::assert_evals_to!(
-            $src,
-            false, // fake value/type for eval
-            bool,
-            $crate::helpers::wasm::identity,
-            true // ignore problems
-        );
-    }};
-}
-
 #[allow(dead_code)]
 pub fn identity<T>(value: T) -> T {
     value
@@ -436,9 +423,6 @@ macro_rules! assert_refcounts {
 
 #[allow(unused_imports)]
 pub(crate) use assert_evals_to;
-
-#[allow(unused_imports)]
-pub(crate) use expect_runtime_error_panic;
 
 #[allow(unused_imports)]
 pub(crate) use assert_refcounts;
