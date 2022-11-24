@@ -26,7 +26,7 @@ WriteErr : InternalFile.WriteErr
 ## This opens the file first and closes it after writing to it.
 ##
 ## To write unformatted bytes to a file, you can use [File.writeBytes] instead.
-write : Path, val, fmt -> Task {} [FileWriteErr Path WriteErr] [Write [File]] | val has Encode.Encoding, fmt has Encode.EncoderFormatting
+write : Path, val, fmt -> Task {} [FileWriteErr Path WriteErr] | val has Encode.Encoding, fmt has Encode.EncoderFormatting
 write = \path, val, fmt ->
     bytes = Encode.toBytes val fmt
 
@@ -41,7 +41,7 @@ write = \path, val, fmt ->
 ## This opens the file first and closes it after writing to it.
 ##
 ## To format data before writing it to a file, you can use [File.write] instead.
-writeBytes : Path, List U8 -> Task {} [FileWriteErr Path WriteErr] [Write [File]]
+writeBytes : Path, List U8 -> Task {} [FileWriteErr Path WriteErr]
 writeBytes = \path, bytes ->
     toWriteTask path \pathBytes -> Effect.fileWriteBytes pathBytes bytes
 
@@ -53,7 +53,7 @@ writeBytes = \path, bytes ->
 ## This opens the file first and closes it after writing to it.
 ##
 ## To write unformatted bytes to a file, you can use [File.writeBytes] instead.
-writeUtf8 : Path, Str -> Task {} [FileWriteErr Path WriteErr] [Write [File]]
+writeUtf8 : Path, Str -> Task {} [FileWriteErr Path WriteErr]
 writeUtf8 = \path, str ->
     toWriteTask path \bytes -> Effect.fileWriteUtf8 bytes str
 
@@ -73,7 +73,7 @@ writeUtf8 = \path, str ->
 ##
 ## On Windows, this will fail when attempting to delete a readonly file; the file's
 ## readonly permission must be disabled before it can be successfully deleted.
-delete : Path -> Task {} [FileWriteErr Path WriteErr] [Write [File]]
+delete : Path -> Task {} [FileWriteErr Path WriteErr]
 delete = \path ->
     toWriteTask path \bytes -> Effect.fileDelete bytes
 
@@ -85,7 +85,7 @@ delete = \path ->
 ## This opens the file first and closes it after reading its contents.
 ##
 ## To read and decode data from a file, you can use `File.read` instead.
-readBytes : Path -> Task (List U8) [FileReadErr Path ReadErr] [Read [File]]
+readBytes : Path -> Task (List U8) [FileReadErr Path ReadErr]
 readBytes = \path ->
     toReadTask path \bytes -> Effect.fileReadBytes bytes
 
@@ -100,10 +100,7 @@ readBytes = \path ->
 ## To read unformatted bytes from a file, you can use [File.readBytes] instead.
 readUtf8 :
     Path
-    -> Task
-    Str
-    [FileReadErr Path ReadErr, FileReadUtf8Err Path _]
-    [Read [File]]
+    -> Task Str [FileReadErr Path ReadErr, FileReadUtf8Err Path _]
 readUtf8 = \path ->
     effect = Effect.map (Effect.fileReadBytes (InternalPath.toBytes path)) \result ->
         when result is
@@ -132,14 +129,14 @@ readUtf8 = \path ->
 #                     Err decodingErr -> Err (FileReadDecodeErr decodingErr)
 #             Err readErr -> Err (FileReadErr readErr)
 #     InternalTask.fromEffect effect
-toWriteTask : Path, (List U8 -> Effect (Result ok err)) -> Task ok [FileWriteErr Path err] [Write [File]]
+toWriteTask : Path, (List U8 -> Effect (Result ok err)) -> Task ok [FileWriteErr Path err]
 toWriteTask = \path, toEffect ->
     InternalPath.toBytes path
     |> toEffect
     |> InternalTask.fromEffect
     |> Task.mapFail \err -> FileWriteErr path err
 
-toReadTask : Path, (List U8 -> Effect (Result ok err)) -> Task ok [FileReadErr Path err] [Read [File]]
+toReadTask : Path, (List U8 -> Effect (Result ok err)) -> Task ok [FileReadErr Path err]
 toReadTask = \path, toEffect ->
     InternalPath.toBytes path
     |> toEffect
