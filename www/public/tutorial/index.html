@@ -758,7 +758,7 @@ fullName <span class="op">=</span> <span class="str">\firstName,</span> lastName
 </samp>
 <p>Comments can be valuable documentation, but they can also get out of date and become misleading.
 If someone changes this function and forgets to update the comment, it will no longer be accurate.</p>
-<h3 id="type-annotations"><a href="#type-annotations">Type annotations</a></h3>
+<h3 id="type-annotations"><a href="#type-annotations">Type Annotations</a></h3>
 <p>Here's another way to document this function's type, which doesn't have that problem:</p>
 <samp>fullName : Str, Str <span class="op">-&gt;</span> Str
 fullName <span class="op">=</span> \firstName, lastName <span class="op">-&gt;</span>
@@ -784,6 +784,7 @@ amy <span class="op">=</span> { <span class="str">firstName:</span> <span class=
 <span class="str">jen :</span> { <span class="str">firstName :</span> Str, <span class="str">lastName :</span> Str }
 jen <span class="op">=</span> { <span class="str">firstName:</span> <span class="str">"Jen"</span>, <span class="str">lastName:</span> <span class="str">"Majura"</span> }
 </samp>
+<h3 id="type-aliases"><a href="#type-aliases">Type Aliases</a></h3>
 <p>When we have a recurring type annotation like this, it can be nice to give it its own name. We do this like
 so:</p>
 <samp><span class="str">Musician :</span> { <span class="str">firstName :</span> Str, <span class="str">lastName :</span> Str }
@@ -798,16 +799,8 @@ simone <span class="op">=</span> { <span class="str">firstName:</span> <span cla
 instead of to a value. Just like how you can read <code>name : Str</code> as "<code>name</code> has the type <code>Str</code>,"
 you can also read <code>Musician : { firstName : Str, lastName : Str }</code> as "<code>Musician</code> has the type
 <code>{ firstName : Str, lastName : Str }</code>."</p>
-<p>We can also give type annotations to tag unions:</p>
-<samp>colorFromStr : Str<span class="hljs-function"> <span class="op">-&gt;</span> [Red, Green, Yellow]
-colorFromStr <span class="op">=</span> <span class="str">\string</span> <span <span class="opclass="hljs-function">-&gt;<</span>/span>
-    <span class="kw">when</span> string <span class="kw">is</span>
-        <span class="str">"red"</span><span class="hljs-function"> <span class="op">-&gt;</span> Red
-        <span class="str">"green"</span><span class="hljs-function"> <span class="op">-&gt;</span> Green
-        _<span class="hljs-function"> <span class="op">-&gt;</span> Yellow
-</samp>
-<p>You can read the type <code>[Red, Green, Yellow]</code> as "a tag union of the tags <code>Red</code>, <code>Green</code>, and <code>Yellow</code>."</p>
-<p>When we annotate a list type, we have to specify the type of its elements:</p>
+<h3 id="type-parameters"><a href="#type-parameters">Type Parameters</a></h3>
+<p>Annotations for lists must specify what type the list's elements have:</p>
 <samp>names : List Str
 names <span class="op">=</span> [<span class="str">"Amy"</span>, <span class="str">"Simone"</span>, <span class="str">"Tarja"</span>]
 </samp>
@@ -815,6 +808,7 @@ names <span class="op">=</span> [<span class="str">"Amy"</span>, <span class="st
 <code>List</code> we're dealing with. <code>List</code> is a <em>parameterized type</em>, which means it's a type that requires a type
 parameter; there's no way to give something a type of <code>List</code> without a type parameter - you have to specify
 what type of list it is, such as <code>List Str</code> or <code>List Bool</code> or <code>List { firstName : Str, lastName : Str }</code>.</p>
+<h3 id="wildcard-type"><a href="#wildcard-type">Wildcard Types (*)</a></h3>
 <p>There are some functions that work on any list, regardless of its type parameter. For example, <code>List.isEmpty</code>
 has this type:</p>
 <samp>isEmpty : List * <span class="op">-&gt;</span> Bool
@@ -826,6 +820,7 @@ with any type of <code>List</code> - so, <code>List Str</code>, <code>List Bool<
 function that takes a <code>List Bool</code>. We might reasonably expect to be able to pass an empty list (that is, <code>[]</code>) to
 either of these functions. And so we can! This is because a <code>[]</code> value has the type <code>List *</code> - that is,
 "a list with a wildcard type parameter," or "a list whose element type could be anything."</p>
+<h3 id="type-variables"><a href="#type-variables">Type Variables</a></h3>
 <p><code>List.reverse</code> works similarly to <code>List.isEmpty</code>, but with an important distinction. As with <code>isEmpty</code>, we can
 call <code>List.reverse</code> on any list, regardless of its type parameter. However, consider these calls:</p>
 <samp><span class="kw">strings </span>: List <span class="kw">Str
@@ -859,6 +854,46 @@ of the type annotation, or even the function's implementation! The only way to h
 <code>List *</code> is if it returns an empty list.</p>
 <p>Similarly, the only way to have a function whose type is <code>a <span class="op">-&gt;</span> a</code> is if the function's implementation returns
 its argument without modifying it in any way. This is known as <a href="https://en.wikipedia.org/wiki/Identity_function">the identity function</a>.</p>
+<h3 id="tag-union-types"><a href="#tag-union-tyes">Tag Union Types</a></h3>
+<p>We can also annotate types that include tags:</p>
+<samp>colorFromStr : Str <span class="kw">-&gt;</span> <span class="brace">[</span>Red<span class="comma">,</span> Green<span class="comma">,</span> Yellow<span class="brace">]</span>
+colorFromStr <span class="kw">=</span> <span class="kw">\</span>string <span class="kw">-&gt;</span>
+    <span class="kw">when</span> string <span class="kw">is</span>
+        <span class="str">"red"</span> <span class="kw">-&gt;</span> Red
+        <span class="str">"green"</span> <span class="kw">-&gt;</span> Green
+        <span class="kw">_</span> <span class="kw">-&gt;</span> Yellow
+</samp>
+<p>You can read the type <code>[Red, Green, Yellow]</code> as "a tag union of the tags <code>Red</code>, <code>Green</code>, and <code>Yellow</code>."</p>
+<p>Some tag unions have only one tag in them. For example:</p>
+<samp>redTag <span class="kw">:</span> <span class="brace">[</span>Red<span class="brace">]</span>
+
+redTag <span class="kw">=</span> Red
+</samp>
+<h3 id="accumulating-tag-types"><a href="#accumulating-tag-types">Accumulating Tag Types</a></h3>
+<p>Tag union types can accumulate more tags based on how they're used. Consider this <code>if</code> expression:</p>
+<samp><span class="kw">\</span>str <span class="kw">-&gt;</span>
+    <span class="kw">if</span> Str.isEmpty str <span class="kw">then</span>
+        Ok <span class="str">"it was empty"</span>
+    <span class="kw">else</span>
+        Err <span class="brace">[</span><span class="str">"it was not empty"</span><span class="brace">]</span>
+</samp>
+<p>Here, Roc sees that the first branch has the type <code>[Ok Str]</code> and that the <code>else</code> branch has
+the type <code>[Err (List Str)]</code>, so it concludes that the whole <code>if</code> expression evaluates to the
+combination of those two tag unions: <code>[Ok Str, Err (List Str)]</code>.</p>
+<p>This means this entire <code>\str -&gt; …</code> function has the type <code>Str -&gt; [Ok Str, Err (List Str)]</code>.
+However, it would be most common to annotate it as <code>Result Str (List Str)</code> instead, because
+the <code>Result</code> type (for operations like <code>Result.withDefault</code>, which we saw earlier) is a type
+alias for a tag union with <code>Ok</code> and <code>Err</code> tags that each have one payload:</p>
+<samp>Result ok err <span class="kw">:</span> <span class="brace">[</span>Ok ok<span class="comma">,</span> Err err<span class="brace">]</span>
+</samp>
+<p>We just saw how tag unions get combined when different branches of a conditional return different tags. Another way tag unions can get combined is through pattern matching. For example:</p>
+<samp><span class="kw">when</span> color <span class="kw">is</span>
+    Red <span class="kw">-&gt;</span> <span class="str">"red"</span>
+    Yellow <span class="kw">-&gt;</span> <span class="str">"yellow"</span>
+    Green <span class="kw">-&gt;</span> <span class="str">"green"</span>
+</samp>
+<p>Here, Roc's compiler will infer that <code>color</code>'s type is <code>[Red, Yellow, Green]</code>, because
+those are the three possibilities this <code>when</code> handles.</p>
 <h2 id="numeric-types"><a href="#numeric-types">Numeric types</a></h2>
 <p>Roc has different numeric types that each have different tradeoffs.
 They can all be broken down into two categories: <a href="https://en.wikipedia.org/wiki/Fraction">fractions</a>,
