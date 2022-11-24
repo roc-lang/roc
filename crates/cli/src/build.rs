@@ -170,14 +170,18 @@ pub fn build_file<'a>(
         })
         .collect();
 
-    let preprocessed_host_path =
-        host_input_path.with_file_name(preprocessed_host_filename(target).unwrap());
+    let preprocessed_host_path = if linking_strategy == LinkingStrategy::Legacy {
+        host_input_path
+            .with_file_name(legacy_host_filename(target, code_gen_options.opt_level).unwrap())
+    } else {
+        host_input_path.with_file_name(preprocessed_host_filename(target).unwrap())
+    };
 
     // We don't need to spawn a rebuild thread when using a prebuilt host.
     let rebuild_thread = if prebuilt {
         if !preprocessed_host_path.exists() {
             eprintln!(
-                "\nSince I was run with --prebuilt-platform=true, I was expecting this file to exist:\n\n    {}\n\nHowever, it was not there!\n\nIf you have the platform's source code locally, you may be able to regenerate it by re-running this command with --prebuilt-platform=false\n",
+                "\nBecause I was run with --prebuilt-platform=true, I was expecting this file to exist:\n\n    {}\n\nHowever, it was not there!\n\nIf you have the platform's source code locally, you may be able to regenerate it by re-running this command with --prebuilt-platform=false\n",
                 preprocessed_host_path.to_string_lossy()
             );
 
