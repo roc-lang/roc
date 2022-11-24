@@ -504,6 +504,25 @@ inside a <code>when</code>, we would write <code>Custom r g b <span class="op">-
 <code>Custom description <span class="op">-&gt;</span> description</code> branch, <code>Custom description</code> would be a pattern. In programming, using
 patterns in branching conditionals like <code>when</code> is known as <a href="https://en.wikipedia.org/wiki/Pattern_matching">pattern matching</a>. You may hear people say things like "let's pattern match on <code>Custom</code> here" as a way to
 suggest making a <code>when</code> branch that begins with something like <code>Custom description <span class="op">-&gt;</span></code>.</p>
+<h3 id="pattern-matching-on-lists"><a href="#pattern-matching-on-lists">Pattern Matching on Lists</a></h3>
+<p>You can also pattern match on lists, like so:</p>
+<samp><span class="kw">when</span> myList <span class="kw">is</span>
+    <span class="brace">[]</span> <span class="kw">-&gt;</span> <span class="number">0</span> <span class="comment"># the list is empty</span>
+    <span class="brace">[</span>Foo<span class="comma">,</span> <span class="kw">..</span><span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">1</span> <span class="comment"># it starts with a Foo tag</span>
+    <span class="brace">[</span>_<span class="comma">,</span> ..<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">2</span> <span class="comment"># it contains at least one element, which we ignore</span>
+    <span class="brace">[</span>Foo<span class="comma">,</span> Bar<span class="comma">,</span> ..<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">3</span> <span class="comment"># it starts with a Foo tag followed by a Bar tag</span>
+    <span class="brace">[</span>Foo<span class="comma">,</span> Bar<span class="comma">,</span> Baz<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">4</span> <span class="comment"># it has exactly 3 elements: Foo, Bar, and Baz</span>
+    <span class="brace">[</span>Foo<span class="comma">,</span> a<span class="comma">,</span> ..<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">5</span> <span class="comment"># its first element is Foo, and its second we name `a`</span>
+    <span class="brace">[</span>Ok a<span class="comma">,</span> ..<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">6</span> <span class="comment"># it starts with an Ok containing a payload named `a`</span>
+    <span class="brace">[</span>..<span class="comma">,</span> Foo<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">7</span> <span class="comment"># it ends with a Foo tag</span>
+    <span class="brace">[</span>A<span class="comma">,</span> B, <span class="kw">..</span><span class="comma">,</span> C<span class="comma">,</span> D<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">8</span> <span class="comment"># it has certain elements at the beginning and end</span>
+</samp>
+<p>This can be both more concise and more efficient (at runtime) than calling <a href="https://www.roc-lang.org/builtins/List#get"><code>List.get</code></a>
+multiple times, since each call to <code>get</code> requires a separate conditional to handle the different
+<code>Result</code>s they return.</p>
+<blockquote>
+<p><strong>Note:</strong> Each list pattern can only have one <code>..</code>, which is known as the &quot;rest pattern&quot; because it&#39;s where the <em>rest</em> of the list goes.</p>
+</blockquote>
 <h2 id="booleans">Booleans</h2>
 <p>In many programming languages, <code>true</code> and <code>false</code> are special language keywords that refer to
 the two boolean values. In Roc, booleans do not get special keywords; instead, they are exposed
