@@ -50,7 +50,7 @@ impl<'a> ExecutionState<'a> {
     ) -> Result<Self, String> {
         let mem_bytes = module.memory.min_bytes().map_err(|e| {
             format!(
-                "Error parsing Memory section at offset 0x{:x}:\n{}",
+                "Error parsing Memory section at offset {:#x}:\n{}",
                 e.offset, e.message
             )
         })?;

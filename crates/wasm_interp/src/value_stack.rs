@@ -76,8 +76,8 @@ impl<'a> ValueStack<'a> {
     }
 
     pub fn peek(&self) -> Value {
-        let is_64 = self.is_64[self.is_64.len() - 1];
-        let is_float = self.is_float[self.is_float.len() - 1];
+        let is_64 = *self.is_64.last().unwrap();
+        let is_float = *self.is_float.last().unwrap();
         let size = if is_64 { 8 } else { 4 };
         let bytes_idx = self.bytes.len() - size;
         self.get(is_64, is_float, bytes_idx)
