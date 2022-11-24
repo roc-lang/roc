@@ -1,0 +1,129 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483649),
+        ],
+        regions: [
+            @0-42,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-1 Identifier(
+                    "f",
+                ),
+                @4-21 Function(
+                    [
+                        @4-7 Apply(
+                            "",
+                            "I64",
+                            [],
+                        ),
+                    ],
+                    @11-21 Tuple {
+                        fields: [
+                            @12-15 Apply(
+                                "",
+                                "I64",
+                                [],
+                            ),
+                            @17-20 Apply(
+                                "",
+                                "I64",
+                                [],
+                            ),
+                        ],
+                        ext: None,
+                    },
+                ),
+            ),
+            AnnotatedBody {
+                ann_pattern: @0-1 Identifier(
+                    "f",
+                ),
+                ann_type: @4-21 Function(
+                    [
+                        @4-7 Apply(
+                            "",
+                            "I64",
+                            [],
+                        ),
+                    ],
+                    @11-21 Tuple {
+                        fields: [
+                            @12-15 Apply(
+                                "",
+                                "I64",
+                                [],
+                            ),
+                            @17-20 Apply(
+                                "",
+                                "I64",
+                                [],
+                            ),
+                        ],
+                        ext: None,
+                    },
+                ),
+                comment: None,
+                body_pattern: @22-23 Identifier(
+                    "f",
+                ),
+                body_expr: @26-42 Closure(
+                    [
+                        @27-28 Identifier(
+                            "x",
+                        ),
+                    ],
+                    @32-42 Tuple(
+                        [
+                            @33-34 Var {
+                                module_name: "",
+                                ident: "x",
+                            },
+                            @36-41 BinOps(
+                                [
+                                    (
+                                        @36-37 Var {
+                                            module_name: "",
+                                            ident: "x",
+                                        },
+                                        @38-39 Plus,
+                                    ),
+                                ],
+                                @40-41 Num(
+                                    "1",
+                                ),
+                            ),
+                        ],
+                    ),
+                ),
+            },
+        ],
+    },
+    @44-48 SpaceBefore(
+        Apply(
+            @44-45 Var {
+                module_name: "",
+                ident: "f",
+            },
+            [
+                @46-48 Num(
+                    "42",
+                ),
+            ],
+            Space,
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

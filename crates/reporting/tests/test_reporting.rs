@@ -4410,13 +4410,14 @@ mod test_reporting {
         @r###"
     ── UNFINISHED PARENTHESES ────────────────── tmp/type_in_parens_start/Test.roc ─
 
-    I just started parsing a type in parentheses, but I got stuck here:
+    I am partway through parsing a type in parentheses, but I got stuck
+    here:
 
     4│      f : (
                  ^
 
-    Tag unions look like [Many I64, None], so I was expecting to see a tag
-    name next.
+    I was expecting to see a parenthesis before this, so try adding a )
+    and see if that helps?
 
     Note: I may be confused by indentation
     "###
@@ -4436,12 +4437,12 @@ mod test_reporting {
     here:
 
     4│      f : ( I64
-                     ^
+    5│
+    6│
+        ^
 
-    I was expecting to see a parenthesis before this, so try adding a )
-    and see if that helps?
-
-    Note: I may be confused by indentation
+    I was expecting to see a closing parenthesis before this, so try
+    adding a ) and see if that helps?
     "###
     );
 
@@ -6046,33 +6047,6 @@ All branches in an `if` must have the same type!
     to see a field name next.
 
     Note: I may be confused by indentation
-    "###
-    );
-
-    test_report!(
-        outdented_in_parens,
-        indoc!(
-            r#"
-            Box : (
-                Str
-            )
-
-            4
-            "#
-        ),
-        @r###"
-    ── NEED MORE INDENTATION ──────────────────── tmp/outdented_in_parens/Test.roc ─
-
-    I am partway through parsing a type in parentheses, but I got stuck
-    here:
-
-    4│      Box : (
-    5│          Str
-    6│      )
-            ^
-
-    I need this parenthesis to be indented more. Try adding more spaces
-    before it!
     "###
     );
 

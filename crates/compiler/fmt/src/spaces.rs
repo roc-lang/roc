@@ -787,6 +787,10 @@ impl<'a> RemoveSpaces<'a> for TypeAnnotation<'a> {
                     vars: vars.remove_spaces(arena),
                 },
             ),
+            TypeAnnotation::Tuple { fields, ext } => TypeAnnotation::Tuple {
+                fields: fields.remove_spaces(arena),
+                ext: ext.remove_spaces(arena),
+            },
             TypeAnnotation::Record { fields, ext } => TypeAnnotation::Record {
                 fields: fields.remove_spaces(arena),
                 ext: ext.remove_spaces(arena),
