@@ -656,6 +656,36 @@ pub fn constrain_expr(
             constraints.exists_many(vars, all_constraints)
         }
 
+        Dbg {
+            loc_condition,
+            loc_continuation,
+            variable,
+            symbol: _,
+        } => {
+            let dbg_type = constraints.push_variable(*variable);
+            let expected_dbg = constraints.push_expected_type(Expected::NoExpectation(dbg_type));
+
+            let cond_con = constrain_expr(
+                types,
+                constraints,
+                env,
+                loc_condition.region,
+                &loc_condition.value,
+                expected_dbg,
+            );
+
+            let continuation_con = constrain_expr(
+                types,
+                constraints,
+                env,
+                loc_continuation.region,
+                &loc_continuation.value,
+                expected,
+            );
+
+            constraints.exists_many([], [cond_con, continuation_con])
+        }
+
         If {
             cond_var,
             branch_var,

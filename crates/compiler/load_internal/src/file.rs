@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
-use roc_can::expr::{Declarations, ExpectLookup, PendingDerives};
+use roc_can::expr::{DbgLookup, Declarations, ExpectLookup, PendingDerives};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
     ResolvedImplementations, TypeState,
@@ -733,6 +733,7 @@ pub struct Expectations {
     pub subs: roc_types::subs::Subs,
     pub path: PathBuf,
     pub expectations: VecMap<Region, Vec<ExpectLookup>>,
+    pub dbgs: VecMap<Symbol, DbgLookup>,
     pub ident_ids: IdentIds,
 }
 
@@ -777,6 +778,7 @@ struct ParsedModule<'a> {
 }
 
 type LocExpects = VecMap<Region, Vec<ExpectLookup>>;
+type LocDbgs = VecMap<Symbol, DbgLookup>;
 
 /// A message sent out _from_ a worker thread,
 /// representing a result of work done, or a request for further work
@@ -796,6 +798,7 @@ enum Msg<'a> {
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
         loc_expects: LocExpects,
+        loc_dbgs: LocDbgs,
     },
     FinishedAllTypeChecking {
         solved_subs: Solved<Subs>,
@@ -2529,6 +2532,7 @@ fn update<'a>(
             mut module_timing,
             abilities_store,
             loc_expects,
+            loc_dbgs,
         } => {
             log!("solved types for {:?}", module_id);
             module_timing.end_time = Instant::now();
@@ -2538,7 +2542,7 @@ fn update<'a>(
                 .type_problems
                 .insert(module_id, solved_module.problems);
 
-            let should_include_expects = !loc_expects.is_empty() && {
+            let should_include_expects = (!loc_expects.is_empty() || !loc_dbgs.is_empty()) && {
                 let modules = state.arc_modules.lock();
                 modules
                     .package_eq(module_id, state.root_id)
@@ -2550,6 +2554,7 @@ fn update<'a>(
 
                 let expectations = Expectations {
                     expectations: loc_expects,
+                    dbgs: loc_dbgs,
                     subs: solved_subs.clone().into_inner(),
                     path: path.to_owned(),
                     ident_ids: ident_ids.clone(),
@@ -4739,6 +4744,7 @@ fn run_solve<'a>(
 
     let mut module = module;
     let loc_expects = std::mem::take(&mut module.loc_expects);
+    let loc_dbgs = std::mem::take(&mut module.loc_dbgs);
     let module = module;
 
     let (solved_subs, solved_implementations, exposed_vars_by_symbol, problems, abilities_store) = {
@@ -4813,6 +4819,7 @@ fn run_solve<'a>(
         module_timing,
         abilities_store,
         loc_expects,
+        loc_dbgs,
     }
 }
 
@@ -5019,6 +5026,7 @@ fn canonicalize_and_constrain<'a>(
         rigid_variables: module_output.rigid_variables,
         abilities_store: module_output.scope.abilities_store,
         loc_expects: module_output.loc_expects,
+        loc_dbgs: module_output.loc_dbgs,
     };
 
     let constrained_module = ConstrainedModule {

@@ -356,6 +356,7 @@ pub enum EExpr<'a> {
     If(EIf<'a>, Position),
 
     Expect(EExpect<'a>, Position),
+    Dbg(EExpect<'a>, Position),
 
     Closure(EClosure<'a>, Position),
     Underscore(Position),
@@ -546,6 +547,7 @@ pub enum EIf<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EExpect<'a> {
     Space(BadInputError, Position),
+    Dbg(Position),
     Expect(Position),
     Condition(&'a EExpr<'a>, Position),
     Continuation(&'a EExpr<'a>, Position),

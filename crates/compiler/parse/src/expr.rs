@@ -327,6 +327,7 @@ fn expr_start<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, E
         loc!(specialize(EExpr::If, if_expr_help(options))),
         loc!(specialize(EExpr::When, when::expr_help(options))),
         loc!(specialize(EExpr::Expect, expect_help(options))),
+        loc!(specialize(EExpr::Dbg, dbg_help(options))),
         loc!(specialize(EExpr::Closure, closure_help(options))),
         loc!(expr_operator_chain(options)),
         fail_expr_start_e()
@@ -586,6 +587,7 @@ pub fn parse_single_def<'a>(
 
     let start = state.pos();
 
+    let parse_dbg = crate::parser::keyword_e(crate::keyword::DBG, EExpect::Dbg);
     let parse_expect_vanilla = crate::parser::keyword_e(crate::keyword::EXPECT, EExpect::Expect);
     let parse_expect_fx = crate::parser::keyword_e(crate::keyword::EXPECT_FX, EExpect::Expect);
     let parse_expect = either!(parse_expect_fx, parse_expect_vanilla);
@@ -596,37 +598,35 @@ pub fn parse_single_def<'a>(
         min_indent,
     ) {
         Err((NoProgress, _)) => {
-            match parse_expect.parse(arena, state, min_indent) {
+            match parse_expect.parse(arena, state.clone(), min_indent) {
                 Err((_, _)) => {
-                    // a hacky way to get expression-based error messages. TODO fix this
-                    Ok((NoProgress, None, initial))
-                }
-                Ok((_, expect_flavor, state)) => {
-                    let parse_def_expr =
-                        space0_before_e(increment_min_indent(loc_expr()), EExpr::IndentEnd);
-
-                    let (_, loc_def_expr, state) =
-                        parse_def_expr.parse(arena, state, min_indent)?;
-                    let end = loc_def_expr.region.end();
-                    let region = Region::new(start, end);
-
-                    // drop newlines before the preceding comment
-                    let spaces_before_start = spaces_before_current_start.offset as usize;
-                    let spaces_before_end = start.offset as usize;
-                    let mut spaces_before_current_start = spaces_before_current_start;
-
-                    for byte in &state.original_bytes()[spaces_before_start..spaces_before_end] {
-                        match byte {
-                            b' ' | b'\n' => {
-                                spaces_before_current_start.offset += 1;
-                            }
-                            _ => break,
+                    match parse_dbg.parse(arena, state, min_indent) {
+                        Ok((_, _, state)) => parse_statement_inside_def(
+                            arena,
+                            state,
+                            min_indent,
+                            start,
+                            spaces_before_current_start,
+                            spaces_before_current,
+                            |preceding_comment, loc_def_expr| ValueDef::Dbg {
+                                condition: arena.alloc(loc_def_expr),
+                                preceding_comment,
+                            },
+                        ),
+                        Err((_, _)) => {
+                            // a hacky way to get expression-based error messages. TODO fix this
+                            Ok((NoProgress, None, initial))
                         }
                     }
-
-                    let preceding_comment = Region::new(spaces_before_current_start, start);
-
-                    let value_def = match expect_flavor {
+                }
+                Ok((_, expect_flavor, state)) => parse_statement_inside_def(
+                    arena,
+                    state,
+                    min_indent,
+                    start,
+                    spaces_before_current_start,
+                    spaces_before_current,
+                    |preceding_comment, loc_def_expr| match expect_flavor {
                         Either::Second(_) => ValueDef::Expect {
                             condition: arena.alloc(loc_def_expr),
                             preceding_comment,
@@ -635,18 +635,8 @@ pub fn parse_single_def<'a>(
                             condition: arena.alloc(loc_def_expr),
                             preceding_comment,
                         },
-                    };
-
-                    Ok((
-                        MadeProgress,
-                        Some(SingleDef {
-                            type_or_value: Either::Second(value_def),
-                            region,
-                            spaces_before: spaces_before_current,
-                        }),
-                        state,
-                    ))
-                }
+                    },
+                ),
             }
         }
         Err((MadeProgress, _)) => {
@@ -868,6 +858,49 @@ pub fn parse_single_def<'a>(
             }
         }
     }
+}
+
+/// e.g. Things that can be on their own line in a def, e.g. `expect`, `expect-fx`, or `dbg`
+fn parse_statement_inside_def<'a>(
+    arena: &'a Bump,
+    state: State<'a>,
+    min_indent: u32,
+    start: Position,
+    spaces_before_current_start: Position,
+    spaces_before_current: &'a [CommentOrNewline<'a>],
+    get_value_def: impl Fn(Region, Loc<Expr<'a>>) -> ValueDef<'a>,
+) -> Result<(Progress, Option<SingleDef<'a>>, State<'a>), (Progress, EExpr<'a>)> {
+    let parse_def_expr = space0_before_e(increment_min_indent(loc_expr()), EExpr::IndentEnd);
+    let (_, loc_def_expr, state) = parse_def_expr.parse(arena, state, min_indent)?;
+    let end = loc_def_expr.region.end();
+    let region = Region::new(start, end);
+
+    // drop newlines before the preceding comment
+    let spaces_before_start = spaces_before_current_start.offset as usize;
+    let spaces_before_end = start.offset as usize;
+    let mut spaces_before_current_start = spaces_before_current_start;
+
+    for byte in &state.original_bytes()[spaces_before_start..spaces_before_end] {
+        match byte {
+            b' ' | b'\n' => {
+                spaces_before_current_start.offset += 1;
+            }
+            _ => break,
+        }
+    }
+
+    let preceding_comment = Region::new(spaces_before_current_start, start);
+    let value_def = get_value_def(preceding_comment, loc_def_expr);
+
+    Ok((
+        MadeProgress,
+        Some(SingleDef {
+            type_or_value: Either::Second(value_def),
+            region,
+            spaces_before: spaces_before_current,
+        }),
+        state,
+    ))
 }
 
 // This is a macro only because trying to make it be a function caused lifetime issues.
@@ -1880,6 +1913,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::If(_, _)
         | Expr::When(_, _)
         | Expr::Expect(_, _)
+        | Expr::Dbg(_, _)
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict { .. }
         | Expr::RecordUpdate { .. }
@@ -2293,6 +2327,36 @@ fn expect_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpe
         let (_, loc_cont, state) = parse_cont.parse(arena, state, min_indent)?;
 
         let expr = Expr::Expect(arena.alloc(condition), arena.alloc(loc_cont));
+
+        Ok((MadeProgress, expr, state))
+    }
+}
+
+fn dbg_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EExpect<'a>> {
+    move |arena: &'a Bump, state: State<'a>, min_indent| {
+        let start_column = state.column();
+
+        let (_, _, state) =
+            parser::keyword_e(keyword::DBG, EExpect::Dbg).parse(arena, state, min_indent)?;
+
+        let (_, condition, state) = space0_before_e(
+            specialize_ref(
+                EExpect::Condition,
+                set_min_indent(start_column + 1, expr_start(options)),
+            ),
+            EExpect::IndentCondition,
+        )
+        .parse(arena, state, start_column + 1)
+        .map_err(|(_, f)| (MadeProgress, f))?;
+
+        let parse_cont = specialize_ref(
+            EExpect::Continuation,
+            space0_before_e(loc_expr(), EExpr::IndentEnd),
+        );
+
+        let (_, loc_cont, state) = parse_cont.parse(arena, state, min_indent)?;
+
+        let expr = Expr::Dbg(arena.alloc(condition), arena.alloc(loc_cont));
 
         Ok((MadeProgress, expr, state))
     }

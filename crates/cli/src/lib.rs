@@ -1005,7 +1005,11 @@ fn roc_dev_native(
     expect_metadata: ExpectMetadata,
 ) -> ! {
     use roc_repl_expect::run::ExpectMemory;
-    use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
+    use signal_hook::{
+        consts::signal::SIGCHLD,
+        consts::signal::{SIGUSR1, SIGUSR2},
+        iterator::Signals,
+    };
 
     let ExpectMetadata {
         mut expectations,
@@ -1013,7 +1017,7 @@ fn roc_dev_native(
         layout_interner,
     } = expect_metadata;
 
-    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
+    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1, SIGUSR2]).unwrap();
 
     // let shm_name =
     let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
@@ -1050,6 +1054,19 @@ fn roc_dev_native(
                         // this is the signal we use for an expect failure. Let's see what the child told us
 
                         roc_repl_expect::run::render_expects_in_memory(
+                            &mut writer,
+                            arena,
+                            &mut expectations,
+                            &interns,
+                            &layout_interner,
+                            &memory,
+                        )
+                        .unwrap();
+                    }
+                    SIGUSR2 => {
+                        // this is the signal we use for a dbg
+
+                        roc_repl_expect::run::render_dbgs_in_memory(
                             &mut writer,
                             arena,
                             &mut expectations,

@@ -426,6 +426,7 @@ pub const UTILS_EXPECT_FAILED_START_SHARED_FILE: &str =
     "roc_builtins.utils.expect_failed_start_shared_file";
 pub const UTILS_EXPECT_FAILED_FINALIZE: &str = "roc_builtins.utils.expect_failed_finalize";
 pub const UTILS_EXPECT_READ_ENV_SHARED_BUFFER: &str = "roc_builtins.utils.read_env_shared_buffer";
+pub const UTILS_SEND_DBG: &str = "roc_builtins.utils.send_dbg";
 
 pub const UTILS_LONGJMP: &str = "longjmp";
 pub const UTILS_SETJMP: &str = "setjmp";
