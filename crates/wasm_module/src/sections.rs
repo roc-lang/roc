@@ -1302,6 +1302,7 @@ impl<'a> Serialize for ElementSection<'a> {
 #[derive(Debug)]
 pub struct CodeSection<'a> {
     pub function_count: u32,
+    pub section_offset: u32,
     pub bytes: Vec<'a, u8>,
     /// The start of each function
     pub function_offsets: Vec<'a, u32>,
@@ -1313,6 +1314,7 @@ impl<'a> CodeSection<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         CodeSection {
             function_count: 0,
+            section_offset: 0,
             bytes: Vec::new_in(arena),
             function_offsets: Vec::new_in(arena),
             dead_import_dummy_count: 0,
@@ -1360,6 +1362,7 @@ impl<'a> CodeSection<'a> {
 
         Ok(CodeSection {
             function_count,
+            section_offset: section_body_start as u32,
             bytes,
             function_offsets,
             dead_import_dummy_count: 0,
