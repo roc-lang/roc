@@ -1,8 +1,5 @@
 use core::ffi::c_void;
 
-use roc_mono::ir::CrashTag;
-use roc_std::RocStr;
-
 /// # Safety
 /// The Roc application needs this.
 #[no_mangle]
@@ -34,21 +31,4 @@ pub unsafe fn roc_realloc(
 #[no_mangle]
 pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
     libc::free(c_ptr)
-}
-
-/// # Safety
-/// The Roc application needs this.
-#[no_mangle]
-pub unsafe fn roc_panic(msg: &RocStr, tag_id: u32) {
-    match CrashTag::try_from(tag_id) {
-        Ok(CrashTag::Roc) => {
-            eprintln!("Roc hit a panic: {}", msg);
-            std::process::exit(1);
-        }
-        Ok(CrashTag::User) => {
-            eprintln!("User panic: {}", msg);
-            std::process::exit(1);
-        }
-        Err(_) => unreachable!(),
-    }
 }
