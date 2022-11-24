@@ -9,4 +9,4 @@ pub const EXPECT: &str = "expect";
 pub const EXPECT_FX: &str = "expect-fx";
 pub const CRASH: &str = "crash";
 
-pub const KEYWORDS: [&str; 9] = [IF, THEN, ELSE, WHEN, AS, IS, EXPECT, EXPECT_FX, CRASH];
+pub const KEYWORDS: [&str; 9] = [IF, THEN, ELSE, WHEN, AS, IS, DBG, EXPECT, EXPECT_FX, CRASH];
