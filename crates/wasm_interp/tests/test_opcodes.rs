@@ -42,42 +42,43 @@ fn test_call_return_no_args() {
     let arena = Bump::new();
     let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
-    let sig = || Signature {
-        param_types: Vec::new_in(&arena),
-        ret_type: Some(ValueType::I32),
-    };
-    module.add_function_signature(sig());
-    module.add_function_signature(sig());
-
-    let buffer = &mut module.code.bytes;
 
     // Function 0
-    let func0_offset = buffer.len() as u32;
+    let func0_offset = module.code.bytes.len() as u32;
     module.code.function_offsets.push(func0_offset);
-    buffer.encode_u32(4); // function byte length
-    buffer.encode_u32(0); // no locals
-    let func0_first_instruction = buffer.len();
-    OpCode::CALL.serialize(buffer);
-    buffer.encode_u32(1); // call function 1
-    OpCode::END.serialize(buffer);
+    module.add_function_signature(Signature {
+        param_types: Vec::new_in(&arena),
+        ret_type: Some(ValueType::I32),
+    });
+    [
+        0, // no locals
+        OpCode::CALL as u8,
+        1, // function 1
+        OpCode::END as u8,
+    ]
+    .serialize(&mut module.code.bytes);
+    let func0_first_instruction = func0_offset + 2; // skip function length and locals length
 
     // Function 1
-    let func1_offset = buffer.len() as u32;
+    let func1_offset = module.code.bytes.len() as u32;
     module.code.function_offsets.push(func1_offset);
-    buffer.encode_u32(6); // function byte length
-    buffer.encode_u32(0); // no locals
-    OpCode::I32CONST.serialize(buffer);
-    buffer.encode_i32(12345);
-    OpCode::END.serialize(buffer);
+    module.add_function_signature(Signature {
+        param_types: Vec::new_in(&arena),
+        ret_type: Some(ValueType::I32),
+    });
+    [
+        0, // no locals
+        OpCode::I32CONST as u8,
+        42, // constant value (<64 so that LEB-128 is just one byte)
+        OpCode::END as u8,
+    ]
+    .serialize(&mut module.code.bytes);
 
-    state.program_counter = func0_first_instruction;
+    state.program_counter = func0_first_instruction as usize;
 
-    state.execute_next_instruction(&module); // [func0] call 1
-    state.execute_next_instruction(&module); // [func1] i32.const
-    state.execute_next_instruction(&module); // [func1] end
-    state.execute_next_instruction(&module); // [func0] end
+    while let Action::Continue = state.execute_next_instruction(&module) {}
 
-    assert_eq!(state.value_stack.peek(), Value::I32(12345));
+    assert_eq!(state.value_stack.peek(), Value::I32(42));
 }
 
 #[test]
@@ -104,7 +105,7 @@ fn test_call_return_with_args() {
         OpCode::END as u8,
     ]
     .serialize(&mut module.code.bytes);
-    let func0_first_instruction = func0_offset + 2;
+    let func0_first_instruction = func0_offset + 2; // skip function length and locals length
 
     // Function 1: add two numbers
     let func1_offset = module.code.bytes.len() as u32;
