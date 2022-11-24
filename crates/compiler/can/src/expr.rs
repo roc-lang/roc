@@ -2883,6 +2883,7 @@ fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
                 // Intentionally ignore the lookups in the nested `expect` condition itself,
                 // because they couldn't possibly influence the outcome of this `expect`!
             }
+            Expr::Crash { msg, .. } => stack.push(&msg.value),
             Expr::Num(_, _, _, _)
             | Expr::Float(_, _, _, _, _)
             | Expr::Int(_, _, _, _, _)

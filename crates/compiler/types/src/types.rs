@@ -3529,6 +3529,8 @@ pub enum Category {
 
     AbilityMemberSpecialization(Symbol),
 
+    Crash,
+
     Expect,
     Dbg,
     Unknown,
