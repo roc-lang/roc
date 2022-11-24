@@ -1,4 +1,5 @@
 use crate::target::{arch_str, target_zig_str};
+use const_format::concatcp;
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
@@ -57,6 +58,86 @@ pub fn link(
         } => link_windows(target, output_path, input_paths, link_type),
         _ => internal_error!("TODO gracefully handle unsupported target: {:?}", target),
     }
+}
+
+const fn legacy_host_filename_ext(
+    os: roc_target::OperatingSystem,
+    opt_level: OptLevel,
+) -> &'static str {
+    use roc_target::OperatingSystem::*;
+
+    match os {
+        Wasi => {
+            // TODO wasm host extension should be something else ideally
+            // .bc does not seem to work because
+            //
+            // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
+            //
+            // and zig does not currently emit `.a` webassembly static libraries
+            if matches!(opt_level, OptLevel::Development) {
+                "wasm"
+            } else {
+                "zig"
+            }
+        }
+        Unix => "o",
+        Windows => "obj",
+    }
+}
+
+const PRECOMPILED_HOST_EXT: &str = "rh1"; // Short for "roc host version 1" (so we can change format in the future)
+
+pub const fn preprocessed_host_filename(target: &Triple) -> Option<&'static str> {
+    match target {
+        Triple {
+            architecture: Architecture::Wasm32,
+            ..
+        } => Some(concatcp!("wasm32", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Linux,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(concatcp!("linux-x64", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Linux,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(concatcp!("linux-arm64", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(concatcp!("macos-arm64", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(concatcp!("macos-x64", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(concatcp!("windows-x64", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::X86_32(_),
+            ..
+        } => Some(concatcp!("windows-x86", '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(concatcp!("windows-arm64", '.', PRECOMPILED_HOST_EXT)),
+        _ => None,
+    }
+}
+
+/// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
+pub fn legacy_host_filename(target: &Triple, opt_level: OptLevel) -> Option<String> {
+    let os = roc_target::OperatingSystem::from(target.operating_system);
+    let ext = legacy_host_filename_ext(os, opt_level);
+
+    Some(preprocessed_host_filename(target)?.replace(PRECOMPILED_HOST_EXT, ext))
 }
 
 fn find_zig_str_path() -> PathBuf {
@@ -489,6 +570,10 @@ pub fn build_swift_host_native(
         .arg("swiftc")
         .args(sources)
         .arg("-emit-object")
+        // `-module-name host` renames the .o file to "host" - otherwise you get an error like:
+        //   error: module name "legacy_macos-arm64" is not a valid identifier; use -module-name flag to specify an alternate name
+        .arg("-module-name")
+        .arg("host")
         .arg("-parse-as-library")
         .args(["-o", dest]);
 
@@ -527,26 +612,18 @@ pub fn rebuild_host(
         roc_target::OperatingSystem::Wasi => "",
     };
 
-    let object_extension = match os {
-        roc_target::OperatingSystem::Windows => "obj",
-        roc_target::OperatingSystem::Unix => "o",
-        roc_target::OperatingSystem::Wasi => "o",
-    };
-
     let host_dest = if matches!(target.architecture, Architecture::Wasm32) {
         if matches!(opt_level, OptLevel::Development) {
-            host_input_path.with_file_name("host.o")
+            host_input_path.with_extension("o")
         } else {
-            host_input_path.with_file_name("host.bc")
+            host_input_path.with_extension("bc")
         }
     } else if shared_lib_path.is_some() {
         host_input_path
             .with_file_name("dynhost")
             .with_extension(executable_extension)
     } else {
-        host_input_path
-            .with_file_name("host")
-            .with_extension(object_extension)
+        host_input_path.with_file_name(legacy_host_filename(target, opt_level).unwrap())
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
