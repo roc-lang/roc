@@ -168,6 +168,7 @@ mod test_parse {
         pass/equals.expr,
         pass/expect_fx.module,
         pass/multiline_tuple_with_comments.expr,
+        pass/dbg.expr,
         pass/expect.expr,
         pass/float_with_underscores.expr,
         pass/full_app_header_trailing_commas.header,

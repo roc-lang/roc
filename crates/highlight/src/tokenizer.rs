@@ -33,6 +33,7 @@ pub enum Token {
     KeywordEffects = 0b_0011_0000,
     KeywordPlatform = 0b_0011_0001,
     KeywordRequires = 0b_0011_0010,
+    KeywordDbg = 0b_0111_1011,
 
     Comma = 0b_0100_0000,
     Colon = 0b_0100_0001,
@@ -417,6 +418,7 @@ fn lex_ident(uppercase: bool, bytes: &[u8]) -> (Token, usize) {
         b"when" => Token::KeywordWhen,
         b"as" => Token::KeywordAs,
         b"is" => Token::KeywordIs,
+        b"dbg" => Token::KeywordDbg,
         b"expect" => Token::KeywordExpect,
         b"app" => Token::KeywordApp,
         b"interface" => Token::KeywordInterface,
