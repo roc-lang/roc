@@ -443,9 +443,6 @@ fn spawn_rebuild_thread(
                     exported_symbols,
                     exported_closure_types,
                 );
-
-                // Copy preprocessed host to executable location.
-                std::fs::copy(preprocessed_host_path, binary_path.as_path()).unwrap();
             }
             LinkingStrategy::Legacy => {
                 rebuild_host(
