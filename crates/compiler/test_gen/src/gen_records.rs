@@ -447,7 +447,7 @@ fn optional_field_when_use_default_nested() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn optional_field_when_no_use_default() {
+fn optional_field_destructure_module() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -468,7 +468,7 @@ fn optional_field_when_no_use_default() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn optional_field_when_no_use_default_nested() {
+fn optional_field_destructure_expr() {
     assert_evals_to!(
         indoc!(
             r#"
