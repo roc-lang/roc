@@ -1,36 +1,24 @@
-BinOps(
-    [
-        (
-            @0-5 Apply(
-                @0-3 Var {
-                    module_name: "",
-                    ident: "dbg",
-                },
-                [
-                    @4-5 Num(
-                        "1",
-                    ),
-                ],
-                Space,
+Dbg(
+    @4-10 BinOps(
+        [
+            (
+                @4-5 Num(
+                    "1",
+                ),
+                @6-8 Equals,
             ),
-            @6-8 Equals,
-        ),
-    ],
-    @9-13 Apply(
+        ],
         @9-10 Num(
             "1",
         ),
+    ),
+    @12-13 SpaceBefore(
+        Num(
+            "4",
+        ),
         [
-            @12-13 SpaceBefore(
-                Num(
-                    "4",
-                ),
-                [
-                    Newline,
-                    Newline,
-                ],
-            ),
+            Newline,
+            Newline,
         ],
-        Space,
     ),
 )
