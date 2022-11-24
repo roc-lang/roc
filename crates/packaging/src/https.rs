@@ -5,7 +5,7 @@ use std::{
 
 use crate::tarball::Compression;
 
-// gzip should be the most widely supported, and brotli offers the highest compession.
+// gzip should be the most widely supported, and brotli offers the highest compression.
 // flate2 gets us both gzip and deflate, so there's no harm in offering deflate too.
 //
 // Here are all the officially supported options: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Accept-Encoding
@@ -190,7 +190,7 @@ impl Encoding {
             }
             other => {
                 if other.contains(',') {
-                    // We don't support mutliple encodings (although the spec for the HTTP header
+                    // We don't support multiple encodings (although the spec for the HTTP header
                     // permits a comma-separated list)
                     Err(Problem::MultipleEncodings(other.to_string()))
                 } else {
