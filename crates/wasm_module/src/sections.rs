@@ -4,7 +4,7 @@ use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
 
-use crate::DUMMY_FUNCTION;
+use crate::{Value, DUMMY_FUNCTION};
 
 use super::linking::{LinkingSection, SymInfo, WasmObjectSymbol};
 use super::opcodes::OpCode;
@@ -255,6 +255,12 @@ impl<'a> TypeSection<'a> {
 
     pub fn is_empty(&self) -> bool {
         self.bytes.is_empty()
+    }
+
+    pub fn look_up_arg_count(&self, sig_index: u32) -> u32 {
+        let mut offset = self.offsets[sig_index as usize];
+        offset += 1; // separator
+        u32::parse((), &self.bytes, &mut offset).unwrap()
     }
 }
 
@@ -771,6 +777,15 @@ impl<'a> MemorySection<'a> {
             MemorySection { count: 1, bytes }
         }
     }
+
+    pub fn min_bytes(&self) -> Result<u32, ParseError> {
+        let mut cursor = 0;
+        let memory_limits = Limits::parse((), &self.bytes, &mut cursor)?;
+        let min_pages = match memory_limits {
+            Limits::Min(pages) | Limits::MinMax(pages, _) => pages,
+        };
+        Ok(min_pages * MemorySection::PAGE_SIZE)
+    }
 }
 
 section_impl!(MemorySection, SectionId::Memory);
@@ -852,6 +867,59 @@ impl ConstExpr {
             _ => internal_error!("Expected ConstExpr to be I32"),
         }
     }
+
+    // ConstExpr and Value are separate types in case we ever need to support
+    // arbitrary constant expressions, rather than just i32.const and friends.
+    fn as_value(&self) -> Value {
+        match self {
+            ConstExpr::I32(x) => Value::I32(*x),
+            ConstExpr::I64(x) => Value::I64(*x),
+            ConstExpr::F32(x) => Value::F32(*x),
+            ConstExpr::F64(x) => Value::F64(*x),
+        }
+    }
+}
+
+impl Parse<()> for ConstExpr {
+    fn parse(_ctx: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let opcode = OpCode::from(bytes[*cursor]);
+        *cursor += 1;
+
+        let result = match opcode {
+            OpCode::I32CONST => {
+                let x = i32::parse((), bytes, cursor)?;
+                Ok(ConstExpr::I32(x))
+            }
+            OpCode::I64CONST => {
+                let x = i64::parse((), bytes, cursor)?;
+                Ok(ConstExpr::I64(x))
+            }
+            OpCode::F32CONST => {
+                let mut b = [0; 4];
+                b.copy_from_slice(&bytes[*cursor..][..4]);
+                Ok(ConstExpr::F32(f32::from_le_bytes(b)))
+            }
+            OpCode::F64CONST => {
+                let mut b = [0; 8];
+                b.copy_from_slice(&bytes[*cursor..][..8]);
+                Ok(ConstExpr::F64(f64::from_le_bytes(b)))
+            }
+            _ => Err(ParseError {
+                offset: *cursor,
+                message: format!("Unsupported opcode {:?} in constant expression.", opcode),
+            }),
+        };
+
+        if bytes[*cursor] != OpCode::END as u8 {
+            return Err(ParseError {
+                offset: *cursor,
+                message: "Expected END opcode in constant expression.".into(),
+            });
+        }
+        *cursor += 1;
+
+        result
+    }
 }
 
 impl Serialize for ConstExpr {
@@ -930,6 +998,17 @@ impl<'a> GlobalSection<'a> {
     pub fn append(&mut self, global: Global) {
         global.serialize(&mut self.bytes);
         self.count += 1;
+    }
+
+    pub fn initial_values<'b>(&self, arena: &'b Bump) -> Vec<'b, Value> {
+        let mut cursor = 0;
+        let iter = (0..self.count)
+            .map(|_| {
+                GlobalType::skip_bytes(&self.bytes, &mut cursor)?;
+                ConstExpr::parse((), &self.bytes, &mut cursor).map(|x| x.as_value())
+            })
+            .filter_map(|r| r.ok());
+        Vec::from_iter_in(iter, arena)
     }
 }
 
@@ -1221,7 +1300,7 @@ impl<'a> Serialize for ElementSection<'a> {
 pub struct CodeSection<'a> {
     pub function_count: u32,
     pub bytes: Vec<'a, u8>,
-    /// The start of each preloaded function
+    /// The start of each function
     pub function_offsets: Vec<'a, u32>,
     /// Dead imports are replaced with dummy functions in CodeSection
     pub dead_import_dummy_count: u32,

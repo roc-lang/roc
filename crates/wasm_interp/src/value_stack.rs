@@ -1,9 +1,7 @@
 use bitvec::vec::BitVec;
 use bumpalo::{collections::Vec, Bump};
-use roc_wasm_module::ValueType;
+use roc_wasm_module::{Value, ValueType};
 use std::{fmt::Debug, mem::size_of};
-
-use crate::Value;
 
 /// Memory-efficient Struct-of-Arrays storage for the value stack.
 /// Pack the values and their types as densely as possible,
@@ -32,6 +30,14 @@ impl<'a> ValueStack<'a> {
             is_float: BitVec::with_capacity(1024),
             is_64: BitVec::with_capacity(1024),
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.is_64.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.is_64.is_empty()
     }
 
     pub fn push(&mut self, value: Value) {
@@ -67,6 +73,14 @@ impl<'a> ValueStack<'a> {
         let value = self.get(is_64, is_float, bytes_idx);
         self.bytes.truncate(bytes_idx);
         value
+    }
+
+    pub fn peek(&self) -> Value {
+        let is_64 = self.is_64[self.is_64.len() - 1];
+        let is_float = self.is_float[self.is_float.len() - 1];
+        let size = if is_64 { 8 } else { 4 };
+        let bytes_idx = self.bytes.len() - size;
+        self.get(is_64, is_float, bytes_idx)
     }
 
     fn get(&self, is_64: bool, is_float: bool, bytes_idx: usize) -> Value {
