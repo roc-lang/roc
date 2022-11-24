@@ -739,6 +739,9 @@ impl SkipBytes for Limits {
 
 impl Parse<()> for Limits {
     fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        if *cursor >= bytes.len() {
+            return Ok(Limits::Min(0));
+        }
         let variant_id = bytes[*cursor];
         *cursor += 1;
 
@@ -1488,6 +1491,13 @@ impl<'a> DataSection<'a> {
 
 impl<'a> Parse<&'a Bump> for DataSection<'a> {
     fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        if *cursor >= module_bytes.len() {
+            return Ok(DataSection {
+                end_addr: 0,
+                count: 0,
+                bytes: Vec::<u8>::new_in(arena),
+            });
+        }
         let (count, range) = parse_section(Self::ID, module_bytes, cursor)?;
 
         let end = range.end;
