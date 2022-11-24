@@ -40,12 +40,12 @@
             <li><a href="#booleans">Booleans</a></li>
             <li><a href="#lists">Lists</a></li>
             <li><a href="#types">Types</a></li>
+            <li><a href="#crashing">Crashing</a></li>
             <li><a href="#tests-and-expectations">Tests and Expectations</a></li>
             <li><a href="#modules">Modules</a></li>
             <li><a href="#modules">Platforms and Packages</a></li>
             <li><a href="#tasks">Tasks</a></li>
             <li><a href="#abilities">Abilities</a></li>
-            <li><a href="#next-steps">Next Steps</a></li>
             <li><a href="#advanced-concepts">Advanced Concepts</a></li>
             <li><a href="#operator-desugaring-table">Operator Desugaring Table</a></li>
         </ol>
@@ -1008,6 +1008,66 @@ so <code>0xC8u8</code> evaluates to decimal <code>200</code> as an unsigned 8-bi
 each bit. <code>0b0000_1000</code> evaluates to decimal <code>8</code>
 The integer type can be specified as a suffix to the binary literal,
 so <code>0b0100u8</code> evaluates to decimal <code>4</code> as an unsigned 8-bit integer.</p>
+<section><h2 id="crashing"><a href="#crashing">Crashing</a></h2>
+<p>Ideally, Roc programs would never crash. However, there are some situations where they may. For example:</p>
+<ol>
+    <li>When doing normal integer arithmetic (e.g. <code>x + y</code>) that overflows.</li>
+    <li>When the system runs out of memory.</li>
+    <li>When a variable-length collection (like a <code>List</code> or <code>Str</code>) gets too
+         long to be representible in the operating system's address space.
+         (A 64-bit operating system's address space can represent several
+         <a href="https://en.wikipedia.org/wiki/Byte#Multiple-byte_units">exibytes</a>
+        of data, so this case should not come up often.)
+    </li>
+</ol>
+<p>Crashes in Roc are not like
+    <a href="https://en.wikipedia.org/wiki/Exception_handling">try/catch exceptions</a>
+found in some other programming languages. There is no way to "catch" a crash. It immediately
+ends the program, and what happens next is defined by the platform. (For example, a command-line
+interface platform might exit with a nonzero <a href="https://en.wikipedia.org/wiki/Exit_status">exit code</a>,
+whereas a web server platform might have the current request respond with a
+<a href="https://en.wikipedia.org/wiki/List_of_HTTP_status_codes#500">HTTP 500 error</a>.)</p>
+<h3 id="crashing-in-unreachable-branches"><a href="#crashing-in-unreachable-branches">Crashing in unreachable branches</a></h3>
+<p>You can intentionally crash a Roc program, for example inside a conditional branch that
+you believe is unreachable. Suppose you're certain that a particular <code>List U8</code>
+contains valid UTF-8 bytes, which means when you call <code>Str.fromUtf8</code> on it, the
+<code>Result</code> it returns will always be <code>Ok</code>. In that scenario, you can use
+the <code>crash</code> keyword to handle the <code>Err</code> case like so:</p>
+<samp>answer : Str
+answer =
+    <span class="kw">when</span> Str.fromUtf8 definitelyValidUtf8 <span class="kw">is</span>
+        Ok str <span class="kw">-&gt;</span> str
+        Err _ <span class="kw">-&gt;</span> <span class="kw">crash</span> <span class="str">"This should never happen!"</span>
+</samp>
+<p>If the unthinkable happens, and somehow the program reaches this <code>Err</code> branch even though that
+was thought to be impossible, then it will crash - just like if the system had run out of memory.
+The string passed to <code>crash</code> will be provided to the platform as context; each platform may do
+something different with it.</p>
+<blockquote>
+<p><b>Note:</b> <code>crash</code> is a language keyword and not a function; you can&#39;t assign <code>crash</code> to a variable
+or pass it to a function.</p>
+</blockquote>
+<h3 id="crashing-for-todos"><a href="#crashing-for-todos">Crashing for TODOs</a></h3>
+<p>Another use for <code>crash</code> is as a TODO marker when you're in the middle of building something:</p>
+<samp><span class="kw">if</span> x <span class="op">&gt;</span> y <span class="kw">then</span>
+    transmogrify (x <span class="op">*</span> <span class="number">2</span>)
+<span class="kw">else</span>
+    <span class="kw">crash</span> <span class="str">"TODO handle the x &lt;= y case"</span>
+</samp>
+<p>This lets you do things like write tests for the non-<code>crash</code> branch, and then come back and finish
+the other branch later.</p>
+</section>
+<h3 id="crashing-for-error-handling"><a href="#crashing-for-error-handling">Crashing for error handling</a></h3>
+<p><code>crash</code> is not for error handling.</p>
+<p>The reason Roc has a <code>crash</code> keyword is for scenarios where it's expected that no error
+    will ever happen (like in <a href="#crashing-in-unreachable-branches">unreachable branches</a>),
+    or where graceful error handling is infeasible (like running out of memory).
+</p>
+<p>Errors that are recoverable should be represented using normal Roc types (
+    like <code><a href="https://www.roc-lang.org/builtins/Result">Result</a></code>)
+    and then handled without crashing—for example, by having the application
+    report that something went wrong, and then continue running from there.
+</p>
 <h2 id="tests-and-expectations"><a href="#tests-and-expectations">Tests and expectations</a></h2>
 <p>You can write automated tests for your Roc code like so:</p>
 <samp>pluralize <span class="op">=</span> \singular, plural, count <span class="op">-&gt;</span>
