@@ -1,18 +1,14 @@
 app "echo"
     packages { pf: "cli-platform/main.roc" }
-    imports [pf.Stdin, pf.Stdout, pf.Task.{ Task }, pf.Program.{ Program, ExitCode }]
+    imports [pf.Stdin, pf.Stdout, pf.Task.{ Task }]
     provides [main] to pf
 
-main : Program
-main = Program.noArgs mainTask
-
-mainTask : Task ExitCode [] [Read [Stdin], Write [Stdout]]
-mainTask =
+main : Task {} []
+main =
     _ <- Task.await (Stdout.line "🗣  Shout into this cave and hear the echo! 👂👂👂")
-    Task.loop {} (\_ -> Task.map tick Step)
-    |> Program.exit 0
+    Task.loop {} \_ -> Task.map tick Step
 
-tick : Task.Task {} [] [Read [Stdin], Write [Stdout]]
+tick : Task.Task {} []
 tick =
     shout <- Task.await Stdin.line
     Stdout.line (echo shout)

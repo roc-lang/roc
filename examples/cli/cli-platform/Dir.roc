@@ -9,7 +9,7 @@ DeleteErr : InternalDir.DeleteErr
 DirEntry : InternalDir.DirEntry
 
 ## Lists the files and directories inside the directory.
-list : Path -> Task (List Path) [DirReadErr Path ReadErr] [Read [File]]
+list : Path -> Task (List Path) [DirReadErr Path ReadErr]
 list = \path ->
     effect = Effect.map (Effect.dirList (InternalPath.toBytes path)) \result ->
         when result is
@@ -19,7 +19,7 @@ list = \path ->
     InternalTask.fromEffect effect
 
 ## Deletes a directory if it's empty.
-deleteEmptyDir : Path -> Task {} [DirDeleteErr Path DeleteErr] [Write [File]]
+deleteEmptyDir : Path -> Task {} [DirDeleteErr Path DeleteErr]
 
 ## Recursively deletes the directory as well as all files and directories inside it.
-deleteRecursive : Path -> Task {} [DirDeleteErr Path DeleteErr] [Write [File]]
+deleteRecursive : Path -> Task {} [DirDeleteErr Path DeleteErr]

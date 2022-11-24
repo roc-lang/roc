@@ -1,9 +1,9 @@
 platform "cli"
-    requires {} { main : InternalProgram }
+    requires {} { main : Task {} [] }
     exposes []
     packages {}
-    imports [Effect.{ Effect }, InternalProgram.{ InternalProgram }]
+    imports [Task.{ Task }]
     provides [mainForHost]
 
-mainForHost : Effect U8 as Fx
-mainForHost = InternalProgram.toEffect main
+mainForHost : Task {} [] as Fx
+mainForHost = main

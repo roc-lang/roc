@@ -1,6 +1,6 @@
 app "type-error"
     packages { pf: "../../../../examples/cli/cli-platform/main.roc" }
-    imports [pf.Stdout.{ line }, pf.Task.{ await }, pf.Program]
+    imports [pf.Stdout.{ line }, pf.Task.{ await }]
     provides [main] to pf
 
 main =
@@ -8,6 +8,6 @@ main =
     _ <- await (line "b")
     _ <- await (line "c")
     _ <- await (line "d")
+    _ <- await (File.readUtf8 (Path.fromStr "blah.txt"))
     line "e"
-    # Type mismatch because this line is missing:
-    # |> Program.quick
+    # Type mismatch because the File.readUtf8 error case is not handled

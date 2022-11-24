@@ -213,7 +213,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 }
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> u8 {
+pub extern "C" fn rust_main() {
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
 
@@ -223,11 +223,9 @@ pub extern "C" fn rust_main() -> u8 {
 
         roc_main(buffer);
 
-        let exit_code = call_the_closure(buffer);
+        call_the_closure(buffer);
 
         std::alloc::dealloc(buffer, layout);
-
-        exit_code
     }
 }
 
@@ -285,6 +283,11 @@ pub extern "C" fn roc_fx_setCwd(roc_path: &RocList<u8>) -> RocResult<(), ()> {
         Ok(()) => RocResult::ok(()),
         Err(_) => RocResult::err(()),
     }
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_processExit(exit_code: u8) {
+    std::process::exit(exit_code as i32);
 }
 
 #[no_mangle]
