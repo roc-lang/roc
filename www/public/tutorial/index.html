@@ -1047,21 +1047,36 @@ compatible with fractions. For example:</p>
 and also <code>Num.cos 1</code> and have them all work as expected; the number literal <code>1</code> has the type
 <code>Num *</code>, which is compatible with the more constrained types <code>Int</code> and <code>Frac</code>. For the same reason,
 you can pass number literals to functions expecting even more constrained types, like <code>I32</code> or <code>F64</code>.</p>
-<h3 id="typed-number-literals"><a href="#typed-number-literals">Typed Number Literals</a></h3>
-<p>When writing a number literal in Roc you can specify the numeric type as a suffix of the literal.
-<code>1u8</code> specifies <code>1</code> as an unsigned 8-bit integer, <code>5i32</code> specifies <code>5</code> as a signed 32-bit integer, etc.
-The full list of possible suffixes includes:
-<code>i8</code>, <code>u8</code>, <code>i16</code>, <code>u16</code>, <code>i32</code>, <code>u32</code>, <code>i64</code>, <code>u64</code>, <code>i128</code>, <code>u128</code>, <code>nat</code>, <code>f32</code>, <code>f64</code>, <code>dec</code></p>
-<h3 id="hexadecimal-integer-literals"><a href="#hexadecimal-integer-literals">Hexadecimal Integer Literals</a></h3>
-<p>Integer literals can be written in hexadecimal form by prefixing with <code>0x</code> followed by hexadecimal characters.
-<code>0xFE</code> evaluates to decimal <code>254</code>
-The integer type can be specified as a suffix to the hexadecimal literal,
-so <code>0xC8u8</code> evaluates to decimal <code>200</code> as an unsigned 8-bit integer.</p>
-<h3 id="binary-integer-literals"><a href="#binary-integer-literals">Binary Integer Literals</a></h3>
-<p>Integer literals can be written in binary form by prefixing with <code>0b</code> followed by the 1's and 0's representing
-each bit. <code>0b0000_1000</code> evaluates to decimal <code>8</code>
-The integer type can be specified as a suffix to the binary literal,
-so <code>0b0100u8</code> evaluates to decimal <code>4</code> as an unsigned 8-bit integer.</p>
+<h3 id="number-literals"><a href="#number-literals">Number Literals</a></h3>
+<p>By default, a number literal with no decimal point has the type <code>Num *</code>—that is,
+we know it's "a number" but nothing more specific. (Number literals with decimal points have the type <code>Frac *</code> instead.)
+</p>
+<p>You can give a number literal a more specific type by adding the type you want as a lowercase suffix.
+For example, <code>1u8</code> specifies <code>1</code> with the type <code>U8</code>,
+and <code>5dec</code> specifies <code>5</code> with the type <code>Dec</code>.</p>
+<p>The full list of possible suffixes includes:</p>
+    <code>u8</code>,
+    <code>i8</code>,
+    <code>u16</code>,
+    <code>i16</code>,
+    <code>u32</code>,
+    <code>i32</code>,
+    <code>u64</code>,
+    <code>i64</code>,
+    <code>u128</code>,
+    <code>i128</code>,
+    <code>nat</code>,
+    <code>f32</code>,
+    <code>f64</code>,
+    <code>dec</code>
+</p>
+<p>Integer literals can be written in <a href="https://en.wikipedia.org/wiki/Hexadecimal">hexadecimal</a>
+form by prefixing with <code>0x</code> followed by hexadecimal characters
+(<code>a</code> - <code>f</code> in addition to <code>0</code> - <code>9</code>)</a>.
+For example, writing <code>0xfe</code> is the same as writing <code>254</code>. Similarly,
+the prefix <code>0b</code> specifies binary integers. Writing <code>0b0000_1000</code>
+is the same as writing <code>8</code>.
+</p>
 <section><h2 id="crashing"><a href="#crashing">Crashing</a></h2>
 <p>Ideally, Roc programs would never crash. However, there are some situations where they may. For example:</p>
 <ol>
@@ -1138,7 +1153,7 @@ expect pluralize <span class="str">"cactus"</span> <span class="str">"cacti"</sp
 </samp>
 <p>If you put this in a file named <code>main.roc</code> and run <code>roc test</code>, Roc will execute the two <code>expect</code>
 expressions (that is, the two <code>pluralize</code> calls) and report any that returned <code>false</code>.</p>
-<h3 id="inline-expects"><a href="#inline-expects">Inline <code>expect</code>s</a></h3>
+<h3 id="inline-expects"><a href="#inline-expects">Inline Expectations</a></h3>
 <p>For example:</p>
 <samp>    <span class="kw">if</span> count <span class="op">==</span> <span class="number">1</span> then
         <span class="str">"<span class="hljs-subst">\(countStr)</span> <span class="hljs-subst">\(singular)</span>"</span>
@@ -1159,19 +1174,6 @@ control flow. In fact, if you do <code>roc build</code>, they are not even inclu
 <p>If you try this code out, you may note that when an <code>expect</code> fails (either a top-level or inline
 one), the failure message includes the values of any named variables - such as <code>count</code> here.
 This leads to a useful technique, which we will see next.</p>
-<h3 id="quick-debugging-with-inline-expect-s"><a href="#quick-debugging-with-inline-expect-s">Quick debugging with inline <code>expect</code>s</a></h3>
-<p>An age-old debugging technique is printing out a variable to the terminal. In Roc you can use
-<code>expect</code> to do this. Here's an example:</p>
-<samp>\arg <span class="op">-&gt;</span>
-    x <span class="op">=</span> arg - <span class="number">1</span>
-
-    # Reports the value <span class="kw">of</span> `x` without stopping the program
-    expect x != x
-
-    Num.abs x
-</samp>
-<p>The failure output will include both the value of <code>x</code> as well as the comment immediately above it,
-which lets you use that comment for extra context in your output.</p>
 <h2 id="interface-modules"><a href="#interface-modules">Interface modules</a></h2>
 <p>[This part of the tutorial has not been written yet. Coming soon!]</p>
 <h2 id="builtin-modules"><a href="#builtin-modules">Builtin modules</a></h2>
