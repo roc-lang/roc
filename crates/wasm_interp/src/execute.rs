@@ -429,8 +429,15 @@ impl<'a> ExecutionState<'a> {
                 let mut target = &mut self.memory[addr..][..4];
                 target.write(&unwrapped.to_le_bytes()[..4]).unwrap();
             }
-            CURRENTMEMORY => todo!("{:?} @ {:#x}", op_code, file_offset),
-            GROWMEMORY => todo!("{:?} @ {:#x}", op_code, file_offset),
+            CURRENTMEMORY => {
+                let size = self.memory.len() as i32 / MemorySection::PAGE_SIZE as i32;
+                self.value_stack.push(Value::I32(size));
+            }
+            GROWMEMORY => {
+                let grow_pages = self.value_stack.pop_u32();
+                let grow_bytes = grow_pages as usize * MemorySection::PAGE_SIZE as usize;
+                self.memory.extend(iter::repeat(0).take(grow_bytes));
+            }
             I32CONST => {
                 let value = i32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
                 self.write_debug(value);
