@@ -183,7 +183,7 @@ impl<'a> Renderer<'a> {
         let line_col_region = self.to_line_col_region(expect_region, dbg_expr_region);
         write!(
             writer,
-            "[{} {}:{}] = ",
+            "\u{001b}[36m[{} {}:{}] \u{001b}[0m",
             self.filename.display(),
             line_col_region.start.line,
             line_col_region.start.column
@@ -197,7 +197,7 @@ impl<'a> Renderer<'a> {
             expr.format(&mut buf, 0);
         }
 
-        write!(writer, "{}", buf.as_str())
+        writeln!(writer, "{}", buf.as_str())
     }
 
     pub fn render_panic<W>(

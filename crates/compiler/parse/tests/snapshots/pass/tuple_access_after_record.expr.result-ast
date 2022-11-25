@@ -1,0 +1,24 @@
+TupleAccess(
+    RecordAccess(
+        Record(
+            [
+                @2-11 RequiredValue(
+                    @2-3 "a",
+                    [],
+                    @5-11 Tuple(
+                        [
+                            @6-7 Num(
+                                "1",
+                            ),
+                            @9-10 Num(
+                                "2",
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        ),
+        "a",
+    ),
+    "0",
+)
