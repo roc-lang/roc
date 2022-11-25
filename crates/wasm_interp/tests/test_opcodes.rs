@@ -460,32 +460,207 @@ fn test_i64load32u() {
     );
 }
 
-// #[test]
-// fn test_i32store() {}
+fn test_store<'a>(
+    arena: &'a Bump,
+    module: &mut WasmModule<'a>,
+    addr: u32,
+    store_op: OpCode,
+    offset: u32,
+    value: Value,
+) -> Vec<'a, u8> {
+    let is_debug_mode = false;
+    let start_fn_name = "test";
 
-// #[test]
-// fn test_i64store() {}
+    module.memory = MemorySection::new(arena, MemorySection::PAGE_SIZE);
 
-// #[test]
-// fn test_f32store() {}
+    let signature = Signature {
+        param_types: bumpalo::vec![in arena],
+        ret_type: None,
+    };
 
-// #[test]
-// fn test_f64store() {}
+    create_exported_function_no_locals(module, start_fn_name, signature, |buf| {
+        buf.append_u8(OpCode::I32CONST as u8);
+        buf.encode_u32(addr);
+        match value {
+            Value::I32(x) => {
+                buf.append_u8(OpCode::I32CONST as u8);
+                buf.encode_i32(x);
+            }
+            Value::I64(x) => {
+                buf.append_u8(OpCode::I64CONST as u8);
+                buf.encode_i64(x);
+            }
+            Value::F32(x) => {
+                buf.append_u8(OpCode::F32CONST as u8);
+                buf.encode_f32(x);
+            }
+            Value::F64(x) => {
+                buf.append_u8(OpCode::F64CONST as u8);
+                buf.encode_f64(x);
+            }
+        }
+        buf.append_u8(store_op as u8);
+        buf.encode_u32(0); // align
+        buf.encode_u32(offset);
+        buf.append_u8(OpCode::END as u8);
+    });
 
-// #[test]
-// fn test_i32store8() {}
+    let mut state =
+        ExecutionState::for_module(&arena, &module, start_fn_name, is_debug_mode).unwrap();
 
-// #[test]
-// fn test_i32store16() {}
+    while let Action::Continue = state.execute_next_instruction(&module) {}
 
-// #[test]
-// fn test_i64store8() {}
+    state.memory
+}
 
-// #[test]
-// fn test_i64store16() {}
+#[test]
+fn test_i32store() {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
 
-// #[test]
-// fn test_i64store32() {}
+    let addr: u32 = 0x11;
+    let store_op = OpCode::I32STORE;
+    let offset = 1;
+    let value = Value::I32(0x12345678);
+    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+
+    let index = (addr + offset) as usize;
+    assert_eq!(&memory[index..][..4], &[0x78, 0x56, 0x34, 0x12]);
+}
+
+#[test]
+fn test_i64store() {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+
+    let addr: u32 = 0x11;
+    let store_op = OpCode::I64STORE;
+    let offset = 1;
+    let value = Value::I64(0x123456789abcdef0);
+    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+
+    let index = (addr + offset) as usize;
+    assert_eq!(
+        &memory[index..][..8],
+        &[0xf0, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12]
+    );
+}
+
+#[test]
+fn test_f32store() {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+
+    let addr: u32 = 0x11;
+    let store_op = OpCode::F32STORE;
+    let offset = 1;
+    let inner: f32 = 1.23456;
+    let value = Value::F32(inner);
+    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+
+    let index = (addr + offset) as usize;
+    assert_eq!(&memory[index..][..4], &inner.to_le_bytes());
+}
+
+#[test]
+fn test_f64store() {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+
+    let addr: u32 = 0x11;
+    let store_op = OpCode::F64STORE;
+    let offset = 1;
+    let inner: f64 = 1.23456;
+    let value = Value::F64(inner);
+    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+
+    let index = (addr + offset) as usize;
+    assert_eq!(&memory[index..][..8], &inner.to_le_bytes());
+}
+
+#[test]
+fn test_i32store8() {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+
+    let addr: u32 = 0x11;
+    let store_op = OpCode::I32STORE8;
+    let offset = 1;
+    let value = Value::I32(0x12345678);
+    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+
+    let index = (addr + offset) as usize;
+    assert_eq!(&memory[index..][..4], &[0x78, 0x00, 0x00, 0x00]);
+}
+
+#[test]
+fn test_i32store16() {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+
+    let addr: u32 = 0x11;
+    let store_op = OpCode::I32STORE16;
+    let offset = 1;
+    let value = Value::I32(0x12345678);
+    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+
+    let index = (addr + offset) as usize;
+    assert_eq!(&memory[index..][..4], &[0x78, 0x56, 0x00, 0x00]);
+}
+
+#[test]
+fn test_i64store8() {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+
+    let addr: u32 = 0x11;
+    let store_op = OpCode::I64STORE8;
+    let offset = 1;
+    let value = Value::I64(0x123456789abcdef0);
+    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+
+    let index = (addr + offset) as usize;
+    assert_eq!(
+        &memory[index..][..8],
+        &[0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    );
+}
+
+#[test]
+fn test_i64store16() {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+
+    let addr: u32 = 0x11;
+    let store_op = OpCode::I64STORE16;
+    let offset = 1;
+    let value = Value::I64(0x123456789abcdef0);
+    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+
+    let index = (addr + offset) as usize;
+    assert_eq!(
+        &memory[index..][..8],
+        &[0xf0, 0xde, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    );
+}
+
+#[test]
+fn test_i64store32() {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+
+    let addr: u32 = 0x11;
+    let store_op = OpCode::I64STORE32;
+    let offset = 1;
+    let value = Value::I64(0x123456789abcdef0);
+    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+
+    let index = (addr + offset) as usize;
+    assert_eq!(
+        &memory[index..][..8],
+        &[0xf0, 0xde, 0xbc, 0x9a, 0x00, 0x00, 0x00, 0x00]
+    );
+}
 
 // #[test]
 // fn test_currentmemory() {}

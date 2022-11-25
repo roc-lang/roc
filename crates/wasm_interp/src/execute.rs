@@ -19,9 +19,7 @@ pub enum Action {
 
 #[derive(Debug)]
 pub struct ExecutionState<'a> {
-    #[allow(dead_code)]
-    memory: Vec<'a, u8>,
-
+    pub memory: Vec<'a, u8>,
     pub call_stack: CallStack<'a>,
     pub value_stack: ValueStack<'a>,
     pub globals: Vec<'a, Value>,
@@ -168,6 +166,9 @@ impl<'a> ExecutionState<'a> {
         let offset = self.fetch_immediate_u32(module);
         let value = self.value_stack.pop();
         let base_addr = self.value_stack.pop_u32();
+
+        dbg!(base_addr, offset);
+
         let addr = (base_addr + offset) as usize;
         (addr, value)
     }
