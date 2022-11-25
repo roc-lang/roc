@@ -1,6 +1,5 @@
 use bumpalo::{collections::Vec, Bump};
-use std::fmt;
-use std::io::Write;
+use std::fmt::{self, Write};
 use std::iter;
 
 use roc_wasm_module::opcodes::OpCode;
@@ -124,7 +123,6 @@ impl<'a> ExecutionState<'a> {
     }
 
     fn fetch_immediate_u32(&mut self, module: &WasmModule<'a>) -> u32 {
-        use std::fmt::Write;
         let x = u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
         if let Some(debug_string) = self.debug_string.as_mut() {
             write!(debug_string, "{}", x).unwrap();
@@ -171,7 +169,6 @@ impl<'a> ExecutionState<'a> {
     }
 
     fn write_debug<T: fmt::Debug>(&mut self, value: T) {
-        use fmt::Write;
         if let Some(debug_string) = self.debug_string.as_mut() {
             std::write!(debug_string, "{:?} ", value).unwrap();
         }
@@ -376,56 +373,56 @@ impl<'a> ExecutionState<'a> {
             I32STORE => {
                 let (addr, value) = self.get_store_addr_value(module);
                 let unwrapped = value.unwrap_i32();
-                let mut target = &mut self.memory[addr..][..4];
-                target.write_all(&unwrapped.to_le_bytes()).unwrap();
+                let target = &mut self.memory[addr..][..4];
+                target.copy_from_slice(&unwrapped.to_le_bytes());
             }
             I64STORE => {
                 let (addr, value) = self.get_store_addr_value(module);
                 let unwrapped = value.unwrap_i64();
-                let mut target = &mut self.memory[addr..][..8];
-                target.write_all(&unwrapped.to_le_bytes()).unwrap();
+                let target = &mut self.memory[addr..][..8];
+                target.copy_from_slice(&unwrapped.to_le_bytes());
             }
             F32STORE => {
                 let (addr, value) = self.get_store_addr_value(module);
                 let unwrapped = value.unwrap_f32();
-                let mut target = &mut self.memory[addr..][..4];
-                target.write_all(&unwrapped.to_le_bytes()).unwrap();
+                let target = &mut self.memory[addr..][..4];
+                target.copy_from_slice(&unwrapped.to_le_bytes());
             }
             F64STORE => {
                 let (addr, value) = self.get_store_addr_value(module);
                 let unwrapped = value.unwrap_f64();
-                let mut target = &mut self.memory[addr..][..8];
-                target.write_all(&unwrapped.to_le_bytes()).unwrap();
+                let target = &mut self.memory[addr..][..8];
+                target.copy_from_slice(&unwrapped.to_le_bytes());
             }
             I32STORE8 => {
                 let (addr, value) = self.get_store_addr_value(module);
                 let unwrapped = value.unwrap_i32();
-                let mut target = &mut self.memory[addr..][..1];
-                target.write_all(&unwrapped.to_le_bytes()[..1]).unwrap();
+                let target = &mut self.memory[addr..][..1];
+                target.copy_from_slice(&unwrapped.to_le_bytes()[..1]);
             }
             I32STORE16 => {
                 let (addr, value) = self.get_store_addr_value(module);
                 let unwrapped = value.unwrap_i32();
-                let mut target = &mut self.memory[addr..][..2];
-                target.write_all(&unwrapped.to_le_bytes()[..2]).unwrap();
+                let target = &mut self.memory[addr..][..2];
+                target.copy_from_slice(&unwrapped.to_le_bytes()[..2]);
             }
             I64STORE8 => {
                 let (addr, value) = self.get_store_addr_value(module);
                 let unwrapped = value.unwrap_i64();
-                let mut target = &mut self.memory[addr..][..1];
-                target.write_all(&unwrapped.to_le_bytes()[..1]).unwrap();
+                let target = &mut self.memory[addr..][..1];
+                target.copy_from_slice(&unwrapped.to_le_bytes()[..1]);
             }
             I64STORE16 => {
                 let (addr, value) = self.get_store_addr_value(module);
                 let unwrapped = value.unwrap_i64();
-                let mut target = &mut self.memory[addr..][..2];
-                target.write_all(&unwrapped.to_le_bytes()[..2]).unwrap();
+                let target = &mut self.memory[addr..][..2];
+                target.copy_from_slice(&unwrapped.to_le_bytes()[..2]);
             }
             I64STORE32 => {
                 let (addr, value) = self.get_store_addr_value(module);
                 let unwrapped = value.unwrap_i64();
-                let mut target = &mut self.memory[addr..][..4];
-                target.write_all(&unwrapped.to_le_bytes()[..4]).unwrap();
+                let target = &mut self.memory[addr..][..4];
+                target.copy_from_slice(&unwrapped.to_le_bytes()[..4]);
             }
             CURRENTMEMORY => {
                 let size = self.memory.len() as i32 / MemorySection::PAGE_SIZE as i32;
