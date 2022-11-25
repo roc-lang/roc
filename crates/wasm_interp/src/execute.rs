@@ -26,8 +26,7 @@ pub struct ExecutionState<'a> {
     pub program_counter: usize,
     block_depth: u32,
     import_signatures: Vec<'a, u32>,
-    is_debug_mode: bool,
-    debug_string: String,
+    debug_string: Option<String>,
 }
 
 impl<'a> ExecutionState<'a> {
@@ -44,8 +43,7 @@ impl<'a> ExecutionState<'a> {
             program_counter,
             block_depth: 0,
             import_signatures: Vec::new_in(arena),
-            is_debug_mode: false,
-            debug_string: String::new(),
+            debug_string: None,
         }
     }
 
@@ -105,6 +103,12 @@ impl<'a> ExecutionState<'a> {
             &mut program_counter,
         );
 
+        let debug_string = if is_debug_mode {
+            Some(String::new())
+        } else {
+            None
+        };
+
         Ok(ExecutionState {
             memory: Vec::with_capacity_in(mem_bytes as usize, arena),
             call_stack,
@@ -113,15 +117,14 @@ impl<'a> ExecutionState<'a> {
             program_counter,
             block_depth: 0,
             import_signatures,
-            is_debug_mode,
-            debug_string: String::new(),
+            debug_string,
         })
     }
 
     fn fetch_immediate_u32(&mut self, module: &WasmModule<'a>) -> u32 {
         let x = u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
-        if self.is_debug_mode {
-            write!(&mut self.debug_string, "{}", x).unwrap();
+        if let Some(debug_string) = self.debug_string.as_mut() {
+            write!(debug_string, "{}", x).unwrap();
         }
         x
     }
@@ -149,9 +152,9 @@ impl<'a> ExecutionState<'a> {
         let op_code = OpCode::from(module.code.bytes[self.program_counter]);
         self.program_counter += 1;
 
-        if self.is_debug_mode {
-            self.debug_string.clear();
-            write!(&mut self.debug_string, "{:?} ", op_code).unwrap();
+        if let Some(debug_string) = self.debug_string.as_mut() {
+            debug_string.clear();
+            write!(debug_string, "{:?} ", op_code).unwrap();
         }
 
         let mut action = Action::Continue;
@@ -271,15 +274,15 @@ impl<'a> ExecutionState<'a> {
             GROWMEMORY => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32CONST => {
                 let value = i32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
-                if self.is_debug_mode {
-                    write!(&mut self.debug_string, "{}", value).unwrap();
+                if let Some(debug_string) = self.debug_string.as_mut() {
+                    write!(debug_string, "{}", value).unwrap();
                 }
                 self.value_stack.push(Value::I32(value));
             }
             I64CONST => {
                 let value = i64::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
-                if self.is_debug_mode {
-                    write!(&mut self.debug_string, "{}", value).unwrap();
+                if let Some(debug_string) = self.debug_string.as_mut() {
+                    write!(debug_string, "{}", value).unwrap();
                 }
                 self.value_stack.push(Value::I64(value));
             }
@@ -287,8 +290,8 @@ impl<'a> ExecutionState<'a> {
                 let mut bytes = [0; 4];
                 bytes.copy_from_slice(&module.code.bytes[self.program_counter..][..4]);
                 let value = f32::from_le_bytes(bytes);
-                if self.is_debug_mode {
-                    write!(&mut self.debug_string, "{}", value).unwrap();
+                if let Some(debug_string) = self.debug_string.as_mut() {
+                    write!(debug_string, "{}", value).unwrap();
                 }
                 self.value_stack.push(Value::F32(value));
                 self.program_counter += 4;
@@ -297,8 +300,8 @@ impl<'a> ExecutionState<'a> {
                 let mut bytes = [0; 8];
                 bytes.copy_from_slice(&module.code.bytes[self.program_counter..][..8]);
                 let value = f64::from_le_bytes(bytes);
-                if self.is_debug_mode {
-                    write!(&mut self.debug_string, "{}", value).unwrap();
+                if let Some(debug_string) = self.debug_string.as_mut() {
+                    write!(debug_string, "{}", value).unwrap();
                 }
                 self.value_stack.push(Value::F64(value));
                 self.program_counter += 8;
@@ -446,10 +449,10 @@ impl<'a> ExecutionState<'a> {
             F64REINTERPRETI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
         }
 
-        if self.is_debug_mode {
+        if let Some(debug_string) = &self.debug_string {
             let base = self.call_stack.value_stack_base();
             let slice = self.value_stack.get_slice(base as usize);
-            eprintln!("{:#07x} {:17} {:?}", file_offset, self.debug_string, slice);
+            eprintln!("{:#07x} {:17} {:?}", file_offset, debug_string, slice);
         }
 
         action
