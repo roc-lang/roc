@@ -1065,7 +1065,7 @@ pub fn canonicalize_expr<'a>(
             output.union(output1);
             output.union(output2);
 
-            // the symbol is used to bind the condition `x = condition`, adn identify this `dbg`.
+            // the symbol is used to bind the condition `x = condition`, and identify this `dbg`.
             // That would cause issues if we dbg a variable, like `dbg y`, because in the IR we
             // cannot alias variables. Hence, we make the dbg use that same variable `y`
             let symbol = match &loc_condition.value {
