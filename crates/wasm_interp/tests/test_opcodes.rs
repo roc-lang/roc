@@ -3,7 +3,10 @@
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_interp::{Action, ExecutionState, ValueStack};
 use roc_wasm_module::{
-    opcodes::OpCode, SerialBuffer, Serialize, Signature, Value, ValueType, WasmModule,
+    opcodes::OpCode,
+    sections::{DataMode, DataSegment, MemorySection},
+    ConstExpr, Export, ExportType, SerialBuffer, Serialize, Signature, Value, ValueType,
+    WasmModule,
 };
 
 fn default_state(arena: &Bump) -> ExecutionState {
@@ -239,47 +242,221 @@ fn test_global() {
     assert_eq!(state.value_stack.pop(), Value::I32(222));
 }
 
-// #[test]
-// fn test_i32load() {}
+fn create_exported_function_no_locals<'a, F>(
+    module: &mut WasmModule<'a>,
+    name: &'a str,
+    signature: Signature<'a>,
+    write_instructions: F,
+) where
+    F: FnOnce(&mut Vec<'a, u8>) -> (),
+{
+    let internal_fn_index = module.code.function_offsets.len();
+    let fn_index = module.import.function_count() + internal_fn_index;
+    module.export.exports.push(Export {
+        name,
+        ty: ExportType::Func,
+        index: fn_index as u32,
+    });
+    module.add_function_signature(signature);
 
-// #[test]
-// fn test_i64load() {}
+    let offset = module.code.bytes.encode_padded_u32(0);
+    let start = module.code.bytes.len();
+    module.code.bytes.push(0); // no locals
+    write_instructions(&mut module.code.bytes);
+    let len = module.code.bytes.len() - start;
+    module.code.bytes.overwrite_padded_u32(offset, len as u32);
 
-// #[test]
-// fn test_f32load() {}
+    module.code.function_count += 1;
+    module.code.function_offsets.push(offset as u32);
+}
 
-// #[test]
-// fn test_f64load() {}
+fn test_load(load_op: OpCode, ty: ValueType, data: &[u8], addr: u32, offset: u32) -> Value {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
 
-// #[test]
-// fn test_i32load8s() {}
+    let is_debug_mode = false;
+    let start_fn_name = "test";
 
-// #[test]
-// fn test_i32load8u() {}
+    module.memory = MemorySection::new(&arena, MemorySection::PAGE_SIZE);
 
-// #[test]
-// fn test_i32load16s() {}
+    module.data.append_segment(DataSegment {
+        mode: DataMode::Active {
+            offset: ConstExpr::I32(addr as i32),
+        },
+        init: Vec::from_iter_in(data.iter().map(|x| *x), &arena),
+    });
 
-// #[test]
-// fn test_i32load16u() {}
+    let signature = Signature {
+        param_types: bumpalo::vec![in &arena],
+        ret_type: Some(ty),
+    };
 
-// #[test]
-// fn test_i64load8s() {}
+    create_exported_function_no_locals(&mut module, start_fn_name, signature, |buf| {
+        buf.append_u8(OpCode::I32CONST as u8);
+        buf.encode_u32(addr);
+        buf.append_u8(load_op as u8);
+        buf.encode_u32(0); // align
+        buf.encode_u32(offset);
+        buf.append_u8(OpCode::END as u8);
+    });
 
-// #[test]
-// fn test_i64load8u() {}
+    let mut outfile_buf = Vec::new_in(&arena);
+    module.serialize(&mut outfile_buf);
+    std::fs::write("/tmp/roc/test.wasm", outfile_buf).unwrap();
 
-// #[test]
-// fn test_i64load16s() {}
+    let mut state =
+        ExecutionState::for_module(&arena, &module, start_fn_name, is_debug_mode).unwrap();
 
-// #[test]
-// fn test_i64load16u() {}
+    while let Action::Continue = state.execute_next_instruction(&module) {}
 
-// #[test]
-// fn test_i64load32s() {}
+    state.value_stack.pop()
+}
 
-// #[test]
-// fn test_i64load32u() {}
+#[test]
+fn test_i32load() {
+    let bytes = "abcdefgh".as_bytes();
+    assert_eq!(
+        test_load(OpCode::I32LOAD, ValueType::I32, bytes, 0x11, 0),
+        Value::I32(0x64636261)
+    );
+    assert_eq!(
+        test_load(OpCode::I32LOAD, ValueType::I32, bytes, 0x11, 2),
+        Value::I32(0x66656463)
+    );
+}
+
+#[test]
+fn test_i64load() {
+    let bytes = "abcdefghijkl".as_bytes();
+    assert_eq!(
+        test_load(OpCode::I64LOAD, ValueType::I64, bytes, 0x11, 0),
+        Value::I64(0x6867666564636261)
+    );
+    assert_eq!(
+        test_load(OpCode::I64LOAD, ValueType::I64, bytes, 0x11, 2),
+        Value::I64(0x6a69686766656463)
+    );
+}
+
+#[test]
+fn test_f32load() {
+    let value: f32 = 1.23456;
+    let bytes = value.to_le_bytes();
+    assert_eq!(
+        test_load(OpCode::F32LOAD, ValueType::F32, &bytes, 0x11, 0),
+        Value::F32(value)
+    );
+}
+
+#[test]
+fn test_f64load() {
+    let value: f64 = 1.23456;
+    let bytes = value.to_le_bytes();
+    assert_eq!(
+        test_load(OpCode::F64LOAD, ValueType::F64, &bytes, 0x11, 0),
+        Value::F64(value)
+    );
+}
+
+#[test]
+fn test_i32load8s() {
+    let value: i8 = -42;
+    let bytes = value.to_le_bytes();
+    assert_eq!(
+        test_load(OpCode::I32LOAD8S, ValueType::I32, &bytes, 0x11, 0),
+        Value::I32(value as i32)
+    );
+}
+
+#[test]
+fn test_i32load8u() {
+    let value: u8 = 42;
+    let bytes = value.to_le_bytes();
+    assert_eq!(
+        test_load(OpCode::I32LOAD8U, ValueType::I32, &bytes, 0x11, 0),
+        Value::I32(value as i32)
+    );
+}
+
+#[test]
+fn test_i32load16s() {
+    let value: i16 = -42;
+    let bytes = value.to_le_bytes();
+    assert_eq!(
+        test_load(OpCode::I32LOAD16S, ValueType::I32, &bytes, 0x11, 0),
+        Value::I32(value as i32)
+    );
+}
+
+#[test]
+fn test_i32load16u() {
+    let value: u16 = 42;
+    let bytes = value.to_le_bytes();
+    assert_eq!(
+        test_load(OpCode::I32LOAD16U, ValueType::I32, &bytes, 0x11, 0),
+        Value::I32(value as i32)
+    );
+}
+
+#[test]
+fn test_i64load8s() {
+    let value: i8 = -42;
+    let bytes = value.to_le_bytes();
+    assert_eq!(
+        test_load(OpCode::I64LOAD8S, ValueType::I64, &bytes, 0x11, 0),
+        Value::I64(value as i64)
+    );
+}
+
+#[test]
+fn test_i64load8u() {
+    let value: u8 = 42;
+    let bytes = value.to_le_bytes();
+    assert_eq!(
+        test_load(OpCode::I32LOAD8U, ValueType::I32, &bytes, 0x11, 0),
+        Value::I32(value as i32)
+    );
+}
+
+#[test]
+fn test_i64load16s() {
+    let value: i16 = -42;
+    let bytes = value.to_le_bytes();
+    assert_eq!(
+        test_load(OpCode::I64LOAD8S, ValueType::I64, &bytes, 0x11, 0),
+        Value::I64(value as i64)
+    );
+}
+
+#[test]
+fn test_i64load16u() {
+    let value: u16 = 42;
+    let bytes = value.to_le_bytes();
+    assert_eq!(
+        test_load(OpCode::I32LOAD8U, ValueType::I32, &bytes, 0x11, 0),
+        Value::I32(value as i32)
+    );
+}
+
+#[test]
+fn test_i64load32s() {
+    let value: i32 = -42;
+    let bytes = value.to_le_bytes();
+    assert_eq!(
+        test_load(OpCode::I64LOAD8S, ValueType::I64, &bytes, 0x11, 0),
+        Value::I64(value as i64)
+    );
+}
+
+#[test]
+fn test_i64load32u() {
+    let value: u32 = 42;
+    let bytes = value.to_le_bytes();
+    assert_eq!(
+        test_load(OpCode::I32LOAD8U, ValueType::I32, &bytes, 0x11, 0),
+        Value::I32(value as i32)
+    );
+}
 
 // #[test]
 // fn test_i32store() {}
