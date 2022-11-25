@@ -242,7 +242,7 @@ impl SegmentCommand64 {
         let mut buffer = Vec::new();
 
         let cmdsize = std::mem::size_of::<SegmentCommand64>()
-            + std::mem::size_of::<SegmentCommand64>() * sections.len();
+            + std::mem::size_of::<Section64>() * sections.len();
 
         // Write the header
         buffer.extend(self.cmd.to_le_bytes());
@@ -257,7 +257,7 @@ impl SegmentCommand64 {
         buffer.extend(self.maxprot.to_le_bytes());
         buffer.extend(self.initprot.to_le_bytes());
 
-        buffer.extend(self.nsects.to_le_bytes());
+        buffer.extend((sections.len() as u32).to_le_bytes());
         buffer.extend(self.flags.to_le_bytes());
 
         for section in sections {
@@ -610,8 +610,10 @@ mod test {
         };
 
         let commands = Commands {
-            count: 5 + 2 + 1 + 1,
-            size: 5 * 0x48 + 0x30 + 0x38 + 0x30 + (6 * 4),
+            // count: 5 + 2 + 1 + 1,
+            // size: 5 * 0x48 + 0x30 + 0x38 + 0x30 + (6 * 4),
+            count: 0x10,
+            size: 0x610,
         };
 
         bytes.extend_from_slice(macho_dylib_header(&triple, commands).as_slice());
@@ -640,7 +642,7 @@ mod test {
             cmd: 0x19,
             cmdsize: 0x48,
             segname: bstring16("__TEXT"),
-            vmaddr: 0,
+            vmaddr: 0x0000000100000000,
             vmsize: 0x1000,
             fileoff: 0,
             filesize: 0x1000,
@@ -650,7 +652,50 @@ mod test {
             flags: 0,
         };
 
-        bytes.extend(command.with_segments(&[]));
+        bytes.extend(command.with_segments(&[
+            Section64 {
+                sectname: bstring16("__text"),
+                segname: bstring16("__TEXT"),
+                addr: 0x0000000100000ff1,
+                size: 0,
+                offset: 0xff1,
+                align: 0,
+                reloff: 0,
+                nreloc: 0,
+                flags: 0x80000400,
+                reserved1: 0,
+                reserved2: 0,
+                reserved3: 0,
+            },
+            Section64 {
+                sectname: bstring16("__stubs"),
+                segname: bstring16("__TEXT"),
+                addr: 0x0000000100000ff1,
+                size: 0,
+                offset: 0xff1,
+                align: 0,
+                reloff: 0,
+                nreloc: 0,
+                flags: 0x80000408,
+                reserved1: 0,
+                reserved2: 6, // random, but makes the diff equal
+                reserved3: 0,
+            },
+            Section64 {
+                sectname: bstring16("__stub_helper"),
+                segname: bstring16("__TEXT"),
+                addr: 0x0000000100000ff1,
+                size: 0xf,
+                offset: 0xff1,
+                align: 0,
+                reloff: 0,
+                nreloc: 0,
+                flags: 0x80000400,
+                reserved1: 0,
+                reserved2: 0,
+                reserved3: 0,
+            },
+        ]));
 
         //
 
@@ -662,13 +707,26 @@ mod test {
             vmsize: 0x1000,
             fileoff: 0x1000,
             filesize: 0x1000,
-            maxprot: 0,
-            initprot: 0,
+            maxprot: 3,
+            initprot: 3,
             nsects: 0,
             flags: 0,
         };
 
-        bytes.extend(command.with_segments(&[]));
+        bytes.extend(command.with_segments(&[Section64 {
+            sectname: bstring16("__got"),
+            segname: bstring16("__DATA_CONST"),
+            addr: 0x0000000100001000,
+            size: 0x8,
+            offset: 0x1000,
+            align: 3,
+            reloff: 0,
+            nreloc: 0,
+            flags: 0x6,
+            reserved1: 0,
+            reserved2: 0,
+            reserved3: 0,
+        }]));
 
         //
 
@@ -704,7 +762,20 @@ mod test {
             flags: 0,
         };
 
-        bytes.extend(command.with_segments(&[]));
+        bytes.extend(command.with_segments(&[Section64 {
+            sectname: bstring16("__la_data_symbol"),
+            segname: bstring16("__DATA"),
+            addr: 0x0000000100002000,
+            size: 0xf,
+            offset: 0x2000,
+            align: 3,
+            reloff: 0,
+            nreloc: 0,
+            flags: 0x07,
+            reserved1: 0,
+            reserved2: 0,
+            reserved3: 0,
+        }]));
 
         bytes.extend(dylib_id_command("librocthing.dylib", 0x2, 0x10000, 0x10000));
 

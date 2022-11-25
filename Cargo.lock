@@ -4038,6 +4038,7 @@ dependencies = [
  "bumpalo",
  "iced-x86",
  "indoc",
+ "leb128",
  "libc",
  "mach_object",
  "memmap2 0.5.7",
