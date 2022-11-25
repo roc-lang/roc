@@ -1,8 +1,8 @@
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{Layout, STLayoutInterner, UnionLayout};
 
-use crate::wasm_module::ValueType;
 use crate::{PTR_SIZE, PTR_TYPE, TARGET_INFO};
+use roc_wasm_module::ValueType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReturnMethod {

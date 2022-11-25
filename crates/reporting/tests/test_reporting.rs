@@ -86,6 +86,7 @@ mod test_reporting {
             let load_config = LoadConfig {
                 target_info: roc_target::TargetInfo::default_x86_64(),
                 render: RenderTarget::Generic,
+                palette: DEFAULT_PALETTE,
                 threading: Threading::Single,
                 exec_mode: ExecutionMode::Check,
             };
@@ -4409,13 +4410,14 @@ mod test_reporting {
         @r###"
     ── UNFINISHED PARENTHESES ────────────────── tmp/type_in_parens_start/Test.roc ─
 
-    I just started parsing a type in parentheses, but I got stuck here:
+    I am partway through parsing a type in parentheses, but I got stuck
+    here:
 
     4│      f : (
                  ^
 
-    Tag unions look like [Many I64, None], so I was expecting to see a tag
-    name next.
+    I was expecting to see a parenthesis before this, so try adding a )
+    and see if that helps?
 
     Note: I may be confused by indentation
     "###
@@ -4435,12 +4437,12 @@ mod test_reporting {
     here:
 
     4│      f : ( I64
-                     ^
+    5│
+    6│
+        ^
 
-    I was expecting to see a parenthesis before this, so try adding a )
-    and see if that helps?
-
-    Note: I may be confused by indentation
+    I was expecting to see a closing parenthesis before this, so try
+    adding a ) and see if that helps?
     "###
     );
 
@@ -5010,12 +5012,13 @@ mod test_reporting {
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    5│          5 -> 2
     6│           _ -> 2
                    ^^
 
     It makes sense to see arrows around here, so I suspect it is something
-    earlier.Maybe this pattern is indented a bit farther from the previous
-    patterns?
+    earlier. Maybe this pattern is indented a bit farther from the
+    previous patterns?
 
     Note: Here is an example of a valid `when` expression for reference.
 
@@ -5046,12 +5049,13 @@ mod test_reporting {
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    5│          5 -> Num.neg
     6│           2 -> 2
                    ^^
 
     It makes sense to see arrows around here, so I suspect it is something
-    earlier.Maybe this pattern is indented a bit farther from the previous
-    patterns?
+    earlier. Maybe this pattern is indented a bit farther from the
+    previous patterns?
 
     Note: Here is an example of a valid `when` expression for reference.
 
@@ -5294,6 +5298,7 @@ mod test_reporting {
 
     This multiline string is not sufficiently indented:
 
+    4│          """
     5│        testing
               ^
 
@@ -6042,33 +6047,6 @@ All branches in an `if` must have the same type!
     to see a field name next.
 
     Note: I may be confused by indentation
-    "###
-    );
-
-    test_report!(
-        outdented_in_parens,
-        indoc!(
-            r#"
-            Box : (
-                Str
-            )
-
-            4
-            "#
-        ),
-        @r###"
-    ── NEED MORE INDENTATION ──────────────────── tmp/outdented_in_parens/Test.roc ─
-
-    I am partway through parsing a type in parentheses, but I got stuck
-    here:
-
-    4│      Box : (
-    5│          Str
-    6│      )
-            ^
-
-    I need this parenthesis to be indented more. Try adding more spaces
-    before it!
     "###
     );
 
@@ -8068,6 +8046,7 @@ All branches in an `if` must have the same type!
         I was partway through parsing an ability definition, but I got stuck
         here:
 
+        4│      MEq has
         5│          eq b c : a, a -> U64 | a has MEq
                        ^
 
@@ -8640,38 +8619,23 @@ All branches in an `if` must have the same type!
             hash = \@Id n -> n
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        Something is off with the body of the `hash` definition:
+    Something is off with the body of the `hash` definition:
 
-        8│  hash : Id -> U32
-        9│  hash = \@Id n -> n
-                             ^
+    8│  hash : Id -> U32
+    9│  hash = \@Id n -> n
+                         ^
 
-        This `n` value is a:
+    This `n` value is a:
 
-            U64
+        U64
 
-        But the type annotation on `hash` says it should be:
+    But the type annotation on `hash` says it should be:
 
-            U32
-
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-        Something is off with this specialization of `hash`:
-
-        9│  hash = \@Id n -> n
-                   ^^^^^^^^^^^
-
-        This value is a declared specialization of type:
-
-            Id -> U32
-
-        But the type annotation on `hash` says it must match:
-
-            Id -> U64
-        "#
+        U32
+    "###
     );
 
     test_report!(
@@ -11771,14 +11735,19 @@ All branches in an `if` must have the same type!
     @r###"
     ── UNNECESSARY WILDCARD ────────────────────────────────── /code/proj/Main.roc ─
 
-    I see you annotated a wildcard in a place where it's not needed:
+    This type annotation has a wildcard type variable (`*`) that isn't
+    needed.
 
     4│      f : {} -> [A, B]*
                             ^
 
-    Tag unions that are constants, or the return values of functions, are
-    always inferred to be open by default! You can remove this annotation
-    safely.
+    Annotations for tag unions which are constants, or which are returned
+    from functions, work the same way with or without a `*` at the end. (The
+    `*` means something different when the tag union is an argument to a
+    function, though!)
+
+    You can safely remove this to make the code more concise without
+    changing what it means.
     "###
     );
 

@@ -149,7 +149,8 @@ impl<'b> Report<'b> {
             .expect(err_msg);
     }
 
-    /// Render to a color terminal using ANSI escape sequences
+    /// Render to a color terminal using ANSI escape sequences,
+    /// or to the web REPL, using HTML tags.
     pub fn render_color_terminal(
         self,
         buf: &mut String,
@@ -188,6 +189,7 @@ impl<'b> Report<'b> {
 /// 2. A set of colors we decided to use
 /// 3. A mapping from UI elements to the styles we use for them
 /// Note: This should really be called Theme! Usually a "palette" is just (2).
+#[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub primary: &'static str,
     pub code_block: &'static str,
@@ -273,7 +275,7 @@ pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
 
 macro_rules! html_color {
     ($name: expr) => {
-        concat!("<span style='color: ", $name, "'>")
+        concat!("<span class='color-", $name, "'>")
     };
 }
 
@@ -285,8 +287,8 @@ pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
     magenta: html_color!("magenta"),
     cyan: html_color!("cyan"),
     white: html_color!("white"),
-    bold: "<span style='font-weight: bold'>",
-    underline: "<span style='text-decoration: underline'>",
+    bold: "<span class='bold'>",
+    underline: "<span class='underline'>",
     reset: "</span>",
     color_reset: "</span>",
 };

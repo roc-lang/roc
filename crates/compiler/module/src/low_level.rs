@@ -112,6 +112,7 @@ pub enum LowLevel {
     RefCountDec,
     BoxExpr,
     UnboxExpr,
+    Dbg,
     Unreachable,
 }
 
@@ -208,11 +209,13 @@ macro_rules! map_symbol_to_lowlevel {
                 LowLevel::NumToIntChecked => unreachable!(),
                 LowLevel::NumToFloatChecked => unreachable!(),
 
+
                 // these are used internally and not tied to a symbol
                 LowLevel::Hash => unimplemented!(),
                 LowLevel::PtrCast => unimplemented!(),
                 LowLevel::RefCountInc => unimplemented!(),
                 LowLevel::RefCountDec => unimplemented!(),
+                LowLevel::Dbg => unreachable!(),
 
                 // these are not implemented, not sure why
                 LowLevel::StrFromInt => unimplemented!(),

@@ -88,14 +88,25 @@ impl<'a> Ident<'a> {
 /// * A named pattern match, e.g. "foo" in `foo =` or `foo ->` or `\foo ->`
 pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     move |_, state: State<'a>, _min_indent: u32| match chomp_lowercase_part(state.bytes()) {
-        Err(progress) => Err((progress, (), state)),
+        Err(progress) => Err((progress, ())),
         Ok(ident) => {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
-                Err((NoProgress, (), state))
+                Err((NoProgress, ()))
             } else {
                 let width = ident.len();
                 Ok((MadeProgress, ident, state.advance(width)))
             }
+        }
+    }
+}
+
+/// This is a tuple accessor, e.g. "1" in `.1`
+pub fn integer_ident<'a>() -> impl Parser<'a, &'a str, ()> {
+    move |_, state: State<'a>, _min_indent: u32| match chomp_integer_part(state.bytes()) {
+        Err(progress) => Err((progress, ())),
+        Ok(ident) => {
+            let width = ident.len();
+            Ok((MadeProgress, ident, state.advance(width)))
         }
     }
 }
@@ -113,7 +124,7 @@ pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
 /// * A tag
 pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
     move |_, state: State<'a>, _min_indent: u32| match chomp_uppercase_part(state.bytes()) {
-        Err(progress) => Err((progress, (), state)),
+        Err(progress) => Err((progress, ())),
         Ok(ident) => {
             let width = ident.len();
             Ok((MadeProgress, ident.into(), state.advance(width)))
@@ -128,7 +139,7 @@ pub fn uppercase<'a>() -> impl Parser<'a, UppercaseIdent<'a>, ()> {
 /// * A tag
 pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     move |_, state: State<'a>, _min_indent: u32| match chomp_uppercase_part(state.bytes()) {
-        Err(progress) => Err((progress, (), state)),
+        Err(progress) => Err((progress, ())),
         Ok(ident) => {
             let width = ident.len();
             Ok((MadeProgress, ident, state.advance(width)))
@@ -138,10 +149,10 @@ pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
 
 pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     move |_, state: State<'a>, _min_indent: u32| match chomp_anycase_part(state.bytes()) {
-        Err(progress) => Err((progress, (), state)),
+        Err(progress) => Err((progress, ())),
         Ok(ident) => {
             if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
-                Err((MadeProgress, (), state))
+                Err((MadeProgress, ()))
             } else {
                 let width = ident.len();
                 Ok((MadeProgress, ident, state.advance(width)))
@@ -163,27 +174,32 @@ pub fn parse_ident<'a>(
 ) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
     let initial = state.clone();
 
-    match parse_ident_help(arena, state) {
-        Ok((progress, ident, state)) => {
+    match chomp_identifier_chain(arena, state.bytes(), state.pos()) {
+        Ok((width, ident)) => {
+            let state = advance_state!(state, width as usize)?;
             if let Ident::Access { module_name, parts } = ident {
                 if module_name.is_empty() {
                     if let Some(first) = parts.first() {
                         for keyword in crate::keyword::KEYWORDS.iter() {
                             if first == keyword {
-                                return Err((NoProgress, EExpr::Start(initial.pos()), initial));
+                                return Err((NoProgress, EExpr::Start(initial.pos())));
                             }
                         }
                     }
                 }
             }
 
-            Ok((progress, ident, state))
+            Ok((MadeProgress, ident, state))
         }
-        Err((NoProgress, _, state)) => Err((NoProgress, EExpr::Start(state.pos()), state)),
-        Err((MadeProgress, fail, state)) => match fail {
-            BadIdent::Start(pos) => Err((NoProgress, EExpr::Start(pos), state)),
-            BadIdent::Space(e, pos) => Err((NoProgress, EExpr::Space(e, pos), state)),
-            _ => malformed_identifier(initial.bytes(), fail, state),
+        Err((0, _)) => Err((NoProgress, EExpr::Start(state.pos()))),
+        Err((width, fail)) => match fail {
+            BadIdent::Start(pos) => Err((NoProgress, EExpr::Start(pos))),
+            BadIdent::Space(e, pos) => Err((NoProgress, EExpr::Space(e, pos))),
+            _ => malformed_identifier(
+                initial.bytes(),
+                fail,
+                advance_state!(state, width as usize)?,
+            ),
         },
     }
 }
@@ -504,7 +520,7 @@ fn chomp_module_chain(buffer: &[u8]) -> Result<u32, Progress> {
 
 pub fn concrete_type<'a>() -> impl Parser<'a, (&'a str, &'a str), ()> {
     move |_, state: State<'a>, _min_indent: u32| match chomp_concrete_type(state.bytes()) {
-        Err(progress) => Err((progress, (), state)),
+        Err(progress) => Err((progress, ())),
         Ok((module_name, type_name, width)) => {
             Ok((MadeProgress, (module_name, type_name), state.advance(width)))
         }
@@ -572,22 +588,5 @@ fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, &'a str>) -> Res
         Err(0)
     } else {
         Ok(chomped as u32)
-    }
-}
-
-fn parse_ident_help<'a>(
-    arena: &'a Bump,
-    mut state: State<'a>,
-) -> ParseResult<'a, Ident<'a>, BadIdent> {
-    match chomp_identifier_chain(arena, state.bytes(), state.pos()) {
-        Ok((width, ident)) => {
-            state = advance_state!(state, width as usize)?;
-            Ok((MadeProgress, ident, state))
-        }
-        Err((0, fail)) => Err((NoProgress, fail, state)),
-        Err((width, fail)) => {
-            state = advance_state!(state, width as usize)?;
-            Err((MadeProgress, fail, state))
-        }
     }
 }

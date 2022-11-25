@@ -9,7 +9,7 @@ use roc_build::link::{rebuild_host, LinkType};
 use roc_error_macros::internal_error;
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::OptLevel;
-use roc_reporting::report::RenderTarget;
+use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use std::cmp::Ordering;
 use std::mem;
 use std::path::{Path, PathBuf};
@@ -77,7 +77,7 @@ pub fn build_and_preprocess_host(
     generate_dynamic_lib(target, &stub_dll_symbols, &stub_lib);
     rebuild_host(opt_level, target, host_input_path, Some(&stub_lib));
     let metadata = host_input_path.with_file_name("metadata");
-    // let prehost = host_input_path.with_file_name("preprocessedhost");
+    // let prehost = host_input_path.with_file_name(preprocessed_host_filename(target).unwrap());
 
     preprocess(
         target,
@@ -117,6 +117,7 @@ pub fn generate_stub_lib(input_path: &Path, triple: &Triple) -> std::io::Result<
         LoadConfig {
             target_info,
             render: RenderTarget::Generic,
+            palette: DEFAULT_PALETTE,
             threading: Threading::AllAvailable,
             exec_mode: ExecutionMode::Executable,
         },

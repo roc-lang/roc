@@ -12,8 +12,8 @@ use roc_mono::low_level::HigherOrder;
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
 use crate::storage::{AddressValue, StackMemoryLocation, StoredValue};
-use crate::wasm_module::{Align, LocalId, ValueType};
 use crate::{PTR_TYPE, TARGET_INFO};
+use roc_wasm_module::{Align, LocalId, ValueType};
 
 /// Number types used for Wasm code gen
 /// Unlike other enums, this contains no details about layout or storage.
@@ -1874,6 +1874,8 @@ impl<'a> LowLevelCall<'a> {
                 },
                 StoredValue::StackMemory { .. } => { /* do nothing */ }
             },
+
+            Dbg => todo!("{:?}", self.lowlevel),
         }
     }
 

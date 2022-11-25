@@ -1,0 +1,136 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483649),
+        ],
+        regions: [
+            @0-32,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-1 Identifier(
+                    "f",
+                ),
+                @4-20 Function(
+                    [
+                        @4-10 Tuple {
+                            fields: [
+                                @5-8 Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                            ],
+                            ext: Some(
+                                @9-10 BoundVariable(
+                                    "a",
+                                ),
+                            ),
+                        },
+                    ],
+                    @14-20 Tuple {
+                        fields: [
+                            @15-18 Apply(
+                                "",
+                                "Str",
+                                [],
+                            ),
+                        ],
+                        ext: Some(
+                            @19-20 BoundVariable(
+                                "a",
+                            ),
+                        ),
+                    },
+                ),
+            ),
+            AnnotatedBody {
+                ann_pattern: @0-1 Identifier(
+                    "f",
+                ),
+                ann_type: @4-20 Function(
+                    [
+                        @4-10 Tuple {
+                            fields: [
+                                @5-8 Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                            ],
+                            ext: Some(
+                                @9-10 BoundVariable(
+                                    "a",
+                                ),
+                            ),
+                        },
+                    ],
+                    @14-20 Tuple {
+                        fields: [
+                            @15-18 Apply(
+                                "",
+                                "Str",
+                                [],
+                            ),
+                        ],
+                        ext: Some(
+                            @19-20 BoundVariable(
+                                "a",
+                            ),
+                        ),
+                    },
+                ),
+                comment: None,
+                body_pattern: @21-22 Identifier(
+                    "f",
+                ),
+                body_expr: @25-32 Closure(
+                    [
+                        @26-27 Identifier(
+                            "x",
+                        ),
+                    ],
+                    @31-32 Var {
+                        module_name: "",
+                        ident: "x",
+                    },
+                ),
+            },
+        ],
+    },
+    @34-47 SpaceBefore(
+        Apply(
+            @34-35 Var {
+                module_name: "",
+                ident: "f",
+            },
+            [
+                @36-47 Tuple(
+                    [
+                        @37-42 Str(
+                            PlainLine(
+                                "Str",
+                            ),
+                        ),
+                        @44-46 Num(
+                            "42",
+                        ),
+                    ],
+                ),
+            ],
+            Space,
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

@@ -134,7 +134,7 @@ impl<'a> Formattable for TypeDef<'a> {
 
                 if !self.is_multiline() {
                     debug_assert_eq!(members.len(), 1);
-                    buf.push_str(" ");
+                    buf.spaces(1);
                     members[0].format_with_options(
                         buf,
                         Parens::NotNeeded,
@@ -168,6 +168,7 @@ impl<'a> Formattable for ValueDef<'a> {
             AnnotatedBody { .. } => true,
             Expect { condition, .. } => condition.is_multiline(),
             ExpectFx { condition, .. } => condition.is_multiline(),
+            Dbg { condition, .. } => condition.is_multiline(),
         }
     }
 
@@ -241,6 +242,7 @@ impl<'a> Formattable for ValueDef<'a> {
             Body(loc_pattern, loc_expr) => {
                 fmt_body(buf, &loc_pattern.value, &loc_expr.value, indent);
             }
+            Dbg { condition, .. } => fmt_dbg_in_def(buf, condition, self.is_multiline(), indent),
             Expect { condition, .. } => fmt_expect(buf, condition, self.is_multiline(), indent),
             ExpectFx { condition, .. } => {
                 fmt_expect_fx(buf, condition, self.is_multiline(), indent)
@@ -292,6 +294,27 @@ impl<'a> Formattable for ValueDef<'a> {
             }
         }
     }
+}
+
+fn fmt_dbg_in_def<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    condition: &'a Loc<Expr<'a>>,
+    is_multiline: bool,
+    indent: u16,
+) {
+    buf.ensure_ends_with_newline();
+    buf.indent(indent);
+    buf.push_str("dbg");
+
+    let return_indent = if is_multiline {
+        buf.newline();
+        indent + INDENT
+    } else {
+        buf.spaces(1);
+        indent
+    };
+
+    condition.format(buf, return_indent);
 }
 
 fn fmt_expect<'a, 'buf>(

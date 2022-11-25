@@ -1,7 +1,10 @@
 use bumpalo::Bump;
 use roc_build::{
-    link::{link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy},
-    program::{self, CodeGenOptions, Problems},
+    link::{
+        legacy_host_filename, link, preprocess_host_wasm32, preprocessed_host_filename,
+        rebuild_host, LinkType, LinkingStrategy,
+    },
+    program::{self, CodeGenOptions},
 };
 use roc_builtins::bitcode;
 use roc_load::{
@@ -9,12 +12,14 @@ use roc_load::{
     LoadingProblem, Threading,
 };
 use roc_mono::ir::OptLevel;
-use roc_reporting::report::RenderTarget;
+use roc_reporting::{
+    cli::Problems,
+    report::{RenderTarget, DEFAULT_PALETTE},
+};
 use roc_target::TargetInfo;
 use std::time::{Duration, Instant};
 use std::{path::PathBuf, thread::JoinHandle};
 use target_lexicon::Triple;
-use tempfile::Builder;
 
 fn report_timing(buf: &mut String, label: &str, duration: Duration) {
     use std::fmt::Write;
@@ -81,6 +86,7 @@ pub fn build_file<'a>(
         target_info,
         // TODO: expose this from CLI?
         render: RenderTarget::ColorTerminal,
+        palette: DEFAULT_PALETTE,
         threading,
         exec_mode,
     };
@@ -103,28 +109,27 @@ pub fn build_file<'a>(
         }
     };
 
-    use target_lexicon::Architecture;
-    let emit_wasm = matches!(target.architecture, Architecture::Wasm32);
-
-    // TODO wasm host extension should be something else ideally
-    // .bc does not seem to work because
-    //
-    // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
-    //
-    // and zig does not currently emit `.a` webassembly static libraries
-    let (host_extension, app_extension, extension) = {
+    let (app_extension, extension, host_filename) = {
         use roc_target::OperatingSystem::*;
 
         match roc_target::OperatingSystem::from(target.operating_system) {
             Wasi => {
                 if matches!(code_gen_options.opt_level, OptLevel::Development) {
-                    ("wasm", "wasm", Some("wasm"))
+                    ("wasm", Some("wasm"), "host.zig".to_string())
                 } else {
-                    ("zig", "bc", Some("wasm"))
+                    ("bc", Some("wasm"), "host.zig".to_string())
                 }
             }
-            Unix => ("o", "o", None),
-            Windows => ("obj", "obj", Some("exe")),
+            Unix => (
+                "o",
+                None,
+                legacy_host_filename(target, code_gen_options.opt_level).unwrap(),
+            ),
+            Windows => (
+                "obj",
+                Some("exe"),
+                legacy_host_filename(target, code_gen_options.opt_level).unwrap(),
+            ),
         }
     };
 
@@ -137,9 +142,7 @@ pub fn build_file<'a>(
 
     let host_input_path = if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point
     {
-        cwd.join(platform_path)
-            .with_file_name("host")
-            .with_extension(host_extension)
+        cwd.join(platform_path).with_file_name(host_filename)
     } else {
         unreachable!();
     };
@@ -169,23 +172,43 @@ pub fn build_file<'a>(
         })
         .collect();
 
-    let preprocessed_host_path = if emit_wasm {
-        host_input_path.with_file_name("preprocessedhost.o")
+    let preprocessed_host_path = if linking_strategy == LinkingStrategy::Legacy {
+        host_input_path
+            .with_file_name(legacy_host_filename(target, code_gen_options.opt_level).unwrap())
     } else {
-        host_input_path.with_file_name("preprocessedhost")
+        host_input_path.with_file_name(preprocessed_host_filename(target).unwrap())
     };
 
-    let rebuild_thread = spawn_rebuild_thread(
-        code_gen_options.opt_level,
-        linking_strategy,
-        prebuilt,
-        host_input_path.clone(),
-        preprocessed_host_path.clone(),
-        binary_path.clone(),
-        target,
-        exposed_values,
-        exposed_closure_types,
-    );
+    // We don't need to spawn a rebuild thread when using a prebuilt host.
+    let rebuild_thread = if prebuilt {
+        if !preprocessed_host_path.exists() {
+            eprintln!(
+                "\nBecause I was run with --prebuilt-platform=true, I was expecting this file to exist:\n\n    {}\n\nHowever, it was not there!\n\nIf you have the platform's source code locally, you may be able to regenerate it by re-running this command with --prebuilt-platform=false\n",
+                preprocessed_host_path.to_string_lossy()
+            );
+
+            std::process::exit(1);
+        }
+
+        if linking_strategy == LinkingStrategy::Surgical {
+            // Copy preprocessed host to executable location.
+            // The surgical linker will modify that copy in-place.
+            std::fs::copy(&preprocessed_host_path, binary_path.as_path()).unwrap();
+        }
+
+        None
+    } else {
+        Some(spawn_rebuild_thread(
+            code_gen_options.opt_level,
+            linking_strategy,
+            host_input_path.clone(),
+            preprocessed_host_path.clone(),
+            binary_path.clone(),
+            target,
+            exposed_values,
+            exposed_closure_types,
+        ))
+    };
 
     let buf = &mut String::with_capacity(1024);
 
@@ -244,19 +267,24 @@ pub fn build_file<'a>(
         ConcurrentWithApp(JoinHandle<u128>),
     }
 
-    let rebuild_timing = if linking_strategy == LinkingStrategy::Additive {
-        let rebuild_duration = rebuild_thread
-            .join()
-            .expect("Failed to (re)build platform.");
-        if emit_timings && !prebuilt {
-            println!(
-                "Finished rebuilding the platform in {} ms\n",
-                rebuild_duration
-            );
+    let opt_rebuild_timing = if let Some(rebuild_thread) = rebuild_thread {
+        if linking_strategy == LinkingStrategy::Additive {
+            let rebuild_duration = rebuild_thread
+                .join()
+                .expect("Failed to (re)build platform.");
+            if emit_timings && !prebuilt {
+                println!(
+                    "Finished rebuilding the platform in {} ms\n",
+                    rebuild_duration
+                );
+            }
+
+            Some(HostRebuildTiming::BeforeApp(rebuild_duration))
+        } else {
+            Some(HostRebuildTiming::ConcurrentWithApp(rebuild_thread))
         }
-        HostRebuildTiming::BeforeApp(rebuild_duration)
     } else {
-        HostRebuildTiming::ConcurrentWithApp(rebuild_thread)
+        None
     };
 
     let (roc_app_bytes, code_gen_timing, expect_metadata) = program::gen_from_mono_module(
@@ -297,7 +325,7 @@ pub fn build_file<'a>(
         );
     }
 
-    if let HostRebuildTiming::ConcurrentWithApp(thread) = rebuild_timing {
+    if let Some(HostRebuildTiming::ConcurrentWithApp(thread)) = opt_rebuild_timing {
         let rebuild_duration = thread.join().expect("Failed to (re)build platform.");
         if emit_timings && !prebuilt {
             println!(
@@ -327,7 +355,7 @@ pub fn build_file<'a>(
             problems
         }
         (LinkingStrategy::Legacy, _) => {
-            let app_o_file = Builder::new()
+            let app_o_file = tempfile::Builder::new()
                 .prefix("roc_app")
                 .suffix(&format!(".{}", app_extension))
                 .tempfile()
@@ -341,29 +369,41 @@ pub fn build_file<'a>(
                 app_o_file.to_str().unwrap(),
             ];
 
-            let str_host_obj_path = bitcode::get_builtins_host_obj_path();
+            let builtins_host_tempfile = {
+                #[cfg(unix)]
+                {
+                    bitcode::host_unix_tempfile()
+                }
+
+                #[cfg(windows)]
+                {
+                    bitcode::host_windows_tempfile()
+                }
+            }
+            .expect("failed to write host builtins object to tempfile");
 
             if matches!(code_gen_options.backend, program::CodeGenBackend::Assembly) {
-                inputs.push(&str_host_obj_path);
+                inputs.push(builtins_host_tempfile.path().to_str().unwrap());
             }
 
-            let (mut child, _) =  // TODO use lld
-            link(target, binary_path.clone(), &inputs, link_type)
+            let (mut child, _) = link(target, binary_path.clone(), &inputs, link_type)
                 .map_err(|_| todo!("gracefully handle `ld` failing to spawn."))?;
 
             let exit_status = child
                 .wait()
                 .map_err(|_| todo!("gracefully handle error after `ld` spawned"))?;
 
+            // Extend the lifetime of the tempfile so it doesn't get dropped
+            // (and thus deleted) before the child process is done using it!
+            let _ = builtins_host_tempfile;
+
             if exit_status.success() {
                 problems
             } else {
-                let mut problems = problems;
-
-                // Add an error for `ld` failing
-                problems.errors += 1;
-
-                problems
+                todo!(
+                    "gracefully handle `ld` (or `zig` in the case of wasm with --optimize) returning exit code {:?}",
+                    exit_status.code()
+                );
             }
         }
     };
@@ -388,7 +428,6 @@ pub fn build_file<'a>(
 fn spawn_rebuild_thread(
     opt_level: OptLevel,
     linking_strategy: LinkingStrategy,
-    prebuilt: bool,
     host_input_path: PathBuf,
     preprocessed_host_path: PathBuf,
     binary_path: PathBuf,
@@ -398,54 +437,49 @@ fn spawn_rebuild_thread(
 ) -> std::thread::JoinHandle<u128> {
     let thread_local_target = target.clone();
     std::thread::spawn(move || {
-        if !prebuilt {
-            // Printing to stderr because we want stdout to contain only the output of the roc program.
-            // We are aware of the trade-offs.
-            // `cargo run` follows the same approach
-            eprintln!("🔨 Rebuilding platform...");
-        }
+        // Printing to stderr because we want stdout to contain only the output of the roc program.
+        // We are aware of the trade-offs.
+        // `cargo run` follows the same approach
+        eprintln!("🔨 Rebuilding platform...");
 
         let rebuild_host_start = Instant::now();
 
-        if !prebuilt {
-            match linking_strategy {
-                LinkingStrategy::Additive => {
-                    let host_dest = rebuild_host(
-                        opt_level,
-                        &thread_local_target,
-                        host_input_path.as_path(),
-                        None,
-                    );
+        match linking_strategy {
+            LinkingStrategy::Additive => {
+                let host_dest = rebuild_host(
+                    opt_level,
+                    &thread_local_target,
+                    host_input_path.as_path(),
+                    None,
+                );
 
-                    preprocess_host_wasm32(host_dest.as_path(), &preprocessed_host_path);
-                }
-                LinkingStrategy::Surgical => {
-                    roc_linker::build_and_preprocess_host(
-                        opt_level,
-                        &thread_local_target,
-                        host_input_path.as_path(),
-                        preprocessed_host_path.as_path(),
-                        exported_symbols,
-                        exported_closure_types,
-                    );
-                }
-                LinkingStrategy::Legacy => {
-                    rebuild_host(
-                        opt_level,
-                        &thread_local_target,
-                        host_input_path.as_path(),
-                        None,
-                    );
-                }
+                preprocess_host_wasm32(host_dest.as_path(), &preprocessed_host_path);
+            }
+            LinkingStrategy::Surgical => {
+                roc_linker::build_and_preprocess_host(
+                    opt_level,
+                    &thread_local_target,
+                    host_input_path.as_path(),
+                    preprocessed_host_path.as_path(),
+                    exported_symbols,
+                    exported_closure_types,
+                );
+
+                // Copy preprocessed host to executable location.
+                // The surgical linker will modify that copy in-place.
+                std::fs::copy(&preprocessed_host_path, binary_path.as_path()).unwrap();
+            }
+            LinkingStrategy::Legacy => {
+                rebuild_host(
+                    opt_level,
+                    &thread_local_target,
+                    host_input_path.as_path(),
+                    None,
+                );
             }
         }
-        if linking_strategy == LinkingStrategy::Surgical {
-            // Copy preprocessed host to executable location.
-            std::fs::copy(preprocessed_host_path, binary_path.as_path()).unwrap();
-        }
-        let rebuild_host_end = rebuild_host_start.elapsed();
 
-        rebuild_host_end.as_millis()
+        rebuild_host_start.elapsed().as_millis()
     })
 }
 
@@ -455,7 +489,7 @@ pub fn check_file(
     roc_file_path: PathBuf,
     emit_timings: bool,
     threading: Threading,
-) -> Result<(program::Problems, Duration), LoadingProblem> {
+) -> Result<(Problems, Duration), LoadingProblem> {
     let compilation_start = Instant::now();
 
     // only used for generating errors. We don't do code generation, so hardcoding should be fine
@@ -469,6 +503,7 @@ pub fn check_file(
         target_info,
         // TODO: expose this from CLI?
         render: RenderTarget::ColorTerminal,
+        palette: DEFAULT_PALETTE,
         threading,
         exec_mode: ExecutionMode::Check,
     };

@@ -53,6 +53,7 @@ pub fn helper(
     let load_config = LoadConfig {
         target_info: roc_target::TargetInfo::default_x86_64(),
         render: roc_reporting::report::RenderTarget::ColorTerminal,
+        palette: roc_reporting::report::DEFAULT_PALETTE,
         threading: Threading::Single,
         exec_mode: ExecutionMode::Executable,
     };
@@ -192,7 +193,8 @@ pub fn helper(
         .expect("failed to build output object");
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
-    // std::fs::copy(&app_o_file, "/tmp/app.o").unwrap();
+    let builtins_host_tempfile =
+        bitcode::host_unix_tempfile().expect("failed to write host builtins object to tempfile");
 
     let (mut child, dylib_path) = link(
         &target,
@@ -201,13 +203,17 @@ pub fn helper(
         // With the current method all methods are kept and it adds about 100k to all outputs.
         &[
             app_o_file.to_str().unwrap(),
-            &bitcode::get_builtins_host_obj_path(),
+            builtins_host_tempfile.path().to_str().unwrap(),
         ],
         LinkType::Dylib,
     )
     .expect("failed to link dynamic library");
 
     child.wait().unwrap();
+
+    // Extend the lifetime of the tempfile so it doesn't get dropped
+    // (and thus deleted) before the linking process is done using it!
+    let _ = builtins_host_tempfile;
 
     // Load the dylib
     let path = dylib_path.as_path().to_str().unwrap();

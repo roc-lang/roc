@@ -134,24 +134,17 @@ fn generate_bc_file(bitcode_path: &Path, zig_object: &str, file_name: &str) {
 
 pub fn get_lib_dir() -> PathBuf {
     // Currently we have the OUT_DIR variable which points to `/target/debug/build/roc_builtins-*/out/`.
-    // So we just need to shed a 3 of the outer layers to get `/target/debug/` and then add `lib`.
-    let out_dir = env::var_os("OUT_DIR").unwrap();
+    // So we just need to add "/bitcode" to that.
+    let dir = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("bitcode");
 
-    let lib_path = Path::new(&out_dir)
-        .parent()
-        .and_then(|path| path.parent())
-        .and_then(|path| path.parent())
-        .unwrap()
-        .join("lib");
+    // create dir if it does not exist
+    fs::create_dir_all(&dir).expect("Failed to make $OUT_DIR/bitcode dir.");
 
-    // create dir of it does not exist
-    fs::create_dir_all(lib_path.clone()).expect("Failed to make lib dir.");
-
-    lib_path
+    dir
 }
 
 fn copy_zig_builtins_to_target_dir(bitcode_path: &Path) {
-    // To enable roc to find the zig biultins, we want them to be moved to a folder next to the roc executable.
+    // To enable roc to find the zig builtins, we want them to be moved to a folder next to the roc executable.
     // So if <roc_folder>/roc is the executable. The zig files will be in <roc_folder>/lib/*.zig
     let target_profile_dir = get_lib_dir();
 
@@ -222,8 +215,12 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
                     } else {
                         run_command(command, flaky_fail_counter + 1)
                     }
+                } else if error_str
+                    .contains("lld-link: error: failed to write the output file: Permission denied")
+                {
+                    panic!("{} failed with:\n\n  {}\n\nWorkaround:\n\n  Re-run the cargo command that triggered this build.\n\n", command_str, error_str);
                 } else {
-                    panic!("{} failed: {}", command_str, error_str);
+                    panic!("{} failed with:\n\n  {}\n", command_str, error_str);
                 }
             }
         },

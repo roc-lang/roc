@@ -7,10 +7,11 @@ use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
-use roc_build::program::{CodeGenBackend, CodeGenOptions, Problems};
+use roc_build::program::{CodeGenBackend, CodeGenOptions};
 use roc_error_macros::{internal_error, user_error};
 use roc_load::{ExpectMetadata, LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
+use roc_reporting::cli::Problems;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
@@ -408,6 +409,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         target_info,
         // TODO: expose this from CLI?
         render: roc_reporting::report::RenderTarget::ColorTerminal,
+        palette: roc_reporting::report::DEFAULT_PALETTE,
         threading,
         exec_mode: ExecutionMode::Test,
     };
@@ -644,8 +646,8 @@ pub fn build(
                     roc_run(&arena, opt_level, triple, args, bytes, expect_metadata)
                 }
                 BuildAndRunIfNoErrors => {
-                    debug_assert!(
-                        problems.errors == 0,
+                    debug_assert_eq!(
+                        problems.errors, 0,
                         "if there are errors, they should have been returned as an error variant"
                     );
                     if problems.warnings > 0 {
@@ -938,7 +940,11 @@ fn roc_dev_native(
     expect_metadata: ExpectMetadata,
 ) -> ! {
     use roc_repl_expect::run::ExpectMemory;
-    use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
+    use signal_hook::{
+        consts::signal::SIGCHLD,
+        consts::signal::{SIGUSR1, SIGUSR2},
+        iterator::Signals,
+    };
 
     let ExpectMetadata {
         mut expectations,
@@ -946,7 +952,7 @@ fn roc_dev_native(
         layout_interner,
     } = expect_metadata;
 
-    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
+    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1, SIGUSR2]).unwrap();
 
     // let shm_name =
     let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
@@ -983,6 +989,19 @@ fn roc_dev_native(
                         // this is the signal we use for an expect failure. Let's see what the child told us
 
                         roc_repl_expect::run::render_expects_in_memory(
+                            &mut writer,
+                            arena,
+                            &mut expectations,
+                            &interns,
+                            &layout_interner,
+                            &memory,
+                        )
+                        .unwrap();
+                    }
+                    SIGUSR2 => {
+                        // this is the signal we use for a dbg
+
+                        roc_repl_expect::run::render_dbgs_in_memory(
                             &mut writer,
                             arena,
                             &mut expectations,

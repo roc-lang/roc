@@ -98,6 +98,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         target_info: TARGET_INFO,
         threading: Threading::Single,
         render: roc_reporting::report::RenderTarget::Generic,
+        palette: roc_reporting::report::DEFAULT_PALETTE,
         exec_mode: ExecutionMode::Executable,
     };
     let loaded = roc_load::load_and_monomorphize_from_str(
@@ -1999,6 +2000,33 @@ fn match_list() {
             [A, A, ..] -> "C"
             [A, B, ..] -> "D"
             [B, ..] -> "E"
+        "#
+    )
+}
+
+#[mono_test]
+#[ignore = "https://github.com/roc-lang/roc/issues/4561"]
+fn recursive_function_and_union_with_inference_hole() {
+    let _tracing_guards = roc_tracing::setup_tracing!();
+
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Html state : [
+            Element (List (Html state)),
+        ]
+
+        translateStatic : Html _ -> Html _
+        translateStatic = \node ->
+            when node is
+                Element children ->
+                    newChildren = List.map children translateStatic
+
+                    Element newChildren
+
+        main = when translateStatic (Element []) is
+            _ -> ""
         "#
     )
 }

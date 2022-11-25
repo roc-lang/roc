@@ -23,9 +23,9 @@ use roc_module::ident::ModuleName;
 use roc_module::symbol::{Interns, ModuleId};
 use roc_problem::can::Problem;
 use roc_region::all::LineInfo;
-use roc_reporting::report::can_problem;
 use roc_reporting::report::RenderTarget;
 use roc_reporting::report::RocDocAllocator;
+use roc_reporting::report::{can_problem, DEFAULT_PALETTE};
 use roc_target::TargetInfo;
 use roc_types::pretty_print::name_and_print_var;
 use roc_types::pretty_print::DebugPrint;
@@ -40,10 +40,11 @@ fn load_and_typecheck(
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename, RenderTarget::Generic)?;
+    let load_start = LoadStart::from_path(arena, filename, RenderTarget::Generic, DEFAULT_PALETTE)?;
     let load_config = LoadConfig {
         target_info,
         render: RenderTarget::Generic,
+        palette: DEFAULT_PALETTE,
         threading: Threading::Single,
         exec_mode: ExecutionMode::Check,
     };

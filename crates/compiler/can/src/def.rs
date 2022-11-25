@@ -88,20 +88,21 @@ pub struct Annotation {
 #[derive(Debug)]
 pub(crate) struct CanDefs {
     defs: Vec<Option<Def>>,
-    expects: Expects,
-    expects_fx: Expects,
+    dbgs: ExpectsOrDbgs,
+    expects: ExpectsOrDbgs,
+    expects_fx: ExpectsOrDbgs,
     def_ordering: DefOrdering,
     aliases: VecMap<Symbol, Alias>,
 }
 
 #[derive(Clone, Debug)]
-pub struct Expects {
+pub struct ExpectsOrDbgs {
     pub conditions: Vec<Expr>,
     pub regions: Vec<Region>,
     pub preceding_comment: Vec<Region>,
 }
 
-impl Expects {
+impl ExpectsOrDbgs {
     fn with_capacity(capacity: usize) -> Self {
         Self {
             conditions: Vec::with_capacity(capacity),
@@ -239,8 +240,8 @@ pub enum Declaration {
     Declare(Def),
     DeclareRec(Vec<Def>, IllegalCycleMark),
     Builtin(Def),
-    Expects(Expects),
-    ExpectsFx(Expects),
+    Expects(ExpectsOrDbgs),
+    ExpectsFx(ExpectsOrDbgs),
     /// If we know a cycle is illegal during canonicalization.
     /// Otherwise we will try to detect this during solving; see [`IllegalCycleMark`].
     InvalidCycle(Vec<CycleEntry>),
@@ -1017,6 +1018,7 @@ fn canonicalize_value_defs<'a>(
     // the ast::Expr values in pending_exprs for further canonicalization
     // once we've finished assembling the entire scope.
     let mut pending_value_defs = Vec::with_capacity(value_defs.len());
+    let mut pending_dbgs = Vec::with_capacity(value_defs.len());
     let mut pending_expects = Vec::with_capacity(value_defs.len());
     let mut pending_expect_fx = Vec::with_capacity(value_defs.len());
 
@@ -1030,10 +1032,12 @@ fn canonicalize_value_defs<'a>(
                 pending_value_defs.push(pending_def);
             }
             PendingValue::SignatureDefMismatch => { /* skip */ }
+            PendingValue::Dbg(pending_dbg) => {
+                pending_dbgs.push(pending_dbg);
+            }
             PendingValue::Expect(pending_expect) => {
                 pending_expects.push(pending_expect);
             }
-
             PendingValue::ExpectFx(pending_expect) => {
                 pending_expect_fx.push(pending_expect);
             }
@@ -1094,8 +1098,23 @@ fn canonicalize_value_defs<'a>(
         def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
     }
 
-    let mut expects = Expects::with_capacity(pending_expects.len());
-    let mut expects_fx = Expects::with_capacity(pending_expects.len());
+    let mut dbgs = ExpectsOrDbgs::with_capacity(pending_dbgs.len());
+    let mut expects = ExpectsOrDbgs::with_capacity(pending_expects.len());
+    let mut expects_fx = ExpectsOrDbgs::with_capacity(pending_expects.len());
+
+    for pending in pending_dbgs {
+        let (loc_can_condition, can_output) = canonicalize_expr(
+            env,
+            var_store,
+            scope,
+            pending.condition.region,
+            &pending.condition.value,
+        );
+
+        dbgs.push(loc_can_condition, pending.preceding_comment);
+
+        output.union(can_output);
+    }
 
     for pending in pending_expects {
         let (loc_can_condition, can_output) = canonicalize_expr(
@@ -1127,6 +1146,7 @@ fn canonicalize_value_defs<'a>(
 
     let can_defs = CanDefs {
         defs,
+        dbgs,
         expects,
         expects_fx,
         def_ordering,
@@ -1534,6 +1554,7 @@ pub(crate) fn sort_can_defs_new(
 ) -> (Declarations, Output) {
     let CanDefs {
         defs,
+        dbgs: _,
         expects,
         expects_fx,
         def_ordering,
@@ -1750,6 +1771,7 @@ pub(crate) fn sort_can_defs(
 ) -> (Vec<Declaration>, Output) {
     let CanDefs {
         mut defs,
+        dbgs,
         expects,
         expects_fx,
         def_ordering,
@@ -1850,6 +1872,10 @@ pub(crate) fn sort_can_defs(
 
             declarations.push(declaration);
         }
+    }
+
+    if !dbgs.conditions.is_empty() {
+        declarations.push(Declaration::Expects(dbgs));
     }
 
     if !expects.conditions.is_empty() {
@@ -2581,12 +2607,13 @@ fn to_pending_type_def<'a>(
 
 enum PendingValue<'a> {
     Def(PendingValueDef<'a>),
-    Expect(PendingExpect<'a>),
-    ExpectFx(PendingExpect<'a>),
+    Dbg(PendingExpectOrDbg<'a>),
+    Expect(PendingExpectOrDbg<'a>),
+    ExpectFx(PendingExpectOrDbg<'a>),
     SignatureDefMismatch,
 }
 
-struct PendingExpect<'a> {
+struct PendingExpectOrDbg<'a> {
     condition: &'a Loc<ast::Expr<'a>>,
     preceding_comment: Region,
 }
@@ -2684,10 +2711,18 @@ fn to_pending_value_def<'a>(
             }
         }
 
+        Dbg {
+            condition,
+            preceding_comment,
+        } => PendingValue::Dbg(PendingExpectOrDbg {
+            condition,
+            preceding_comment: *preceding_comment,
+        }),
+
         Expect {
             condition,
             preceding_comment,
-        } => PendingValue::Expect(PendingExpect {
+        } => PendingValue::Expect(PendingExpectOrDbg {
             condition,
             preceding_comment: *preceding_comment,
         }),
@@ -2695,7 +2730,7 @@ fn to_pending_value_def<'a>(
         ExpectFx {
             condition,
             preceding_comment,
-        } => PendingValue::ExpectFx(PendingExpect {
+        } => PendingValue::ExpectFx(PendingExpectOrDbg {
             condition,
             preceding_comment: *preceding_comment,
         }),

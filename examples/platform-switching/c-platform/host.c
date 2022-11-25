@@ -1,12 +1,19 @@
 #include <errno.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
+
+#ifdef _WIN32
+#else
 #include <sys/shm.h> // shm_open
 #include <sys/mman.h> // for mmap
 #include <signal.h> // for kill
+#endif
 
 void* roc_alloc(size_t size, unsigned int alignment) { return malloc(size); }
 

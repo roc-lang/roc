@@ -1547,7 +1547,7 @@ fn to_unexpected_arrow_report<'a>(
         ),
         alloc.concat([
             alloc.reflow(r"It makes sense to see arrows around here, "),
-            alloc.reflow(r"so I suspect it is something earlier."),
+            alloc.reflow(r"so I suspect it is something earlier. "),
             alloc.reflow(
                 r"Maybe this pattern is indented a bit farther from the previous patterns?",
             ),
@@ -2904,6 +2904,27 @@ fn to_tinparens_report<'a>(
                         severity: Severity::RuntimeError,
                     }
                 }
+            }
+        }
+
+        ETypeInParens::Empty(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow("I am partway through parsing a parenthesized type:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow(r"I was expecting to see an expression next."),
+                    alloc.reflow(r"Note, Roc doesn't use '()' as a null type."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "EMPTY PARENTHESES".to_string(),
+                severity: Severity::RuntimeError,
             }
         }
 

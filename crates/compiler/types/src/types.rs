@@ -497,19 +497,15 @@ impl Default for Types {
 
 impl Types {
     pub const EMPTY_RECORD: Index<TypeTag> = Index::new(0);
-    const EMPTY_RECORD_TAG: TypeTag = TypeTag::EmptyRecord;
+    const EMPTY_RECORD_TAG: TypeTag = TypeTag::Variable(Variable::EMPTY_RECORD);
     const EMPTY_RECORD_ARGS: Slice<TypeTag> = Slice::empty();
 
     pub const EMPTY_TAG_UNION: Index<TypeTag> = Index::new(1);
-    const EMPTY_TAG_UNION_TAG: TypeTag = TypeTag::EmptyTagUnion;
+    const EMPTY_TAG_UNION_TAG: TypeTag = TypeTag::Variable(Variable::EMPTY_TAG_UNION);
     const EMPTY_TAG_UNION_ARGS: Slice<TypeTag> = Slice::empty();
 
     pub const STR: Index<TypeTag> = Index::new(2);
-    const STR_TAG: TypeTag = TypeTag::Apply {
-        symbol: Symbol::STR_STR,
-        type_argument_regions: Slice::empty(),
-        region: Region::zero(),
-    };
+    const STR_TAG: TypeTag = TypeTag::Variable(Variable::STR);
     const STR_ARGS: Slice<TypeTag> = Slice::empty();
 
     pub fn new() -> Self {
@@ -589,8 +585,9 @@ impl Types {
     /// # Safety
     ///
     /// May only be called if `var` is known to represent the type at `index`.
-    pub unsafe fn set_variable(&mut self, index: Index<TypeTag>, var: Variable) {
-        self.tags[index.index()] = TypeTag::Variable(var);
+    #[must_use]
+    pub unsafe fn emplace_variable(&mut self, index: Index<TypeTag>, var: Variable) -> TypeTag {
+        std::mem::replace(&mut self.tags[index.index()], TypeTag::Variable(var))
     }
 
     fn reserve_type_tags(&mut self, length: usize) -> Slice<TypeTag> {
@@ -3532,6 +3529,7 @@ pub enum Category {
     AbilityMemberSpecialization(Symbol),
 
     Expect,
+    Dbg,
     Unknown,
 }
 

@@ -158,7 +158,7 @@ impl LlvmBackendMode {
         }
     }
 
-    fn runs_expects(self) -> bool {
+    pub(crate) fn runs_expects(self) -> bool {
         match self {
             LlvmBackendMode::Binary => false,
             LlvmBackendMode::BinaryDev => true,
@@ -1053,7 +1053,16 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             load_roc_value(env, *layout, value.into_pointer_value(), "load_boxed_value")
         }
 
-        Reset { symbol, .. } => {
+        Reset {
+            symbol,
+            update_mode,
+        } => {
+            let bytes = update_mode.to_bytes();
+            let update_var = UpdateModeVar(&bytes);
+            let update_mode = func_spec_solutions
+                .update_mode(update_var)
+                .unwrap_or(UpdateMode::Immutable);
+
             let (tag_ptr, layout) = load_symbol_and_layout(scope, symbol);
             let tag_ptr = tag_ptr.into_pointer_value();
 
@@ -1070,7 +1079,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
             let refcount_ptr =
                 PointerToRefcount::from_ptr_to_data(env, tag_pointer_clear_tag_id(env, tag_ptr));
-            let is_unique = refcount_ptr.is_1(env);
+
+            let is_unique = match update_mode {
+                UpdateMode::InPlace => env.context.bool_type().const_int(1, false),
+                UpdateMode::Immutable => refcount_ptr.is_1(env),
+            };
 
             env.builder
                 .build_conditional_branch(is_unique, then_block, else_block);
@@ -4259,12 +4272,16 @@ fn build_procedures_help<'a, 'ctx, 'env>(
 
     let it = procedures.iter().map(|x| x.1);
 
-    let solutions =
-        match roc_alias_analysis::spec_program(env.layout_interner, opt_level, opt_entry_point, it)
-        {
-            Err(e) => panic!("Error in alias analysis: {}", e),
-            Ok(solutions) => solutions,
-        };
+    let solutions = match roc_alias_analysis::spec_program(
+        env.arena,
+        env.layout_interner,
+        opt_level,
+        opt_entry_point,
+        it,
+    ) {
+        Err(e) => panic!("Error in alias analysis: {}", e),
+        Ok(solutions) => solutions,
+    };
 
     let solutions = env.arena.alloc(solutions);
 

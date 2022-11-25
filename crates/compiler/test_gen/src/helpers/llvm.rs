@@ -10,7 +10,7 @@ use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::OptLevel;
 use roc_region::all::LineInfo;
-use roc_reporting::report::RenderTarget;
+use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_utils::zig;
 use target_lexicon::Triple;
 
@@ -70,6 +70,7 @@ fn create_llvm_module<'a>(
     let load_config = LoadConfig {
         target_info,
         render: RenderTarget::ColorTerminal,
+        palette: DEFAULT_PALETTE,
         threading: Threading::Single,
         exec_mode: ExecutionMode::Executable,
     };
@@ -105,7 +106,7 @@ fn create_llvm_module<'a>(
     let mut delayed_errors = Vec::new();
 
     for (home, (module_path, src)) in loaded.sources {
-        use roc_reporting::report::{can_problem, type_problem, RocDocAllocator, DEFAULT_PALETTE};
+        use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
 
         let can_problems = loaded.can_problems.remove(&home).unwrap_or_default();
         let type_problems = loaded.type_problems.remove(&home).unwrap_or_default();

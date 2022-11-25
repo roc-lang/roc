@@ -104,7 +104,7 @@ fn parse_type_alias_after_as<'a>() -> impl Parser<'a, TypeHeader<'a>, EType<'a>>
 
             match res {
                 Ok(header) => Ok((progress, header, state)),
-                Err(err) => Err((progress, EType::TInlineAlias(err, state.pos()), state)),
+                Err(err) => Err((progress, EType::TInlineAlias(err, state.pos()))),
             }
         },
     )
@@ -116,7 +116,7 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
             one_of!(
                 loc_wildcard(),
                 loc_inferred(),
-                specialize(EType::TInParens, loc_type_in_parens()),
+                specialize(EType::TInParens, loc_type_in_parens(stop_at_surface_has)),
                 loc!(specialize(EType::TRecord, record_type(stop_at_surface_has))),
                 loc!(specialize(
                     EType::TTagUnion,
@@ -185,7 +185,7 @@ fn loc_applied_arg<'a>(
             one_of!(
                 loc_wildcard(),
                 loc_inferred(),
-                specialize(EType::TInParens, loc_type_in_parens()),
+                specialize(EType::TInParens, loc_type_in_parens(stop_at_surface_has)),
                 loc!(specialize(EType::TRecord, record_type(stop_at_surface_has))),
                 loc!(specialize(
                     EType::TTagUnion,
@@ -206,16 +206,45 @@ fn loc_applied_arg<'a>(
     )
 }
 
-fn loc_type_in_parens<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, ETypeInParens<'a>> {
-    between!(
-        word1(b'(', ETypeInParens::Open),
-        space0_around_ee(
-            specialize_ref(ETypeInParens::Type, expression(true, false)),
-            ETypeInParens::IndentOpen,
-            ETypeInParens::IndentEnd,
-        ),
-        word1(b')', ETypeInParens::IndentEnd)
+fn loc_type_in_parens<'a>(
+    stop_at_surface_has: bool,
+) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, ETypeInParens<'a>> {
+    then(
+        loc!(and!(
+            collection_trailing_sep_e!(
+                word1(b'(', ETypeInParens::Open),
+                specialize_ref(ETypeInParens::Type, expression(true, false)),
+                word1(b',', ETypeInParens::End),
+                word1(b')', ETypeInParens::End),
+                ETypeInParens::Open,
+                ETypeInParens::IndentEnd,
+                TypeAnnotation::SpaceBefore
+            ),
+            optional(allocated(specialize_ref(
+                ETypeInParens::Type,
+                term(stop_at_surface_has)
+            )))
+        )),
+        |_arena, state, progress, item| {
+            let Loc {
+                region,
+                value: (fields, ext),
+            } = item;
+            if fields.len() > 1 || ext.is_some() {
+                Ok((
+                    MadeProgress,
+                    Loc::at(region, TypeAnnotation::Tuple { fields, ext }),
+                    state,
+                ))
+            } else if fields.len() == 1 {
+                Ok((MadeProgress, fields.items[0], state))
+            } else {
+                debug_assert!(fields.is_empty());
+                Err((progress, ETypeInParens::Empty(state.pos())))
+            }
+        },
     )
+    .trace("type_annotation:type_in_parens")
 }
 
 #[inline(always)]
@@ -242,11 +271,13 @@ where
     F: Fn(Position) -> E,
     E: 'a,
 {
-    move |arena, state: State<'a>, min_indent: u32| match crate::ident::tag_name()
-        .parse(arena, state, min_indent)
-    {
+    move |arena, state: State<'a>, min_indent: u32| match crate::ident::tag_name().parse(
+        arena,
+        state.clone(),
+        min_indent,
+    ) {
         Ok(good) => Ok(good),
-        Err((progress, _, state)) => Err((progress, to_problem(state.pos()), state)),
+        Err((progress, _)) => Err((progress, to_problem(state.pos()))),
     }
 }
 
@@ -320,29 +351,24 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
 fn record_type<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
-    use crate::type_annotation::TypeAnnotation::*;
-
-    (move |arena, state, min_indent| {
-        let (_, fields, state) = collection_trailing_sep_e!(
-            // word1_check_indent!(b'{', TRecord::Open, min_indent, TRecord::IndentOpen),
-            word1(b'{', ETypeRecord::Open),
-            loc!(record_type_field()),
-            word1(b',', ETypeRecord::End),
-            // word1_check_indent!(b'}', TRecord::End, min_indent, TRecord::IndentEnd),
-            word1(b'}', ETypeRecord::End),
-            ETypeRecord::Open,
-            ETypeRecord::IndentEnd,
-            AssignedField::SpaceBefore
-        )
-        .parse(arena, state, min_indent)?;
-
-        let field_term = specialize_ref(ETypeRecord::Type, term(stop_at_surface_has));
-        let (_, ext, state) = optional(allocated(field_term)).parse(arena, state, min_indent)?;
-
-        let result = Record { fields, ext };
-
-        Ok((MadeProgress, result, state))
-    })
+    map!(
+        and!(
+            collection_trailing_sep_e!(
+                word1(b'{', ETypeRecord::Open),
+                loc!(record_type_field()),
+                word1(b',', ETypeRecord::End),
+                word1(b'}', ETypeRecord::End),
+                ETypeRecord::Open,
+                ETypeRecord::IndentEnd,
+                AssignedField::SpaceBefore
+            ),
+            optional(allocated(specialize_ref(
+                ETypeRecord::Type,
+                term(stop_at_surface_has)
+            )))
+        ),
+        |(fields, ext)| { TypeAnnotation::Record { fields, ext } }
+    )
     .trace("type_annotation:record_type")
 }
 
@@ -645,14 +671,15 @@ fn concrete_type<'a>() -> impl Parser<'a, TypeAnnotation<'a>, ETypeApply> {
     move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
         let initial_bytes = state.bytes();
 
-        match crate::ident::concrete_type().parse(arena, state, min_indent) {
+        match crate::ident::concrete_type().parse(arena, state.clone(), min_indent) {
             Ok((_, (module_name, type_name), state)) => {
                 let answer = TypeAnnotation::Apply(module_name, type_name, &[]);
 
                 Ok((MadeProgress, answer, state))
             }
-            Err((NoProgress, _, state)) => Err((NoProgress, ETypeApply::End(state.pos()), state)),
-            Err((MadeProgress, _, mut state)) => {
+            Err((NoProgress, _)) => Err((NoProgress, ETypeApply::End(state.pos()))),
+            Err((MadeProgress, _)) => {
+                let mut state = state.clone();
                 // we made some progress, but ultimately failed.
                 // that means a malformed type name
                 let chomped = crate::ident::chomp_malformed(state.bytes());
@@ -671,18 +698,20 @@ fn concrete_type<'a>() -> impl Parser<'a, TypeAnnotation<'a>, ETypeApply> {
 fn parse_type_variable<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, TypeAnnotation<'a>, EType<'a>> {
-    move |arena, state: State<'a>, min_indent: u32| match crate::ident::lowercase_ident()
-        .parse(arena, state, min_indent)
-    {
+    move |arena, state: State<'a>, min_indent: u32| match crate::ident::lowercase_ident().parse(
+        arena,
+        state.clone(),
+        min_indent,
+    ) {
         Ok((_, name, state)) => {
             if name == "has" && stop_at_surface_has {
-                Err((NoProgress, EType::TEnd(state.pos()), state))
+                Err((NoProgress, EType::TEnd(state.pos())))
             } else {
                 let answer = TypeAnnotation::BoundVariable(name);
 
                 Ok((MadeProgress, answer, state))
             }
         }
-        Err((progress, _, state)) => Err((progress, EType::TBadTypeVariable(state.pos()), state)),
+        Err((progress, _)) => Err((progress, EType::TBadTypeVariable(state.pos()))),
     }
 }
