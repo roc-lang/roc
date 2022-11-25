@@ -67,7 +67,7 @@ fn main() -> io::Result<()> {
     let module = match WasmModule::preload(&arena, &module_bytes, require_relocatable) {
         Ok(m) => m,
         Err(e) => {
-            eprintln!("I couldn't parse this WebAssembly module! There's something wrong at byte offset 0x{}.",  e.offset);
+            eprintln!("I couldn't parse this WebAssembly module! There's something wrong at byte offset {:#x}.",  e.offset);
             eprintln!("{}", e.message);
             eprintln!("If you think this could be a code generation problem in the Roc compiler, see crates/compiler/gen_wasm/README.md for debugging tips.");
             process::exit(1);
