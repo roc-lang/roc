@@ -96,7 +96,7 @@ pub fn install_package<'a>(
 // e.g. the "Roc" in %APPDATA%\\Roc
 const ROC_CACHE_DIR_NAME: &str = "Roc";
 
-#[cfg(unix)]
+#[cfg(not(windows))]
 // e.g. the "roc" in ~/.cache/roc
 const ROC_CACHE_DIR_NAME: &str = "roc";
 
