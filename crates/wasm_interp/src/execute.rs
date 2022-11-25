@@ -1,5 +1,6 @@
 use bumpalo::{collections::Vec, Bump};
 use std::fmt::Write;
+use std::iter;
 
 use roc_wasm_module::opcodes::OpCode;
 use roc_wasm_module::parse::Parse;
@@ -59,6 +60,8 @@ impl<'a> ExecutionState<'a> {
                 e.offset, e.message
             )
         })?;
+        let mut memory = Vec::from_iter_in(iter::repeat(0).take(mem_bytes as usize), arena);
+        module.data.load_into(&mut memory)?;
 
         let globals = module.global.initial_values(arena);
 
@@ -110,7 +113,7 @@ impl<'a> ExecutionState<'a> {
         };
 
         Ok(ExecutionState {
-            memory: Vec::with_capacity_in(mem_bytes as usize, arena),
+            memory,
             call_stack,
             value_stack,
             globals,
