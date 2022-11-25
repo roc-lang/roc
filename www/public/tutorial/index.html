@@ -36,6 +36,7 @@
             <li><a href="#defining-functions">Defining Functions</a></li>
             <li><a href="#if-then-else">if-then-else</a></li>
             <li><a href="#records">Records</a></li>
+            <li><a href="#debugging">Debugging</a></li>
             <li><a href="#tags">Tags &amp; Pattern Matching</a></li>
             <li><a href="#booleans">Booleans</a></li>
             <li><a href="#lists">Lists</a></li>
@@ -294,6 +295,34 @@ the <code>else</code> branch contains another <code>if</code>/<code>else</code>.
 on the same line, although the convention is to use the original version's style.
 </p>
 </section>
+<section><h2 id="debugging"><a href="#debugging">Debugging</a></h2>
+<p><a href="https://en.wikipedia.org/wiki/Debugging#Techniques">Print debugging</a> is the most
+common debugging technique in the history of programming, and Roc has a <code>dbg</code>
+keyword to facilitate it. Here's an example of how to use <code>dbg</code>:</p>
+<samp>pluralize <span class="op">=</span> <span class="kw">\</span>singular, plural, count <span class="op">-&gt;</span>
+    <span class="kw">dbg</span> count
+
+    <span class="kw">if</span> count <span class="op">==</span> <span class="number">1</span> then
+        singular
+    <span class="kw">else</span>
+        plural
+</samp>
+<p>Whenever this <code>dbg</code> line of code is reached, the value of <code>count</code>
+will be printed to <a href="https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)">stderr</a>,
+along with the source code file and line number where the <code>dbg</code> itself was written:</p>
+<samp><span class="kw">[pluralize.roc 6:8]</span> 5
+</samp>
+<p>You can give <code>dbg</code> any expression you like, for example:</p>
+<samp><span class="kw">dbg</span> Str.concat singular plural</samp>
+<p>An easy way to print multiple values at a time is to wrap them in a tag, for example
+a concise tag like <code>T</code>:
+</p>
+<samp><span class="kw">dbg</span> T "the value of `count` is:" count</samp>
+</section>
+<p>Note that <code>dbg</code> is a debugging tool, and is only available when running
+your program via <code>roc dev</code>, <code>roc run</code>, or <code>roc test</code>. When you
+build a standalone application with <code>roc build</code>, any uses of <code>dbg</code> won't
+be included!</p>
 <section><h2 id="records"><a href="#records">Records</a></h2>
 <p>Currently our <code>addAndStringify</code> function takes two arguments. We can instead make
 it take one argument like so:</p>
