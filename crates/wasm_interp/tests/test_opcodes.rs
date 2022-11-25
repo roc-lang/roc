@@ -300,9 +300,11 @@ fn test_load(load_op: OpCode, ty: ValueType, data: &[u8], addr: u32, offset: u32
         buf.append_u8(OpCode::END as u8);
     });
 
-    let mut outfile_buf = Vec::new_in(&arena);
-    module.serialize(&mut outfile_buf);
-    std::fs::write("/tmp/roc/test.wasm", outfile_buf).unwrap();
+    if false {
+        let mut outfile_buf = Vec::new_in(&arena);
+        module.serialize(&mut outfile_buf);
+        std::fs::write("/tmp/roc/interp_load_test.wasm", outfile_buf).unwrap();
+    }
 
     let mut state =
         ExecutionState::for_module(&arena, &module, start_fn_name, is_debug_mode).unwrap();
