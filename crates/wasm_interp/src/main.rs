@@ -12,6 +12,7 @@ use roc_wasm_module::WasmModule;
 
 pub const FLAG_FUNCTION: &str = "function";
 pub const FLAG_DEBUG: &str = "debug";
+pub const FLAG_HEX: &str = "hex";
 pub const WASM_FILE: &str = "WASM_FILE";
 
 fn main() -> io::Result<()> {
@@ -29,6 +30,12 @@ fn main() -> io::Result<()> {
         .action(ArgAction::SetTrue)
         .required(false);
 
+    let flag_hex = Arg::new(FLAG_HEX)
+        .long(FLAG_HEX)
+        .help("If the called function returns a value, print it in hexadecimal format.")
+        .action(ArgAction::SetTrue)
+        .required(false);
+
     let wasm_file_to_run = Arg::new(WASM_FILE)
         .help("The .wasm file to run")
         .allow_invalid_utf8(true)
@@ -38,6 +45,7 @@ fn main() -> io::Result<()> {
         .about("Run the given .wasm file")
         .arg(flag_function)
         .arg(flag_debug)
+        .arg(flag_hex)
         .arg(wasm_file_to_run);
 
     // Parse the command line arguments
@@ -45,6 +53,7 @@ fn main() -> io::Result<()> {
     let matches = app.get_matches();
     let start_fn_name = matches.get_one::<String>(FLAG_FUNCTION).unwrap();
     let is_debug_mode = matches.get_flag(FLAG_DEBUG);
+    let is_hex_format = matches.get_flag(FLAG_HEX);
 
     // Load the WebAssembly binary file
 
@@ -81,8 +90,20 @@ fn main() -> io::Result<()> {
 
     match state.value_stack.len() {
         0 => {}
-        1 => println!("{:?}", state.value_stack.pop()),
-        _ => println!("{:?}", &state.value_stack),
+        1 => {
+            if is_hex_format {
+                println!("{:#x?}", state.value_stack.pop())
+            } else {
+                println!("{:?}", state.value_stack.pop())
+            }
+        }
+        _ => {
+            if is_hex_format {
+                println!("{:#x?}", &state.value_stack)
+            } else {
+                println!("{:?}", &state.value_stack)
+            }
+        }
     }
 
     Ok(())
