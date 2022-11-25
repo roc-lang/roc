@@ -188,6 +188,8 @@ mod test_parse {
         pass/lowest_float.expr,
         pass/lowest_int.expr,
         pass/tuple_type.expr,
+        pass/tuple_access_after_record.expr,
+        pass/record_access_after_tuple.expr,
         pass/tuple_type_ext.expr,
         pass/malformed_ident_due_to_underscore.expr,
         pass/malformed_pattern_field_access.expr, // See https://github.com/roc-lang/roc/issues/399
