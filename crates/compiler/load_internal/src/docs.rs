@@ -200,6 +200,11 @@ fn generate_entry_docs<'a>(
 
                 ValueDef::Body(_, _) => (),
 
+                ValueDef::Dbg { .. } => {
+
+                    // Don't generate docs for `dbg`s
+                }
+
                 ValueDef::Expect { .. } => {
                     // Don't generate docs for `expect`s
                 }

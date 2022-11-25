@@ -42,13 +42,18 @@ impl<'a> Renderer<'a> {
         }
     }
 
+    fn render_expr(&'a self, error_type: ErrorType) -> RocDocBuilder<'a> {
+        use crate::error::r#type::error_type_to_doc;
+
+        error_type_to_doc(&self.alloc, error_type)
+    }
+
     fn render_lookup(
         &'a self,
         symbol: Symbol,
         expr: &Expr<'_>,
         error_type: ErrorType,
     ) -> RocDocBuilder<'a> {
-        use crate::error::r#type::error_type_to_doc;
         use roc_fmt::annotation::Formattable;
 
         let mut buf = roc_fmt::Buf::new_in(self.arena);
@@ -58,7 +63,7 @@ impl<'a> Renderer<'a> {
             self.alloc
                 .symbol_unqualified(symbol)
                 .append(" : ")
-                .append(error_type_to_doc(&self.alloc, error_type)),
+                .append(self.render_expr(error_type)),
             self.alloc
                 .symbol_unqualified(symbol)
                 .append(" = ")
@@ -162,6 +167,37 @@ impl<'a> Renderer<'a> {
         );
 
         write!(writer, "{}", buf)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_dbg<W>(
+        &self,
+        writer: &mut W,
+        expressions: &[Expr<'_>],
+        expect_region: Option<Region>,
+        dbg_expr_region: Region,
+    ) -> std::io::Result<()>
+    where
+        W: std::io::Write,
+    {
+        let line_col_region = self.to_line_col_region(expect_region, dbg_expr_region);
+        write!(
+            writer,
+            "\u{001b}[36m[{} {}:{}] \u{001b}[0m",
+            self.filename.display(),
+            line_col_region.start.line + 1,
+            line_col_region.start.column + 1
+        )?;
+
+        let expr = expressions[0];
+
+        let mut buf = roc_fmt::Buf::new_in(self.arena);
+        {
+            use roc_fmt::annotation::Formattable;
+            expr.format(&mut buf, 0);
+        }
+
+        writeln!(writer, "{}", buf.as_str())
     }
 
     pub fn render_panic<W>(

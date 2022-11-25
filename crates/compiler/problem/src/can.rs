@@ -195,6 +195,12 @@ pub enum Problem {
         type_got: u8,
         alias_kind: AliasKind,
     },
+    UnappliedCrash {
+        region: Region,
+    },
+    OverAppliedCrash {
+        region: Region,
+    },
 }
 
 impl Problem {
@@ -325,7 +331,9 @@ impl Problem {
             }
             | Problem::MultipleListRestPattern { region }
             | Problem::BadTypeArguments { region, .. }
-            | Problem::UnnecessaryOutputWildcard { region } => Some(*region),
+            | Problem::UnnecessaryOutputWildcard { region }
+            | Problem::OverAppliedCrash { region }
+            | Problem::UnappliedCrash { region } => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
             | Problem::BadRecursion(cycle_entries) => {
                 cycle_entries.first().map(|entry| entry.expr_region)

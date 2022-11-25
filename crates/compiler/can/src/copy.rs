@@ -376,6 +376,10 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                 *called_via,
             )
         }
+        Crash { msg, ret_var } => Crash {
+            msg: Box::new(msg.map(|m| go_help!(m))),
+            ret_var: sub!(*ret_var),
+        },
         RunLowLevel { op, args, ret_var } => RunLowLevel {
             op: *op,
             args: args
@@ -609,6 +613,18 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             loc_condition: Box::new(loc_condition.map(|e| go_help!(e))),
             loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
             lookups_in_cond: lookups_in_cond.to_vec(),
+        },
+
+        Dbg {
+            loc_condition,
+            loc_continuation,
+            variable,
+            symbol,
+        } => Dbg {
+            loc_condition: Box::new(loc_condition.map(|e| go_help!(e))),
+            loc_continuation: Box::new(loc_continuation.map(|e| go_help!(e))),
+            variable: sub!(*variable),
+            symbol: *symbol,
         },
 
         TypedHole(v) => TypedHole(sub!(*v)),

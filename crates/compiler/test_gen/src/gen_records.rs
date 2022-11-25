@@ -1,11 +1,11 @@
 #[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::{assert_evals_to, expect_runtime_error_panic};
+use crate::helpers::llvm::assert_evals_to;
 
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
 
 #[cfg(feature = "gen-wasm")]
-use crate::helpers::wasm::{assert_evals_to, expect_runtime_error_panic};
+use crate::helpers::wasm::assert_evals_to;
 
 // use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;
@@ -447,7 +447,7 @@ fn optional_field_when_use_default_nested() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn optional_field_when_no_use_default() {
+fn optional_field_destructure_module() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -468,15 +468,15 @@ fn optional_field_when_no_use_default() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn optional_field_when_no_use_default_nested() {
+fn optional_field_destructure_expr() {
     assert_evals_to!(
         indoc!(
             r#"
-                f = \r ->
+                fn = \r ->
                     { x ? 10, y } = r
                     x + y
 
-                f { x: 4, y: 9 }
+                fn { x: 4, y: 9 }
                 "#
         ),
         13,
@@ -1019,8 +1019,9 @@ fn different_proc_types_specialized_to_same_layout() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "Can't create record with improper layout""#)]
 fn call_with_bad_record_runtime_error() {
-    expect_runtime_error_panic!(indoc!(
-        r#"
+    assert_evals_to!(
+        indoc!(
+            r#"
             app "test" provides [main] to "./platform"
 
             main =
@@ -1028,7 +1029,12 @@ fn call_with_bad_record_runtime_error() {
                 get = \{a} -> a
                 get {b: ""}
             "#
-    ))
+        ),
+        true,
+        bool,
+        |x| x,
+        true // ignore type errors
+    )
 }
 
 #[test]
@@ -1056,9 +1062,9 @@ fn update_record_that_is_a_thunk() {
             app "test" provides [main] to "./platform"
 
             main = Num.toStr fromOriginal.birds
-            
+
             original = { birds: 5, iguanas: 7, zebras: 2, goats: 1 }
-            
+
             fromOriginal = { original & birds: 4, iguanas: 3 }
             "#
         ),
@@ -1076,9 +1082,9 @@ fn update_record_that_is_a_thunk_single_field() {
             app "test" provides [main] to "./platform"
 
             main = Num.toStr fromOriginal.birds
-            
+
             original = { birds: 5 }
-            
+
             fromOriginal = { original & birds: 4 }
             "#
         ),

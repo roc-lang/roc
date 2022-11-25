@@ -3315,6 +3315,7 @@ name = "roc_build"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
+ "const_format",
  "inkwell",
  "libloading",
  "roc_builtins",
@@ -4159,6 +4160,7 @@ version = "0.1.0"
 dependencies = [
  "bitvec 1.0.1",
  "bumpalo",
+ "clap 3.2.20",
  "roc_wasm_module",
 ]
 

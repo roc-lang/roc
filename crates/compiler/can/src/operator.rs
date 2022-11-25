@@ -82,6 +82,16 @@ fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a>
             body_pattern,
             body_expr: desugar_expr(arena, body_expr),
         },
+        Dbg {
+            condition,
+            preceding_comment,
+        } => {
+            let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
+            Dbg {
+                condition: desugared_condition,
+                preceding_comment: *preceding_comment,
+            }
+        }
         Expect {
             condition,
             preceding_comment,
@@ -128,7 +138,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | MalformedClosure
         | PrecedenceConflict { .. }
         | Tag(_)
-        | OpaqueRef(_) => loc_expr,
+        | OpaqueRef(_)
+        | Crash => loc_expr,
 
         TupleAccess(_sub_expr, _paths) => todo!("Handle TupleAccess"),
         RecordAccess(sub_expr, paths) => {
@@ -345,6 +356,14 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
             let desugared_continuation = &*arena.alloc(desugar_expr(arena, continuation));
             arena.alloc(Loc {
                 value: Expect(desugared_condition, desugared_continuation),
+                region: loc_expr.region,
+            })
+        }
+        Dbg(condition, continuation) => {
+            let desugared_condition = &*arena.alloc(desugar_expr(arena, condition));
+            let desugared_continuation = &*arena.alloc(desugar_expr(arena, continuation));
+            arena.alloc(Loc {
+                value: Dbg(desugared_condition, desugared_continuation),
                 region: loc_expr.region,
             })
         }

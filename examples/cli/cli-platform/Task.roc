@@ -2,9 +2,9 @@ interface Task
     exposes [Task, succeed, fail, await, map, mapFail, onFail, attempt, forever, loop, fromResult]
     imports [Effect, InternalTask]
 
-Task ok err fx : InternalTask.Task ok err fx
+Task ok err : InternalTask.Task ok err
 
-forever : Task val err fx -> Task * err fx
+forever : Task val err -> Task * err
 forever = \task ->
     looper = \{} ->
         task
@@ -18,7 +18,7 @@ forever = \task ->
     Effect.loop {} looper
     |> InternalTask.fromEffect
 
-loop : state, (state -> Task [Step state, Done done] err fx) -> Task done err fx
+loop : state, (state -> Task [Step state, Done done] err) -> Task done err
 loop = \state, step ->
     looper = \current ->
         step current
@@ -33,13 +33,13 @@ loop = \state, step ->
     Effect.loop state looper
     |> InternalTask.fromEffect
 
-succeed : ok -> Task ok * *
+succeed : ok -> Task ok *
 succeed = \ok -> InternalTask.succeed ok
 
-fail : err -> Task * err *
+fail : err -> Task * err
 fail = \err -> InternalTask.fail err
 
-attempt : Task a b fx, (Result a b -> Task c d fx) -> Task c d fx
+attempt : Task a b, (Result a b -> Task c d) -> Task c d
 attempt = \task, transform ->
     effect = Effect.after
         (InternalTask.toEffect task)
@@ -50,7 +50,7 @@ attempt = \task, transform ->
 
     InternalTask.fromEffect effect
 
-await : Task a err fx, (a -> Task b err fx) -> Task b err fx
+await : Task a err, (a -> Task b err) -> Task b err
 await = \task, transform ->
     effect = Effect.after
         (InternalTask.toEffect task)
@@ -61,7 +61,7 @@ await = \task, transform ->
 
     InternalTask.fromEffect effect
 
-onFail : Task ok a fx, (a -> Task ok b fx) -> Task ok b fx
+onFail : Task ok a, (a -> Task ok b) -> Task ok b
 onFail = \task, transform ->
     effect = Effect.after
         (InternalTask.toEffect task)
@@ -72,7 +72,7 @@ onFail = \task, transform ->
 
     InternalTask.fromEffect effect
 
-map : Task a err fx, (a -> b) -> Task b err fx
+map : Task a err, (a -> b) -> Task b err
 map = \task, transform ->
     effect = Effect.after
         (InternalTask.toEffect task)
@@ -83,7 +83,7 @@ map = \task, transform ->
 
     InternalTask.fromEffect effect
 
-mapFail : Task ok a fx, (a -> b) -> Task ok b fx
+mapFail : Task ok a, (a -> b) -> Task ok b
 mapFail = \task, transform ->
     effect = Effect.after
         (InternalTask.toEffect task)
@@ -95,7 +95,7 @@ mapFail = \task, transform ->
     InternalTask.fromEffect effect
 
 ## Use a Result among other Tasks by converting it into a Task.
-fromResult : Result ok err -> Task ok err *
+fromResult : Result ok err -> Task ok err
 fromResult = \result ->
     when result is
         Ok ok -> succeed ok

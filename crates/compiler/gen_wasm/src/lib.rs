@@ -56,7 +56,8 @@ impl Env<'_> {
 /// Parse the preprocessed host binary
 /// If successful, the module can be passed to build_app_binary
 pub fn parse_host<'a>(arena: &'a Bump, host_bytes: &[u8]) -> Result<WasmModule<'a>, ParseError> {
-    WasmModule::preload(arena, host_bytes)
+    let require_relocatable = true;
+    WasmModule::preload(arena, host_bytes, require_relocatable)
 }
 
 /// Generate a Wasm module in binary form, ready to write to a file. Entry point from roc_build.

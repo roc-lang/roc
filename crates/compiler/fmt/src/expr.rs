@@ -43,7 +43,8 @@ impl<'a> Formattable for Expr<'a> {
             | MalformedIdent(_, _)
             | MalformedClosure
             | Tag(_)
-            | OpaqueRef(_) => false,
+            | OpaqueRef(_)
+            | Crash => false,
 
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
@@ -71,6 +72,7 @@ impl<'a> Formattable for Expr<'a> {
             Expect(condition, continuation) => {
                 condition.is_multiline() || continuation.is_multiline()
             }
+            Dbg(condition, continuation) => condition.is_multiline() || continuation.is_multiline(),
 
             If(branches, final_else) => {
                 final_else.is_multiline()
@@ -189,6 +191,10 @@ impl<'a> Formattable for Expr<'a> {
                 buf.indent(indent);
                 buf.push('_');
                 buf.push_str(name);
+            }
+            Crash => {
+                buf.indent(indent);
+                buf.push_str("crash");
             }
             Apply(loc_expr, loc_args, _) => {
                 buf.indent(indent);
@@ -378,6 +384,9 @@ impl<'a> Formattable for Expr<'a> {
             }
             Expect(condition, continuation) => {
                 fmt_expect(buf, condition, continuation, self.is_multiline(), indent);
+            }
+            Dbg(condition, continuation) => {
+                fmt_dbg(buf, condition, continuation, self.is_multiline(), indent);
             }
             If(branches, final_else) => {
                 fmt_if(buf, branches, final_else, self.is_multiline(), indent);
@@ -841,6 +850,33 @@ fn fmt_when<'a, 'buf>(
 
         prev_branch_was_multiline = is_multiline_expr || is_multiline_patterns;
     }
+}
+
+fn fmt_dbg<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    condition: &'a Loc<Expr<'a>>,
+    continuation: &'a Loc<Expr<'a>>,
+    is_multiline: bool,
+    indent: u16,
+) {
+    buf.ensure_ends_with_newline();
+    buf.indent(indent);
+    buf.push_str("dbg");
+
+    let return_indent = if is_multiline {
+        buf.newline();
+        indent + INDENT
+    } else {
+        buf.spaces(1);
+        indent
+    };
+
+    condition.format(buf, return_indent);
+
+    // Always put a blank line after the `dbg` line(s)
+    buf.ensure_ends_with_blank_line();
+
+    continuation.format(buf, indent);
 }
 
 fn fmt_expect<'a, 'buf>(

@@ -5829,6 +5829,42 @@ mod test_fmt {
         );
     }
 
+    #[test]
+    fn format_crash() {
+        expr_formats_same(indoc!(
+            r#"
+            _ = crash
+            _ = crash ""
+
+            crash "" ""
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                _ = crash
+                _ = crash    ""
+                _ = crash   ""   ""
+                try
+                    foo
+                    (\_ ->   crash "")
+                "#
+            ),
+            indoc!(
+                r#"
+                _ = crash
+                _ = crash ""
+                _ = crash "" ""
+
+                try
+                    foo
+                    (\_ -> crash "")
+                "#
+            ),
+        );
+    }
+
     // this is a parse error atm
     //    #[test]
     //    fn multiline_apply() {

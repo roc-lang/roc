@@ -1249,7 +1249,7 @@ If you put these into a hypothetical Roc REPL, here's what you'd see:
 - `comparable` is used in Elm for comparison operators (like `<` and such), plus `List.sort`, `Dict`, and `Set`. Roc's comparison operators (like `<`) only accept numbers; `"foo" < "bar"` is valid Elm, but will not compile in Roc. Roc's dictionaries and sets are hashmaps behind the scenes (rather than ordered trees), so their keys need to be hashable but not necessarily comparable.
 
 That said, Roc's `Dict` and `Set` do have a restriction on their keys, just not `comparable`.
-See the section on Abilities in [the tutorial](TUTORIAL.md) for details.
+See the section on Abilities in [the tutorial](https://roc-lang.org/tutorial) for details.
 
 ## Standard library
 

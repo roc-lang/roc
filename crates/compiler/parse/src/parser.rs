@@ -354,9 +354,11 @@ pub enum EExpr<'a> {
     If(EIf<'a>, Position),
 
     Expect(EExpect<'a>, Position),
+    Dbg(EExpect<'a>, Position),
 
     Closure(EClosure<'a>, Position),
     Underscore(Position),
+    Crash(Position),
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
@@ -544,6 +546,7 @@ pub enum EIf<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EExpect<'a> {
     Space(BadInputError, Position),
+    Dbg(Position),
     Expect(Position),
     Condition(&'a EExpr<'a>, Position),
     Continuation(&'a EExpr<'a>, Position),
@@ -672,6 +675,9 @@ pub enum ETypeTagUnion<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeInParens<'a> {
+    /// e.g. (), which isn't a valid type
+    Empty(Position),
+
     End(Position),
     Open(Position),
     ///
@@ -1784,7 +1790,7 @@ macro_rules! one_or_more {
         move |arena, state: State<'a>, min_indent: u32| {
             use bumpalo::collections::Vec;
 
-            match $parser.parse(arena, state, min_indent) {
+            match $parser.parse(arena, state.clone(), min_indent) {
                 Ok((_, first_output, next_state)) => {
                     let mut state = next_state;
                     let mut buf = Vec::with_capacity_in(1, arena);
@@ -1802,14 +1808,12 @@ macro_rules! one_or_more {
                                 return Ok((MadeProgress, buf, old_state));
                             }
                             Err((MadeProgress, fail)) => {
-                                return Err((MadeProgress, fail, old_state));
+                                return Err((MadeProgress, fail));
                             }
                         }
                     }
                 }
-                Err((progress, _, new_state)) => {
-                    Err((progress, $to_error(new_state.pos), new_state))
-                }
+                Err((progress, _)) => Err((progress, $to_error(state.pos()))),
             }
         }
     };

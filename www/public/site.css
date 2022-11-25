@@ -331,10 +331,16 @@ h1 a, h2 a, h3 a, h4 a, h5 a {
     color: var(--header-link-color);
 }
 
-
 h1 a:hover, h2 a:hover, h3 a:hover, h4 a:hover, h5 a:hover {
     text-decoration: none;
     color: var(--header-link-hover);
+}
+
+h1 code, h2 code, h3 code, h4 code, h5 code {
+    color: inherit;
+    background-color: inherit;
+    padding: 0;
+    margin: 0;
 }
 
 h1 {
