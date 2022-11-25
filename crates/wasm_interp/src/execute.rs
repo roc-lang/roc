@@ -125,7 +125,7 @@ impl<'a> ExecutionState<'a> {
     fn fetch_immediate_u32(&mut self, module: &WasmModule<'a>) -> u32 {
         let x = u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
         if let Some(debug_string) = self.debug_string.as_mut() {
-            write!(debug_string, "{}", x).unwrap();
+            write!(debug_string, "{} ", x).unwrap();
         }
         x
     }
@@ -174,6 +174,28 @@ impl<'a> ExecutionState<'a> {
         }
     }
 
+    fn break_forward(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>) {
+        use OpCode::*;
+
+        let target_block_depth = self.block_depth - relative_blocks_outward - 1;
+        loop {
+            let skip_op = OpCode::from(module.code.bytes[self.program_counter]);
+            OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
+            match skip_op {
+                BLOCK | LOOP | IF => {
+                    self.block_depth += 1;
+                }
+                END => {
+                    self.block_depth -= 1;
+                    if self.block_depth == target_block_depth {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) -> Action {
         use OpCode::*;
 
@@ -204,7 +226,11 @@ impl<'a> ExecutionState<'a> {
                 self.fetch_immediate_u32(module); // blocktype
                 self.block_depth += 1;
             }
-            IF => todo!("{:?} @ {:#x}", op_code, file_offset),
+            IF => {
+                self.fetch_immediate_u32(module); // blocktype
+                self.block_depth += 1;
+                todo!("{:?} @ {:#x}", op_code, file_offset);
+            }
             ELSE => todo!("{:?} @ {:#x}", op_code, file_offset),
             END => {
                 if self.block_depth == 0 {
@@ -216,28 +242,29 @@ impl<'a> ExecutionState<'a> {
             }
             BR => {
                 let relative_blocks_outward = self.fetch_immediate_u32(module);
-                let target_block_depth = self.block_depth - relative_blocks_outward;
-                loop {
-                    match OpCode::from(module.code.bytes[self.program_counter]) {
-                        BLOCK | LOOP | IF => {
-                            self.block_depth += 1;
-                        }
-                        END => {
-                            self.block_depth -= 1;
-                            if self.block_depth == target_block_depth {
-                                break;
-                            }
-                        }
-                        _ => {}
-                    }
-                    OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
-                }
-                if self.block_depth == 0 {
-                    action = self.do_return()
+                self.break_forward(relative_blocks_outward, module);
+            }
+            BRIF => {
+                let relative_blocks_outward = self.fetch_immediate_u32(module);
+                let condition = self.value_stack.pop_i32();
+                if condition != 0 {
+                    self.break_forward(relative_blocks_outward, module);
                 }
             }
-            BRIF => todo!("{:?} @ {:#x}", op_code, file_offset),
-            BRTABLE => todo!("{:?} @ {:#x}", op_code, file_offset),
+            BRTABLE => {
+                let selector = self.value_stack.pop_u32();
+                let nondefault_condition_count = self.fetch_immediate_u32(module);
+                let mut selected = None;
+                for i in 0..nondefault_condition_count {
+                    let rel_blocks = self.fetch_immediate_u32(module);
+                    if i == selector {
+                        selected = Some(rel_blocks);
+                    }
+                }
+                let fallback = self.fetch_immediate_u32(module);
+                let relative_blocks_outward = selected.unwrap_or(fallback);
+                self.break_forward(relative_blocks_outward, module);
+            }
             RETURN => {
                 action = self.do_return();
             }
