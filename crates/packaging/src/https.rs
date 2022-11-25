@@ -117,6 +117,16 @@ pub enum Problem {
     DownloadTooBig(u64),
 }
 
+#[cfg(feature = "run-wasm32")]
+pub fn download_and_hash(
+    url: &str,
+    dest_dir: &Path,
+    max_download_bytes: u64,
+) -> Result<String, Problem> {
+    panic!("Downloading packages from URLs is not supported on wasm yet, because it currently uses reqwest::blocking - which is not supported on wasm due to being blocking instead of async. This can be supported once we switch over to an async system!");
+}
+
+#[cfg(not(feature = "run-wasm32"))]
 pub fn download_and_hash(
     url: &str,
     dest_dir: &Path,
