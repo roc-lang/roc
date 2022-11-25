@@ -36,7 +36,7 @@ impl<'a> ExecutionState<'a> {
     {
         let mem_bytes = memory_pages * MemorySection::PAGE_SIZE;
         ExecutionState {
-            memory: Vec::with_capacity_in(mem_bytes as usize, arena),
+            memory: Vec::from_iter_in(iter::repeat(0).take(mem_bytes as usize), arena),
             call_stack: CallStack::new(arena),
             value_stack: ValueStack::new(arena),
             globals: Vec::from_iter_in(globals, arena),
@@ -435,9 +435,23 @@ impl<'a> ExecutionState<'a> {
                 self.value_stack.push(Value::I32(size));
             }
             GROWMEMORY => {
+                let old_bytes = self.memory.len() as u32;
+                let old_pages = old_bytes / MemorySection::PAGE_SIZE as u32;
                 let grow_pages = self.value_stack.pop_u32();
-                let grow_bytes = grow_pages as usize * MemorySection::PAGE_SIZE as usize;
-                self.memory.extend(iter::repeat(0).take(grow_bytes));
+                let grow_bytes = grow_pages * MemorySection::PAGE_SIZE;
+                let new_bytes = old_bytes + grow_bytes;
+
+                let success = match module.memory.max_bytes().unwrap() {
+                    Some(max_bytes) => new_bytes <= max_bytes,
+                    None => true,
+                };
+                if success {
+                    self.memory
+                        .extend(iter::repeat(0).take(grow_bytes as usize));
+                    self.value_stack.push(Value::I32(old_pages as i32));
+                } else {
+                    self.value_stack.push(Value::I32(-1));
+                }
             }
             I32CONST => {
                 let value = i32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();

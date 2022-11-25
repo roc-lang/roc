@@ -662,11 +662,39 @@ fn test_i64store32() {
     );
 }
 
-// #[test]
-// fn test_currentmemory() {}
+#[test]
+fn test_currentmemory() {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
 
-// #[test]
-// fn test_growmemory() {}
+    let pages = 3;
+    let pc = 0;
+    module.memory = MemorySection::new(&arena, pages * MemorySection::PAGE_SIZE);
+    module.code.bytes.push(OpCode::CURRENTMEMORY as u8);
+
+    let mut state = ExecutionState::new(&arena, pages, pc, []);
+    state.execute_next_instruction(&module);
+    assert_eq!(state.value_stack.pop(), Value::I32(3))
+}
+
+#[test]
+fn test_growmemory() {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+
+    let existing_pages = 3;
+    let grow_pages = 2;
+    let pc = 0;
+    module.memory = MemorySection::new(&arena, existing_pages * MemorySection::PAGE_SIZE);
+    module.code.bytes.push(OpCode::I32CONST as u8);
+    module.code.bytes.encode_i32(grow_pages);
+    module.code.bytes.push(OpCode::GROWMEMORY as u8);
+
+    let mut state = ExecutionState::new(&arena, existing_pages, pc, []);
+    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module);
+    assert_eq!(state.memory.len(), 5 * MemorySection::PAGE_SIZE as usize);
+}
 
 #[test]
 fn test_i32const() {

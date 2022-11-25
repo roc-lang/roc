@@ -790,6 +790,16 @@ impl<'a> MemorySection<'a> {
         };
         Ok(min_pages * MemorySection::PAGE_SIZE)
     }
+
+    pub fn max_bytes(&self) -> Result<Option<u32>, ParseError> {
+        let mut cursor = 0;
+        let memory_limits = Limits::parse((), &self.bytes, &mut cursor)?;
+        let bytes = match memory_limits {
+            Limits::Min(_) => None,
+            Limits::MinMax(_, pages) => Some(pages * MemorySection::PAGE_SIZE),
+        };
+        Ok(bytes)
+    }
 }
 
 section_impl!(MemorySection, SectionId::Memory);
