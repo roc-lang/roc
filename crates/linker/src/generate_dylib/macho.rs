@@ -398,7 +398,7 @@ impl SymtabCommand {
         let mut buffer = Vec::new();
 
         buffer.extend(mach_object::LC_SYMTAB.to_le_bytes());
-        buffer.extend((std::mem::size_of::<Self>() as u32).to_le_bytes());
+        buffer.extend((4 + 4 + std::mem::size_of::<Self>() as u32).to_le_bytes());
 
         buffer.extend(self.symoff.to_le_bytes());
         buffer.extend(self.nsyms.to_le_bytes());
@@ -439,15 +439,27 @@ fn trivial_symbol_table<'a>(input: impl Iterator<Item = &'a str>) -> Vec<u8> {
     for string in input {
         let list = Nlist64 {
             string_table_offset,
-            n_type: 0x0f,
-            n_sect: 0,
-            n_desc: 0,
-            n_value: 0,
+            n_type: match string {
+                "dyld_stub_binder" => 0x01,
+                _ => 0x0f,
+            },
+            n_sect: match string {
+                "__mh_execute_header" => 0x01,
+                _ => 0x00,
+            },
+            n_desc: match string {
+                "dyld_stub_binder" => 0x100,
+                _ => 0x00,
+            },
+            n_value: match string {
+                "__mh_execute_header" => 0x0000000100000ff1,
+                _ => 0x00,
+            },
         };
 
         buffer.extend(list.to_bytes());
 
-        string_table_offset += 1 + string.len() as u32 + 1;
+        string_table_offset += string.len() as u32 + 1;
     }
 
     buffer
@@ -460,7 +472,6 @@ fn trivial_string_table<'a>(input: impl Iterator<Item = &'a str>) -> Vec<u8> {
     buffer.push(0);
 
     for string in input {
-        buffer.push(b'_');
         buffer.extend(string.as_bytes());
         buffer.push(0);
     }
@@ -549,6 +560,17 @@ fn load_dylinker_command(linker: &str) -> Vec<u8> {
     buffer.extend(std::iter::repeat(0).take(padding));
 
     buffer
+}
+
+fn hexstring(input: &str) -> Vec<u8> {
+    assert!(input.len() % 2 == 0);
+
+    input
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|slice| std::str::from_utf8(slice).unwrap())
+        .map(|c| u8::from_str_radix(c, 16).unwrap())
+        .collect()
 }
 
 #[cfg(test)]
@@ -641,31 +663,31 @@ mod test {
     }
 
     const STRINGS: &[&str] = &[
-        "_mh_execute_header",
-        "roc__mainForHost_1_Decode_DecodeError_caller",
-        "roc__mainForHost_1_Decode_DecodeError_result_size",
-        "roc__mainForHost_1_Decode_DecodeError_size",
-        "roc__mainForHost_1_Decode_DecodeResult_caller",
-        "roc__mainForHost_1_Decode_DecodeResult_result_size",
-        "roc__mainForHost_1_Decode_DecodeResult_size",
-        "roc__mainForHost_1_Decode_Decoder_caller",
-        "roc__mainForHost_1_Decode_Decoder_result_size",
-        "roc__mainForHost_1_Decode_Decoder_size",
-        "roc__mainForHost_1_Dict_Dict_caller",
-        "roc__mainForHost_1_Dict_Dict_result_size",
-        "roc__mainForHost_1_Dict_Dict_size",
-        "roc__mainForHost_1_Dict_LowLevelHasher_caller",
-        "roc__mainForHost_1_Dict_LowLevelHasher_result_size",
-        "roc__mainForHost_1_Dict_LowLevelHasher_size",
-        "roc__mainForHost_1_Encode_Encoder_caller",
-        "roc__mainForHost_1_Encode_Encoder_result_size",
-        "roc__mainForHost_1_Encode_Encoder_size",
-        "roc__mainForHost_1_Set_Set_caller",
-        "roc__mainForHost_1_Set_Set_result_size",
-        "roc__mainForHost_1_Set_Set_size",
-        "roc__mainForHost_1_exposed",
-        "roc__mainForHost_1_exposed_generic",
-        "roc__mainForHost_size",
+        "__mh_execute_header",
+        "_roc__mainForHost_1_Decode_DecodeError_caller",
+        "_roc__mainForHost_1_Decode_DecodeError_result_size",
+        "_roc__mainForHost_1_Decode_DecodeError_size",
+        "_roc__mainForHost_1_Decode_DecodeResult_caller",
+        "_roc__mainForHost_1_Decode_DecodeResult_result_size",
+        "_roc__mainForHost_1_Decode_DecodeResult_size",
+        "_roc__mainForHost_1_Decode_Decoder_caller",
+        "_roc__mainForHost_1_Decode_Decoder_result_size",
+        "_roc__mainForHost_1_Decode_Decoder_size",
+        "_roc__mainForHost_1_Dict_Dict_caller",
+        "_roc__mainForHost_1_Dict_Dict_result_size",
+        "_roc__mainForHost_1_Dict_Dict_size",
+        "_roc__mainForHost_1_Dict_LowLevelHasher_caller",
+        "_roc__mainForHost_1_Dict_LowLevelHasher_result_size",
+        "_roc__mainForHost_1_Dict_LowLevelHasher_size",
+        "_roc__mainForHost_1_Encode_Encoder_caller",
+        "_roc__mainForHost_1_Encode_Encoder_result_size",
+        "_roc__mainForHost_1_Encode_Encoder_size",
+        "_roc__mainForHost_1_Set_Set_caller",
+        "_roc__mainForHost_1_Set_Set_result_size",
+        "_roc__mainForHost_1_Set_Set_size",
+        "_roc__mainForHost_1_exposed",
+        "_roc__mainForHost_1_exposed_generic",
+        "_roc__mainForHost_size",
         "dyld_stub_binder",
     ];
 
@@ -981,6 +1003,25 @@ mod test {
 
         bytes.extend(dylib_id_command("librocthing.dylib", 0x2, 0x10000, 0x10000));
 
+        // source version
+        bytes.extend(hexstring("2a000000100000000000000000000000"));
+
+        // build version
+        bytes.extend(hexstring(
+            "320000002000000001000000000d0a00000d0a00010000000300000000000000",
+        ));
+
+        // uuid
+        bytes.extend(hexstring(
+            "1b00000018000000c0206cd57267f341dd44132f60085197",
+        ));
+
+        // function starts
+        bytes.extend(hexstring("26000000100000000033000008000000"));
+
+        // data in code
+        bytes.extend(hexstring("29000000100000000000000000000000"));
+
         bytes.extend(dylib_load_command(
             "/usr/lib/libSystem.B.dylib",
             0x2,
@@ -1002,16 +1043,15 @@ mod test {
         bytes.extend([0x72, 0x00, 0x90, 0x00]);
         assert_eq!(bytes.len() - a, 0x18);
 
-        // export
-        bytes.extend(trie);
+        // export trie
+        bytes.extend(hexstring("00015f000500025f6d685f657865637574655f686561646572002e726f635f5f6d61696e466f72486f73745f00330300f11f000002315f003f73697a65006b0004440078456e636f64655f456e636f6465725f0090015365745f5365745f00b0016578706f73656400d0010b0080808080f0ffffffff0100000265636f64655f4465636f646500e8016963745f008202000363616c6c6572009e02726573756c745f73697a6500ab0273697a6500b802000363616c6c657200c502726573756c745f73697a6500d20273697a6500df020b0080808080f0ffffffff01015f67656e6572696300ec0200034572726f725f00f902526573756c745f009903725f00b9030002446963745f00d9034c6f774c6576656c4861736865725f00f9030b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff0100000363616c6c6572009904726573756c745f73697a6500a60473697a6500b304000363616c6c657200c004726573756c745f73697a6500cd0473697a6500da04000363616c6c657200e704726573756c745f73697a6500f40473697a65008105000363616c6c6572008e05726573756c745f73697a65009b0573697a6500a805000363616c6c657200b505726573756c745f73697a6500c20573697a6500cf050b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff01000b0080808080f0ffffffff010000000000"));
 
-        //        let delta = symtab.symoff as usize - bytes.len();
-        //        bytes.extend(std::iter::repeat(0).take(delta));
-        //        bytes.extend(symbol_table);
-        //
-        //        let delta = symtab.stroff as usize - bytes.len();
-        //        bytes.extend(std::iter::repeat(0).take(delta));
-        //        bytes.extend(string_table);
+        bytes.extend(0x1ff1u64.to_le_bytes()); // TODO what is this?
+
+        bytes.extend(symbol_table);
+
+        bytes.extend(0x19u32.to_le_bytes()); // TODO what is this?
+        bytes.extend(string_table);
 
         std::fs::write("/tmp/test.dylib", &bytes);
     }
