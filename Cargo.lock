@@ -4144,6 +4144,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_solve_problem",
+ "roc_tracing",
  "roc_types",
 ]
 

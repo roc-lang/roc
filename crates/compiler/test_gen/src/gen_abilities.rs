@@ -1735,6 +1735,45 @@ mod eq {
     }
 
     #[test]
+    fn custom_eq_impl_for_fn_opaque() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Q := ({} -> Str) has [Eq {isEq: isEqQ}]
+
+                isEqQ = \@Q _, @Q _ -> Bool.true
+
+                main = isEqQ (@Q \{} -> "a") (@Q \{} -> "a")
+                "#
+            ),
+            true,
+            bool
+        )
+    }
+
+    #[test]
+    #[ignore = "needs https://github.com/roc-lang/roc/issues/4557 first"]
+    fn custom_eq_impl_for_fn_opaque_material() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Q := ({} -> Str) has [Eq {isEq: isEqQ}]
+
+                isEqQ = \@Q f1, @Q f2 -> (f1 {} == f2 {})
+
+                main = isEqQ (@Q \{} -> "a") (@Q \{} -> "a")
+                "#
+            ),
+            true,
+            bool
+        )
+    }
+
+    #[test]
     fn derive_structural_eq() {
         assert_evals_to!(
             indoc!(

@@ -8321,6 +8321,50 @@ mod solve_expr {
     }
 
     #[test]
+    fn impl_ability_for_opaque_with_lambda_sets() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [isEqQ] to "./platform"
+
+                Q := [ F (Str -> Str), G ] has [Eq { isEq: isEqQ }]
+
+                isEqQ = \@Q q1, @Q q2 -> when T q1 q2 is
+                #^^^^^{-1}
+                    T (F _) (F _) -> Bool.true
+                    T G G -> Bool.true
+                    _ -> Bool.false
+                "#
+            ),
+        @"isEqQ : Q, Q -[[isEqQ(0)]]-> Bool"
+        );
+    }
+
+    #[test]
+    fn impl_ability_for_opaque_with_lambda_sets_material() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Q := ({} -> Str) has [Eq {isEq: isEqQ}]
+
+                isEqQ = \@Q f1, @Q f2 -> (f1 {} == f2 {})
+                #^^^^^{-1}
+
+                main = isEqQ (@Q \{} -> "a") (@Q \{} -> "a")
+                #      ^^^^^
+                "#
+            ),
+        @r###"
+        isEqQ : ({} -[[]]-> Str), ({} -[[]]-> Str) -[[isEqQ(2)]]-> [False, True]
+        isEqQ : ({} -[[6(6), 7(7)]]-> Str), ({} -[[6(6), 7(7)]]-> Str) -[[isEqQ(2)]]-> [False, True]
+        "###
+        print_only_under_alias: true
+        );
+    }
+
+    #[test]
     fn infer_concrete_type_with_inference_var() {
         infer_queries!(indoc!(
             r#"
