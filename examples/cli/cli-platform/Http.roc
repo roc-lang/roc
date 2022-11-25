@@ -103,7 +103,7 @@ errorToString = \err ->
         BadStatus code -> Str.concat "Request failed with status " (Num.toStr code)
         BadBody details -> Str.concat "Request failed. Invalid body. " details
 
-send : Request -> Task Str Error [Network [Http]]
+send : Request -> Task Str Error
 send = \req ->
     # TODO: Fix our C ABI codegen so that we don't this Box.box heap allocation
     Effect.sendRequest (Box.box req)

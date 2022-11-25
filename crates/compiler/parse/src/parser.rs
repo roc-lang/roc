@@ -676,6 +676,9 @@ pub enum ETypeTagUnion<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeInParens<'a> {
+    /// e.g. (), which isn't a valid type
+    Empty(Position),
+
     End(Position),
     Open(Position),
     ///

@@ -1056,50 +1056,29 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── TYPE MISMATCH ─ ...known_bad/../../../../examples/cli/cli-platform/main.roc ─
+                ── TYPE MISMATCH ─────────────────────────────── tests/known_bad/TypeError.roc ─
 
-                Something is off with the type annotation of the main required symbol:
+                This 2nd argument to attempt has an unexpected type:
 
-                2│      requires {} { main : InternalProgram }
-                                             ^^^^^^^^^^^^^^^
+                15│>      Task.attempt task /result ->
+                16│>          when result is
+                17│>              Ok {} -> Stdout.line "Done!"
+                18│>              # Type mismatch because the File.readUtf8 error case is not handled
+                19│>              Err {} -> Stdout.line "Problem!"
 
-                This #UserApp.main value is a:
+                The argument is an anonymous function of type:
 
-                    Task.Task {} * [Write [Stdout]]
+                    [Err {}a, Ok {}] -> Task {} *
 
-                But the type annotation on main says it should be:
+                But attempt needs its 2nd argument to be:
 
-                    InternalProgram.InternalProgram
-
-                Tip: Type comparisons between an opaque type are only ever equal if
-                both types are the same opaque type. Did you mean to create an opaque
-                type by wrapping it? If I have an opaque type Age := U32 I can create
-                an instance of this opaque type by doing @Age 23.
-
-
-                ── TYPE MISMATCH ─ ...known_bad/../../../../examples/cli/cli-platform/main.roc ─
-
-                This 1st argument to toEffect has an unexpected type:
-
-                9│  mainForHost = InternalProgram.toEffect main
-                                                           ^^^^
-
-                This #UserApp.main value is a:
-
-                    Task.Task {} * [Write [Stdout]]
-
-                But toEffect needs its 1st argument to be:
-
-                    InternalProgram.InternalProgram
-
-                Tip: Type comparisons between an opaque type are only ever equal if
-                both types are the same opaque type. Did you mean to create an opaque
-                type by wrapping it? If I have an opaque type Age := U32 I can create
-                an instance of this opaque type by doing @Age 23.
+                    Result {} [FileReadErr Path.Path InternalFile.ReadErr,
+                    FileReadUtf8Err Path.Path [BadUtf8 Utf8ByteProblem Nat]*]* ->
+                    Task {} *
 
                 ────────────────────────────────────────────────────────────────────────────────
 
-                2 errors and 1 warning found in <ignored for test> ms."#
+                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }

@@ -14,8 +14,16 @@ interface Arg
         choice,
         withParser,
         program,
+        list,
     ]
-    imports []
+    imports [Effect, InternalTask, Task.{ Task }]
+
+## Gives a list of the program's command-line arguments.
+list : Task (List Str) *
+list =
+    Effect.args
+    |> Effect.map Ok
+    |> InternalTask.fromEffect
 
 ## A parser for a command-line application.
 ## A [NamedParser] is usually built from a [Parser] using [program].
@@ -695,7 +703,7 @@ formatError = \err ->
                 |> Str.joinWith ", "
 
             """
-            The \(fmtFound) subcommand was found, but it's not expected in this context! 
+            The \(fmtFound) subcommand was found, but it's not expected in this context!
             The available subcommands are:
             \t\(fmtChoices)
             """
@@ -1025,7 +1033,7 @@ expect
             err
             ==
             """
-            The "logs" subcommand was found, but it's not expected in this context! 
+            The "logs" subcommand was found, but it's not expected in this context!
             The available subcommands are:
             \t"auth", "publish"
             """

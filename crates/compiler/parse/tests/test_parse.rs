@@ -187,6 +187,8 @@ mod test_parse {
         pass/list_patterns.expr,
         pass/lowest_float.expr,
         pass/lowest_int.expr,
+        pass/tuple_type.expr,
+        pass/tuple_type_ext.expr,
         pass/malformed_ident_due_to_underscore.expr,
         pass/malformed_pattern_field_access.expr, // See https://github.com/roc-lang/roc/issues/399
         pass/malformed_pattern_module_name.expr, // See https://github.com/roc-lang/roc/issues/399
@@ -303,6 +305,8 @@ mod test_parse {
         pass/when_with_negative_numbers.expr,
         pass/when_with_numbers.expr,
         pass/when_with_records.expr,
+        pass/function_with_tuple_type.expr,
+        pass/function_with_tuple_ext_type.expr,
         pass/where_clause_function.expr,
         pass/where_clause_multiple_bound_abilities.expr,
         pass/where_clause_multiple_has_across_newlines.expr,
