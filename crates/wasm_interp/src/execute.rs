@@ -1,5 +1,6 @@
 use bumpalo::{collections::Vec, Bump};
-use std::fmt::Write;
+use std::fmt;
+use std::io::Write;
 use std::iter;
 
 use roc_wasm_module::opcodes::OpCode;
@@ -125,6 +126,7 @@ impl<'a> ExecutionState<'a> {
     }
 
     fn fetch_immediate_u32(&mut self, module: &WasmModule<'a>) -> u32 {
+        use std::fmt::Write;
         let x = u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
         if let Some(debug_string) = self.debug_string.as_mut() {
             write!(debug_string, "{}", x).unwrap();
@@ -158,6 +160,25 @@ impl<'a> ExecutionState<'a> {
         base_addr + offset
     }
 
+    fn get_store_addr_value(&mut self, module: &WasmModule<'a>) -> (usize, Value) {
+        // Alignment is not used in the execution steps from the spec! Maybe it's just an optimization hint?
+        // https://webassembly.github.io/spec/core/exec/instructions.html#memory-instructions
+        // Also note: in the text format we can specify the useless `align=` but not the useful `offset=`!
+        let _alignment = self.fetch_immediate_u32(module);
+        let offset = self.fetch_immediate_u32(module);
+        let value = self.value_stack.pop();
+        let base_addr = self.value_stack.pop_u32();
+        let addr = (base_addr + offset) as usize;
+        (addr, value)
+    }
+
+    fn write_debug<T: fmt::Debug>(&mut self, value: T) {
+        use fmt::Write;
+        if let Some(debug_string) = self.debug_string.as_mut() {
+            std::write!(debug_string, "{:?} ", value).unwrap();
+        }
+    }
+
     pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) -> Action {
         use OpCode::*;
 
@@ -167,7 +188,7 @@ impl<'a> ExecutionState<'a> {
 
         if let Some(debug_string) = self.debug_string.as_mut() {
             debug_string.clear();
-            write!(debug_string, "{:?} ", op_code).unwrap();
+            self.write_debug(op_code);
         }
 
         let mut action = Action::Continue;
@@ -354,38 +375,77 @@ impl<'a> ExecutionState<'a> {
                 let value = u32::from_le_bytes(bytes);
                 self.value_stack.push(Value::I64(value as i64));
             }
-            I32STORE => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64STORE => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32STORE => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64STORE => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32STORE8 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32STORE16 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64STORE8 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64STORE16 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64STORE32 => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I32STORE => {
+                let (addr, value) = self.get_store_addr_value(module);
+                let unwrapped = value.unwrap_i32();
+                let mut target = &mut self.memory[addr..][..4];
+                target.write(&unwrapped.to_le_bytes()).unwrap();
+            }
+            I64STORE => {
+                let (addr, value) = self.get_store_addr_value(module);
+                let unwrapped = value.unwrap_i64();
+                let mut target = &mut self.memory[addr..][..8];
+                target.write(&unwrapped.to_le_bytes()).unwrap();
+            }
+            F32STORE => {
+                let (addr, value) = self.get_store_addr_value(module);
+                let unwrapped = value.unwrap_f32();
+                let mut target = &mut self.memory[addr..][..4];
+                target.write(&unwrapped.to_le_bytes()).unwrap();
+            }
+            F64STORE => {
+                let (addr, value) = self.get_store_addr_value(module);
+                let unwrapped = value.unwrap_f64();
+                let mut target = &mut self.memory[addr..][..8];
+                target.write(&unwrapped.to_le_bytes()).unwrap();
+            }
+            I32STORE8 => {
+                let (addr, value) = self.get_store_addr_value(module);
+                let unwrapped = value.unwrap_i32();
+                let mut target = &mut self.memory[addr..][..1];
+                target.write(&unwrapped.to_le_bytes()[..1]).unwrap();
+            }
+            I32STORE16 => {
+                let (addr, value) = self.get_store_addr_value(module);
+                let unwrapped = value.unwrap_i32();
+                let mut target = &mut self.memory[addr..][..2];
+                target.write(&unwrapped.to_le_bytes()[..2]).unwrap();
+            }
+            I64STORE8 => {
+                let (addr, value) = self.get_store_addr_value(module);
+                let unwrapped = value.unwrap_i64();
+                let mut target = &mut self.memory[addr..][..1];
+                target.write(&unwrapped.to_le_bytes()[..1]).unwrap();
+            }
+            I64STORE16 => {
+                let (addr, value) = self.get_store_addr_value(module);
+                let unwrapped = value.unwrap_i64();
+                let mut target = &mut self.memory[addr..][..2];
+                target.write(&unwrapped.to_le_bytes()[..2]).unwrap();
+            }
+            I64STORE32 => {
+                let (addr, value) = self.get_store_addr_value(module);
+                let unwrapped = value.unwrap_i64();
+                let mut target = &mut self.memory[addr..][..4];
+                target.write(&unwrapped.to_le_bytes()[..4]).unwrap();
+            }
             CURRENTMEMORY => todo!("{:?} @ {:#x}", op_code, file_offset),
             GROWMEMORY => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32CONST => {
                 let value = i32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
-                if let Some(debug_string) = self.debug_string.as_mut() {
-                    write!(debug_string, "{}", value).unwrap();
-                }
+                self.write_debug(value);
                 self.value_stack.push(Value::I32(value));
             }
             I64CONST => {
                 let value = i64::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
-                if let Some(debug_string) = self.debug_string.as_mut() {
-                    write!(debug_string, "{}", value).unwrap();
-                }
+                self.write_debug(value);
                 self.value_stack.push(Value::I64(value));
             }
             F32CONST => {
                 let mut bytes = [0; 4];
                 bytes.copy_from_slice(&module.code.bytes[self.program_counter..][..4]);
                 let value = f32::from_le_bytes(bytes);
-                if let Some(debug_string) = self.debug_string.as_mut() {
-                    write!(debug_string, "{}", value).unwrap();
-                }
+                self.write_debug(value);
                 self.value_stack.push(Value::F32(value));
                 self.program_counter += 4;
             }
@@ -393,9 +453,7 @@ impl<'a> ExecutionState<'a> {
                 let mut bytes = [0; 8];
                 bytes.copy_from_slice(&module.code.bytes[self.program_counter..][..8]);
                 let value = f64::from_le_bytes(bytes);
-                if let Some(debug_string) = self.debug_string.as_mut() {
-                    write!(debug_string, "{}", value).unwrap();
-                }
+                self.write_debug(value);
                 self.value_stack.push(Value::F64(value));
                 self.program_counter += 8;
             }
