@@ -3,7 +3,7 @@ use std::fmt::{self, Write};
 use std::iter;
 
 use roc_wasm_module::opcodes::OpCode;
-use roc_wasm_module::parse::Parse;
+use roc_wasm_module::parse::{Parse, SkipBytes};
 use roc_wasm_module::sections::{ImportDesc, MemorySection};
 use roc_wasm_module::Value;
 use roc_wasm_module::{ExportType, WasmModule};
@@ -197,12 +197,12 @@ impl<'a> ExecutionState<'a> {
             }
             NOP => {}
             BLOCK => {
+                self.fetch_immediate_u32(module); // blocktype
                 self.block_depth += 1;
-                todo!("{:?} @ {:#x}", op_code, file_offset);
             }
             LOOP => {
+                self.fetch_immediate_u32(module); // blocktype
                 self.block_depth += 1;
-                todo!("{:?} @ {:#x}", op_code, file_offset);
             }
             IF => todo!("{:?} @ {:#x}", op_code, file_offset),
             ELSE => todo!("{:?} @ {:#x}", op_code, file_offset),
@@ -214,7 +214,28 @@ impl<'a> ExecutionState<'a> {
                     self.block_depth -= 1;
                 }
             }
-            BR => todo!("{:?} @ {:#x}", op_code, file_offset),
+            BR => {
+                let relative_blocks_outward = self.fetch_immediate_u32(module);
+                let target_block_depth = self.block_depth - relative_blocks_outward;
+                loop {
+                    match OpCode::from(module.code.bytes[self.program_counter]) {
+                        BLOCK | LOOP | IF => {
+                            self.block_depth += 1;
+                        }
+                        END => {
+                            self.block_depth -= 1;
+                            if self.block_depth == target_block_depth {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
+                }
+                if self.block_depth == 0 {
+                    action = self.do_return()
+                }
+            }
             BRIF => todo!("{:?} @ {:#x}", op_code, file_offset),
             BRTABLE => todo!("{:?} @ {:#x}", op_code, file_offset),
             RETURN => {
