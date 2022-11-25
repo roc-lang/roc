@@ -115,7 +115,11 @@ impl<'a> WasmModule<'a> {
             + self.names.size()
     }
 
-    pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Result<Self, ParseError> {
+    pub fn preload(
+        arena: &'a Bump,
+        bytes: &[u8],
+        require_relocatable: bool,
+    ) -> Result<Self, ParseError> {
         let is_valid_magic_number = &bytes[0..4] == "\0asm".as_bytes();
         let is_valid_version = bytes[4..8] == Self::WASM_VERSION.to_le_bytes();
         if !is_valid_magic_number || !is_valid_version {
@@ -155,27 +159,36 @@ impl<'a> WasmModule<'a> {
         if code.bytes.is_empty() {
             module_errors.push_str("Missing Code section\n");
         }
-        if linking.symbol_table.is_empty() {
-            module_errors.push_str("Missing \"linking\" Custom section\n");
-        }
-        if reloc_code.entries.is_empty() {
-            module_errors.push_str("Missing \"reloc.CODE\" Custom section\n");
-        }
-        if global.count != 0 {
-            let global_err_msg =
+
+        if require_relocatable {
+            if linking.symbol_table.is_empty() {
+                module_errors.push_str("Missing \"linking\" Custom section\n");
+            }
+            if reloc_code.entries.is_empty() {
+                module_errors.push_str("Missing \"reloc.CODE\" Custom section\n");
+            }
+            if global.count != 0 {
+                let global_err_msg =
                 format!("All globals in a relocatable Wasm module should be imported, but found {} internally defined", global.count);
-            module_errors.push_str(&global_err_msg);
+                module_errors.push_str(&global_err_msg);
+            }
         }
 
         if !module_errors.is_empty() {
-            return Err(ParseError {
-                offset: 0,
-                message: format!("{}\n{}\n{}",
+            let message = if require_relocatable {
+                format!(
+                    "{}\n{}\n{}",
                     "The host file has the wrong structure. I need a relocatable WebAssembly binary file.",
                     "If you're using wasm-ld, try the --relocatable option.",
                     module_errors,
                 )
-            });
+            } else {
+                format!(
+                    "I wasn't able to understand this WebAssembly file.\n{}",
+                    module_errors,
+                )
+            };
+            return Err(ParseError { offset: 0, message });
         }
 
         Ok(WasmModule {

@@ -14,6 +14,8 @@ pub struct CallStack<'a> {
     return_addrs_and_block_depths: Vec<'a, (u32, u32)>,
     /// frame offsets into the `locals`, `is_float`, and `is_64` vectors (one entry per frame)
     frame_offsets: Vec<'a, u32>,
+    /// base size of the value stack before executing (one entry per frame)
+    value_stack_bases: Vec<'a, u32>,
     /// binary data for local variables (one entry per local)
     locals_data: Vec<'a, u64>,
     /// int/float type info (one entry per local)
@@ -37,6 +39,7 @@ impl<'a> CallStack<'a> {
         CallStack {
             return_addrs_and_block_depths: Vec::with_capacity_in(256, arena),
             frame_offsets: Vec::with_capacity_in(256, arena),
+            value_stack_bases: Vec::with_capacity_in(256, arena),
             locals_data: Vec::with_capacity_in(16 * 256, arena),
             is_float: BitVec::with_capacity(256),
             is_64: BitVec::with_capacity(256),
@@ -70,6 +73,8 @@ impl<'a> CallStack<'a> {
             self.set_local_help(i, arg);
         }
 
+        self.value_stack_bases.push(value_stack.len() as u32);
+
         // Parse local variable declarations in the function header. They're grouped by type.
         let local_group_count = u32::parse((), code_bytes, pc).unwrap();
         for _ in 0..local_group_count {
@@ -87,6 +92,7 @@ impl<'a> CallStack<'a> {
     /// On returning from a Wasm call, drop its locals and retrieve the return address
     pub fn pop_frame(&mut self) -> Option<(u32, u32)> {
         let frame_offset = self.frame_offsets.pop()? as usize;
+        self.value_stack_bases.pop()?;
         self.locals_data.truncate(frame_offset);
         self.is_64.truncate(frame_offset);
         self.is_64.truncate(frame_offset);
@@ -141,6 +147,14 @@ impl<'a> CallStack<'a> {
                 self.is_float[index] && self.is_64[index]
             }
         }
+    }
+
+    pub fn value_stack_base(&self) -> u32 {
+        *self.value_stack_bases.last().unwrap_or(&0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.is_64.is_empty()
     }
 }
 

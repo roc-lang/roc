@@ -739,6 +739,9 @@ impl SkipBytes for Limits {
 
 impl Parse<()> for Limits {
     fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        if *cursor >= bytes.len() {
+            return Ok(Limits::Min(0));
+        }
         let variant_id = bytes[*cursor];
         *cursor += 1;
 
@@ -1299,6 +1302,7 @@ impl<'a> Serialize for ElementSection<'a> {
 #[derive(Debug)]
 pub struct CodeSection<'a> {
     pub function_count: u32,
+    pub section_offset: u32,
     pub bytes: Vec<'a, u8>,
     /// The start of each function
     pub function_offsets: Vec<'a, u32>,
@@ -1310,6 +1314,7 @@ impl<'a> CodeSection<'a> {
     pub fn new(arena: &'a Bump) -> Self {
         CodeSection {
             function_count: 0,
+            section_offset: 0,
             bytes: Vec::new_in(arena),
             function_offsets: Vec::new_in(arena),
             dead_import_dummy_count: 0,
@@ -1357,6 +1362,7 @@ impl<'a> CodeSection<'a> {
 
         Ok(CodeSection {
             function_count,
+            section_offset: section_body_start as u32,
             bytes,
             function_offsets,
             dead_import_dummy_count: 0,
@@ -1488,6 +1494,13 @@ impl<'a> DataSection<'a> {
 
 impl<'a> Parse<&'a Bump> for DataSection<'a> {
     fn parse(arena: &'a Bump, module_bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        if *cursor >= module_bytes.len() {
+            return Ok(DataSection {
+                end_addr: 0,
+                count: 0,
+                bytes: Vec::<u8>::new_in(arena),
+            });
+        }
         let (count, range) = parse_section(Self::ID, module_bytes, cursor)?;
 
         let end = range.end;
