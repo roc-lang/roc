@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use clap::ArgAction;
 use clap::{Arg, Command};
 use roc_wasm_interp::Action;
 use std::ffi::OsString;
@@ -10,6 +11,7 @@ use roc_wasm_interp::ExecutionState;
 use roc_wasm_module::WasmModule;
 
 pub const FLAG_FUNCTION: &str = "function";
+pub const FLAG_DEBUG: &str = "debug";
 pub const WASM_FILE: &str = "WASM_FILE";
 
 fn main() -> io::Result<()> {
@@ -21,6 +23,12 @@ fn main() -> io::Result<()> {
         .default_value("_start")
         .required(false);
 
+    let flag_debug = Arg::new(FLAG_DEBUG)
+        .long(FLAG_DEBUG)
+        .help("Print a log of every instruction executed, for debugging purposes.")
+        .action(ArgAction::SetTrue)
+        .required(false);
+
     let wasm_file_to_run = Arg::new(WASM_FILE)
         .help("The .wasm file to run")
         .allow_invalid_utf8(true)
@@ -29,12 +37,14 @@ fn main() -> io::Result<()> {
     let app = Command::new("roc_wasm_interp")
         .about("Run the given .wasm file")
         .arg(flag_function)
+        .arg(flag_debug)
         .arg(wasm_file_to_run);
 
     // Parse the command line arguments
 
     let matches = app.get_matches();
     let start_fn_name = matches.get_one::<String>(FLAG_FUNCTION).unwrap();
+    let is_debug_mode = matches.get_flag(FLAG_DEBUG);
 
     // Load the WebAssembly binary file
 
@@ -57,13 +67,11 @@ fn main() -> io::Result<()> {
 
     // Initialise the execution state
 
-    let mut state = match ExecutionState::for_module(&arena, &module, start_fn_name) {
-        Ok(s) => s,
-        Err(e) => {
+    let mut state = ExecutionState::for_module(&arena, &module, start_fn_name, is_debug_mode)
+        .unwrap_or_else(|e| {
             eprintln!("{}", e);
             process::exit(2);
-        }
-    };
+        });
 
     // Run
 

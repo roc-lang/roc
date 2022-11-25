@@ -24,6 +24,7 @@ pub struct ExecutionState<'a> {
     pub program_counter: usize,
     block_depth: u32,
     import_signatures: Vec<'a, u32>,
+    is_debug_mode: bool,
 }
 
 impl<'a> ExecutionState<'a> {
@@ -40,6 +41,7 @@ impl<'a> ExecutionState<'a> {
             program_counter,
             block_depth: 0,
             import_signatures: Vec::new_in(arena),
+            is_debug_mode: false,
         }
     }
 
@@ -47,6 +49,7 @@ impl<'a> ExecutionState<'a> {
         arena: &'a Bump,
         module: &WasmModule<'a>,
         start_fn_name: &str,
+        is_debug_mode: bool,
     ) -> Result<Self, String> {
         let mem_bytes = module.memory.min_bytes().map_err(|e| {
             format!(
@@ -106,6 +109,7 @@ impl<'a> ExecutionState<'a> {
             program_counter,
             block_depth: 0,
             import_signatures,
+            is_debug_mode,
         })
     }
 
@@ -136,6 +140,8 @@ impl<'a> ExecutionState<'a> {
         let op_code = OpCode::from(module.code.bytes[self.program_counter]);
         self.program_counter += 1;
 
+        let mut action = Action::Continue;
+
         match op_code {
             UNREACHABLE => {
                 unreachable!(
@@ -157,7 +163,7 @@ impl<'a> ExecutionState<'a> {
             END => {
                 if self.block_depth == 0 {
                     // implicit RETURN at end of function
-                    return self.do_return();
+                    action = self.do_return();
                 } else {
                     self.block_depth -= 1;
                 }
@@ -166,7 +172,7 @@ impl<'a> ExecutionState<'a> {
             BRIF => todo!("{:?} @ {:#x}", op_code, file_offset),
             BRTABLE => todo!("{:?} @ {:#x}", op_code, file_offset),
             RETURN => {
-                return self.do_return();
+                action = self.do_return();
             }
             CALL => {
                 let index = self.fetch_immediate_u32(module) as usize;
@@ -411,6 +417,22 @@ impl<'a> ExecutionState<'a> {
             F32REINTERPRETI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64REINTERPRETI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
         }
-        Action::Continue
+
+        if self.is_debug_mode {
+            self.print_debug_log_line(file_offset, op_code);
+        }
+
+        action
+    }
+
+    fn print_debug_log_line(&self, file_offset: u32, op_code: OpCode) {
+        let base = self.call_stack.value_stack_base();
+        let slice = self.value_stack.get_slice(base as usize);
+        eprintln!(
+            "{:#07x} {:17}\t{:?}",
+            file_offset,
+            format!("{:?}", op_code),
+            slice
+        );
     }
 }
