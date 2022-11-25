@@ -139,58 +139,80 @@ Utf8ByteProblem : [
 
 Utf8Problem : { byteIndex : Nat, problem : Utf8ByteProblem }
 
-## Returns `Bool.true` if the string is empty, and `Bool.false` otherwise.
+## Returns [Bool.true] if the string is empty, and [Bool.false] otherwise.
 ##
 ##     expect Str.isEmpty "hi!" == Bool.false
 ##     expect Str.isEmpty "" == Bool.true
 isEmpty : Str -> Bool
 
-## Concatenate two [Str] values together.
+## Concatenates two strings together.
 ##
-##     expect Str.concat "Hello" "World" == "HelloWorld"
+##     expect Str.concat "ab" "cd" == "abcd"
+##     expect Str.concat "hello" "" == "hello"
+##     expect Str.concat "" "" == ""
 concat : Str, Str -> Str
 
-## Returns a [Str] of the specified capacity [Num] without any content
+## Returns a string of the specified capacity without any content.
 withCapacity : Nat -> Str
 
-## Combine a [List] of [Str] into a single [Str], with a separator
-## [Str] in between each.
+## Combines a [List] of strings into a single string, with a separator
+## string in between each.
 ##
 ##     expect Str.joinWith ["one", "two", "three"] ", " == "one, two, three"
 ##     expect Str.joinWith ["1", "2", "3", "4"] "." == "1.2.3.4"
 joinWith : List Str, Str -> Str
 
-## Split a [Str] around a separator. Passing `""` for the separator is not
-## useful; it returns the original string wrapped in a list. To split a string
+## Split a string around a separator.
+##
+## Passing `""` for the separator is not useful;
+## it returns the original string wrapped in a [List]. To split a string
 ## into its individual [graphemes](https://stackoverflow.com/a/27331885/4200103), use `Str.graphemes`
 ##
 ##     expect Str.split "1,2,3" "," == ["1","2","3"]
 ##     expect Str.split "1,2,3" "" == ["1,2,3"]
 split : Str, Str -> List Str
 
-## Repeat a given [Str] value [Nat] times.
+## Repeats a string the given number of times.
 ##
-##     expect Str.repeat ">" 3 == ">>>"
+##     expect Str.repeat "z" 3 == "zzz"
+##     expect Str.repeat "na" 8 == "nananananananana"
+##
+## Returns `""` when given `""` for the string or `0` for the count.
+##
+##     expect Str.repeat "" 10 == ""
+##     expect Str.repeat "anything" 0 == ""
 repeat : Str, Nat -> Str
 
-## Count the number of [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster)
+## Counts the number of [extended grapheme clusters](http://www.unicode.org/glossary/#extended_grapheme_cluster)
 ## in the string.
 ##
-##     expect Str.countGraphemes "Roc!" == 4
-##     expect Str.countGraphemes "‰∏ÉÂ∑ßÊùø" == 9
-##     expect Str.countGraphemes "üïä" == 4
+## Note that the number of extended grapheme clusters can be different from the number
+## of visual glyphs rendered! Consider the following examples:
+##
+##     expect Str.countGraphemes "Roc" == 3
+##     expect Str.countGraphemes "👩‍👩‍👦‍👦"  == 4
+##     expect Str.countGraphemes "🕊"  == 1
+##
+## Note that "👩‍👩‍👦‍👦" takes up 4 graphemes (even though visually it appears as a single
+## glyph) because under the hood it's represented using an emoji modifier sequence.
+## In contrast, "🕊" only takes up 1 grapheme because under the hood it's represented
+## using a single Unicode code point.
 countGraphemes : Str -> Nat
 
 ## Split a string into its constituent grapheme clusters
 graphemes : Str -> List Str
 
 ## If the string begins with a [Unicode code point](http://www.unicode.org/glossary/#code_point)
-## equal to the given [U32], return `Bool.true`. Otherwise return `Bool.false`.
+## equal to the given [U32], returns [Bool.true]. Otherwise returns [Bool.false].
 ##
-## If the given [Str] is empty, or if the given [U32] is not a valid
-## code point, this will return `Bool.false`.
+## If the given string is empty, or if the given [U32] is not a valid
+## code point, returns [Bool.false].
 ##
-## **Performance Note:** This runs slightly faster than `Str.startsWith`, so
+##     expect Str.startsWithScalar "鹏 means 'roc'" 40527 # "鹏" is Unicode scalar 40527
+##     expect !Str.startsWithScalar "9" 9 # the Unicode scalar for "9" is 57, not 9
+##     expect !Str.startsWithScalar "" 40527
+##
+## **Performance Note:** This runs slightly faster than [Str.startsWith], so
 ## if you want to check whether a string begins with something that's representable
 ## in a single code point, you can use (for example) `Str.startsWithScalar '鹏'`
 ## instead of `Str.startsWith "鹏"`. ('鹏' evaluates to the [U32] value `40527`.)
@@ -200,26 +222,41 @@ graphemes : Str -> List Str
 ## You'd need to use `Str.startsWithScalar "🕊"` instead.
 startsWithScalar : Str, U32 -> Bool
 
-## Return a [List] of the [unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
-## in the given string. Strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
-## so this is equivalent to returning a list of the string's [code points](https://unicode.org/glossary/#code_point).
+## Returns a [List] of the [Unicode scalar values](https://unicode.org/glossary/#unicode_scalar_value)
+## in the given string.
 ##
+## (Roc strings contain only scalar values, not [surrogate code points](https://unicode.org/glossary/#surrogate_code_point),
+## so this is equivalent to returning a list of the string's [code points](https://unicode.org/glossary/#code_point).)
+##
+##     expect Str.toScalars "Roc" == [82, 111, 99]
+##     expect Str.toScalars "鹏" == [40527]
+##     expect Str.toScalars "சி" == [2970, 3007]
+##     expect Str.toScalars "🐦" == [128038]
+##     expect Str.toScalars "👩‍👩‍👦‍👦" == [128105, 8205, 128105, 8205, 128102, 8205, 128102]
 ##     expect Str.toScalars "I ♥ Roc" == [73, 32, 9829, 32, 82, 111, 99]
+##     expect Str.toScalars "" == []
 toScalars : Str -> List U32
 
-## Return a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
-## To split the string into a [List] of smaller [Str] values instead of [U8] values,
-## see `Str.split`.
+## Returns a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
+## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
+## see [Str.split].)
 ##
+##     expect Str.toUtf8 "Roc" == [82, 111, 99]
 ##     expect Str.toUtf8 "鹏" == [233, 185, 143]
+##     expect Str.toUtf8 "சி" == [224, 174, 154, 224, 174, 191]
 ##     expect Str.toUtf8 "🐦" == [240, 159, 144, 166]
 toUtf8 : Str -> List U8
 
-## Encode a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit)
-## into a [Str]
+## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
 ##
+## Returns `Err` if the given bytes are invalid UTF-8, and returns `Ok ""` when given `[]`.
+##
+##     expect Str.fromUtf8 [82, 111, 99] == Ok "Roc"
 ##     expect Str.fromUtf8 [233, 185, 143] == Ok "鹏"
-##     expect Str.fromUtf8 [0xb0] == Err (BadUtf8 InvalidStartByte 0)
+##     expect Str.fromUtf8 [224, 174, 154, 224, 174, 191] == Ok "சி"
+##     expect Str.fromUtf8 [240, 159, 144, 166] == Ok "🐦"
+##     expect Str.fromUtf8 [] == Ok ""
+##     expect Str.fromUtf8 [255] |> Result.isErr
 fromUtf8 : List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]
 fromUtf8 = \bytes ->
     result = fromUtf8RangeLowlevel bytes 0 (List.len bytes)
@@ -673,14 +710,14 @@ walkUtf8WithIndexHelp = \string, state, step, index, length ->
     else
         state
 
-## Enlarge the given [Str] for at least capacity additional bytes.
+## Enlarge a string for at least the given number additional bytes.
 reserve : Str, Nat -> Str
 
 ## is UB when the scalar is invalid
 appendScalarUnsafe : Str, U32 -> Str
 
-## Append a [U32] scalar to the given [Str]. If the given scalar is not a valid
-## unicode value, it will return [Err InvalidScalar].
+## Append a [U32] scalar to the given string. If the given scalar is not a valid
+## unicode value, it returns [Err InvalidScalar].
 ##
 ##     expect Str.appendScalar "H" 105 == Ok "Hi"
 ##     expect Str.appendScalar "😢" 0xabcdef == Err InvalidScalar
