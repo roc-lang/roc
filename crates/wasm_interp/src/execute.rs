@@ -148,6 +148,16 @@ impl<'a> ExecutionState<'a> {
         }
     }
 
+    fn get_load_address(&mut self, module: &WasmModule<'a>) -> u32 {
+        // Alignment is not used in the execution steps from the spec! Maybe it's just an optimization hint?
+        // https://webassembly.github.io/spec/core/exec/instructions.html#memory-instructions
+        // Also note: in the text format we can specify the useless `align=` but not the useful `offset=`!
+        let _alignment = self.fetch_immediate_u32(module);
+        let offset = self.fetch_immediate_u32(module);
+        let base_addr = self.value_stack.pop_u32();
+        base_addr + offset
+    }
+
     pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) -> Action {
         use OpCode::*;
 
@@ -250,20 +260,100 @@ impl<'a> ExecutionState<'a> {
                 let index = self.fetch_immediate_u32(module);
                 self.globals[index as usize] = self.value_stack.pop();
             }
-            I32LOAD => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64LOAD => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32LOAD => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64LOAD => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32LOAD8S => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32LOAD8U => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32LOAD16S => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32LOAD16U => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64LOAD8S => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64LOAD8U => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64LOAD16S => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64LOAD16U => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64LOAD32S => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64LOAD32U => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I32LOAD => {
+                let addr = self.get_load_address(module) as usize;
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&self.memory[addr..][..4]);
+                let value = i32::from_le_bytes(bytes);
+                self.value_stack.push(Value::I32(value));
+            }
+            I64LOAD => {
+                let addr = self.get_load_address(module) as usize;
+                let mut bytes = [0; 8];
+                bytes.copy_from_slice(&self.memory[addr..][..8]);
+                let value = i64::from_le_bytes(bytes);
+                self.value_stack.push(Value::I64(value));
+            }
+            F32LOAD => {
+                let addr = self.get_load_address(module) as usize;
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&self.memory[addr..][..4]);
+                let value = f32::from_le_bytes(bytes);
+                self.value_stack.push(Value::F32(value));
+            }
+            F64LOAD => {
+                let addr = self.get_load_address(module) as usize;
+                let mut bytes = [0; 8];
+                bytes.copy_from_slice(&self.memory[addr..][..8]);
+                let value = f64::from_le_bytes(bytes);
+                self.value_stack.push(Value::F64(value));
+            }
+            I32LOAD8S => {
+                let addr = self.get_load_address(module) as usize;
+                let mut bytes = [0; 1];
+                bytes.copy_from_slice(&self.memory[addr..][..1]);
+                let value = i8::from_le_bytes(bytes);
+                self.value_stack.push(Value::I32(value as i32));
+            }
+            I32LOAD8U => {
+                let addr = self.get_load_address(module) as usize;
+                let value = self.memory[addr];
+                self.value_stack.push(Value::I32(value as i32));
+            }
+            I32LOAD16S => {
+                let addr = self.get_load_address(module) as usize;
+                let mut bytes = [0; 2];
+                bytes.copy_from_slice(&self.memory[addr..][..2]);
+                let value = i16::from_le_bytes(bytes);
+                self.value_stack.push(Value::I32(value as i32));
+            }
+            I32LOAD16U => {
+                let addr = self.get_load_address(module) as usize;
+                let mut bytes = [0; 2];
+                bytes.copy_from_slice(&self.memory[addr..][..2]);
+                let value = u16::from_le_bytes(bytes);
+                self.value_stack.push(Value::I32(value as i32));
+            }
+            I64LOAD8S => {
+                let addr = self.get_load_address(module) as usize;
+                let mut bytes = [0; 1];
+                bytes.copy_from_slice(&self.memory[addr..][..1]);
+                let value = i8::from_le_bytes(bytes);
+                self.value_stack.push(Value::I64(value as i64));
+            }
+            I64LOAD8U => {
+                let addr = self.get_load_address(module) as usize;
+                let value = self.memory[addr];
+                self.value_stack.push(Value::I64(value as i64));
+            }
+            I64LOAD16S => {
+                let addr = self.get_load_address(module) as usize;
+                let mut bytes = [0; 2];
+                bytes.copy_from_slice(&self.memory[addr..][..2]);
+                let value = i16::from_le_bytes(bytes);
+                self.value_stack.push(Value::I64(value as i64));
+            }
+            I64LOAD16U => {
+                let addr = self.get_load_address(module) as usize;
+                let mut bytes = [0; 2];
+                bytes.copy_from_slice(&self.memory[addr..][..2]);
+                let value = u16::from_le_bytes(bytes);
+                self.value_stack.push(Value::I64(value as i64));
+            }
+            I64LOAD32S => {
+                let addr = self.get_load_address(module) as usize;
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&self.memory[addr..][..4]);
+                let value = i32::from_le_bytes(bytes);
+                self.value_stack.push(Value::I64(value as i64));
+            }
+            I64LOAD32U => {
+                let addr = self.get_load_address(module) as usize;
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&self.memory[addr..][..4]);
+                let value = u32::from_le_bytes(bytes);
+                self.value_stack.push(Value::I64(value as i64));
+            }
             I32STORE => todo!("{:?} @ {:#x}", op_code, file_offset),
             I64STORE => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32STORE => todo!("{:?} @ {:#x}", op_code, file_offset),
