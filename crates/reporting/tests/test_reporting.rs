@@ -12516,4 +12516,6 @@ All branches in an `if` must have the same type!
                   ^^^^^
 
     `crash` must be given exacly one message to crash with.
+    "###
+    );
 }
