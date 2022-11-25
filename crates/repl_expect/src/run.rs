@@ -499,7 +499,7 @@ fn render_dbg_failure<'a>(
     let data = expectations.get_mut(&module_id).unwrap();
 
     let current = match data.dbgs.get(&dbg_symbol) {
-        None => panic!("region {failure_region:?} not in list of expects"),
+        None => panic!("region {failure_region:?} not in list of dbgs"),
         Some(current) => current,
     };
     let failure_region = current.region;

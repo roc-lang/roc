@@ -185,8 +185,8 @@ impl<'a> Renderer<'a> {
             writer,
             "\u{001b}[36m[{} {}:{}] \u{001b}[0m",
             self.filename.display(),
-            line_col_region.start.line,
-            line_col_region.start.column
+            line_col_region.start.line + 1,
+            line_col_region.start.column + 1
         )?;
 
         let expr = expressions[0];

@@ -1065,12 +1065,20 @@ pub fn canonicalize_expr<'a>(
             output.union(output1);
             output.union(output2);
 
+            // the symbol is used to bind the condition `x = condition`, and identify this `dbg`.
+            // That would cause issues if we dbg a variable, like `dbg y`, because in the IR we
+            // cannot alias variables. Hence, we make the dbg use that same variable `y`
+            let symbol = match &loc_condition.value {
+                Expr::Var(symbol, _) => *symbol,
+                _ => scope.gen_unique_symbol(),
+            };
+
             (
                 Dbg {
                     loc_condition: Box::new(loc_condition),
                     loc_continuation: Box::new(loc_continuation),
                     variable: var_store.fresh(),
-                    symbol: scope.gen_unique_symbol(),
+                    symbol,
                 },
                 output,
             )
