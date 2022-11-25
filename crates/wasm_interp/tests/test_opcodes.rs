@@ -248,7 +248,7 @@ fn create_exported_function_no_locals<'a, F>(
     signature: Signature<'a>,
     write_instructions: F,
 ) where
-    F: FnOnce(&mut Vec<'a, u8>) -> (),
+    F: FnOnce(&mut Vec<'a, u8>),
 {
     let internal_fn_index = module.code.function_offsets.len();
     let fn_index = module.import.function_count() + internal_fn_index;
@@ -283,7 +283,7 @@ fn test_load(load_op: OpCode, ty: ValueType, data: &[u8], addr: u32, offset: u32
         mode: DataMode::Active {
             offset: ConstExpr::I32(addr as i32),
         },
-        init: Vec::from_iter_in(data.iter().map(|x| *x), &arena),
+        init: Vec::from_iter_in(data.iter().copied(), &arena),
     });
 
     let signature = Signature {
