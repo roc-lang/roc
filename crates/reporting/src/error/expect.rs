@@ -197,7 +197,7 @@ impl<'a> Renderer<'a> {
             expr.format(&mut buf, 0);
         }
 
-        write!(writer, "{}\n", buf.as_str())
+        writeln!(writer, "{}", buf.as_str())
     }
 
     pub fn render_panic<W>(
