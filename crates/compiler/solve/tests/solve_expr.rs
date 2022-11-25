@@ -8352,4 +8352,20 @@ mod solve_expr {
         @"translateStatic : [Element (List a)] as a -[[translateStatic(0)]]-> [Element (List b)]* as b"
         )
     }
+
+    #[test]
+    fn infer_contextual_crash() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [getInfallible] to "./platform"
+
+                getInfallible = \result -> when result is
+                    Ok x -> x
+                    _ -> crash "turns out this was fallible"
+                "#
+            ),
+            "[Ok a]* -> a",
+        );
+    }
 }

@@ -41,9 +41,9 @@ use crate::llvm::{
     },
 };
 
-use super::convert::zig_with_overflow_roc_dec;
+use super::{build::throw_internal_exception, convert::zig_with_overflow_roc_dec};
 use super::{
-    build::{load_symbol, load_symbol_and_layout, throw_exception, Env, Scope},
+    build::{load_symbol, load_symbol_and_layout, Env, Scope},
     convert::zig_dec_type,
 };
 
@@ -1557,7 +1557,7 @@ fn throw_on_overflow<'a, 'ctx, 'env>(
 
     bd.position_at_end(throw_block);
 
-    throw_exception(env, message);
+    throw_internal_exception(env, parent, message);
 
     bd.position_at_end(then_block);
 
@@ -2003,8 +2003,9 @@ fn int_neg_raise_on_overflow<'a, 'ctx, 'env>(
 
     builder.position_at_end(then_block);
 
-    throw_exception(
+    throw_internal_exception(
         env,
+        parent,
         "integer negation overflowed because its argument is the minimum value",
     );
 
@@ -2033,8 +2034,9 @@ fn int_abs_raise_on_overflow<'a, 'ctx, 'env>(
 
     builder.position_at_end(then_block);
 
-    throw_exception(
+    throw_internal_exception(
         env,
+        parent,
         "integer absolute overflowed because its argument is the minimum value",
     );
 

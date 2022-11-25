@@ -1,0 +1,18 @@
+procedure Test.1 (Test.2):
+    let Test.10 : U8 = 1i64;
+    let Test.11 : U8 = GetTagId Test.2;
+    let Test.12 : Int1 = lowlevel Eq Test.10 Test.11;
+    if Test.12 then
+        let Test.3 : U64 = UnionAtIndex (Id 1) (Index 0) Test.2;
+        dec Test.2;
+        ret Test.3;
+    else
+        dec Test.2;
+        let Test.9 : Str = "turns out this was fallible";
+        Crash Test.9
+
+procedure Test.0 ():
+    let Test.13 : U64 = 78i64;
+    let Test.4 : [C Str, C U64] = TagId(1) Test.13;
+    let Test.6 : U64 = CallByName Test.1 Test.4;
+    ret Test.6;

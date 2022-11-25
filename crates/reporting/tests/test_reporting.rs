@@ -12420,4 +12420,69 @@ All branches in an `if` must have the same type!
     to be more general?
     "###
     );
+
+    test_report!(
+        crash_given_non_string,
+        indoc!(
+            r#"
+            crash {}
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This value passed to `crash` is not a string:
+
+    4│      crash {}
+                  ^^
+
+    The value is a record of type:
+
+        {}
+
+    But I can only `crash` with messages of type
+
+        Str
+    "###
+    );
+
+    test_report!(
+        crash_unapplied,
+        indoc!(
+            r#"
+            crash
+            "#
+        ),
+    @r###"
+    ── UNAPPLIED CRASH ─────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `crash` doesn't have a message given to it:
+
+    4│      crash
+            ^^^^^
+
+    `crash` must be passed a message to crash with at the exact place it's
+    used. `crash` can't be used as a value that's passed around, like
+    functions can be - it must be applied immediately!
+    "###
+    );
+
+    test_report!(
+        crash_overapplied,
+        indoc!(
+            r#"
+            crash "" ""
+            "#
+        ),
+    @r###"
+    ── OVERAPPLIED CRASH ───────────────────────────────────── /code/proj/Main.roc ─
+
+    This `crash` has too many values given to it:
+
+    4│      crash "" ""
+                  ^^^^^
+
+    `crash` must be given exacly one message to crash with.
+    "###
+    );
 }

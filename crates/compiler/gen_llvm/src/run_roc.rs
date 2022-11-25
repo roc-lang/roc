@@ -1,6 +1,7 @@
-use std::ffi::CStr;
 use std::mem::MaybeUninit;
-use std::os::raw::c_char;
+
+use roc_mono::ir::CrashTag;
+use roc_std::RocStr;
 
 /// This must have the same size as the repr() of RocCallResult!
 pub const ROC_CALL_RESULT_DISCRIMINANT_SIZE: usize = std::mem::size_of::<u64>();
@@ -8,7 +9,7 @@ pub const ROC_CALL_RESULT_DISCRIMINANT_SIZE: usize = std::mem::size_of::<u64>();
 #[repr(C)]
 pub struct RocCallResult<T> {
     tag: u64,
-    error_msg: *mut c_char,
+    error_msg: *mut RocStr,
     value: MaybeUninit<T>,
 }
 
@@ -32,14 +33,18 @@ impl<T: Default> Default for RocCallResult<T> {
     }
 }
 
-impl<T: Sized> From<RocCallResult<T>> for Result<T, String> {
+impl<T: Sized> From<RocCallResult<T>> for Result<T, (String, CrashTag)> {
     fn from(call_result: RocCallResult<T>) -> Self {
         match call_result.tag {
             0 => Ok(unsafe { call_result.value.assume_init() }),
-            _ => Err({
-                let raw = unsafe { CStr::from_ptr(call_result.error_msg) };
+            n => Err({
+                let msg: &RocStr = unsafe { &*call_result.error_msg };
+                let tag = (n - 1) as u32;
+                let tag = tag
+                    .try_into()
+                    .unwrap_or_else(|_| panic!("received illegal tag: {tag}"));
 
-                raw.to_str().unwrap().to_owned()
+                (msg.as_str().to_owned(), tag)
             }),
         }
     }
@@ -120,7 +125,7 @@ macro_rules! run_jit_function {
 
                 $transform(success)
             }
-            Err(error_msg) => {
+            Err((error_msg, _)) => {
                 eprintln!("This Roc code crashed with: \"{error_msg}\"");
 
                 Expr::MalformedClosure

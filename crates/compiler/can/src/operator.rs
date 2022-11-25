@@ -138,7 +138,8 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | MalformedClosure
         | PrecedenceConflict { .. }
         | Tag(_)
-        | OpaqueRef(_) => loc_expr,
+        | OpaqueRef(_)
+        | Crash => loc_expr,
 
         TupleAccess(_sub_expr, _paths) => todo!("Handle TupleAccess"),
         RecordAccess(sub_expr, paths) => {

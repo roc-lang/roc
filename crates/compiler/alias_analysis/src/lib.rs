@@ -640,10 +640,13 @@ fn stmt_spec<'a>(
             let jpid = env.join_points[id];
             builder.add_jump(block, jpid, argument, ret_type_id)
         }
-        RuntimeError(_) => {
-            let type_id = layout_spec(env, builder, interner, layout, &WhenRecursive::Unreachable)?;
+        Crash(msg, _) => {
+            // Model this as a foreign call rather than TERMINATE because
+            // we want ownership of the message.
+            let result_type =
+                layout_spec(env, builder, interner, layout, &WhenRecursive::Unreachable)?;
 
-            builder.add_terminate(block, type_id)
+            builder.add_unknown_with(block, &[env.symbols[msg]], result_type)
         }
     }
 }

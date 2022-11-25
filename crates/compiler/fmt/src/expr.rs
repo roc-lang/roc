@@ -43,7 +43,8 @@ impl<'a> Formattable for Expr<'a> {
             | MalformedIdent(_, _)
             | MalformedClosure
             | Tag(_)
-            | OpaqueRef(_) => false,
+            | OpaqueRef(_)
+            | Crash => false,
 
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
@@ -190,6 +191,10 @@ impl<'a> Formattable for Expr<'a> {
                 buf.indent(indent);
                 buf.push('_');
                 buf.push_str(name);
+            }
+            Crash => {
+                buf.indent(indent);
+                buf.push_str("crash");
             }
             Apply(loc_expr, loc_args, _) => {
                 buf.indent(indent);
