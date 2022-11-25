@@ -268,6 +268,60 @@ impl SegmentCommand64 {
     }
 }
 
+struct DySymTabCommand {
+    // uint32_t cmd;
+    //uint32_t cmdsize;
+    ilocalsym: u32,
+    nlocalsym: u32,
+    iextdefsym: u32,
+    nextdefsym: u32,
+    iundefsym: u32,
+    nundefsym: u32,
+    tocoff: u32,
+    ntoc: u32,
+    modtaboff: u32,
+    nmodtab: u32,
+    extrefsymoff: u32,
+    nextrefsyms: u32,
+    indirectsymoff: u32,
+    nindirectsyms: u32,
+    extreloff: u32,
+    nextrel: u32,
+    locreloff: u32,
+    nlocrel: u32,
+}
+
+impl DySymTabCommand {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut buffer = Vec::new();
+        let size = 4 + 4 + std::mem::size_of::<Self>();
+
+        buffer.extend(mach_object::LC_DYSYMTAB.to_le_bytes());
+        buffer.extend((size as u32).to_le_bytes());
+
+        buffer.extend(self.ilocalsym.to_le_bytes());
+        buffer.extend(self.nlocalsym.to_le_bytes());
+        buffer.extend(self.iextdefsym.to_le_bytes());
+        buffer.extend(self.nextdefsym.to_le_bytes());
+        buffer.extend(self.iundefsym.to_le_bytes());
+        buffer.extend(self.nundefsym.to_le_bytes());
+        buffer.extend(self.tocoff.to_le_bytes());
+        buffer.extend(self.ntoc.to_le_bytes());
+        buffer.extend(self.modtaboff.to_le_bytes());
+        buffer.extend(self.nmodtab.to_le_bytes());
+        buffer.extend(self.extrefsymoff.to_le_bytes());
+        buffer.extend(self.nextrefsyms.to_le_bytes());
+        buffer.extend(self.indirectsymoff.to_le_bytes());
+        buffer.extend(self.nindirectsyms.to_le_bytes());
+        buffer.extend(self.extreloff.to_le_bytes());
+        buffer.extend(self.nextrel.to_le_bytes());
+        buffer.extend(self.locreloff.to_le_bytes());
+        buffer.extend(self.nlocrel.to_le_bytes());
+
+        buffer
+    }
+}
+
 fn dylib_id_command(
     name: &str,
     timestamp: u32,
@@ -480,6 +534,23 @@ fn export_trie(input: &[&str]) -> Vec<u8> {
     buffer
 }
 
+fn load_dylinker_command(linker: &str) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    let size = next_multiple_of(4 + 4 + 4 + linker.len() + 1, 8);
+
+    buffer.extend(mach_object::LC_LOAD_DYLINKER.to_le_bytes());
+    buffer.extend((size as u32).to_le_bytes());
+    buffer.extend(12u32.to_le_bytes());
+
+    buffer.extend(linker.as_bytes());
+    buffer.push(0);
+
+    let padding = next_multiple_of(buffer.len(), 8) - buffer.len();
+    buffer.extend(std::iter::repeat(0).take(padding));
+
+    buffer
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -570,31 +641,32 @@ mod test {
     }
 
     const STRINGS: &[&str] = &[
-        "__mh_execute_header",
-        "_roc__mainForHost_1_Decode_DecodeError_caller",
-        "_roc__mainForHost_1_Decode_DecodeError_result_size",
-        //        "_roc__mainForHost_1_Decode_DecodeError_size",
-        //        "_roc__mainForHost_1_Decode_DecodeResult_caller",
-        //        "_roc__mainForHost_1_Decode_DecodeResult_result_size",
-        //        "_roc__mainForHost_1_Decode_DecodeResult_size",
-        //        "_roc__mainForHost_1_Decode_Decoder_caller",
-        //        "_roc__mainForHost_1_Decode_Decoder_result_size",
-        //        "_roc__mainForHost_1_Decode_Decoder_size",
-        //        "_roc__mainForHost_1_Dict_Dict_caller",
-        //        "_roc__mainForHost_1_Dict_Dict_result_size",
-        //        "_roc__mainForHost_1_Dict_Dict_size",
-        //        "_roc__mainForHost_1_Dict_LowLevelHasher_caller",
-        //        "_roc__mainForHost_1_Dict_LowLevelHasher_result_size",
-        //        "_roc__mainForHost_1_Dict_LowLevelHasher_size",
-        //        "_roc__mainForHost_1_Encode_Encoder_caller",
-        //        "_roc__mainForHost_1_Encode_Encoder_result_size",
-        //        "_roc__mainForHost_1_Encode_Encoder_size",
-        //        "_roc__mainForHost_1_Set_Set_caller",
-        //        "_roc__mainForHost_1_Set_Set_result_size",
-        //        "_roc__mainForHost_1_Set_Set_size",
-        //        "_roc__mainForHost_1_exposed",
-        //        "_roc__mainForHost_1_exposed_generic",
-        //        "_roc__mainForHost_size",
+        "_mh_execute_header",
+        "roc__mainForHost_1_Decode_DecodeError_caller",
+        "roc__mainForHost_1_Decode_DecodeError_result_size",
+        "roc__mainForHost_1_Decode_DecodeError_size",
+        "roc__mainForHost_1_Decode_DecodeResult_caller",
+        "roc__mainForHost_1_Decode_DecodeResult_result_size",
+        "roc__mainForHost_1_Decode_DecodeResult_size",
+        "roc__mainForHost_1_Decode_Decoder_caller",
+        "roc__mainForHost_1_Decode_Decoder_result_size",
+        "roc__mainForHost_1_Decode_Decoder_size",
+        "roc__mainForHost_1_Dict_Dict_caller",
+        "roc__mainForHost_1_Dict_Dict_result_size",
+        "roc__mainForHost_1_Dict_Dict_size",
+        "roc__mainForHost_1_Dict_LowLevelHasher_caller",
+        "roc__mainForHost_1_Dict_LowLevelHasher_result_size",
+        "roc__mainForHost_1_Dict_LowLevelHasher_size",
+        "roc__mainForHost_1_Encode_Encoder_caller",
+        "roc__mainForHost_1_Encode_Encoder_result_size",
+        "roc__mainForHost_1_Encode_Encoder_size",
+        "roc__mainForHost_1_Set_Set_caller",
+        "roc__mainForHost_1_Set_Set_result_size",
+        "roc__mainForHost_1_Set_Set_size",
+        "roc__mainForHost_1_exposed",
+        "roc__mainForHost_1_exposed_generic",
+        "roc__mainForHost_size",
+        "dyld_stub_binder",
     ];
 
     #[test]
@@ -738,13 +810,98 @@ mod test {
             vmsize: 0x1000,
             fileoff: 0x2000,
             filesize: 0x1000,
-            maxprot: 0,
-            initprot: 0,
+            maxprot: 3,
+            initprot: 3,
             nsects: 0,
             flags: 0,
         };
 
-        bytes.extend(command.with_segments(&[]));
+        bytes.extend(command.with_segments(&[
+            Section64 {
+                sectname: bstring16("__la_symbol_ptr"),
+                segname: bstring16("__DATA"),
+                addr: 0x0000000100002000,
+                size: 0x00,
+                offset: 0x2000,
+                align: 3,
+                reloff: 0,
+                nreloc: 0,
+                flags: 0x07,
+                reserved1: 0x1,
+                reserved2: 0,
+                reserved3: 0,
+            },
+            Section64 {
+                sectname: bstring16("__data"),
+                segname: bstring16("__DATA"),
+                addr: 0x0000000100002000,
+                size: 0x8,
+                offset: 0x2000,
+                align: 3,
+                reloff: 0,
+                nreloc: 0,
+                flags: 0,
+                reserved1: 0,
+                reserved2: 0,
+                reserved3: 0,
+            },
+            Section64 {
+                sectname: bstring16("__thread_vars"),
+                segname: bstring16("__DATA"),
+                addr: 0x0000000100002008,
+                size: 0,
+                offset: 0x2008,
+                align: 3,
+                reloff: 0,
+                nreloc: 0,
+                flags: 0x13,
+                reserved1: 0,
+                reserved2: 0,
+                reserved3: 0,
+            },
+            Section64 {
+                sectname: bstring16("__thread_data"),
+                segname: bstring16("__DATA"),
+                addr: 0x0000000100002008,
+                size: 0,
+                offset: 0x2008,
+                align: 3,
+                reloff: 0,
+                nreloc: 0,
+                flags: 0x11,
+                reserved1: 0,
+                reserved2: 0,
+                reserved3: 0,
+            },
+            Section64 {
+                sectname: bstring16("__thread_bss"),
+                segname: bstring16("__DATA"),
+                addr: 0x0000000100002008,
+                size: 0x0,
+                offset: 0,
+                align: 3,
+                reloff: 0,
+                nreloc: 0,
+                flags: 0x12,
+                reserved1: 0,
+                reserved2: 0,
+                reserved3: 0,
+            },
+            Section64 {
+                sectname: bstring16("__bss"),
+                segname: bstring16("__DATA"),
+                addr: 0x0000000100002008,
+                size: 0x0,
+                offset: 0,
+                align: 3,
+                reloff: 0,
+                nreloc: 0,
+                flags: 0x01,
+                reserved1: 0,
+                reserved2: 0,
+                reserved3: 0,
+            },
+        ]));
 
         //
 
@@ -755,54 +912,16 @@ mod test {
             vmaddr: 0x0000000100003000,
             vmsize: 0x1000,
             fileoff: 0x3000,
-            filesize: 0x1000,
-            maxprot: 0,
-            initprot: 0,
+            filesize: 0x08bc,
+            maxprot: 1,
+            initprot: 1,
             nsects: 0,
             flags: 0,
         };
 
-        bytes.extend(command.with_segments(&[Section64 {
-            sectname: bstring16("__la_data_symbol"),
-            segname: bstring16("__DATA"),
-            addr: 0x0000000100002000,
-            size: 0xf,
-            offset: 0x2000,
-            align: 3,
-            reloff: 0,
-            nreloc: 0,
-            flags: 0x07,
-            reserved1: 0,
-            reserved2: 0,
-            reserved3: 0,
-        }]));
+        bytes.extend(command.with_segments(&[]));
 
-        bytes.extend(dylib_id_command("librocthing.dylib", 0x2, 0x10000, 0x10000));
-
-        bytes.extend(dylib_load_command(
-            "/usr/lib/libSystem.B.dylib",
-            0x2,
-            0x05016401,
-            0x10000,
-        ));
-
-        let symbols = [
-            "_mh_execute_header",
-            "roc__mainForHost_1_Encode_Encoder_size",
-            "yyy",
-        ];
-
-        let symbol_table = trivial_symbol_table(symbols.iter().copied());
-        let string_table = trivial_string_table(symbols.iter().copied());
-
-        let symtab = SymtabCommand {
-            symoff: 0x3308,
-            nsyms: symbols.len() as u32,
-            stroff: 0x34ac,
-            strsize: string_table.len() as u32,
-        };
-
-        bytes.extend(symtab.to_bytes());
+        let symbols = STRINGS;
 
         let trie = export_trie(&symbols);
         let export_size = trie.len() as u32;
@@ -817,10 +936,57 @@ mod test {
             lazy_bind_off: 0x3020,
             lazy_bind_size: 0x00,
             export_off: 0x3020,
-            export_size,
+            // export_size, TODO
+            export_size: 0x02e0,
         };
 
         bytes.extend(dyld_info_only.to_bytes());
+
+        let symbol_table = trivial_symbol_table(symbols.iter().copied());
+        let string_table = trivial_string_table(symbols.iter().copied());
+
+        let symtab = SymtabCommand {
+            symoff: 0x3308,
+            nsyms: symbols.len() as u32,
+            stroff: 0x34ac,
+            strsize: string_table.len() as u32,
+        };
+
+        bytes.extend(symtab.to_bytes());
+
+        let dysym = DySymTabCommand {
+            ilocalsym: 0,
+            nlocalsym: 0,
+            iextdefsym: 0,
+            nextdefsym: 0x19,
+            iundefsym: 0x19,
+            nundefsym: 0x1,
+            tocoff: 0,
+            ntoc: 0,
+            modtaboff: 0,
+            nmodtab: 0,
+            extrefsymoff: 0,
+            nextrefsyms: 0,
+            indirectsymoff: 0x000034a8,
+            nindirectsyms: 0x1,
+            extreloff: 0,
+            nextrel: 0,
+            locreloff: 0,
+            nlocrel: 0,
+        };
+
+        bytes.extend(dysym.to_bytes());
+
+        bytes.extend(load_dylinker_command("/usr/lib/dyld"));
+
+        bytes.extend(dylib_id_command("librocthing.dylib", 0x2, 0x10000, 0x10000));
+
+        bytes.extend(dylib_load_command(
+            "/usr/lib/libSystem.B.dylib",
+            0x2,
+            0x05016401,
+            0x10000,
+        ));
 
         let delta = 0x3000 - bytes.len();
         bytes.extend(std::iter::repeat(0).take(delta));
@@ -839,13 +1005,13 @@ mod test {
         // export
         bytes.extend(trie);
 
-        let delta = symtab.symoff as usize - bytes.len();
-        bytes.extend(std::iter::repeat(0).take(delta));
-        bytes.extend(symbol_table);
-
-        let delta = symtab.stroff as usize - bytes.len();
-        bytes.extend(std::iter::repeat(0).take(delta));
-        bytes.extend(string_table);
+        //        let delta = symtab.symoff as usize - bytes.len();
+        //        bytes.extend(std::iter::repeat(0).take(delta));
+        //        bytes.extend(symbol_table);
+        //
+        //        let delta = symtab.stroff as usize - bytes.len();
+        //        bytes.extend(std::iter::repeat(0).take(delta));
+        //        bytes.extend(string_table);
 
         std::fs::write("/tmp/test.dylib", &bytes);
     }
