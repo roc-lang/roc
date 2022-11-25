@@ -1,4 +1,6 @@
 use bumpalo::{collections::Vec, Bump};
+use std::fmt::Write;
+
 use roc_wasm_module::opcodes::OpCode;
 use roc_wasm_module::parse::Parse;
 use roc_wasm_module::sections::{ImportDesc, MemorySection};
@@ -25,6 +27,7 @@ pub struct ExecutionState<'a> {
     block_depth: u32,
     import_signatures: Vec<'a, u32>,
     is_debug_mode: bool,
+    debug_string: String,
 }
 
 impl<'a> ExecutionState<'a> {
@@ -42,6 +45,7 @@ impl<'a> ExecutionState<'a> {
             block_depth: 0,
             import_signatures: Vec::new_in(arena),
             is_debug_mode: false,
+            debug_string: String::new(),
         }
     }
 
@@ -50,7 +54,7 @@ impl<'a> ExecutionState<'a> {
         module: &WasmModule<'a>,
         start_fn_name: &str,
         is_debug_mode: bool,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, std::string::String> {
         let mem_bytes = module.memory.min_bytes().map_err(|e| {
             format!(
                 "Error parsing Memory section at offset {:#x}:\n{}",
@@ -110,11 +114,16 @@ impl<'a> ExecutionState<'a> {
             block_depth: 0,
             import_signatures,
             is_debug_mode,
+            debug_string: String::new(),
         })
     }
 
     fn fetch_immediate_u32(&mut self, module: &WasmModule<'a>) -> u32 {
-        u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap()
+        let x = u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
+        if self.is_debug_mode {
+            write!(&mut self.debug_string, "{}", x).unwrap();
+        }
+        x
     }
 
     fn do_return(&mut self) -> Action {
@@ -139,6 +148,11 @@ impl<'a> ExecutionState<'a> {
         let file_offset = self.program_counter as u32 + module.code.section_offset;
         let op_code = OpCode::from(module.code.bytes[self.program_counter]);
         self.program_counter += 1;
+
+        if self.is_debug_mode {
+            self.debug_string.clear();
+            write!(&mut self.debug_string, "{:?} ", op_code).unwrap();
+        }
 
         let mut action = Action::Continue;
 
@@ -257,22 +271,36 @@ impl<'a> ExecutionState<'a> {
             GROWMEMORY => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32CONST => {
                 let value = i32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
+                if self.is_debug_mode {
+                    write!(&mut self.debug_string, "{}", value).unwrap();
+                }
                 self.value_stack.push(Value::I32(value));
             }
             I64CONST => {
                 let value = i64::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
+                if self.is_debug_mode {
+                    write!(&mut self.debug_string, "{}", value).unwrap();
+                }
                 self.value_stack.push(Value::I64(value));
             }
             F32CONST => {
                 let mut bytes = [0; 4];
                 bytes.copy_from_slice(&module.code.bytes[self.program_counter..][..4]);
-                self.value_stack.push(Value::F32(f32::from_le_bytes(bytes)));
+                let value = f32::from_le_bytes(bytes);
+                if self.is_debug_mode {
+                    write!(&mut self.debug_string, "{}", value).unwrap();
+                }
+                self.value_stack.push(Value::F32(value));
                 self.program_counter += 4;
             }
             F64CONST => {
                 let mut bytes = [0; 8];
                 bytes.copy_from_slice(&module.code.bytes[self.program_counter..][..8]);
-                self.value_stack.push(Value::F64(f64::from_le_bytes(bytes)));
+                let value = f64::from_le_bytes(bytes);
+                if self.is_debug_mode {
+                    write!(&mut self.debug_string, "{}", value).unwrap();
+                }
+                self.value_stack.push(Value::F64(value));
                 self.program_counter += 8;
             }
             I32EQZ => todo!("{:?} @ {:#x}", op_code, file_offset),
@@ -419,20 +447,11 @@ impl<'a> ExecutionState<'a> {
         }
 
         if self.is_debug_mode {
-            self.print_debug_log_line(file_offset, op_code);
+            let base = self.call_stack.value_stack_base();
+            let slice = self.value_stack.get_slice(base as usize);
+            eprintln!("{:#07x} {:17} {:?}", file_offset, self.debug_string, slice);
         }
 
         action
-    }
-
-    fn print_debug_log_line(&self, file_offset: u32, op_code: OpCode) {
-        let base = self.call_stack.value_stack_base();
-        let slice = self.value_stack.get_slice(base as usize);
-        eprintln!(
-            "{:#07x} {:17}\t{:?}",
-            file_offset,
-            format!("{:?}", op_code),
-            slice
-        );
     }
 }
