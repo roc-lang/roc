@@ -506,9 +506,9 @@ fn test_store<'a>(
     });
 
     let mut state =
-        ExecutionState::for_module(&arena, &module, start_fn_name, is_debug_mode).unwrap();
+        ExecutionState::for_module(arena, module, start_fn_name, is_debug_mode).unwrap();
 
-    while let Action::Continue = state.execute_next_instruction(&module) {}
+    while let Action::Continue = state.execute_next_instruction(module) {}
 
     state.memory
 }

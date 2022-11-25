@@ -166,9 +166,6 @@ impl<'a> ExecutionState<'a> {
         let offset = self.fetch_immediate_u32(module);
         let value = self.value_stack.pop();
         let base_addr = self.value_stack.pop_u32();
-
-        dbg!(base_addr, offset);
-
         let addr = (base_addr + offset) as usize;
         (addr, value)
     }
