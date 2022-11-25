@@ -77,5 +77,13 @@ fn main() -> io::Result<()> {
 
     while let Action::Continue = state.execute_next_instruction(&module) {}
 
+    // Print out return value(s), if any
+
+    match state.value_stack.len() {
+        0 => {}
+        1 => println!("{:?}", state.value_stack.pop()),
+        _ => println!("{:?}", &state.value_stack),
+    }
+
     Ok(())
 }
