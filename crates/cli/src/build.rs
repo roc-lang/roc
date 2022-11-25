@@ -145,7 +145,7 @@ pub fn build_file<'a>(
 
     let host_input_path = if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point
     {
-        cwd.join(platform_path).with_file_name(host_filename)
+        platform_path.with_file_name(host_filename)
     } else {
         unreachable!();
     };
