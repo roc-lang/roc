@@ -67,7 +67,7 @@ impl<'a> ExecutionState<'a> {
             Vec::from_iter_in(sig_iter, arena)
         };
 
-        let program_counter = {
+        let mut program_counter = {
             let mut export_iter = module.export.exports.iter();
             let start_fn_index = export_iter
                 .find_map(|ex| {
@@ -87,10 +87,21 @@ impl<'a> ExecutionState<'a> {
             cursor
         };
 
+        let mut value_stack = ValueStack::new(arena);
+        let mut call_stack = CallStack::new(arena);
+        call_stack.push_frame(
+            0, // return_addr
+            0, // return_block_depth
+            0, // n_args
+            &mut value_stack,
+            &module.code.bytes,
+            &mut program_counter,
+        );
+
         Ok(ExecutionState {
             memory: Vec::with_capacity_in(mem_bytes as usize, arena),
-            call_stack: CallStack::new(arena),
-            value_stack: ValueStack::new(arena),
+            call_stack,
+            value_stack,
             globals,
             program_counter,
             block_depth: 0,
@@ -104,10 +115,16 @@ impl<'a> ExecutionState<'a> {
 
     fn do_return(&mut self) -> Action {
         if let Some((return_addr, block_depth)) = self.call_stack.pop_frame() {
-            self.program_counter = return_addr as usize;
-            self.block_depth = block_depth;
-            Action::Continue
+            if self.call_stack.is_empty() {
+                // We just popped the stack frame for the entry function. Terminate the program.
+                Action::Break
+            } else {
+                self.program_counter = return_addr as usize;
+                self.block_depth = block_depth;
+                Action::Continue
+            }
         } else {
+            // We should never get here with real programs but maybe in tests. Terminate the program.
             Action::Break
         }
     }
