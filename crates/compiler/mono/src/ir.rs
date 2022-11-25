@@ -6570,15 +6570,23 @@ pub fn from_can<'a>(
             let expr = Expr::Call(call);
             let mut stmt = Stmt::Let(dbg_symbol, expr, dbg_layout, env.arena.alloc(rest));
 
-            stmt = with_hole(
-                env,
-                loc_condition.value,
-                variable,
-                procs,
-                layout_cache,
-                dbg_symbol,
-                env.arena.alloc(stmt),
+            let symbol_is_reused = matches!(
+                can_reuse_symbol(env, procs, &loc_condition.value, variable),
+                ReuseSymbol::Value(_)
             );
+
+            // skip evaluating the condition if it's just a symbol
+            if !symbol_is_reused {
+                stmt = with_hole(
+                    env,
+                    loc_condition.value,
+                    variable,
+                    procs,
+                    layout_cache,
+                    dbg_symbol,
+                    env.arena.alloc(stmt),
+                );
+            }
 
             stmt
         }
