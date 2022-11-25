@@ -103,6 +103,18 @@ impl<'a> ValueStack<'a> {
         }
     }
 
+    /// Memory addresses etc
+    pub fn pop_u32(&mut self) -> u32 {
+        match (self.is_float.pop(), self.is_64.pop()) {
+            (Some(false), Some(false)) => pop_bytes!(u32, self.bytes),
+            (Some(is_float), Some(is_64)) => panic!(
+                "Expected I32 but found {:?}",
+                type_from_flags(is_float, is_64)
+            ),
+            _ => panic!("Expected I32 but value stack was empty"),
+        }
+    }
+
     pub fn pop_i32(&mut self) -> i32 {
         match (self.is_float.pop(), self.is_64.pop()) {
             (Some(false), Some(false)) => pop_bytes!(i32, self.bytes),

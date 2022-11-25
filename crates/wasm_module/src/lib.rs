@@ -679,6 +679,33 @@ pub enum Value {
     F64(f64),
 }
 
+impl Value {
+    pub fn unwrap_i32(&self) -> i32 {
+        match self {
+            Value::I32(x) => *x,
+            _ => panic!("Expected I32 but found {:?}", self),
+        }
+    }
+    pub fn unwrap_i64(&self) -> i64 {
+        match self {
+            Value::I64(x) => *x,
+            _ => panic!("Expected I64 but found {:?}", self),
+        }
+    }
+    pub fn unwrap_f32(&self) -> f32 {
+        match self {
+            Value::F32(x) => *x,
+            _ => panic!("Expected F32 but found {:?}", self),
+        }
+    }
+    pub fn unwrap_f64(&self) -> f64 {
+        match self {
+            Value::F64(x) => *x,
+            _ => panic!("Expected F64 but found {:?}", self),
+        }
+    }
+}
+
 /// Wasm memory alignment for load/store instructions.
 /// Rust representation matches Wasm encoding.
 /// It's an error to specify alignment higher than the "natural" alignment of the instruction

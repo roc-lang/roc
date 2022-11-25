@@ -1,4 +1,5 @@
 use std::fmt::{Debug, Formatter};
+use std::io::Write;
 
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -789,6 +790,16 @@ impl<'a> MemorySection<'a> {
         };
         Ok(min_pages * MemorySection::PAGE_SIZE)
     }
+
+    pub fn max_bytes(&self) -> Result<Option<u32>, ParseError> {
+        let mut cursor = 0;
+        let memory_limits = Limits::parse((), &self.bytes, &mut cursor)?;
+        let bytes = match memory_limits {
+            Limits::Min(_) => None,
+            Limits::MinMax(_, pages) => Some(pages * MemorySection::PAGE_SIZE),
+        };
+        Ok(bytes)
+    }
 }
 
 section_impl!(MemorySection, SectionId::Memory);
@@ -1489,6 +1500,29 @@ impl<'a> DataSection<'a> {
         self.count += 1;
         segment.serialize(&mut self.bytes);
         index
+    }
+
+    pub fn load_into(&self, memory: &mut [u8]) -> Result<(), String> {
+        let mut cursor = 0;
+        for _ in 0..self.count {
+            let mode =
+                DataMode::parse((), &self.bytes, &mut cursor).map_err(|e| format!("{:?}", e))?;
+            let start = match mode {
+                DataMode::Active {
+                    offset: ConstExpr::I32(addr),
+                } => addr as usize,
+                _ => {
+                    continue;
+                }
+            };
+            let len32 = u32::parse((), &self.bytes, &mut cursor).map_err(|e| format!("{:?}", e))?;
+            let len = len32 as usize;
+            let mut target_slice = &mut memory[start..][..len];
+            target_slice
+                .write(&self.bytes[cursor..][..len])
+                .map_err(|e| format!("{:?}", e))?;
+        }
+        Ok(())
     }
 }
 
