@@ -706,8 +706,8 @@ mod test {
         let commands = Commands {
             // count: 5 + 2 + 1 + 1,
             // size: 5 * 0x48 + 0x30 + 0x38 + 0x30 + (6 * 4),
-            count: 0x10,
-            size: 0x610,
+            count: 5 + 8,
+            size: 5 * 0x48 + 0x30 + 0x18 + 0x50 + 0x20 + 0x30 + 0x10 + 0x10 + 0x38,
         };
 
         bytes.extend_from_slice(macho_dylib_header(&triple, commands).as_slice());
@@ -1002,19 +1002,6 @@ mod test {
         bytes.extend(load_dylinker_command("/usr/lib/dyld"));
 
         bytes.extend(dylib_id_command("librocthing.dylib", 0x2, 0x10000, 0x10000));
-
-        // source version
-        bytes.extend(hexstring("2a000000100000000000000000000000"));
-
-        // build version
-        bytes.extend(hexstring(
-            "320000002000000001000000000d0a00000d0a00010000000300000000000000",
-        ));
-
-        // uuid
-        bytes.extend(hexstring(
-            "1b00000018000000c0206cd57267f341dd44132f60085197",
-        ));
 
         // function starts
         bytes.extend(hexstring("26000000100000000033000008000000"));
