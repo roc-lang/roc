@@ -16,6 +16,9 @@ mod test_reporting {
     use roc_load::{self, ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
     use roc_packaging::cache::RocCacheDir;
+    use roc_parse::module::parse_header;
+    use roc_parse::state::State;
+    use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
         can_problem, parse_problem, type_problem, RenderTarget, Report, Severity, ANSI_STYLE_CODES,
@@ -55,6 +58,38 @@ mod test_reporting {
         buffer
     }
 
+    fn maybe_save_parse_test_case(test_name: &str, src: &str, is_expr: bool) {
+        // First check if the env var indicates we should migrate tests
+        if std::env::var("ROC_MIGRATE_REPORTING_TESTS").is_err() {
+            return;
+        }
+
+        // Check if we have parse errors
+        let arena = Bump::new();
+        let has_error = if is_expr {
+            parse_expr_with(&arena, src).is_err()
+        } else {
+            parse_header(&arena, State::new(src.trim().as_bytes())).is_err()
+            // TODO: also parse the module defs
+        };
+
+        if !has_error {
+            return;
+        }
+
+        let mut path = PathBuf::from(std::env!("ROC_WORKSPACE_DIR"));
+        path.push("crates");
+        path.push("compiler");
+        path.push("parse");
+        path.push("tests");
+        path.push("snapshots");
+        path.push("fail");
+        let kind = if is_expr { "expr" } else { "header" };
+        path.push(format!("{}.{}.roc", test_name, kind));
+
+        std::fs::write(path, src).unwrap();
+    }
+
     fn run_load_and_infer<'a>(
         subdir: &str,
         arena: &'a Bump,
@@ -64,9 +99,11 @@ mod test_reporting {
         use std::io::Write;
 
         let module_src = if src.starts_with("app") {
+            maybe_save_parse_test_case(subdir, src, false);
             // this is already a module
             src.to_string()
         } else {
+            maybe_save_parse_test_case(subdir, src, true);
             // this is an expression, promote it to a module
             promote_expr_to_module(src)
         };
@@ -313,8 +350,6 @@ mod test_reporting {
     {
         use ven_pretty::DocAllocator;
 
-        use roc_parse::state::State;
-
         let state = State::new(src.as_bytes());
 
         let filename = filename_from_string(r"/code/proj/Main.roc");
@@ -386,7 +421,7 @@ mod test_reporting {
     }
 
     /// Do not call this directly! Use the test_report macro below!
-    fn __new_report_problem_as(subdir: &str, src: &str, check_render: impl FnOnce(&str)) {
+    fn __new_report_problem_as(test_name: &str, src: &str, check_render: impl FnOnce(&str)) {
         let arena = Bump::new();
 
         let finalize_render = |doc: RocDocBuilder<'_>, buf: &mut String| {
@@ -395,7 +430,7 @@ mod test_reporting {
                 .expect("list_reports")
         };
 
-        let buf = list_reports_new(subdir, &arena, src, finalize_render);
+        let buf = list_reports_new(test_name, &arena, src, finalize_render);
 
         check_render(buf.as_str());
     }
