@@ -1,7 +1,7 @@
 use crate::https::{self, PackageMetadata, Problem};
 use roc_error_macros::internal_error;
 use std::{
-    env, fs,
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -115,6 +115,8 @@ const ROC_CACHE_DIR_NAME: &str = "roc";
 /// (or if %APPDATA% is missing on Windows) on this system.
 #[cfg(not(target_family = "wasm"))]
 pub fn roc_cache_dir() -> PathBuf {
+    use std::{env, process};
+
     const PACKAGES_DIR_NAME: &str = "packages";
 
     // Respect XDG, if the system appears to be using it.
@@ -137,7 +139,7 @@ pub fn roc_cache_dir() -> PathBuf {
                         .join(PACKAGES_DIR_NAME)
                 } else {
                     eprintln!("roc needs either the %APPDATA% or else the %XDG_CACHE_HOME% environment variables set. Please set one of these environment variables and re-run roc!");
-                    std::process::exit(1);
+                    process::exit(1);
                 }
             }
 
@@ -151,7 +153,7 @@ pub fn roc_cache_dir() -> PathBuf {
                         .join(PACKAGES_DIR_NAME)
                 } else {
                     eprintln!("roc needs either the $HOME or else the $XDG_CACHE_HOME environment variables set. Please set one of these environment variables and re-run roc!");
-                    std::process::exit(1);
+                    process::exit(1);
                 }
             }
         }
