@@ -20,8 +20,6 @@ macro_rules! log_instruction {
     };
 }
 
-const BLOCK_NO_RESULT: u8 = 0x40;
-
 /// A control block in our model of the VM
 /// Child blocks cannot "see" values from their parent block
 struct VmBlock<'a> {
@@ -531,7 +529,8 @@ impl<'a> CodeBuilder<'a> {
         self.inst_base(opcode, pops, false);
 
         // We don't support block result types. Too hard to track types through arbitrary control flow.
-        self.code.push(BLOCK_NO_RESULT);
+        // This results in slightly more instructions but not much. (Rust does the same thing!)
+        self.code.push(ValueType::VOID);
 
         // Start a new block with a fresh value stack
         self.vm_block_stack.push(VmBlock {

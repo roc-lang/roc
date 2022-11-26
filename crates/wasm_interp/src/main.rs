@@ -14,6 +14,7 @@ pub const FLAG_FUNCTION: &str = "function";
 pub const FLAG_DEBUG: &str = "debug";
 pub const FLAG_HEX: &str = "hex";
 pub const WASM_FILE: &str = "WASM_FILE";
+pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 fn main() -> io::Result<()> {
     // Define the command line arguments
@@ -41,12 +42,20 @@ fn main() -> io::Result<()> {
         .allow_invalid_utf8(true)
         .required(true);
 
+    let args_for_app = Arg::new(ARGS_FOR_APP)
+        .help("Arguments to pass into the WebAssembly app\ne.g. `roc_wasm_interp app.wasm -- 123 123.45`")
+        .multiple_values(true)
+        .takes_value(true)
+        .last(true);
+
     let app = Command::new("roc_wasm_interp")
         .about("Run the given .wasm file")
         .arg(flag_function)
         .arg(flag_debug)
         .arg(flag_hex)
-        .arg(wasm_file_to_run);
+        .arg(wasm_file_to_run)
+        .trailing_var_arg(true)
+        .arg(args_for_app);
 
     // Parse the command line arguments
 
@@ -54,6 +63,10 @@ fn main() -> io::Result<()> {
     let start_fn_name = matches.get_one::<String>(FLAG_FUNCTION).unwrap();
     let is_debug_mode = matches.get_flag(FLAG_DEBUG);
     let is_hex_format = matches.get_flag(FLAG_HEX);
+    let start_arg_strings = matches
+        .get_many::<String>(ARGS_FOR_APP)
+        .unwrap_or_default()
+        .map(|s| s.as_str());
 
     // Load the WebAssembly binary file
 
@@ -76,11 +89,17 @@ fn main() -> io::Result<()> {
 
     // Initialise the execution state
 
-    let mut state = ExecutionState::for_module(&arena, &module, start_fn_name, is_debug_mode)
-        .unwrap_or_else(|e| {
-            eprintln!("{}", e);
-            process::exit(2);
-        });
+    let mut state = ExecutionState::for_module(
+        &arena,
+        &module,
+        start_fn_name,
+        is_debug_mode,
+        start_arg_strings,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("{}", e);
+        process::exit(2);
+    });
 
     // Run
 

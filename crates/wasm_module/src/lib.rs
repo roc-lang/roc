@@ -637,6 +637,10 @@ pub enum ValueType {
     F64 = 0x7c,
 }
 
+impl ValueType {
+    pub const VOID: u8 = 0x40;
+}
+
 impl Serialize for ValueType {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.append_u8(*self as u8);
@@ -651,6 +655,17 @@ impl From<u8> for ValueType {
             0x7d => Self::F32,
             0x7c => Self::F64,
             _ => internal_error!("Invalid ValueType 0x{:02x}", x),
+        }
+    }
+}
+
+impl From<Value> for ValueType {
+    fn from(x: Value) -> Self {
+        match x {
+            Value::I32(_) => Self::I32,
+            Value::I64(_) => Self::I64,
+            Value::F32(_) => Self::F32,
+            Value::F64(_) => Self::F64,
         }
     }
 }

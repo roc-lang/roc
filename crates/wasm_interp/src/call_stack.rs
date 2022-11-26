@@ -51,7 +51,7 @@ impl<'a> CallStack<'a> {
         &mut self,
         return_addr: u32,
         return_block_depth: u32,
-        n_args: u32,
+        arg_type_bytes: &[u8],
         value_stack: &mut ValueStack<'a>,
         code_bytes: &[u8],
         pc: &mut usize,
@@ -63,14 +63,16 @@ impl<'a> CallStack<'a> {
         let mut total = 0;
 
         // Make space for arguments
-        self.is_64.extend(repeat(false).take(n_args as usize));
-        self.is_float.extend(repeat(false).take(n_args as usize));
-        self.locals_data.extend(repeat(0).take(n_args as usize));
+        let n_args = arg_type_bytes.len();
+        self.is_64.extend(repeat(false).take(n_args));
+        self.is_float.extend(repeat(false).take(n_args));
+        self.locals_data.extend(repeat(0).take(n_args));
 
         // Pop arguments off the value stack and into locals
-        for i in (0..n_args).rev() {
+        for (i, type_byte) in arg_type_bytes.iter().copied().enumerate().rev() {
             let arg = value_stack.pop();
-            self.set_local_help(i, arg);
+            assert_eq!(ValueType::from(arg), ValueType::from(type_byte));
+            self.set_local_help(i as u32, arg);
         }
 
         self.value_stack_bases.push(value_stack.len() as u32);
@@ -178,13 +180,13 @@ mod tests {
 
         // Push a other few frames before the test frame, just to make the scenario more typical.
         [(1u32, ValueType::I32)].serialize(&mut buffer);
-        call_stack.push_frame(0x11111, 0, 0, &mut vs, &buffer, &mut cursor);
+        call_stack.push_frame(0x11111, 0, &[], &mut vs, &buffer, &mut cursor);
 
         [(2u32, ValueType::I32)].serialize(&mut buffer);
-        call_stack.push_frame(0x22222, 0, 0, &mut vs, &buffer, &mut cursor);
+        call_stack.push_frame(0x22222, 0, &[], &mut vs, &buffer, &mut cursor);
 
         [(3u32, ValueType::I32)].serialize(&mut buffer);
-        call_stack.push_frame(0x33333, 0, 0, &mut vs, &buffer, &mut cursor);
+        call_stack.push_frame(0x33333, 0, &[], &mut vs, &buffer, &mut cursor);
 
         // Create a test call frame with local variables of every type
         [
@@ -194,7 +196,7 @@ mod tests {
             (1u32, ValueType::F64),
         ]
         .serialize(&mut buffer);
-        call_stack.push_frame(RETURN_ADDR, 0, 0, &mut vs, &buffer, &mut cursor);
+        call_stack.push_frame(RETURN_ADDR, 0, &[], &mut vs, &buffer, &mut cursor);
     }
 
     #[test]

@@ -3,10 +3,10 @@ use std::fmt::{self, Write};
 use std::iter;
 
 use roc_wasm_module::opcodes::OpCode;
-use roc_wasm_module::parse::Parse;
+use roc_wasm_module::parse::{Parse, SkipBytes};
 use roc_wasm_module::sections::{ImportDesc, MemorySection};
-use roc_wasm_module::Value;
 use roc_wasm_module::{ExportType, WasmModule};
+use roc_wasm_module::{Value, ValueType};
 
 use crate::call_stack::CallStack;
 use crate::value_stack::ValueStack;
@@ -18,13 +18,23 @@ pub enum Action {
 
 #[derive(Debug)]
 pub struct ExecutionState<'a> {
+    /// Contents of the WebAssembly instance's memory
     pub memory: Vec<'a, u8>,
+    /// Metadata for every currently-active function call
     pub call_stack: CallStack<'a>,
+    /// The WebAssembly stack machine's stack of values
     pub value_stack: ValueStack<'a>,
+    /// Values of any global variables
     pub globals: Vec<'a, Value>,
+    /// Index in the code section of the current instruction
     pub program_counter: usize,
-    block_depth: u32,
+    /// One entry per nested block. For loops, stores the address of the first instruction.
+    block_loop_addrs: Vec<'a, Option<u32>>,
+    /// Outermost block depth for the currently-executing function.
+    outermost_block: u32,
+    /// Signature indices (in the TypeSection) of all imported (non-WebAssembly) functions
     import_signatures: Vec<'a, u32>,
+    /// temporary storage for output using the --debug option
     debug_string: Option<String>,
 }
 
@@ -40,18 +50,23 @@ impl<'a> ExecutionState<'a> {
             value_stack: ValueStack::new(arena),
             globals: Vec::from_iter_in(globals, arena),
             program_counter,
-            block_depth: 0,
+            block_loop_addrs: Vec::new_in(arena),
+            outermost_block: 0,
             import_signatures: Vec::new_in(arena),
-            debug_string: None,
+            debug_string: Some(String::new()),
         }
     }
 
-    pub fn for_module(
+    pub fn for_module<'arg, A>(
         arena: &'a Bump,
         module: &WasmModule<'a>,
         start_fn_name: &str,
         is_debug_mode: bool,
-    ) -> Result<Self, std::string::String> {
+        arg_strings: A,
+    ) -> Result<Self, std::string::String>
+    where
+        A: IntoIterator<Item = &'arg str>,
+    {
         let mem_bytes = module.memory.min_bytes().map_err(|e| {
             format!(
                 "Error parsing Memory section at offset {:#x}:\n{}",
@@ -73,9 +88,9 @@ impl<'a> ExecutionState<'a> {
             Vec::from_iter_in(sig_iter, arena)
         };
 
-        let mut program_counter = {
+        let start_fn_index = {
             let mut export_iter = module.export.exports.iter();
-            let start_fn_index = export_iter
+            export_iter
                 .find_map(|ex| {
                     if ex.ty == ExportType::Func && ex.name == start_fn_name {
                         Some(ex.index)
@@ -86,7 +101,16 @@ impl<'a> ExecutionState<'a> {
                 .ok_or(format!(
                     "I couldn't find an exported function '{}' in this WebAssembly module",
                     start_fn_name
-                ))?;
+                ))?
+        };
+
+        let arg_type_bytes = {
+            let internal_fn_index = start_fn_index as usize - import_signatures.len();
+            let signature_index = module.function.signatures[internal_fn_index];
+            module.types.look_up_arg_type_bytes(signature_index)
+        };
+
+        let mut program_counter = {
             let internal_fn_index = start_fn_index as usize - module.import.function_count();
             let mut cursor = module.code.function_offsets[internal_fn_index] as usize;
             let _start_fn_byte_length = u32::parse((), &module.code.bytes, &mut cursor);
@@ -94,11 +118,22 @@ impl<'a> ExecutionState<'a> {
         };
 
         let mut value_stack = ValueStack::new(arena);
+        for (value_str, type_byte) in arg_strings.into_iter().zip(arg_type_bytes.iter().copied()) {
+            use ValueType::*;
+            let value = match ValueType::from(type_byte) {
+                I32 => Value::I32(value_str.parse::<i32>().map_err(|e| e.to_string())?),
+                I64 => Value::I64(value_str.parse::<i64>().map_err(|e| e.to_string())?),
+                F32 => Value::F32(value_str.parse::<f32>().map_err(|e| e.to_string())?),
+                F64 => Value::F64(value_str.parse::<f64>().map_err(|e| e.to_string())?),
+            };
+            value_stack.push(value);
+        }
+
         let mut call_stack = CallStack::new(arena);
         call_stack.push_frame(
             0, // return_addr
             0, // return_block_depth
-            0, // n_args
+            arg_type_bytes,
             &mut value_stack,
             &module.code.bytes,
             &mut program_counter,
@@ -116,7 +151,8 @@ impl<'a> ExecutionState<'a> {
             value_stack,
             globals,
             program_counter,
-            block_depth: 0,
+            block_loop_addrs: Vec::new_in(arena),
+            outermost_block: 0,
             import_signatures,
             debug_string,
         })
@@ -125,7 +161,7 @@ impl<'a> ExecutionState<'a> {
     fn fetch_immediate_u32(&mut self, module: &WasmModule<'a>) -> u32 {
         let x = u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
         if let Some(debug_string) = self.debug_string.as_mut() {
-            write!(debug_string, "{}", x).unwrap();
+            write!(debug_string, "{} ", x).unwrap();
         }
         x
     }
@@ -136,12 +172,13 @@ impl<'a> ExecutionState<'a> {
                 // We just popped the stack frame for the entry function. Terminate the program.
                 Action::Break
             } else {
+                dbg!(return_addr, block_depth);
                 self.program_counter = return_addr as usize;
-                self.block_depth = block_depth;
+                self.outermost_block = block_depth;
                 Action::Continue
             }
         } else {
-            // We should never get here with real programs but maybe in tests. Terminate the program.
+            // We should never get here with real programs, but maybe in tests. Terminate the program.
             Action::Break
         }
     }
@@ -174,6 +211,44 @@ impl<'a> ExecutionState<'a> {
         }
     }
 
+    fn do_break(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>) {
+        let block_index = self.block_loop_addrs.len() - 1 - relative_blocks_outward as usize;
+        match self.block_loop_addrs[block_index] {
+            Some(addr) => {
+                self.block_loop_addrs.truncate(block_index + 1);
+                self.program_counter = addr as usize;
+            }
+            None => {
+                self.break_forward(relative_blocks_outward, module);
+            }
+        }
+    }
+
+    // Break to an outer block, going forward in the program
+    fn break_forward(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>) {
+        use OpCode::*;
+
+        let mut depth = self.block_loop_addrs.len();
+        let target_block_depth = depth - (relative_blocks_outward + 1) as usize;
+        loop {
+            let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
+            OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
+            match skipped_op {
+                BLOCK | LOOP | IF => {
+                    depth += 1;
+                }
+                END => {
+                    depth -= 1;
+                    if depth == target_block_depth {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.block_loop_addrs.truncate(target_block_depth);
+    }
+
     pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) -> Action {
         use OpCode::*;
 
@@ -197,26 +272,79 @@ impl<'a> ExecutionState<'a> {
             }
             NOP => {}
             BLOCK => {
-                self.block_depth += 1;
-                todo!("{:?} @ {:#x}", op_code, file_offset);
+                self.fetch_immediate_u32(module); // blocktype (ignored)
+                self.block_loop_addrs.push(None);
             }
             LOOP => {
-                self.block_depth += 1;
-                todo!("{:?} @ {:#x}", op_code, file_offset);
+                self.fetch_immediate_u32(module); // blocktype (ignored)
+                self.block_loop_addrs
+                    .push(Some(self.program_counter as u32));
             }
-            IF => todo!("{:?} @ {:#x}", op_code, file_offset),
-            ELSE => todo!("{:?} @ {:#x}", op_code, file_offset),
+            IF => {
+                self.fetch_immediate_u32(module); // blocktype (ignored)
+                let condition = self.value_stack.pop_i32();
+                self.block_loop_addrs.push(None);
+                if condition == 0 {
+                    let mut depth = self.block_loop_addrs.len();
+                    loop {
+                        let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
+                        OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
+                        match skipped_op {
+                            BLOCK | LOOP | IF => {
+                                depth += 1;
+                            }
+                            END => {
+                                depth -= 1;
+                            }
+                            ELSE => {
+                                if depth == self.block_loop_addrs.len() {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            ELSE => {
+                // We only reach this point when we finish executing the "then" block of an IF statement
+                // (For a false condition, we would have skipped past the ELSE when we saw the IF)
+                // We don't want to execute the ELSE block, so we skip it, just like `br 0` would.
+                self.do_break(0, module);
+            }
             END => {
-                if self.block_depth == 0 {
+                if self.block_loop_addrs.len() == self.outermost_block as usize {
                     // implicit RETURN at end of function
                     action = self.do_return();
                 } else {
-                    self.block_depth -= 1;
+                    self.block_loop_addrs.pop().unwrap();
                 }
             }
-            BR => todo!("{:?} @ {:#x}", op_code, file_offset),
-            BRIF => todo!("{:?} @ {:#x}", op_code, file_offset),
-            BRTABLE => todo!("{:?} @ {:#x}", op_code, file_offset),
+            BR => {
+                let relative_blocks_outward = self.fetch_immediate_u32(module);
+                self.do_break(relative_blocks_outward, module);
+            }
+            BRIF => {
+                let relative_blocks_outward = self.fetch_immediate_u32(module);
+                let condition = self.value_stack.pop_i32();
+                if condition != 0 {
+                    self.do_break(relative_blocks_outward, module);
+                }
+            }
+            BRTABLE => {
+                let selector = self.value_stack.pop_u32();
+                let nondefault_condition_count = self.fetch_immediate_u32(module);
+                let mut selected = None;
+                for i in 0..nondefault_condition_count {
+                    let rel_blocks = self.fetch_immediate_u32(module);
+                    if i == selector {
+                        selected = Some(rel_blocks);
+                    }
+                }
+                let fallback = self.fetch_immediate_u32(module);
+                let relative_blocks_outward = selected.unwrap_or(fallback);
+                self.do_break(relative_blocks_outward, module);
+            }
             RETURN => {
                 action = self.do_return();
             }
@@ -229,20 +357,20 @@ impl<'a> ExecutionState<'a> {
                     let internal_fn_index = index - self.import_signatures.len();
                     module.function.signatures[internal_fn_index]
                 };
-                let arg_count = module.types.look_up_arg_count(signature_index);
+                let arg_type_bytes = module.types.look_up_arg_type_bytes(signature_index);
 
                 let return_addr = self.program_counter as u32;
                 self.program_counter = module.code.function_offsets[index] as usize;
 
-                let return_block_depth = self.block_depth;
-                self.block_depth = 0;
+                let return_block_depth = self.outermost_block;
+                self.outermost_block = self.block_loop_addrs.len() as u32;
 
                 let _function_byte_length =
                     u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
                 self.call_stack.push_frame(
                     return_addr,
                     return_block_depth,
-                    arg_count,
+                    arg_type_bytes,
                     &mut self.value_stack,
                     &module.code.bytes,
                     &mut self.program_counter,
@@ -476,7 +604,12 @@ impl<'a> ExecutionState<'a> {
             I32EQZ => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32EQ => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32NE => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32LTS => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I32LTS => {
+                let second = self.value_stack.pop_i32();
+                let first = self.value_stack.pop_i32();
+                let result: bool = first < second;
+                self.value_stack.push(Value::I32(result as i32));
+            }
             I32LTU => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32GTS => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32GTU => todo!("{:?} @ {:#x}", op_code, file_offset),
