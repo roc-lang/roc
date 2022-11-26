@@ -12,7 +12,7 @@ const MAX_DOWNLOAD_BYTES: u64 = 32 * 1_000_000_000; // GB
 pub enum RocCacheDir<'a> {
     /// Normal scenario: reading from the user's cache dir on disk
     Persistent(&'a Path),
-    /// For build.rs and tests where we never want be downloading anything - yell loudly if we try!
+    /// For build.rs and tests where we never want to be downloading anything - yell loudly if we try!
     Disallowed,
     /// For tests only; we don't want to write to the real cache during a test!
     #[cfg(test)]
