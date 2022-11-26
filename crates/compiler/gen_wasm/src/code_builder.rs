@@ -529,6 +529,7 @@ impl<'a> CodeBuilder<'a> {
         self.inst_base(opcode, pops, false);
 
         // We don't support block result types. Too hard to track types through arbitrary control flow.
+        // This results in slightly more instructions but not much. (Rust does the same thing!)
         self.code.push(ValueType::VOID);
 
         // Start a new block with a fresh value stack
