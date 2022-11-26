@@ -57,9 +57,13 @@ echo 'Generating CLI example platform docs...'
 # "/examples/cli/" rather than "/builtins/"
 export ROC_DOCS_URL_ROOT=/examples/cli
 
+rm -rf ./downloaded-basic-cli
+
+git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
+
 # Until https://github.com/roc-lang/roc/issues/3280 is done,
 # manually exclude the Internal* modules and `main.roc`.
-ls examples/cli/cli-platform/*.roc | grep -v Internal | grep -v main.roc | grep -v Effect.roc | xargs cargo run --bin roc-docs
+ls downloaded-basic-cli/src/*.roc | grep -v Internal | grep -v main.roc | grep -v Effect.roc | xargs cargo run --bin roc-docs
 
 mkdir www/build/examples
 rm generated-docs/*.* # we already copied over the *.js and *.css files earlier, so just drop these.
