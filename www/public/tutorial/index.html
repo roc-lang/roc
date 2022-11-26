@@ -198,7 +198,6 @@ total <span class="kw">=</span> Num.toStr <span class="paren">(</span>birds <spa
 
 main <span class="kw">=</span>
     Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
-    <span class="kw">|&gt;</span> Program.quick
 </samp>
 <p>Now if you run <code>roc dev</code>, you should see this:</p>
 <samp>There are 5 animals.</samp>
@@ -232,7 +231,6 @@ total <span class="kw">=</span> Num.toStr <span class="paren">(</span>birds <spa
 
 main <span class="kw">=</span>
     Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
-    <span class="kw">|&gt;</span> Program.quick</span>
 
 addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span>
     Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span>
@@ -1230,7 +1228,7 @@ Roc compiler. That's why they're called "builtins!"</p>
 <p>Let's take a closer look at the part of <code>main.roc</code> above the <code>main</code> def:</p>
 <samp><span class="hljs-selector-tag">app</span> "<span class="hljs-selector-tag">hello</span>"
     <span class="hljs-selector-tag">packages</span> { <span class="attribute">pf</span>: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-    <span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program]</span>
+    <span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout]</span>
     <span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
 </samp>
 <p>This is known as a <em>module header</em>. Every <code>.roc</code> file is a <em>module</em>, and there
@@ -1243,7 +1241,7 @@ named <code>hello</code> (or <code>hello.exe</code> on Windows) and run it. You 
 without running it by running <code>roc build</code>.</p>
 <p>The remaining lines all involve the <em>platform</em> this application is built on:</p>
 <samp><span class="hljs-selector-tag">packages</span> { <span class="attribute">pf</span>: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program]</span>
+<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout]</span>
 <span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
 </samp>
 <p>The <code>packages { pf: "examples/cli/cli-platform/main.roc" }</code> part says two things:</p>
@@ -1251,19 +1249,17 @@ without running it by running <code>roc build</code>.</p>
 <li>We're going to be using a <em>package</em> (that is, a collection of modules) called <code>"examples/cli/cli-platform/main.roc"</code></li>
 <li>We're going to name that package <code>pf</code> so we can refer to it more concisely in the future.</li>
 </ul>
-<p>The <code>imports [pf.Stdout, pf.Program]</code> line says that we want to import the <code>Stdout</code> and <code>Program</code> modules
-from the <code>pf</code> package, and make them available in the current module.</p>
+<p>The <code>imports [pf.Stdout]</code> line says that we want to import the <code>Stdout</code> module
+from the <code>pf</code> package, and make it available in the current module.</p>
 <p>This import has a direct interaction with our definition of <code>main</code>. Let's look
 at that again:</p>
-<samp><span class="attr">main</span> <span class="op">=</span> Stdout.line <span class="str">"I'm a Roc application!"</span> |&gt; Program.quick
+<samp><span class="attr">main</span> <span class="op">=</span> Stdout.line <span class="str">"I'm a Roc application!"</span>
 </samp>
 <p>Here, <code>main</code> is calling a function called <code>Stdout.line</code>. More specifically, it's
 calling a function named <code>line</code> which is exposed by a module named
 <code>Stdout</code>.
-Then the result of that function call is passed to the <code>quick</code> function of the <code>Program</code> module,
-which effectively makes it a simple Roc program.</p>
-<p>When we write <code>imports [pf.Stdout, pf.Program]</code>, it specifies that the <code>Stdout</code>
-and <code>Program</code> modules come from the <code>pf</code> package.</p>
+<p>When we write <code>imports [pf.Stdout]</code>, it specifies that the <code>Stdout</code>
+module comes from the <code>pf</code> package.</p>
 <p>Since <code>pf</code> was the name we chose for the <code>examples/cli/cli-platform/main.roc</code>
 package (when we wrote <code>packages { pf: "examples/cli/cli-platform/main.roc" }</code>),
 this <code>imports</code> line tells the Roc compiler that when we call <code>Stdout.line</code>, it
@@ -1271,7 +1267,7 @@ should look for that <code>line</code> function in the <code>Stdout</code> modul
 <code>examples/cli/cli-platform/main.roc</code> package.</p>
 <p>If we would like to include other modules in our application, say <code>AdditionalModule.roc</code> and <code>AnotherModule.roc</code>, then they can be imported directly in <code>imports</code> like this:  </p>
 <samp><span class="hljs-selector-tag">packages</span> { <span class="attribute">pf</span>: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program, AdditionalModule, AnotherModule]</span>
+<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, AdditionalModule, AnotherModule]</span>
 <span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
 </samp>
 <h2 id="comments"><a href="#comments">Comments</a></h2>
@@ -1301,12 +1297,11 @@ platforms. Let's use the CLI platform in <code>examples/cli/cli-platform/main.ro
 <p>First, let's do a basic "Hello World" using the tutorial app.</p>
 <samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
     packages { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-    imports [pf.Stdout, pf.<span class="kw">Program</span>]
+    imports [pf.Stdout]
     provides [main] to pf
 
 main <span class="op">=</span>
     Stdout.<span class="kw">line</span> <span class="str">"Hello, World!"</span>
-        |&gt; <span class="kw">Program</span>.quick
 </samp>
 <p>The <code>Stdout.line</code> function takes a <code>Str</code> and writes it to <a href="https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout">standard output</a>).
 It has this type:</p>
@@ -1327,12 +1322,10 @@ when it runs (hence the <code>*</code>).</p>
 <p>Let's change <code>main</code> to read a line from <code>stdin</code>, and then print it back out again:</p>
 <samp>app <span class="str">"cli-tutorial"</span>
     packages { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-    imports [pf.Stdout, pf.Stdin, pf.Task, pf.Program]
+    imports [pf.Stdout, pf.Stdin, pf.Task]
     provides [main] to pf
 
-main <span class="op">=</span> Program.quick task
-
-task <span class="op">=</span>
+main <span class="op">=</span>
     Task.await Stdin.line \text <span class="op">-&gt;</span>
         Stdout.line <span class="str">"You just entered: \(text)"</span>
 </samp>
@@ -1364,12 +1357,10 @@ the program isn't doing anything when we start it up:</p>
 <p>This works, but we can make it a little nicer to read. Let's change it to the following:</p>
 <samp>app <span class="str">"cli-tutorial"</span>
     packages { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }, pf.Program]
+    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     provides [main] to pf
 
-main <span class="op">=</span> Program.quick task
-
-task <span class="op">=</span>
+main <span class="op">=</span>
     await (Stdout.line <span class="str">"Type something press Enter:"</span>) \_ <span class="op">-&gt;</span>
         await Stdin.line \text <span class="op">-&gt;</span>
             Stdout.line <span class="str">"You just entered: \(text)"</span>
