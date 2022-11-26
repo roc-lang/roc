@@ -1,5 +1,4 @@
 use bumpalo::Bump;
-use clap::parser::ValuesRef;
 use clap::ArgAction;
 use clap::{Arg, Command};
 use roc_wasm_interp::Action;
@@ -66,7 +65,7 @@ fn main() -> io::Result<()> {
     let is_hex_format = matches.get_flag(FLAG_HEX);
     let start_arg_strings = matches
         .get_many::<String>(ARGS_FOR_APP)
-        .unwrap_or(ValuesRef::default())
+        .unwrap_or_default()
         .map(|s| s.as_str());
 
     // Load the WebAssembly binary file
