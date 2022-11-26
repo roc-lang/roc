@@ -8,6 +8,7 @@ use target_lexicon::Triple;
 use crate::pe::next_multiple_of;
 
 // TODO: Eventually do this from scratch and in memory instead of with ld.
+#[allow(dead_code)]
 pub fn create_dylib_macho_old(
     custom_names: &[String],
     triple: &Triple,
@@ -557,7 +558,7 @@ struct DyldCommand {
 }
 
 impl DyldCommand {
-    fn to_bytes(&self) -> Vec<u8> {
+    fn to_bytes(self) -> Vec<u8> {
         let mut buffer = Vec::new();
 
         buffer.extend(0x80000022u32.to_le_bytes());
@@ -578,8 +579,6 @@ impl DyldCommand {
     }
 }
 
-type vm_prot_t = u32;
-
 #[repr(C)]
 #[derive(Default)]
 struct SegmentCommand64 {
@@ -590,8 +589,8 @@ struct SegmentCommand64 {
     vmsize: u64,
     fileoff: u64,
     filesize: u64,
-    maxprot: vm_prot_t,
-    initprot: vm_prot_t,
+    maxprot: u32,
+    initprot: u32,
     nsects: u32,
     flags: u32,
 }
@@ -798,22 +797,10 @@ fn trivial_symbol_table<'a>(input: impl Iterator<Item = &'a str>) -> Vec<u8> {
     for string in input {
         let list = Nlist64 {
             string_table_offset,
-            n_type: match string {
-                "dyld_stub_binder" => 0x01,
-                _ => 0x0f,
-            },
-            n_sect: match string {
-                "__mh_execute_header" => 0x01,
-                _ => 0x00,
-            },
-            n_desc: match string {
-                "dyld_stub_binder" => 0x100,
-                _ => 0x00,
-            },
-            n_value: match string {
-                "__mh_execute_header" => 0x0000000100000ff1,
-                _ => 0x00,
-            },
+            n_type: 0x0f,
+            n_sect: 0x00,
+            n_desc: 0x00,
+            n_value: 0x00,
         };
 
         buffer.extend(list.to_bytes());
@@ -858,20 +845,24 @@ fn load_dylinker_command(linker: &str) -> Vec<u8> {
     buffer
 }
 
-fn hexstring(input: &str) -> Vec<u8> {
-    assert!(input.len() % 2 == 0);
-
-    input
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|slice| std::str::from_utf8(slice).unwrap())
-        .map(|c| u8::from_str_radix(c, 16).unwrap())
-        .collect()
-}
-
 #[cfg(test)]
 mod test {
     use super::*;
+
+    use object::Object;
+
+    // turn a string of hex symbols into a sequence of bytes
+    #[allow(unused)]
+    fn hexstring(input: &str) -> Vec<u8> {
+        assert!(input.len() % 2 == 0);
+
+        input
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|slice| std::str::from_utf8(slice).unwrap())
+            .map(|c| u8::from_str_radix(c, 16).unwrap())
+            .collect()
+    }
 
     #[test]
     fn header_x86_64() {
@@ -959,7 +950,7 @@ mod test {
     }
 
     #[test]
-    fn running_example() {
+    fn check_exported_symbols() {
         let custom_names = &[
             "roc__mainForHost_1_Decode_DecodeError_caller".to_string(),
             "roc__mainForHost_1_Decode_DecodeError_result_size".to_string(),
@@ -1001,23 +992,19 @@ mod test {
 
         std::fs::write("/tmp/test.dylib", &bytes).unwrap();
 
-        {
-            use object::Object;
+        let object = object::File::parse(bytes.as_slice()).unwrap();
 
-            let object = object::File::parse(bytes.as_slice()).unwrap();
+        let mut triple = Triple::host();
+        triple.binary_format = target_lexicon::BinaryFormat::Elf;
 
-            let mut triple = Triple::host();
-            triple.binary_format = target_lexicon::BinaryFormat::Elf;
+        let mut keys: Vec<_> = object
+            .exports()
+            .unwrap()
+            .iter()
+            .filter_map(|s| std::str::from_utf8(s.name()).ok())
+            .collect();
+        keys.sort_unstable();
 
-            let mut keys: Vec<_> = object
-                .exports()
-                .unwrap()
-                .iter()
-                .filter_map(|s| std::str::from_utf8(s.name()).ok())
-                .collect();
-            keys.sort_unstable();
-
-            assert_eq!(keys.as_slice(), expected.as_slice())
-        }
+        assert_eq!(keys.as_slice(), expected.as_slice())
     }
 }

@@ -221,7 +221,7 @@ impl TrieBuilder {
             });
         } else {
             // This is the tail-call-optimized version of the following:
-            if j - i > i {
+            if j.saturating_sub(i) > i {
                 self.sort_and_build(&mut symbols[i..j - i], node_index, last_pos, pos + 1);
             }
         }
