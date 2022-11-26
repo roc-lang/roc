@@ -1058,23 +1058,25 @@ mod cli_run {
                 r#"
                 ── TYPE MISMATCH ─────────────────────────────── tests/known_bad/TypeError.roc ─
 
-                This 2nd argument to attempt has an unexpected type:
+                Something is off with the body of the main definition:
 
-                15│>      Task.attempt task /result ->
-                16│>          when result is
-                17│>              Ok {} -> Stdout.line "Done!"
-                18│>              # Type mismatch because the File.readUtf8 error case is not handled
-                19│>              Err {} -> Stdout.line "Problem!"
+                6│  main : Str -> Task {} []
+                7│  main = /_ ->
+                8│      "this is a string, not a Task {} [] function like the platform expects."
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                The argument is an anonymous function of type:
+                The body is a string of type:
 
-                    [Err {}a, Ok {}] -> Task {} *
+                    Str
 
-                But attempt needs its 2nd argument to be:
+                But the type annotation on main says it should be:
 
-                    Result {} [FileReadErr Path.Path InternalFile.ReadErr,
-                    FileReadUtf8Err Path.Path [BadUtf8 Utf8ByteProblem Nat]*]* ->
-                    Task {} *
+                    Effect.Effect (Result {} [])
+
+                Tip: Type comparisons between an opaque type are only ever equal if
+                both types are the same opaque type. Did you mean to create an opaque
+                type by wrapping it? If I have an opaque type Age := U32 I can create
+                an instance of this opaque type by doing @Age 23.
 
                 ────────────────────────────────────────────────────────────────────────────────
 
