@@ -16,6 +16,7 @@ jobs:
     env:
       LIBCLANG_PATH: C:\Users\nadp6\Downloads\LLVM-13.0.1-win64\bin
       LLVM_SYS_130_PREFIX: C:\Users\nadp6\Downloads\LLVM-13.0.1-win64
+      RUSTC_WRAPPER: sccache
 
     timeout-minutes: 90
     steps:
