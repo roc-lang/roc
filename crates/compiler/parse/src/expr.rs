@@ -173,6 +173,7 @@ fn loc_term_or_underscore_or_conditional<'a>(
         loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Closure, closure_help(options))),
+        loc!(crash_kw()),
         loc!(underscore_expression()),
         loc!(record_literal_help()),
         loc!(specialize(EExpr::List, list_literal_help())),
@@ -235,6 +236,15 @@ fn underscore_expression<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
             Some(name) => Ok((MadeProgress, Expr::Underscore(name), final_state)),
             None => Ok((MadeProgress, Expr::Underscore(""), final_state)),
         }
+    }
+}
+
+fn crash_kw<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, _, next_state) = crate::parser::keyword_e(crate::keyword::CRASH, EExpr::Crash)
+            .parse(arena, state, min_indent)?;
+
+        Ok((MadeProgress, Expr::Crash, next_state))
     }
 }
 
@@ -1886,7 +1896,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::MalformedClosure
         | Expr::PrecedenceConflict { .. }
         | Expr::RecordUpdate { .. }
-        | Expr::UnaryOp(_, _) => Err(()),
+        | Expr::UnaryOp(_, _)
+        | Expr::Crash => Err(()),
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(*string)),
         Expr::SingleQuote(string) => Ok(Pattern::SingleQuote(string)),

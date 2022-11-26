@@ -198,7 +198,9 @@ fn generate_dynamic_lib(target: &Triple, stub_dll_symbols: &[String], stub_lib_p
         let bytes = crate::generate_dylib::generate(target, stub_dll_symbols)
             .unwrap_or_else(|e| internal_error!("{e}"));
 
-        std::fs::write(stub_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{e}"));
+        if let Err(e) = std::fs::write(stub_lib_path, &bytes) {
+            internal_error!("failed to write stub lib to {:?}: {e}", stub_lib_path)
+        }
 
         if let target_lexicon::OperatingSystem::Windows = target.operating_system {
             generate_import_library(stub_lib_path, stub_dll_symbols);
@@ -212,8 +214,9 @@ fn generate_import_library(stub_lib_path: &Path, custom_names: &[String]) {
     let mut def_path = stub_lib_path.to_owned();
     def_path.set_extension("def");
 
-    std::fs::write(def_path, def_file_content.as_bytes())
-        .unwrap_or_else(|e| internal_error!("{e}"));
+    if let Err(e) = std::fs::write(&def_path, def_file_content.as_bytes()) {
+        internal_error!("failed to write import library to {:?}: {e}", def_path)
+    }
 
     let mut def_filename = PathBuf::from(generate_dylib::APP_DLL);
     def_filename.set_extension("def");
@@ -499,7 +502,7 @@ pub(crate) fn open_mmap(path: &Path) -> Mmap {
     let in_file = std::fs::OpenOptions::new()
         .read(true)
         .open(path)
-        .unwrap_or_else(|e| internal_error!("{e}"));
+        .unwrap_or_else(|e| internal_error!("failed to open file {path:?}: {e}"));
 
     unsafe { Mmap::map(&in_file).unwrap_or_else(|e| internal_error!("{e}")) }
 }
@@ -510,7 +513,7 @@ pub(crate) fn open_mmap_mut(path: &Path, length: usize) -> MmapMut {
         .write(true)
         .create(true)
         .open(path)
-        .unwrap_or_else(|e| internal_error!("{e}"));
+        .unwrap_or_else(|e| internal_error!("failed to create or open file {path:?}: {e}"));
     out_file
         .set_len(length as u64)
         .unwrap_or_else(|e| internal_error!("{e}"));

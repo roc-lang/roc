@@ -376,6 +376,10 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
                 *called_via,
             )
         }
+        Crash { msg, ret_var } => Crash {
+            msg: Box::new(msg.map(|m| go_help!(m))),
+            ret_var: sub!(*ret_var),
+        },
         RunLowLevel { op, args, ret_var } => RunLowLevel {
             op: *op,
             args: args

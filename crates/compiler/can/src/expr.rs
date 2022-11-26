@@ -166,6 +166,12 @@ pub enum Expr {
     /// Empty record constant
     EmptyRecord,
 
+    /// The "crash" keyword
+    Crash {
+        msg: Box<Loc<Expr>>,
+        ret_var: Variable,
+    },
+
     /// Look up exactly one field on a record, e.g. (expr).foo.
     Access {
         record_var: Variable,
@@ -309,6 +315,7 @@ impl Expr {
             }
             Self::Expect { .. } => Category::Expect,
             Self::ExpectFx { .. } => Category::Expect,
+            Self::Crash { .. } => Category::Crash,
 
             Self::Dbg { .. } => Category::Expect,
 
@@ -784,6 +791,47 @@ pub fn canonicalize_expr<'a>(
                         }
                     }
                 }
+            } else if let ast::Expr::Crash = loc_fn.value {
+                // We treat crash specially, since crashing must be applied with one argument.
+
+                debug_assert!(!args.is_empty());
+
+                let mut args = Vec::new();
+                let mut output = Output::default();
+
+                for loc_arg in loc_args.iter() {
+                    let (arg_expr, arg_out) =
+                        canonicalize_expr(env, var_store, scope, loc_arg.region, &loc_arg.value);
+
+                    args.push(arg_expr);
+                    output.references.union_mut(&arg_out.references);
+                }
+
+                let crash = if args.len() > 1 {
+                    let args_region = Region::span_across(
+                        &loc_args.first().unwrap().region,
+                        &loc_args.last().unwrap().region,
+                    );
+                    env.problem(Problem::OverAppliedCrash {
+                        region: args_region,
+                    });
+                    // Still crash, just with our own message, and drop the references.
+                    Crash {
+                        msg: Box::new(Loc::at(
+                            region,
+                            Expr::Str(String::from("hit a crash!").into_boxed_str()),
+                        )),
+                        ret_var: var_store.fresh(),
+                    }
+                } else {
+                    let msg = args.pop().unwrap();
+                    Crash {
+                        msg: Box::new(msg),
+                        ret_var: var_store.fresh(),
+                    }
+                };
+
+                (crash, output)
             } else {
                 // Canonicalize the function expression and its arguments
                 let (fn_expr, fn_expr_output) =
@@ -873,6 +921,22 @@ pub fn canonicalize_expr<'a>(
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
+        }
+        ast::Expr::Crash => {
+            // Naked crashes aren't allowed; we'll admit this with our own message, but yield an
+            // error.
+            env.problem(Problem::UnappliedCrash { region });
+
+            (
+                Crash {
+                    msg: Box::new(Loc::at(
+                        region,
+                        Expr::Str(String::from("hit a crash!").into_boxed_str()),
+                    )),
+                    ret_var: var_store.fresh(),
+                },
+                Output::default(),
+            )
         }
         ast::Expr::Defs(loc_defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
@@ -1065,12 +1129,20 @@ pub fn canonicalize_expr<'a>(
             output.union(output1);
             output.union(output2);
 
+            // the symbol is used to bind the condition `x = condition`, and identify this `dbg`.
+            // That would cause issues if we dbg a variable, like `dbg y`, because in the IR we
+            // cannot alias variables. Hence, we make the dbg use that same variable `y`
+            let symbol = match &loc_condition.value {
+                Expr::Var(symbol, _) => *symbol,
+                _ => scope.gen_unique_symbol(),
+            };
+
             (
                 Dbg {
                     loc_condition: Box::new(loc_condition),
                     loc_continuation: Box::new(loc_continuation),
                     variable: var_store.fresh(),
-                    symbol: scope.gen_unique_symbol(),
+                    symbol,
                 },
                 output,
             )
@@ -1720,7 +1792,8 @@ pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
         | other @ RunLowLevel { .. }
         | other @ TypedHole { .. }
         | other @ ForeignCall { .. }
-        | other @ OpaqueWrapFunction(_) => other,
+        | other @ OpaqueWrapFunction(_)
+        | other @ Crash { .. } => other,
 
         List {
             elem_var,
@@ -2818,6 +2891,7 @@ fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
                 // Intentionally ignore the lookups in the nested `expect` condition itself,
                 // because they couldn't possibly influence the outcome of this `expect`!
             }
+            Expr::Crash { msg, .. } => stack.push(&msg.value),
             Expr::Num(_, _, _, _)
             | Expr::Float(_, _, _, _, _)
             | Expr::Int(_, _, _, _, _)

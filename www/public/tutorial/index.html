@@ -36,6 +36,7 @@
             <li><a href="#defining-functions">Defining Functions</a></li>
             <li><a href="#if-then-else">if-then-else</a></li>
             <li><a href="#records">Records</a></li>
+            <li><a href="#debugging">Debugging</a></li>
             <li><a href="#tags">Tags &amp; Pattern Matching</a></li>
             <li><a href="#booleans">Booleans</a></li>
             <li><a href="#lists">Lists</a></li>
@@ -174,13 +175,17 @@ to use them for more than that.</p>
 <p>Let's move out of the REPL and create our first Roc application!</p>
 <p>Make a file named <code>main.roc</code> and put this in it:</p>
 <samp><span class="kw">app</span> <span class="str">"hello"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://roc-lang.org/basic-cli/1.0.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz.rp1"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> <span class="brace">}</span>
     <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
     <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 
 main <span class="kw">=</span>
     Stdout.line <span class="str">"I'm a Roc application!"</span>
 </samp>
+<p>In order to get access to this <code>examples/cli/cli-platform/main.roc</code> file, you'll need
+to download the <a href="https://github.com/roc-lang/roc">Roc source code repository</a>, which
+contains the <code>examples</code> directory at the beginning of that string. Make sure you <code>cd</code>
+into that directory once you've downloaded it!</p>
 <p>Try running this with:</p>
 <samp>roc dev</samp>
 <p>You should see this printed to the terminal:</p>
@@ -197,7 +202,6 @@ total <span class="kw">=</span> Num.toStr <span class="paren">(</span>birds <spa
 
 main <span class="kw">=</span>
     Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
-    <span class="kw">|&gt;</span> Program.quick
 </samp>
 <p>Now if you run <code>roc dev</code>, you should see this:</p>
 <samp>There are 5 animals.</samp>
@@ -231,7 +235,6 @@ total <span class="kw">=</span> Num.toStr <span class="paren">(</span>birds <spa
 
 main <span class="kw">=</span>
     Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
-    <span class="kw">|&gt;</span> Program.quick</span>
 
 addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span>
     Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span>
@@ -294,6 +297,34 @@ the <code>else</code> branch contains another <code>if</code>/<code>else</code>.
 on the same line, although the convention is to use the original version's style.
 </p>
 </section>
+<section><h2 id="debugging"><a href="#debugging">Debugging</a></h2>
+<p><a href="https://en.wikipedia.org/wiki/Debugging#Techniques">Print debugging</a> is the most
+common debugging technique in the history of programming, and Roc has a <code>dbg</code>
+keyword to facilitate it. Here's an example of how to use <code>dbg</code>:</p>
+<samp>pluralize <span class="op">=</span> <span class="kw">\</span>singular, plural, count <span class="op">-&gt;</span>
+    <span class="kw">dbg</span> count
+
+    <span class="kw">if</span> count <span class="op">==</span> <span class="number">1</span> then
+        singular
+    <span class="kw">else</span>
+        plural
+</samp>
+<p>Whenever this <code>dbg</code> line of code is reached, the value of <code>count</code>
+will be printed to <a href="https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)">stderr</a>,
+along with the source code file and line number where the <code>dbg</code> itself was written:</p>
+<samp><span class="kw">[pluralize.roc 6:8]</span> 5
+</samp>
+<p>You can give <code>dbg</code> any expression you like, for example:</p>
+<samp><span class="kw">dbg</span> Str.concat singular plural</samp>
+<p>An easy way to print multiple values at a time is to wrap them in a tag, for example
+a concise tag like <code>T</code>:
+</p>
+<samp><span class="kw">dbg</span> T "the value of `count` is:" count</samp>
+</section>
+<p>Note that <code>dbg</code> is a debugging tool, and is only available when running
+your program via a <code>roc</code> subcommand (for example using <code>roc dev</code>,
+<code>roc run</code>, or <code>roc test</code>). When you build a standalone application with
+<code>roc build</code>, any uses of <code>dbg</code> won't be included!</p>
 <section><h2 id="records"><a href="#records">Records</a></h2>
 <p>Currently our <code>addAndStringify</code> function takes two arguments. We can instead make
 it take one argument like so:</p>
@@ -1047,21 +1078,36 @@ compatible with fractions. For example:</p>
 and also <code>Num.cos 1</code> and have them all work as expected; the number literal <code>1</code> has the type
 <code>Num *</code>, which is compatible with the more constrained types <code>Int</code> and <code>Frac</code>. For the same reason,
 you can pass number literals to functions expecting even more constrained types, like <code>I32</code> or <code>F64</code>.</p>
-<h3 id="typed-number-literals"><a href="#typed-number-literals">Typed Number Literals</a></h3>
-<p>When writing a number literal in Roc you can specify the numeric type as a suffix of the literal.
-<code>1u8</code> specifies <code>1</code> as an unsigned 8-bit integer, <code>5i32</code> specifies <code>5</code> as a signed 32-bit integer, etc.
-The full list of possible suffixes includes:
-<code>i8</code>, <code>u8</code>, <code>i16</code>, <code>u16</code>, <code>i32</code>, <code>u32</code>, <code>i64</code>, <code>u64</code>, <code>i128</code>, <code>u128</code>, <code>nat</code>, <code>f32</code>, <code>f64</code>, <code>dec</code></p>
-<h3 id="hexadecimal-integer-literals"><a href="#hexadecimal-integer-literals">Hexadecimal Integer Literals</a></h3>
-<p>Integer literals can be written in hexadecimal form by prefixing with <code>0x</code> followed by hexadecimal characters.
-<code>0xFE</code> evaluates to decimal <code>254</code>
-The integer type can be specified as a suffix to the hexadecimal literal,
-so <code>0xC8u8</code> evaluates to decimal <code>200</code> as an unsigned 8-bit integer.</p>
-<h3 id="binary-integer-literals"><a href="#binary-integer-literals">Binary Integer Literals</a></h3>
-<p>Integer literals can be written in binary form by prefixing with <code>0b</code> followed by the 1's and 0's representing
-each bit. <code>0b0000_1000</code> evaluates to decimal <code>8</code>
-The integer type can be specified as a suffix to the binary literal,
-so <code>0b0100u8</code> evaluates to decimal <code>4</code> as an unsigned 8-bit integer.</p>
+<h3 id="number-literals"><a href="#number-literals">Number Literals</a></h3>
+<p>By default, a number literal with no decimal point has the type <code>Num *</code>—that is,
+we know it's "a number" but nothing more specific. (Number literals with decimal points have the type <code>Frac *</code> instead.)
+</p>
+<p>You can give a number literal a more specific type by adding the type you want as a lowercase suffix.
+For example, <code>1u8</code> specifies <code>1</code> with the type <code>U8</code>,
+and <code>5dec</code> specifies <code>5</code> with the type <code>Dec</code>.</p>
+<p>The full list of possible suffixes includes:</p>
+    <code>u8</code>,
+    <code>i8</code>,
+    <code>u16</code>,
+    <code>i16</code>,
+    <code>u32</code>,
+    <code>i32</code>,
+    <code>u64</code>,
+    <code>i64</code>,
+    <code>u128</code>,
+    <code>i128</code>,
+    <code>nat</code>,
+    <code>f32</code>,
+    <code>f64</code>,
+    <code>dec</code>
+</p>
+<p>Integer literals can be written in <a href="https://en.wikipedia.org/wiki/Hexadecimal">hexadecimal</a>
+form by prefixing with <code>0x</code> followed by hexadecimal characters
+(<code>a</code> - <code>f</code> in addition to <code>0</code> - <code>9</code>)</a>.
+For example, writing <code>0xfe</code> is the same as writing <code>254</code>. Similarly,
+the prefix <code>0b</code> specifies binary integers. Writing <code>0b0000_1000</code>
+is the same as writing <code>8</code>.
+</p>
 <section><h2 id="crashing"><a href="#crashing">Crashing</a></h2>
 <p>Ideally, Roc programs would never crash. However, there are some situations where they may. For example:</p>
 <ol>
@@ -1138,7 +1184,7 @@ expect pluralize <span class="str">"cactus"</span> <span class="str">"cacti"</sp
 </samp>
 <p>If you put this in a file named <code>main.roc</code> and run <code>roc test</code>, Roc will execute the two <code>expect</code>
 expressions (that is, the two <code>pluralize</code> calls) and report any that returned <code>false</code>.</p>
-<h3 id="inline-expects"><a href="#inline-expects">Inline <code>expect</code>s</a></h3>
+<h3 id="inline-expects"><a href="#inline-expects">Inline Expectations</a></h3>
 <p>For example:</p>
 <samp>    <span class="kw">if</span> count <span class="op">==</span> <span class="number">1</span> then
         <span class="str">"<span class="hljs-subst">\(countStr)</span> <span class="hljs-subst">\(singular)</span>"</span>
@@ -1159,19 +1205,6 @@ control flow. In fact, if you do <code>roc build</code>, they are not even inclu
 <p>If you try this code out, you may note that when an <code>expect</code> fails (either a top-level or inline
 one), the failure message includes the values of any named variables - such as <code>count</code> here.
 This leads to a useful technique, which we will see next.</p>
-<h3 id="quick-debugging-with-inline-expect-s"><a href="#quick-debugging-with-inline-expect-s">Quick debugging with inline <code>expect</code>s</a></h3>
-<p>An age-old debugging technique is printing out a variable to the terminal. In Roc you can use
-<code>expect</code> to do this. Here's an example:</p>
-<samp>\arg <span class="op">-&gt;</span>
-    x <span class="op">=</span> arg - <span class="number">1</span>
-
-    # Reports the value <span class="kw">of</span> `x` without stopping the program
-    expect x != x
-
-    Num.abs x
-</samp>
-<p>The failure output will include both the value of <code>x</code> as well as the comment immediately above it,
-which lets you use that comment for extra context in your output.</p>
 <h2 id="interface-modules"><a href="#interface-modules">Interface modules</a></h2>
 <p>[This part of the tutorial has not been written yet. Coming soon!]</p>
 <h2 id="builtin-modules"><a href="#builtin-modules">Builtin modules</a></h2>
@@ -1199,7 +1232,7 @@ Roc compiler. That's why they're called "builtins!"</p>
 <p>Let's take a closer look at the part of <code>main.roc</code> above the <code>main</code> def:</p>
 <samp><span class="hljs-selector-tag">app</span> "<span class="hljs-selector-tag">hello</span>"
     <span class="hljs-selector-tag">packages</span> { <span class="attribute">pf</span>: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-    <span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program]</span>
+    <span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout]</span>
     <span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
 </samp>
 <p>This is known as a <em>module header</em>. Every <code>.roc</code> file is a <em>module</em>, and there
@@ -1212,7 +1245,7 @@ named <code>hello</code> (or <code>hello.exe</code> on Windows) and run it. You 
 without running it by running <code>roc build</code>.</p>
 <p>The remaining lines all involve the <em>platform</em> this application is built on:</p>
 <samp><span class="hljs-selector-tag">packages</span> { <span class="attribute">pf</span>: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program]</span>
+<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout]</span>
 <span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
 </samp>
 <p>The <code>packages { pf: "examples/cli/cli-platform/main.roc" }</code> part says two things:</p>
@@ -1220,19 +1253,17 @@ without running it by running <code>roc build</code>.</p>
 <li>We're going to be using a <em>package</em> (that is, a collection of modules) called <code>"examples/cli/cli-platform/main.roc"</code></li>
 <li>We're going to name that package <code>pf</code> so we can refer to it more concisely in the future.</li>
 </ul>
-<p>The <code>imports [pf.Stdout, pf.Program]</code> line says that we want to import the <code>Stdout</code> and <code>Program</code> modules
-from the <code>pf</code> package, and make them available in the current module.</p>
+<p>The <code>imports [pf.Stdout]</code> line says that we want to import the <code>Stdout</code> module
+from the <code>pf</code> package, and make it available in the current module.</p>
 <p>This import has a direct interaction with our definition of <code>main</code>. Let's look
 at that again:</p>
-<samp><span class="attr">main</span> <span class="op">=</span> Stdout.line <span class="str">"I'm a Roc application!"</span> |&gt; Program.quick
+<samp><span class="attr">main</span> <span class="op">=</span> Stdout.line <span class="str">"I'm a Roc application!"</span>
 </samp>
 <p>Here, <code>main</code> is calling a function called <code>Stdout.line</code>. More specifically, it's
 calling a function named <code>line</code> which is exposed by a module named
 <code>Stdout</code>.
-Then the result of that function call is passed to the <code>quick</code> function of the <code>Program</code> module,
-which effectively makes it a simple Roc program.</p>
-<p>When we write <code>imports [pf.Stdout, pf.Program]</code>, it specifies that the <code>Stdout</code>
-and <code>Program</code> modules come from the <code>pf</code> package.</p>
+<p>When we write <code>imports [pf.Stdout]</code>, it specifies that the <code>Stdout</code>
+module comes from the <code>pf</code> package.</p>
 <p>Since <code>pf</code> was the name we chose for the <code>examples/cli/cli-platform/main.roc</code>
 package (when we wrote <code>packages { pf: "examples/cli/cli-platform/main.roc" }</code>),
 this <code>imports</code> line tells the Roc compiler that when we call <code>Stdout.line</code>, it
@@ -1240,7 +1271,7 @@ should look for that <code>line</code> function in the <code>Stdout</code> modul
 <code>examples/cli/cli-platform/main.roc</code> package.</p>
 <p>If we would like to include other modules in our application, say <code>AdditionalModule.roc</code> and <code>AnotherModule.roc</code>, then they can be imported directly in <code>imports</code> like this:  </p>
 <samp><span class="hljs-selector-tag">packages</span> { <span class="attribute">pf</span>: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program, AdditionalModule, AnotherModule]</span>
+<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, AdditionalModule, AnotherModule]</span>
 <span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
 </samp>
 <h2 id="comments"><a href="#comments">Comments</a></h2>
@@ -1270,12 +1301,11 @@ platforms. Let's use the CLI platform in <code>examples/cli/cli-platform/main.ro
 <p>First, let's do a basic "Hello World" using the tutorial app.</p>
 <samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
     packages { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-    imports [pf.Stdout, pf.<span class="kw">Program</span>]
+    imports [pf.Stdout]
     provides [main] to pf
 
 main <span class="op">=</span>
     Stdout.<span class="kw">line</span> <span class="str">"Hello, World!"</span>
-        |&gt; <span class="kw">Program</span>.quick
 </samp>
 <p>The <code>Stdout.line</code> function takes a <code>Str</code> and writes it to <a href="https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout">standard output</a>).
 It has this type:</p>
@@ -1296,12 +1326,10 @@ when it runs (hence the <code>*</code>).</p>
 <p>Let's change <code>main</code> to read a line from <code>stdin</code>, and then print it back out again:</p>
 <samp>app <span class="str">"cli-tutorial"</span>
     packages { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-    imports [pf.Stdout, pf.Stdin, pf.Task, pf.Program]
+    imports [pf.Stdout, pf.Stdin, pf.Task]
     provides [main] to pf
 
-main <span class="op">=</span> Program.quick task
-
-task <span class="op">=</span>
+main <span class="op">=</span>
     Task.await Stdin.line \text <span class="op">-&gt;</span>
         Stdout.line <span class="str">"You just entered: \(text)"</span>
 </samp>
@@ -1333,12 +1361,10 @@ the program isn't doing anything when we start it up:</p>
 <p>This works, but we can make it a little nicer to read. Let's change it to the following:</p>
 <samp>app <span class="str">"cli-tutorial"</span>
     packages { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }, pf.Program]
+    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     provides [main] to pf
 
-main <span class="op">=</span> Program.quick task
-
-task <span class="op">=</span>
+main <span class="op">=</span>
     await (Stdout.line <span class="str">"Type something press Enter:"</span>) \_ <span class="op">-&gt;</span>
         await Stdin.line \text <span class="op">-&gt;</span>
             Stdout.line <span class="str">"You just entered: \(text)"</span>

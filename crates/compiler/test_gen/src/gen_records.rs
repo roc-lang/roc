@@ -1,11 +1,11 @@
 #[cfg(feature = "gen-llvm")]
-use crate::helpers::llvm::{assert_evals_to, expect_runtime_error_panic};
+use crate::helpers::llvm::assert_evals_to;
 
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to;
 
 #[cfg(feature = "gen-wasm")]
-use crate::helpers::wasm::{assert_evals_to, expect_runtime_error_panic};
+use crate::helpers::wasm::assert_evals_to;
 
 // use crate::assert_wasm_evals_to as assert_evals_to;
 use indoc::indoc;
@@ -1019,8 +1019,9 @@ fn different_proc_types_specialized_to_same_layout() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 #[should_panic(expected = r#"Roc failed with message: "Can't create record with improper layout""#)]
 fn call_with_bad_record_runtime_error() {
-    expect_runtime_error_panic!(indoc!(
-        r#"
+    assert_evals_to!(
+        indoc!(
+            r#"
             app "test" provides [main] to "./platform"
 
             main =
@@ -1028,7 +1029,12 @@ fn call_with_bad_record_runtime_error() {
                 get = \{a} -> a
                 get {b: ""}
             "#
-    ))
+        ),
+        true,
+        bool,
+        |x| x,
+        true // ignore type errors
+    )
 }
 
 #[test]

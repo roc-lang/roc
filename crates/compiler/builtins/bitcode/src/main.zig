@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const math = std.math;
 const utils = @import("utils.zig");
 const expect = @import("expect.zig");
+const panic_utils = @import("panic.zig");
 
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
@@ -166,7 +167,7 @@ comptime {
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
 
-    @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
+    @export(panic_utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
 
     if (builtin.target.cpu.arch != .wasm32) {
         exportUtilsFn(expect.expectFailedStartSharedBuffer, "expect_failed_start_shared_buffer");

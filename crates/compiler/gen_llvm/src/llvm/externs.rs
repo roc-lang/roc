@@ -1,5 +1,5 @@
 use crate::llvm::bitcode::call_void_bitcode_fn;
-use crate::llvm::build::{add_func, get_panic_msg_ptr, C_CALL_CONV};
+use crate::llvm::build::{add_func, get_panic_msg_ptr, get_panic_tag_ptr, C_CALL_CONV};
 use crate::llvm::build::{CCReturn, Env, FunctionSpec};
 use inkwell::module::Linkage;
 use inkwell::types::BasicType;
@@ -193,10 +193,9 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
         // already been defined by the builtins, which rely on it.
         let fn_val = module.get_function("roc_panic").unwrap();
         let mut params = fn_val.get_param_iter();
-        let ptr_arg = params.next().unwrap();
+        let roc_str_arg = params.next().unwrap();
 
-        // in debug mode, this is assumed to be NullTerminatedString
-        let _tag_id_arg = params.next().unwrap();
+        let tag_id_arg = params.next().unwrap();
 
         debug_assert!(params.next().is_none());
 
@@ -210,8 +209,38 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
 
         builder.position_at_end(entry);
 
-        // write our error message pointer
-        env.builder.build_store(get_panic_msg_ptr(env), ptr_arg);
+        // write our error message to the RocStr pointer
+        {
+            let loaded_roc_str = match env.target_info.ptr_width() {
+                roc_target::PtrWidth::Bytes4 => roc_str_arg,
+                // On 64-bit we pass RocStrs by reference internally
+                roc_target::PtrWidth::Bytes8 => {
+                    builder.build_load(roc_str_arg.into_pointer_value(), "load_roc_str")
+                }
+            };
+
+            env.builder
+                .build_store(get_panic_msg_ptr(env), loaded_roc_str);
+        }
+
+        // write the panic tag.
+        // increment by 1, since the tag we'll get from the Roc program is 0-based,
+        // but we use 0 for marking a successful call.
+        {
+            let cast_tag_id = builder.build_int_z_extend(
+                tag_id_arg.into_int_value(),
+                env.context.i64_type(),
+                "zext_panic_tag",
+            );
+
+            let inc_tag_id = builder.build_int_add(
+                cast_tag_id,
+                env.context.i64_type().const_int(1, false),
+                "inc_panic_tag",
+            );
+
+            env.builder.build_store(get_panic_tag_ptr(env), inc_tag_id);
+        }
 
         build_longjmp_call(env);
 

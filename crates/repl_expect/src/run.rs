@@ -235,7 +235,7 @@ fn run_expect_pure<'a, W: std::io::Write>(
 
     let sequence = ExpectSequence::new(shared_memory.ptr.cast());
 
-    let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
+    let result: Result<(), (String, _)> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
 
     let shared_memory_ptr: *const u8 = shared_memory.ptr.cast();
 
@@ -249,7 +249,7 @@ fn run_expect_pure<'a, W: std::io::Write>(
 
         let renderer = Renderer::new(arena, interns, render_target, module_id, filename, &source);
 
-        if let Err(roc_panic_message) = result {
+        if let Err((roc_panic_message, _roc_panic_tag)) = result {
             renderer.render_panic(writer, &roc_panic_message, expect.region)?;
         } else {
             let mut offset = ExpectSequence::START_OFFSET;
@@ -305,9 +305,10 @@ fn run_expect_fx<'a, W: std::io::Write>(
 
             child_memory.set_shared_buffer(lib);
 
-            let result: Result<(), String> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
+            let result: Result<(), (String, _)> =
+                try_run_jit_function!(lib, expect.name, (), |v: ()| v);
 
-            if let Err(msg) = result {
+            if let Err((msg, _)) = result {
                 panic!("roc panic {}", msg);
             }
 
@@ -499,7 +500,7 @@ fn render_dbg_failure<'a>(
     let data = expectations.get_mut(&module_id).unwrap();
 
     let current = match data.dbgs.get(&dbg_symbol) {
-        None => panic!("region {failure_region:?} not in list of expects"),
+        None => panic!("region {failure_region:?} not in list of dbgs"),
         Some(current) => current,
     };
     let failure_region = current.region;

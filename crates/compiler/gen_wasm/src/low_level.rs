@@ -1362,7 +1362,7 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.i32_const(i32::MIN);
                         backend.code_builder.i32_eq();
                         backend.code_builder.if_();
-                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.stmt_internal_error(PANIC_MSG);
                         backend.code_builder.end();
 
                         // x
@@ -1388,7 +1388,7 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.i64_const(i64::MIN);
                         backend.code_builder.i64_eq();
                         backend.code_builder.if_();
-                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.stmt_internal_error(PANIC_MSG);
                         backend.code_builder.end();
 
                         // x
@@ -1422,7 +1422,7 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.i32_const(i32::MIN);
                         backend.code_builder.i32_eq();
                         backend.code_builder.if_();
-                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.stmt_internal_error(PANIC_MSG);
                         backend.code_builder.end();
 
                         backend.code_builder.i32_const(0);
@@ -1433,7 +1433,7 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.i64_const(i64::MIN);
                         backend.code_builder.i64_eq();
                         backend.code_builder.if_();
-                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.stmt_internal_error(PANIC_MSG);
                         backend.code_builder.end();
 
                         backend.code_builder.i64_const(0);

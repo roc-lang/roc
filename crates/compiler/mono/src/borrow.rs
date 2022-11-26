@@ -321,7 +321,7 @@ impl<'a> ParamMap<'a> {
                 }
                 Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
-                Ret(_) | Jump(_, _) | RuntimeError(_) => {
+                Ret(_) | Jump(_, _) | Crash(..) => {
                     // these are terminal, do nothing
                 }
             }
@@ -827,7 +827,12 @@ impl<'a> BorrowInfState<'a> {
 
             Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
-            Ret(_) | RuntimeError(_) => {
+            Crash(msg, _) => {
+                // Crash is a foreign call, so we must own the argument.
+                self.own_var(*msg);
+            }
+
+            Ret(_) => {
                 // these are terminal, do nothing
             }
         }
@@ -1001,7 +1006,7 @@ fn call_info_stmt<'a>(arena: &'a Bump, stmt: &Stmt<'a>, info: &mut CallInfo<'a>)
 
             Refcounting(_, _) => unreachable!("these have not been introduced yet"),
 
-            Ret(_) | Jump(_, _) | RuntimeError(_) => {
+            Ret(_) | Jump(_, _) | Crash(..) => {
                 // these are terminal, do nothing
             }
         }
