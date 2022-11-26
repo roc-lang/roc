@@ -18,13 +18,23 @@ pub enum Action {
 
 #[derive(Debug)]
 pub struct ExecutionState<'a> {
+    /// Contents of the WebAssembly instance's memory
     pub memory: Vec<'a, u8>,
+    /// Metadata for every currently-active function call
     pub call_stack: CallStack<'a>,
+    /// The WebAssembly stack machine's stack of values
     pub value_stack: ValueStack<'a>,
+    /// Values of any global variables
     pub globals: Vec<'a, Value>,
+    /// Index in the code section of the current instruction
     pub program_counter: usize,
+    /// One entry per nested block. For loops, stores the address of the first instruction.
     block_loop_addrs: Vec<'a, Option<u32>>,
+    /// Outermost block depth for the currently-executing function.
+    outermost_block: u32,
+    /// Signature indices (in the TypeSection) of all imported (non-WebAssembly) functions
     import_signatures: Vec<'a, u32>,
+    /// temporary storage for output using the --debug option
     debug_string: Option<String>,
 }
 
@@ -41,6 +51,7 @@ impl<'a> ExecutionState<'a> {
             globals: Vec::from_iter_in(globals, arena),
             program_counter,
             block_loop_addrs: Vec::new_in(arena),
+            outermost_block: 0,
             import_signatures: Vec::new_in(arena),
             debug_string: Some(String::new()),
         }
@@ -121,6 +132,7 @@ impl<'a> ExecutionState<'a> {
         let mut call_stack = CallStack::new(arena);
         call_stack.push_frame(
             0, // return_addr
+            0, // return_block_depth
             arg_type_bytes,
             &mut value_stack,
             &module.code.bytes,
@@ -140,6 +152,7 @@ impl<'a> ExecutionState<'a> {
             globals,
             program_counter,
             block_loop_addrs: Vec::new_in(arena),
+            outermost_block: 0,
             import_signatures,
             debug_string,
         })
@@ -154,12 +167,14 @@ impl<'a> ExecutionState<'a> {
     }
 
     fn do_return(&mut self) -> Action {
-        if let Some(return_addr) = self.call_stack.pop_frame() {
+        if let Some((return_addr, block_depth)) = self.call_stack.pop_frame() {
             if self.call_stack.is_empty() {
                 // We just popped the stack frame for the entry function. Terminate the program.
                 Action::Break
             } else {
+                dbg!(return_addr, block_depth);
                 self.program_counter = return_addr as usize;
+                self.outermost_block = block_depth;
                 Action::Continue
             }
         } else {
@@ -298,7 +313,7 @@ impl<'a> ExecutionState<'a> {
                 self.do_break(0, module);
             }
             END => {
-                if self.block_loop_addrs.is_empty() {
+                if self.block_loop_addrs.len() == self.outermost_block as usize {
                     // implicit RETURN at end of function
                     action = self.do_return();
                 } else {
@@ -347,10 +362,14 @@ impl<'a> ExecutionState<'a> {
                 let return_addr = self.program_counter as u32;
                 self.program_counter = module.code.function_offsets[index] as usize;
 
+                let return_block_depth = self.outermost_block;
+                self.outermost_block = self.block_loop_addrs.len() as u32;
+
                 let _function_byte_length =
                     u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
                 self.call_stack.push_frame(
                     return_addr,
+                    return_block_depth,
                     arg_type_bytes,
                     &mut self.value_stack,
                     &module.code.bytes,
