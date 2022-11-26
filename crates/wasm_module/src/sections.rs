@@ -258,10 +258,11 @@ impl<'a> TypeSection<'a> {
         self.bytes.is_empty()
     }
 
-    pub fn look_up_arg_count(&self, sig_index: u32) -> u32 {
+    pub fn look_up_arg_type_bytes(&self, sig_index: u32) -> &[u8] {
         let mut offset = self.offsets[sig_index as usize];
         offset += 1; // separator
-        u32::parse((), &self.bytes, &mut offset).unwrap()
+        let count = u32::parse((), &self.bytes, &mut offset).unwrap() as usize;
+        &self.bytes[offset..][..count]
     }
 }
 

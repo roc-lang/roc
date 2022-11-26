@@ -5,8 +5,8 @@ use std::iter;
 use roc_wasm_module::opcodes::OpCode;
 use roc_wasm_module::parse::{Parse, SkipBytes};
 use roc_wasm_module::sections::{ImportDesc, MemorySection};
-use roc_wasm_module::Value;
 use roc_wasm_module::{ExportType, WasmModule};
+use roc_wasm_module::{Value, ValueType};
 
 use crate::call_stack::CallStack;
 use crate::value_stack::ValueStack;
@@ -46,12 +46,16 @@ impl<'a> ExecutionState<'a> {
         }
     }
 
-    pub fn for_module(
+    pub fn for_module<'arg, A>(
         arena: &'a Bump,
         module: &WasmModule<'a>,
         start_fn_name: &str,
         is_debug_mode: bool,
-    ) -> Result<Self, std::string::String> {
+        arg_strings: A,
+    ) -> Result<Self, std::string::String>
+    where
+        A: IntoIterator<Item = &'arg str>,
+    {
         let mem_bytes = module.memory.min_bytes().map_err(|e| {
             format!(
                 "Error parsing Memory section at offset {:#x}:\n{}",
@@ -73,9 +77,9 @@ impl<'a> ExecutionState<'a> {
             Vec::from_iter_in(sig_iter, arena)
         };
 
-        let mut program_counter = {
+        let start_fn_index = {
             let mut export_iter = module.export.exports.iter();
-            let start_fn_index = export_iter
+            export_iter
                 .find_map(|ex| {
                     if ex.ty == ExportType::Func && ex.name == start_fn_name {
                         Some(ex.index)
@@ -86,7 +90,16 @@ impl<'a> ExecutionState<'a> {
                 .ok_or(format!(
                     "I couldn't find an exported function '{}' in this WebAssembly module",
                     start_fn_name
-                ))?;
+                ))?
+        };
+
+        let arg_type_bytes = {
+            let internal_fn_index = start_fn_index as usize - import_signatures.len();
+            let signature_index = module.function.signatures[internal_fn_index];
+            module.types.look_up_arg_type_bytes(signature_index)
+        };
+
+        let mut program_counter = {
             let internal_fn_index = start_fn_index as usize - module.import.function_count();
             let mut cursor = module.code.function_offsets[internal_fn_index] as usize;
             let _start_fn_byte_length = u32::parse((), &module.code.bytes, &mut cursor);
@@ -94,11 +107,22 @@ impl<'a> ExecutionState<'a> {
         };
 
         let mut value_stack = ValueStack::new(arena);
+        for (value_str, type_byte) in arg_strings.into_iter().zip(arg_type_bytes.iter().copied()) {
+            use ValueType::*;
+            let value = match ValueType::from(type_byte) {
+                I32 => Value::I32(value_str.parse::<i32>().map_err(|e| e.to_string())?),
+                I64 => Value::I64(value_str.parse::<i64>().map_err(|e| e.to_string())?),
+                F32 => Value::F32(value_str.parse::<f32>().map_err(|e| e.to_string())?),
+                F64 => Value::F64(value_str.parse::<f64>().map_err(|e| e.to_string())?),
+            };
+            value_stack.push(value);
+        }
+
         let mut call_stack = CallStack::new(arena);
         call_stack.push_frame(
             0, // return_addr
             0, // return_block_depth
-            0, // n_args
+            arg_type_bytes,
             &mut value_stack,
             &module.code.bytes,
             &mut program_counter,
@@ -303,7 +327,7 @@ impl<'a> ExecutionState<'a> {
                     let internal_fn_index = index - self.import_signatures.len();
                     module.function.signatures[internal_fn_index]
                 };
-                let arg_count = module.types.look_up_arg_count(signature_index);
+                let arg_type_bytes = module.types.look_up_arg_type_bytes(signature_index);
 
                 let return_addr = self.program_counter as u32;
                 self.program_counter = module.code.function_offsets[index] as usize;
@@ -316,7 +340,7 @@ impl<'a> ExecutionState<'a> {
                 self.call_stack.push_frame(
                     return_addr,
                     return_block_depth,
-                    arg_count,
+                    arg_type_bytes,
                     &mut self.value_stack,
                     &module.code.bytes,
                     &mut self.program_counter,

@@ -106,7 +106,7 @@ fn test_br() {
     state.call_stack.push_frame(
         0,
         0,
-        0,
+        &[],
         &mut state.value_stack,
         &module.code.bytes,
         &mut state.program_counter,
@@ -204,7 +204,7 @@ fn test_br_if_help(condition: i32, expected: i32) {
     state.call_stack.push_frame(
         0,
         0,
-        0,
+        &[],
         &mut state.value_stack,
         &module.code.bytes,
         &mut state.program_counter,
@@ -223,8 +223,6 @@ fn test_br_table() {
 }
 
 fn test_br_table_help(condition: i32, expected: i32) {
-    dbg!(condition, expected);
-
     let arena = Bump::new();
     let mut state = default_state(&arena);
     let mut module = WasmModule::new(&arena);
@@ -310,7 +308,7 @@ fn test_br_table_help(condition: i32, expected: i32) {
     state.call_stack.push_frame(
         0,
         0,
-        0,
+        &[],
         &mut state.value_stack,
         &module.code.bytes,
         &mut state.program_counter,
@@ -443,7 +441,7 @@ fn test_set_get_local() {
     .serialize(&mut buffer);
     state
         .call_stack
-        .push_frame(0x1234, 0, 0, &mut vs, &buffer, &mut cursor);
+        .push_frame(0x1234, 0, &[], &mut vs, &buffer, &mut cursor);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
     module.code.bytes.encode_i32(12345);
@@ -478,7 +476,7 @@ fn test_tee_get_local() {
     .serialize(&mut buffer);
     state
         .call_stack
-        .push_frame(0x1234, 0, 0, &mut vs, &buffer, &mut cursor);
+        .push_frame(0x1234, 0, &[], &mut vs, &buffer, &mut cursor);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
     module.code.bytes.encode_i32(12345);
@@ -588,7 +586,7 @@ fn test_load(load_op: OpCode, ty: ValueType, data: &[u8], addr: u32, offset: u32
     }
 
     let mut state =
-        ExecutionState::for_module(&arena, &module, start_fn_name, is_debug_mode).unwrap();
+        ExecutionState::for_module(&arena, &module, start_fn_name, is_debug_mode, []).unwrap();
 
     while let Action::Continue = state.execute_next_instruction(&module) {}
 
@@ -787,7 +785,7 @@ fn test_store<'a>(
     });
 
     let mut state =
-        ExecutionState::for_module(arena, module, start_fn_name, is_debug_mode).unwrap();
+        ExecutionState::for_module(arena, module, start_fn_name, is_debug_mode, []).unwrap();
 
     while let Action::Continue = state.execute_next_instruction(module) {}
 

@@ -659,6 +659,17 @@ impl From<u8> for ValueType {
     }
 }
 
+impl From<Value> for ValueType {
+    fn from(x: Value) -> Self {
+        match x {
+            Value::I32(_) => Self::I32,
+            Value::I64(_) => Self::I64,
+            Value::F32(_) => Self::F32,
+            Value::F64(_) => Self::F64,
+        }
+    }
+}
+
 impl Parse<()> for ValueType {
     fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let byte = u8::parse((), bytes, cursor)?;
