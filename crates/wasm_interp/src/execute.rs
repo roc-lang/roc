@@ -179,9 +179,9 @@ impl<'a> ExecutionState<'a> {
 
         let target_block_depth = self.block_depth - relative_blocks_outward - 1;
         loop {
-            let skip_op = OpCode::from(module.code.bytes[self.program_counter]);
+            let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
             OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
-            match skip_op {
+            match skipped_op {
                 BLOCK | LOOP | IF => {
                     self.block_depth += 1;
                 }
@@ -219,19 +219,45 @@ impl<'a> ExecutionState<'a> {
             }
             NOP => {}
             BLOCK => {
-                self.fetch_immediate_u32(module); // blocktype
+                self.fetch_immediate_u32(module); // blocktype (ignored)
                 self.block_depth += 1;
             }
             LOOP => {
-                self.fetch_immediate_u32(module); // blocktype
+                self.fetch_immediate_u32(module); // blocktype (ignored)
                 self.block_depth += 1;
             }
             IF => {
-                self.fetch_immediate_u32(module); // blocktype
+                self.fetch_immediate_u32(module); // blocktype (ignored)
+                let condition = self.value_stack.pop_i32();
                 self.block_depth += 1;
-                todo!("{:?} @ {:#x}", op_code, file_offset);
+                if condition == 0 {
+                    let mut depth = self.block_depth;
+                    loop {
+                        let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
+                        OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
+                        match skipped_op {
+                            BLOCK | LOOP | IF => {
+                                depth += 1;
+                            }
+                            END => {
+                                depth -= 1;
+                            }
+                            ELSE => {
+                                if depth == self.block_depth {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
             }
-            ELSE => todo!("{:?} @ {:#x}", op_code, file_offset),
+            ELSE => {
+                // We only reach this point when we finish executing the "then" block of an IF statement
+                // (For a false condition, we would have skipped past the ELSE when we saw the IF)
+                // We don't want to execute the ELSE block, so we skip it, just like `br 0` would.
+                self.break_forward(0, module);
+            }
             END => {
                 if self.block_depth == 0 {
                     // implicit RETURN at end of function
