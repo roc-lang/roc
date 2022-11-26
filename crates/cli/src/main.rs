@@ -10,6 +10,7 @@ use roc_cli::{
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
 use roc_load::{LoadingProblem, Threading};
+use roc_packaging::cache::{self, RocCacheDir};
 use std::fs::{self, FileType};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -37,6 +38,7 @@ fn main() -> io::Result<()> {
                     &matches,
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host(),
+                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
                 )
             } else {
@@ -51,6 +53,7 @@ fn main() -> io::Result<()> {
                     matches,
                     BuildConfig::BuildAndRun,
                     Triple::host(),
+                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
                 )
             } else {
@@ -74,6 +77,7 @@ fn main() -> io::Result<()> {
                     matches,
                     BuildConfig::BuildAndRunIfNoErrors,
                     Triple::host(),
+                    RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                     LinkType::Executable,
                 )
             } else {
@@ -97,12 +101,14 @@ fn main() -> io::Result<()> {
         Some((CMD_GEN_STUB_LIB, matches)) => {
             let input_path = Path::new(matches.value_of_os(ROC_FILE).unwrap());
             let target: Target = matches.value_of_t(FLAG_TARGET).unwrap_or_default();
-
-            roc_linker::generate_stub_lib(input_path, &target.to_triple())
+            roc_linker::generate_stub_lib(
+                input_path,
+                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                &target.to_triple(),
+            )
         }
         Some((CMD_BUILD, matches)) => {
             let target: Target = matches.value_of_t(FLAG_TARGET).unwrap_or_default();
-
             let link_type = match (
                 matches.is_present(FLAG_LIB),
                 matches.is_present(FLAG_NO_LINK),
@@ -117,6 +123,7 @@ fn main() -> io::Result<()> {
                 matches,
                 BuildConfig::BuildOnly,
                 target.to_triple(),
+                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
                 link_type,
             )?)
         }
@@ -136,7 +143,13 @@ fn main() -> io::Result<()> {
                 Some(n) => Threading::AtMost(n),
             };
 
-            match check_file(&arena, roc_file_path, emit_timings, threading) {
+            match check_file(
+                &arena,
+                roc_file_path,
+                emit_timings,
+                RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+                threading,
+            ) {
                 Ok((problems, total_time)) => {
                     println!(
                         "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms.",

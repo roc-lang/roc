@@ -1,5 +1,6 @@
 use bumpalo::Bump;
 use roc_load::{ExecutionMode, LoadConfig, Threading};
+use roc_packaging::cache::{self, RocCacheDir};
 use roc_reporting::report::{Palette, Severity};
 use std::path::PathBuf;
 
@@ -59,6 +60,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
         module_src,
         src_dir,
         exposed_types,
+        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         LoadConfig {
             target_info,
             render: roc_reporting::report::RenderTarget::ColorTerminal,

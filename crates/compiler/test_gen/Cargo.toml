@@ -31,6 +31,7 @@ roc_unify = { path = "../unify" }
 roc_utils = { path = "../../utils" }
 roc_solve = { path = "../solve" }
 roc_mono = { path = "../mono" }
+roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
 roc_load = { path = "../load" }
 roc_can = { path = "../can" }

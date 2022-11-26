@@ -18,6 +18,7 @@ mod solve_expr {
     };
     use roc_load::LoadedModule;
     use roc_module::symbol::{Interns, ModuleId};
+    use roc_packaging::cache::RocCacheDir;
     use roc_problem::can::Problem;
     use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
@@ -108,6 +109,7 @@ mod solve_expr {
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
                 roc_reporting::report::RenderTarget::Generic,
+                RocCacheDir::Disallowed,
                 roc_reporting::report::DEFAULT_PALETTE,
             );
 
@@ -7767,7 +7769,7 @@ mod solve_expr {
             indoc!(
                 r#"
                 f : { x ? Str, y ? Str } -> {}
-                
+
                 f {x : ""}
                 "#
             ),

@@ -4,6 +4,7 @@ use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result::Wasm32Result;
 use roc_gen_wasm::DEBUG_SETTINGS;
 use roc_load::{ExecutionMode, LoadConfig, Threading};
+use roc_packaging::cache::RocCacheDir;
 use roc_reporting::report::DEFAULT_PALETTE_HTML;
 use roc_std::RocStr;
 use roc_wasm_module::{Export, ExportType};
@@ -99,6 +100,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         module_src,
         src_dir,
         Default::default(),
+        RocCacheDir::Disallowed,
         load_config,
     );
 

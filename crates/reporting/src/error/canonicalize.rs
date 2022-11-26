@@ -1267,9 +1267,8 @@ fn to_bad_ident_expr_report<'b>(
                     lines.convert_region(surroundings),
                     lines.convert_region(region),
                 ),
-                alloc.concat([alloc.reflow(
-                    r"I recommend using camelCase, it is the standard in the Roc ecosystem.",
-                )]),
+                alloc.concat([alloc
+                    .reflow(r"I recommend using camelCase. It's the standard style in Roc code!")]),
             ])
         }
 

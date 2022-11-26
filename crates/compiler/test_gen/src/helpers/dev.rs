@@ -2,6 +2,7 @@ use libloading::Library;
 use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
+use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
 use tempfile::tempdir;
 
@@ -63,6 +64,7 @@ pub fn helper(
         module_src,
         src_dir,
         Default::default(),
+        RocCacheDir::Disallowed,
         load_config,
     );
 

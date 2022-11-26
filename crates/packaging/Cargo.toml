@@ -1,0 +1,32 @@
+[package]
+name = "roc_packaging"
+version = "0.0.1"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+repository = "https://github.com/roc-lang/roc"
+edition = "2021"
+description = "Functionality for packaging Roc source code - e.g. for distribution over the network"
+
+[dependencies]
+roc_parse = { path = "../compiler/parse" }
+roc_error_macros = { path = "../error_macros" }
+
+tar = "0.4.38" # used for `roc build --tar`
+brotli = "3.3.4" # used for decompressing tarballs over HTTPS, if the server supports brotli
+flate2 = "1.0.24"
+walkdir = "2.3.2"
+blake3 = "1.3.1"
+base64-url = "1.4.13"
+
+bumpalo.workspace = true
+tempfile.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# default-features=false removes libopenssl as a dependency on Linux, which might not be available!
+reqwest = { version = "0.11.13", default-features = false, features = [ "blocking", "rustls-tls" ] }
+
+[dev-dependencies]
+pretty_assertions = "1.3.0"
+indoc = "1.0.7"
+
+tempfile.workspace = true

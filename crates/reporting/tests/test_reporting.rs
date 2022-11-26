@@ -15,6 +15,7 @@ mod test_reporting {
     use roc_can::expr::PendingDerives;
     use roc_load::{self, ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
+    use roc_packaging::cache::RocCacheDir;
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
         can_problem, parse_problem, type_problem, RenderTarget, Report, Severity, ANSI_STYLE_CODES,
@@ -90,8 +91,13 @@ mod test_reporting {
                 threading: Threading::Single,
                 exec_mode: ExecutionMode::Check,
             };
-            let result =
-                roc_load::load_and_typecheck(arena, full_file_path, exposed_types, load_config);
+            let result = roc_load::load_and_typecheck(
+                arena,
+                full_file_path,
+                exposed_types,
+                RocCacheDir::Disallowed,
+                load_config,
+            );
             drop(file);
 
             result
@@ -4387,16 +4393,20 @@ mod test_reporting {
     test_report!(
         comment_with_tab,
         "# comment with a \t\n4",
-        @r###"
-    ── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            &format!(
+                r###"── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
 
-    I encountered a tab character
+I encountered a tab character
 
-    4│      # comment with a 	
-                             ^
+4│      # comment with a {}
+                         ^
 
-    Tab characters are not allowed.
-    "###
+Tab characters are not allowed."###,
+                "\t"
+            )
+        )
     );
 
     // TODO bad error message
@@ -5675,23 +5685,27 @@ All branches in an `if` must have the same type!
             main = 5 -> 3
             "#
         ),
-        @r###"
-    ── UNKNOWN OPERATOR ───────────────────────────── tmp/wild_case_arrow/Test.roc ─
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            &format!(
+                r###"── UNKNOWN OPERATOR ───────────────────────────── tmp/wild_case_arrow/Test.roc ─
 
-    This looks like an operator, but it's not one I recognize!
+This looks like an operator, but it's not one I recognize!
 
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      main = 5 -> 3
-                     ^^
+1│  app "test" provides [main] to "./platform"
+2│
+3│  main =
+4│      main = 5 -> 3
+                 ^^
 
-    Looks like you are trying to define a function. 
+Looks like you are trying to define a function.{}
 
-    In roc, functions are always written as a lambda, like 
+In roc, functions are always written as a lambda, like{}
 
-        increment = \n -> n + 1
-    "###
+    increment = \n -> n + 1"###,
+                ' ', ' '
+            )
+        )
     );
 
     #[test]
@@ -9933,16 +9947,21 @@ All branches in an `if` must have the same type!
             f 1 _ 1
             "#
         ),
-        @r###"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            &format!(
+                r###"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    Underscores are not allowed in identifier names:
+Underscores are not allowed in identifier names:
 
-    6│      f 1 _ 1
-      
+6│      f 1 _ 1
+{}
 
-    I recommend using camelCase, it is the standard in the Roc ecosystem.
-    "###
+I recommend using camelCase. It's the standard style in Roc code!
+"###,
+                "  " // TODO make the reporter not insert extraneous spaces here in the first place!
+            ),
+        )
     );
 
     test_report!(
@@ -10355,7 +10374,7 @@ All branches in an `if` must have the same type!
 
             u8 : [Good (List U8), Bad [DecodeProblem]]
 
-            fromBytes = 
+            fromBytes =
                 when u8 is
                     Good _ _ ->
                         Ok "foo"
@@ -10372,7 +10391,7 @@ All branches in an `if` must have the same type!
      6│>      when u8 is
      7│           Good _ _ ->
      8│               Ok "foo"
-     9│ 
+     9│
     10│           Bad _ ->
     11│               Ok "foo"
 
@@ -11115,7 +11134,7 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             x : U8
-            
+
             when x is
                 '☃' -> ""
                 _ -> ""
@@ -11662,7 +11681,7 @@ All branches in an `if` must have the same type!
         list_pattern_not_terminated,
         indoc!(
             r#"
-            when [] is 
+            when [] is
                 [1, 2, -> ""
             "#
         ),
@@ -11683,7 +11702,7 @@ All branches in an `if` must have the same type!
         list_pattern_weird_indent,
         indoc!(
             r#"
-            when [] is 
+            when [] is
                 [1, 2,
             3] -> ""
             "#

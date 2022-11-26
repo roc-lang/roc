@@ -27,6 +27,7 @@ roc_mono = { path = "../mono" }
 roc_intern = { path = "../intern" }
 roc_target = { path = "../roc_target" }
 roc_tracing = { path = "../../tracing" }
+roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
 roc_debug_flags = { path = "../debug_flags" }
 
@@ -35,6 +36,7 @@ ven_pretty = { path = "../../vendor/pretty" }
 bumpalo.workspace = true
 parking_lot.workspace = true
 crossbeam.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 roc_test_utils = { path = "../../test_utils" }

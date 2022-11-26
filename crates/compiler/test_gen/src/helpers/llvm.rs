@@ -9,6 +9,7 @@ use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::{CrashTag, OptLevel};
+use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_utils::zig;
@@ -80,6 +81,7 @@ fn create_llvm_module<'a>(
         module_src,
         src_dir,
         Default::default(),
+        RocCacheDir::Disallowed,
         load_config,
     );
 

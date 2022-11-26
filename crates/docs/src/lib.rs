@@ -14,6 +14,7 @@ use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{Documentation, ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_module::symbol::{IdentIdsByModule, Interns, ModuleId};
+use roc_packaging::cache::{self, RocCacheDir};
 use roc_parse::ident::{parse_ident, Ident};
 use roc_parse::state::State;
 use roc_region::all::Region;
@@ -462,7 +463,13 @@ pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
             threading: Threading::AllAvailable,
             exec_mode: ExecutionMode::Check,
         };
-        match roc_load::load_and_typecheck(&arena, filename, Default::default(), load_config) {
+        match roc_load::load_and_typecheck(
+            &arena,
+            filename,
+            Default::default(),
+            RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+            load_config,
+        ) {
             Ok(loaded) => modules.push(loaded),
             Err(LoadingProblem::FormattedReport(report)) => {
                 eprintln!("{}", report);

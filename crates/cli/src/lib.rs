@@ -11,6 +11,8 @@ use roc_build::program::{CodeGenBackend, CodeGenOptions};
 use roc_error_macros::{internal_error, user_error};
 use roc_load::{ExpectMetadata, LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
+use roc_packaging::cache::RocCacheDir;
+use roc_packaging::tarball::Compression;
 use roc_reporting::cli::Problems;
 use std::env;
 use std::ffi::{CString, OsStr};
@@ -19,6 +21,7 @@ use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::Instant;
 use strum::{EnumIter, IntoEnumIterator, IntoStaticStr};
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
@@ -49,6 +52,7 @@ pub const CMD_GLUE: &str = "glue";
 pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
 
 pub const FLAG_DEBUG: &str = "debug";
+pub const FLAG_BUNDLE: &str = "bundle";
 pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_MAX_THREADS: &str = "max-threads";
@@ -163,6 +167,14 @@ pub fn build_app<'a>() -> Command<'a> {
                 Arg::new(FLAG_LIB)
                     .long(FLAG_LIB)
                     .help("Build a C library instead of an executable")
+                    .required(false),
+            )
+            .arg(
+                Arg::new(FLAG_BUNDLE)
+                    .long(FLAG_BUNDLE)
+                    .help("Create an archive of a package (for example, a .tar, .tar.gz, or .tar.br file), so others can add it as a HTTPS dependency.")
+                    .conflicts_with(FLAG_TARGET)
+                    .possible_values([".tar", ".tar.gz", ".tar.br"])
                     .required(false),
             )
             .arg(
@@ -349,8 +361,8 @@ pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     use roc_gen_llvm::llvm::build::LlvmBackendMode;
     use roc_load::{ExecutionMode, LoadConfig};
+    use roc_packaging::cache;
     use roc_target::TargetInfo;
-    use std::time::Instant;
 
     let start_time = Instant::now();
     let arena = Bump::new();
@@ -413,9 +425,14 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         threading,
         exec_mode: ExecutionMode::Test,
     };
-    let loaded =
-        roc_load::load_and_monomorphize(arena, path.to_path_buf(), subs_by_module, load_config)
-            .unwrap();
+    let loaded = roc_load::load_and_monomorphize(
+        arena,
+        path.to_path_buf(),
+        subs_by_module,
+        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        load_config,
+    )
+    .unwrap();
 
     let mut loaded = loaded;
     let mut expectations = std::mem::take(&mut loaded.expectations);
@@ -481,10 +498,78 @@ pub fn build(
     matches: &ArgMatches,
     config: BuildConfig,
     triple: Triple,
+    roc_cache_dir: RocCacheDir<'_>,
     link_type: LinkType,
 ) -> io::Result<i32> {
     use build::build_file;
     use BuildConfig::*;
+
+    let filename = matches.value_of_os(ROC_FILE).unwrap();
+    let path_buf = {
+        let path = Path::new(filename);
+
+        // Spawn the root task
+        if !path.exists() {
+            let path_string = path.to_string_lossy();
+
+            // TODO these should use roc_reporting to display nicer error messages.
+            match matches.value_source(ROC_FILE) {
+                Some(ValueSource::DefaultValue) => {
+                    eprintln!(
+                        "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
+                        DEFAULT_ROC_FILENAME
+                    )
+                }
+                _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
+            }
+
+            process::exit(1);
+        }
+
+        if config == BuildConfig::BuildOnly && matches.is_present(FLAG_BUNDLE) {
+            let start_time = Instant::now();
+
+            let compression =
+                Compression::try_from(matches.value_of(FLAG_BUNDLE).unwrap()).unwrap();
+
+            // Print a note of advice. This is mainly here because brotli takes so long but produces
+            // such smaller output files; the idea is to encourage people to wait for brotli,
+            // so that downloads go faster. The compression only happens once, but the network
+            // transfer and decompression will happen many more times!
+            match compression {
+                Compression::Brotli => {
+                    println!("Compressing with Brotli at maximum quality level…\n\n(Note: Brotli compression can take awhile! Using --{FLAG_BUNDLE} .tar.gz takes less time, but usually produces a significantly larger output file. Brotli is generally worth the up-front wait if this is a file people will be downloading!)\n");
+                }
+                Compression::Gzip => {
+                    println!("Compressing with gzip at minimum quality…\n\n(Note: Gzip usually runs faster than Brotli but typically produces significantly larger output files. Consider using --{FLAG_BUNDLE} .tar.br if this is a file people will be downloading!)\n");
+                }
+                Compression::Uncompressed => {
+                    println!("Building .tar archive without compression…\n\n(Note: Compression takes more time to run but typically produces much smaller output files. Consider using --{FLAG_BUNDLE} .tar.br if this is a file people will be downloading!)\n");
+                }
+            }
+
+            // Rather than building an executable or library, we're building
+            // a tarball so this code can be distributed via a HTTPS
+            let filename = roc_packaging::tarball::build(path, compression)?;
+            let total_time_ms = start_time.elapsed().as_millis();
+            let total_time = if total_time_ms > 1000 {
+                format!("{}s {}ms", total_time_ms / 1000, total_time_ms % 1000)
+            } else {
+                format!("{total_time_ms} ms")
+            };
+            let created_path = path.with_file_name(&filename);
+
+            println!(
+                "\nBundled \x1B[33m{}\x1B[39m and its dependent files into the following archive in {total_time}:\n\n\t\x1B[33m{}\x1B[39m\n\nTo distribute this archive as a package, upload this to some URL and then add it as a dependency with:\n\n\t\x1B[32m\"https://your-url-goes-here/{filename}\"\x1B[39m\n",
+                path.to_string_lossy(),
+                created_path.to_string_lossy()
+            );
+
+            return Ok(0);
+        }
+
+        path.to_path_buf()
+    };
 
     // the process will end after this function,
     // so we don't want to spend time freeing these values
@@ -549,27 +634,6 @@ pub fn build(
         triple != Triple::host() && !matches!(triple.architecture, Architecture::Wasm32)
     };
 
-    let filename = matches.value_of_os(ROC_FILE).unwrap();
-    let path = Path::new(filename);
-
-    // Spawn the root task
-    if !path.exists() {
-        let path_string = path.to_string_lossy();
-
-        // TODO these should use roc_reporting to display nicer error messages.
-        match matches.value_source(ROC_FILE) {
-                    Some(ValueSource::DefaultValue) => {
-                        eprintln!(
-                            "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
-                            DEFAULT_ROC_FILENAME
-                        )
-                    }
-                    _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
-                }
-
-        process::exit(1);
-    }
-
     let wasm_dev_stack_bytes: Option<u32> = matches
         .try_get_one::<&str>(FLAG_WASM_STACK_SIZE_KB)
         .ok()
@@ -591,7 +655,7 @@ pub fn build(
     let res_binary_path = build_file(
         &arena,
         &triple,
-        path.to_path_buf(),
+        path_buf,
         code_gen_options,
         emit_timings,
         link_type,
@@ -599,6 +663,7 @@ pub fn build(
         prebuilt,
         threading,
         wasm_dev_stack_bytes,
+        roc_cache_dir,
         build_ordering,
     );
 

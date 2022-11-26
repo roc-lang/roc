@@ -21,6 +21,7 @@ use roc_load_internal::file::{ExecutionMode, LoadConfig, Threading};
 use roc_load_internal::file::{LoadResult, LoadStart, LoadedModule, LoadingProblem};
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{Interns, ModuleId};
+use roc_packaging::cache::RocCacheDir;
 use roc_problem::can::Problem;
 use roc_region::all::LineInfo;
 use roc_reporting::report::RenderTarget;
@@ -40,7 +41,13 @@ fn load_and_typecheck(
 ) -> Result<LoadedModule, LoadingProblem> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_path(arena, filename, RenderTarget::Generic, DEFAULT_PALETTE)?;
+    let load_start = LoadStart::from_path(
+        arena,
+        filename,
+        RenderTarget::Generic,
+        RocCacheDir::Disallowed,
+        DEFAULT_PALETTE,
+    )?;
     let load_config = LoadConfig {
         target_info,
         render: RenderTarget::Generic,
@@ -54,6 +61,7 @@ fn load_and_typecheck(
         load_start,
         exposed_types,
         Default::default(), // these tests will re-compile the builtins
+        RocCacheDir::Disallowed,
         load_config,
     )? {
         Monomorphized(_) => unreachable!(""),

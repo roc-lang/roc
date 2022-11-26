@@ -12,6 +12,7 @@ use roc_load::{
     LoadingProblem, Threading,
 };
 use roc_mono::ir::OptLevel;
+use roc_packaging::cache::RocCacheDir;
 use roc_reporting::{
     cli::Problems,
     report::{RenderTarget, DEFAULT_PALETTE},
@@ -66,9 +67,10 @@ pub fn build_file<'a>(
     emit_timings: bool,
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
-    prebuilt: bool,
+    prebuilt_requested: bool,
     threading: Threading,
     wasm_dev_stack_bytes: Option<u32>,
+    roc_cache_dir: RocCacheDir<'_>,
     order: BuildOrdering,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let compilation_start = Instant::now();
@@ -94,6 +96,7 @@ pub fn build_file<'a>(
         arena,
         app_module_path.clone(),
         subs_by_module,
+        roc_cache_dir,
         load_config,
     );
     let loaded = match load_result {
@@ -109,6 +112,9 @@ pub fn build_file<'a>(
         }
     };
 
+    // For example, if we're loading the platform from a URL, it's automatically prebuilt
+    // even if the --prebuilt-platform=true CLI flag wasn't set.
+    let is_prebuilt = prebuilt_requested || loaded.uses_prebuilt_platform;
     let (app_extension, extension, host_filename) = {
         use roc_target::OperatingSystem::*;
 
@@ -142,7 +148,7 @@ pub fn build_file<'a>(
 
     let host_input_path = if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point
     {
-        cwd.join(platform_path).with_file_name(host_filename)
+        platform_path.with_file_name(host_filename)
     } else {
         unreachable!();
     };
@@ -180,12 +186,19 @@ pub fn build_file<'a>(
     };
 
     // We don't need to spawn a rebuild thread when using a prebuilt host.
-    let rebuild_thread = if prebuilt {
+    let rebuild_thread = if is_prebuilt {
         if !preprocessed_host_path.exists() {
-            eprintln!(
-                "\nBecause I was run with --prebuilt-platform=true, I was expecting this file to exist:\n\n    {}\n\nHowever, it was not there!\n\nIf you have the platform's source code locally, you may be able to regenerate it by re-running this command with --prebuilt-platform=false\n",
-                preprocessed_host_path.to_string_lossy()
-            );
+            if prebuilt_requested {
+                eprintln!(
+                    "\nBecause I was run with --prebuilt-platform=true, I was expecting this file to exist:\n\n    {}\n\nHowever, it was not there!\n\nIf you have the platform's source code locally, you may be able to generate it by re-running this command with --prebuilt-platform=false\n",
+                    preprocessed_host_path.to_string_lossy()
+                );
+            } else {
+                eprintln!(
+                    "\nI was expecting this file to exist:\n\n    {}\n\nHowever, it was not there!\n\nIf you have the platform's source code locally, you may be able to generate it by re-running this command with --prebuilt-platform=false\n",
+                    preprocessed_host_path.to_string_lossy()
+                );
+            }
 
             std::process::exit(1);
         }
@@ -272,7 +285,8 @@ pub fn build_file<'a>(
             let rebuild_duration = rebuild_thread
                 .join()
                 .expect("Failed to (re)build platform.");
-            if emit_timings && !prebuilt {
+
+            if emit_timings && !is_prebuilt {
                 println!(
                     "Finished rebuilding the platform in {} ms\n",
                     rebuild_duration
@@ -309,7 +323,6 @@ pub fn build_file<'a>(
     );
 
     let compilation_end = compilation_start.elapsed();
-
     let size = roc_app_bytes.len();
 
     if emit_timings {
@@ -327,7 +340,8 @@ pub fn build_file<'a>(
 
     if let Some(HostRebuildTiming::ConcurrentWithApp(thread)) = opt_rebuild_timing {
         let rebuild_duration = thread.join().expect("Failed to (re)build platform.");
-        if emit_timings && !prebuilt {
+
+        if emit_timings && !is_prebuilt {
             println!(
                 "Finished rebuilding the platform in {} ms\n",
                 rebuild_duration
@@ -484,12 +498,13 @@ fn spawn_rebuild_thread(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn check_file(
-    arena: &Bump,
+pub fn check_file<'a>(
+    arena: &'a Bump,
     roc_file_path: PathBuf,
     emit_timings: bool,
+    roc_cache_dir: RocCacheDir<'_>,
     threading: Threading,
-) -> Result<(Problems, Duration), LoadingProblem> {
+) -> Result<(Problems, Duration), LoadingProblem<'a>> {
     let compilation_start = Instant::now();
 
     // only used for generating errors. We don't do code generation, so hardcoding should be fine
@@ -507,8 +522,13 @@ pub fn check_file(
         threading,
         exec_mode: ExecutionMode::Check,
     };
-    let mut loaded =
-        roc_load::load_and_typecheck(arena, roc_file_path, subs_by_module, load_config)?;
+    let mut loaded = roc_load::load_and_typecheck(
+        arena,
+        roc_file_path,
+        subs_by_module,
+        roc_cache_dir,
+        load_config,
+    )?;
 
     let buf = &mut String::with_capacity(1024);
 

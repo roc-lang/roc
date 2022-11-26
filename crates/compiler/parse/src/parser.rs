@@ -4,11 +4,13 @@ use bumpalo::Bump;
 use roc_region::all::{Loc, Position, Region};
 use Progress::*;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Either<First, Second> {
     First(First),
     Second(Second),
 }
+
+impl<F: Copy, S: Copy> Copy for Either<F, S> {}
 
 pub type ParseResult<'a, Output, Error> = Result<(Progress, Output, State<'a>), (Progress, Error)>;
 
