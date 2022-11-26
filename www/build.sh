@@ -69,6 +69,6 @@ rm -rf ./downloaded-basic-cli
 
 mkdir www/build/examples
 rm generated-docs/*.* # we already copied over the *.js and *.css files earlier, so just drop these.
-mv generated-docs/ www/build/examples/cli # move all the folders to build/examples/cli
+mv generated-docs/ www/build/packages/basic-cli # move all the folders to build/packages/basic-cli
 
 popd
