@@ -1,6 +1,7 @@
 use target_lexicon::Triple;
 
 mod elf64;
+mod export_trie;
 mod macho;
 mod pe;
 
