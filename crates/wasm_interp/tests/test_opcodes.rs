@@ -215,8 +215,111 @@ fn test_br_if_help(condition: i32, expected: i32) {
     assert_eq!(state.value_stack.pop(), Value::I32(expected))
 }
 
-// #[test]
-// fn test_brtable() {}
+#[test]
+fn test_br_table() {
+    test_br_table_help(0, 333);
+    test_br_table_help(1, 222);
+    test_br_table_help(2, 111);
+}
+
+fn test_br_table_help(condition: i32, expected: i32) {
+    dbg!(condition, expected);
+
+    let arena = Bump::new();
+    let mut state = default_state(&arena);
+    let mut module = WasmModule::new(&arena);
+    let buf = &mut module.code.bytes;
+
+    // (local i32)
+    buf.encode_u32(1);
+    buf.encode_u32(1);
+    buf.push(ValueType::I32 as u8);
+
+    // i32.const 111
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(111);
+
+    // local.set 0
+    buf.push(OpCode::SETLOCAL as u8);
+    buf.encode_u32(0);
+
+    // block  ;; label = @1
+    buf.push(OpCode::BLOCK as u8);
+    buf.push(ValueType::VOID);
+
+    //     block  ;; label = @2
+    buf.push(OpCode::BLOCK as u8);
+    buf.push(ValueType::VOID);
+
+    //     block  ;; label = @3
+    buf.push(OpCode::BLOCK as u8);
+    buf.push(ValueType::VOID);
+
+    //         i32.const <condition>
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(condition);
+
+    //         br_table 0 1 2 (;@1;)
+    buf.push(OpCode::BRTABLE as u8);
+    buf.encode_u32(2); // number of non-fallback branches
+    buf.encode_u32(0);
+    buf.encode_u32(1);
+    buf.encode_u32(2);
+
+    //     end
+    buf.push(OpCode::END as u8);
+
+    //         i32.const 333
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(333);
+
+    //         local.set 0
+    buf.push(OpCode::SETLOCAL as u8);
+    buf.encode_u32(0);
+
+    //         br 1
+    buf.push(OpCode::BR as u8);
+    buf.encode_u32(1);
+
+    //     end
+    buf.push(OpCode::END as u8);
+
+    //     i32.const 222
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(222);
+
+    //     local.set 0
+    buf.push(OpCode::SETLOCAL as u8);
+    buf.encode_u32(0);
+
+    //         br 0
+    buf.push(OpCode::BR as u8);
+    buf.encode_u32(0);
+
+    //     end
+    buf.push(OpCode::END as u8);
+
+    // local.get 0)
+    buf.push(OpCode::GETLOCAL as u8);
+    buf.encode_u32(0);
+
+    buf.push(OpCode::END as u8);
+
+    println!("{:02x?}", buf);
+
+    state.call_stack.push_frame(
+        0,
+        0,
+        0,
+        &mut state.value_stack,
+        &module.code.bytes,
+        &mut state.program_counter,
+    );
+
+    while let Action::Continue = state.execute_next_instruction(&module) {}
+
+    assert_eq!(state.value_stack.pop(), Value::I32(expected))
+}
 
 #[test]
 fn test_call_return_no_args() {
