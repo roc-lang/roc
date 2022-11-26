@@ -113,6 +113,7 @@ const ROC_CACHE_DIR_NAME: &str = "roc";
 ///
 /// Returns None if XDG_CACHE_HOME is not set, and also we can't determine the home directory
 /// (or if %APPDATA% is missing on Windows) on this system.
+#[cfg(not(target_family = "wasm"))]
 pub fn roc_cache_dir() -> PathBuf {
     const PACKAGES_DIR_NAME: &str = "packages";
 
@@ -155,4 +156,11 @@ pub fn roc_cache_dir() -> PathBuf {
             }
         }
     }
+}
+
+/// WASI doesn't have a home directory, so just make the cache dir in the current directory
+/// https://github.com/WebAssembly/wasi-filesystem/issues/59
+#[cfg(target_family = "wasm")]
+pub fn roc_cache_dir() -> PathBuf {
+    PathBuf::new(".cache").join(ROC_CACHE_DIR_NAME)
 }
