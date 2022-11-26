@@ -17,9 +17,6 @@ fn default_state(arena: &Bump) -> ExecutionState {
 }
 
 // #[test]
-// fn test_block() {}
-
-// #[test]
 // fn test_loop() {}
 
 // #[test]
@@ -31,8 +28,94 @@ fn default_state(arena: &Bump) -> ExecutionState {
 // #[test]
 // fn test_end() {}
 
-// #[test]
-// fn test_br() {}
+#[test]
+fn test_br() {
+    let arena = Bump::new();
+    let mut state = default_state(&arena);
+    let mut module = WasmModule::new(&arena);
+    let buf = &mut module.code.bytes;
+
+    // (local i32)
+    buf.encode_u32(1);
+    buf.encode_u32(1);
+    buf.push(ValueType::I32 as u8);
+
+    // i32.const 111
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(111);
+
+    // local.set 0
+    buf.push(OpCode::SETLOCAL as u8);
+    buf.encode_u32(0);
+
+    // block  ;; label = @1
+    buf.push(OpCode::BLOCK as u8);
+    buf.push(ValueType::VOID);
+
+    //     block  ;; label = @2
+    buf.push(OpCode::BLOCK as u8);
+    buf.push(ValueType::VOID);
+
+    //     block  ;; label = @3
+    buf.push(OpCode::BLOCK as u8);
+    buf.push(ValueType::VOID);
+
+    //         br 2 (;@1;)
+    buf.push(OpCode::BR as u8);
+    buf.encode_u32(2);
+
+    //         i32.const 444
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(444);
+
+    //         local.set 0
+    buf.push(OpCode::SETLOCAL as u8);
+    buf.encode_u32(0);
+
+    //     end
+    buf.push(OpCode::END as u8);
+
+    //     i32.const 333
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(333);
+
+    //     local.set 0
+    buf.push(OpCode::SETLOCAL as u8);
+    buf.encode_u32(0);
+
+    //     end
+    buf.push(OpCode::END as u8);
+
+    //     i32.const 222
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(222);
+
+    //     local.set 0
+    buf.push(OpCode::SETLOCAL as u8);
+    buf.encode_u32(0);
+
+    // end
+    buf.push(OpCode::END as u8);
+
+    // local.get 0)
+    buf.push(OpCode::GETLOCAL as u8);
+    buf.encode_u32(0);
+
+    buf.push(OpCode::END as u8);
+
+    state.call_stack.push_frame(
+        0,
+        0,
+        0,
+        &mut state.value_stack,
+        &module.code.bytes,
+        &mut state.program_counter,
+    );
+
+    while let Action::Continue = state.execute_next_instruction(&module) {}
+
+    assert_eq!(state.value_stack.pop(), Value::I32(111))
+}
 
 // #[test]
 // fn test_brif() {}
