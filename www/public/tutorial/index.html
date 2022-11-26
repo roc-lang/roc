@@ -318,9 +318,9 @@ a concise tag like <code>T</code>:
 <samp><span class="kw">dbg</span> T "the value of `count` is:" count</samp>
 </section>
 <p>Note that <code>dbg</code> is a debugging tool, and is only available when running
-your program via <code>roc dev</code>, <code>roc run</code>, or <code>roc test</code>. When you
-build a standalone application with <code>roc build</code>, any uses of <code>dbg</code> won't
-be included!</p>
+your program via a <code>roc</code> subcommand (for example using <code>roc dev</code>,
+<code>roc run</code>, or <code>roc test</code>). When you build a standalone application with
+<code>roc build</code>, any uses of <code>dbg</code> won't be included!</p>
 <section><h2 id="records"><a href="#records">Records</a></h2>
 <p>Currently our <code>addAndStringify</code> function takes two arguments. We can instead make
 it take one argument like so:</p>
