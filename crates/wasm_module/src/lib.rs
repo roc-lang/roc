@@ -637,6 +637,10 @@ pub enum ValueType {
     F64 = 0x7c,
 }
 
+impl ValueType {
+    pub const VOID: u8 = 0x40;
+}
+
 impl Serialize for ValueType {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.append_u8(*self as u8);
