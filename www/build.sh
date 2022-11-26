@@ -65,6 +65,8 @@ git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-c
 # manually exclude the Internal* modules and `main.roc`.
 ls downloaded-basic-cli/src/*.roc | grep -v Internal | grep -v main.roc | grep -v Effect.roc | xargs cargo run --bin roc-docs
 
+rm -rf ./downloaded-basic-cli
+
 mkdir www/build/examples
 rm generated-docs/*.* # we already copied over the *.js and *.css files earlier, so just drop these.
 mv generated-docs/ www/build/examples/cli # move all the folders to build/examples/cli
