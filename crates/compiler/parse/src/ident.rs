@@ -1,5 +1,5 @@
 use crate::parser::Progress::{self, *};
-use crate::parser::{BadInputError, EExpr, ParseResult, Parser};
+use crate::parser::{BadInputError, EExpr, ParseResult, Parser, Parser2};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
@@ -136,18 +136,23 @@ pub fn uppercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     }
 }
 
-pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
-    move |_, state: State<'a>, _min_indent: u32| match chomp_anycase_part(state.bytes()) {
-        Err(progress) => Err((progress, ())),
-        Ok(ident) => {
-            if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
-                Err((MadeProgress, ()))
-            } else {
-                let width = ident.len();
-                Ok((MadeProgress, ident, state.advance(width)))
+pub fn unqualified_ident<'a>() -> impl Parser2<'a, &'a str, ()> {
+    fixed_token!(
+        UnqualifiedIdent,
+        move |_, state: State<'a>, _min_indent: u32| {
+            match chomp_anycase_part(state.bytes()) {
+                Err(progress) => Err((progress, ())),
+                Ok(ident) => {
+                    if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
+                        Err((MadeProgress, ()))
+                    } else {
+                        let width = ident.len();
+                        Ok((MadeProgress, ident, state.advance(width)))
+                    }
+                }
             }
         }
-    }
+    )
 }
 
 macro_rules! advance_state {

@@ -801,6 +801,22 @@ pub trait Parser<'a, Output, Error> {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+pub enum Token {
+    UnqualifiedIdent,
+    // TODO add more as we implement Parser2 for more things
+}
+
+/// Temporary extension of Parser. Will eventually be merged into Parser.
+pub trait Parser2<'a, Output, Error>: Parser<'a, Output, Error> {
+    fn parse_concrete(
+        &self,
+        alloc: &'a Bump,
+        state: State<'a>,
+        min_indent: u32,
+    ) -> ParseResult<'a, (Output, Vec<'a, Loc<Token>>), Error>;
+}
+
 impl<'a, F, Output, Error> Parser<'a, Output, Error> for F
 where
     Error: 'a,
@@ -1474,6 +1490,46 @@ macro_rules! absolute_indented_seq {
                 },
                 Err((progress, fail)) => Err((progress, fail)),
             }
+        }
+    };
+}
+
+pub struct FixedToken<'a, O, E, P: Parser<'a, O, E>> {
+    pub token: Token,
+    pub parser: P,
+    pub _marker: std::marker::PhantomData<&'a (O, E)>,
+}
+
+impl<'a, O, E, P: Parser<'a, O, E>> Parser<'a, O, E> for FixedToken<'a, O, E, P> {
+    fn parse(&self, alloc: &'a Bump, state: State<'a>, min_indent: u32) -> ParseResult<'a, O, E> {
+        self.parser.parse(alloc, state, min_indent)
+    }
+}
+
+impl<'a, O, E, P: Parser<'a, O, E>> Parser2<'a, O, E> for FixedToken<'a, O, E, P> {
+    fn parse_concrete(
+        &self,
+        alloc: &'a Bump,
+        state: State<'a>,
+        min_indent: u32,
+    ) -> ParseResult<'a, (O, Vec<'a, Loc<Token>>), E> {
+        let start = state.pos();
+        let (progress, output, state) = self.parser.parse(alloc, state, min_indent)?;
+        let end = state.pos();
+        let region = Region::between(start, end);
+        let mut tokens = Vec::with_capacity_in(1, alloc);
+        tokens.push(Loc::at(region, self.token));
+        Ok((progress, (output, tokens), state))
+    }
+}
+
+#[macro_export]
+macro_rules! fixed_token {
+    ($token_name:ident, $p:expr) => {
+        $crate::parser::FixedToken {
+            token: $crate::parser::Token::$token_name,
+            parser: $p,
+            _marker: std::marker::PhantomData,
         }
     };
 }
