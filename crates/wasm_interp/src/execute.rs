@@ -574,7 +574,12 @@ impl<'a> ExecutionState<'a> {
             I32EQZ => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32EQ => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32NE => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32LTS => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I32LTS => {
+                let second = self.value_stack.pop_i32();
+                let first = self.value_stack.pop_i32();
+                let result: bool = first < second;
+                self.value_stack.push(Value::I32(result as i32));
+            }
             I32LTU => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32GTS => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32GTU => todo!("{:?} @ {:#x}", op_code, file_offset),

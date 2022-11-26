@@ -1095,8 +1095,46 @@ fn test_f64const() {
 // #[test]
 // fn test_i32ne() {}
 
-// #[test]
-// fn test_i32lts() {}
+#[test]
+fn test_i32lts() {
+    test_i32_compare_help(OpCode::I32LTS, 123, 234, true);
+    test_i32_compare_help(OpCode::I32LTS, 234, 123, false);
+    test_i32_compare_help(OpCode::I32LTS, -42, 1, true);
+    test_i32_compare_help(OpCode::I32LTS, 13, -1, false);
+}
+
+fn test_i32_compare_help(op: OpCode, x: i32, y: i32, expected: bool) {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+    let buf = &mut module.code.bytes;
+
+    buf.push(0); // no locals
+
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(x);
+
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(y);
+
+    buf.push(op as u8);
+
+    // end function
+    buf.push(OpCode::END as u8);
+
+    let mut state = default_state(&arena);
+    state.call_stack.push_frame(
+        0,
+        0,
+        &[],
+        &mut state.value_stack,
+        &module.code.bytes,
+        &mut state.program_counter,
+    );
+
+    while let Action::Continue = state.execute_next_instruction(&module) {}
+
+    assert_eq!(state.value_stack.pop_i32(), expected as i32);
+}
 
 // #[test]
 // fn test_i32ltu() {}
