@@ -24,6 +24,7 @@ pub struct ExecutionState<'a> {
     pub globals: Vec<'a, Value>,
     pub program_counter: usize,
     block_depth: u32,
+    block_loop_addrs: Vec<'a, Option<u32>>,
     import_signatures: Vec<'a, u32>,
     debug_string: Option<String>,
 }
@@ -41,6 +42,7 @@ impl<'a> ExecutionState<'a> {
             globals: Vec::from_iter_in(globals, arena),
             program_counter,
             block_depth: 0,
+            block_loop_addrs: Vec::new_in(arena),
             import_signatures: Vec::new_in(arena),
             debug_string: Some(String::new()),
         }
@@ -141,6 +143,7 @@ impl<'a> ExecutionState<'a> {
             globals,
             program_counter,
             block_depth: 0,
+            block_loop_addrs: Vec::new_in(arena),
             import_signatures,
             debug_string,
         })
@@ -198,25 +201,50 @@ impl<'a> ExecutionState<'a> {
         }
     }
 
+    fn do_break(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>, op: OpCode) {
+        let maybe_loop = if matches!(op, OpCode::ELSE) {
+            None
+        } else {
+            let block_index = self.block_loop_addrs.len() - 1 - relative_blocks_outward as usize;
+            self.block_loop_addrs[block_index].map(|addr| (block_index, addr))
+        };
+
+        match maybe_loop {
+            Some((block_index, addr)) => {
+                self.block_loop_addrs.truncate(block_index + 1);
+                self.block_depth = self.block_loop_addrs.len() as u32;
+                self.program_counter = addr as usize;
+            }
+            None => {
+                self.break_forward(relative_blocks_outward, module);
+            }
+        }
+    }
+
     fn break_forward(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>) {
         use OpCode::*;
 
+        let mut depth = self.block_depth;
         let target_block_depth = self.block_depth - relative_blocks_outward - 1;
         loop {
             let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
             OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
             match skipped_op {
                 BLOCK | LOOP | IF => {
-                    self.block_depth += 1;
+                    depth += 1;
                 }
                 END => {
-                    self.block_depth -= 1;
-                    if self.block_depth == target_block_depth {
+                    depth -= 1;
+                    if depth == target_block_depth {
                         break;
                     }
                 }
                 _ => {}
             }
+        }
+        while self.block_depth > depth {
+            self.block_depth -= 1;
+            self.block_loop_addrs.pop().unwrap();
         }
     }
 
@@ -245,15 +273,19 @@ impl<'a> ExecutionState<'a> {
             BLOCK => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
                 self.block_depth += 1;
+                self.block_loop_addrs.push(None);
             }
             LOOP => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
                 self.block_depth += 1;
+                self.block_loop_addrs
+                    .push(Some(self.program_counter as u32));
             }
             IF => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
                 let condition = self.value_stack.pop_i32();
                 self.block_depth += 1;
+                self.block_loop_addrs.push(None);
                 if condition == 0 {
                     let mut depth = self.block_depth;
                     loop {
@@ -280,7 +312,7 @@ impl<'a> ExecutionState<'a> {
                 // We only reach this point when we finish executing the "then" block of an IF statement
                 // (For a false condition, we would have skipped past the ELSE when we saw the IF)
                 // We don't want to execute the ELSE block, so we skip it, just like `br 0` would.
-                self.break_forward(0, module);
+                self.do_break(0, module, op_code);
             }
             END => {
                 if self.block_depth == 0 {
@@ -292,13 +324,13 @@ impl<'a> ExecutionState<'a> {
             }
             BR => {
                 let relative_blocks_outward = self.fetch_immediate_u32(module);
-                self.break_forward(relative_blocks_outward, module);
+                self.do_break(relative_blocks_outward, module, op_code);
             }
             BRIF => {
                 let relative_blocks_outward = self.fetch_immediate_u32(module);
                 let condition = self.value_stack.pop_i32();
                 if condition != 0 {
-                    self.break_forward(relative_blocks_outward, module);
+                    self.do_break(relative_blocks_outward, module, op_code);
                 }
             }
             BRTABLE => {
@@ -313,7 +345,7 @@ impl<'a> ExecutionState<'a> {
                 }
                 let fallback = self.fetch_immediate_u32(module);
                 let relative_blocks_outward = selected.unwrap_or(fallback);
-                self.break_forward(relative_blocks_outward, module);
+                self.do_break(relative_blocks_outward, module, op_code);
             }
             RETURN => {
                 action = self.do_return();

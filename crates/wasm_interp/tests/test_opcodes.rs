@@ -16,8 +16,94 @@ fn default_state(arena: &Bump) -> ExecutionState {
     ExecutionState::new(arena, pages, program_counter, globals)
 }
 
-// #[test]
-// fn test_loop() {}
+#[test]
+fn test_loop() {
+    test_loop_help(10, 55);
+}
+
+fn test_loop_help(end: i32, expected: i32) {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+    let buf = &mut module.code.bytes;
+
+    // Loop from 0 to end, adding the loop variable to a total
+    let var_i = 0;
+    let var_total = 1;
+
+    // (local i32 i32)
+    buf.push(1); // one group of the given type
+    buf.push(2); // two locals in the group
+    buf.push(ValueType::I32 as u8);
+
+    // loop <void>
+    buf.push(OpCode::LOOP as u8);
+    buf.push(ValueType::VOID as u8);
+
+    //   local.get $i
+    buf.push(OpCode::GETLOCAL as u8);
+    buf.encode_u32(var_i);
+
+    //   i32.const 1
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(1);
+
+    //   i32.add
+    buf.push(OpCode::I32ADD as u8);
+
+    //   local.tee $i
+    buf.push(OpCode::TEELOCAL as u8);
+    buf.encode_u32(var_i);
+
+    //   local.get $total
+    buf.push(OpCode::GETLOCAL as u8);
+    buf.encode_u32(var_total);
+
+    //   i32.add
+    buf.push(OpCode::I32ADD as u8);
+
+    //   local.set $total
+    buf.push(OpCode::SETLOCAL as u8);
+    buf.encode_u32(var_total);
+
+    //   local.get $i
+    buf.push(OpCode::GETLOCAL as u8);
+    buf.encode_u32(var_i);
+
+    //   i32.const $end
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(end);
+
+    //   i32.lt_s
+    buf.push(OpCode::I32LTS as u8);
+
+    //   br_if 0
+    buf.push(OpCode::BRIF as u8);
+    buf.encode_u32(0);
+
+    // end
+    buf.push(OpCode::END as u8);
+
+    // local.get $total
+    buf.push(OpCode::GETLOCAL as u8);
+    buf.encode_u32(var_total);
+
+    // end function
+    buf.push(OpCode::END as u8);
+
+    let mut state = default_state(&arena);
+    state.call_stack.push_frame(
+        0,
+        0,
+        &[],
+        &mut state.value_stack,
+        &module.code.bytes,
+        &mut state.program_counter,
+    );
+
+    while let Action::Continue = state.execute_next_instruction(&module) {}
+
+    assert_eq!(state.value_stack.pop_i32(), expected);
+}
 
 #[test]
 fn test_if_else() {
