@@ -1089,10 +1089,10 @@ fn opaque_signature_with_space_before<'a>(
                 EType::TIndentStart,
             ),
         ),
-        optional(specialize(
+        optional(backtrackable(specialize(
             EExpr::Type,
             space0_before_e(type_annotation::has_abilities(), EType::TIndentStart,),
-        ))
+        )))
     )
 }
 
@@ -2557,7 +2557,7 @@ fn record_help<'a>() -> impl Parser<
         and!(
             // You can optionally have an identifier followed by an '&' to
             // make this a record update, e.g. { Foo.user & username: "blah" }.
-            optional(skip_second!(
+            optional(backtrackable(skip_second!(
                 space0_around_ee(
                     // We wrap the ident in an Expr here,
                     // so that we have a Spaceable value to work with,
@@ -2568,7 +2568,7 @@ fn record_help<'a>() -> impl Parser<
                     ERecord::IndentAmpersand,
                 ),
                 word1(b'&', ERecord::Ampersand)
-            )),
+            ))),
             loc!(skip_first!(
                 // We specifically allow space characters inside here, so that
                 // `{  }` can be successfully parsed as an empty record, and then

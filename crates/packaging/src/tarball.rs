@@ -1,7 +1,7 @@
 use brotli::enc::BrotliEncoderParams;
 use bumpalo::Bump;
 use flate2::write::GzEncoder;
-use roc_parse::ast::Module;
+use roc_parse::ast::{Header, Module};
 use roc_parse::header::PlatformHeader;
 use roc_parse::module::parse_header;
 use roc_parse::state::State;
@@ -124,22 +124,20 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
     let arena = Bump::new();
     let mut buf = Vec::new();
 
-    let _other_modules: &[Module<'_>] = match read_header(&arena, &mut buf, path)? {
-        Module::Interface { .. } => {
+    let _other_modules: &[Module<'_>] = match read_header(&arena, &mut buf, path)?.header {
+        Header::Interface(_) => {
             todo!();
             // TODO report error
         }
-        Module::App { .. } => {
+        Header::App(_) => {
             todo!();
             // TODO report error
         }
-        Module::Hosted { .. } => {
+        Header::Hosted(_) => {
             todo!();
             // TODO report error
         }
-        Module::Platform {
-            header: PlatformHeader { imports: _, .. },
-        } => {
+        Header::Platform(PlatformHeader { imports: _, .. }) => {
             use walkdir::WalkDir;
 
             // Add all the prebuilt host files to the archive.

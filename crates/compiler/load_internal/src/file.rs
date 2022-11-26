@@ -3293,25 +3293,43 @@ fn load_platform_module<'a>(
             pkg_module_timing.parse_header = parse_header_duration;
 
             match parsed {
-                Ok((ast::Module::Interface { header }, _parse_state)) => {
-                    Err(LoadingProblem::UnexpectedHeader(format!(
-                        "expected platform/package module, got Interface with header\n{:?}",
-                        header
-                    )))
-                }
-                Ok((ast::Module::Hosted { header }, _parse_state)) => {
-                    Err(LoadingProblem::UnexpectedHeader(format!(
-                        "expected platform/package module, got Hosted module with header\n{:?}",
-                        header
-                    )))
-                }
-                Ok((ast::Module::App { header }, _parse_state)) => {
-                    Err(LoadingProblem::UnexpectedHeader(format!(
-                        "expected platform/package module, got App with header\n{:?}",
-                        header
-                    )))
-                }
-                Ok((ast::Module::Platform { header }, parser_state)) => {
+                Ok((
+                    ast::Module {
+                        header: ast::Header::Interface(header),
+                        ..
+                    },
+                    _parse_state,
+                )) => Err(LoadingProblem::UnexpectedHeader(format!(
+                    "expected platform/package module, got Interface with header\n{:?}",
+                    header
+                ))),
+                Ok((
+                    ast::Module {
+                        header: ast::Header::Hosted(header),
+                        ..
+                    },
+                    _parse_state,
+                )) => Err(LoadingProblem::UnexpectedHeader(format!(
+                    "expected platform/package module, got Hosted module with header\n{:?}",
+                    header
+                ))),
+                Ok((
+                    ast::Module {
+                        header: ast::Header::App(header),
+                        ..
+                    },
+                    _parse_state,
+                )) => Err(LoadingProblem::UnexpectedHeader(format!(
+                    "expected platform/package module, got App with header\n{:?}",
+                    header
+                ))),
+                Ok((
+                    ast::Module {
+                        header: ast::Header::Platform(header),
+                        ..
+                    },
+                    parser_state,
+                )) => {
                     // make a `platform` module that ultimately exposes `main` to the host
                     let platform_module_msg = fabricate_platform_module(
                         arena,
@@ -3356,7 +3374,13 @@ fn load_builtin_module_help<'a>(
     let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
 
     match parsed {
-        Ok((ast::Module::Interface { header }, parse_state)) => {
+        Ok((
+            ast::Module {
+                header: ast::Header::Interface(header),
+                ..
+            },
+            parse_state,
+        )) => {
             let info = HeaderInfo {
                 loc_name: Loc {
                     region: header.name.region,
@@ -3366,8 +3390,8 @@ fn load_builtin_module_help<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
-                exposes: unspace(arena, header.exposes.items),
-                imports: unspace(arena, header.imports.items),
+                exposes: unspace(arena, header.exposes.item.items),
+                imports: unspace(arena, header.imports.item.items),
                 extra: HeaderFor::Builtin {
                     generates_with: &[],
                 },
@@ -3643,7 +3667,13 @@ fn parse_header<'a>(
     module_timing.parse_header = parse_header_duration;
 
     match parsed {
-        Ok((ast::Module::Interface { header }, parse_state)) => {
+        Ok((
+            ast::Module {
+                header: ast::Header::Interface(header),
+                ..
+            },
+            parse_state,
+        )) => {
             verify_interface_matches_file_path(header.name, &filename, &parse_state)?;
 
             let header_name_region = header.name.region;
@@ -3657,8 +3687,8 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
-                exposes: unspace(arena, header.exposes.items),
-                imports: unspace(arena, header.imports.items),
+                exposes: unspace(arena, header.exposes.item.items),
+                imports: unspace(arena, header.imports.item.items),
                 extra: HeaderFor::Interface,
             };
 
@@ -3690,7 +3720,13 @@ fn parse_header<'a>(
 
             Ok((module_id, Msg::Header(header)))
         }
-        Ok((ast::Module::Hosted { header }, parse_state)) => {
+        Ok((
+            ast::Module {
+                header: ast::Header::Hosted(header),
+                ..
+            },
+            parse_state,
+        )) => {
             let info = HeaderInfo {
                 loc_name: Loc {
                     region: header.name.region,
@@ -3700,11 +3736,11 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
-                exposes: unspace(arena, header.exposes.items),
-                imports: unspace(arena, header.imports.items),
+                exposes: unspace(arena, header.exposes.item.items),
+                imports: unspace(arena, header.imports.item.items),
                 extra: HeaderFor::Hosted {
-                    generates: header.generates,
-                    generates_with: unspace(arena, header.generates_with.items),
+                    generates: header.generates.item,
+                    generates_with: unspace(arena, header.generates_with.item.items),
                 },
             };
 
@@ -3718,16 +3754,27 @@ fn parse_header<'a>(
 
             Ok((module_id, Msg::Header(header)))
         }
-        Ok((ast::Module::App { header }, parse_state)) => {
+        Ok((
+            ast::Module {
+                header: ast::Header::App(header),
+                ..
+            },
+            parse_state,
+        )) => {
             let mut app_file_dir = filename.clone();
             app_file_dir.pop();
 
-            let packages = unspace(arena, header.packages.items);
+            let packages = if let Some(packages) = header.packages {
+                unspace(arena, packages.item.items)
+            } else {
+                &[]
+            };
 
             let mut exposes = bumpalo::collections::Vec::new_in(arena);
-            exposes.extend(unspace(arena, header.provides.items));
 
-            if let Some(provided_types) = header.provides_types {
+            exposes.extend(unspace(arena, header.provides.entries.items));
+
+            if let Some(provided_types) = header.provides.types {
                 for provided_type in unspace(arena, provided_types.items) {
                     let string: &str = provided_type.value.into();
                     let exposed_name = ExposedName::new(string);
@@ -3748,9 +3795,13 @@ fn parse_header<'a>(
                 opt_shorthand,
                 packages,
                 exposes,
-                imports: unspace(arena, header.imports.items),
+                imports: if let Some(imports) = header.imports {
+                    unspace(arena, imports.item.items)
+                } else {
+                    &[]
+                },
                 extra: HeaderFor::App {
-                    to_platform: header.to.value,
+                    to_platform: header.provides.to.value,
                 },
             };
 
@@ -3763,7 +3814,7 @@ fn parse_header<'a>(
             );
             let app_module_header_msg = Msg::Header(resolved_header);
 
-            match header.to.value {
+            match header.provides.to.value {
                 To::ExistingPackage(existing_package) => {
                     let opt_base_package = packages.iter().find_map(|loc_package_entry| {
                         let Loc { value, .. } = loc_package_entry;
@@ -3851,7 +3902,13 @@ fn parse_header<'a>(
                 To::NewPackage(_package_name) => Ok((module_id, app_module_header_msg)),
             }
         }
-        Ok((ast::Module::Platform { header }, parse_state)) => Ok(fabricate_platform_module(
+        Ok((
+            ast::Module {
+                header: ast::Header::Platform(header),
+                ..
+            },
+            parse_state,
+        )) => Ok(fabricate_platform_module(
             arena,
             None,
             None,
@@ -4881,13 +4938,13 @@ fn fabricate_platform_module<'a>(
         opt_shorthand,
         opt_app_module_id,
         packages: &[],
-        provides: unspace(arena, header.provides.items),
+        provides: unspace(arena, header.provides.item.items),
         requires: &*arena.alloc([Loc::at(
-            header.requires.signature.region,
-            header.requires.signature.extract_spaces().item,
+            header.requires.item.signature.region,
+            header.requires.item.signature.extract_spaces().item,
         )]),
-        requires_types: unspace(arena, header.requires.rigids.items),
-        imports: unspace(arena, header.imports.items),
+        requires_types: unspace(arena, header.requires.item.rigids.items),
+        imports: unspace(arena, header.imports.item.items),
     };
 
     send_header_two(
