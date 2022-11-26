@@ -162,5 +162,5 @@ pub fn roc_cache_dir() -> PathBuf {
 /// https://github.com/WebAssembly/wasi-filesystem/issues/59
 #[cfg(target_family = "wasm")]
 pub fn roc_cache_dir() -> PathBuf {
-    PathBuf::new(".cache").join(ROC_CACHE_DIR_NAME)
+    PathBuf::from(".cache").join(ROC_CACHE_DIR_NAME)
 }
