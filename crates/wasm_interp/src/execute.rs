@@ -196,16 +196,10 @@ impl<'a> ExecutionState<'a> {
         }
     }
 
-    fn do_break(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>, op: OpCode) {
-        let maybe_loop = if matches!(op, OpCode::ELSE) {
-            None
-        } else {
-            let block_index = self.block_loop_addrs.len() - 1 - relative_blocks_outward as usize;
-            self.block_loop_addrs[block_index].map(|addr| (block_index, addr))
-        };
-
-        match maybe_loop {
-            Some((block_index, addr)) => {
+    fn do_break(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>) {
+        let block_index = self.block_loop_addrs.len() - 1 - relative_blocks_outward as usize;
+        match self.block_loop_addrs[block_index] {
+            Some(addr) => {
                 self.block_loop_addrs.truncate(block_index + 1);
                 self.program_counter = addr as usize;
             }
@@ -301,7 +295,7 @@ impl<'a> ExecutionState<'a> {
                 // We only reach this point when we finish executing the "then" block of an IF statement
                 // (For a false condition, we would have skipped past the ELSE when we saw the IF)
                 // We don't want to execute the ELSE block, so we skip it, just like `br 0` would.
-                self.do_break(0, module, op_code);
+                self.do_break(0, module);
             }
             END => {
                 if self.block_loop_addrs.is_empty() {
@@ -313,13 +307,13 @@ impl<'a> ExecutionState<'a> {
             }
             BR => {
                 let relative_blocks_outward = self.fetch_immediate_u32(module);
-                self.do_break(relative_blocks_outward, module, op_code);
+                self.do_break(relative_blocks_outward, module);
             }
             BRIF => {
                 let relative_blocks_outward = self.fetch_immediate_u32(module);
                 let condition = self.value_stack.pop_i32();
                 if condition != 0 {
-                    self.do_break(relative_blocks_outward, module, op_code);
+                    self.do_break(relative_blocks_outward, module);
                 }
             }
             BRTABLE => {
@@ -334,7 +328,7 @@ impl<'a> ExecutionState<'a> {
                 }
                 let fallback = self.fetch_immediate_u32(module);
                 let relative_blocks_outward = selected.unwrap_or(fallback);
-                self.do_break(relative_blocks_outward, module, op_code);
+                self.do_break(relative_blocks_outward, module);
             }
             RETURN => {
                 action = self.do_return();
