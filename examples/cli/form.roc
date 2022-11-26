@@ -1,5 +1,5 @@
 app "form"
-    packages { pf: "cli-platform/main.roc" }
+    packages { pf: "https://github.com/roc-lang/basic-cli/releases/download/0.1.0/_V6HO2Dwez0xsSstgK8qC6wBLXSfNlVFyUTMg0cYiQQ.tar.br" }
     imports [pf.Stdin, pf.Stdout, pf.Task.{ await, Task }]
     provides [main] to pf
 
