@@ -19,14 +19,73 @@ fn default_state(arena: &Bump) -> ExecutionState {
 // #[test]
 // fn test_loop() {}
 
-// #[test]
-// fn test_if() {}
+#[test]
+fn test_if_else() {
+    test_if_else_help(0, 222);
+    test_if_else_help(1, 111);
+    test_if_else_help(-123, 111);
+}
 
-// #[test]
-// fn test_else() {}
+fn test_if_else_help(condition: i32, expected: i32) {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+    let buf = &mut module.code.bytes;
 
-// #[test]
-// fn test_end() {}
+    buf.push(1); // one group of the given type
+    buf.push(1); // one local in the group
+    buf.push(ValueType::I32 as u8);
+
+    // i32.const <condition>
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(condition);
+
+    // if <blocktype>
+    buf.push(OpCode::IF as u8);
+    buf.push(ValueType::VOID as u8);
+
+    // i32.const 111
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(111);
+
+    // local.set 0
+    buf.push(OpCode::SETLOCAL as u8);
+    buf.encode_u32(0);
+
+    // else
+    buf.push(OpCode::ELSE as u8);
+
+    // i32.const 222
+    buf.push(OpCode::I32CONST as u8);
+    buf.encode_i32(222);
+
+    // local.set 0
+    buf.push(OpCode::SETLOCAL as u8);
+    buf.encode_u32(0);
+
+    // end
+    buf.push(OpCode::END as u8);
+
+    // local.get 0
+    buf.push(OpCode::GETLOCAL as u8);
+    buf.encode_u32(0);
+
+    // end function
+    buf.push(OpCode::END as u8);
+
+    let mut state = default_state(&arena);
+    state.call_stack.push_frame(
+        0,
+        0,
+        &[],
+        &mut state.value_stack,
+        &module.code.bytes,
+        &mut state.program_counter,
+    );
+
+    while let Action::Continue = state.execute_next_instruction(&module) {}
+
+    assert_eq!(state.value_stack.pop_i32(), expected);
+}
 
 #[test]
 fn test_br() {

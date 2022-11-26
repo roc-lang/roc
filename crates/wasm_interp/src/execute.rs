@@ -42,7 +42,7 @@ impl<'a> ExecutionState<'a> {
             program_counter,
             block_depth: 0,
             import_signatures: Vec::new_in(arena),
-            debug_string: None,
+            debug_string: Some(String::new()),
         }
     }
 
