@@ -37,6 +37,7 @@ use roc_mono::layout::{
     CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, STLayoutInterner,
 };
 use roc_packaging::cache::{self, RocCacheDir};
+#[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::PackageMetadata;
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
@@ -2261,26 +2262,38 @@ fn update<'a>(
                 for (shorthand, package_name) in header.packages.iter() {
                     let package_str = package_name.as_str();
                     let shorthand_path = if package_str.starts_with("https://") {
-                        let url = package_str;
+                        #[cfg(not(target_family = "wasm"))]
+                        {
+                            let url = package_str;
+                            match PackageMetadata::try_from(url) {
+                                Ok(url_metadata) => {
+                                    // This was a valid URL
+                                    let root_module_dir = state
+                                        .cache_dir
+                                        .join(url_metadata.cache_subdir)
+                                        .join(url_metadata.content_hash);
+                                    let root_module = root_module_dir.join(
+                                        url_metadata.root_module_filename.unwrap_or("main.roc"),
+                                    );
 
-                        match PackageMetadata::try_from(url) {
-                            Ok(url_metadata) => {
-                                // This was a valid URL
-                                let root_module_dir = state
-                                    .cache_dir
-                                    .join(url_metadata.cache_subdir)
-                                    .join(url_metadata.content_hash);
-                                let root_module = root_module_dir
-                                    .join(url_metadata.root_module_filename.unwrap_or("main.roc"));
-
-                                ShorthandPath::FromHttpsUrl {
-                                    root_module_dir,
-                                    root_module,
+                                    ShorthandPath::FromHttpsUrl {
+                                        root_module_dir,
+                                        root_module,
+                                    }
+                                }
+                                Err(url_err) => {
+                                    todo!(
+                                        "Gracefully report URL error for {:?} - {:?}",
+                                        url,
+                                        url_err
+                                    );
                                 }
                             }
-                            Err(url_err) => {
-                                todo!("Gracefully report URL error for {:?} - {:?}", url, url_err);
-                            }
+                        }
+
+                        #[cfg(target_family = "wasm")]
+                        {
+                            panic!("Specifying packages via URLs is curently unsupported in wasm.");
                         }
                     } else {
                         // This wasn't a URL, so it must be a filesystem path.
@@ -3776,23 +3789,36 @@ fn parse_header<'a>(
 
                         // check whether we can find a `platform` module file on disk
                         let platform_module_path = if src.starts_with("https://") {
-                            // If this is a HTTPS package, synchronously download it
-                            // to the cache before proceeding.
+                            #[cfg(not(target_family = "wasm"))]
+                            {
+                                // If this is a HTTPS package, synchronously download it
+                                // to the cache before proceeding.
 
-                            // TODO we should do this async; however, with the current
-                            // architecture of fie.rs (which doesn't use async/await),
-                            // this would be very difficult!
-                            let (package_dir, opt_root_module) =
-                                cache::install_package(roc_cache_dir, src).unwrap_or_else(|err| {
+                                // TODO we should do this async; however, with the current
+                                // architecture of file.rs (which doesn't use async/await),
+                                // this would be very difficult!
+                                let (package_dir, opt_root_module) = cache::install_package(
+                                    roc_cache_dir,
+                                    src,
+                                )
+                                .unwrap_or_else(|err| {
                                     todo!("TODO gracefully handle package install error {:?}", err);
                                 });
 
-                            // You can optionally specify the root module using the URL fragment,
-                            // e.g. #foo.roc
-                            // (defaults to main.roc)
-                            match opt_root_module {
-                                Some(root_module) => package_dir.join(root_module),
-                                None => package_dir.join("main.roc"),
+                                // You can optionally specify the root module using the URL fragment,
+                                // e.g. #foo.roc
+                                // (defaults to main.roc)
+                                match opt_root_module {
+                                    Some(root_module) => package_dir.join(root_module),
+                                    None => package_dir.join("main.roc"),
+                                }
+                            }
+
+                            #[cfg(target_family = "wasm")]
+                            {
+                                panic!(
+                                    "Specifying packages via URLs is curently unsupported in wasm."
+                                );
                             }
                         } else {
                             app_file_dir.join(src)

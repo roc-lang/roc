@@ -117,16 +117,6 @@ pub enum Problem {
     DownloadTooBig(u64),
 }
 
-#[cfg(target_family = "wasm")]
-pub fn download_and_hash(
-    url: &str,
-    dest_dir: &Path,
-    max_download_bytes: u64,
-) -> Result<String, Problem> {
-    panic!("Downloading packages from URLs is not supported on wasm yet, because it currently uses reqwest::blocking::Client - which is not supported on wasm.");
-}
-
-#[cfg(not(target_family = "wasm"))]
 pub fn download_and_hash(
     url: &str,
     dest_dir: &Path,

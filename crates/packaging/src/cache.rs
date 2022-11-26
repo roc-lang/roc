@@ -1,3 +1,4 @@
+#[cfg(not(target_family = "wasm"))]
 use crate::https::{self, PackageMetadata, Problem};
 use roc_error_macros::internal_error;
 use std::{
@@ -28,6 +29,7 @@ pub enum RocCacheDir<'a> {
 ///
 /// Returns the path to the installed package (which will be in the cache dir somewhere), as well
 /// as the requested root module filename (optionally specified via the URL fragment).
+#[cfg(not(target_family = "wasm"))]
 pub fn install_package<'a>(
     roc_cache_dir: RocCacheDir<'_>,
     url: &'a str,
