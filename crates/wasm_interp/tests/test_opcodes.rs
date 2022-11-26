@@ -93,7 +93,6 @@ fn test_loop_help(end: i32, expected: i32) {
     let mut state = default_state(&arena);
     state.call_stack.push_frame(
         0,
-        0,
         &[],
         &mut state.value_stack,
         &module.code.bytes,
@@ -160,7 +159,6 @@ fn test_if_else_help(condition: i32, expected: i32) {
 
     let mut state = default_state(&arena);
     state.call_stack.push_frame(
-        0,
         0,
         &[],
         &mut state.value_stack,
@@ -249,7 +247,6 @@ fn test_br() {
     buf.push(OpCode::END as u8);
 
     state.call_stack.push_frame(
-        0,
         0,
         &[],
         &mut state.value_stack,
@@ -347,7 +344,6 @@ fn test_br_if_help(condition: i32, expected: i32) {
     buf.push(OpCode::END as u8);
 
     state.call_stack.push_frame(
-        0,
         0,
         &[],
         &mut state.value_stack,
@@ -451,7 +447,6 @@ fn test_br_table_help(condition: i32, expected: i32) {
     println!("{:02x?}", buf);
 
     state.call_stack.push_frame(
-        0,
         0,
         &[],
         &mut state.value_stack,
@@ -586,7 +581,7 @@ fn test_set_get_local() {
     .serialize(&mut buffer);
     state
         .call_stack
-        .push_frame(0x1234, 0, &[], &mut vs, &buffer, &mut cursor);
+        .push_frame(0x1234, &[], &mut vs, &buffer, &mut cursor);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
     module.code.bytes.encode_i32(12345);
@@ -621,7 +616,7 @@ fn test_tee_get_local() {
     .serialize(&mut buffer);
     state
         .call_stack
-        .push_frame(0x1234, 0, &[], &mut vs, &buffer, &mut cursor);
+        .push_frame(0x1234, &[], &mut vs, &buffer, &mut cursor);
 
     module.code.bytes.push(OpCode::I32CONST as u8);
     module.code.bytes.encode_i32(12345);
@@ -1209,7 +1204,6 @@ fn test_i32_compare_help(op: OpCode, x: i32, y: i32, expected: bool) {
 
     let mut state = default_state(&arena);
     state.call_stack.push_frame(
-        0,
         0,
         &[],
         &mut state.value_stack,

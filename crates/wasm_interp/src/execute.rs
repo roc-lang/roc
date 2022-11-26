@@ -23,7 +23,6 @@ pub struct ExecutionState<'a> {
     pub value_stack: ValueStack<'a>,
     pub globals: Vec<'a, Value>,
     pub program_counter: usize,
-    block_depth: u32,
     block_loop_addrs: Vec<'a, Option<u32>>,
     import_signatures: Vec<'a, u32>,
     debug_string: Option<String>,
@@ -41,7 +40,6 @@ impl<'a> ExecutionState<'a> {
             value_stack: ValueStack::new(arena),
             globals: Vec::from_iter_in(globals, arena),
             program_counter,
-            block_depth: 0,
             block_loop_addrs: Vec::new_in(arena),
             import_signatures: Vec::new_in(arena),
             debug_string: Some(String::new()),
@@ -123,7 +121,6 @@ impl<'a> ExecutionState<'a> {
         let mut call_stack = CallStack::new(arena);
         call_stack.push_frame(
             0, // return_addr
-            0, // return_block_depth
             arg_type_bytes,
             &mut value_stack,
             &module.code.bytes,
@@ -142,7 +139,6 @@ impl<'a> ExecutionState<'a> {
             value_stack,
             globals,
             program_counter,
-            block_depth: 0,
             block_loop_addrs: Vec::new_in(arena),
             import_signatures,
             debug_string,
@@ -158,17 +154,16 @@ impl<'a> ExecutionState<'a> {
     }
 
     fn do_return(&mut self) -> Action {
-        if let Some((return_addr, block_depth)) = self.call_stack.pop_frame() {
+        if let Some(return_addr) = self.call_stack.pop_frame() {
             if self.call_stack.is_empty() {
                 // We just popped the stack frame for the entry function. Terminate the program.
                 Action::Break
             } else {
                 self.program_counter = return_addr as usize;
-                self.block_depth = block_depth;
                 Action::Continue
             }
         } else {
-            // We should never get here with real programs but maybe in tests. Terminate the program.
+            // We should never get here with real programs, but maybe in tests. Terminate the program.
             Action::Break
         }
     }
@@ -212,7 +207,6 @@ impl<'a> ExecutionState<'a> {
         match maybe_loop {
             Some((block_index, addr)) => {
                 self.block_loop_addrs.truncate(block_index + 1);
-                self.block_depth = self.block_loop_addrs.len() as u32;
                 self.program_counter = addr as usize;
             }
             None => {
@@ -221,11 +215,12 @@ impl<'a> ExecutionState<'a> {
         }
     }
 
+    // Break to an outer block, going forward in the program
     fn break_forward(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>) {
         use OpCode::*;
 
-        let mut depth = self.block_depth;
-        let target_block_depth = self.block_depth - relative_blocks_outward - 1;
+        let mut depth = self.block_loop_addrs.len();
+        let target_block_depth = depth - (relative_blocks_outward + 1) as usize;
         loop {
             let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
             OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
@@ -242,10 +237,7 @@ impl<'a> ExecutionState<'a> {
                 _ => {}
             }
         }
-        while self.block_depth > depth {
-            self.block_depth -= 1;
-            self.block_loop_addrs.pop().unwrap();
-        }
+        self.block_loop_addrs.truncate(target_block_depth);
     }
 
     pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) -> Action {
@@ -272,22 +264,19 @@ impl<'a> ExecutionState<'a> {
             NOP => {}
             BLOCK => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
-                self.block_depth += 1;
                 self.block_loop_addrs.push(None);
             }
             LOOP => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
-                self.block_depth += 1;
                 self.block_loop_addrs
                     .push(Some(self.program_counter as u32));
             }
             IF => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
                 let condition = self.value_stack.pop_i32();
-                self.block_depth += 1;
                 self.block_loop_addrs.push(None);
                 if condition == 0 {
-                    let mut depth = self.block_depth;
+                    let mut depth = self.block_loop_addrs.len();
                     loop {
                         let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
                         OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
@@ -299,7 +288,7 @@ impl<'a> ExecutionState<'a> {
                                 depth -= 1;
                             }
                             ELSE => {
-                                if depth == self.block_depth {
+                                if depth == self.block_loop_addrs.len() {
                                     break;
                                 }
                             }
@@ -315,11 +304,11 @@ impl<'a> ExecutionState<'a> {
                 self.do_break(0, module, op_code);
             }
             END => {
-                if self.block_depth == 0 {
+                if self.block_loop_addrs.is_empty() {
                     // implicit RETURN at end of function
                     action = self.do_return();
                 } else {
-                    self.block_depth -= 1;
+                    self.block_loop_addrs.pop().unwrap();
                 }
             }
             BR => {
@@ -364,14 +353,10 @@ impl<'a> ExecutionState<'a> {
                 let return_addr = self.program_counter as u32;
                 self.program_counter = module.code.function_offsets[index] as usize;
 
-                let return_block_depth = self.block_depth;
-                self.block_depth = 0;
-
                 let _function_byte_length =
                     u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
                 self.call_stack.push_frame(
                     return_addr,
-                    return_block_depth,
                     arg_type_bytes,
                     &mut self.value_stack,
                     &module.code.bytes,
