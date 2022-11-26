@@ -71,6 +71,16 @@ roc_error_macros::assert_sizeof_non_wasm!(ProcLayout, 8 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(Call, 9 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(CallType, 7 * 8);
 
+fn runtime_error<'a>(env: &mut Env<'a, '_>, msg: &'a str) -> Stmt<'a> {
+    let sym = env.unique_symbol();
+    Stmt::Let(
+        sym,
+        Expr::Literal(Literal::Str(msg)),
+        Layout::Builtin(Builtin::Str),
+        env.arena.alloc(Stmt::Crash(sym, CrashTag::Roc)),
+    )
+}
+
 macro_rules! return_on_layout_error {
     ($env:expr, $layout_result:expr, $context_msg:expr) => {
         match $layout_result {
@@ -84,15 +94,17 @@ macro_rules! return_on_layout_error_help {
     ($env:expr, $error:expr, $context_msg:expr) => {{
         match $error {
             LayoutProblem::UnresolvedTypeVar(_) => {
-                return Stmt::RuntimeError(
+                return runtime_error(
+                    $env,
                     $env.arena
                         .alloc(format!("UnresolvedTypeVar: {}", $context_msg,)),
-                );
+                )
             }
             LayoutProblem::Erroneous => {
-                return Stmt::RuntimeError(
+                return runtime_error(
+                    $env,
                     $env.arena.alloc(format!("Erroneous: {}", $context_msg,)),
-                );
+                )
             }
         }
     }};
@@ -1611,6 +1623,7 @@ pub fn cond<'a>(
 }
 
 pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
     Let(Symbol, Expr<'a>, Layout<'a>, &'a Stmt<'a>),
@@ -1655,7 +1668,29 @@ pub enum Stmt<'a> {
         remainder: &'a Stmt<'a>,
     },
     Jump(JoinPointId, &'a [Symbol]),
-    RuntimeError(&'a str),
+    Crash(Symbol, CrashTag),
+}
+
+/// Source of crash, and its runtime representation to roc_panic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum CrashTag {
+    /// The crash is due to Roc, either via a builtin or type error.
+    Roc = 0,
+    /// The crash is user-defined.
+    User = 1,
+}
+
+impl TryFrom<u32> for CrashTag {
+    type Error = ();
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Roc),
+            1 => Ok(Self::User),
+            _ => Err(()),
+        }
+    }
 }
 
 /// in the block below, symbol `scrutinee` is assumed be be of shape `tag_id`
@@ -2303,7 +2338,7 @@ impl<'a> Stmt<'a> {
                 }
             }
 
-            RuntimeError(s) => alloc.text(format!("Error {}", s)),
+            Crash(s, _src) => alloc.text("Crash ").append(symbol_to_doc(alloc, *s)),
 
             Join {
                 id,
@@ -3152,7 +3187,7 @@ fn generate_runtime_error_function<'a>(
         );
     });
 
-    let runtime_error = Stmt::RuntimeError(msg.into_bump_str());
+    let runtime_error = runtime_error(env, msg.into_bump_str());
 
     let (args, ret_layout) = match layout {
         RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
@@ -4300,7 +4335,7 @@ pub fn with_hole<'a>(
             };
             let sorted_fields = match sorted_fields_result {
                 Ok(fields) => fields,
-                Err(_) => return Stmt::RuntimeError("Can't create record with improper layout"),
+                Err(_) => return runtime_error(env, "Can't create record with improper layout"),
             };
 
             let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
@@ -4352,7 +4387,7 @@ pub fn with_hole<'a>(
             // creating a record from the var will unpack it if it's just a single field.
             let layout = match layout_cache.from_var(env.arena, record_var, env.subs) {
                 Ok(layout) => layout,
-                Err(_) => return Stmt::RuntimeError("Can't create record with improper layout"),
+                Err(_) => return runtime_error(env, "Can't create record with improper layout"),
             };
 
             let field_symbols = field_symbols.into_bump_slice();
@@ -4531,8 +4566,8 @@ pub fn with_hole<'a>(
                         }
                     }
                 }
-                (Err(_), _) => Stmt::RuntimeError("invalid ret_layout"),
-                (_, Err(_)) => Stmt::RuntimeError("invalid cond_layout"),
+                (Err(_), _) => runtime_error(env, "invalid ret_layout"),
+                (_, Err(_)) => runtime_error(env, "invalid cond_layout"),
             }
         }
 
@@ -4698,7 +4733,7 @@ pub fn with_hole<'a>(
             };
             let sorted_fields = match sorted_fields_result {
                 Ok(fields) => fields,
-                Err(_) => return Stmt::RuntimeError("Can't access record with improper layout"),
+                Err(_) => return runtime_error(env, "Can't access record with improper layout"),
             };
 
             let mut index = None;
@@ -4816,7 +4851,8 @@ pub fn with_hole<'a>(
                     }
                 }
 
-                Err(_error) => Stmt::RuntimeError(
+                Err(_error) => runtime_error(
+                    env,
                     "TODO convert anonymous function error to a RuntimeError string",
                 ),
             }
@@ -4872,7 +4908,8 @@ pub fn with_hole<'a>(
                     }
                 }
 
-                Err(_error) => Stmt::RuntimeError(
+                Err(_error) => runtime_error(
+                    env,
                     "TODO convert anonymous function error to a RuntimeError string",
                 ),
             }
@@ -4907,7 +4944,7 @@ pub fn with_hole<'a>(
 
             let sorted_fields = match sorted_fields_result {
                 Ok(fields) => fields,
-                Err(_) => return Stmt::RuntimeError("Can't update record with improper layout"),
+                Err(_) => return runtime_error(env, "Can't update record with improper layout"),
             };
 
             let mut field_layouts = Vec::with_capacity_in(sorted_fields.len(), env.arena);
@@ -5093,10 +5130,10 @@ pub fn with_hole<'a>(
                         layout_cache,
                     );
 
-                    if let Err(runtime_error) = inserted {
-                        return Stmt::RuntimeError(
-                            env.arena
-                                .alloc(format!("RuntimeError: {:?}", runtime_error,)),
+                    if let Err(e) = inserted {
+                        return runtime_error(
+                            env,
+                            env.arena.alloc(format!("RuntimeError: {:?}", e,)),
                         );
                     } else {
                         drop(inserted);
@@ -5560,8 +5597,20 @@ pub fn with_hole<'a>(
                 }
             }
         }
-        TypedHole(_) => Stmt::RuntimeError("Hit a blank"),
-        RuntimeError(e) => Stmt::RuntimeError(env.arena.alloc(e.runtime_message())),
+        TypedHole(_) => runtime_error(env, "Hit a blank"),
+        RuntimeError(e) => runtime_error(env, env.arena.alloc(e.runtime_message())),
+        Crash { msg, ret_var: _ } => {
+            let msg_sym = possible_reuse_symbol_or_specialize(
+                env,
+                procs,
+                layout_cache,
+                &msg.value,
+                Variable::STR,
+            );
+            let stmt = Stmt::Crash(msg_sym, CrashTag::User);
+
+            assign_to_symbol(env, procs, layout_cache, Variable::STR, *msg, msg_sym, stmt)
+        }
     }
 }
 
@@ -5820,16 +5869,22 @@ fn convert_tag_union<'a>(
     let variant = match res_variant {
         Ok(cached) => cached,
         Err(LayoutProblem::UnresolvedTypeVar(_)) => {
-            return Stmt::RuntimeError(env.arena.alloc(format!(
-                "Unresolved type variable for tag {}",
-                tag_name.0.as_str()
-            )))
+            return runtime_error(
+                env,
+                env.arena.alloc(format!(
+                    "Unresolved type variable for tag {}",
+                    tag_name.0.as_str()
+                )),
+            )
         }
         Err(LayoutProblem::Erroneous) => {
-            return Stmt::RuntimeError(env.arena.alloc(format!(
-                "Tag {} was part of a type error!",
-                tag_name.0.as_str()
-            )));
+            return runtime_error(
+                env,
+                env.arena.alloc(format!(
+                    "Tag {} was part of a type error!",
+                    tag_name.0.as_str()
+                )),
+            );
         }
     };
 
@@ -5857,7 +5912,7 @@ fn convert_tag_union<'a>(
                     Layout::Builtin(Builtin::Int(IntWidth::U8)),
                     hole,
                 ),
-                None => Stmt::RuntimeError("tag must be in its own type"),
+                None => runtime_error(env, "tag must be in its own type"),
             }
         }
 
@@ -5897,7 +5952,7 @@ fn convert_tag_union<'a>(
 
             if dataful_tag != tag_name {
                 // this tag is not represented, and hence will never be reached, at runtime.
-                Stmt::RuntimeError("voided tag constructor is unreachable")
+                runtime_error(env, "voided tag constructor is unreachable")
             } else {
                 let field_symbols_temp = sorted_field_symbols(env, procs, layout_cache, args);
 
@@ -6161,10 +6216,13 @@ fn tag_union_to_function<'a>(
             }
         }
 
-        Err(runtime_error) => Stmt::RuntimeError(env.arena.alloc(format!(
-            "Could not produce tag function due to a runtime error: {:?}",
-            runtime_error,
-        ))),
+        Err(e) => runtime_error(
+            env,
+            env.arena.alloc(format!(
+                "Could not produce tag function due to a runtime error: {:?}",
+                e,
+            )),
+        ),
     }
 }
 
@@ -6570,15 +6628,23 @@ pub fn from_can<'a>(
             let expr = Expr::Call(call);
             let mut stmt = Stmt::Let(dbg_symbol, expr, dbg_layout, env.arena.alloc(rest));
 
-            stmt = with_hole(
-                env,
-                loc_condition.value,
-                variable,
-                procs,
-                layout_cache,
-                dbg_symbol,
-                env.arena.alloc(stmt),
+            let symbol_is_reused = matches!(
+                can_reuse_symbol(env, procs, &loc_condition.value, variable),
+                ReuseSymbol::Value(_)
             );
+
+            // skip evaluating the condition if it's just a symbol
+            if !symbol_is_reused {
+                stmt = with_hole(
+                    env,
+                    loc_condition.value,
+                    variable,
+                    procs,
+                    layout_cache,
+                    dbg_symbol,
+                    env.arena.alloc(stmt),
+                );
+            }
 
             stmt
         }
@@ -6714,7 +6780,7 @@ fn from_can_when<'a>(
     if branches.is_empty() {
         // A when-expression with no branches is a runtime error.
         // We can't know what to return!
-        return Stmt::RuntimeError("Hit a 0-branch when expression");
+        return runtime_error(env, "Hit a 0-branch when expression");
     }
     let opt_branches = to_opt_branches(env, procs, branches, exhaustive_mark, layout_cache);
 
@@ -7017,8 +7083,7 @@ fn substitute_in_stmt_help<'a>(
                 None
             }
         }
-
-        RuntimeError(_) => None,
+        Crash(msg, tag) => substitute(subs, *msg).map(|new| &*arena.alloc(Crash(new, *tag))),
     }
 }
 
@@ -8401,7 +8466,7 @@ fn evaluate_arguments_then_runtime_error<'a>(
     let arena = env.arena;
 
     // eventually we will throw this runtime error
-    let result = Stmt::RuntimeError(env.arena.alloc(msg));
+    let result = runtime_error(env, env.arena.alloc(msg));
 
     // but, we also still evaluate and specialize the arguments to give better error messages
     let arg_symbols = Vec::from_iter_in(
@@ -8626,7 +8691,7 @@ fn call_by_name_help<'a>(
             Err(_) => {
                 // One of this function's arguments code gens to a runtime error,
                 // so attempting to call it will immediately crash.
-                return Stmt::RuntimeError("TODO runtime error for invalid layout");
+                return runtime_error(env, "TODO runtime error for invalid layout");
             }
         }
     }
@@ -10125,7 +10190,7 @@ where
     ToLowLevelCall: Fn(ToLowLevelCallArguments<'a>) -> Call<'a> + Copy,
 {
     match lambda_set.call_by_name_options(&layout_cache.interner) {
-        ClosureCallOptions::Void => empty_lambda_set_error(),
+        ClosureCallOptions::Void => empty_lambda_set_error(env),
         ClosureCallOptions::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
@@ -10304,9 +10369,9 @@ where
     }
 }
 
-fn empty_lambda_set_error() -> Stmt<'static> {
+fn empty_lambda_set_error<'a>(env: &mut Env<'a, '_>) -> Stmt<'a> {
     let msg = "a Lambda Set is empty. Most likely there is a type error in your program.";
-    Stmt::RuntimeError(msg)
+    runtime_error(env, msg)
 }
 
 /// Use the lambda set to figure out how to make a call-by-name
@@ -10324,7 +10389,7 @@ fn match_on_lambda_set<'a>(
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     match lambda_set.call_by_name_options(&layout_cache.interner) {
-        ClosureCallOptions::Void => empty_lambda_set_error(),
+        ClosureCallOptions::Void => empty_lambda_set_error(env),
         ClosureCallOptions::Union(union_layout) => {
             let closure_tag_id_symbol = env.unique_symbol();
 
@@ -10478,7 +10543,7 @@ fn union_lambda_set_to_switch<'a>(
         // there is really nothing we can do here. We generate a runtime error here which allows
         // code gen to proceed. We then assume that we hit another (more descriptive) error before
         // hitting this one
-        return empty_lambda_set_error();
+        return empty_lambda_set_error(env);
     }
 
     let join_point_id = JoinPointId(env.unique_symbol());

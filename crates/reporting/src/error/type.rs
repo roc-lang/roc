@@ -1375,6 +1375,42 @@ fn to_expr_report<'b>(
                 }
             }
 
+            Reason::CrashArg => {
+                let this_is = alloc.reflow("The value is");
+
+                let wanted = alloc.concat([
+                    alloc.reflow("But I can only "),
+                    alloc.keyword("crash"),
+                    alloc.reflow(" with messages of type"),
+                ]);
+
+                let details = None;
+
+                let lines = [
+                    alloc
+                        .reflow("This value passed to ")
+                        .append(alloc.keyword("crash"))
+                        .append(alloc.reflow(" is not a string:")),
+                    alloc.region(lines.convert_region(region)),
+                    type_comparison(
+                        alloc,
+                        found,
+                        expected_type,
+                        ExpectationContext::WhenCondition,
+                        add_category(alloc, this_is, &category),
+                        wanted,
+                        details,
+                    ),
+                ];
+
+                Report {
+                    filename,
+                    title: "TYPE MISMATCH".to_string(),
+                    doc: alloc.stack(lines),
+                    severity: Severity::RuntimeError,
+                }
+            }
+
             Reason::LowLevelOpArg { op, arg_index } => {
                 panic!(
                     "Compiler bug: argument #{} to low-level operation {:?} was the wrong type!",
@@ -1680,6 +1716,10 @@ fn format_category<'b>(
             alloc.concat([this_is, alloc.text(" an uniqueness attribute")]),
             alloc.text(" of type:"),
         ),
+        Crash => {
+            internal_error!("calls to crash should be unconditionally admitted in any context, unexpected reachability!");
+        }
+
         Storage(..) | Unknown => (
             alloc.concat([this_is, alloc.text(" a value")]),
             alloc.text(" of type:"),

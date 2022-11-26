@@ -214,7 +214,7 @@ impl<'a> Parse<RelocCtx<'a>> for RelocationSection<'a> {
     fn parse(ctx: RelocCtx<'a>, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
         let (arena, name) = ctx;
 
-        if *cursor > bytes.len() || bytes[*cursor] != SectionId::Custom as u8 {
+        if *cursor >= bytes.len() || bytes[*cursor] != SectionId::Custom as u8 {
             // The section we're looking for is missing, which is the same as being empty.
             return Ok(RelocationSection::new(arena, name));
         }
@@ -626,7 +626,7 @@ impl<'a> LinkingSection<'a> {
 
 impl<'a> Parse<&'a Bump> for LinkingSection<'a> {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
-        if *cursor > bytes.len() || bytes[*cursor] != SectionId::Custom as u8 {
+        if *cursor >= bytes.len() || bytes[*cursor] != SectionId::Custom as u8 {
             return Ok(LinkingSection::new(arena));
         }
         *cursor += 1;

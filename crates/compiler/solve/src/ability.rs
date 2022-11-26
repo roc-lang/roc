@@ -502,7 +502,7 @@ trait DerivableVisitor {
         if abilities != [Self::ABILITY] {
             Err(NotDerivable {
                 var,
-                context: NotDerivableContext::NoContext,
+                context: NotDerivableContext::UnboundVar,
             })
         } else {
             Ok(())
@@ -634,7 +634,7 @@ trait DerivableVisitor {
                 RigidVar(_) => {
                     return Err(NotDerivable {
                         var,
-                        context: NotDerivableContext::NoContext,
+                        context: NotDerivableContext::UnboundVar,
                     })
                 }
                 FlexAbleVar(opt_name, abilities) => {

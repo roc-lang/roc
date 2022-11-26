@@ -39,8 +39,8 @@ use roc_debug_flags::dbg_do;
 use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc, OptLevel,
-    ProcLayout,
+    BranchInfo, CallType, CrashTag, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc,
+    OptLevel, ProcLayout,
 };
 use roc_mono::layout::{
     Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, RawFunctionLayout,
@@ -181,22 +181,6 @@ pub struct Env<'a, 'ctx, 'env> {
     pub target_info: TargetInfo,
     pub mode: LlvmBackendMode,
     pub exposed_to_host: MutSet<Symbol>,
-}
-
-#[repr(u32)]
-pub enum PanicTagId {
-    NullTerminatedString = 0,
-}
-
-impl std::convert::TryFrom<u32> for PanicTagId {
-    type Error = ();
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(PanicTagId::NullTerminatedString),
-            _ => Err(()),
-        }
-    }
 }
 
 impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
@@ -344,16 +328,33 @@ impl<'a, 'ctx, 'env> Env<'a, 'ctx, 'env> {
         )
     }
 
-    pub fn call_panic(&self, message: PointerValue<'ctx>, tag_id: PanicTagId) {
+    pub fn call_panic(
+        &self,
+        env: &Env<'a, 'ctx, 'env>,
+        message: BasicValueEnum<'ctx>,
+        tag: CrashTag,
+    ) {
         let function = self.module.get_function("roc_panic").unwrap();
-        let tag_id = self
-            .context
-            .i32_type()
-            .const_int(tag_id as u32 as u64, false);
+        let tag_id = self.context.i32_type().const_int(tag as u32 as u64, false);
+
+        let msg = match env.target_info.ptr_width() {
+            PtrWidth::Bytes4 => {
+                // we need to pass the message by reference, but we currently hold the value.
+                let alloca = env
+                    .builder
+                    .build_alloca(message.get_type(), "alloca_panic_msg");
+                env.builder.build_store(alloca, message);
+                alloca.into()
+            }
+            PtrWidth::Bytes8 => {
+                // string is already held by reference
+                message
+            }
+        };
 
         let call = self
             .builder
-            .build_call(function, &[message.into(), tag_id.into()], "roc_panic");
+            .build_call(function, &[msg.into(), tag_id.into()], "roc_panic");
 
         call.set_call_convention(C_CALL_CONV);
     }
@@ -750,25 +751,30 @@ pub fn build_exp_literal<'a, 'ctx, 'env>(
         }
         Bool(b) => env.context.bool_type().const_int(*b as u64, false).into(),
         Byte(b) => env.context.i8_type().const_int(*b as u64, false).into(),
-        Str(str_literal) => {
-            if str_literal.len() < env.small_str_bytes() as usize {
-                match env.small_str_bytes() {
-                    24 => small_str_ptr_width_8(env, parent, str_literal).into(),
-                    12 => small_str_ptr_width_4(env, str_literal).into(),
-                    _ => unreachable!("incorrect small_str_bytes"),
-                }
-            } else {
-                let ptr = define_global_str_literal_ptr(env, str_literal);
-                let number_of_elements = env.ptr_int().const_int(str_literal.len() as u64, false);
+        Str(str_literal) => build_string_literal(env, parent, str_literal),
+    }
+}
 
-                let alloca =
-                    const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements);
+fn build_string_literal<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
+    str_literal: &str,
+) -> BasicValueEnum<'ctx> {
+    if str_literal.len() < env.small_str_bytes() as usize {
+        match env.small_str_bytes() {
+            24 => small_str_ptr_width_8(env, parent, str_literal).into(),
+            12 => small_str_ptr_width_4(env, str_literal).into(),
+            _ => unreachable!("incorrect small_str_bytes"),
+        }
+    } else {
+        let ptr = define_global_str_literal_ptr(env, str_literal);
+        let number_of_elements = env.ptr_int().const_int(str_literal.len() as u64, false);
 
-                match env.target_info.ptr_width() {
-                    PtrWidth::Bytes4 => env.builder.build_load(alloca, "load_const_str"),
-                    PtrWidth::Bytes8 => alloca.into(),
-                }
-            }
+        let alloca = const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements);
+
+        match env.target_info.ptr_width() {
+            PtrWidth::Bytes4 => env.builder.build_load(alloca, "load_const_str"),
+            PtrWidth::Bytes8 => alloca.into(),
         }
     }
 }
@@ -2621,7 +2627,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
-                        throw_exception(env, "An expectation failed!");
+                        throw_internal_exception(env, parent, "An expectation failed!");
                     }
                 }
             } else {
@@ -2683,7 +2689,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                     }
                     roc_target::PtrWidth::Bytes4 => {
                         // temporary WASM implementation
-                        throw_exception(env, "An expectation failed!");
+                        throw_internal_exception(env, parent, "An expectation failed!");
                     }
                 }
             } else {
@@ -2703,8 +2709,8 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             )
         }
 
-        RuntimeError(error_msg) => {
-            throw_exception(env, error_msg);
+        Crash(sym, tag) => {
+            throw_exception(env, scope, sym, *tag);
 
             // unused value (must return a BasicValue)
             let zero = env.context.i64_type().const_zero();
@@ -3336,7 +3342,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
 
         builder.position_at_end(entry);
 
-        let wrapped_layout = roc_result_layout(env.arena, return_layout, env.target_info);
+        let wrapped_layout = roc_call_result_layout(env.arena, return_layout, env.target_info);
         call_roc_function(env, roc_function, &wrapped_layout, arguments_for_call)
     } else {
         call_roc_function(env, roc_function, &return_layout, arguments_for_call)
@@ -3366,7 +3372,8 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     // a tagged union to indicate to the test loader that a panic occurred.
     // especially when running 32-bit binaries on a 64-bit machine, there
     // does not seem to be a smarter solution
-    let wrapper_return_type = roc_result_type(env, basic_type_from_layout(env, &return_layout));
+    let wrapper_return_type =
+        roc_call_result_type(env, basic_type_from_layout(env, &return_layout));
 
     let mut cc_argument_types = Vec::with_capacity_in(arguments.len(), env.arena);
     for layout in arguments {
@@ -3755,7 +3762,7 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx, 'env>(
 
     let return_type = match env.mode {
         LlvmBackendMode::GenTest | LlvmBackendMode::WasmGenTest | LlvmBackendMode::CliTest => {
-            roc_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
+            roc_call_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
         }
 
         LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev => {
@@ -3862,14 +3869,29 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
     }
 }
 
-/// Pointer to pointer of the panic message.
+/// Pointer to RocStr which is the panic message.
 pub fn get_panic_msg_ptr<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
-    let ptr_to_u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    let str_typ = zig_str_type(env);
 
-    let global_name = "roc_panic_msg_ptr";
+    let global_name = "roc_panic_msg_str";
     let global = env.module.get_global(global_name).unwrap_or_else(|| {
-        let global = env.module.add_global(ptr_to_u8_ptr, None, global_name);
-        global.set_initializer(&ptr_to_u8_ptr.const_zero());
+        let global = env.module.add_global(str_typ, None, global_name);
+        global.set_initializer(&str_typ.const_zero());
+        global
+    });
+
+    global.as_pointer_value()
+}
+
+/// Pointer to the panic tag.
+/// Only non-zero values must be written into here.
+pub fn get_panic_tag_ptr<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValue<'ctx> {
+    let i64_typ = env.context.i64_type();
+
+    let global_name = "roc_panic_msg_tag";
+    let global = env.module.get_global(global_name).unwrap_or_else(|| {
+        let global = env.module.add_global(i64_typ, None, global_name);
+        global.set_initializer(&i64_typ.const_zero());
         global
     });
 
@@ -3887,7 +3909,7 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let return_type = basic_type_from_layout(env, &return_layout);
-    let call_result_type = roc_result_type(env, return_type.as_basic_type_enum());
+    let call_result_type = roc_call_result_type(env, return_type.as_basic_type_enum());
     let result_alloca = builder.build_alloca(call_result_type, "result");
 
     let then_block = context.append_basic_block(parent, "then_block");
@@ -3922,26 +3944,21 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
     {
         builder.position_at_end(catch_block);
 
-        let error_msg = {
-            // u8**
-            let ptr_int_ptr = get_panic_msg_ptr(env);
-
-            // u8* again
-            builder.build_load(ptr_int_ptr, "ptr_int")
-        };
+        // RocStr* global
+        let error_msg_ptr = get_panic_msg_ptr(env);
+        // i64* global
+        let error_tag_ptr = get_panic_tag_ptr(env);
 
         let return_value = {
             let v1 = call_result_type.const_zero();
 
-            // flag is non-zero, indicating failure
-            let flag = context.i64_type().const_int(1, false);
+            // tag must be non-zero, indicating failure
+            let tag = builder.build_load(error_tag_ptr, "load_panic_tag");
 
-            let v2 = builder
-                .build_insert_value(v1, flag, 0, "set_error")
-                .unwrap();
+            let v2 = builder.build_insert_value(v1, tag, 0, "set_error").unwrap();
 
             let v3 = builder
-                .build_insert_value(v2, error_msg, 1, "set_exception")
+                .build_insert_value(v2, error_msg_ptr, 1, "set_exception")
                 .unwrap();
             v3
         };
@@ -3971,7 +3988,7 @@ fn make_exception_catcher<'a, 'ctx, 'env>(
     function_value
 }
 
-fn roc_result_layout<'a>(
+fn roc_call_result_layout<'a>(
     arena: &'a Bump,
     return_layout: Layout<'a>,
     target_info: TargetInfo,
@@ -3981,14 +3998,14 @@ fn roc_result_layout<'a>(
     Layout::struct_no_name_order(arena.alloc(elements))
 }
 
-fn roc_result_type<'a, 'ctx, 'env>(
+fn roc_call_result_type<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     return_type: BasicTypeEnum<'ctx>,
 ) -> StructType<'ctx> {
     env.context.struct_type(
         &[
             env.context.i64_type().into(),
-            env.context.i8_type().ptr_type(AddressSpace::Generic).into(),
+            zig_str_type(env).ptr_type(AddressSpace::Generic).into(),
             return_type,
         ],
         false,
@@ -4003,7 +4020,7 @@ fn make_good_roc_result<'a, 'ctx, 'env>(
     let context = env.context;
     let builder = env.builder;
 
-    let v1 = roc_result_type(env, basic_type_from_layout(env, &return_layout)).const_zero();
+    let v1 = roc_call_result_type(env, basic_type_from_layout(env, &return_layout)).const_zero();
 
     let v2 = builder
         .build_insert_value(v1, context.i64_type().const_zero(), 0, "set_no_error")
@@ -4050,7 +4067,8 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
         }
     };
 
-    let wrapper_return_type = roc_result_type(env, basic_type_from_layout(env, &return_layout));
+    let wrapper_return_type =
+        roc_call_result_type(env, basic_type_from_layout(env, &return_layout));
 
     // argument_types.push(wrapper_return_type.ptr_type(AddressSpace::Generic).into());
 
@@ -5520,49 +5538,31 @@ fn define_global_str_literal<'a, 'ctx, 'env>(
     }
 }
 
-fn define_global_error_str<'a, 'ctx, 'env>(
+pub(crate) fn throw_internal_exception<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    parent: FunctionValue<'ctx>,
     message: &str,
-) -> inkwell::values::GlobalValue<'ctx> {
-    let module = env.module;
-
-    // hash the name so we don't re-define existing messages
-    let name = {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let mut hasher = DefaultHasher::new();
-        message.hash(&mut hasher);
-        let hash = hasher.finish();
-
-        format!("_Error_message_{}", hash)
-    };
-
-    match module.get_global(&name) {
-        Some(current) => current,
-        None => unsafe { env.builder.build_global_string(message, name.as_str()) },
-    }
-}
-
-pub(crate) fn throw_exception<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>, message: &str) {
+) {
     let builder = env.builder;
 
-    // define the error message as a global
-    // (a hash is used such that the same value is not defined repeatedly)
-    let error_msg_global = define_global_error_str(env, message);
+    let str = build_string_literal(env, parent, message);
 
-    let cast = env
-        .builder
-        .build_bitcast(
-            error_msg_global.as_pointer_value(),
-            env.context.i8_type().ptr_type(AddressSpace::Generic),
-            "cast_void",
-        )
-        .into_pointer_value();
-
-    env.call_panic(cast, PanicTagId::NullTerminatedString);
+    env.call_panic(env, str, CrashTag::Roc);
 
     builder.build_unreachable();
+}
+
+pub(crate) fn throw_exception<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    scope: &mut Scope<'a, 'ctx>,
+    message: &Symbol,
+    tag: CrashTag,
+) {
+    let msg_val = load_symbol(scope, message);
+
+    env.call_panic(env, msg_val, tag);
+
+    env.builder.build_unreachable();
 }
 
 fn get_foreign_symbol<'a, 'ctx, 'env>(

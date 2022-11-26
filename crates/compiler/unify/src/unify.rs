@@ -1259,11 +1259,28 @@ fn extract_specialization_lambda_set<M: MetaCollector>(
     debug_assert!(member_rec_var.is_none());
 
     let member_uls = env.subs.get_subs_slice(member_uls_slice);
-    debug_assert_eq!(
-        member_uls.len(),
-        1,
-        "member signature lambda sets should contain only one unspecialized lambda set"
+    debug_assert!(
+        member_uls.len() <= 1,
+        "member signature lambda sets should contain at most one unspecialized lambda set"
     );
+
+    if member_uls.is_empty() {
+        // This can happen if the specialized type has a lambda set that is determined to be
+        // immaterial in the implementation of the specialization, because the specialization
+        // lambda set does not line up with one required by the ability member prototype.
+        // As an example, consider
+        //
+        //   Q := [ F (Str -> Str) ] has [Eq {isEq}]
+        //
+        //   isEq = \@Q _, @Q _ -> Bool.false
+        //
+        // here the lambda set of `F`'s payload is part of the specialization signature, but it is
+        // irrelevant to the specialization. As such, I believe it is safe to drop the
+        // empty specialization lambda set.
+        roc_tracing::info!(ambient_function=?env.subs.get_root_key_without_compacting(specialization_lset.ambient_function), "ambient function in a specialization has a zero-lambda set");
+
+        return merge(env, ctx, Content::LambdaSet(specialization_lset));
+    }
 
     let Uls(_, member, region) = member_uls[0];
 

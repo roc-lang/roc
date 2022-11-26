@@ -5,7 +5,8 @@ procedure List.5 (#Attr.2, #Attr.3):
 
 procedure Test.2 (Test.3):
     let Test.7 : {} = Struct {};
-    Error a Lambda Set is empty. Most likely there is a type error in your program.
+    let Test.8 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
+    Crash Test.8
 
 procedure Test.0 ():
     let Test.1 : List [] = Array [];

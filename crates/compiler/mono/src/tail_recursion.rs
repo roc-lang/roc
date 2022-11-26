@@ -299,6 +299,6 @@ fn insert_jumps<'a>(
 
         Ret(_) => None,
         Jump(_, _) => None,
-        RuntimeError(_) => None,
+        Crash(..) => None,
     }
 }

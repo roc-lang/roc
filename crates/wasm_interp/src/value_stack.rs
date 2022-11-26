@@ -76,8 +76,8 @@ impl<'a> ValueStack<'a> {
     }
 
     pub fn peek(&self) -> Value {
-        let is_64 = self.is_64[self.is_64.len() - 1];
-        let is_float = self.is_float[self.is_float.len() - 1];
+        let is_64 = *self.is_64.last().unwrap();
+        let is_float = *self.is_float.last().unwrap();
         let size = if is_64 { 8 } else { 4 };
         let bytes_idx = self.bytes.len() - size;
         self.get(is_64, is_float, bytes_idx)
@@ -100,6 +100,18 @@ impl<'a> ValueStack<'a> {
             } else {
                 Value::I32(i32::from_ne_bytes(b))
             }
+        }
+    }
+
+    /// Memory addresses etc
+    pub fn pop_u32(&mut self) -> u32 {
+        match (self.is_float.pop(), self.is_64.pop()) {
+            (Some(false), Some(false)) => pop_bytes!(u32, self.bytes),
+            (Some(is_float), Some(is_64)) => panic!(
+                "Expected I32 but found {:?}",
+                type_from_flags(is_float, is_64)
+            ),
+            _ => panic!("Expected I32 but value stack was empty"),
         }
     }
 
@@ -146,6 +158,36 @@ impl<'a> ValueStack<'a> {
             _ => panic!("Expected F64 but value stack was empty"),
         }
     }
+
+    fn fmt_from_index(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        from_index: usize,
+    ) -> std::fmt::Result {
+        write!(f, "[")?;
+        let mut bytes_index = 0;
+        assert_eq!(self.is_64.len(), self.is_float.len());
+        if from_index < self.is_64.len() {
+            let iter_64 = self.is_64.iter().by_vals();
+            let iter_float = self.is_float.iter().by_vals();
+            for (i, (is_64, is_float)) in iter_64.zip(iter_float).enumerate() {
+                if i < from_index {
+                    continue;
+                }
+                let value = self.get(is_64, is_float, bytes_index);
+                bytes_index += if is_64 { 8 } else { 4 };
+                value.fmt(f)?;
+                if i < self.is_64.len() - 1 {
+                    write!(f, ", ")?;
+                }
+            }
+        }
+        write!(f, "]")
+    }
+
+    pub fn get_slice<'b>(&'b self, index: usize) -> ValueStackSlice<'a, 'b> {
+        ValueStackSlice { stack: self, index }
+    }
 }
 
 fn type_from_flags(is_float: bool, is_64: bool) -> ValueType {
@@ -159,20 +201,18 @@ fn type_from_flags(is_float: bool, is_64: bool) -> ValueType {
 
 impl Debug for ValueStack<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[")?;
-        let mut index = 0;
-        assert_eq!(self.is_64.len(), self.is_float.len());
-        let iter_64 = self.is_64.iter().by_vals();
-        let iter_float = self.is_float.iter().by_vals();
-        for (i, (is_64, is_float)) in iter_64.zip(iter_float).enumerate() {
-            let value = self.get(is_64, is_float, index);
-            index += if is_64 { 8 } else { 4 };
-            value.fmt(f)?;
-            if i < self.is_64.len() - 1 {
-                write!(f, ", ")?;
-            }
-        }
-        write!(f, "]")
+        self.fmt_from_index(f, 0)
+    }
+}
+
+pub struct ValueStackSlice<'a, 'b> {
+    stack: &'b ValueStack<'a>,
+    index: usize,
+}
+
+impl Debug for ValueStackSlice<'_, '_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.stack.fmt_from_index(f, self.index)
     }
 }
 
