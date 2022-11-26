@@ -103,14 +103,7 @@ pub fn create_dylib_macho(
 ) -> object::read::Result<Vec<u8>> {
     // exported symbols always start with a `_` in Mach-O
     let prefixed_custom_names: Vec<_> = custom_names.iter().map(|s| format!("_{s}")).collect();
-
-    let mut symbols: Vec<_> = prefixed_custom_names.clone();
-    symbols.insert(0, "__mh_execute_header".to_string());
-    symbols.push("dyld_stub_binder".to_string());
-
-    let symbols = symbols.as_slice();
-
-    // let symbols = custom_names;
+    let symbols = prefixed_custom_names.as_slice();
 
     let mut bytes = Vec::new();
 
@@ -376,11 +369,44 @@ pub fn create_dylib_macho(
     let symbol_table = trivial_symbol_table(symbols.iter().map(|s| s.as_str()));
     let string_table = trivial_string_table(symbols.iter().map(|s| s.as_str()));
 
+    let string_table_len = string_table.len();
+
+    let (symbol_table_start, string_table_start, linkedit_section) = {
+        let mut bytes = Vec::new();
+
+        // rebase
+        bytes.extend(std::iter::repeat(0).take(0x8));
+
+        // binding
+
+        let a = bytes.len();
+        bytes.extend([0x11, 0x51, 0x40]);
+        bytes.extend(b"dyld_stub_binder\0");
+        bytes.extend([0x72, 0x00, 0x90, 0x00]);
+        assert_eq!(bytes.len() - a, 0x18);
+
+        // export trie
+        bytes.extend(trie);
+
+        bytes.extend(0x1ff1u64.to_le_bytes()); // TODO what is this?
+        let symbol_table_start = 0x3000 + bytes.len();
+        bytes.extend(symbol_table);
+
+        // the number of exported symbols
+        // TODO make dynamic
+        bytes.extend(0x19u32.to_le_bytes());
+
+        let string_table_start = 0x3000 + bytes.len();
+        bytes.extend(string_table);
+
+        (symbol_table_start, string_table_start, bytes)
+    };
+
     let symtab = SymtabCommand {
-        symoff: 0x3308 - 0x02e0 + dyld_info_only.export_size,
+        symoff: symbol_table_start as u32,
         nsyms: symbols.len() as u32,
-        stroff: 0x34ac - 0x02e0 + dyld_info_only.export_size,
-        strsize: string_table.len() as u32,
+        stroff: string_table_start as u32,
+        strsize: string_table_len as u32,
     };
 
     bytes.extend(symtab.to_bytes());
@@ -392,16 +418,16 @@ pub fn create_dylib_macho(
         iextdefsym: 0,
         nextdefsym: symbols.len() as u32, // was 0x19
         // we have no undefined symbols
-        iundefsym: symbols.len() as u32, // was 0x19
-        nundefsym: 0x1,
+        iundefsym: 0,
+        nundefsym: 0,
         tocoff: 0,
         ntoc: 0,
         modtaboff: 0,
         nmodtab: 0,
         extrefsymoff: 0,
         nextrefsyms: 0,
-        indirectsymoff: 0x000034a8,
-        nindirectsyms: 0x1,
+        indirectsymoff: 0,
+        nindirectsyms: 0,
         extreloff: 0,
         nextrel: 0,
         locreloff: 0,
@@ -424,26 +450,7 @@ pub fn create_dylib_macho(
     let delta = 0x3000 - bytes.len();
     bytes.extend(std::iter::repeat(0).take(delta));
 
-    // rebase
-    bytes.extend(std::iter::repeat(0).take(0x8));
-
-    // binding
-
-    let a = bytes.len();
-    bytes.extend([0x11, 0x51, 0x40]);
-    bytes.extend(b"dyld_stub_binder\0");
-    bytes.extend([0x72, 0x00, 0x90, 0x00]);
-    assert_eq!(bytes.len() - a, 0x18);
-
-    // export trie
-    bytes.extend(trie);
-
-    bytes.extend(0x1ff1u64.to_le_bytes()); // TODO what is this?
-
-    bytes.extend(symbol_table);
-
-    bytes.extend(0x19u32.to_le_bytes()); // TODO what is this?
-    bytes.extend(string_table);
+    bytes.extend(linkedit_section);
 
     Ok(bytes)
 }
@@ -461,7 +468,10 @@ fn macho_dylib_header(triple: &Triple, commands: Commands) -> [u8; 8 * 4] {
             mach_object::CPU_TYPE_X86_64,
             mach_object::CPU_SUBTYPE_I386_ALL,
         ),
-        target_lexicon::Architecture::Aarch64(_) => todo!(),
+        target_lexicon::Architecture::Aarch64(_) => (
+            mach_object::CPU_TYPE_ARM64,
+            mach_object::CPU_SUBTYPE_ARM_ALL,
+        ),
         _ => unreachable!(),
     };
 
@@ -469,8 +479,8 @@ fn macho_dylib_header(triple: &Triple, commands: Commands) -> [u8; 8 * 4] {
         | mach_object::MH_DYLDLINK
         | mach_object::MH_TWOLEVEL
         | mach_object::MH_NO_REEXPORTED_DYLIBS
-        | mach_object::MH_HAS_TLV_DESCRIPTORS
-        | mach_object::MH_PIE;
+        | mach_object::MH_PIE
+        | mach_object::MH_HAS_TLV_DESCRIPTORS;
 
     buffer[0..][..4].copy_from_slice(&mach_object::MH_MAGIC_64.to_le_bytes());
     buffer[4..][..4].copy_from_slice(&cpu_type.to_le_bytes());
@@ -491,8 +501,6 @@ fn bstring16(string: &str) -> [u8; 16] {
 
     result
 }
-
-type vm_prot_t = u32;
 
 #[repr(C)]
 #[derive(Default)]
@@ -570,6 +578,8 @@ impl DyldCommand {
     }
 }
 
+type vm_prot_t = u32;
+
 #[repr(C)]
 #[derive(Default)]
 struct SegmentCommand64 {
@@ -620,8 +630,6 @@ impl SegmentCommand64 {
 }
 
 struct DySymTabCommand {
-    // uint32_t cmd;
-    //uint32_t cmdsize;
     ilocalsym: u32,
     nlocalsym: u32,
     iextdefsym: u32,
@@ -1009,7 +1017,7 @@ mod test {
                 .collect();
             keys.sort_unstable();
 
-            // assert_eq!(keys.as_slice(), expected.as_slice())
+            assert_eq!(keys.as_slice(), expected.as_slice())
         }
     }
 }
