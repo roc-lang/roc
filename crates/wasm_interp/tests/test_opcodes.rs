@@ -1,6 +1,7 @@
 #![cfg(test)]
 
 use bumpalo::{collections::Vec, Bump};
+use roc_wasm_interp::test_utils::{const_value, default_state};
 use roc_wasm_interp::{Action, ExecutionState, ValueStack};
 use roc_wasm_module::{
     opcodes::OpCode,
@@ -8,35 +9,6 @@ use roc_wasm_module::{
     ConstExpr, Export, ExportType, SerialBuffer, Serialize, Signature, Value, ValueType,
     WasmModule,
 };
-
-fn default_state(arena: &Bump) -> ExecutionState {
-    let pages = 1;
-    let program_counter = 0;
-    let globals = [];
-    ExecutionState::new(arena, pages, program_counter, globals)
-}
-
-fn const_value(buf: &mut Vec<'_, u8>, value: Value) {
-    use Value::*;
-    match value {
-        I32(x) => {
-            buf.push(OpCode::I32CONST as u8);
-            buf.encode_i32(x);
-        }
-        I64(x) => {
-            buf.push(OpCode::I64CONST as u8);
-            buf.encode_i64(x);
-        }
-        F32(x) => {
-            buf.push(OpCode::F32CONST as u8);
-            buf.encode_f32(x);
-        }
-        F64(x) => {
-            buf.push(OpCode::F64CONST as u8);
-            buf.encode_f64(x);
-        }
-    }
-}
 
 #[test]
 fn test_loop() {
