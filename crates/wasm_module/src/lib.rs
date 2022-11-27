@@ -721,6 +721,18 @@ impl Value {
     }
 }
 
+impl From<u32> for Value {
+    fn from(x: u32) -> Self {
+        Value::I32(i32::from_ne_bytes(x.to_ne_bytes()))
+    }
+}
+
+impl From<u64> for Value {
+    fn from(x: u64) -> Self {
+        Value::I64(i64::from_ne_bytes(x.to_ne_bytes()))
+    }
+}
+
 /// Wasm memory alignment for load/store instructions.
 /// Rust representation matches Wasm encoding.
 /// It's an error to specify alignment higher than the "natural" alignment of the instruction
