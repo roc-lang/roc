@@ -175,20 +175,16 @@ to use them for more than that.</p>
 <p>Let's move out of the REPL and create our first Roc application!</p>
 <p>Make a file named <code>main.roc</code> and put this in it:</p>
 <samp><span class="kw">app</span> <span class="str">"hello"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.0/_V6HO2Dwez0xsSstgK8qC6wBLXSfNlVFyUTMg0cYiQQ.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
     <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 
 main <span class="kw">=</span>
     Stdout.line <span class="str">"I'm a Roc application!"</span>
 </samp>
-<p>In order to get access to this <code>examples/cli/cli-platform/main.roc</code> file, you'll need
-to download the <a href="https://github.com/roc-lang/roc">Roc source code repository</a>, which
-contains the <code>examples</code> directory at the beginning of that string. Make sure you <code>cd</code>
-into that directory once you've downloaded it!</p>
 <p>Try running this with:</p>
 <samp>roc dev</samp>
-<p>You should see this printed to the terminal:</p>
+<p>You should see a message about a file being downloaded, followed by this:</p>
 <samp>I'm a Roc application!</samp>
 <p>Congratulations - you've written your first Roc application! We'll go over what the parts of
 this file above <code>main</code> do later, but first let's play around a bit.</p>
@@ -203,7 +199,9 @@ total <span class="kw">=</span> Num.toStr <span class="paren">(</span>birds <spa
 main <span class="kw">=</span>
     Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
 </samp>
-<p>Now if you run <code>roc dev</code>, you should see this:</p>
+<p>Now run <code>roc dev</code> again. This time the "Downloading …" message won't appear;
+the file has been cached from last time, and won't need to be downloaded again.</p>
+<p>You should see this:</p>
 <samp>There are 5 animals.</samp>
 <p><code>main.roc</code> now has four definitions—<em>defs</em> for
 short—<code>birds</code>, <code>iguanas</code>, <code>total</code>, and <code>main</code>.</p>
@@ -367,8 +365,16 @@ because <code>total</code> is calling <code>addAndStringify</code> passing a rec
 <h3 id="comments"><a href="#comments">Comments</a></h3>
 <p>By the way, this is a comment in Roc:</p>
 <samp class="comment"># The `name` field is unused by addAndStringify</samp>
-<p>Whenever you write <span class="comment">#</span> it means that the rest of the line is a comment,
-and will have no effect on the program.</p>
+<p>Whenever you write <code>#</code> it means that the rest of the line is a comment,
+and will not affect the program.</p>
+<h3 id="doc-comments"><a href="#doc-comments">Doc Comments</a></h2>
+<p>Comments that begin with <code>##</code> will be included in generated documentation (<code>roc docs</code>). They can include code blocks by adding five spaces after <code>##</code>. </p>
+<samp><span class="comment">## This is a comment for documentation, and includes a <span class="kw">code</span> block.</span>
+<span class="comment">##</span>
+<span class="comment">##     x <span class="op">=</span> <span class="number">2</span></span>
+<span class="comment">##     expect x <span class="op">==</span> <span class="number">2</span></span>
+</samp>
+<p>Roc does not have multiline comment syntax.</p>
 <h3 id="record-shorthands"><a href="#record-shorthands">Record shorthands</a></h3>
 <p>Roc has a couple of shorthands you can use to express some record-related operations more concisely.</p>
 <p>Instead of writing <code>\record -&gt; record.x</code> we can write <code>.x</code> and it will evaluate to the same thing:
@@ -1231,7 +1237,7 @@ Roc compiler. That's why they're called "builtins!"</p>
 <h2 id="the-app-module-header"><a href="#the-app-module-header">The app module header</a></h2>
 <p>Let's take a closer look at the part of <code>main.roc</code> above the <code>main</code> def:</p>
 <samp><span class="hljs-selector-tag">app</span> "<span class="hljs-selector-tag">hello</span>"
-    <span class="hljs-selector-tag">packages</span> { <span class="attribute">pf</span>: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.0/_V6HO2Dwez0xsSstgK8qC6wBLXSfNlVFyUTMg0cYiQQ.tar.br"</span> <span class="brace">}</span>
     <span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout]</span>
     <span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
 </samp>
@@ -1244,13 +1250,18 @@ means when you run <code>roc dev</code>, the Roc compiler will build an executab
 named <code>hello</code> (or <code>hello.exe</code> on Windows) and run it. You can also build the executable
 without running it by running <code>roc build</code>.</p>
 <p>The remaining lines all involve the <em>platform</em> this application is built on:</p>
-<samp><span class="hljs-selector-tag">packages</span> { <span class="attribute">pf</span>: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout]</span>
-<span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
+<samp><span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.0/_V6HO2Dwez0xsSstgK8qC6wBLXSfNlVFyUTMg0cYiQQ.tar.br"</span> <span class="brace">}</span>
+<span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
+<span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 </samp>
-<p>The <code>packages { pf: "examples/cli/cli-platform/main.roc" }</code> part says two things:</p>
+<p>The <code>packages { pf: "https://…tar.br" }</code> part says three things:</p>
 <ul>
-<li>We're going to be using a <em>package</em> (that is, a collection of modules) called <code>"examples/cli/cli-platform/main.roc"</code></li>
+<li>We're going to be using a <em>package</em> (that is, a collection of modules) that can be downloaded from the URL <code>"https://…tar.br"</code></li>
+<li>That package's <a href="https://en.wikipedia.org/wiki/Base64#URL_applications">base64url</a>-encoded <a href="https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3">BLAKE3</a>
+cryptographic hash is the long string at the end (before the <code>.tar.br</code> file extension).
+Once the file has been downloaded, its contents will be verified against this hash, and it will only
+be installed if they match. (This way, you can be confident the download was neither corrupted nor
+changed since it was originally published.)</li>
 <li>We're going to name that package <code>pf</code> so we can refer to it more concisely in the future.</li>
 </ul>
 <p>The <code>imports [pf.Stdout]</code> line says that we want to import the <code>Stdout</code> module
@@ -1263,34 +1274,18 @@ at that again:</p>
 calling a function named <code>line</code> which is exposed by a module named
 <code>Stdout</code>.
 <p>When we write <code>imports [pf.Stdout]</code>, it specifies that the <code>Stdout</code>
-module comes from the <code>pf</code> package.</p>
-<p>Since <code>pf</code> was the name we chose for the <code>examples/cli/cli-platform/main.roc</code>
-package (when we wrote <code>packages { pf: "examples/cli/cli-platform/main.roc" }</code>),
-this <code>imports</code> line tells the Roc compiler that when we call <code>Stdout.line</code>, it
-should look for that <code>line</code> function in the <code>Stdout</code> module of the
-<code>examples/cli/cli-platform/main.roc</code> package.</p>
+module comes from the package we named <code>pf</code> in the <code>packages { pf: … }</code> section.</p>
 <p>If we would like to include other modules in our application, say <code>AdditionalModule.roc</code> and <code>AnotherModule.roc</code>, then they can be imported directly in <code>imports</code> like this:  </p>
-<samp><span class="hljs-selector-tag">packages</span> { <span class="attribute">pf</span>: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, AdditionalModule, AnotherModule]</span>
-<span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
+<samp><span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="comma">,</span> AdditionalModule<span class="comma">,</span> AnotherModule<span class="brace">]</span></span>
 </samp>
-<h2 id="comments"><a href="#comments">Comments</a></h2>
-<p>Comments that begin with <code>##</code> will be included in generated documentation (<code>roc docs</code>). They require a single space after the <code>##</code>, and can include code blocks by adding five spaces after <code>##</code>. </p>
-<samp><span class="comment">## This is a comment for documentation, and includes a <span class="kw">code</span> block.</span>
-<span class="comment">##</span>
-<span class="comment">##     x <span class="op">=</span> <span class="number">2</span></span>
-<span class="comment">##     expect x <span class="op">==</span> <span class="number">2</span></span>
-</samp>
-<p>Roc also supports inline comments and line comments with <code>#</code>. They can be used to add information that won't be included in documentation.</p>
-<samp><span class="comment"># This is a line comment that won't appear in documentation.</span>
-myFunction : U8<span class="hljs-function"> <span class="op">-&gt;</span> U8
-myFunction <span class="op">=</span> <span class="str">\bit</span> <span <span class="opclass="hljs-function">-&gt;<</span>/span> bit % <span class="number">2</span> <span class="comment"># this is an inline comment</span>
-</samp>
-<p>Roc does not have multiline comment syntax.</p>
+<p>You can find the <a href="https://www.roc-lang.org/packages/basic-cli/Stdout#line">documentation for <code>Stdout.line</code></a>
+in <a href="https://www.roc-lang.org/packages/basic-cli/Stdout">the documentation for the <code>Stdout</code> module</a>.
+</p>
 <h2 id="tasks"><a href="#tasks">Tasks</a></h2>
 <p>Tasks are technically not part of the Roc language, but they're very common in
-platforms. Let's use the CLI platform in <code>examples/cli/cli-platform/main.roc</code> as an example!</p>
-<p>In the CLI platform, we have four operations we can do:</p>
+platforms. Let's continue using the <a href="https://github.com/roc-lang/basic-cli">basic-cli</a> platform
+we've been using up to this point as an example!</p>
+<p>In the <code>basic-cli</code> platform, we have four operations we can do:</p>
 <ul>
 <li>Write a string to the console</li>
 <li>Read a string from user input</li>
@@ -1298,9 +1293,9 @@ platforms. Let's use the CLI platform in <code>examples/cli/cli-platform/main.ro
 <li>Read a string from a file</li>
 </ul>
 <p>We'll use these four operations to learn about tasks.</p>
-<p>First, let's do a basic "Hello World" using the tutorial app.</p>
+<p>Let's start with a basic "Hello World" program.</p>
 <samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    packages { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.0/_V6HO2Dwez0xsSstgK8qC6wBLXSfNlVFyUTMg0cYiQQ.tar.br"</span> <span class="brace">}</span>
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -1325,7 +1320,7 @@ when it runs (hence the <code>*</code>).</p>
 </samp>
 <p>Let's change <code>main</code> to read a line from <code>stdin</code>, and then print it back out again:</p>
 <samp>app <span class="str">"cli-tutorial"</span>
-    packages { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.0/_V6HO2Dwez0xsSstgK8qC6wBLXSfNlVFyUTMg0cYiQQ.tar.br"</span> <span class="brace">}</span>
     imports [pf.Stdout, pf.Stdin, pf.Task]
     provides [main] to pf
 
@@ -1360,7 +1355,7 @@ the program isn't doing anything when we start it up:</p>
 </samp>
 <p>This works, but we can make it a little nicer to read. Let's change it to the following:</p>
 <samp>app <span class="str">"cli-tutorial"</span>
-    packages { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.0/_V6HO2Dwez0xsSstgK8qC6wBLXSfNlVFyUTMg0cYiQQ.tar.br"</span> <span class="brace">}</span>
     imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     provides [main] to pf
 
