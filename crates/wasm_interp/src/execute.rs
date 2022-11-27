@@ -646,22 +646,72 @@ impl<'a> ExecutionState<'a> {
                 self.value_stack.push(Value::F64(value));
                 self.program_counter += 8;
             }
-            I32EQZ => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32EQ => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32NE => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32LTS => {
-                let second = self.value_stack.pop_i32();
-                let first = self.value_stack.pop_i32();
-                let result: bool = first < second;
+            I32EQZ => {
+                let arg = self.value_stack.pop_i32();
+                let result: bool = arg == 0;
                 self.value_stack.push(Value::I32(result as i32));
             }
-            I32LTU => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32GTS => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32GTU => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32LES => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32LEU => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32GES => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32GEU => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I32EQ => {
+                let arg2 = self.value_stack.pop_i32();
+                let arg1 = self.value_stack.pop_i32();
+                let result: bool = arg1 == arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32NE => {
+                let arg2 = self.value_stack.pop_i32();
+                let arg1 = self.value_stack.pop_i32();
+                let result: bool = arg1 != arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32LTS => {
+                let arg2 = self.value_stack.pop_i32();
+                let arg1 = self.value_stack.pop_i32();
+                let result: bool = arg1 < arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32LTU => {
+                let arg2 = self.value_stack.pop_u32();
+                let arg1 = self.value_stack.pop_u32();
+                let result: bool = arg1 < arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32GTS => {
+                let arg2 = self.value_stack.pop_i32();
+                let arg1 = self.value_stack.pop_i32();
+                let result: bool = arg1 > arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32GTU => {
+                let arg2 = self.value_stack.pop_u32();
+                let arg1 = self.value_stack.pop_u32();
+                let result: bool = arg1 > arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32LES => {
+                let arg2 = self.value_stack.pop_i32();
+                let arg1 = self.value_stack.pop_i32();
+                let result: bool = arg1 <= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32LEU => {
+                let arg2 = self.value_stack.pop_u32();
+                let arg1 = self.value_stack.pop_u32();
+                let result: bool = arg1 <= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32GES => {
+                let arg2 = self.value_stack.pop_i32();
+                let arg1 = self.value_stack.pop_i32();
+                let result: bool = arg1 >= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32GEU => {
+                let arg2 = self.value_stack.pop_u32();
+                let arg1 = self.value_stack.pop_u32();
+                let result: bool = arg1 >= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+
             I64EQZ => todo!("{:?} @ {:#x}", op_code, file_offset),
             I64EQ => todo!("{:?} @ {:#x}", op_code, file_offset),
             I64NE => todo!("{:?} @ {:#x}", op_code, file_offset),
@@ -688,36 +738,116 @@ impl<'a> ExecutionState<'a> {
             F64LE => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64GE => todo!("{:?} @ {:#x}", op_code, file_offset),
 
-            I32CLZ => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32CTZ => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32POPCNT => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I32CLZ => {
+                let arg = self.value_stack.pop_u32();
+                self.value_stack
+                    .push(Value::I32(arg.leading_zeros() as i32));
+            }
+            I32CTZ => {
+                let arg = self.value_stack.pop_u32();
+                self.value_stack
+                    .push(Value::I32(arg.trailing_zeros() as i32));
+            }
+            I32POPCNT => {
+                let arg = self.value_stack.pop_u32();
+                self.value_stack.push(Value::I32(arg.count_ones() as i32));
+            }
             I32ADD => {
-                let x = self.value_stack.pop_i32();
-                let y = self.value_stack.pop_i32();
-                self.value_stack.push(Value::I32(y + x));
+                let arg2 = self.value_stack.pop_i32();
+                let arg1 = self.value_stack.pop_i32();
+                self.value_stack.push(Value::I32(arg1 + arg2));
             }
             I32SUB => {
-                let x = self.value_stack.pop_i32();
-                let y = self.value_stack.pop_i32();
-                self.value_stack.push(Value::I32(y - x));
+                let arg2 = self.value_stack.pop_i32();
+                let arg1 = self.value_stack.pop_i32();
+                self.value_stack.push(Value::I32(arg1 - arg2));
             }
             I32MUL => {
-                let x = self.value_stack.pop_i32();
-                let y = self.value_stack.pop_i32();
-                self.value_stack.push(Value::I32(y * x));
+                let arg2 = self.value_stack.pop_i32();
+                let arg1 = self.value_stack.pop_i32();
+                self.value_stack.push(Value::I32(arg1 * arg2));
             }
-            I32DIVS => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32DIVU => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32REMS => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32REMU => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32AND => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32OR => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32XOR => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32SHL => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32SHRS => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32SHRU => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32ROTL => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32ROTR => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I32DIVS => {
+                let arg2 = self.value_stack.pop_i32();
+                let arg1 = self.value_stack.pop_i32();
+                self.value_stack.push(Value::I32(arg1 / arg2));
+            }
+            I32DIVU => {
+                let arg2 = self.value_stack.pop_u32();
+                let arg1 = self.value_stack.pop_u32();
+                let result: u32 = arg1 / arg2;
+                self.value_stack
+                    .push(Value::I32(i32::from_ne_bytes(result.to_ne_bytes())));
+            }
+            I32REMS => {
+                let arg2 = self.value_stack.pop_i32();
+                let arg1 = self.value_stack.pop_i32();
+                self.value_stack.push(Value::I32(arg1 % arg2));
+            }
+            I32REMU => {
+                let arg2 = self.value_stack.pop_u32();
+                let arg1 = self.value_stack.pop_u32();
+                let result: u32 = arg1 % arg2;
+                self.value_stack
+                    .push(Value::I32(i32::from_ne_bytes(result.to_ne_bytes())));
+            }
+            I32AND => {
+                let arg2 = self.value_stack.pop_u32();
+                let arg1 = self.value_stack.pop_u32();
+                let result: u32 = arg1 & arg2;
+                self.value_stack
+                    .push(Value::I32(i32::from_ne_bytes(result.to_ne_bytes())));
+            }
+            I32OR => {
+                let arg2 = self.value_stack.pop_u32();
+                let arg1 = self.value_stack.pop_u32();
+                let result: u32 = arg1 | arg2;
+                self.value_stack
+                    .push(Value::I32(i32::from_ne_bytes(result.to_ne_bytes())));
+            }
+            I32XOR => {
+                let arg2 = self.value_stack.pop_u32();
+                let arg1 = self.value_stack.pop_u32();
+                let result: u32 = arg1 ^ arg2;
+                self.value_stack
+                    .push(Value::I32(i32::from_ne_bytes(result.to_ne_bytes())));
+            }
+            I32SHL => {
+                let arg2 = self.value_stack.pop_u32();
+                let arg1 = self.value_stack.pop_u32();
+                let k = arg2 % 32;
+                let result: u32 = arg1 << k;
+                self.value_stack
+                    .push(Value::I32(i32::from_ne_bytes(result.to_ne_bytes())));
+            }
+            I32SHRS => {
+                let arg2 = self.value_stack.pop_i32();
+                let arg1 = self.value_stack.pop_i32();
+                let k = arg2 % 32;
+                self.value_stack.push(Value::I32(arg1 >> k));
+            }
+            I32SHRU => {
+                let arg2 = self.value_stack.pop_u32();
+                let arg1 = self.value_stack.pop_u32();
+                let k = arg2 % 32;
+                let result: u32 = arg1 >> k;
+                self.value_stack
+                    .push(Value::I32(i32::from_ne_bytes(result.to_ne_bytes())));
+            }
+            I32ROTL => {
+                let arg2 = self.value_stack.pop_u32();
+                let arg1 = self.value_stack.pop_u32();
+                let result: u32 = arg1.rotate_left(arg2);
+                self.value_stack
+                    .push(Value::I32(i32::from_ne_bytes(result.to_ne_bytes())));
+            }
+            I32ROTR => {
+                let arg2 = self.value_stack.pop_u32();
+                let arg1 = self.value_stack.pop_u32();
+                let result: u32 = arg1.rotate_right(arg2);
+                self.value_stack
+                    .push(Value::I32(i32::from_ne_bytes(result.to_ne_bytes())));
+            }
 
             I64CLZ => todo!("{:?} @ {:#x}", op_code, file_offset),
             I64CTZ => todo!("{:?} @ {:#x}", op_code, file_offset),
@@ -737,6 +867,7 @@ impl<'a> ExecutionState<'a> {
             I64SHRU => todo!("{:?} @ {:#x}", op_code, file_offset),
             I64ROTL => todo!("{:?} @ {:#x}", op_code, file_offset),
             I64ROTR => todo!("{:?} @ {:#x}", op_code, file_offset),
+
             F32ABS => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32NEG => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32CEIL => todo!("{:?} @ {:#x}", op_code, file_offset),
@@ -751,6 +882,7 @@ impl<'a> ExecutionState<'a> {
             F32MIN => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32MAX => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32COPYSIGN => todo!("{:?} @ {:#x}", op_code, file_offset),
+
             F64ABS => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64NEG => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64CEIL => todo!("{:?} @ {:#x}", op_code, file_offset),
