@@ -1304,15 +1304,6 @@ fn test_f64const() {
     assert_eq!(state.value_stack.pop(), Value::F64(12345.67890))
 }
 
-// #[test]
-// fn test_i32eqz() {}
-
-// #[test]
-// fn test_i32eq() {}
-
-// #[test]
-// fn test_i32ne() {}
-
 #[test]
 fn test_i32lts() {
     test_i32_compare_help(OpCode::I32LTS, 123, 234, true);
@@ -1353,27 +1344,6 @@ fn test_i32_compare_help(op: OpCode, x: i32, y: i32, expected: bool) {
 
     assert_eq!(state.value_stack.pop_i32(), expected as i32);
 }
-
-// #[test]
-// fn test_i32ltu() {}
-
-// #[test]
-// fn test_i32gts() {}
-
-// #[test]
-// fn test_i32gtu() {}
-
-// #[test]
-// fn test_i32les() {}
-
-// #[test]
-// fn test_i32leu() {}
-
-// #[test]
-// fn test_i32ges() {}
-
-// #[test]
-// fn test_i32geu() {}
 
 // #[test]
 // fn test_i64eqz() {}
@@ -1443,105 +1413,6 @@ fn test_i32_compare_help(op: OpCode, x: i32, y: i32, expected: bool) {
 
 // #[test]
 // fn test_f64ge() {}
-
-// #[test]
-// fn test_i32clz() {}
-
-// #[test]
-// fn test_i32ctz() {}
-
-// #[test]
-// fn test_i32popcnt() {}
-
-#[test]
-fn test_i32add() {
-    let arena = Bump::new();
-    let mut state = default_state(&arena);
-    let mut module = WasmModule::new(&arena);
-
-    module.code.bytes.push(OpCode::I32CONST as u8);
-    module.code.bytes.encode_i32(123);
-    module.code.bytes.push(OpCode::I32CONST as u8);
-    module.code.bytes.encode_i32(321);
-    module.code.bytes.push(OpCode::I32ADD as u8);
-
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
-    assert_eq!(state.value_stack.pop(), Value::I32(444))
-}
-
-#[test]
-fn test_i32sub() {
-    let arena = Bump::new();
-    let mut state = default_state(&arena);
-    let mut module = WasmModule::new(&arena);
-
-    module.code.bytes.push(OpCode::I32CONST as u8);
-    module.code.bytes.encode_i32(123);
-    module.code.bytes.push(OpCode::I32CONST as u8);
-    module.code.bytes.encode_i32(321);
-    module.code.bytes.push(OpCode::I32SUB as u8);
-
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
-    assert_eq!(state.value_stack.pop(), Value::I32(-198))
-}
-
-#[test]
-fn test_i32mul() {
-    let arena = Bump::new();
-    let mut state = default_state(&arena);
-    let mut module = WasmModule::new(&arena);
-
-    module.code.bytes.push(OpCode::I32CONST as u8);
-    module.code.bytes.encode_i32(123);
-    module.code.bytes.push(OpCode::I32CONST as u8);
-    module.code.bytes.encode_i32(321);
-    module.code.bytes.push(OpCode::I32MUL as u8);
-
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
-    assert_eq!(state.value_stack.pop(), Value::I32(39483))
-}
-
-// #[test]
-// fn test_i32divs() {}
-
-// #[test]
-// fn test_i32divu() {}
-
-// #[test]
-// fn test_i32rems() {}
-
-// #[test]
-// fn test_i32remu() {}
-
-// #[test]
-// fn test_i32and() {}
-
-// #[test]
-// fn test_i32or() {}
-
-// #[test]
-// fn test_i32xor() {}
-
-// #[test]
-// fn test_i32shl() {}
-
-// #[test]
-// fn test_i32shrs() {}
-
-// #[test]
-// fn test_i32shru() {}
-
-// #[test]
-// fn test_i32rotl() {}
-
-// #[test]
-// fn test_i32rotr() {}
 
 // #[test]
 // fn test_i64clz() {}
