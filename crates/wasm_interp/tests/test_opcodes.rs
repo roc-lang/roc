@@ -615,11 +615,11 @@ fn test_call_indirect_help(table_index: u32, elem_index: u32) -> Value {
     let start_fn_name = "test";
 
     // function 0: caller
-    let signature0 = Signature {
+    let signature0 = || Signature {
         param_types: bumpalo::vec![in &arena],
         ret_type: Some(ValueType::I32),
     };
-    create_exported_function_no_locals(&mut module, start_fn_name, signature0.clone(), |buf| {
+    create_exported_function_no_locals(&mut module, start_fn_name, signature0(), |buf| {
         buf.append_u8(OpCode::I32CONST as u8);
         buf.encode_u32(elem_index);
         buf.append_u8(OpCode::CALLINDIRECT as u8);
@@ -629,7 +629,7 @@ fn test_call_indirect_help(table_index: u32, elem_index: u32) -> Value {
     });
 
     // function 1: callee, right signature
-    create_exported_function_no_locals(&mut module, "callee1", signature0, |buf| {
+    create_exported_function_no_locals(&mut module, "callee1", signature0(), |buf| {
         buf.append_u8(OpCode::I32CONST as u8);
         buf.encode_i32(111);
         buf.append_u8(OpCode::END as u8);

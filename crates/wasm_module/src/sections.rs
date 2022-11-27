@@ -194,7 +194,7 @@ pub fn update_section_size<T: SerialBuffer>(buffer: &mut T, header_indices: Sect
  *
  *******************************************************************/
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Debug)]
 pub struct Signature<'a> {
     pub param_types: Vec<'a, ValueType>,
     pub ret_type: Option<ValueType>,
