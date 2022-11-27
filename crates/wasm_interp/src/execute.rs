@@ -249,6 +249,47 @@ impl<'a> ExecutionState<'a> {
         self.block_loop_addrs.truncate(target_block_depth);
     }
 
+    fn do_call(
+        &mut self,
+        expected_signature: Option<u32>,
+        fn_index: usize,
+        module: &WasmModule<'a>,
+    ) {
+        let n_imports = self.import_signatures.len();
+        let signature_index: u32 = if fn_index < n_imports {
+            self.import_signatures[fn_index]
+        } else {
+            module.function.signatures[fn_index - n_imports]
+        };
+
+        if let Some(expected) = expected_signature {
+            assert_eq!(
+                expected, signature_index,
+                "Indirect function call failed. Expected signature {} but found {}",
+                expected, signature_index,
+            );
+        }
+
+        let arg_type_bytes = module.types.look_up_arg_type_bytes(signature_index);
+
+        let return_addr = self.program_counter as u32;
+        self.program_counter = module.code.function_offsets[fn_index] as usize;
+
+        let return_block_depth = self.outermost_block;
+        self.outermost_block = self.block_loop_addrs.len() as u32;
+
+        let _function_byte_length =
+            u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
+        self.call_stack.push_frame(
+            return_addr,
+            return_block_depth,
+            arg_type_bytes,
+            &mut self.value_stack,
+            &module.code.bytes,
+            &mut self.program_counter,
+        );
+    }
+
     pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) -> Action {
         use OpCode::*;
 
@@ -349,34 +390,31 @@ impl<'a> ExecutionState<'a> {
                 action = self.do_return();
             }
             CALL => {
-                let index = self.fetch_immediate_u32(module) as usize;
-
-                let signature_index = if index < self.import_signatures.len() {
-                    self.import_signatures[index]
-                } else {
-                    let internal_fn_index = index - self.import_signatures.len();
-                    module.function.signatures[internal_fn_index]
-                };
-                let arg_type_bytes = module.types.look_up_arg_type_bytes(signature_index);
-
-                let return_addr = self.program_counter as u32;
-                self.program_counter = module.code.function_offsets[index] as usize;
-
-                let return_block_depth = self.outermost_block;
-                self.outermost_block = self.block_loop_addrs.len() as u32;
-
-                let _function_byte_length =
-                    u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
-                self.call_stack.push_frame(
-                    return_addr,
-                    return_block_depth,
-                    arg_type_bytes,
-                    &mut self.value_stack,
-                    &module.code.bytes,
-                    &mut self.program_counter,
-                );
+                let fn_index = self.fetch_immediate_u32(module) as usize;
+                self.do_call(None, fn_index, module);
             }
-            CALLINDIRECT => todo!("{:?} @ {:#x}", op_code, file_offset),
+            CALLINDIRECT => {
+                let table_index = self.fetch_immediate_u32(module);
+                let expected_signature = self.fetch_immediate_u32(module);
+                let element_index = self.value_stack.pop_u32();
+
+                // So far, all compilers seem to be emitting MVP-compatible code. (Rust, Zig, Roc...)
+                assert_eq!(
+                    table_index, 0,
+                    "Table index {} not supported at file offset {:#x}. This interpreter only supports Wasm MVP.",
+                    table_index, file_offset
+                );
+
+                // Dereference the function pointer (look up the element index in the function table)
+                let fn_index = module.element.lookup(element_index).unwrap_or_else(|| {
+                    panic!(
+                        "Indirect function call failed. There is no function with element index {}",
+                        element_index
+                    )
+                });
+
+                self.do_call(Some(expected_signature), fn_index as usize, module);
+            }
             DROP => {
                 self.value_stack.pop();
             }

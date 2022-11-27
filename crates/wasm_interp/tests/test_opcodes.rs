@@ -4,7 +4,7 @@ use bumpalo::{collections::Vec, Bump};
 use roc_wasm_interp::{Action, ExecutionState, ValueStack};
 use roc_wasm_module::{
     opcodes::OpCode,
-    sections::{DataMode, DataSegment, MemorySection},
+    sections::{DataMode, DataSegment, ElementSegment, MemorySection},
     ConstExpr, Export, ExportType, SerialBuffer, Serialize, Signature, Value, ValueType,
     WasmModule,
 };
@@ -583,8 +583,91 @@ fn test_call_return_with_args() {
     assert_eq!(state.value_stack.peek(), Value::I32(4));
 }
 
-// #[test]
-// fn test_callindirect() {}
+#[test]
+fn test_call_indirect_ok() {
+    let result = test_call_indirect_help(0, 0);
+    assert_eq!(result, Value::I32(111));
+}
+
+#[test]
+#[should_panic(expected = "Expected signature")]
+fn test_call_indirect_wrong_signature() {
+    test_call_indirect_help(0, 1);
+}
+
+#[test]
+#[should_panic(expected = "element index")]
+fn test_call_indirect_index_out_of_bounds() {
+    test_call_indirect_help(0, 2);
+}
+
+#[test]
+#[should_panic(expected = "Table index")]
+fn test_call_indirect_unsupported_table() {
+    test_call_indirect_help(1, 0);
+}
+
+fn test_call_indirect_help(table_index: u32, elem_index: u32) -> Value {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+
+    let is_debug_mode = true;
+    let start_fn_name = "test";
+
+    // function 0: caller
+    let signature0 = || Signature {
+        param_types: bumpalo::vec![in &arena],
+        ret_type: Some(ValueType::I32),
+    };
+    create_exported_function_no_locals(&mut module, start_fn_name, signature0(), |buf| {
+        buf.append_u8(OpCode::I32CONST as u8);
+        buf.encode_u32(elem_index);
+        buf.append_u8(OpCode::CALLINDIRECT as u8);
+        buf.encode_u32(table_index);
+        buf.encode_u32(0); // signature index
+        buf.append_u8(OpCode::END as u8);
+    });
+
+    // function 1: callee, right signature
+    create_exported_function_no_locals(&mut module, "callee1", signature0(), |buf| {
+        buf.append_u8(OpCode::I32CONST as u8);
+        buf.encode_i32(111);
+        buf.append_u8(OpCode::END as u8);
+    });
+
+    // function 2: callee, wrong signature
+    let signature1 = Signature {
+        param_types: bumpalo::vec![in &arena],
+        ret_type: Some(ValueType::F32),
+    };
+    create_exported_function_no_locals(&mut module, "callee2", signature1, |buf| {
+        buf.append_u8(OpCode::F32CONST as u8);
+        buf.encode_f32(2.22);
+        buf.append_u8(OpCode::END as u8);
+    });
+
+    // Put functions 1 and 2 in the function table
+    module.element.segments.push(ElementSegment::new(&arena));
+    assert_eq!(module.element.get_or_insert_fn(1), 0);
+    assert_eq!(module.element.get_or_insert_fn(2), 1);
+
+    if false {
+        let mut outfile_buf = Vec::new_in(&arena);
+        module.serialize(&mut outfile_buf);
+        std::fs::write(
+            format!("/tmp/roc/call_indirect_{}_{}.wasm", table_index, elem_index),
+            outfile_buf,
+        )
+        .unwrap();
+    }
+
+    let mut state =
+        ExecutionState::for_module(&arena, &module, start_fn_name, is_debug_mode, []).unwrap();
+
+    while let Action::Continue = state.execute_next_instruction(&module) {}
+
+    state.value_stack.pop()
+}
 
 // #[test]
 // fn test_drop() {}
