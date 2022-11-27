@@ -740,104 +740,93 @@ impl<'a> ExecutionState<'a> {
 
             I32CLZ => {
                 let arg = self.value_stack.pop_u32();
-                self.value_stack
-                    .push(Value::I32(arg.leading_zeros() as i32));
+                self.value_stack.push(Value::from(arg.leading_zeros()));
             }
             I32CTZ => {
                 let arg = self.value_stack.pop_u32();
-                self.value_stack
-                    .push(Value::I32(arg.trailing_zeros() as i32));
+                self.value_stack.push(Value::from(arg.trailing_zeros()));
             }
             I32POPCNT => {
                 let arg = self.value_stack.pop_u32();
-                self.value_stack.push(Value::I32(arg.count_ones() as i32));
+                self.value_stack.push(Value::from(arg.count_ones()));
             }
             I32ADD => {
                 let arg2 = self.value_stack.pop_i32();
                 let arg1 = self.value_stack.pop_i32();
-                self.value_stack.push(Value::I32(arg1 + arg2));
+                self.value_stack.push(Value::from(arg1 + arg2));
             }
             I32SUB => {
                 let arg2 = self.value_stack.pop_i32();
                 let arg1 = self.value_stack.pop_i32();
-                self.value_stack.push(Value::I32(arg1 - arg2));
+                self.value_stack.push(Value::from(arg1 - arg2));
             }
             I32MUL => {
                 let arg2 = self.value_stack.pop_i32();
                 let arg1 = self.value_stack.pop_i32();
-                self.value_stack.push(Value::I32(arg1 * arg2));
+                self.value_stack.push(Value::from(arg1 * arg2));
             }
             I32DIVS => {
                 let arg2 = self.value_stack.pop_i32();
                 let arg1 = self.value_stack.pop_i32();
-                self.value_stack.push(Value::I32(arg1 / arg2));
+                self.value_stack.push(Value::from(arg1 / arg2));
             }
             I32DIVU => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
-                let result: u32 = arg1 / arg2;
-                self.value_stack.push(Value::from(result));
+                self.value_stack.push(Value::from(arg1 / arg2));
             }
             I32REMS => {
                 let arg2 = self.value_stack.pop_i32();
                 let arg1 = self.value_stack.pop_i32();
-                self.value_stack.push(Value::I32(arg1 % arg2));
+                self.value_stack.push(Value::from(arg1 % arg2));
             }
             I32REMU => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
-                let result: u32 = arg1 % arg2;
-                self.value_stack.push(Value::from(result));
+                self.value_stack.push(Value::from(arg1 % arg2));
             }
             I32AND => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
-                let result: u32 = arg1 & arg2;
-                self.value_stack.push(Value::from(result));
+                self.value_stack.push(Value::from(arg1 & arg2));
             }
             I32OR => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
-                let result: u32 = arg1 | arg2;
-                self.value_stack.push(Value::from(result));
+                self.value_stack.push(Value::from(arg1 | arg2));
             }
             I32XOR => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
-                let result: u32 = arg1 ^ arg2;
-                self.value_stack.push(Value::from(result));
+                self.value_stack.push(Value::from(arg1 ^ arg2));
             }
             I32SHL => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
                 let k = arg2 % 32;
-                let result: u32 = arg1 << k;
-                self.value_stack.push(Value::from(result));
+                self.value_stack.push(Value::from(arg1 << k));
             }
             I32SHRS => {
                 let arg2 = self.value_stack.pop_i32();
                 let arg1 = self.value_stack.pop_i32();
                 let k = arg2 % 32;
-                self.value_stack.push(Value::I32(arg1 >> k));
+                self.value_stack.push(Value::from(arg1 >> k));
             }
             I32SHRU => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
                 let k = arg2 % 32;
-                let result: u32 = arg1 >> k;
-                self.value_stack.push(Value::from(result));
+                self.value_stack.push(Value::from(arg1 >> k));
             }
             I32ROTL => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
-                let result: u32 = arg1.rotate_left(arg2);
-                self.value_stack.push(Value::from(result));
+                self.value_stack.push(Value::from(arg1.rotate_left(arg2)));
             }
             I32ROTR => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
-                let result: u32 = arg1.rotate_right(arg2);
-                self.value_stack.push(Value::from(result));
+                self.value_stack.push(Value::from(arg1.rotate_right(arg2)));
             }
 
             I64CLZ => todo!("{:?} @ {:#x}", op_code, file_offset),
