@@ -67,8 +67,9 @@ ls downloaded-basic-cli/src/*.roc | grep -v Internal | grep -v main.roc | grep -
 
 rm -rf ./downloaded-basic-cli
 
-mkdir www/build/examples
+BASIC_CLI_PACKAGE_DIR="www/build/packages/basic-cli"
+mkdir -p $BASIC_CLI_PACKAGE_DIR
 rm generated-docs/*.* # we already copied over the *.js and *.css files earlier, so just drop these.
-mv generated-docs/ www/build/packages/basic-cli # move all the folders to build/packages/basic-cli
+mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
 
 popd
