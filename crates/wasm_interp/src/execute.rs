@@ -406,12 +406,14 @@ impl<'a> ExecutionState<'a> {
                 );
 
                 // Dereference the function pointer (look up the element index in the function table)
-                let fn_index = module.element.lookup(element_index).expect(&format!(
-                    "Indirect function call failed. There is no function with element index {}",
-                    element_index
-                )) as usize;
+                let fn_index = module.element.lookup(element_index).unwrap_or_else(|| {
+                    panic!(
+                        "Indirect function call failed. There is no function with element index {}",
+                        element_index
+                    )
+                });
 
-                self.do_call(Some(expected_signature), fn_index, module);
+                self.do_call(Some(expected_signature), fn_index as usize, module);
             }
             DROP => {
                 self.value_stack.pop();
