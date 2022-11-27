@@ -418,7 +418,14 @@ impl<'a> ExecutionState<'a> {
             DROP => {
                 self.value_stack.pop();
             }
-            SELECT => todo!("{:?} @ {:#x}", op_code, file_offset),
+            SELECT => {
+                let c = self.value_stack.pop_i32();
+                let val2 = self.value_stack.pop();
+                let val1 = self.value_stack.pop();
+                assert_eq!(ValueType::from(val1), ValueType::from(val2));
+                let result = if c != 0 { val1 } else { val2 };
+                self.value_stack.push(result);
+            }
             GETLOCAL => {
                 let index = self.fetch_immediate_u32(module);
                 let value = self.call_stack.get_local(index);

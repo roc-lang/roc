@@ -16,6 +16,28 @@ fn default_state(arena: &Bump) -> ExecutionState {
     ExecutionState::new(arena, pages, program_counter, globals)
 }
 
+fn const_value(buf: &mut Vec<'_, u8>, value: Value) {
+    use Value::*;
+    match value {
+        I32(x) => {
+            buf.push(OpCode::I32CONST as u8);
+            buf.encode_i32(x);
+        }
+        I64(x) => {
+            buf.push(OpCode::I64CONST as u8);
+            buf.encode_i64(x);
+        }
+        F32(x) => {
+            buf.push(OpCode::F32CONST as u8);
+            buf.encode_f32(x);
+        }
+        F64(x) => {
+            buf.push(OpCode::F64CONST as u8);
+            buf.encode_f64(x);
+        }
+    }
+}
+
 #[test]
 fn test_loop() {
     test_loop_help(10, 55);
@@ -672,8 +694,39 @@ fn test_call_indirect_help(table_index: u32, elem_index: u32) -> Value {
 // #[test]
 // fn test_drop() {}
 
-// #[test]
-// fn test_select() {}
+#[test]
+fn test_select() {
+    test_select_help(Value::F32(1.11), Value::F32(2.22), -100, Value::F32(1.11));
+    test_select_help(Value::F64(1.11), Value::F64(2.22), 0, Value::F64(2.22));
+}
+
+fn test_select_help(first: Value, second: Value, condition: i32, expected: Value) {
+    let arena = Bump::new();
+    let mut module = WasmModule::new(&arena);
+    let buf = &mut module.code.bytes;
+
+    buf.push(0); // no locals
+
+    const_value(buf, first);
+    const_value(buf, second);
+    const_value(buf, Value::I32(condition));
+    buf.push(OpCode::SELECT as u8);
+    buf.push(OpCode::END as u8);
+
+    let mut state = default_state(&arena);
+    state.call_stack.push_frame(
+        0,
+        0,
+        &[],
+        &mut state.value_stack,
+        &module.code.bytes,
+        &mut state.program_counter,
+    );
+
+    while let Action::Continue = state.execute_next_instruction(&module) {}
+
+    assert_eq!(state.value_stack.pop(), expected);
+}
 
 #[test]
 fn test_set_get_local() {
