@@ -753,37 +753,37 @@ impl<'a> ExecutionState<'a> {
             I32ADD => {
                 let arg2 = self.value_stack.pop_i32();
                 let arg1 = self.value_stack.pop_i32();
-                self.value_stack.push(Value::from(arg1 + arg2));
+                self.value_stack.push(Value::from(arg1.wrapping_add(arg2)));
             }
             I32SUB => {
                 let arg2 = self.value_stack.pop_i32();
                 let arg1 = self.value_stack.pop_i32();
-                self.value_stack.push(Value::from(arg1 - arg2));
+                self.value_stack.push(Value::from(arg1.wrapping_sub(arg2)));
             }
             I32MUL => {
                 let arg2 = self.value_stack.pop_i32();
                 let arg1 = self.value_stack.pop_i32();
-                self.value_stack.push(Value::from(arg1 * arg2));
+                self.value_stack.push(Value::from(arg1.wrapping_mul(arg2)));
             }
             I32DIVS => {
                 let arg2 = self.value_stack.pop_i32();
                 let arg1 = self.value_stack.pop_i32();
-                self.value_stack.push(Value::from(arg1 / arg2));
+                self.value_stack.push(Value::from(arg1.wrapping_div(arg2)));
             }
             I32DIVU => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
-                self.value_stack.push(Value::from(arg1 / arg2));
+                self.value_stack.push(Value::from(arg1.wrapping_div(arg2)));
             }
             I32REMS => {
                 let arg2 = self.value_stack.pop_i32();
                 let arg1 = self.value_stack.pop_i32();
-                self.value_stack.push(Value::from(arg1 % arg2));
+                self.value_stack.push(Value::from(arg1.wrapping_rem(arg2)));
             }
             I32REMU => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
-                self.value_stack.push(Value::from(arg1 % arg2));
+                self.value_stack.push(Value::from(arg1.wrapping_rem(arg2)));
             }
             I32AND => {
                 let arg2 = self.value_stack.pop_u32();
