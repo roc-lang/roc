@@ -1117,13 +1117,23 @@ impl<'a> Instance<'a> {
             F64MAX => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64COPYSIGN => todo!("{:?} @ {:#x}", op_code, file_offset),
 
-            I32WRAPI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I32WRAPI64 => {
+                let arg = self.value_stack.pop_u64();
+                let wrapped: u32 = (arg & 0xffff_ffff) as u32;
+                self.value_stack.push(Value::from(wrapped));
+            }
             I32TRUNCSF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32TRUNCUF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32TRUNCSF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32TRUNCUF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64EXTENDSI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64EXTENDUI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I64EXTENDSI32 => {
+                let arg = self.value_stack.pop_i32();
+                self.value_stack.push(Value::I64(arg as i64));
+            }
+            I64EXTENDUI32 => {
+                let arg = self.value_stack.pop_u32();
+                self.value_stack.push(Value::from(arg as u64));
+            }
             I64TRUNCSF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
             I64TRUNCUF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
             I64TRUNCSF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
@@ -1132,12 +1142,31 @@ impl<'a> Instance<'a> {
             F32CONVERTUI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32CONVERTSI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32CONVERTUI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32DEMOTEF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64CONVERTSI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64CONVERTUI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64CONVERTSI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64CONVERTUI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64PROMOTEF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F32DEMOTEF64 => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F32(arg as f32));
+            }
+            F64CONVERTSI32 => {
+                let arg = self.value_stack.pop_i32();
+                self.value_stack.push(Value::F64(arg as f64));
+            }
+            F64CONVERTUI32 => {
+                let arg = self.value_stack.pop_u32();
+                self.value_stack.push(Value::F64(arg as f64));
+            }
+            F64CONVERTSI64 => {
+                let arg = self.value_stack.pop_i64();
+                self.value_stack.push(Value::F64(arg as f64));
+            }
+            F64CONVERTUI64 => {
+                let arg = self.value_stack.pop_u64();
+                dbg!(arg);
+                self.value_stack.push(Value::F64(arg as f64));
+            }
+            F64PROMOTEF32 => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F64(arg as f64));
+            }
 
             I32REINTERPRETF32 => {
                 let x = self.value_stack.pop_f32();
