@@ -716,67 +716,67 @@ impl<'a> Instance<'a> {
             I64EQZ => {
                 let arg = self.value_stack.pop_i64();
                 let result: bool = arg == 0;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64EQ => {
                 let arg2 = self.value_stack.pop_i64();
                 let arg1 = self.value_stack.pop_i64();
                 let result: bool = arg1 == arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64NE => {
                 let arg2 = self.value_stack.pop_i64();
                 let arg1 = self.value_stack.pop_i64();
                 let result: bool = arg1 != arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64LTS => {
                 let arg2 = self.value_stack.pop_i64();
                 let arg1 = self.value_stack.pop_i64();
                 let result: bool = arg1 < arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64LTU => {
                 let arg2 = self.value_stack.pop_u64();
                 let arg1 = self.value_stack.pop_u64();
                 let result: bool = arg1 < arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64GTS => {
                 let arg2 = self.value_stack.pop_i64();
                 let arg1 = self.value_stack.pop_i64();
                 let result: bool = arg1 > arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64GTU => {
                 let arg2 = self.value_stack.pop_u64();
                 let arg1 = self.value_stack.pop_u64();
                 let result: bool = arg1 > arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64LES => {
                 let arg2 = self.value_stack.pop_i64();
                 let arg1 = self.value_stack.pop_i64();
                 let result: bool = arg1 <= arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64LEU => {
                 let arg2 = self.value_stack.pop_u64();
                 let arg1 = self.value_stack.pop_u64();
                 let result: bool = arg1 <= arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64GES => {
                 let arg2 = self.value_stack.pop_i64();
                 let arg1 = self.value_stack.pop_i64();
                 let result: bool = arg1 >= arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64GEU => {
                 let arg2 = self.value_stack.pop_u64();
                 let arg1 = self.value_stack.pop_u64();
                 let result: bool = arg1 >= arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
 
             F32EQ => todo!("{:?} @ {:#x}", op_code, file_offset),

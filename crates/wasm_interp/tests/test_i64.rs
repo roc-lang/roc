@@ -3,6 +3,22 @@
 use roc_wasm_interp::test_utils::test_op_example;
 use roc_wasm_module::{opcodes::OpCode, opcodes::OpCode::*, Value};
 
+fn test_i64_comparison(op: OpCode, arg1: i64, arg2: i64, expected: bool) {
+    test_op_example(
+        op,
+        [Value::from(arg1), Value::from(arg2)],
+        Value::I32(expected as i32),
+    )
+}
+
+fn test_u64_comparison(op: OpCode, arg1: u64, arg2: u64, expected: bool) {
+    test_op_example(
+        op,
+        [Value::from(arg1), Value::from(arg2)],
+        Value::I32(expected as i32),
+    )
+}
+
 fn test_i64_binop(op: OpCode, arg1: i64, arg2: i64, expected: i64) {
     test_op_example(
         op,
@@ -26,109 +42,109 @@ fn test_i64_unop(op: OpCode, arg: i64, expected: i64) {
 #[test]
 fn test_i64eqz() {
     let op = I64EQZ;
-    test_i64_unop(op, 0, 1);
-    test_i64_unop(op, i64::MIN, 0);
-    test_i64_unop(op, i64::MAX, 0);
+    test_op_example(op, [Value::I64(0)], Value::I32(true as i32));
+    test_op_example(op, [Value::I64(i64::MIN)], Value::I32(false as i32));
+    test_op_example(op, [Value::I64(i64::MAX)], Value::I32(false as i32));
 }
 
 #[test]
 fn test_i64eq() {
     let op = I64EQ;
-    test_i64_binop(op, 0, 0, 1);
-    test_i64_binop(op, i64::MIN, i64::MIN, 1);
-    test_i64_binop(op, i64::MAX, i64::MAX, 1);
-    test_i64_binop(op, i64::MIN, i64::MAX, 0);
-    test_i64_binop(op, i64::MAX, i64::MIN, 0);
+    test_i64_comparison(op, 0, 0, true);
+    test_i64_comparison(op, i64::MIN, i64::MIN, true);
+    test_i64_comparison(op, i64::MAX, i64::MAX, true);
+    test_i64_comparison(op, i64::MIN, i64::MAX, false);
+    test_i64_comparison(op, i64::MAX, i64::MIN, false);
 }
 
 #[test]
 fn test_i64ne() {
     let op = I64NE;
-    test_i64_binop(op, 0, 0, 0);
-    test_i64_binop(op, i64::MIN, i64::MIN, 0);
-    test_i64_binop(op, i64::MAX, i64::MAX, 0);
-    test_i64_binop(op, i64::MIN, i64::MAX, 1);
-    test_i64_binop(op, i64::MAX, i64::MIN, 1);
+    test_i64_comparison(op, 0, 0, false);
+    test_i64_comparison(op, i64::MIN, i64::MIN, false);
+    test_i64_comparison(op, i64::MAX, i64::MAX, false);
+    test_i64_comparison(op, i64::MIN, i64::MAX, true);
+    test_i64_comparison(op, i64::MAX, i64::MIN, true);
 }
 
 #[test]
 fn test_i64lts() {
     let op = I64LTS;
-    test_i64_binop(op, 0, 0, 0);
-    test_i64_binop(op, i64::MIN, i64::MIN, 0);
-    test_i64_binop(op, i64::MAX, i64::MAX, 0);
-    test_i64_binop(op, i64::MIN, i64::MAX, 1);
-    test_i64_binop(op, i64::MAX, i64::MIN, 0);
+    test_i64_comparison(op, 0, 0, false);
+    test_i64_comparison(op, i64::MIN, i64::MIN, false);
+    test_i64_comparison(op, i64::MAX, i64::MAX, false);
+    test_i64_comparison(op, i64::MIN, i64::MAX, true);
+    test_i64_comparison(op, i64::MAX, i64::MIN, false);
 }
 
 #[test]
 fn test_i64ltu() {
     let op = I64LTU;
-    test_u64_binop(op, 0, 0, 0);
-    test_u64_binop(op, u64::MIN, u64::MIN, 0);
-    test_u64_binop(op, u64::MAX, u64::MAX, 0);
-    test_u64_binop(op, u64::MIN, u64::MAX, 1);
-    test_u64_binop(op, u64::MAX, u64::MIN, 0);
+    test_u64_comparison(op, 0, 0, false);
+    test_u64_comparison(op, u64::MIN, u64::MIN, false);
+    test_u64_comparison(op, u64::MAX, u64::MAX, false);
+    test_u64_comparison(op, u64::MIN, u64::MAX, true);
+    test_u64_comparison(op, u64::MAX, u64::MIN, false);
 }
 
 #[test]
 fn test_i64gts() {
     let op = I64GTS;
-    test_i64_binop(op, 0, 0, 0);
-    test_i64_binop(op, i64::MIN, i64::MIN, 0);
-    test_i64_binop(op, i64::MAX, i64::MAX, 0);
-    test_i64_binop(op, i64::MIN, i64::MAX, 0);
-    test_i64_binop(op, i64::MAX, i64::MIN, 1);
+    test_i64_comparison(op, 0, 0, false);
+    test_i64_comparison(op, i64::MIN, i64::MIN, false);
+    test_i64_comparison(op, i64::MAX, i64::MAX, false);
+    test_i64_comparison(op, i64::MIN, i64::MAX, false);
+    test_i64_comparison(op, i64::MAX, i64::MIN, true);
 }
 
 #[test]
 fn test_i64gtu() {
     let op = I64GTU;
-    test_u64_binop(op, 0, 0, 0);
-    test_u64_binop(op, u64::MIN, u64::MIN, 0);
-    test_u64_binop(op, u64::MAX, u64::MAX, 0);
-    test_u64_binop(op, u64::MIN, u64::MAX, 0);
-    test_u64_binop(op, u64::MAX, u64::MIN, 1);
+    test_u64_comparison(op, 0, 0, false);
+    test_u64_comparison(op, u64::MIN, u64::MIN, false);
+    test_u64_comparison(op, u64::MAX, u64::MAX, false);
+    test_u64_comparison(op, u64::MIN, u64::MAX, false);
+    test_u64_comparison(op, u64::MAX, u64::MIN, true);
 }
 
 #[test]
 fn test_i64les() {
     let op = I64LES;
-    test_i64_binop(op, 0, 0, 1);
-    test_i64_binop(op, i64::MIN, i64::MIN, 1);
-    test_i64_binop(op, i64::MAX, i64::MAX, 1);
-    test_i64_binop(op, i64::MIN, i64::MAX, 1);
-    test_i64_binop(op, i64::MAX, i64::MIN, 0);
+    test_i64_comparison(op, 0, 0, true);
+    test_i64_comparison(op, i64::MIN, i64::MIN, true);
+    test_i64_comparison(op, i64::MAX, i64::MAX, true);
+    test_i64_comparison(op, i64::MIN, i64::MAX, true);
+    test_i64_comparison(op, i64::MAX, i64::MIN, false);
 }
 
 #[test]
 fn test_i64leu() {
     let op = I64LEU;
-    test_u64_binop(op, 0, 0, 1);
-    test_u64_binop(op, u64::MIN, u64::MIN, 1);
-    test_u64_binop(op, u64::MAX, u64::MAX, 1);
-    test_u64_binop(op, u64::MIN, u64::MAX, 1);
-    test_u64_binop(op, u64::MAX, u64::MIN, 0);
+    test_u64_comparison(op, 0, 0, true);
+    test_u64_comparison(op, u64::MIN, u64::MIN, true);
+    test_u64_comparison(op, u64::MAX, u64::MAX, true);
+    test_u64_comparison(op, u64::MIN, u64::MAX, true);
+    test_u64_comparison(op, u64::MAX, u64::MIN, false);
 }
 
 #[test]
 fn test_i64ges() {
     let op = I64GES;
-    test_i64_binop(op, 0, 0, 1);
-    test_i64_binop(op, i64::MIN, i64::MIN, 1);
-    test_i64_binop(op, i64::MAX, i64::MAX, 1);
-    test_i64_binop(op, i64::MIN, i64::MAX, 0);
-    test_i64_binop(op, i64::MAX, i64::MIN, 1);
+    test_i64_comparison(op, 0, 0, true);
+    test_i64_comparison(op, i64::MIN, i64::MIN, true);
+    test_i64_comparison(op, i64::MAX, i64::MAX, true);
+    test_i64_comparison(op, i64::MIN, i64::MAX, false);
+    test_i64_comparison(op, i64::MAX, i64::MIN, true);
 }
 
 #[test]
 fn test_i64geu() {
     let op = I64GEU;
-    test_u64_binop(op, 0, 0, 1);
-    test_u64_binop(op, u64::MIN, u64::MIN, 1);
-    test_u64_binop(op, u64::MAX, u64::MAX, 1);
-    test_u64_binop(op, u64::MIN, u64::MAX, 0);
-    test_u64_binop(op, u64::MAX, u64::MIN, 1);
+    test_u64_comparison(op, 0, 0, true);
+    test_u64_comparison(op, u64::MIN, u64::MIN, true);
+    test_u64_comparison(op, u64::MAX, u64::MAX, true);
+    test_u64_comparison(op, u64::MIN, u64::MAX, false);
+    test_u64_comparison(op, u64::MAX, u64::MIN, true);
 }
 
 #[test]
