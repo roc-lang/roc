@@ -99,14 +99,14 @@ fn decode_i64(bytes: &[u8]) -> Result<(i64, usize), ()> {
     let mut shift = 0;
     for (i, byte) in bytes.iter().take(MAX_SIZE_ENCODED_U64).enumerate() {
         value |= ((byte & 0x7f) as i64) << shift;
+        shift += 7;
         if (byte & 0x80) == 0 {
             let is_negative = byte & 0x40 != 0;
-            if shift < MAX_SIZE_ENCODED_U64 && is_negative {
+            if shift < 64 && is_negative {
                 value |= -1 << shift;
             }
             return Ok((value, i + 1));
         }
-        shift += 7;
     }
     Err(())
 }

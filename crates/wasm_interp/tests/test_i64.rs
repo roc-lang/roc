@@ -276,21 +276,18 @@ fn test_i64shl() {
 }
 
 #[test]
-#[ignore] // TODO: i64.const is encoding the wrong LEB bytes
 fn test_i64shrs() {
     test_u64_binop(I64SHRS, 0xffff_ffff_0000_0000, 8, 0xffff_ffff_ff00_0000);
     test_u64_binop(I64SHRS, 0xffff_ffff_0000_0000, 72, 0xffff_ffff_ff00_0000);
 }
 
 #[test]
-#[ignore] // TODO: i64.const is encoding the wrong LEB bytes
 fn test_i64shru() {
     test_u64_binop(I64SHRU, 0xffff_ffff_0000_0000, 8, 0x00ff_ffff_ff00_0000);
     test_u64_binop(I64SHRU, 0xffff_ffff_0000_0000, 72, 0x00ff_ffff_ff00_0000);
 }
 
 #[test]
-#[ignore] // TODO: i64.const is encoding the wrong LEB bytes
 fn test_i64rotl() {
     test_u64_binop(I64ROTL, 0xff00_0000_0000_0000, 4, 0xf000_0000_0000_000f);
     test_u64_binop(I64ROTL, 0xff00_0000_0000_0000, 68, 0xf000_0000_0000_000f);
