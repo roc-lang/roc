@@ -1,5 +1,5 @@
 when Just 4 is
-    Just when ->
+    Just if ->
         4
 
     _ ->
