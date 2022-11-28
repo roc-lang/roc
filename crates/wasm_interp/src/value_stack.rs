@@ -126,6 +126,17 @@ impl<'a> ValueStack<'a> {
         }
     }
 
+    pub fn pop_u64(&mut self) -> u64 {
+        match (self.is_float.pop(), self.is_64.pop()) {
+            (Some(false), Some(true)) => pop_bytes!(u64, self.bytes),
+            (Some(is_float), Some(is_64)) => panic!(
+                "Expected I64 but found {:?}",
+                type_from_flags(is_float, is_64)
+            ),
+            _ => panic!("Expected I64 but value stack was empty"),
+        }
+    }
+
     pub fn pop_i64(&mut self) -> i64 {
         match (self.is_float.pop(), self.is_64.pop()) {
             (Some(false), Some(true)) => pop_bytes!(i64, self.bytes),
