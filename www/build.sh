@@ -54,8 +54,8 @@ find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div c
 
 echo 'Generating CLI example platform docs...'
 # Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
-# "/examples/cli/" rather than "/builtins/"
-export ROC_DOCS_URL_ROOT=/examples/cli
+# "/packages/basic-cli/" rather than "/builtins/"
+export ROC_DOCS_URL_ROOT=/packages/basic-cli
 
 rm -rf ./downloaded-basic-cli
 
