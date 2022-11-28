@@ -135,7 +135,6 @@ fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PInPare
             specialize_ref(PInParens::Pattern, loc_pattern_help()),
             word1(b',', PInParens::End),
             word1(b')', PInParens::End),
-            PInParens::Open,
             PInParens::IndentOpen,
             Pattern::SpaceBefore
         )),
@@ -209,7 +208,6 @@ fn list_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PList<'a>> {
             list_element_pattern(),
             word1(b',', PList::End),
             word1(b']', PList::End),
-            PList::Open,
             PList::IndentEnd,
             Pattern::SpaceBefore
         ),
@@ -380,7 +378,6 @@ fn record_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
             record_pattern_field(),
             word1(b',', PRecord::End),
             word1(b'}', PRecord::End),
-            PRecord::Open,
             PRecord::IndentEnd,
             Pattern::SpaceBefore
         ),

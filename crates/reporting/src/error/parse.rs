@@ -3832,7 +3832,7 @@ fn to_requires_report<'a>(
             }
         }
 
-        ERequires::Open(pos) => {
+        ERequires::ListEnd(pos) | ERequires::Open(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
