@@ -22,15 +22,14 @@
             <a href="/install">install</a>
             <a href="/repl">repl</a>
             <a href="/builtins/Bool">docs</a>
-            <label class="tutorial-toc-toggle" for="tutorial-toc-toggle">menu</label>
         </div>
     </nav>
 </div>
 <main>
 <div id="tutorial-start">
-    <input id="tutorial-toc-toggle" name="tutorial-toc-toggle" type="checkbox" style="display: none" />
+    <input id="tutorial-toc-toggle" name="tutorial-toc-toggle" type="checkbox" />
     <nav id="tutorial-toc">
-        <label class="tutorial-toc-inner-toggle" for="tutorial-toc-toggle">Close</label>
+        <label id="close-tutorial-toc" for="tutorial-toc-toggle">close</label>
         <input id="toc-search" type="text" placeholder="Search">
         <ol>
             <li><a href="#installation">Installation</a></li>
@@ -56,7 +55,9 @@
     </nav>
     <div id="tutorial-intro">
         <section>
-            <h1>Tutorial</h1>
+            <h1>Tutorial
+                <label id="tutorial-toc-toggle-label" for="tutorial-toc-toggle">contents</label>
+            </h1>
 
             <p>Welcome to Roc!</p>
 
