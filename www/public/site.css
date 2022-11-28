@@ -511,13 +511,13 @@ h4 {
 @media (prefers-color-scheme: dark) {
     :root {
         --text-color: #cdcdcd;
-        --top-bar-bg: #8d51f6;
+        --top-bar-bg: #2a2a2a;
         --header-link-color: hsl(258, 73%, 70%);
         --header-link-hover: #ddd;
         --h1-color: #1bc6bd;
         --link-color: #1bc6bd;
         --repl-prompt: #0ff4f4;
-        --body-bg: #161519;
+        --body-bg: #0e0e0f;
         --code-bg: #303030;
         --snippet-bg: #1a1a1a;
         --snippet-border: #444;
