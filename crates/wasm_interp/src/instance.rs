@@ -1139,10 +1139,26 @@ impl<'a> Instance<'a> {
             F64CONVERTUI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64PROMOTEF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
 
-            I32REINTERPRETF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64REINTERPRETF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32REINTERPRETI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64REINTERPRETI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I32REINTERPRETF32 => {
+                let x = self.value_stack.pop_f32();
+                self.value_stack
+                    .push(Value::I32(i32::from_ne_bytes(x.to_ne_bytes())));
+            }
+            I64REINTERPRETF64 => {
+                let x = self.value_stack.pop_f64();
+                self.value_stack
+                    .push(Value::I64(i64::from_ne_bytes(x.to_ne_bytes())));
+            }
+            F32REINTERPRETI32 => {
+                let x = self.value_stack.pop_i32();
+                self.value_stack
+                    .push(Value::F32(f32::from_ne_bytes(x.to_ne_bytes())));
+            }
+            F64REINTERPRETI64 => {
+                let x = self.value_stack.pop_i64();
+                self.value_stack
+                    .push(Value::F64(f64::from_ne_bytes(x.to_ne_bytes())));
+            }
         }
 
         if let Some(debug_string) = &self.debug_string {
