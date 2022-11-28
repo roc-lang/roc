@@ -811,6 +811,33 @@ macro_rules! round_up_to_alignment {
     };
 }
 
+/// # dbg_hex
+/// display dbg result in hexadecimal `{:#x?}` format.
+#[macro_export]
+macro_rules! dbg_hex {
+    // NOTE: We cannot use `concat!` to make a static string as a format argument
+    // of `eprintln!` because `file!` could contain a `{` or
+    // `$val` expression could be a block (`{ .. }`), in which case the `eprintln!`
+    // will be malformed.
+    () => {
+        eprintln!("[{}:{}]", file!(), line!());
+    };
+    ($val:expr $(,)?) => {
+        // Use of `match` here is intentional because it affects the lifetimes
+        // of temporaries - https://stackoverflow.com/a/48732525/1063961
+        match $val {
+            tmp => {
+                eprintln!("[{}:{}] {} = {:#x?}",
+                    file!(), line!(), stringify!($val), &tmp);
+                tmp
+            }
+        }
+    };
+    ($($val:expr),+ $(,)?) => {
+        ($($crate::dbg_hex!($val)),+,)
+    };
+}
+
 /// Bytes for a dummy function with just a single `unreachable` instruction.
 /// Used in dead code elimination to replace unused functions.
 const DUMMY_FUNCTION: [u8; 3] = [
