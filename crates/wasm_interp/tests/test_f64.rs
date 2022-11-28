@@ -19,9 +19,9 @@ fn test_f64_binop(op: OpCode, arg1: f64, arg2: f64, expected: f64) {
     )
 }
 
-// fn test_f64_unop(op: OpCode, arg: f64, expected: f64) {
-//     test_op_example(op, [Value::F64(arg)], Value::F64(expected))
-// }
+fn test_f64_unop(op: OpCode, arg: f64, expected: f64) {
+    test_op_example(op, [Value::F64(arg)], Value::F64(expected))
+}
 
 #[test]
 fn test_f64eq() {
@@ -67,6 +67,22 @@ fn test_f64ge() {
     test_f64_comparison(op, 1.1, 1.1, true);
     test_f64_comparison(op, 1.1, -1.1, true);
     test_f64_comparison(op, -1.1, 1.1, false);
+}
+
+#[test]
+fn test_f64abs() {
+    let op = F64ABS;
+    test_f64_unop(op, 0.0, 0.0);
+    test_f64_unop(op, 1.1, 1.1);
+    test_f64_unop(op, -1.1, 1.1);
+}
+
+#[test]
+fn test_f64neg() {
+    let op = F64NEG;
+    test_f64_unop(op, 0.0, 0.0);
+    test_f64_unop(op, 1.1, -1.1);
+    test_f64_unop(op, -1.1, 1.1);
 }
 
 #[test]

@@ -1043,8 +1043,14 @@ impl<'a> Instance<'a> {
                 self.value_stack.push(Value::from(arg1.rotate_right(k)));
             }
 
-            F32ABS => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32NEG => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F32ABS => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg.abs()));
+            }
+            F32NEG => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(-arg));
+            }
             F32CEIL => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32FLOOR => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32TRUNC => todo!("{:?} @ {:#x}", op_code, file_offset),
@@ -1074,8 +1080,14 @@ impl<'a> Instance<'a> {
             F32MAX => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32COPYSIGN => todo!("{:?} @ {:#x}", op_code, file_offset),
 
-            F64ABS => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64NEG => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F64ABS => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg.abs()));
+            }
+            F64NEG => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(-arg));
+            }
             F64CEIL => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64FLOOR => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64TRUNC => todo!("{:?} @ {:#x}", op_code, file_offset),

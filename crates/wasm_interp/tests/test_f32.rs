@@ -19,9 +19,9 @@ fn test_f32_binop(op: OpCode, arg1: f32, arg2: f32, expected: f32) {
     )
 }
 
-// fn test_f32_unop(op: OpCode, arg: f32, expected: f32) {
-//     test_op_example(op, [Value::F32(arg)], Value::F32(expected))
-// }
+fn test_f32_unop(op: OpCode, arg: f32, expected: f32) {
+    test_op_example(op, [Value::F32(arg)], Value::F32(expected))
+}
 
 #[test]
 fn test_f32eq() {
@@ -67,6 +67,22 @@ fn test_f32ge() {
     test_f32_comparison(op, 1.1, 1.1, true);
     test_f32_comparison(op, 1.1, -1.1, true);
     test_f32_comparison(op, -1.1, 1.1, false);
+}
+
+#[test]
+fn test_f32abs() {
+    let op = F32ABS;
+    test_f32_unop(op, 0.0, 0.0);
+    test_f32_unop(op, 1.1, 1.1);
+    test_f32_unop(op, -1.1, 1.1);
+}
+
+#[test]
+fn test_f32neg() {
+    let op = F32NEG;
+    test_f32_unop(op, 0.0, 0.0);
+    test_f32_unop(op, 1.1, -1.1);
+    test_f32_unop(op, -1.1, 1.1);
 }
 
 #[test]
