@@ -889,15 +889,17 @@ impl<'a> ExecutionState<'a> {
 
             I64CLZ => {
                 let arg = self.value_stack.pop_u64();
-                self.value_stack.push(Value::from(arg.leading_zeros()));
+                self.value_stack
+                    .push(Value::from(arg.leading_zeros() as u64));
             }
             I64CTZ => {
                 let arg = self.value_stack.pop_u64();
-                self.value_stack.push(Value::from(arg.trailing_zeros()));
+                self.value_stack
+                    .push(Value::from(arg.trailing_zeros() as u64));
             }
             I64POPCNT => {
                 let arg = self.value_stack.pop_u64();
-                self.value_stack.push(Value::from(arg.count_ones()));
+                self.value_stack.push(Value::from(arg.count_ones() as u64));
             }
             I64ADD => {
                 let arg2 = self.value_stack.pop_i64();
