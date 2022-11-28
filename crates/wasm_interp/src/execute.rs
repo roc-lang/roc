@@ -803,6 +803,7 @@ impl<'a> ExecutionState<'a> {
             I32SHL => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
+                // Take modulo N as per the spec https://webassembly.github.io/spec/core/exec/numerics.html#op-ishl
                 let k = arg2 % 32;
                 self.value_stack.push(Value::from(arg1 << k));
             }

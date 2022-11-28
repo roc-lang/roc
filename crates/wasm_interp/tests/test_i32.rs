@@ -257,16 +257,19 @@ fn test_i32xor() {
 #[test]
 fn test_i32shl() {
     test_u32_binop(I32SHL, 0xffff_ffff, 8, 0xffff_ff00);
+    test_u32_binop(I32SHL, 0xffff_ffff, 40, 0xffff_ff00);
 }
 
 #[test]
 fn test_i32shrs() {
     test_u32_binop(I32SHRS, 0xffff_0000, 8, 0xffff_ff00);
+    test_u32_binop(I32SHRS, 0xffff_0000, 40, 0xffff_ff00);
 }
 
 #[test]
 fn test_i32shru() {
     test_u32_binop(I32SHRU, 0xffff_0000, 8, 0x00ff_ff00);
+    test_u32_binop(I32SHRU, 0xffff_0000, 40, 0x00ff_ff00);
 }
 
 #[test]
