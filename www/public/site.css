@@ -181,7 +181,7 @@ samp .dim {
 }
 
 samp .comment {
-    color: green;
+    color: #88c796;
 }
 samp .comment .kw,
 samp .comment .str,
