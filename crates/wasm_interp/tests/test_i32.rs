@@ -269,8 +269,12 @@ fn test_i32shru() {
     test_u32_binop(I32SHRU, 0xffff_0000, 8, 0x00ff_ff00);
 }
 
-// #[test]
-// fn test_i32rotl() {}
+#[test]
+fn test_i32rotl() {
+    test_u32_binop(I32ROTL, 0xff00_0000, 4, 0xf000_000f);
+}
 
-// #[test]
-// fn test_i32rotr() {}
+#[test]
+fn test_i32rotr() {
+    test_u32_binop(I32ROTR, 0x0000_00ff, 4, 0xf000_000f);
+}
