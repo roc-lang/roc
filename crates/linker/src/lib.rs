@@ -5,7 +5,7 @@
 //! practical to use a regular linker.
 use memmap2::{Mmap, MmapMut};
 use object::Object;
-use roc_build::link::{rebuild_host, LinkType};
+use roc_build::link::{get_target_triple_str, rebuild_host, LinkType};
 use roc_error_macros::internal_error;
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::OptLevel;
@@ -77,7 +77,8 @@ pub fn build_and_preprocess_host(
     let stub_dll_symbols = make_stub_dll_symbols(exposed_to_host, exported_closure_types);
     generate_dynamic_lib(target, &stub_dll_symbols, &stub_lib);
     rebuild_host(opt_level, target, host_input_path, Some(&stub_lib));
-    let metadata = host_input_path.with_file_name("metadata");
+
+    let metadata = host_input_path.with_file_name(metadata_file_name(target));
     // let prehost = host_input_path.with_file_name(preprocessed_host_filename(target).unwrap());
 
     preprocess(
@@ -92,13 +93,19 @@ pub fn build_and_preprocess_host(
     )
 }
 
+fn metadata_file_name(target: &Triple) -> String {
+    let target_triple_str = get_target_triple_str(target);
+
+    format!("metadata_{}.rm1", target_triple_str.unwrap_or("unknown"))
+}
+
 pub fn link_preprocessed_host(
     target: &Triple,
     host_input_path: &Path,
     roc_app_bytes: &[u8],
     binary_path: &Path,
 ) {
-    let metadata = host_input_path.with_file_name("metadata");
+    let metadata = host_input_path.with_file_name(metadata_file_name(target));
     surgery(roc_app_bytes, &metadata, binary_path, false, false, target)
 }
 

@@ -87,47 +87,122 @@ const fn legacy_host_filename_ext(
 
 const PRECOMPILED_HOST_EXT: &str = "rh1"; // Short for "roc host version 1" (so we can change format in the future)
 
+const WASM_TARGET_STR: &str = "wasm32";
+const LINUX_X86_64_TARGET_STR: &str = "linux-x86_64";
+const LINUX_ARM64_TARGET_STR: &str = "linux-arm64";
+const MACOS_ARM64_TARGET_STR: &str = "macos-arm64";
+const MACOS_X86_64_TARGET_STR: &str = "macos-x86_64";
+const WINDOWS_X86_64_TARGET_STR: &str = "windows-x86_64";
+const WINDOWS_X86_32_TARGET_STR: &str = "windows-x86_32";
+const WIDNOWS_ARM64_TARGET_STR: &str = "windows-arm64";
+
 pub const fn preprocessed_host_filename(target: &Triple) -> Option<&'static str> {
+    // Don't try to split this match off in a different function, it will not work with concatcp
     match target {
         Triple {
             architecture: Architecture::Wasm32,
             ..
-        } => Some(concatcp!("wasm32", '.', PRECOMPILED_HOST_EXT)),
+        } => Some(concatcp!(WASM_TARGET_STR, '.', PRECOMPILED_HOST_EXT)),
         Triple {
             operating_system: OperatingSystem::Linux,
             architecture: Architecture::X86_64,
             ..
-        } => Some(concatcp!("linux-x64", '.', PRECOMPILED_HOST_EXT)),
+        } => Some(concatcp!(
+            LINUX_X86_64_TARGET_STR,
+            '.',
+            PRECOMPILED_HOST_EXT
+        )),
         Triple {
             operating_system: OperatingSystem::Linux,
             architecture: Architecture::Aarch64(_),
             ..
-        } => Some(concatcp!("linux-arm64", '.', PRECOMPILED_HOST_EXT)),
+        } => Some(concatcp!(LINUX_ARM64_TARGET_STR, '.', PRECOMPILED_HOST_EXT)),
         Triple {
             operating_system: OperatingSystem::Darwin,
             architecture: Architecture::Aarch64(_),
             ..
-        } => Some(concatcp!("macos-arm64", '.', PRECOMPILED_HOST_EXT)),
+        } => Some(concatcp!(MACOS_ARM64_TARGET_STR, '.', PRECOMPILED_HOST_EXT)),
         Triple {
             operating_system: OperatingSystem::Darwin,
             architecture: Architecture::X86_64,
             ..
-        } => Some(concatcp!("macos-x64", '.', PRECOMPILED_HOST_EXT)),
+        } => Some(concatcp!(
+            MACOS_X86_64_TARGET_STR,
+            '.',
+            PRECOMPILED_HOST_EXT
+        )),
         Triple {
             operating_system: OperatingSystem::Windows,
             architecture: Architecture::X86_64,
             ..
-        } => Some(concatcp!("windows-x64", '.', PRECOMPILED_HOST_EXT)),
+        } => Some(concatcp!(
+            WINDOWS_X86_64_TARGET_STR,
+            '.',
+            PRECOMPILED_HOST_EXT
+        )),
         Triple {
             operating_system: OperatingSystem::Windows,
             architecture: Architecture::X86_32(_),
             ..
-        } => Some(concatcp!("windows-x86", '.', PRECOMPILED_HOST_EXT)),
+        } => Some(concatcp!(
+            WINDOWS_X86_32_TARGET_STR,
+            '.',
+            PRECOMPILED_HOST_EXT
+        )),
         Triple {
             operating_system: OperatingSystem::Windows,
             architecture: Architecture::Aarch64(_),
             ..
-        } => Some(concatcp!("windows-arm64", '.', PRECOMPILED_HOST_EXT)),
+        } => Some(concatcp!(
+            WIDNOWS_ARM64_TARGET_STR,
+            '.',
+            PRECOMPILED_HOST_EXT
+        )),
+        _ => None,
+    }
+}
+
+pub fn get_target_triple_str(target: &Triple) -> Option<&'static str> {
+    match target {
+        Triple {
+            architecture: Architecture::Wasm32,
+            ..
+        } => Some(WASM_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Linux,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(LINUX_X86_64_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Linux,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(LINUX_ARM64_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(MACOS_ARM64_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(MACOS_X86_64_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(WINDOWS_X86_64_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::X86_32(_),
+            ..
+        } => Some(WINDOWS_X86_32_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(WIDNOWS_ARM64_TARGET_STR),
         _ => None,
     }
 }
