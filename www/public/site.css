@@ -121,7 +121,7 @@ code, samp {
     color: var(--code-color);
 }
 
-code.snippet, samp {
+.snippet, samp {
     display: block;
     overflow: auto;
     white-space: pre;
@@ -315,6 +315,10 @@ td:last-child {
 
 /* Mobile-friendly screen width */
 @media screen and (max-width: 900px) {
+    p, code, samp, .snippet {
+        font-size: 16px;
+    }
+
     #tutorial-toc-toggle-label,
     #close-tutorial-toc {
         display: block;
