@@ -877,12 +877,14 @@ impl<'a> ExecutionState<'a> {
             I32ROTL => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
-                self.value_stack.push(Value::from(arg1.rotate_left(arg2)));
+                let k = arg2 % 32;
+                self.value_stack.push(Value::from(arg1.rotate_left(k)));
             }
             I32ROTR => {
                 let arg2 = self.value_stack.pop_u32();
                 let arg1 = self.value_stack.pop_u32();
-                self.value_stack.push(Value::from(arg1.rotate_right(arg2)));
+                let k = arg2 % 32;
+                self.value_stack.push(Value::from(arg1.rotate_right(k)));
             }
 
             I64CLZ => todo!("{:?} @ {:#x}", op_code, file_offset),
