@@ -427,7 +427,6 @@ fn provides_without_to<'a>() -> impl Parser<
                 exposes_entry(EProvides::Identifier),
                 word1(b',', EProvides::ListEnd),
                 word1(b']', EProvides::ListEnd),
-                EProvides::Open,
                 EProvides::IndentListEnd,
                 Spaced::SpaceBefore
             ),
@@ -457,7 +456,6 @@ fn provides_types<'a>(
             provides_type_entry(EProvides::Identifier),
             word1(b',', EProvides::ListEnd),
             word1(b'}', EProvides::ListEnd),
-            EProvides::Open,
             EProvides::IndentListEnd,
             Spaced::SpaceBefore
         )
@@ -534,7 +532,6 @@ fn requires_rigids<'a>(
         ),
         word1(b',', ERequires::ListEnd),
         word1(b'}', ERequires::ListEnd),
-        ERequires::Open,
         ERequires::IndentListEnd,
         Spaced::SpaceBefore
     )
@@ -576,7 +573,6 @@ fn exposes_values<'a>() -> impl Parser<
             exposes_entry(EExposes::Identifier),
             word1(b',', EExposes::ListEnd),
             word1(b']', EExposes::ListEnd),
-            EExposes::Open,
             EExposes::IndentListEnd,
             Spaced::SpaceBefore
         )
@@ -622,7 +618,6 @@ fn exposes_modules<'a>() -> impl Parser<
             exposes_module(EExposes::Identifier),
             word1(b',', EExposes::ListEnd),
             word1(b']', EExposes::ListEnd),
-            EExposes::Open,
             EExposes::IndentListEnd,
             Spaced::SpaceBefore
         )
@@ -665,7 +660,6 @@ fn packages<'a>() -> impl Parser<'a, Packages<'a>, EPackages<'a>> {
                 specialize(EPackages::PackageEntry, loc!(package_entry())),
                 word1(b',', EPackages::ListEnd),
                 word1(b'}', EPackages::ListEnd),
-                EPackages::Open,
                 EPackages::IndentListEnd,
                 Spaced::SpaceBefore
             )
@@ -724,7 +718,6 @@ fn generates_with<'a>() -> impl Parser<
             exposes_entry(EGeneratesWith::Identifier),
             word1(b',', EGeneratesWith::ListEnd),
             word1(b']', EGeneratesWith::ListEnd),
-            EGeneratesWith::Open,
             EGeneratesWith::IndentListEnd,
             Spaced::SpaceBefore
         )
@@ -752,7 +745,6 @@ fn imports<'a>() -> impl Parser<
             loc!(imports_entry()),
             word1(b',', EImports::ListEnd),
             word1(b']', EImports::ListEnd),
-            EImports::Open,
             EImports::IndentListEnd,
             Spaced::SpaceBefore
         )
@@ -833,7 +825,6 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                     exposes_entry(EImports::Identifier),
                     word1(b',', EImports::SetEnd),
                     word1(b'}', EImports::SetEnd),
-                    EImports::Open,
                     EImports::IndentSetEnd,
                     Spaced::SpaceBefore
                 )

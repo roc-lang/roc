@@ -6,7 +6,7 @@ use crate::blankspace::{
     space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
 };
 use crate::expr::record_value_field;
-use crate::ident::lowercase_ident;
+use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
     absolute_column_min_indent, increment_min_indent, then, ERecord, ETypeAbilityImpl,
@@ -43,7 +43,6 @@ fn tag_union_type<'a>(
             loc!(tag_type(false)),
             word1(b',', ETypeTagUnion::End),
             word1(b']', ETypeTagUnion::End),
-            ETypeTagUnion::Open,
             ETypeTagUnion::IndentEnd,
             Tag::SpaceBefore
         )
@@ -216,7 +215,6 @@ fn loc_type_in_parens<'a>(
                 specialize_ref(ETypeInParens::Type, expression(true, false)),
                 word1(b',', ETypeInParens::End),
                 word1(b')', ETypeInParens::End),
-                ETypeInParens::Open,
                 ETypeInParens::IndentEnd,
                 TypeAnnotation::SpaceBefore
             ),
@@ -292,7 +290,7 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
         let pos = state.pos();
         let (progress, loc_label, state) = loc!(specialize(
             move |_, _| ETypeRecord::Field(pos),
-            lowercase_ident()
+            lowercase_ident_keyword_e()
         ))
         .parse(arena, state, min_indent)?;
         debug_assert_eq!(progress, MadeProgress);
@@ -358,7 +356,6 @@ fn record_type<'a>(
                 loc!(record_type_field()),
                 word1(b',', ETypeRecord::End),
                 word1(b'}', ETypeRecord::End),
-                ETypeRecord::Open,
                 ETypeRecord::IndentEnd,
                 AssignedField::SpaceBefore
             ),
@@ -507,7 +504,6 @@ pub fn has_abilities<'a>() -> impl Parser<'a, Loc<HasAbilities<'a>>, EType<'a>> 
                     loc!(parse_has_ability()),
                     word1(b',', EType::TEnd),
                     word1(b']', EType::TEnd),
-                    EType::TStart,
                     EType::TIndentEnd,
                     HasAbility::SpaceBefore
                 ),
@@ -531,7 +527,6 @@ fn parse_has_ability<'a>() -> impl Parser<'a, HasAbility<'a>, EType<'a>> {
                             specialize(|e: ERecord<'_>, _| e.into(), loc!(record_value_field())),
                             word1(b',', ETypeAbilityImpl::End),
                             word1(b'}', ETypeAbilityImpl::End),
-                            ETypeAbilityImpl::Open,
                             ETypeAbilityImpl::IndentEnd,
                             AssignedField::SpaceBefore
                         )
