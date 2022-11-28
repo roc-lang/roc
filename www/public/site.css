@@ -183,12 +183,7 @@ samp .dim {
 }
 
 samp .comment {
-    color: #88c796;
-}
-samp .comment .kw,
-samp .comment .str,
-samp .comment .number {
-    color: inherit;
+    color: #2b9d44;
 }
 
 /* Tables */
@@ -563,5 +558,9 @@ h4 {
     samp .str {
         /* string literals */
         color: #26b2b9;
+    }
+
+    samp .comment {
+        color: #88c796;
     }
 }
