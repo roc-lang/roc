@@ -81,3 +81,31 @@ where
 
     assert_eq!(state.value_stack.pop(), expected);
 }
+
+pub fn create_exported_function_no_locals<'a, F>(
+    module: &mut WasmModule<'a>,
+    name: &'a str,
+    signature: Signature<'a>,
+    write_instructions: F,
+) where
+    F: FnOnce(&mut Vec<'a, u8>),
+{
+    let internal_fn_index = module.code.function_offsets.len();
+    let fn_index = module.import.function_count() + internal_fn_index;
+    module.export.exports.push(Export {
+        name,
+        ty: ExportType::Func,
+        index: fn_index as u32,
+    });
+    module.add_function_signature(signature);
+
+    let offset = module.code.bytes.encode_padded_u32(0);
+    let start = module.code.bytes.len();
+    module.code.bytes.push(0); // no locals
+    write_instructions(&mut module.code.bytes);
+    let len = module.code.bytes.len() - start;
+    module.code.bytes.overwrite_padded_u32(offset, len as u32);
+
+    module.code.function_count += 1;
+    module.code.function_offsets.push(offset as u32);
+}
