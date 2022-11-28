@@ -367,15 +367,15 @@ If we were to use <code>counts.note</code> inside <code>addAndStringify</code>, 
 because <code>total</code> is calling <code>addAndStringify</code> passing a record that doesn't have a <code>note</code> field.</p>
 <h3 id="comments"><a href="#comments">Comments</a></h3>
 <p>By the way, this is a comment in Roc:</p>
-<samp class="comment"># The `name` field is unused by addAndStringify</samp>
+<samp><span class="comment"># The `name` field is unused by addAndStringify</span></samp>
 <p>Whenever you write <code>#</code> it means that the rest of the line is a comment,
 and will not affect the program.</p>
 <h3 id="doc-comments"><a href="#doc-comments">Doc Comments</a></h2>
 <p>Comments that begin with <code>##</code> will be included in generated documentation (<code>roc docs</code>). They can include code blocks by adding five spaces after <code>##</code>. </p>
-<samp><span class="comment">## This is a comment for documentation, and includes a <span class="kw">code</span> block.</span>
-<span class="comment">##</span>
-<span class="comment">##     x <span class="op">=</span> <span class="number">2</span></span>
-<span class="comment">##     expect x <span class="op">==</span> <span class="number">2</span></span>
+<samp><span class="comment">## This is a comment for documentation, and includes a code block.
+##
+##     x = 2
+##     expect x == 2</span>
 </samp>
 <p>Roc does not have multiline comment syntax.</p>
 <h3 id="record-shorthands"><a href="#record-shorthands">Record shorthands</a></h3>
