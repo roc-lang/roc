@@ -111,7 +111,6 @@ code {
     background: var(--code-bg);
     padding: 0.1rem 0.5rem;
     border-radius: 4px;
-    white-space: nowrap;
 }
 
 code, samp {
