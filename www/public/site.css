@@ -309,7 +309,7 @@ td:last-child {
 }
 
 /* Mobile-friendly screen width */
-@media screen and (max-width: 900px) {
+@media only screen and (max-device-width: 480px) and (orientation: portrait) {
     p, code, samp, .snippet {
         font-size: 16px;
     }
