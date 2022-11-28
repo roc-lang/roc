@@ -72,7 +72,6 @@ li {
 }
 
 #top-bar nav {
-    min-width: var(--body-max-width);
     max-width: 1024px;
     margin: 0 auto;
     display: flex;
@@ -90,7 +89,9 @@ li {
     display: flex;
 }
 
-#top-bar-links a {
+#top-bar-links a,
+#top-bar-links label {
+    box-sizing: border-box;
     color: var(--top-bar-fg);
     font-size: 1.1rem;
     display: block;
@@ -99,16 +100,14 @@ li {
     margin: 0 2px;
 }
 
-@media only screen and (min-device-width: 900px) {
-    main {
-        width: var(--body-max-width);
-        margin: 36px auto;
-    }
+main {
+    max-width: var(--body-max-width);
+    margin: 36px auto;
+    padding: 0 12px;
 }
 
 code {
     margin: 0 0.2rem;
-    white-space: nowrap;
     background: var(--code-bg);
     padding: 0.1rem 0.5rem;
     border-radius: 4px;
@@ -294,6 +293,59 @@ td:last-child {
     font-size: inherit;
 }
 
+#top-bar-links label.tutorial-toc-toggle {
+    display: none;
+    width: 60px;
+    color: transparent;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: 20px 20px;
+    background-image: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0Ij48cGF0aCBmaWxsPSIjZmZmIiBkPSJNOS4xNDUgMTguMjljLTUuMDQyIDAtOS4xNDUtNC4xMDItOS4xNDUtOS4xNDVzNC4xMDMtOS4xNDUgOS4xNDUtOS4xNDUgOS4xNDUgNC4xMDMgOS4xNDUgOS4xNDUtNC4xMDIgOS4xNDUtOS4xNDUgOS4xNDV6bTAtMTUuMTY3Yy0zLjMyMSAwLTYuMDIyIDIuNzAyLTYuMDIyIDYuMDIyczIuNzAyIDYuMDIyIDYuMDIyIDYuMDIyIDYuMDIzLTIuNzAyIDYuMDIzLTYuMDIyLTIuNzAyLTYuMDIyLTYuMDIzLTYuMDIyem05LjI2MyAxMi40NDNjLS44MTcgMS4xNzYtMS44NTIgMi4xODgtMy4wNDYgMi45ODFsNS40NTIgNS40NTMgMy4wMTQtMy4wMTMtNS40Mi01LjQyMXoiLz48L3N2Zz4=');
+}
+
+.tutorial-toc-inner-toggle {
+    display: none;
+    position: absolute;
+    top: 20px;
+    right: 8px;
+    font-size: 18px;
+    padding: 12px 24px;
+}
+
+@media screen and (max-width: 900px) {
+    #top-bar-links label.tutorial-toc-toggle,
+    .tutorial-toc-inner-toggle {
+        display: block;
+    }
+    #tutorial-toc-toggle:checked + #tutorial-toc {
+        display: block;
+    }
+    #tutorial-toc {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        overflow-y: auto;
+        margin: 0;
+        padding-right: 120px;
+        border: 0;
+    }
+    h1, h2, h3, h4, h5, h6, p, code {
+        word-break: break-word !important;
+    }
+    h1, h2, h3, h4, h5 {
+        line-height: 1.2em !important;
+        font-size: 2rem !important;
+    }
+    #top-bar-links a,
+    #top-bar-links label {
+        padding: 12px 8px;
+        margin: 0;
+    }
+}
+
 /* Used on on the different-names page. */
 
 th, td {
@@ -458,13 +510,13 @@ h4 {
 @media (prefers-color-scheme: dark) {
     :root {
         --text-color: #cdcdcd;
-        --top-bar-bg: #2a2a2a;
+        --top-bar-bg: #8d51f6;
         --header-link-color: hsl(258, 73%, 70%);
         --header-link-hover: #ddd;
         --h1-color: #1bc6bd;
         --link-color: #1bc6bd;
         --repl-prompt: #0ff4f4;
-        --body-bg: #0e0e0f;
+        --body-bg: #161519;
         --code-bg: #303030;
         --snippet-bg: #1a1a1a;
         --snippet-border: #444;
