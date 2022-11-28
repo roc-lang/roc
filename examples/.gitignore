@@ -2,7 +2,6 @@
 libhost.a
 libapp.so
 dynhost
-preprocessedhost
 *.rm1
 *.rh1
 

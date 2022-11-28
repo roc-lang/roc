@@ -150,6 +150,8 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
                 if [
                     // surgical linker format
                     Some("rh1"),
+                    // metadata file
+                    Some("rm1"),
                     // legacy linker formats
                     Some("o"),
                     Some("obj"),
