@@ -17,7 +17,7 @@ pub enum Action {
 }
 
 #[derive(Debug)]
-pub struct ExecutionState<'a> {
+pub struct Instance<'a> {
     /// Contents of the WebAssembly instance's memory
     pub memory: Vec<'a, u8>,
     /// Metadata for every currently-active function call
@@ -38,13 +38,13 @@ pub struct ExecutionState<'a> {
     debug_string: Option<String>,
 }
 
-impl<'a> ExecutionState<'a> {
+impl<'a> Instance<'a> {
     pub fn new<G>(arena: &'a Bump, memory_pages: u32, program_counter: usize, globals: G) -> Self
     where
         G: IntoIterator<Item = Value>,
     {
         let mem_bytes = memory_pages * MemorySection::PAGE_SIZE;
-        ExecutionState {
+        Instance {
             memory: Vec::from_iter_in(iter::repeat(0).take(mem_bytes as usize), arena),
             call_stack: CallStack::new(arena),
             value_stack: ValueStack::new(arena),
@@ -145,7 +145,7 @@ impl<'a> ExecutionState<'a> {
             None
         };
 
-        Ok(ExecutionState {
+        Ok(Instance {
             memory,
             call_stack,
             value_stack,

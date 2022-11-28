@@ -1,14 +1,14 @@
-use crate::{Action, ExecutionState};
+use crate::{Action, Instance};
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::{
     opcodes::OpCode, Export, ExportType, SerialBuffer, Signature, Value, ValueType, WasmModule,
 };
 
-pub fn default_state(arena: &Bump) -> ExecutionState {
+pub fn default_state(arena: &Bump) -> Instance {
     let pages = 1;
     let program_counter = 0;
     let globals = [];
-    ExecutionState::new(arena, pages, program_counter, globals)
+    Instance::new(arena, pages, program_counter, globals)
 }
 
 pub fn const_value(buf: &mut Vec<'_, u8>, value: Value) {
@@ -75,7 +75,7 @@ where
         println!("\nWrote to {}\n", &filename);
     }
 
-    let mut state = ExecutionState::for_module(&arena, &module, "test", true, []).unwrap();
+    let mut state = Instance::for_module(&arena, &module, "test", true, []).unwrap();
 
     while let Action::Continue = state.execute_next_instruction(&module) {}
 

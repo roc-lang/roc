@@ -2,7 +2,7 @@
 
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_interp::test_utils::{const_value, default_state};
-use roc_wasm_interp::{Action, ExecutionState, ValueStack};
+use roc_wasm_interp::{Action, Instance, ValueStack};
 use roc_wasm_module::{
     opcodes::OpCode,
     sections::{DataMode, DataSegment, ElementSegment, MemorySection},
@@ -519,7 +519,7 @@ fn test_call_return_no_args() {
         println!("Wrote to {}", filename);
     }
 
-    let mut state = ExecutionState::for_module(&arena, &module, start_fn_name, true, []).unwrap();
+    let mut state = Instance::for_module(&arena, &module, start_fn_name, true, []).unwrap();
 
     while let Action::Continue = state.execute_next_instruction(&module) {}
 
@@ -656,7 +656,7 @@ fn test_call_indirect_help(table_index: u32, elem_index: u32) -> Value {
     }
 
     let mut state =
-        ExecutionState::for_module(&arena, &module, start_fn_name, is_debug_mode, []).unwrap();
+        Instance::for_module(&arena, &module, start_fn_name, is_debug_mode, []).unwrap();
 
     while let Action::Continue = state.execute_next_instruction(&module) {}
 
@@ -863,7 +863,7 @@ fn test_load(load_op: OpCode, ty: ValueType, data: &[u8], addr: u32, offset: u32
     }
 
     let mut state =
-        ExecutionState::for_module(&arena, &module, start_fn_name, is_debug_mode, []).unwrap();
+        Instance::for_module(&arena, &module, start_fn_name, is_debug_mode, []).unwrap();
 
     while let Action::Continue = state.execute_next_instruction(&module) {}
 
@@ -1061,8 +1061,7 @@ fn test_store<'a>(
         buf.append_u8(OpCode::END as u8);
     });
 
-    let mut state =
-        ExecutionState::for_module(arena, module, start_fn_name, is_debug_mode, []).unwrap();
+    let mut state = Instance::for_module(arena, module, start_fn_name, is_debug_mode, []).unwrap();
 
     while let Action::Continue = state.execute_next_instruction(module) {}
 
@@ -1228,7 +1227,7 @@ fn test_currentmemory() {
     module.memory = MemorySection::new(&arena, pages * MemorySection::PAGE_SIZE);
     module.code.bytes.push(OpCode::CURRENTMEMORY as u8);
 
-    let mut state = ExecutionState::new(&arena, pages, pc, []);
+    let mut state = Instance::new(&arena, pages, pc, []);
     state.execute_next_instruction(&module);
     assert_eq!(state.value_stack.pop(), Value::I32(3))
 }
@@ -1246,7 +1245,7 @@ fn test_growmemory() {
     module.code.bytes.encode_i32(grow_pages);
     module.code.bytes.push(OpCode::GROWMEMORY as u8);
 
-    let mut state = ExecutionState::new(&arena, existing_pages, pc, []);
+    let mut state = Instance::new(&arena, existing_pages, pc, []);
     state.execute_next_instruction(&module);
     state.execute_next_instruction(&module);
     assert_eq!(state.memory.len(), 5 * MemorySection::PAGE_SIZE as usize);
