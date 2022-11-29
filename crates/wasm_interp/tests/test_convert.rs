@@ -159,6 +159,30 @@ fn test_i64truncuf64_oob() {
 }
 
 #[test]
+fn test_f32convertsi32() {
+    test_op_example(F32CONVERTSI32, [Value::I32(-1)], Value::F32(-1.0));
+}
+
+#[test]
+fn test_f32convertui32() {
+    test_op_example(F32CONVERTUI32, [Value::I32(-1)], Value::F32(4294967295.0));
+}
+
+#[test]
+fn test_f32convertsi64() {
+    test_op_example(F32CONVERTSI64, [Value::I64(-1)], Value::F32(-1.0));
+}
+
+#[test]
+fn test_f32convertui64() {
+    test_op_example(
+        F32CONVERTUI64,
+        [Value::I64(-1)],
+        Value::F32(1.8446744073709552e19),
+    );
+}
+
+#[test]
 fn test_f32demotef64() {
     test_op_example(F32DEMOTEF64, [Value::F64(12.375)], Value::F32(12.375));
 }
