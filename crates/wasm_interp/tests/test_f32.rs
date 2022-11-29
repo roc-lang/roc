@@ -86,6 +86,44 @@ fn test_f32neg() {
 }
 
 #[test]
+fn test_f32ceil() {
+    let op = F32CEIL;
+    test_f32_unop(op, 1.1, 2.0);
+    test_f32_unop(op, -1.1, -1.0);
+}
+
+#[test]
+fn test_f32floor() {
+    let op = F32FLOOR;
+    test_f32_unop(op, 1.1, 1.0);
+    test_f32_unop(op, -1.1, -2.0);
+}
+
+#[test]
+fn test_f32trunc() {
+    let op = F32TRUNC;
+    test_f32_unop(op, 1.1, 1.0);
+    test_f32_unop(op, -1.1, -1.0);
+}
+
+#[test]
+fn test_f32nearest() {
+    let op = F32NEAREST;
+    test_f32_unop(op, 1.4, 1.0);
+    test_f32_unop(op, 1.6, 2.0);
+    test_f32_unop(op, -1.4, -1.0);
+    test_f32_unop(op, -1.6, -2.0);
+    test_f32_unop(op, 1.5, 2.0);
+    test_f32_unop(op, 2.5, 2.0);
+}
+
+#[test]
+fn test_f32sqrt() {
+    let op = F32SQRT;
+    test_f32_unop(op, 4.0, 2.0);
+}
+
+#[test]
 fn test_f32add() {
     let op = F32ADD;
     test_f32_binop(op, 0.0, 0.0, 0.0);

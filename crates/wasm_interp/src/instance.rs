@@ -1051,11 +1051,42 @@ impl<'a> Instance<'a> {
                 let arg = self.value_stack.pop_f32();
                 self.value_stack.push(Value::F32(-arg));
             }
-            F32CEIL => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32FLOOR => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32TRUNC => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32NEAREST => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32SQRT => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F32CEIL => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg.ceil()));
+            }
+            F32FLOOR => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg.floor()));
+            }
+            F32TRUNC => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg.trunc()));
+            }
+            F32NEAREST => {
+                // https://webassembly.github.io/spec/core/exec/numerics.html#op-fnearest
+                let arg = self.value_stack.pop_f32();
+                let rounded = arg.round(); // "Rounds half-way cases away from 0.0"
+                let frac = arg - rounded;
+                let result = if frac == 0.5 || frac == -0.5 {
+                    let rounded_half = rounded / 2.0;
+                    let is_rounded_even = rounded_half.trunc() == rounded_half;
+                    if is_rounded_even {
+                        rounded
+                    } else if rounded < arg {
+                        rounded + 1.0
+                    } else {
+                        rounded - 1.0
+                    }
+                } else {
+                    rounded
+                };
+                self.value_stack.push(Value::F32(result));
+            }
+            F32SQRT => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg.sqrt()));
+            }
             F32ADD => {
                 let arg2 = self.value_stack.pop_f32();
                 let arg1 = self.value_stack.pop_f32();
@@ -1088,11 +1119,42 @@ impl<'a> Instance<'a> {
                 let arg = self.value_stack.pop_f64();
                 self.value_stack.push(Value::F64(-arg));
             }
-            F64CEIL => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64FLOOR => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64TRUNC => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64NEAREST => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64SQRT => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F64CEIL => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg.ceil()));
+            }
+            F64FLOOR => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg.floor()));
+            }
+            F64TRUNC => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg.trunc()));
+            }
+            F64NEAREST => {
+                // https://webassembly.github.io/spec/core/exec/numerics.html#op-fnearest
+                let arg = self.value_stack.pop_f64();
+                let rounded = arg.round(); // "Rounds half-way cases away from 0.0"
+                let frac = arg - rounded;
+                let result = if frac == 0.5 || frac == -0.5 {
+                    let rounded_half = rounded / 2.0;
+                    let is_rounded_even = rounded_half.trunc() == rounded_half;
+                    if is_rounded_even {
+                        rounded
+                    } else if rounded < arg {
+                        rounded + 1.0
+                    } else {
+                        rounded - 1.0
+                    }
+                } else {
+                    rounded
+                };
+                self.value_stack.push(Value::F64(result));
+            }
+            F64SQRT => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg.sqrt()));
+            }
             F64ADD => {
                 let arg2 = self.value_stack.pop_f64();
                 let arg1 = self.value_stack.pop_f64();
