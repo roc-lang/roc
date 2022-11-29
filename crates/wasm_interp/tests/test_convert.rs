@@ -175,11 +175,7 @@ fn test_f32convertsi64() {
 
 #[test]
 fn test_f32convertui64() {
-    test_op_example(
-        F32CONVERTUI64,
-        [Value::I64(-1)],
-        Value::F32(1.8446744073709552e19),
-    );
+    test_op_example(F32CONVERTUI64, [Value::I64(-1)], Value::F32(1.844_674_4e19));
 }
 
 #[test]
