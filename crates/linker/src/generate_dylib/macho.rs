@@ -108,12 +108,20 @@ pub fn create_dylib_macho(
 
     let mut bytes = Vec::new();
 
+    // keep updated by hand. We currently have 5  segment commands, and 6 others
+    const COMMAND_COUNT: u32 = 5 + 6;
+
+    // we don't know the value of the cmdsize up-front. It is the total number of bytes occupied
+    // by load commands. So we put in a placeholder for now, and patch it up later.
     let commands = Commands {
-        count: 5 + 6,
-        size: 0x610, // 5 * 0x48 + 0x30 + 0x18 + 0x50 + 0x20 + 0x30 + 0x10 + 0x10 + 0x38 + x,
+        count: COMMAND_COUNT,
+        size: 0x00,
     };
 
-    bytes.extend_from_slice(macho_dylib_header(triple, commands).as_slice());
+    let placeholder_header = macho_dylib_header(triple, commands);
+    bytes.extend_from_slice(placeholder_header.as_slice());
+
+    let start_of_cmds = bytes.len();
 
     //
 
@@ -362,7 +370,6 @@ pub fn create_dylib_macho(
         lazy_bind_size: 0x00,
         export_off: 0x3020,
         export_size,
-        // export_size: 0x02e0,
     };
 
     bytes.extend(dyld_info_only.to_bytes());
@@ -447,6 +454,17 @@ pub fn create_dylib_macho(
         0x05016401,
         0x10000,
     ));
+
+    // we've now written all commands, and can patch the size of the commands
+    let end_of_cmds = bytes.len();
+
+    let commands = Commands {
+        count: COMMAND_COUNT,
+        size: (end_of_cmds - start_of_cmds) as u32,
+    };
+
+    let complete_header = macho_dylib_header(triple, commands);
+    bytes[..complete_header.len()].copy_from_slice(complete_header.as_slice());
 
     let delta = 0x3000 - bytes.len();
     bytes.extend(std::iter::repeat(0).take(delta));
@@ -989,8 +1007,6 @@ mod test {
         };
 
         let bytes = create_dylib_macho(custom_names, &triple).unwrap();
-
-        std::fs::write("/tmp/test.dylib", &bytes).unwrap();
 
         let object = object::File::parse(bytes.as_slice()).unwrap();
 
