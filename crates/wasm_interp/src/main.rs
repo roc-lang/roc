@@ -7,7 +7,7 @@ use std::fs;
 use std::io;
 use std::process;
 
-use roc_wasm_interp::ExecutionState;
+use roc_wasm_interp::Instance;
 use roc_wasm_module::WasmModule;
 
 pub const FLAG_FUNCTION: &str = "function";
@@ -89,7 +89,7 @@ fn main() -> io::Result<()> {
 
     // Initialise the execution state
 
-    let mut state = ExecutionState::for_module(
+    let mut state = Instance::for_module(
         &arena,
         &module,
         start_fn_name,

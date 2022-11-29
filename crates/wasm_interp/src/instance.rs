@@ -17,7 +17,7 @@ pub enum Action {
 }
 
 #[derive(Debug)]
-pub struct ExecutionState<'a> {
+pub struct Instance<'a> {
     /// Contents of the WebAssembly instance's memory
     pub memory: Vec<'a, u8>,
     /// Metadata for every currently-active function call
@@ -38,13 +38,13 @@ pub struct ExecutionState<'a> {
     debug_string: Option<String>,
 }
 
-impl<'a> ExecutionState<'a> {
+impl<'a> Instance<'a> {
     pub fn new<G>(arena: &'a Bump, memory_pages: u32, program_counter: usize, globals: G) -> Self
     where
         G: IntoIterator<Item = Value>,
     {
         let mem_bytes = memory_pages * MemorySection::PAGE_SIZE;
-        ExecutionState {
+        Instance {
             memory: Vec::from_iter_in(iter::repeat(0).take(mem_bytes as usize), arena),
             call_stack: CallStack::new(arena),
             value_stack: ValueStack::new(arena),
@@ -145,7 +145,7 @@ impl<'a> ExecutionState<'a> {
             None
         };
 
-        Ok(ExecutionState {
+        Ok(Instance {
             memory,
             call_stack,
             value_stack,
@@ -716,82 +716,142 @@ impl<'a> ExecutionState<'a> {
             I64EQZ => {
                 let arg = self.value_stack.pop_i64();
                 let result: bool = arg == 0;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64EQ => {
                 let arg2 = self.value_stack.pop_i64();
                 let arg1 = self.value_stack.pop_i64();
                 let result: bool = arg1 == arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64NE => {
                 let arg2 = self.value_stack.pop_i64();
                 let arg1 = self.value_stack.pop_i64();
                 let result: bool = arg1 != arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64LTS => {
                 let arg2 = self.value_stack.pop_i64();
                 let arg1 = self.value_stack.pop_i64();
                 let result: bool = arg1 < arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64LTU => {
                 let arg2 = self.value_stack.pop_u64();
                 let arg1 = self.value_stack.pop_u64();
                 let result: bool = arg1 < arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64GTS => {
                 let arg2 = self.value_stack.pop_i64();
                 let arg1 = self.value_stack.pop_i64();
                 let result: bool = arg1 > arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64GTU => {
                 let arg2 = self.value_stack.pop_u64();
                 let arg1 = self.value_stack.pop_u64();
                 let result: bool = arg1 > arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64LES => {
                 let arg2 = self.value_stack.pop_i64();
                 let arg1 = self.value_stack.pop_i64();
                 let result: bool = arg1 <= arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64LEU => {
                 let arg2 = self.value_stack.pop_u64();
                 let arg1 = self.value_stack.pop_u64();
                 let result: bool = arg1 <= arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64GES => {
                 let arg2 = self.value_stack.pop_i64();
                 let arg1 = self.value_stack.pop_i64();
                 let result: bool = arg1 >= arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
             I64GEU => {
                 let arg2 = self.value_stack.pop_u64();
                 let arg1 = self.value_stack.pop_u64();
                 let result: bool = arg1 >= arg2;
-                self.value_stack.push(Value::I64(result as i64));
+                self.value_stack.push(Value::I32(result as i32));
             }
 
-            F32EQ => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32NE => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32LT => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32GT => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32LE => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32GE => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F32EQ => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                let result: bool = arg1 == arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F32NE => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                let result: bool = arg1 != arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F32LT => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                let result: bool = arg1 < arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F32GT => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                let result: bool = arg1 > arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F32LE => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                let result: bool = arg1 <= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F32GE => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                let result: bool = arg1 >= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
 
-            F64EQ => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64NE => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64LT => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64GT => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64LE => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64GE => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F64EQ => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                let result: bool = arg1 == arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F64NE => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                let result: bool = arg1 != arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F64LT => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                let result: bool = arg1 < arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F64GT => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                let result: bool = arg1 > arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F64LE => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                let result: bool = arg1 <= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F64GE => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                let result: bool = arg1 >= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
 
             I32CLZ => {
                 let arg = self.value_stack.pop_u32();
@@ -983,43 +1043,97 @@ impl<'a> ExecutionState<'a> {
                 self.value_stack.push(Value::from(arg1.rotate_right(k)));
             }
 
-            F32ABS => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32NEG => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F32ABS => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg.abs()));
+            }
+            F32NEG => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(-arg));
+            }
             F32CEIL => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32FLOOR => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32TRUNC => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32NEAREST => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32SQRT => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32ADD => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32SUB => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32MUL => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32DIV => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F32ADD => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg1 + arg2));
+            }
+            F32SUB => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg1 - arg2));
+            }
+            F32MUL => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg1 * arg2));
+            }
+            F32DIV => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg1 / arg2));
+            }
             F32MIN => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32MAX => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32COPYSIGN => todo!("{:?} @ {:#x}", op_code, file_offset),
 
-            F64ABS => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64NEG => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F64ABS => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg.abs()));
+            }
+            F64NEG => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(-arg));
+            }
             F64CEIL => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64FLOOR => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64TRUNC => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64NEAREST => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64SQRT => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64ADD => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64SUB => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64MUL => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64DIV => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F64ADD => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg1 + arg2));
+            }
+            F64SUB => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg1 - arg2));
+            }
+            F64MUL => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg1 * arg2));
+            }
+            F64DIV => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg1 / arg2));
+            }
             F64MIN => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64MAX => todo!("{:?} @ {:#x}", op_code, file_offset),
             F64COPYSIGN => todo!("{:?} @ {:#x}", op_code, file_offset),
 
-            I32WRAPI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I32WRAPI64 => {
+                let arg = self.value_stack.pop_u64();
+                let wrapped: u32 = (arg & 0xffff_ffff) as u32;
+                self.value_stack.push(Value::from(wrapped));
+            }
             I32TRUNCSF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32TRUNCUF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32TRUNCSF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
             I32TRUNCUF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64EXTENDSI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64EXTENDUI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I64EXTENDSI32 => {
+                let arg = self.value_stack.pop_i32();
+                self.value_stack.push(Value::I64(arg as i64));
+            }
+            I64EXTENDUI32 => {
+                let arg = self.value_stack.pop_u32();
+                self.value_stack.push(Value::from(arg as u64));
+            }
             I64TRUNCSF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
             I64TRUNCUF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
             I64TRUNCSF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
@@ -1028,17 +1142,52 @@ impl<'a> ExecutionState<'a> {
             F32CONVERTUI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32CONVERTSI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32CONVERTUI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32DEMOTEF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64CONVERTSI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64CONVERTUI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64CONVERTSI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64CONVERTUI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64PROMOTEF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F32DEMOTEF64 => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F32(arg as f32));
+            }
+            F64CONVERTSI32 => {
+                let arg = self.value_stack.pop_i32();
+                self.value_stack.push(Value::F64(arg as f64));
+            }
+            F64CONVERTUI32 => {
+                let arg = self.value_stack.pop_u32();
+                self.value_stack.push(Value::F64(arg as f64));
+            }
+            F64CONVERTSI64 => {
+                let arg = self.value_stack.pop_i64();
+                self.value_stack.push(Value::F64(arg as f64));
+            }
+            F64CONVERTUI64 => {
+                let arg = self.value_stack.pop_u64();
+                dbg!(arg);
+                self.value_stack.push(Value::F64(arg as f64));
+            }
+            F64PROMOTEF32 => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F64(arg as f64));
+            }
 
-            I32REINTERPRETF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64REINTERPRETF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32REINTERPRETI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64REINTERPRETI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I32REINTERPRETF32 => {
+                let x = self.value_stack.pop_f32();
+                self.value_stack
+                    .push(Value::I32(i32::from_ne_bytes(x.to_ne_bytes())));
+            }
+            I64REINTERPRETF64 => {
+                let x = self.value_stack.pop_f64();
+                self.value_stack
+                    .push(Value::I64(i64::from_ne_bytes(x.to_ne_bytes())));
+            }
+            F32REINTERPRETI32 => {
+                let x = self.value_stack.pop_i32();
+                self.value_stack
+                    .push(Value::F32(f32::from_ne_bytes(x.to_ne_bytes())));
+            }
+            F64REINTERPRETI64 => {
+                let x = self.value_stack.pop_i64();
+                self.value_stack
+                    .push(Value::F64(f64::from_ne_bytes(x.to_ne_bytes())));
+            }
         }
 
         if let Some(debug_string) = &self.debug_string {
