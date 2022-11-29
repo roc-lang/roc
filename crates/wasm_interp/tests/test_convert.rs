@@ -48,7 +48,7 @@ fn test_i64extendui32() {
 
 #[test]
 fn test_f32demotef64() {
-    test_op_example(F32DEMOTEF64, [Value::F64(12.375)], Value::F64(12.375));
+    test_op_example(F32DEMOTEF64, [Value::F64(12.375)], Value::F32(12.375));
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn test_f64convertui64() {
 
 #[test]
 fn test_f64promotef32() {
-    test_op_example(F32DEMOTEF64, [Value::F32(12.375)], Value::F64(12.375));
+    test_op_example(F64PROMOTEF32, [Value::F32(12.375)], Value::F64(12.375));
 }
 
 #[test]
