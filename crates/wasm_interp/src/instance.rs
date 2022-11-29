@@ -1051,11 +1051,42 @@ impl<'a> Instance<'a> {
                 let arg = self.value_stack.pop_f32();
                 self.value_stack.push(Value::F32(-arg));
             }
-            F32CEIL => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32FLOOR => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32TRUNC => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32NEAREST => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32SQRT => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F32CEIL => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg.ceil()));
+            }
+            F32FLOOR => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg.floor()));
+            }
+            F32TRUNC => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg.trunc()));
+            }
+            F32NEAREST => {
+                // https://webassembly.github.io/spec/core/exec/numerics.html#op-fnearest
+                let arg = self.value_stack.pop_f32();
+                let rounded = arg.round(); // "Rounds half-way cases away from 0.0"
+                let frac = arg - rounded;
+                let result = if frac == 0.5 || frac == -0.5 {
+                    let rounded_half = rounded / 2.0;
+                    let is_rounded_even = rounded_half.trunc() == rounded_half;
+                    if is_rounded_even {
+                        rounded
+                    } else if rounded < arg {
+                        rounded + 1.0
+                    } else {
+                        rounded - 1.0
+                    }
+                } else {
+                    rounded
+                };
+                self.value_stack.push(Value::F32(result));
+            }
+            F32SQRT => {
+                let arg = self.value_stack.pop_f32();
+                self.value_stack.push(Value::F32(arg.sqrt()));
+            }
             F32ADD => {
                 let arg2 = self.value_stack.pop_f32();
                 let arg1 = self.value_stack.pop_f32();
@@ -1076,9 +1107,28 @@ impl<'a> Instance<'a> {
                 let arg1 = self.value_stack.pop_f32();
                 self.value_stack.push(Value::F32(arg1 / arg2));
             }
-            F32MIN => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32MAX => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32COPYSIGN => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F32MIN => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                let result = if arg1 < arg2 { arg1 } else { arg2 };
+                self.value_stack.push(Value::F32(result));
+            }
+            F32MAX => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                let result = if arg1 > arg2 { arg1 } else { arg2 };
+                self.value_stack.push(Value::F32(result));
+            }
+            F32COPYSIGN => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                let result = if arg1.is_sign_negative() == arg2.is_sign_negative() {
+                    arg1
+                } else {
+                    arg2
+                };
+                self.value_stack.push(Value::F32(result));
+            }
 
             F64ABS => {
                 let arg = self.value_stack.pop_f64();
@@ -1088,11 +1138,42 @@ impl<'a> Instance<'a> {
                 let arg = self.value_stack.pop_f64();
                 self.value_stack.push(Value::F64(-arg));
             }
-            F64CEIL => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64FLOOR => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64TRUNC => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64NEAREST => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64SQRT => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F64CEIL => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg.ceil()));
+            }
+            F64FLOOR => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg.floor()));
+            }
+            F64TRUNC => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg.trunc()));
+            }
+            F64NEAREST => {
+                // https://webassembly.github.io/spec/core/exec/numerics.html#op-fnearest
+                let arg = self.value_stack.pop_f64();
+                let rounded = arg.round(); // "Rounds half-way cases away from 0.0"
+                let frac = arg - rounded;
+                let result = if frac == 0.5 || frac == -0.5 {
+                    let rounded_half = rounded / 2.0;
+                    let is_rounded_even = rounded_half.trunc() == rounded_half;
+                    if is_rounded_even {
+                        rounded
+                    } else if rounded < arg {
+                        rounded + 1.0
+                    } else {
+                        rounded - 1.0
+                    }
+                } else {
+                    rounded
+                };
+                self.value_stack.push(Value::F64(result));
+            }
+            F64SQRT => {
+                let arg = self.value_stack.pop_f64();
+                self.value_stack.push(Value::F64(arg.sqrt()));
+            }
             F64ADD => {
                 let arg2 = self.value_stack.pop_f64();
                 let arg1 = self.value_stack.pop_f64();
@@ -1113,19 +1194,62 @@ impl<'a> Instance<'a> {
                 let arg1 = self.value_stack.pop_f64();
                 self.value_stack.push(Value::F64(arg1 / arg2));
             }
-            F64MIN => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64MAX => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64COPYSIGN => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F64MIN => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                let result = if arg1 < arg2 { arg1 } else { arg2 };
+                self.value_stack.push(Value::F64(result));
+            }
+            F64MAX => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                let result = if arg1 > arg2 { arg1 } else { arg2 };
+                self.value_stack.push(Value::F64(result));
+            }
+            F64COPYSIGN => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                let result = if arg1.is_sign_negative() == arg2.is_sign_negative() {
+                    arg1
+                } else {
+                    arg2
+                };
+                self.value_stack.push(Value::F64(result));
+            }
 
             I32WRAPI64 => {
                 let arg = self.value_stack.pop_u64();
                 let wrapped: u32 = (arg & 0xffff_ffff) as u32;
                 self.value_stack.push(Value::from(wrapped));
             }
-            I32TRUNCSF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32TRUNCUF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32TRUNCSF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32TRUNCUF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I32TRUNCSF32 => {
+                let arg = self.value_stack.pop_f32();
+                if arg < i32::MIN as f32 || arg > i32::MAX as f32 {
+                    panic!("Cannot truncate {} from F32 to I32", arg);
+                }
+                self.value_stack.push(Value::I32(arg as i32));
+            }
+            I32TRUNCUF32 => {
+                let arg = self.value_stack.pop_f32();
+                if arg < u32::MIN as f32 || arg > u32::MAX as f32 {
+                    panic!("Cannot truncate {} from F32 to unsigned I32", arg);
+                }
+                self.value_stack.push(Value::from(arg as u32));
+            }
+            I32TRUNCSF64 => {
+                let arg = self.value_stack.pop_f64();
+                if arg < i32::MIN as f64 || arg > i32::MAX as f64 {
+                    panic!("Cannot truncate {} from F64 to I32", arg);
+                }
+                self.value_stack.push(Value::I32(arg as i32));
+            }
+            I32TRUNCUF64 => {
+                let arg = self.value_stack.pop_f64();
+                if arg < u32::MIN as f64 || arg > u32::MAX as f64 {
+                    panic!("Cannot truncate {} from F64 to unsigned I32", arg);
+                }
+                self.value_stack.push(Value::from(arg as u32));
+            }
             I64EXTENDSI32 => {
                 let arg = self.value_stack.pop_i32();
                 self.value_stack.push(Value::I64(arg as i64));
@@ -1134,14 +1258,50 @@ impl<'a> Instance<'a> {
                 let arg = self.value_stack.pop_u32();
                 self.value_stack.push(Value::from(arg as u64));
             }
-            I64TRUNCSF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64TRUNCUF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64TRUNCSF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64TRUNCUF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32CONVERTSI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32CONVERTUI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32CONVERTSI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32CONVERTUI64 => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I64TRUNCSF32 => {
+                let arg = self.value_stack.pop_f32();
+                if arg < i64::MIN as f32 || arg > i64::MAX as f32 {
+                    panic!("Cannot truncate {} from F32 to I64", arg);
+                }
+                self.value_stack.push(Value::I64(arg as i64));
+            }
+            I64TRUNCUF32 => {
+                let arg = self.value_stack.pop_f32();
+                if arg < u64::MIN as f32 || arg > u64::MAX as f32 {
+                    panic!("Cannot truncate {} from F32 to unsigned I64", arg);
+                }
+                self.value_stack.push(Value::from(arg as u64));
+            }
+            I64TRUNCSF64 => {
+                let arg = self.value_stack.pop_f64();
+                if arg < i64::MIN as f64 || arg > i64::MAX as f64 {
+                    panic!("Cannot truncate {} from F64 to I64", arg);
+                }
+                self.value_stack.push(Value::I64(arg as i64));
+            }
+            I64TRUNCUF64 => {
+                let arg = self.value_stack.pop_f64();
+                if arg < u64::MIN as f64 || arg > u64::MAX as f64 {
+                    panic!("Cannot truncate {} from F64 to unsigned I64", arg);
+                }
+                self.value_stack.push(Value::from(arg as u64));
+            }
+            F32CONVERTSI32 => {
+                let arg = self.value_stack.pop_i32();
+                self.value_stack.push(Value::F32(arg as f32));
+            }
+            F32CONVERTUI32 => {
+                let arg = self.value_stack.pop_u32();
+                self.value_stack.push(Value::F32(arg as f32));
+            }
+            F32CONVERTSI64 => {
+                let arg = self.value_stack.pop_i64();
+                self.value_stack.push(Value::F32(arg as f32));
+            }
+            F32CONVERTUI64 => {
+                let arg = self.value_stack.pop_u64();
+                self.value_stack.push(Value::F32(arg as f32));
+            }
             F32DEMOTEF64 => {
                 let arg = self.value_stack.pop_f64();
                 self.value_stack.push(Value::F32(arg as f32));
@@ -1160,7 +1320,6 @@ impl<'a> Instance<'a> {
             }
             F64CONVERTUI64 => {
                 let arg = self.value_stack.pop_u64();
-                dbg!(arg);
                 self.value_stack.push(Value::F64(arg as f64));
             }
             F64PROMOTEF32 => {
