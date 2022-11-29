@@ -1122,10 +1122,34 @@ impl<'a> Instance<'a> {
                 let wrapped: u32 = (arg & 0xffff_ffff) as u32;
                 self.value_stack.push(Value::from(wrapped));
             }
-            I32TRUNCSF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32TRUNCUF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32TRUNCSF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I32TRUNCUF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I32TRUNCSF32 => {
+                let arg = self.value_stack.pop_f32();
+                if arg < i32::MIN as f32 || arg > i32::MAX as f32 {
+                    panic!("Cannot truncate {} from F32 to I32", arg);
+                }
+                self.value_stack.push(Value::I32(arg as i32));
+            }
+            I32TRUNCUF32 => {
+                let arg = self.value_stack.pop_f32();
+                if arg < u32::MIN as f32 || arg > u32::MAX as f32 {
+                    panic!("Cannot truncate {} from F32 to unsigned I32", arg);
+                }
+                self.value_stack.push(Value::from(arg as u32));
+            }
+            I32TRUNCSF64 => {
+                let arg = self.value_stack.pop_f64();
+                if arg < i32::MIN as f64 || arg > i32::MAX as f64 {
+                    panic!("Cannot truncate {} from F64 to I32", arg);
+                }
+                self.value_stack.push(Value::I32(arg as i32));
+            }
+            I32TRUNCUF64 => {
+                let arg = self.value_stack.pop_f64();
+                if arg < u32::MIN as f64 || arg > u32::MAX as f64 {
+                    panic!("Cannot truncate {} from F64 to unsigned I32", arg);
+                }
+                self.value_stack.push(Value::from(arg as u32));
+            }
             I64EXTENDSI32 => {
                 let arg = self.value_stack.pop_i32();
                 self.value_stack.push(Value::I64(arg as i64));
@@ -1134,10 +1158,34 @@ impl<'a> Instance<'a> {
                 let arg = self.value_stack.pop_u32();
                 self.value_stack.push(Value::from(arg as u64));
             }
-            I64TRUNCSF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64TRUNCUF32 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64TRUNCSF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
-            I64TRUNCUF64 => todo!("{:?} @ {:#x}", op_code, file_offset),
+            I64TRUNCSF32 => {
+                let arg = self.value_stack.pop_f32();
+                if arg < i64::MIN as f32 || arg > i64::MAX as f32 {
+                    panic!("Cannot truncate {} from F32 to I64", arg);
+                }
+                self.value_stack.push(Value::I64(arg as i64));
+            }
+            I64TRUNCUF32 => {
+                let arg = self.value_stack.pop_f32();
+                if arg < u64::MIN as f32 || arg > u64::MAX as f32 {
+                    panic!("Cannot truncate {} from F32 to unsigned I64", arg);
+                }
+                self.value_stack.push(Value::from(arg as u64));
+            }
+            I64TRUNCSF64 => {
+                let arg = self.value_stack.pop_f64();
+                if arg < i64::MIN as f64 || arg > i64::MAX as f64 {
+                    panic!("Cannot truncate {} from F64 to I64", arg);
+                }
+                self.value_stack.push(Value::I64(arg as i64));
+            }
+            I64TRUNCUF64 => {
+                let arg = self.value_stack.pop_f64();
+                if arg < u64::MIN as f64 || arg > u64::MAX as f64 {
+                    panic!("Cannot truncate {} from F64 to unsigned I64", arg);
+                }
+                self.value_stack.push(Value::from(arg as u64));
+            }
             F32CONVERTSI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32CONVERTUI32 => todo!("{:?} @ {:#x}", op_code, file_offset),
             F32CONVERTSI64 => todo!("{:?} @ {:#x}", op_code, file_offset),

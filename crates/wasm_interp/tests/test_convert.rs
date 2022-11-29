@@ -12,17 +12,73 @@ fn test_i32wrapi64() {
     );
 }
 
-// #[test]
-// fn test_i32truncsf32() {}
+#[test]
+fn test_i32truncsf32() {
+    test_op_example(I32TRUNCSF32, [Value::F32(2.9)], Value::I32(2));
+}
 
-// #[test]
-// fn test_i32truncuf32() {}
+#[test]
+#[should_panic(expected = "Cannot truncate")]
+fn test_i32truncsf32_oob() {
+    test_op_example(
+        I32TRUNCSF32,
+        [Value::F32(i32::MAX as f32 * 2.0)],
+        Value::I32(i32::MIN),
+    );
+}
 
-// #[test]
-// fn test_i32truncsf64() {}
+#[test]
+fn test_i32truncuf32() {
+    test_op_example(
+        I32TRUNCUF32,
+        [Value::F32(i32::MAX as f32 + 1.0)],
+        Value::I32(i32::MIN),
+    );
+}
 
-// #[test]
-// fn test_i32truncuf64() {}
+#[test]
+#[should_panic(expected = "Cannot truncate")]
+fn test_i32truncuf32_oob() {
+    test_op_example(
+        I32TRUNCUF32,
+        [Value::F32(u32::MAX as f32 * 2.0)],
+        Value::I32(0),
+    );
+}
+
+#[test]
+fn test_i32truncsf64() {
+    test_op_example(I32TRUNCSF64, [Value::F64(2.9)], Value::I32(2));
+}
+
+#[test]
+#[should_panic(expected = "Cannot truncate")]
+fn test_i32truncsf64_oob() {
+    test_op_example(
+        I32TRUNCSF64,
+        [Value::F64(i32::MAX as f64 * 2.0)],
+        Value::I32(i32::MIN),
+    );
+}
+
+#[test]
+fn test_i32truncuf64() {
+    test_op_example(
+        I32TRUNCUF64,
+        [Value::F64(i32::MAX as f64 + 1.0)],
+        Value::I32(i32::MIN),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Cannot truncate")]
+fn test_i32truncuf64_oob() {
+    test_op_example(
+        I32TRUNCUF64,
+        [Value::F64(u32::MAX as f64 * 2.0)],
+        Value::I32(0),
+    );
+}
 
 #[test]
 fn test_i64extendsi32() {
@@ -34,17 +90,73 @@ fn test_i64extendui32() {
     test_op_example(I64EXTENDUI32, [Value::I32(-1)], Value::I64(0xffff_ffff));
 }
 
-// #[test]
-// fn test_i64truncsf32() {}
+#[test]
+fn test_i64truncsf32() {
+    test_op_example(I64TRUNCSF32, [Value::F32(2.9)], Value::I64(2));
+}
 
-// #[test]
-// fn test_i64truncuf32() {}
+#[test]
+#[should_panic(expected = "Cannot truncate")]
+fn test_i64truncsf32_oob() {
+    test_op_example(
+        I64TRUNCSF32,
+        [Value::F32(i64::MAX as f32 * 2.0)],
+        Value::I64(i64::MIN),
+    );
+}
 
-// #[test]
-// fn test_i64truncsf64() {}
+#[test]
+fn test_i64truncuf32() {
+    test_op_example(
+        I64TRUNCUF32,
+        [Value::F32(i64::MAX as f32 + 1.0)],
+        Value::I64(i64::MIN),
+    );
+}
 
-// #[test]
-// fn test_i64truncuf64() {}
+#[test]
+#[should_panic(expected = "Cannot truncate")]
+fn test_i64truncuf32_oob() {
+    test_op_example(
+        I64TRUNCUF32,
+        [Value::F32(u64::MAX as f32 * 2.0)],
+        Value::I64(0),
+    );
+}
+
+#[test]
+fn test_i64truncsf64() {
+    test_op_example(I64TRUNCSF64, [Value::F64(2.9)], Value::I64(2));
+}
+
+#[test]
+#[should_panic(expected = "Cannot truncate")]
+fn test_i64truncsf64_oob() {
+    test_op_example(
+        I64TRUNCSF64,
+        [Value::F64(i64::MAX as f64 * 2.0)],
+        Value::I64(i64::MIN),
+    );
+}
+
+#[test]
+fn test_i64truncuf64() {
+    test_op_example(
+        I64TRUNCUF64,
+        [Value::F64(i64::MAX as f64 + 1.0)],
+        Value::I64(i64::MIN),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Cannot truncate")]
+fn test_i64truncuf64_oob() {
+    test_op_example(
+        I32TRUNCUF64,
+        [Value::F64(u64::MAX as f64 * 2.0)],
+        Value::I32(0),
+    );
+}
 
 #[test]
 fn test_f32demotef64() {
