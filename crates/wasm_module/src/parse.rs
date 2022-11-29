@@ -62,14 +62,14 @@ fn decode_i32(bytes: &[u8]) -> Result<(i32, usize), ()> {
     let mut shift = 0;
     for (i, byte) in bytes.iter().take(MAX_SIZE_ENCODED_U32).enumerate() {
         value |= ((byte & 0x7f) as i32) << shift;
+        shift += 7;
         if (byte & 0x80) == 0 {
             let is_negative = byte & 0x40 != 0;
-            if shift < MAX_SIZE_ENCODED_U32 && is_negative {
+            if shift < 32 && is_negative {
                 value |= -1 << shift;
             }
             return Ok((value, i + 1));
         }
-        shift += 7;
     }
     Err(())
 }
@@ -99,14 +99,14 @@ fn decode_i64(bytes: &[u8]) -> Result<(i64, usize), ()> {
     let mut shift = 0;
     for (i, byte) in bytes.iter().take(MAX_SIZE_ENCODED_U64).enumerate() {
         value |= ((byte & 0x7f) as i64) << shift;
+        shift += 7;
         if (byte & 0x80) == 0 {
             let is_negative = byte & 0x40 != 0;
-            if shift < MAX_SIZE_ENCODED_U64 && is_negative {
+            if shift < 64 && is_negative {
                 value |= -1 << shift;
             }
             return Ok((value, i + 1));
         }
-        shift += 7;
     }
     Err(())
 }
@@ -241,7 +241,7 @@ impl SkipBytes for String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::decode_u32;
+    use crate::{parse::decode_u32, SerialBuffer};
 
     #[test]
     fn test_decode_u32() {
@@ -274,5 +274,24 @@ mod tests {
 
         assert_eq!(u32::parse((), bytes, &mut cursor).unwrap(), expected[2]);
         assert_eq!(cursor, 8);
+    }
+
+    #[test]
+    fn test_encode_decode_i32() {
+        encode_decode_i32_help(3);
+        encode_decode_i32_help(65535);
+        encode_decode_i32_help(-2);
+        encode_decode_i32_help(-65536);
+        encode_decode_i32_help(i32::MIN);
+        encode_decode_i32_help(i32::MAX);
+    }
+
+    fn encode_decode_i32_help(value: i32) {
+        let arena = &Bump::new();
+        let mut buffer = Vec::with_capacity_in(MAX_SIZE_ENCODED_U32, arena);
+        buffer.encode_i32(value);
+        let mut cursor = 0;
+        let parsed = i32::parse((), &buffer, &mut cursor).unwrap();
+        assert_eq!(parsed, value);
     }
 }

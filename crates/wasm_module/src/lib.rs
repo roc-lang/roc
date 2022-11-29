@@ -721,6 +721,30 @@ impl Value {
     }
 }
 
+impl From<u32> for Value {
+    fn from(x: u32) -> Self {
+        Value::I32(i32::from_ne_bytes(x.to_ne_bytes()))
+    }
+}
+
+impl From<u64> for Value {
+    fn from(x: u64) -> Self {
+        Value::I64(i64::from_ne_bytes(x.to_ne_bytes()))
+    }
+}
+
+impl From<i32> for Value {
+    fn from(x: i32) -> Self {
+        Value::I32(x)
+    }
+}
+
+impl From<i64> for Value {
+    fn from(x: i64) -> Self {
+        Value::I64(x)
+    }
+}
+
 /// Wasm memory alignment for load/store instructions.
 /// Rust representation matches Wasm encoding.
 /// It's an error to specify alignment higher than the "natural" alignment of the instruction
@@ -784,6 +808,33 @@ macro_rules! round_up_to_alignment {
             aligned &= !$alignment_bytes + 1; // mask with a flag that has upper bits 1, lower bits 0
             aligned
         }
+    };
+}
+
+/// # dbg_hex
+/// display dbg result in hexadecimal `{:#x?}` format.
+#[macro_export]
+macro_rules! dbg_hex {
+    // NOTE: We cannot use `concat!` to make a static string as a format argument
+    // of `eprintln!` because `file!` could contain a `{` or
+    // `$val` expression could be a block (`{ .. }`), in which case the `eprintln!`
+    // will be malformed.
+    () => {
+        eprintln!("[{}:{}]", file!(), line!());
+    };
+    ($val:expr $(,)?) => {
+        // Use of `match` here is intentional because it affects the lifetimes
+        // of temporaries - https://stackoverflow.com/a/48732525/1063961
+        match $val {
+            tmp => {
+                eprintln!("[{}:{}] {} = {:#x?}",
+                    file!(), line!(), stringify!($val), &tmp);
+                tmp
+            }
+        }
+    };
+    ($($val:expr),+ $(,)?) => {
+        ($($crate::dbg_hex!($val)),+,)
     };
 }
 

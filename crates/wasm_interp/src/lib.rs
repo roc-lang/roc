@@ -1,5 +1,6 @@
 mod call_stack;
 mod execute;
+pub mod test_utils;
 mod value_stack;
 
 // Exposed for testing only. Should eventually become private.
