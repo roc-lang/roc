@@ -158,5 +158,28 @@ fn test_f64div() {
 
     test_f64_binop(op, 1.0, 0.0, f64::INFINITY);
     test_f64_binop(op, -1.0, 0.0, f64::NEG_INFINITY);
-    // test_f64_binop(op, 0.0, 0.0, f64::NAN); // can't check NaN for equality! LOL
+    // to-probably-never-do: check NaN. It needs its own special test setup.
+}
+
+#[test]
+fn test_f64min() {
+    let op = F64MIN;
+    test_f64_binop(op, 1.1, 2.2, 1.1);
+    test_f64_binop(op, -1.1, -2.2, -2.2);
+}
+
+#[test]
+fn test_f64max() {
+    let op = F64MAX;
+    test_f64_binop(op, 1.1, 2.2, 2.2);
+    test_f64_binop(op, -1.1, -2.2, -1.1);
+}
+
+#[test]
+fn test_f64copysign() {
+    let op = F64COPYSIGN;
+    test_f64_binop(op, 1.1, 2.2, 1.1);
+    test_f64_binop(op, -1.1, -2.2, -1.1);
+    test_f64_binop(op, -1.1, 1.1, 1.1);
+    test_f64_binop(op, 1.1, -1.1, -1.1);
 }

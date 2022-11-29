@@ -160,3 +160,26 @@ fn test_f32div() {
     test_f32_binop(op, -1.0, 0.0, f32::NEG_INFINITY);
     // test_f32_binop(op, 0.0, 0.0, f32::NAN); // can't check NaN for equality! LOL
 }
+
+#[test]
+fn test_f32min() {
+    let op = F32MIN;
+    test_f32_binop(op, 1.1, 2.2, 1.1);
+    test_f32_binop(op, -1.1, -2.2, -2.2);
+}
+
+#[test]
+fn test_f32max() {
+    let op = F32MAX;
+    test_f32_binop(op, 1.1, 2.2, 2.2);
+    test_f32_binop(op, -1.1, -2.2, -1.1);
+}
+
+#[test]
+fn test_f32copysign() {
+    let op = F32COPYSIGN;
+    test_f32_binop(op, 1.1, 2.2, 1.1);
+    test_f32_binop(op, -1.1, -2.2, -1.1);
+    test_f32_binop(op, -1.1, 1.1, 1.1);
+    test_f32_binop(op, 1.1, -1.1, -1.1);
+}

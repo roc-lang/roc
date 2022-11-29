@@ -1107,9 +1107,28 @@ impl<'a> Instance<'a> {
                 let arg1 = self.value_stack.pop_f32();
                 self.value_stack.push(Value::F32(arg1 / arg2));
             }
-            F32MIN => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32MAX => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F32COPYSIGN => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F32MIN => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                let result = if arg1 < arg2 { arg1 } else { arg2 };
+                self.value_stack.push(Value::F32(result));
+            }
+            F32MAX => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                let result = if arg1 > arg2 { arg1 } else { arg2 };
+                self.value_stack.push(Value::F32(result));
+            }
+            F32COPYSIGN => {
+                let arg2 = self.value_stack.pop_f32();
+                let arg1 = self.value_stack.pop_f32();
+                let result = if arg1.is_sign_negative() == arg2.is_sign_negative() {
+                    arg1
+                } else {
+                    arg2
+                };
+                self.value_stack.push(Value::F32(result));
+            }
 
             F64ABS => {
                 let arg = self.value_stack.pop_f64();
@@ -1175,9 +1194,28 @@ impl<'a> Instance<'a> {
                 let arg1 = self.value_stack.pop_f64();
                 self.value_stack.push(Value::F64(arg1 / arg2));
             }
-            F64MIN => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64MAX => todo!("{:?} @ {:#x}", op_code, file_offset),
-            F64COPYSIGN => todo!("{:?} @ {:#x}", op_code, file_offset),
+            F64MIN => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                let result = if arg1 < arg2 { arg1 } else { arg2 };
+                self.value_stack.push(Value::F64(result));
+            }
+            F64MAX => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                let result = if arg1 > arg2 { arg1 } else { arg2 };
+                self.value_stack.push(Value::F64(result));
+            }
+            F64COPYSIGN => {
+                let arg2 = self.value_stack.pop_f64();
+                let arg1 = self.value_stack.pop_f64();
+                let result = if arg1.is_sign_negative() == arg2.is_sign_negative() {
+                    arg1
+                } else {
+                    arg2
+                };
+                self.value_stack.push(Value::F64(result));
+            }
 
             I32WRAPI64 => {
                 let arg = self.value_stack.pop_u64();
