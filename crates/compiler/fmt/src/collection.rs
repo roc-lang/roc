@@ -1,7 +1,7 @@
 use roc_parse::ast::{Collection, CommentOrNewline, ExtractSpaces};
 
 use crate::{
-    annotation::{Formattable, Newlines},
+    annotation::{is_collection_multiline, Formattable, Newlines},
     spaces::{fmt_comments_only, NewlineAt, INDENT},
     Buf,
 };
@@ -34,7 +34,7 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
         Braces::Square => ']',
     };
 
-    if items.is_multiline() {
+    if is_collection_multiline(&items) {
         let braces_indent = indent;
         let item_indent = braces_indent + INDENT;
         if newline == Newlines::Yes {

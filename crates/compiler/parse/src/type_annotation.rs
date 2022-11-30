@@ -349,23 +349,20 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
 fn record_type<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
-    map!(
-        and!(
-            collection_trailing_sep_e!(
-                word1(b'{', ETypeRecord::Open),
-                loc!(record_type_field()),
-                word1(b',', ETypeRecord::End),
-                word1(b'}', ETypeRecord::End),
-                ETypeRecord::IndentEnd,
-                AssignedField::SpaceBefore
-            ),
-            optional(allocated(specialize_ref(
-                ETypeRecord::Type,
-                term(stop_at_surface_has)
-            )))
+    record!(TypeAnnotation::Record {
+        fields: collection_trailing_sep_e!(
+            word1(b'{', ETypeRecord::Open),
+            loc!(record_type_field()),
+            word1(b',', ETypeRecord::End),
+            word1(b'}', ETypeRecord::End),
+            ETypeRecord::IndentEnd,
+            AssignedField::SpaceBefore
         ),
-        |(fields, ext)| { TypeAnnotation::Record { fields, ext } }
-    )
+        ext: optional(allocated(specialize_ref(
+            ETypeRecord::Type,
+            term(stop_at_surface_has)
+        )))
+    })
     .trace("type_annotation:record_type")
 }
 
@@ -515,29 +512,26 @@ pub fn has_abilities<'a>() -> impl Parser<'a, Loc<HasAbilities<'a>>, EType<'a>> 
 }
 
 fn parse_has_ability<'a>() -> impl Parser<'a, HasAbility<'a>, EType<'a>> {
-    increment_min_indent(map!(
-        and!(
-            loc!(specialize(EType::TApply, concrete_type())),
-            optional(space0_before_e(
-                loc!(map!(
-                    specialize(
-                        EType::TAbilityImpl,
-                        collection_trailing_sep_e!(
-                            word1(b'{', ETypeAbilityImpl::Open),
-                            specialize(|e: ERecord<'_>, _| e.into(), loc!(record_value_field())),
-                            word1(b',', ETypeAbilityImpl::End),
-                            word1(b'}', ETypeAbilityImpl::End),
-                            ETypeAbilityImpl::IndentEnd,
-                            AssignedField::SpaceBefore
-                        )
-                    ),
-                    HasImpls::HasImpls
-                )),
-                EType::TIndentEnd
-            ))
-        ),
-        |(ability, impls): (_, Option<_>)| { HasAbility::HasAbility { ability, impls } }
-    ))
+    increment_min_indent(record!(HasAbility::HasAbility {
+        ability: loc!(specialize(EType::TApply, concrete_type())),
+        impls: optional(backtrackable(space0_before_e(
+            loc!(map!(
+                specialize(
+                    EType::TAbilityImpl,
+                    collection_trailing_sep_e!(
+                        word1(b'{', ETypeAbilityImpl::Open),
+                        specialize(|e: ERecord<'_>, _| e.into(), loc!(record_value_field())),
+                        word1(b',', ETypeAbilityImpl::End),
+                        word1(b'}', ETypeAbilityImpl::End),
+                        ETypeAbilityImpl::IndentEnd,
+                        AssignedField::SpaceBefore
+                    )
+                ),
+                HasImpls::HasImpls
+            )),
+            EType::TIndentEnd
+        )))
+    }))
 }
 
 fn expression<'a>(
@@ -594,10 +588,10 @@ fn expression<'a>(
             }
             Err(err) => {
                 if !is_trailing_comma_valid {
-                    let (_, comma, _) = optional(skip_first!(
+                    let (_, comma, _) = optional(backtrackable(skip_first!(
                         space0_e(EType::TIndentStart),
                         word1(b',', EType::TStart)
-                    ))
+                    )))
                     .trace("check trailing comma")
                     .parse(arena, state.clone(), min_indent)?;
 

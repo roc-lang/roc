@@ -8,7 +8,7 @@ use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Spaces<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
     pub item: T,
@@ -81,11 +81,17 @@ impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Module<'a> {
-    Interface { header: InterfaceHeader<'a> },
-    App { header: AppHeader<'a> },
-    Platform { header: PlatformHeader<'a> },
-    Hosted { header: HostedHeader<'a> },
+pub struct Module<'a> {
+    pub comments: &'a [CommentOrNewline<'a>],
+    pub header: Header<'a>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Header<'a> {
+    Interface(InterfaceHeader<'a>),
+    App(AppHeader<'a>),
+    Platform(PlatformHeader<'a>),
+    Hosted(HostedHeader<'a>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

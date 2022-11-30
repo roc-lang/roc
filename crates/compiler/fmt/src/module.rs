@@ -1,184 +1,248 @@
-use crate::annotation::{Formattable, Newlines};
+use crate::annotation::{is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
 use crate::expr::fmt_str_literal;
+use crate::spaces::RemoveSpaces;
 use crate::spaces::{fmt_comments_only, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
-use roc_parse::ast::{Collection, Module, Spaced};
+use bumpalo::Bump;
+use roc_parse::ast::{Collection, Header, Module, Spaced, Spaces};
 use roc_parse::header::{
-    AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName, PackageEntry,
-    PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
+    AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword, HostedHeader, ImportsEntry,
+    ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName, PackageEntry,
+    PackageKeyword, PackageName, PackagesKeyword, PlatformHeader, PlatformRequires,
+    ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
 };
 use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
 
 pub fn fmt_module<'a>(buf: &mut Buf<'_>, module: &'a Module<'a>) {
-    match module {
-        Module::Interface { header } => {
+    fmt_comments_only(buf, module.comments.iter(), NewlineAt::Bottom, 0);
+    match &module.header {
+        Header::Interface(header) => {
             fmt_interface_header(buf, header);
         }
-        Module::App { header } => {
+        Header::App(header) => {
             fmt_app_header(buf, header);
         }
-        Module::Platform { header } => {
+        Header::Platform(header) => {
             fmt_platform_header(buf, header);
         }
-        Module::Hosted { header } => {
+        Header::Hosted(header) => {
             fmt_hosted_header(buf, header);
         }
     }
 }
 
+macro_rules! keywords {
+    ($($name:ident),* $(,)?) => {
+        $(
+            impl Formattable for $name {
+                fn is_multiline(&self) -> bool {
+                    false
+                }
+
+                fn format_with_options<'buf>(
+                    &self,
+                    buf: &mut Buf<'buf>,
+                    _parens: crate::annotation::Parens,
+                    _newlines: Newlines,
+                    indent: u16,
+                ) {
+                    buf.indent(indent);
+                    buf.push_str($name::KEYWORD);
+                }
+            }
+
+            impl<'a> RemoveSpaces<'a> for $name {
+                fn remove_spaces(&self, _arena: &'a Bump) -> Self {
+                    *self
+                }
+            }
+        )*
+    }
+}
+
+keywords! {
+    ExposesKeyword,
+    ImportsKeyword,
+    WithKeyword,
+    GeneratesKeyword,
+    PackageKeyword,
+    PackagesKeyword,
+    RequiresKeyword,
+    ProvidesKeyword,
+    ToKeyword,
+}
+
+impl<V: Formattable> Formattable for Option<V> {
+    fn is_multiline(&self) -> bool {
+        if let Some(v) = self {
+            v.is_multiline()
+        } else {
+            false
+        }
+    }
+
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        parens: crate::annotation::Parens,
+        newlines: Newlines,
+        indent: u16,
+    ) {
+        if let Some(v) = self {
+            v.format_with_options(buf, parens, newlines, indent);
+        }
+    }
+}
+
+impl<'a> Formattable for ProvidesTo<'a> {
+    fn is_multiline(&self) -> bool {
+        if let Some(types) = &self.types {
+            if is_collection_multiline(types) {
+                return true;
+            }
+        }
+        self.provides_keyword.is_multiline()
+            || is_collection_multiline(&self.entries)
+            || self.to_keyword.is_multiline()
+    }
+
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        _parens: crate::annotation::Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        self.provides_keyword.format(buf, indent);
+        fmt_provides(buf, self.entries, self.types, indent);
+        self.to_keyword.format(buf, indent);
+        fmt_to(buf, self.to.value, indent);
+    }
+}
+
+impl<'a> Formattable for PlatformRequires<'a> {
+    fn is_multiline(&self) -> bool {
+        is_collection_multiline(&self.rigids) || self.signature.is_multiline()
+    }
+
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        _parens: crate::annotation::Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        fmt_requires(buf, self, indent);
+    }
+}
+
+impl<'a, V: Formattable> Formattable for Spaces<'a, V> {
+    fn is_multiline(&self) -> bool {
+        !self.before.is_empty() || !self.after.is_empty() || self.item.is_multiline()
+    }
+
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        parens: crate::annotation::Parens,
+        newlines: Newlines,
+        indent: u16,
+    ) {
+        fmt_default_spaces(buf, self.before, indent);
+        self.item.format_with_options(buf, parens, newlines, indent);
+        fmt_default_spaces(buf, self.after, indent);
+    }
+}
+
+impl<'a, K: Formattable, V: Formattable> Formattable for KeywordItem<'a, K, V> {
+    fn is_multiline(&self) -> bool {
+        self.keyword.is_multiline() || self.item.is_multiline()
+    }
+
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        parens: Parens,
+        newlines: Newlines,
+        indent: u16,
+    ) {
+        self.keyword
+            .format_with_options(buf, parens, newlines, indent);
+        self.item.format_with_options(buf, parens, newlines, indent);
+    }
+}
+
 pub fn fmt_interface_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a InterfaceHeader<'a>) {
-    let indent = INDENT;
-
-    fmt_comments_only(buf, header.before_header.iter(), NewlineAt::Bottom, indent);
-
     buf.indent(0);
     buf.push_str("interface");
+    let indent = INDENT;
+    fmt_default_spaces(buf, header.before_name, indent);
 
     // module name
-    fmt_default_spaces(buf, header.after_interface_keyword, indent);
+    buf.indent(indent);
     buf.push_str(header.name.value.as_str());
 
-    // exposes
-    fmt_default_spaces(buf, header.before_exposes, indent);
-    buf.indent(indent);
-    buf.push_str("exposes");
-    fmt_default_spaces(buf, header.after_exposes, indent);
-    fmt_exposes(buf, header.exposes, indent);
-
-    // imports
-    fmt_default_spaces(buf, header.before_imports, indent);
-    buf.indent(indent);
-    buf.push_str("imports");
-    fmt_default_spaces(buf, header.after_imports, indent);
-    fmt_imports(buf, header.imports, indent);
+    header.exposes.keyword.format(buf, indent);
+    fmt_exposes(buf, header.exposes.item, indent);
+    header.imports.keyword.format(buf, indent);
+    fmt_imports(buf, header.imports.item, indent);
 }
 
 pub fn fmt_hosted_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a HostedHeader<'a>) {
-    let indent = INDENT;
-
-    fmt_comments_only(buf, header.before_header.iter(), NewlineAt::Bottom, indent);
-
     buf.indent(0);
     buf.push_str("hosted");
+    let indent = INDENT;
+    fmt_default_spaces(buf, header.before_name, indent);
 
-    // module name
-    fmt_default_spaces(buf, header.after_hosted_keyword, indent);
     buf.push_str(header.name.value.as_str());
 
-    // exposes
-    fmt_default_spaces(buf, header.before_exposes, indent);
-    buf.indent(indent);
-    buf.push_str("exposes");
-    fmt_default_spaces(buf, header.after_exposes, indent);
-    fmt_exposes(buf, header.exposes, indent);
-
-    // imports
-    fmt_default_spaces(buf, header.before_imports, indent);
-    buf.indent(indent);
-    buf.push_str("imports");
-    fmt_default_spaces(buf, header.after_imports, indent);
-    fmt_imports(buf, header.imports, indent);
-
-    // generates
-    fmt_default_spaces(buf, header.before_generates, indent);
-    buf.indent(indent);
-    buf.push_str("generates");
-    fmt_default_spaces(buf, header.after_generates, indent);
-    buf.push_str(header.generates.into());
-
-    // with
-    fmt_default_spaces(buf, header.before_with, indent);
-    buf.indent(indent);
-    buf.push_str("with");
-    fmt_default_spaces(buf, header.after_with, indent);
-    fmt_exposes(buf, header.generates_with, indent);
+    header.exposes.keyword.format(buf, indent);
+    fmt_exposes(buf, header.exposes.item, indent);
+    header.imports.keyword.format(buf, indent);
+    fmt_imports(buf, header.imports.item, indent);
+    header.generates.format(buf, indent);
+    header.generates_with.keyword.format(buf, indent);
+    fmt_exposes(buf, header.generates_with.item, indent);
 }
 
 pub fn fmt_app_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a AppHeader<'a>) {
-    let indent = INDENT;
-
-    fmt_comments_only(buf, header.before_header.iter(), NewlineAt::Bottom, indent);
-
     buf.indent(0);
     buf.push_str("app");
+    let indent = INDENT;
+    fmt_default_spaces(buf, header.before_name, indent);
 
-    fmt_default_spaces(buf, header.after_app_keyword, indent);
     fmt_str_literal(buf, header.name.value, indent);
 
-    // packages
-    fmt_default_spaces(buf, header.before_packages, indent);
-    buf.indent(indent);
-    buf.push_str("packages");
-    fmt_default_spaces(buf, header.after_packages, indent);
-    fmt_packages(buf, header.packages, indent);
-
-    // imports
-    fmt_default_spaces(buf, header.before_imports, indent);
-    buf.indent(indent);
-    buf.push_str("imports");
-    fmt_default_spaces(buf, header.after_imports, indent);
-    fmt_imports(buf, header.imports, indent);
-
-    // provides
-    fmt_default_spaces(buf, header.before_provides, indent);
-    buf.indent(indent);
-    buf.push_str("provides");
-    fmt_default_spaces(buf, header.after_provides, indent);
-    fmt_provides(buf, header.provides, header.provides_types, indent);
-    fmt_default_spaces(buf, header.before_to, indent);
-    buf.indent(indent);
-    buf.push_str("to");
-    fmt_default_spaces(buf, header.after_to, indent);
-    fmt_to(buf, header.to.value, indent);
+    if let Some(packages) = &header.packages {
+        packages.keyword.format(buf, indent);
+        fmt_packages(buf, packages.item, indent);
+    }
+    if let Some(imports) = &header.imports {
+        imports.keyword.format(buf, indent);
+        fmt_imports(buf, imports.item, indent);
+    }
+    header.provides.format(buf, indent);
 }
 
 pub fn fmt_platform_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PlatformHeader<'a>) {
-    let indent = INDENT;
-
-    fmt_comments_only(buf, header.before_header.iter(), NewlineAt::Bottom, indent);
-
     buf.indent(0);
     buf.push_str("platform");
+    let indent = INDENT;
+    fmt_default_spaces(buf, header.before_name, indent);
 
-    fmt_default_spaces(buf, header.after_platform_keyword, indent);
     fmt_package_name(buf, header.name.value, indent);
 
-    // requires
-    fmt_default_spaces(buf, header.before_requires, indent);
-    buf.indent(indent);
-    buf.push_str("requires");
-    fmt_default_spaces(buf, header.after_requires, indent);
-    fmt_requires(buf, &header.requires, indent);
-
-    // exposes
-    fmt_default_spaces(buf, header.before_exposes, indent);
-    buf.indent(indent);
-    buf.push_str("exposes");
-    fmt_default_spaces(buf, header.after_exposes, indent);
-    fmt_exposes(buf, header.exposes, indent);
-
-    // packages
-    fmt_default_spaces(buf, header.before_packages, indent);
-    buf.indent(indent);
-    buf.push_str("packages");
-    fmt_default_spaces(buf, header.after_packages, indent);
-    fmt_packages(buf, header.packages, indent);
-
-    // imports
-    fmt_default_spaces(buf, header.before_imports, indent);
-    buf.indent(indent);
-    buf.push_str("imports");
-    fmt_default_spaces(buf, header.after_imports, indent);
-    fmt_imports(buf, header.imports, indent);
-
-    // provides
-    fmt_default_spaces(buf, header.before_provides, indent);
-    buf.indent(indent);
-    buf.push_str("provides");
-    fmt_default_spaces(buf, header.after_provides, indent);
-    fmt_provides(buf, header.provides, None, indent);
+    header.requires.format(buf, indent);
+    header.exposes.keyword.format(buf, indent);
+    fmt_exposes(buf, header.exposes.item, indent);
+    header.packages.keyword.format(buf, indent);
+    fmt_packages(buf, header.packages.item, indent);
+    header.imports.keyword.format(buf, indent);
+    fmt_imports(buf, header.imports.item, indent);
+    header.provides.keyword.format(buf, indent);
+    fmt_provides(buf, header.provides.item, None, indent);
 }
 
 fn fmt_requires<'a, 'buf>(buf: &mut Buf<'buf>, requires: &PlatformRequires<'a>, indent: u16) {
@@ -195,7 +259,13 @@ impl<'a> Formattable for TypedIdent<'a> {
         false
     }
 
-    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
         buf.indent(indent);
         buf.push_str(self.ident.value);
         fmt_default_spaces(buf, self.spaces_before_colon, indent);
@@ -306,7 +376,13 @@ impl<'a> Formattable for ModuleName<'a> {
         false
     }
 
-    fn format<'buf>(&self, buf: &mut Buf<'buf>, _indent: u16) {
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        _parens: Parens,
+        _newlines: Newlines,
+        _indent: u16,
+    ) {
         buf.push_str(self.as_str());
     }
 }
@@ -316,7 +392,13 @@ impl<'a> Formattable for ExposedName<'a> {
         false
     }
 
-    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
         buf.indent(indent);
         buf.push_str(self.as_str());
     }
@@ -341,7 +423,13 @@ impl<'a> Formattable for PackageEntry<'a> {
         false
     }
 
-    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
         fmt_packages_entry(buf, self, indent);
     }
 }
@@ -351,7 +439,13 @@ impl<'a> Formattable for ImportsEntry<'a> {
         false
     }
 
-    fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
         fmt_imports_entry(buf, self, indent);
     }
 }

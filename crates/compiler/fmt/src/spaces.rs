@@ -4,12 +4,13 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, Has, HasAbilities,
-        HasAbility, HasClause, HasImpls, Module, Pattern, Spaced, StrLiteral, StrSegment, Tag,
-        TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
+        HasAbility, HasClause, HasImpls, Header, Module, Pattern, Spaced, Spaces, StrLiteral,
+        StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
-        AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName,
-        PackageEntry, PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
+        AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
+        ModuleName, PackageEntry, PackageName, PlatformHeader, PlatformRequires, ProvidesTo, To,
+        TypedIdent,
     },
     ident::UppercaseIdent,
 };
@@ -242,83 +243,74 @@ impl<'a> RemoveSpaces<'a> for Defs<'a> {
     }
 }
 
+impl<'a, V: RemoveSpaces<'a>> RemoveSpaces<'a> for Spaces<'a, V> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        Spaces {
+            before: &[],
+            item: self.item.remove_spaces(arena),
+            after: &[],
+        }
+    }
+}
+
+impl<'a, K: RemoveSpaces<'a>, V: RemoveSpaces<'a>> RemoveSpaces<'a> for KeywordItem<'a, K, V> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        KeywordItem {
+            keyword: self.keyword.remove_spaces(arena),
+            item: self.item.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ProvidesTo<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        ProvidesTo {
+            provides_keyword: self.provides_keyword.remove_spaces(arena),
+            entries: self.entries.remove_spaces(arena),
+            types: self.types.remove_spaces(arena),
+            to_keyword: self.to_keyword.remove_spaces(arena),
+            to: self.to.remove_spaces(arena),
+        }
+    }
+}
+
 impl<'a> RemoveSpaces<'a> for Module<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        match self {
-            Module::Interface { header } => Module::Interface {
-                header: InterfaceHeader {
-                    name: header.name.remove_spaces(arena),
-                    exposes: header.exposes.remove_spaces(arena),
-                    imports: header.imports.remove_spaces(arena),
-                    before_header: &[],
-                    after_interface_keyword: &[],
-                    before_exposes: &[],
-                    after_exposes: &[],
-                    before_imports: &[],
-                    after_imports: &[],
-                },
-            },
-            Module::App { header } => Module::App {
-                header: AppHeader {
-                    name: header.name.remove_spaces(arena),
-                    packages: header.packages.remove_spaces(arena),
-                    imports: header.imports.remove_spaces(arena),
-                    provides: header.provides.remove_spaces(arena),
-                    provides_types: header.provides_types.map(|ts| ts.remove_spaces(arena)),
-                    to: header.to.remove_spaces(arena),
-                    before_header: &[],
-                    after_app_keyword: &[],
-                    before_packages: &[],
-                    after_packages: &[],
-                    before_imports: &[],
-                    after_imports: &[],
-                    before_provides: &[],
-                    after_provides: &[],
-                    before_to: &[],
-                    after_to: &[],
-                },
-            },
-            Module::Platform { header } => Module::Platform {
-                header: PlatformHeader {
-                    name: header.name.remove_spaces(arena),
-                    requires: header.requires.remove_spaces(arena),
-                    exposes: header.exposes.remove_spaces(arena),
-                    packages: header.packages.remove_spaces(arena),
-                    imports: header.imports.remove_spaces(arena),
-                    provides: header.provides.remove_spaces(arena),
-                    before_header: &[],
-                    after_platform_keyword: &[],
-                    before_requires: &[],
-                    after_requires: &[],
-                    before_exposes: &[],
-                    after_exposes: &[],
-                    before_packages: &[],
-                    after_packages: &[],
-                    before_imports: &[],
-                    after_imports: &[],
-                    before_provides: &[],
-                    after_provides: &[],
-                },
-            },
-            Module::Hosted { header } => Module::Hosted {
-                header: HostedHeader {
-                    name: header.name.remove_spaces(arena),
-                    exposes: header.exposes.remove_spaces(arena),
-                    imports: header.imports.remove_spaces(arena),
-                    generates: header.generates.remove_spaces(arena),
-                    generates_with: header.generates_with.remove_spaces(arena),
-                    before_header: &[],
-                    after_hosted_keyword: &[],
-                    before_exposes: &[],
-                    after_exposes: &[],
-                    before_imports: &[],
-                    after_imports: &[],
-                    before_generates: &[],
-                    after_generates: &[],
-                    before_with: &[],
-                    after_with: &[],
-                },
-            },
+        let header = match &self.header {
+            Header::Interface(header) => Header::Interface(InterfaceHeader {
+                before_name: &[],
+                name: header.name.remove_spaces(arena),
+                exposes: header.exposes.remove_spaces(arena),
+                imports: header.imports.remove_spaces(arena),
+            }),
+            Header::App(header) => Header::App(AppHeader {
+                before_name: &[],
+                name: header.name.remove_spaces(arena),
+                packages: header.packages.remove_spaces(arena),
+                imports: header.imports.remove_spaces(arena),
+                provides: header.provides.remove_spaces(arena),
+            }),
+            Header::Platform(header) => Header::Platform(PlatformHeader {
+                before_name: &[],
+                name: header.name.remove_spaces(arena),
+                requires: header.requires.remove_spaces(arena),
+                exposes: header.exposes.remove_spaces(arena),
+                packages: header.packages.remove_spaces(arena),
+                imports: header.imports.remove_spaces(arena),
+                provides: header.provides.remove_spaces(arena),
+            }),
+            Header::Hosted(header) => Header::Hosted(HostedHeader {
+                before_name: &[],
+                name: header.name.remove_spaces(arena),
+                exposes: header.exposes.remove_spaces(arena),
+                imports: header.imports.remove_spaces(arena),
+                generates: header.generates.remove_spaces(arena),
+                generates_with: header.generates_with.remove_spaces(arena),
+            }),
+        };
+        Module {
+            comments: &[],
+            header,
         }
     }
 }
