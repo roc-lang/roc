@@ -237,6 +237,7 @@ pub mod test_ed_model {
     use roc_load::{LoadedModule, Threading};
     use roc_module::symbol::IdentIds;
     use roc_module::symbol::ModuleIds;
+    use roc_packaging::cache::RocCacheDir;
     use roc_types::subs::VarStore;
     use std::fs;
     use std::fs::File;
@@ -329,7 +330,11 @@ pub mod test_ed_model {
         writeln!(file, "{}", clean_code_str)
             .unwrap_or_else(|_| panic!("Failed to write {:?} to file: {:?}", clean_code_str, file));
 
-        let loaded_module = load_module(&temp_file_full_path, Threading::AllAvailable);
+        let loaded_module = load_module(
+            &temp_file_full_path,
+            RocCacheDir::Disallowed,
+            Threading::AllAvailable,
+        );
 
         let mut ed_model = init_dummy_model(
             clean_code_str,

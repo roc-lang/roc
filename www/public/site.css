@@ -21,10 +21,13 @@
 }
 
 html {
-    font-family: 'Lato', sans-serif;
     line-height: 1.5rem;
     background: var(--body-bg);
     color: var(--text-color);
+}
+
+html, #tutorial-toc-toggle-label {
+    font-family: 'Lato', sans-serif;
 }
 
 html, body {
@@ -72,7 +75,6 @@ li {
 }
 
 #top-bar nav {
-    min-width: var(--body-max-width);
     max-width: 1024px;
     margin: 0 auto;
     display: flex;
@@ -90,7 +92,9 @@ li {
     display: flex;
 }
 
-#top-bar-links a {
+#top-bar-links a,
+#top-bar-links label {
+    box-sizing: border-box;
     color: var(--top-bar-fg);
     font-size: 1.1rem;
     display: block;
@@ -99,16 +103,14 @@ li {
     margin: 0 2px;
 }
 
-@media only screen and (min-device-width: 900px) {
-    main {
-        width: var(--body-max-width);
-        margin: 36px auto;
-    }
+main {
+    max-width: var(--body-max-width);
+    margin: 36px auto;
+    padding: 0 12px;
 }
 
 code {
     margin: 0 0.2rem;
-    white-space: nowrap;
     background: var(--code-bg);
     padding: 0.1rem 0.5rem;
     border-radius: 4px;
@@ -119,7 +121,7 @@ code, samp {
     color: var(--code-color);
 }
 
-code.snippet, samp {
+.snippet, samp {
     display: block;
     overflow: auto;
     white-space: pre;
@@ -181,12 +183,7 @@ samp .dim {
 }
 
 samp .comment {
-    color: green;
-}
-samp .comment .kw,
-samp .comment .str,
-samp .comment .number {
-    color: inherit;
+    color: #2b9d44;
 }
 
 /* Tables */
@@ -294,6 +291,62 @@ td:last-child {
     font-size: inherit;
 }
 
+#tutorial-toc-toggle, #tutorial-toc-toggle-label, #close-tutorial-toc {
+    display: none; /* This may be overridden on mobile-friendly screen widths */
+}
+
+#tutorial-toc-toggle, #tutorial-toc-toggle-label {
+    font-size: 1.1rem;
+    float: right;
+}
+
+#close-tutorial-toc {
+    position: absolute;
+    top: 20px;
+    right: 8px;
+    font-size: 18px;
+    padding: 12px 24px;
+}
+
+/* Mobile-friendly screen width */
+@media only screen and (max-device-width: 480px) and (orientation: portrait) {
+    p, code, samp, .snippet {
+        font-size: 16px;
+    }
+
+    #tutorial-toc-toggle-label,
+    #close-tutorial-toc {
+        display: block;
+    }
+    #tutorial-toc-toggle:checked + #tutorial-toc {
+        display: block;
+    }
+    #tutorial-toc {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        overflow-y: auto;
+        margin: 0;
+        padding-right: 120px;
+        border: 0;
+    }
+    h1, h2, h3, h4, h5, h6, p, code {
+        word-break: break-word !important;
+    }
+    h1, h2, h3, h4, h5 {
+        line-height: 1.2em !important;
+        font-size: 2rem !important;
+    }
+    #top-bar-links a,
+    #top-bar-links label {
+        padding: 12px 8px;
+        margin: 0;
+    }
+}
+
 /* Used on on the different-names page. */
 
 th, td {
@@ -327,14 +380,29 @@ h1, h2, h3, h4, h5 {
     margin-bottom: 0;
 }
 
+#tutorial-toc-toggle-label, #close-tutorial-toc {
+    color: var(--header-link-color);
+}
+
+#tutorial-toc-toggle-label:hover, #close-tutorial-toc:hover {
+    color: var(--header-link-hover);
+    cursor: pointer;
+}
+
 h1 a, h2 a, h3 a, h4 a, h5 a {
     color: var(--header-link-color);
 }
 
-
 h1 a:hover, h2 a:hover, h3 a:hover, h4 a:hover, h5 a:hover {
     text-decoration: none;
     color: var(--header-link-hover);
+}
+
+h1 code, h2 code, h3 code, h4 code, h5 code {
+    color: inherit;
+    background-color: inherit;
+    padding: 0;
+    margin: 0;
 }
 
 h1 {
@@ -490,5 +558,9 @@ h4 {
     samp .str {
         /* string literals */
         color: #26b2b9;
+    }
+
+    samp .comment {
+        color: #88c796;
     }
 }

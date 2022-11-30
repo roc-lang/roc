@@ -30,6 +30,7 @@ roc_problem = { path = "../compiler/problem" }
 roc_types = { path = "../compiler/types" }
 roc_unify = { path = "../compiler/unify" }
 roc_utils = { path = "../utils"}
+roc_packaging = { path = "../packaging" }
 roc_reporting = { path = "../reporting" }
 roc_solve = { path = "../compiler/solve" }
 ven_graph = { path = "../vendor/pathfinding" }

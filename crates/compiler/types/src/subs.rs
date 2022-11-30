@@ -1667,6 +1667,8 @@ impl Subs {
     pub const TAG_NAME_BAD_UTF_8: SubsIndex<TagName> = SubsIndex::new(3);
     pub const TAG_NAME_OUT_OF_BOUNDS: SubsIndex<TagName> = SubsIndex::new(4);
 
+    pub const STR_SLICE: VariableSubsSlice = SubsSlice::new(0, 1);
+
     #[rustfmt::skip]
     pub const AB_ENCODING: SubsSlice<Symbol> = SubsSlice::new(0, 1);
     #[rustfmt::skip]
@@ -1704,14 +1706,18 @@ impl Subs {
 
         let mut subs = Subs {
             utable: UnificationTable::default(),
-            variables: Vec::new(),
+            variables: vec![
+                // Used for STR_SLICE
+                Variable::STR,
+            ],
             tag_names,
             symbol_names,
             field_names: Vec::new(),
             record_fields: Vec::new(),
-            // store an empty slice at the first position
-            // used for "TagOrFunction"
-            variable_slices: vec![VariableSubsSlice::default()],
+            variable_slices: vec![
+                // used for "TagOrFunction"
+                VariableSubsSlice::default(),
+            ],
             unspecialized_lambda_sets: Vec::new(),
             tag_name_cache: Default::default(),
             uls_of_var: Default::default(),

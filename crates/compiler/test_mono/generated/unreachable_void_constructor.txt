@@ -5,7 +5,8 @@ procedure Bool.2 ():
 procedure Test.0 ():
     let Test.6 : Int1 = CallByName Bool.2;
     if Test.6 then
-        Error voided tag constructor is unreachable
+        let Test.8 : Str = "voided tag constructor is unreachable";
+        Crash Test.8
     else
         let Test.5 : Str = "abc";
         ret Test.5;

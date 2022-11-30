@@ -1,5 +1,7 @@
 use object::{elf, Endianness};
 
+use crate::pe::next_multiple_of;
+
 pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u8>> {
     let endian = Endianness::Little;
 
@@ -32,6 +34,31 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
 
     writer.reserve_file_header();
 
+    let mut program_headers = [
+        object::write::elf::ProgramHeader {
+            p_type: object::elf::PT_LOAD,
+            p_flags: object::elf::PF_R | object::elf::PF_W,
+            p_offset: 0,
+            p_vaddr: 0,
+            p_paddr: 0,
+            p_filesz: 0,
+            p_memsz: 0,
+            p_align: 1 << 12,
+        },
+        object::write::elf::ProgramHeader {
+            p_type: object::elf::PT_DYNAMIC,
+            p_flags: object::elf::PF_R | object::elf::PF_W,
+            p_offset: 0,
+            p_vaddr: 0,
+            p_paddr: 0,
+            p_filesz: 0,
+            p_memsz: 0,
+            p_align: 1 << 3,
+        },
+    ];
+
+    writer.reserve_program_headers(program_headers.len() as u32);
+
     let dynsym_address = writer.reserved_len();
     writer.reserve_dynsym();
 
@@ -39,13 +66,27 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
     writer.reserve_dynstr();
 
     // aligned to the next multiple of 8
-    let dynamic_address = (writer.reserved_len() + 7) & !7;
+    let dynamic_address = next_multiple_of(writer.reserved_len(), 8);
     writer.reserve_dynamic(out_dynamic.len());
 
     writer.reserve_strtab();
     writer.reserve_shstrtab();
 
     writer.reserve_section_headers();
+
+    // just enough program header info to satisfy the dynamic loader
+    for program_header in program_headers.iter_mut() {
+        match program_header.p_type {
+            object::elf::PT_LOAD | object::elf::PT_DYNAMIC => {
+                program_header.p_offset = dynamic_address as u64;
+                program_header.p_vaddr = dynamic_address as u64 + 0x1000;
+                program_header.p_paddr = dynamic_address as u64 + 0x1000;
+                program_header.p_filesz = 0x8;
+                program_header.p_memsz = 0x8;
+            }
+            _ => {}
+        }
+    }
 
     // WRITING SECTION CONTENT
 
@@ -59,6 +100,14 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
             e_flags: 0,
         })
         .unwrap();
+
+    {
+        writer.write_align_program_headers();
+
+        for header in program_headers {
+            writer.write_program_header(&header);
+        }
+    }
 
     // dynsym content
     {
@@ -91,7 +140,6 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
 
     // strtab content
     writer.write_strtab();
-
     writer.write_shstrtab();
 
     // SECTION HEADERS
@@ -102,7 +150,7 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
 
     writer.write_dynstr_section_header(dynstr_address as _);
 
-    writer.write_dynamic_section_header(dynamic_address as _);
+    writer.write_dynamic_section_header(dynamic_address as u64 + 0x1000);
 
     writer.write_strtab_section_header();
     writer.write_shstrtab_section_header();

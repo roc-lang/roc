@@ -1056,41 +1056,22 @@ mod cli_run {
             &[],
             indoc!(
                 r#"
-                ── TYPE MISMATCH ─ ...known_bad/../../../../examples/cli/cli-platform/main.roc ─
+                ── TYPE MISMATCH ─────────────────────────────── tests/known_bad/TypeError.roc ─
 
-                Something is off with the type annotation of the main required symbol:
+                Something is off with the body of the main definition:
 
-                2│      requires {} { main : InternalProgram }
-                                             ^^^^^^^^^^^^^^^
+                6│  main : Str -> Task {} []
+                7│  main = /_ ->
+                8│      "this is a string, not a Task {} [] function like the platform expects."
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-                This #UserApp.main value is a:
+                The body is a string of type:
 
-                    Task.Task {} * [Write [Stdout]]
+                    Str
 
                 But the type annotation on main says it should be:
 
-                    InternalProgram.InternalProgram
-
-                Tip: Type comparisons between an opaque type are only ever equal if
-                both types are the same opaque type. Did you mean to create an opaque
-                type by wrapping it? If I have an opaque type Age := U32 I can create
-                an instance of this opaque type by doing @Age 23.
-
-
-                ── TYPE MISMATCH ─ ...known_bad/../../../../examples/cli/cli-platform/main.roc ─
-
-                This 1st argument to toEffect has an unexpected type:
-
-                9│  mainForHost = InternalProgram.toEffect main
-                                                           ^^^^
-
-                This #UserApp.main value is a:
-
-                    Task.Task {} * [Write [Stdout]]
-
-                But toEffect needs its 1st argument to be:
-
-                    InternalProgram.InternalProgram
+                    Effect.Effect (Result {} [])
 
                 Tip: Type comparisons between an opaque type are only ever equal if
                 both types are the same opaque type. Did you mean to create an opaque
@@ -1099,7 +1080,7 @@ mod cli_run {
 
                 ────────────────────────────────────────────────────────────────────────────────
 
-                2 errors and 1 warning found in <ignored for test> ms."#
+                1 error and 0 warnings found in <ignored for test> ms."#
             ),
         );
     }

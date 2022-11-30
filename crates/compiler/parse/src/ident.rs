@@ -100,6 +100,33 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     }
 }
 
+/// This is a tuple accessor, e.g. "1" in `.1`
+pub fn integer_ident<'a>() -> impl Parser<'a, &'a str, ()> {
+    move |_, state: State<'a>, _min_indent: u32| match chomp_integer_part(state.bytes()) {
+        Err(progress) => Err((progress, ())),
+        Ok(ident) => {
+            let width = ident.len();
+            Ok((MadeProgress, ident, state.advance(width)))
+        }
+    }
+}
+
+/// Like `lowercase_ident`, but returns an error with MadeProgress if the
+/// identifier is a keyword.
+pub fn lowercase_ident_keyword_e<'a>() -> impl Parser<'a, &'a str, ()> {
+    move |_, state: State<'a>, _min_indent: u32| match chomp_lowercase_part(state.bytes()) {
+        Err(progress) => Err((progress, ())),
+        Ok(ident) => {
+            if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
+                Err((MadeProgress, ()))
+            } else {
+                let width = ident.len();
+                Ok((MadeProgress, ident, state.advance(width)))
+            }
+        }
+    }
+}
+
 pub fn tag_name<'a>() -> impl Parser<'a, &'a str, ()> {
     move |arena, state: State<'a>, min_indent: u32| {
         uppercase_ident().parse(arena, state, min_indent)

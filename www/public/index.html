@@ -39,7 +39,7 @@
   <p>With all that context in mind, if you'd like to try it out or to get involved with contributing,
     the <a href="https://github.com/roc-lang/roc">source code repository</a> has
     <a href="https://github.com/roc-lang/roc/releases">nightly builds</a> you can download,
-    and a <a href="https://github.com/roc-lang/roc/blob/main/TUTORIAL.md">tutorial</a>.</p>
+    and a <a href="https://roc-lang.org/tutorial">tutorial</a>.</p>
 
   <p>If you'd like to learn more about Roc, you can continue reading here, or check out one of these videos:</p>
   <ul>
@@ -68,7 +68,7 @@
 
   <p>When benchmarking Roc code against similarly-optimized programs written in
     <a href="https://go.dev">Go</a>,
-    <a href="https://www.swift.com/">Swift</a>, <a href="https://www.java.com">Java</a>,
+    <a href="https://www.swift.org/">Swift</a>, <a href="https://www.java.com">Java</a>,
     <a href="https://learn.microsoft.com/en-us/dotnet/csharp">C#</a>, or
     <a href="https://www.ecma-international.org/publications-and-standards/standards/ecma-262">JavaScript</a>,
     we generally aim for Roc to outperform all of those languages. Outperforming systems
@@ -177,26 +177,17 @@
 
 <p>The REPL fully supports entering arbitrary expressions, and will evaluate them and print the
   results. It remembers recent expressions entered in the current session (if you press the up arrow),
-  but it can't yet execute effects, and any named variables you define currently exist only for the
-  next expression it evaluates; they don't yet persist for the remainder of the session. You can try
-  out the REPL in a browser at <a href="https://roc-lang.org/repl">roc-lang.org/repl</a> - it uses a
-  WebAssembly build of Roc's compiler, and compiles the code you write to WebAssembly on the fly,
-  which it then executes in the browser to display the answer.</p>
+  but it can't yet execute effects. You can try out the REPL in a browser at
+  <a href="https://roc-lang.org/repl">roc-lang.org/repl</a> - it uses a WebAssembly build of Roc's
+  compiler, and compiles the code you write to WebAssembly on the fly, which it then executes in
+  the browser to display the answer.</p>
 
 <p>The compiler works well enough on a basic level to build things with it, but some error messages
   could use significant improvement, and it has a lot of known bugs and missing features. You can
-  currently use it on macOS (either Intel or Apple Silicon), Linux (only x86 machines at the moment),
-  and Windows (only recently supported; there are definitely still a number of issues to iron out).
-  Support for other operating systems has not yet been discussed.</p>
-
-<p>In the future, the entire Roc toolset should work completely as a standalone binary, but for now,
-  application development requires additionally having some combination of
-  <a href="https://clang.llvm.org">clang</a>,
-  <a href="https://www.rust-lang.org/">Rust</a>, and
-  <a href="https://ziglang.org">Zig</a> installed on your machine. These are needed to compile
-  certain platform dependencies on the fly; in the future, the plan is to have the package manager
-  include precompiled target-specific binaries for these dependencies, so the only binary you'll need
-  to have is the one that includes the Roc compiler itself.</p>
+  currently use it on macOS (either Intel or Apple Silicon), Linux (only x86-64 machines at the moment),
+  and Windows (only recently supported; debugging and testing features don't work on it yet, and
+  there are likely bugs we haven't encountered yet due to lack of battle testing). Support for other
+  operating systems has not yet been discussed.</p>
 
 <p>The compiler doesn't yet support incremental compilation or hot code loading, and build times vary
   based on what machine you're building for.</p>
@@ -220,12 +211,13 @@ longer to run than generating unoptimized machine code directly.)</p>
   ways to go, but improving them can be done by anyone with the patience to read some documentation;
   we have issues split up for them, and are happy to help new contributors get up and running!</p>
 
-<p>Builds on x86 Linux also use Roc's surgical linker instead of the system linker, which runs so
-  fast that linking essentially disappears from the performance profile altogether. The surgical linker
-  currently only works on x86 Linux. Work has started on the Windows and macOS implementations, but
-  these have been more challenging in large part because up-to-date public documentation for macOS's
-  Mach-O file format is hard to find. If you're interested in working on that, please get in touch on
-  <a href="https://roc.zulipchat.com/">Roc Zulip</a>!</p>
+<p>Builds on Linux and Windows also use Roc's surgical linker instead of the system linker, which
+  runs so fast that linking essentially disappears from the performance profile altogether. The
+  surgical linker currently only works on Linux and Windows, and it currently supports building
+  executables but not (yet) dynamic libraries, which is relevant if you're using Roc to create
+  plugins or want to call Roc functions from existing code bases in other languages. Work has started
+  on macOS surgical linking, but it isn't usable yet. If you're interested in working on that,
+  please get in touch on <a href="https://roc.zulipchat.com/">Roc Zulip</a>!</p>
 
 <p>The test runner currently has first-class support for running standard non-effectful tests.
   It does not yet have first-class support for effectful tests, property-based tests, snapshot tests,

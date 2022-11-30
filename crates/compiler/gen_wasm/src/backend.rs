@@ -8,8 +8,8 @@ use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, HelperOp, REFCOUNT_MAX};
 use roc_mono::ir::{
-    BranchInfo, CallType, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc, Param, Proc,
-    ProcLayout, Stmt,
+    BranchInfo, CallType, CrashTag, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc,
+    Param, Proc, ProcLayout, Stmt,
 };
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_std::RocDec;
@@ -717,7 +717,7 @@ impl<'a> WasmBackend<'a> {
             Stmt::Expect { .. } => todo!("expect is not implemented in the wasm backend"),
             Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the wasm backend"),
 
-            Stmt::RuntimeError(msg) => self.stmt_runtime_error(msg),
+            Stmt::Crash(sym, tag) => self.stmt_crash(*sym, *tag),
         }
     }
 
@@ -987,19 +987,31 @@ impl<'a> WasmBackend<'a> {
         self.stmt(rc_stmt);
     }
 
-    pub fn stmt_runtime_error(&mut self, msg: &'a str) {
-        // Create a zero-terminated version of the message string
-        let mut bytes = Vec::with_capacity_in(msg.len() + 1, self.env.arena);
-        bytes.extend_from_slice(msg.as_bytes());
-        bytes.push(0);
+    pub fn stmt_internal_error(&mut self, msg: &'a str) {
+        let msg_sym = self.create_symbol("panic_str");
+        let msg_storage = self.storage.allocate_var(
+            self.env.layout_interner,
+            Layout::Builtin(Builtin::Str),
+            msg_sym,
+            StoredVarKind::Variable,
+        );
 
-        // Store it in the app's data section
-        let elements_addr = self.store_bytes_in_data_section(&bytes);
+        // Store the message as a RocStr on the stack
+        let (local_id, offset) = match msg_storage {
+            StoredValue::StackMemory { location, .. } => {
+                location.local_and_offset(self.storage.stack_frame_pointer)
+            }
+            _ => internal_error!("String must always have stack memory"),
+        };
+        self.expr_string_literal(msg, local_id, offset);
 
-        // Pass its address to roc_panic
-        let tag_id = 0;
-        self.code_builder.i32_const(elements_addr as i32);
-        self.code_builder.i32_const(tag_id);
+        self.stmt_crash(msg_sym, CrashTag::Roc);
+    }
+
+    pub fn stmt_crash(&mut self, msg: Symbol, tag: CrashTag) {
+        // load the pointer
+        self.storage.load_symbols(&mut self.code_builder, &[msg]);
+        self.code_builder.i32_const(tag as _);
         self.call_host_fn_after_loading_args("roc_panic", 2, false);
 
         self.code_builder.unreachable_();
@@ -1128,45 +1140,7 @@ impl<'a> WasmBackend<'a> {
                         let (local_id, offset) =
                             location.local_and_offset(self.storage.stack_frame_pointer);
 
-                        let len = string.len();
-                        if len < 12 {
-                            // Construct the bytes of the small string
-                            let mut bytes = [0; 12];
-                            bytes[0..len].clone_from_slice(string.as_bytes());
-                            bytes[11] = 0x80 | (len as u8);
-
-                            // Transform into two integers, to minimise number of instructions
-                            let bytes_split: &([u8; 8], [u8; 4]) =
-                                unsafe { std::mem::transmute(&bytes) };
-                            let int64 = i64::from_le_bytes(bytes_split.0);
-                            let int32 = i32::from_le_bytes(bytes_split.1);
-
-                            // Write the integers to memory
-                            self.code_builder.get_local(local_id);
-                            self.code_builder.i64_const(int64);
-                            self.code_builder.i64_store(Align::Bytes4, offset);
-                            self.code_builder.get_local(local_id);
-                            self.code_builder.i32_const(int32);
-                            self.code_builder.i32_store(Align::Bytes4, offset + 8);
-                        } else {
-                            let bytes = string.as_bytes();
-                            let elements_addr = self.store_bytes_in_data_section(bytes);
-
-                            // ptr
-                            self.code_builder.get_local(local_id);
-                            self.code_builder.i32_const(elements_addr as i32);
-                            self.code_builder.i32_store(Align::Bytes4, offset);
-
-                            // len
-                            self.code_builder.get_local(local_id);
-                            self.code_builder.i32_const(string.len() as i32);
-                            self.code_builder.i32_store(Align::Bytes4, offset + 4);
-
-                            // capacity
-                            self.code_builder.get_local(local_id);
-                            self.code_builder.i32_const(string.len() as i32);
-                            self.code_builder.i32_store(Align::Bytes4, offset + 8);
-                        };
+                        self.expr_string_literal(string, local_id, offset);
                     }
                     // Bools and bytes should not be stored in the stack frame
                     Literal::Bool(_) | Literal::Byte(_) => invalid_error(),
@@ -1174,6 +1148,47 @@ impl<'a> WasmBackend<'a> {
             }
 
             _ => invalid_error(),
+        };
+    }
+
+    fn expr_string_literal(&mut self, string: &str, local_id: LocalId, offset: u32) {
+        let len = string.len();
+        if len < 12 {
+            // Construct the bytes of the small string
+            let mut bytes = [0; 12];
+            bytes[0..len].clone_from_slice(string.as_bytes());
+            bytes[11] = 0x80 | (len as u8);
+
+            // Transform into two integers, to minimise number of instructions
+            let bytes_split: &([u8; 8], [u8; 4]) = unsafe { std::mem::transmute(&bytes) };
+            let int64 = i64::from_le_bytes(bytes_split.0);
+            let int32 = i32::from_le_bytes(bytes_split.1);
+
+            // Write the integers to memory
+            self.code_builder.get_local(local_id);
+            self.code_builder.i64_const(int64);
+            self.code_builder.i64_store(Align::Bytes4, offset);
+            self.code_builder.get_local(local_id);
+            self.code_builder.i32_const(int32);
+            self.code_builder.i32_store(Align::Bytes4, offset + 8);
+        } else {
+            let bytes = string.as_bytes();
+            let elements_addr = self.store_bytes_in_data_section(bytes);
+
+            // ptr
+            self.code_builder.get_local(local_id);
+            self.code_builder.i32_const(elements_addr as i32);
+            self.code_builder.i32_store(Align::Bytes4, offset);
+
+            // len
+            self.code_builder.get_local(local_id);
+            self.code_builder.i32_const(string.len() as i32);
+            self.code_builder.i32_store(Align::Bytes4, offset + 4);
+
+            // capacity
+            self.code_builder.get_local(local_id);
+            self.code_builder.i32_const(string.len() as i32);
+            self.code_builder.i32_store(Align::Bytes4, offset + 8);
         };
     }
 

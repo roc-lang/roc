@@ -20,10 +20,11 @@ roc_parse = { path = "../compiler/parse" }
 roc_target = { path = "../compiler/roc_target" }
 roc_collections = { path = "../compiler/collections" }
 roc_highlight = { path = "../highlight"}
+roc_packaging = { path = "../packaging"}
 roc_reporting = { path = "../reporting"}
 bumpalo.workspace = true
 snafu.workspace  = true
 peg.workspace = true
 
 [dev-dependencies]
-pretty_assertions.workspace = true 
+pretty_assertions.workspace = true

@@ -3,7 +3,9 @@ use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, Def};
 use crate::effect_module::HostedGeneratedFunctions;
 use crate::env::Env;
-use crate::expr::{ClosureData, Declarations, ExpectLookup, Expr, Output, PendingDerives};
+use crate::expr::{
+    ClosureData, DbgLookup, Declarations, ExpectLookup, Expr, Output, PendingDerives,
+};
 use crate::pattern::{BindingsFromPattern, Pattern};
 use crate::scope::Scope;
 use bumpalo::Bump;
@@ -131,6 +133,7 @@ pub struct Module {
     pub rigid_variables: RigidVariables,
     pub abilities_store: PendingAbilitiesStore,
     pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
+    pub loc_dbgs: VecMap<Symbol, DbgLookup>,
 }
 
 #[derive(Debug, Default)]
@@ -153,6 +156,7 @@ pub struct ModuleOutput {
     pub pending_derives: PendingDerives,
     pub scope: Scope,
     pub loc_expects: VecMap<Region, Vec<ExpectLookup>>,
+    pub loc_dbgs: VecMap<Symbol, DbgLookup>,
 }
 
 fn validate_generate_with<'a>(
@@ -776,7 +780,7 @@ pub fn canonicalize_module_defs<'a>(
         }
     }
 
-    let loc_expects = declarations.expects();
+    let collected = declarations.expects();
 
     ModuleOutput {
         scope,
@@ -789,7 +793,8 @@ pub fn canonicalize_module_defs<'a>(
         problems: env.problems,
         symbols_from_requires,
         pending_derives,
-        loc_expects,
+        loc_expects: collected.expects,
+        loc_dbgs: collected.dbgs,
     }
 }
 
@@ -952,7 +957,17 @@ fn fix_values_captured_in_closure_expr(
         Expect {
             loc_condition,
             loc_continuation,
-            lookups_in_cond: _,
+            ..
+        }
+        | ExpectFx {
+            loc_condition,
+            loc_continuation,
+            ..
+        }
+        | Dbg {
+            loc_condition,
+            loc_continuation,
+            ..
         } => {
             fix_values_captured_in_closure_expr(
                 &mut loc_condition.value,
@@ -966,18 +981,9 @@ fn fix_values_captured_in_closure_expr(
             );
         }
 
-        ExpectFx {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond: _,
-        } => {
+        Crash { msg, ret_var: _ } => {
             fix_values_captured_in_closure_expr(
-                &mut loc_condition.value,
-                no_capture_symbols,
-                closure_captures,
-            );
-            fix_values_captured_in_closure_expr(
-                &mut loc_continuation.value,
+                &mut msg.value,
                 no_capture_symbols,
                 closure_captures,
             );

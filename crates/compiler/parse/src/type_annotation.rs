@@ -6,7 +6,7 @@ use crate::blankspace::{
     space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
 };
 use crate::expr::record_value_field;
-use crate::ident::lowercase_ident;
+use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
     absolute_column_min_indent, increment_min_indent, then, ERecord, ETypeAbilityImpl,
@@ -43,7 +43,6 @@ fn tag_union_type<'a>(
             loc!(tag_type(false)),
             word1(b',', ETypeTagUnion::End),
             word1(b']', ETypeTagUnion::End),
-            ETypeTagUnion::Open,
             ETypeTagUnion::IndentEnd,
             Tag::SpaceBefore
         )
@@ -116,7 +115,7 @@ fn term<'a>(stop_at_surface_has: bool) -> impl Parser<'a, Loc<TypeAnnotation<'a>
             one_of!(
                 loc_wildcard(),
                 loc_inferred(),
-                specialize(EType::TInParens, loc_type_in_parens()),
+                specialize(EType::TInParens, loc_type_in_parens(stop_at_surface_has)),
                 loc!(specialize(EType::TRecord, record_type(stop_at_surface_has))),
                 loc!(specialize(
                     EType::TTagUnion,
@@ -185,7 +184,7 @@ fn loc_applied_arg<'a>(
             one_of!(
                 loc_wildcard(),
                 loc_inferred(),
-                specialize(EType::TInParens, loc_type_in_parens()),
+                specialize(EType::TInParens, loc_type_in_parens(stop_at_surface_has)),
                 loc!(specialize(EType::TRecord, record_type(stop_at_surface_has))),
                 loc!(specialize(
                     EType::TTagUnion,
@@ -206,16 +205,44 @@ fn loc_applied_arg<'a>(
     )
 }
 
-fn loc_type_in_parens<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, ETypeInParens<'a>> {
-    between!(
-        word1(b'(', ETypeInParens::Open),
-        space0_around_ee(
-            specialize_ref(ETypeInParens::Type, expression(true, false)),
-            ETypeInParens::IndentOpen,
-            ETypeInParens::IndentEnd,
-        ),
-        word1(b')', ETypeInParens::IndentEnd)
+fn loc_type_in_parens<'a>(
+    stop_at_surface_has: bool,
+) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, ETypeInParens<'a>> {
+    then(
+        loc!(and!(
+            collection_trailing_sep_e!(
+                word1(b'(', ETypeInParens::Open),
+                specialize_ref(ETypeInParens::Type, expression(true, false)),
+                word1(b',', ETypeInParens::End),
+                word1(b')', ETypeInParens::End),
+                ETypeInParens::IndentEnd,
+                TypeAnnotation::SpaceBefore
+            ),
+            optional(allocated(specialize_ref(
+                ETypeInParens::Type,
+                term(stop_at_surface_has)
+            )))
+        )),
+        |_arena, state, progress, item| {
+            let Loc {
+                region,
+                value: (fields, ext),
+            } = item;
+            if fields.len() > 1 || ext.is_some() {
+                Ok((
+                    MadeProgress,
+                    Loc::at(region, TypeAnnotation::Tuple { fields, ext }),
+                    state,
+                ))
+            } else if fields.len() == 1 {
+                Ok((MadeProgress, fields.items[0], state))
+            } else {
+                debug_assert!(fields.is_empty());
+                Err((progress, ETypeInParens::Empty(state.pos())))
+            }
+        },
     )
+    .trace("type_annotation:type_in_parens")
 }
 
 #[inline(always)]
@@ -263,7 +290,7 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
         let pos = state.pos();
         let (progress, loc_label, state) = loc!(specialize(
             move |_, _| ETypeRecord::Field(pos),
-            lowercase_ident()
+            lowercase_ident_keyword_e()
         ))
         .parse(arena, state, min_indent)?;
         debug_assert_eq!(progress, MadeProgress);
@@ -322,28 +349,19 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
 fn record_type<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, TypeAnnotation<'a>, ETypeRecord<'a>> {
-    use crate::type_annotation::TypeAnnotation::*;
-
-    (move |arena, state, min_indent| {
-        let (_, fields, state) = collection_trailing_sep_e!(
-            // word1_check_indent!(b'{', TRecord::Open, min_indent, TRecord::IndentOpen),
+    record!(TypeAnnotation::Record {
+        fields: collection_trailing_sep_e!(
             word1(b'{', ETypeRecord::Open),
             loc!(record_type_field()),
             word1(b',', ETypeRecord::End),
-            // word1_check_indent!(b'}', TRecord::End, min_indent, TRecord::IndentEnd),
             word1(b'}', ETypeRecord::End),
-            ETypeRecord::Open,
             ETypeRecord::IndentEnd,
             AssignedField::SpaceBefore
-        )
-        .parse(arena, state, min_indent)?;
-
-        let field_term = specialize_ref(ETypeRecord::Type, term(stop_at_surface_has));
-        let (_, ext, state) = optional(allocated(field_term)).parse(arena, state, min_indent)?;
-
-        let result = Record { fields, ext };
-
-        Ok((MadeProgress, result, state))
+        ),
+        ext: optional(allocated(specialize_ref(
+            ETypeRecord::Type,
+            term(stop_at_surface_has)
+        )))
     })
     .trace("type_annotation:record_type")
 }
@@ -483,7 +501,6 @@ pub fn has_abilities<'a>() -> impl Parser<'a, Loc<HasAbilities<'a>>, EType<'a>> 
                     loc!(parse_has_ability()),
                     word1(b',', EType::TEnd),
                     word1(b']', EType::TEnd),
-                    EType::TStart,
                     EType::TIndentEnd,
                     HasAbility::SpaceBefore
                 ),
@@ -495,30 +512,26 @@ pub fn has_abilities<'a>() -> impl Parser<'a, Loc<HasAbilities<'a>>, EType<'a>> 
 }
 
 fn parse_has_ability<'a>() -> impl Parser<'a, HasAbility<'a>, EType<'a>> {
-    increment_min_indent(map!(
-        and!(
-            loc!(specialize(EType::TApply, concrete_type())),
-            optional(space0_before_e(
-                loc!(map!(
-                    specialize(
-                        EType::TAbilityImpl,
-                        collection_trailing_sep_e!(
-                            word1(b'{', ETypeAbilityImpl::Open),
-                            specialize(|e: ERecord<'_>, _| e.into(), loc!(record_value_field())),
-                            word1(b',', ETypeAbilityImpl::End),
-                            word1(b'}', ETypeAbilityImpl::End),
-                            ETypeAbilityImpl::Open,
-                            ETypeAbilityImpl::IndentEnd,
-                            AssignedField::SpaceBefore
-                        )
-                    ),
-                    HasImpls::HasImpls
-                )),
-                EType::TIndentEnd
-            ))
-        ),
-        |(ability, impls): (_, Option<_>)| { HasAbility::HasAbility { ability, impls } }
-    ))
+    increment_min_indent(record!(HasAbility::HasAbility {
+        ability: loc!(specialize(EType::TApply, concrete_type())),
+        impls: optional(backtrackable(space0_before_e(
+            loc!(map!(
+                specialize(
+                    EType::TAbilityImpl,
+                    collection_trailing_sep_e!(
+                        word1(b'{', ETypeAbilityImpl::Open),
+                        specialize(|e: ERecord<'_>, _| e.into(), loc!(record_value_field())),
+                        word1(b',', ETypeAbilityImpl::End),
+                        word1(b'}', ETypeAbilityImpl::End),
+                        ETypeAbilityImpl::IndentEnd,
+                        AssignedField::SpaceBefore
+                    )
+                ),
+                HasImpls::HasImpls
+            )),
+            EType::TIndentEnd
+        )))
+    }))
 }
 
 fn expression<'a>(
@@ -575,10 +588,10 @@ fn expression<'a>(
             }
             Err(err) => {
                 if !is_trailing_comma_valid {
-                    let (_, comma, _) = optional(skip_first!(
+                    let (_, comma, _) = optional(backtrackable(skip_first!(
                         space0_e(EType::TIndentStart),
                         word1(b',', EType::TStart)
-                    ))
+                    )))
                     .trace("check trailing comma")
                     .parse(arena, state.clone(), min_indent)?;
 

@@ -54,15 +54,22 @@ find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div c
 
 echo 'Generating CLI example platform docs...'
 # Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
-# "/examples/cli/" rather than "/builtins/"
-export ROC_DOCS_URL_ROOT=/examples/cli
+# "/packages/basic-cli/" rather than "/builtins/"
+export ROC_DOCS_URL_ROOT=/packages/basic-cli
+
+rm -rf ./downloaded-basic-cli
+
+git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
 
 # Until https://github.com/roc-lang/roc/issues/3280 is done,
 # manually exclude the Internal* modules and `main.roc`.
-ls examples/cli/cli-platform/*.roc | grep -v Internal | grep -v main.roc | grep -v Effect.roc | xargs cargo run --bin roc-docs
+ls downloaded-basic-cli/src/*.roc | grep -v Internal | grep -v main.roc | grep -v Effect.roc | xargs cargo run --bin roc-docs
 
-mkdir www/build/examples
+rm -rf ./downloaded-basic-cli
+
+BASIC_CLI_PACKAGE_DIR="www/build/packages/basic-cli"
+mkdir -p $BASIC_CLI_PACKAGE_DIR
 rm generated-docs/*.* # we already copied over the *.js and *.css files earlier, so just drop these.
-mv generated-docs/ www/build/examples/cli # move all the folders to build/examples/cli
+mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
 
 popd

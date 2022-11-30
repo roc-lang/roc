@@ -27,7 +27,9 @@
 </div>
 <main>
 <div id="tutorial-start">
+    <input id="tutorial-toc-toggle" name="tutorial-toc-toggle" type="checkbox" />
     <nav id="tutorial-toc">
+        <label id="close-tutorial-toc" for="tutorial-toc-toggle">close</label>
         <input id="toc-search" type="text" placeholder="Search">
         <ol>
             <li><a href="#installation">Installation</a></li>
@@ -36,23 +38,26 @@
             <li><a href="#defining-functions">Defining Functions</a></li>
             <li><a href="#if-then-else">if-then-else</a></li>
             <li><a href="#records">Records</a></li>
+            <li><a href="#debugging">Debugging</a></li>
             <li><a href="#tags">Tags &amp; Pattern Matching</a></li>
             <li><a href="#booleans">Booleans</a></li>
             <li><a href="#lists">Lists</a></li>
             <li><a href="#types">Types</a></li>
+            <li><a href="#crashing">Crashing</a></li>
             <li><a href="#tests-and-expectations">Tests and Expectations</a></li>
             <li><a href="#modules">Modules</a></li>
             <li><a href="#modules">Platforms and Packages</a></li>
             <li><a href="#tasks">Tasks</a></li>
             <li><a href="#abilities">Abilities</a></li>
-            <li><a href="#next-steps">Next Steps</a></li>
             <li><a href="#advanced-concepts">Advanced Concepts</a></li>
             <li><a href="#operator-desugaring-table">Operator Desugaring Table</a></li>
         </ol>
     </nav>
     <div id="tutorial-intro">
         <section>
-            <h1>Tutorial</h1>
+            <h1>Tutorial
+                <label id="tutorial-toc-toggle-label" for="tutorial-toc-toggle">contents</label>
+            </h1>
 
             <p>Welcome to Roc!</p>
 
@@ -174,7 +179,7 @@ to use them for more than that.</p>
 <p>Let's move out of the REPL and create our first Roc application!</p>
 <p>Make a file named <code>main.roc</code> and put this in it:</p>
 <samp><span class="kw">app</span> <span class="str">"hello"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://roc-lang.org/basic-cli/1.0.0/oUkxSOI9zFGtSoIaMB40QPdrXphr1p1780eiui2iO9Mz.rp1"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.1/zAoiC9xtQPHywYk350_b7ust04BmWLW00sjb9ZPtSQk.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
     <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 
@@ -183,7 +188,7 @@ main <span class="kw">=</span>
 </samp>
 <p>Try running this with:</p>
 <samp>roc dev</samp>
-<p>You should see this printed to the terminal:</p>
+<p>You should see a message about a file being downloaded, followed by this:</p>
 <samp>I'm a Roc application!</samp>
 <p>Congratulations - you've written your first Roc application! We'll go over what the parts of
 this file above <code>main</code> do later, but first let's play around a bit.</p>
@@ -197,9 +202,10 @@ total <span class="kw">=</span> Num.toStr <span class="paren">(</span>birds <spa
 
 main <span class="kw">=</span>
     Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
-    <span class="kw">|&gt;</span> Program.quick
 </samp>
-<p>Now if you run <code>roc dev</code>, you should see this:</p>
+<p>Now run <code>roc dev</code> again. This time the "Downloading …" message won't appear;
+the file has been cached from last time, and won't need to be downloaded again.</p>
+<p>You should see this:</p>
 <samp>There are 5 animals.</samp>
 <p><code>main.roc</code> now has four definitions—<em>defs</em> for
 short—<code>birds</code>, <code>iguanas</code>, <code>total</code>, and <code>main</code>.</p>
@@ -231,7 +237,6 @@ total <span class="kw">=</span> Num.toStr <span class="paren">(</span>birds <spa
 
 main <span class="kw">=</span>
     Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
-    <span class="kw">|&gt;</span> Program.quick</span>
 
 addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <span class="kw">-&gt;</span>
     Num.toStr <span class="paren">(</span>num1 <span class="op">+</span> num2<span class="paren">)</span>
@@ -294,6 +299,34 @@ the <code>else</code> branch contains another <code>if</code>/<code>else</code>.
 on the same line, although the convention is to use the original version's style.
 </p>
 </section>
+<section><h2 id="debugging"><a href="#debugging">Debugging</a></h2>
+<p><a href="https://en.wikipedia.org/wiki/Debugging#Techniques">Print debugging</a> is the most
+common debugging technique in the history of programming, and Roc has a <code>dbg</code>
+keyword to facilitate it. Here's an example of how to use <code>dbg</code>:</p>
+<samp>pluralize <span class="op">=</span> <span class="kw">\</span>singular, plural, count <span class="op">-&gt;</span>
+    <span class="kw">dbg</span> count
+
+    <span class="kw">if</span> count <span class="op">==</span> <span class="number">1</span> then
+        singular
+    <span class="kw">else</span>
+        plural
+</samp>
+<p>Whenever this <code>dbg</code> line of code is reached, the value of <code>count</code>
+will be printed to <a href="https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)">stderr</a>,
+along with the source code file and line number where the <code>dbg</code> itself was written:</p>
+<samp><span class="kw">[pluralize.roc 6:8]</span> 5
+</samp>
+<p>You can give <code>dbg</code> any expression you like, for example:</p>
+<samp><span class="kw">dbg</span> Str.concat singular plural</samp>
+<p>An easy way to print multiple values at a time is to wrap them in a tag, for example
+a concise tag like <code>T</code>:
+</p>
+<samp><span class="kw">dbg</span> T "the value of `count` is:" count</samp>
+</section>
+<p>Note that <code>dbg</code> is a debugging tool, and is only available when running
+your program via a <code>roc</code> subcommand (for example using <code>roc dev</code>,
+<code>roc run</code>, or <code>roc test</code>). When you build a standalone application with
+<code>roc build</code>, any uses of <code>dbg</code> won't be included!</p>
 <section><h2 id="records"><a href="#records">Records</a></h2>
 <p>Currently our <code>addAndStringify</code> function takes two arguments. We can instead make
 it take one argument like so:</p>
@@ -335,9 +368,17 @@ If we were to use <code>counts.note</code> inside <code>addAndStringify</code>, 
 because <code>total</code> is calling <code>addAndStringify</code> passing a record that doesn't have a <code>note</code> field.</p>
 <h3 id="comments"><a href="#comments">Comments</a></h3>
 <p>By the way, this is a comment in Roc:</p>
-<samp class="comment"># The `name` field is unused by addAndStringify</samp>
-<p>Whenever you write <span class="comment">#</span> it means that the rest of the line is a comment,
-and will have no effect on the program.</p>
+<samp><span class="comment"># The `name` field is unused by addAndStringify</span></samp>
+<p>Whenever you write <code>#</code> it means that the rest of the line is a comment,
+and will not affect the program.</p>
+<h3 id="doc-comments"><a href="#doc-comments">Doc Comments</a></h2>
+<p>Comments that begin with <code>##</code> will be included in generated documentation (<code>roc docs</code>). They can include code blocks by adding five spaces after <code>##</code>. </p>
+<samp><span class="comment">## This is a comment for documentation, and includes a code block.
+##
+##     x = 2
+##     expect x == 2</span>
+</samp>
+<p>Roc does not have multiline comment syntax.</p>
 <h3 id="record-shorthands"><a href="#record-shorthands">Record shorthands</a></h3>
 <p>Roc has a couple of shorthands you can use to express some record-related operations more concisely.</p>
 <p>Instead of writing <code>\record -&gt; record.x</code> we can write <code>.x</code> and it will evaluate to the same thing:
@@ -504,6 +545,25 @@ inside a <code>when</code>, we would write <code>Custom r g b <span class="op">-
 <code>Custom description <span class="op">-&gt;</span> description</code> branch, <code>Custom description</code> would be a pattern. In programming, using
 patterns in branching conditionals like <code>when</code> is known as <a href="https://en.wikipedia.org/wiki/Pattern_matching">pattern matching</a>. You may hear people say things like "let's pattern match on <code>Custom</code> here" as a way to
 suggest making a <code>when</code> branch that begins with something like <code>Custom description <span class="op">-&gt;</span></code>.</p>
+<h3 id="pattern-matching-on-lists"><a href="#pattern-matching-on-lists">Pattern Matching on Lists</a></h3>
+<p>You can also pattern match on lists, like so:</p>
+<samp><span class="kw">when</span> myList <span class="kw">is</span>
+    <span class="brace">[]</span> <span class="kw">-&gt;</span> <span class="number">0</span> <span class="comment"># the list is empty</span>
+    <span class="brace">[</span>Foo<span class="comma">,</span> <span class="kw">..</span><span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">1</span> <span class="comment"># it starts with a Foo tag</span>
+    <span class="brace">[</span>_<span class="comma">,</span> ..<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">2</span> <span class="comment"># it contains at least one element, which we ignore</span>
+    <span class="brace">[</span>Foo<span class="comma">,</span> Bar<span class="comma">,</span> ..<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">3</span> <span class="comment"># it starts with a Foo tag followed by a Bar tag</span>
+    <span class="brace">[</span>Foo<span class="comma">,</span> Bar<span class="comma">,</span> Baz<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">4</span> <span class="comment"># it has exactly 3 elements: Foo, Bar, and Baz</span>
+    <span class="brace">[</span>Foo<span class="comma">,</span> a<span class="comma">,</span> ..<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">5</span> <span class="comment"># its first element is Foo, and its second we name `a`</span>
+    <span class="brace">[</span>Ok a<span class="comma">,</span> ..<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">6</span> <span class="comment"># it starts with an Ok containing a payload named `a`</span>
+    <span class="brace">[</span>..<span class="comma">,</span> Foo<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">7</span> <span class="comment"># it ends with a Foo tag</span>
+    <span class="brace">[</span>A<span class="comma">,</span> B, <span class="kw">..</span><span class="comma">,</span> C<span class="comma">,</span> D<span class="brace">]</span> <span class="kw">-&gt;</span> <span class="number">8</span> <span class="comment"># it has certain elements at the beginning and end</span>
+</samp>
+<p>This can be both more concise and more efficient (at runtime) than calling <a href="https://www.roc-lang.org/builtins/List#get"><code>List.get</code></a>
+multiple times, since each call to <code>get</code> requires a separate conditional to handle the different
+<code>Result</code>s they return.</p>
+<blockquote>
+<p><strong>Note:</strong> Each list pattern can only have one <code>..</code>, which is known as the &quot;rest pattern&quot; because it&#39;s where the <em>rest</em> of the list goes.</p>
+</blockquote>
 <h2 id="booleans">Booleans</h2>
 <p>In many programming languages, <code>true</code> and <code>false</code> are special language keywords that refer to
 the two boolean values. In Roc, booleans do not get special keywords; instead, they are exposed
@@ -739,7 +799,7 @@ fullName <span class="op">=</span> <span class="str">\firstName,</span> lastName
 </samp>
 <p>Comments can be valuable documentation, but they can also get out of date and become misleading.
 If someone changes this function and forgets to update the comment, it will no longer be accurate.</p>
-<h3 id="type-annotations"><a href="#type-annotations">Type annotations</a></h3>
+<h3 id="type-annotations"><a href="#type-annotations">Type Annotations</a></h3>
 <p>Here's another way to document this function's type, which doesn't have that problem:</p>
 <samp>fullName : Str, Str <span class="op">-&gt;</span> Str
 fullName <span class="op">=</span> \firstName, lastName <span class="op">-&gt;</span>
@@ -765,6 +825,7 @@ amy <span class="op">=</span> { <span class="str">firstName:</span> <span class=
 <span class="str">jen :</span> { <span class="str">firstName :</span> Str, <span class="str">lastName :</span> Str }
 jen <span class="op">=</span> { <span class="str">firstName:</span> <span class="str">"Jen"</span>, <span class="str">lastName:</span> <span class="str">"Majura"</span> }
 </samp>
+<h3 id="type-aliases"><a href="#type-aliases">Type Aliases</a></h3>
 <p>When we have a recurring type annotation like this, it can be nice to give it its own name. We do this like
 so:</p>
 <samp><span class="str">Musician :</span> { <span class="str">firstName :</span> Str, <span class="str">lastName :</span> Str }
@@ -779,16 +840,8 @@ simone <span class="op">=</span> { <span class="str">firstName:</span> <span cla
 instead of to a value. Just like how you can read <code>name : Str</code> as "<code>name</code> has the type <code>Str</code>,"
 you can also read <code>Musician : { firstName : Str, lastName : Str }</code> as "<code>Musician</code> has the type
 <code>{ firstName : Str, lastName : Str }</code>."</p>
-<p>We can also give type annotations to tag unions:</p>
-<samp>colorFromStr : Str<span class="hljs-function"> <span class="op">-&gt;</span> [Red, Green, Yellow]
-colorFromStr <span class="op">=</span> <span class="str">\string</span> <span <span class="opclass="hljs-function">-&gt;<</span>/span>
-    <span class="kw">when</span> string <span class="kw">is</span>
-        <span class="str">"red"</span><span class="hljs-function"> <span class="op">-&gt;</span> Red
-        <span class="str">"green"</span><span class="hljs-function"> <span class="op">-&gt;</span> Green
-        _<span class="hljs-function"> <span class="op">-&gt;</span> Yellow
-</samp>
-<p>You can read the type <code>[Red, Green, Yellow]</code> as "a tag union of the tags <code>Red</code>, <code>Green</code>, and <code>Yellow</code>."</p>
-<p>When we annotate a list type, we have to specify the type of its elements:</p>
+<h3 id="type-parameters"><a href="#type-parameters">Type Parameters</a></h3>
+<p>Annotations for lists must specify what type the list's elements have:</p>
 <samp>names : List Str
 names <span class="op">=</span> [<span class="str">"Amy"</span>, <span class="str">"Simone"</span>, <span class="str">"Tarja"</span>]
 </samp>
@@ -796,6 +849,7 @@ names <span class="op">=</span> [<span class="str">"Amy"</span>, <span class="st
 <code>List</code> we're dealing with. <code>List</code> is a <em>parameterized type</em>, which means it's a type that requires a type
 parameter; there's no way to give something a type of <code>List</code> without a type parameter - you have to specify
 what type of list it is, such as <code>List Str</code> or <code>List Bool</code> or <code>List { firstName : Str, lastName : Str }</code>.</p>
+<h3 id="wildcard-type"><a href="#wildcard-type">Wildcard Types (*)</a></h3>
 <p>There are some functions that work on any list, regardless of its type parameter. For example, <code>List.isEmpty</code>
 has this type:</p>
 <samp>isEmpty : List * <span class="op">-&gt;</span> Bool
@@ -807,6 +861,7 @@ with any type of <code>List</code> - so, <code>List Str</code>, <code>List Bool<
 function that takes a <code>List Bool</code>. We might reasonably expect to be able to pass an empty list (that is, <code>[]</code>) to
 either of these functions. And so we can! This is because a <code>[]</code> value has the type <code>List *</code> - that is,
 "a list with a wildcard type parameter," or "a list whose element type could be anything."</p>
+<h3 id="type-variables"><a href="#type-variables">Type Variables</a></h3>
 <p><code>List.reverse</code> works similarly to <code>List.isEmpty</code>, but with an important distinction. As with <code>isEmpty</code>, we can
 call <code>List.reverse</code> on any list, regardless of its type parameter. However, consider these calls:</p>
 <samp><span class="kw">strings </span>: List <span class="kw">Str
@@ -840,6 +895,46 @@ of the type annotation, or even the function's implementation! The only way to h
 <code>List *</code> is if it returns an empty list.</p>
 <p>Similarly, the only way to have a function whose type is <code>a <span class="op">-&gt;</span> a</code> is if the function's implementation returns
 its argument without modifying it in any way. This is known as <a href="https://en.wikipedia.org/wiki/Identity_function">the identity function</a>.</p>
+<h3 id="tag-union-types"><a href="#tag-union-tyes">Tag Union Types</a></h3>
+<p>We can also annotate types that include tags:</p>
+<samp>colorFromStr : Str <span class="kw">-&gt;</span> <span class="brace">[</span>Red<span class="comma">,</span> Green<span class="comma">,</span> Yellow<span class="brace">]</span>
+colorFromStr <span class="kw">=</span> <span class="kw">\</span>string <span class="kw">-&gt;</span>
+    <span class="kw">when</span> string <span class="kw">is</span>
+        <span class="str">"red"</span> <span class="kw">-&gt;</span> Red
+        <span class="str">"green"</span> <span class="kw">-&gt;</span> Green
+        <span class="kw">_</span> <span class="kw">-&gt;</span> Yellow
+</samp>
+<p>You can read the type <code>[Red, Green, Yellow]</code> as "a tag union of the tags <code>Red</code>, <code>Green</code>, and <code>Yellow</code>."</p>
+<p>Some tag unions have only one tag in them. For example:</p>
+<samp>redTag <span class="kw">:</span> <span class="brace">[</span>Red<span class="brace">]</span>
+
+redTag <span class="kw">=</span> Red
+</samp>
+<h3 id="accumulating-tag-types"><a href="#accumulating-tag-types">Accumulating Tag Types</a></h3>
+<p>Tag union types can accumulate more tags based on how they're used. Consider this <code>if</code> expression:</p>
+<samp><span class="kw">\</span>str <span class="kw">-&gt;</span>
+    <span class="kw">if</span> Str.isEmpty str <span class="kw">then</span>
+        Ok <span class="str">"it was empty"</span>
+    <span class="kw">else</span>
+        Err <span class="brace">[</span><span class="str">"it was not empty"</span><span class="brace">]</span>
+</samp>
+<p>Here, Roc sees that the first branch has the type <code>[Ok Str]</code> and that the <code>else</code> branch has
+the type <code>[Err (List Str)]</code>, so it concludes that the whole <code>if</code> expression evaluates to the
+combination of those two tag unions: <code>[Ok Str, Err (List Str)]</code>.</p>
+<p>This means this entire <code>\str -&gt; …</code> function has the type <code>Str -&gt; [Ok Str, Err (List Str)]</code>.
+However, it would be most common to annotate it as <code>Result Str (List Str)</code> instead, because
+the <code>Result</code> type (for operations like <code>Result.withDefault</code>, which we saw earlier) is a type
+alias for a tag union with <code>Ok</code> and <code>Err</code> tags that each have one payload:</p>
+<samp>Result ok err <span class="kw">:</span> <span class="brace">[</span>Ok ok<span class="comma">,</span> Err err<span class="brace">]</span>
+</samp>
+<p>We just saw how tag unions get combined when different branches of a conditional return different tags. Another way tag unions can get combined is through pattern matching. For example:</p>
+<samp><span class="kw">when</span> color <span class="kw">is</span>
+    Red <span class="kw">-&gt;</span> <span class="str">"red"</span>
+    Yellow <span class="kw">-&gt;</span> <span class="str">"yellow"</span>
+    Green <span class="kw">-&gt;</span> <span class="str">"green"</span>
+</samp>
+<p>Here, Roc's compiler will infer that <code>color</code>'s type is <code>[Red, Yellow, Green]</code>, because
+those are the three possibilities this <code>when</code> handles.</p>
 <h2 id="numeric-types"><a href="#numeric-types">Numeric types</a></h2>
 <p>Roc has different numeric types that each have different tradeoffs.
 They can all be broken down into two categories: <a href="https://en.wikipedia.org/wiki/Fraction">fractions</a>,
@@ -993,21 +1088,96 @@ compatible with fractions. For example:</p>
 and also <code>Num.cos 1</code> and have them all work as expected; the number literal <code>1</code> has the type
 <code>Num *</code>, which is compatible with the more constrained types <code>Int</code> and <code>Frac</code>. For the same reason,
 you can pass number literals to functions expecting even more constrained types, like <code>I32</code> or <code>F64</code>.</p>
-<h3 id="typed-number-literals"><a href="#typed-number-literals">Typed Number Literals</a></h3>
-<p>When writing a number literal in Roc you can specify the numeric type as a suffix of the literal.
-<code>1u8</code> specifies <code>1</code> as an unsigned 8-bit integer, <code>5i32</code> specifies <code>5</code> as a signed 32-bit integer, etc.
-The full list of possible suffixes includes:
-<code>i8</code>, <code>u8</code>, <code>i16</code>, <code>u16</code>, <code>i32</code>, <code>u32</code>, <code>i64</code>, <code>u64</code>, <code>i128</code>, <code>u128</code>, <code>nat</code>, <code>f32</code>, <code>f64</code>, <code>dec</code></p>
-<h3 id="hexadecimal-integer-literals"><a href="#hexadecimal-integer-literals">Hexadecimal Integer Literals</a></h3>
-<p>Integer literals can be written in hexadecimal form by prefixing with <code>0x</code> followed by hexadecimal characters.
-<code>0xFE</code> evaluates to decimal <code>254</code>
-The integer type can be specified as a suffix to the hexadecimal literal,
-so <code>0xC8u8</code> evaluates to decimal <code>200</code> as an unsigned 8-bit integer.</p>
-<h3 id="binary-integer-literals"><a href="#binary-integer-literals">Binary Integer Literals</a></h3>
-<p>Integer literals can be written in binary form by prefixing with <code>0b</code> followed by the 1's and 0's representing
-each bit. <code>0b0000_1000</code> evaluates to decimal <code>8</code>
-The integer type can be specified as a suffix to the binary literal,
-so <code>0b0100u8</code> evaluates to decimal <code>4</code> as an unsigned 8-bit integer.</p>
+<h3 id="number-literals"><a href="#number-literals">Number Literals</a></h3>
+<p>By default, a number literal with no decimal point has the type <code>Num *</code>—that is,
+we know it's "a number" but nothing more specific. (Number literals with decimal points have the type <code>Frac *</code> instead.)
+</p>
+<p>You can give a number literal a more specific type by adding the type you want as a lowercase suffix.
+For example, <code>1u8</code> specifies <code>1</code> with the type <code>U8</code>,
+and <code>5dec</code> specifies <code>5</code> with the type <code>Dec</code>.</p>
+<p>The full list of possible suffixes includes:</p>
+    <code>u8</code>,
+    <code>i8</code>,
+    <code>u16</code>,
+    <code>i16</code>,
+    <code>u32</code>,
+    <code>i32</code>,
+    <code>u64</code>,
+    <code>i64</code>,
+    <code>u128</code>,
+    <code>i128</code>,
+    <code>nat</code>,
+    <code>f32</code>,
+    <code>f64</code>,
+    <code>dec</code>
+</p>
+<p>Integer literals can be written in <a href="https://en.wikipedia.org/wiki/Hexadecimal">hexadecimal</a>
+form by prefixing with <code>0x</code> followed by hexadecimal characters
+(<code>a</code> - <code>f</code> in addition to <code>0</code> - <code>9</code>)</a>.
+For example, writing <code>0xfe</code> is the same as writing <code>254</code>. Similarly,
+the prefix <code>0b</code> specifies binary integers. Writing <code>0b0000_1000</code>
+is the same as writing <code>8</code>.
+</p>
+<section><h2 id="crashing"><a href="#crashing">Crashing</a></h2>
+<p>Ideally, Roc programs would never crash. However, there are some situations where they may. For example:</p>
+<ol>
+    <li>When doing normal integer arithmetic (e.g. <code>x + y</code>) that overflows.</li>
+    <li>When the system runs out of memory.</li>
+    <li>When a variable-length collection (like a <code>List</code> or <code>Str</code>) gets too
+         long to be representible in the operating system's address space.
+         (A 64-bit operating system's address space can represent several
+         <a href="https://en.wikipedia.org/wiki/Byte#Multiple-byte_units">exibytes</a>
+        of data, so this case should not come up often.)
+    </li>
+</ol>
+<p>Crashes in Roc are not like
+    <a href="https://en.wikipedia.org/wiki/Exception_handling">try/catch exceptions</a>
+found in some other programming languages. There is no way to "catch" a crash. It immediately
+ends the program, and what happens next is defined by the platform. (For example, a command-line
+interface platform might exit with a nonzero <a href="https://en.wikipedia.org/wiki/Exit_status">exit code</a>,
+whereas a web server platform might have the current request respond with a
+<a href="https://en.wikipedia.org/wiki/List_of_HTTP_status_codes#500">HTTP 500 error</a>.)</p>
+<h3 id="crashing-in-unreachable-branches"><a href="#crashing-in-unreachable-branches">Crashing in unreachable branches</a></h3>
+<p>You can intentionally crash a Roc program, for example inside a conditional branch that
+you believe is unreachable. Suppose you're certain that a particular <code>List U8</code>
+contains valid UTF-8 bytes, which means when you call <code>Str.fromUtf8</code> on it, the
+<code>Result</code> it returns will always be <code>Ok</code>. In that scenario, you can use
+the <code>crash</code> keyword to handle the <code>Err</code> case like so:</p>
+<samp>answer : Str
+answer =
+    <span class="kw">when</span> Str.fromUtf8 definitelyValidUtf8 <span class="kw">is</span>
+        Ok str <span class="kw">-&gt;</span> str
+        Err _ <span class="kw">-&gt;</span> <span class="kw">crash</span> <span class="str">"This should never happen!"</span>
+</samp>
+<p>If the unthinkable happens, and somehow the program reaches this <code>Err</code> branch even though that
+was thought to be impossible, then it will crash - just like if the system had run out of memory.
+The string passed to <code>crash</code> will be provided to the platform as context; each platform may do
+something different with it.</p>
+<blockquote>
+<p><b>Note:</b> <code>crash</code> is a language keyword and not a function; you can&#39;t assign <code>crash</code> to a variable
+or pass it to a function.</p>
+</blockquote>
+<h3 id="crashing-for-todos"><a href="#crashing-for-todos">Crashing for TODOs</a></h3>
+<p>Another use for <code>crash</code> is as a TODO marker when you're in the middle of building something:</p>
+<samp><span class="kw">if</span> x <span class="op">&gt;</span> y <span class="kw">then</span>
+    transmogrify (x <span class="op">*</span> <span class="number">2</span>)
+<span class="kw">else</span>
+    <span class="kw">crash</span> <span class="str">"TODO handle the x &lt;= y case"</span>
+</samp>
+<p>This lets you do things like write tests for the non-<code>crash</code> branch, and then come back and finish
+the other branch later.</p>
+</section>
+<h3 id="crashing-for-error-handling"><a href="#crashing-for-error-handling">Crashing for error handling</a></h3>
+<p><code>crash</code> is not for error handling.</p>
+<p>The reason Roc has a <code>crash</code> keyword is for scenarios where it's expected that no error
+    will ever happen (like in <a href="#crashing-in-unreachable-branches">unreachable branches</a>),
+    or where graceful error handling is infeasible (like running out of memory).
+</p>
+<p>Errors that are recoverable should be represented using normal Roc types (
+    like <code><a href="https://www.roc-lang.org/builtins/Result">Result</a></code>)
+    and then handled without crashing—for example, by having the application
+    report that something went wrong, and then continue running from there.
+</p>
 <h2 id="tests-and-expectations"><a href="#tests-and-expectations">Tests and expectations</a></h2>
 <p>You can write automated tests for your Roc code like so:</p>
 <samp>pluralize <span class="op">=</span> \singular, plural, count <span class="op">-&gt;</span>
@@ -1024,7 +1194,7 @@ expect pluralize <span class="str">"cactus"</span> <span class="str">"cacti"</sp
 </samp>
 <p>If you put this in a file named <code>main.roc</code> and run <code>roc test</code>, Roc will execute the two <code>expect</code>
 expressions (that is, the two <code>pluralize</code> calls) and report any that returned <code>false</code>.</p>
-<h3 id="inline-expects"><a href="#inline-expects">Inline <code>expect</code>s</a></h3>
+<h3 id="inline-expects"><a href="#inline-expects">Inline Expectations</a></h3>
 <p>For example:</p>
 <samp>    <span class="kw">if</span> count <span class="op">==</span> <span class="number">1</span> then
         <span class="str">"<span class="hljs-subst">\(countStr)</span> <span class="hljs-subst">\(singular)</span>"</span>
@@ -1045,19 +1215,6 @@ control flow. In fact, if you do <code>roc build</code>, they are not even inclu
 <p>If you try this code out, you may note that when an <code>expect</code> fails (either a top-level or inline
 one), the failure message includes the values of any named variables - such as <code>count</code> here.
 This leads to a useful technique, which we will see next.</p>
-<h3 id="quick-debugging-with-inline-expect-s"><a href="#quick-debugging-with-inline-expect-s">Quick debugging with inline <code>expect</code>s</a></h3>
-<p>An age-old debugging technique is printing out a variable to the terminal. In Roc you can use
-<code>expect</code> to do this. Here's an example:</p>
-<samp>\arg <span class="op">-&gt;</span>
-    x <span class="op">=</span> arg - <span class="number">1</span>
-
-    # Reports the value <span class="kw">of</span> `x` without stopping the program
-    expect x != x
-
-    Num.abs x
-</samp>
-<p>The failure output will include both the value of <code>x</code> as well as the comment immediately above it,
-which lets you use that comment for extra context in your output.</p>
 <h2 id="interface-modules"><a href="#interface-modules">Interface modules</a></h2>
 <p>[This part of the tutorial has not been written yet. Coming soon!]</p>
 <h2 id="builtin-modules"><a href="#builtin-modules">Builtin modules</a></h2>
@@ -1084,8 +1241,8 @@ Roc compiler. That's why they're called "builtins!"</p>
 <h2 id="the-app-module-header"><a href="#the-app-module-header">The app module header</a></h2>
 <p>Let's take a closer look at the part of <code>main.roc</code> above the <code>main</code> def:</p>
 <samp><span class="hljs-selector-tag">app</span> "<span class="hljs-selector-tag">hello</span>"
-    <span class="hljs-selector-tag">packages</span> { <span class="attribute">pf</span>: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-    <span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program]</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.1/zAoiC9xtQPHywYk350_b7ust04BmWLW00sjb9ZPtSQk.tar.br"</span> <span class="brace">}</span>
+    <span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout]</span>
     <span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
 </samp>
 <p>This is known as a <em>module header</em>. Every <code>.roc</code> file is a <em>module</em>, and there
@@ -1097,55 +1254,42 @@ means when you run <code>roc dev</code>, the Roc compiler will build an executab
 named <code>hello</code> (or <code>hello.exe</code> on Windows) and run it. You can also build the executable
 without running it by running <code>roc build</code>.</p>
 <p>The remaining lines all involve the <em>platform</em> this application is built on:</p>
-<samp><span class="hljs-selector-tag">packages</span> { <span class="attribute">pf</span>: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program]</span>
-<span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
+<samp><span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.1/zAoiC9xtQPHywYk350_b7ust04BmWLW00sjb9ZPtSQk.tar.br"</span> <span class="brace">}</span>
+<span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
+<span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 </samp>
-<p>The <code>packages { pf: "examples/cli/cli-platform/main.roc" }</code> part says two things:</p>
+<p>The <code>packages { pf: "https://…tar.br" }</code> part says three things:</p>
 <ul>
-<li>We're going to be using a <em>package</em> (that is, a collection of modules) called <code>"examples/cli/cli-platform/main.roc"</code></li>
+<li>We're going to be using a <em>package</em> (that is, a collection of modules) that can be downloaded from the URL <code>"https://…tar.br"</code></li>
+<li>That package's <a href="https://en.wikipedia.org/wiki/Base64#URL_applications">base64url</a>-encoded <a href="https://en.wikipedia.org/wiki/BLAKE_(hash_function)#BLAKE3">BLAKE3</a>
+cryptographic hash is the long string at the end (before the <code>.tar.br</code> file extension).
+Once the file has been downloaded, its contents will be verified against this hash, and it will only
+be installed if they match. (This way, you can be confident the download was neither corrupted nor
+changed since it was originally published.)</li>
 <li>We're going to name that package <code>pf</code> so we can refer to it more concisely in the future.</li>
 </ul>
-<p>The <code>imports [pf.Stdout, pf.Program]</code> line says that we want to import the <code>Stdout</code> and <code>Program</code> modules
-from the <code>pf</code> package, and make them available in the current module.</p>
+<p>The <code>imports [pf.Stdout]</code> line says that we want to import the <code>Stdout</code> module
+from the <code>pf</code> package, and make it available in the current module.</p>
 <p>This import has a direct interaction with our definition of <code>main</code>. Let's look
 at that again:</p>
-<samp><span class="attr">main</span> <span class="op">=</span> Stdout.line <span class="str">"I'm a Roc application!"</span> |&gt; Program.quick
+<samp><span class="attr">main</span> <span class="op">=</span> Stdout.line <span class="str">"I'm a Roc application!"</span>
 </samp>
 <p>Here, <code>main</code> is calling a function called <code>Stdout.line</code>. More specifically, it's
 calling a function named <code>line</code> which is exposed by a module named
 <code>Stdout</code>.
-Then the result of that function call is passed to the <code>quick</code> function of the <code>Program</code> module,
-which effectively makes it a simple Roc program.</p>
-<p>When we write <code>imports [pf.Stdout, pf.Program]</code>, it specifies that the <code>Stdout</code>
-and <code>Program</code> modules come from the <code>pf</code> package.</p>
-<p>Since <code>pf</code> was the name we chose for the <code>examples/cli/cli-platform/main.roc</code>
-package (when we wrote <code>packages { pf: "examples/cli/cli-platform/main.roc" }</code>),
-this <code>imports</code> line tells the Roc compiler that when we call <code>Stdout.line</code>, it
-should look for that <code>line</code> function in the <code>Stdout</code> module of the
-<code>examples/cli/cli-platform/main.roc</code> package.</p>
+<p>When we write <code>imports [pf.Stdout]</code>, it specifies that the <code>Stdout</code>
+module comes from the package we named <code>pf</code> in the <code>packages { pf: … }</code> section.</p>
 <p>If we would like to include other modules in our application, say <code>AdditionalModule.roc</code> and <code>AnotherModule.roc</code>, then they can be imported directly in <code>imports</code> like this:  </p>
-<samp><span class="hljs-selector-tag">packages</span> { <span class="attribute">pf</span>: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-<span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout, pf.Program, AdditionalModule, AnotherModule]</span>
-<span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
+<samp><span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="comma">,</span> AdditionalModule<span class="comma">,</span> AnotherModule<span class="brace">]</span></span>
 </samp>
-<h2 id="comments"><a href="#comments">Comments</a></h2>
-<p>Comments that begin with <code>##</code> will be included in generated documentation (<code>roc docs</code>). They require a single space after the <code>##</code>, and can include code blocks by adding five spaces after <code>##</code>. </p>
-<samp><span class="comment">## This is a comment for documentation, and includes a <span class="kw">code</span> block.</span>
-<span class="comment">##</span>
-<span class="comment">##     x <span class="op">=</span> <span class="number">2</span></span>
-<span class="comment">##     expect x <span class="op">==</span> <span class="number">2</span></span>
-</samp>
-<p>Roc also supports inline comments and line comments with <code>#</code>. They can be used to add information that won't be included in documentation.</p>
-<samp><span class="comment"># This is a line comment that won't appear in documentation.</span>
-myFunction : U8<span class="hljs-function"> <span class="op">-&gt;</span> U8
-myFunction <span class="op">=</span> <span class="str">\bit</span> <span <span class="opclass="hljs-function">-&gt;<</span>/span> bit % <span class="number">2</span> <span class="comment"># this is an inline comment</span>
-</samp>
-<p>Roc does not have multiline comment syntax.</p>
+<p>You can find the <a href="https://www.roc-lang.org/packages/basic-cli/Stdout#line">documentation for <code>Stdout.line</code></a>
+in <a href="https://www.roc-lang.org/packages/basic-cli/Stdout">the documentation for the <code>Stdout</code> module</a>.
+</p>
 <h2 id="tasks"><a href="#tasks">Tasks</a></h2>
 <p>Tasks are technically not part of the Roc language, but they're very common in
-platforms. Let's use the CLI platform in <code>examples/cli/cli-platform/main.roc</code> as an example!</p>
-<p>In the CLI platform, we have four operations we can do:</p>
+platforms. Let's continue using the <a href="https://github.com/roc-lang/basic-cli">basic-cli</a> platform
+we've been using up to this point as an example!</p>
+<p>In the <code>basic-cli</code> platform, we have four operations we can do:</p>
 <ul>
 <li>Write a string to the console</li>
 <li>Read a string from user input</li>
@@ -1153,15 +1297,14 @@ platforms. Let's use the CLI platform in <code>examples/cli/cli-platform/main.ro
 <li>Read a string from a file</li>
 </ul>
 <p>We'll use these four operations to learn about tasks.</p>
-<p>First, let's do a basic "Hello World" using the tutorial app.</p>
+<p>Let's start with a basic "Hello World" program.</p>
 <samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    packages { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-    imports [pf.Stdout, pf.<span class="kw">Program</span>]
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.1/zAoiC9xtQPHywYk350_b7ust04BmWLW00sjb9ZPtSQk.tar.br"</span> <span class="brace">}</span>
+    imports [pf.Stdout]
     provides [main] to pf
 
 main <span class="op">=</span>
     Stdout.<span class="kw">line</span> <span class="str">"Hello, World!"</span>
-        |&gt; <span class="kw">Program</span>.quick
 </samp>
 <p>The <code>Stdout.line</code> function takes a <code>Str</code> and writes it to <a href="https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout">standard output</a>).
 It has this type:</p>
@@ -1181,13 +1324,11 @@ when it runs (hence the <code>*</code>).</p>
 </samp>
 <p>Let's change <code>main</code> to read a line from <code>stdin</code>, and then print it back out again:</p>
 <samp>app <span class="str">"cli-tutorial"</span>
-    packages { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-    imports [pf.Stdout, pf.Stdin, pf.Task, pf.Program]
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.1/zAoiC9xtQPHywYk350_b7ust04BmWLW00sjb9ZPtSQk.tar.br"</span> <span class="brace">}</span>
+    imports [pf.Stdout, pf.Stdin, pf.Task]
     provides [main] to pf
 
-main <span class="op">=</span> Program.quick task
-
-task <span class="op">=</span>
+main <span class="op">=</span>
     Task.await Stdin.line \text <span class="op">-&gt;</span>
         Stdout.line <span class="str">"You just entered: \(text)"</span>
 </samp>
@@ -1218,13 +1359,11 @@ the program isn't doing anything when we start it up:</p>
 </samp>
 <p>This works, but we can make it a little nicer to read. Let's change it to the following:</p>
 <samp>app <span class="str">"cli-tutorial"</span>
-    packages { pf: <span class="str">"examples/cli/cli-platform/main.roc"</span> }
-    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }, pf.Program]
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.1/zAoiC9xtQPHywYk350_b7ust04BmWLW00sjb9ZPtSQk.tar.br"</span> <span class="brace">}</span>
+    imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     provides [main] to pf
 
-main <span class="op">=</span> Program.quick task
-
-task <span class="op">=</span>
+main <span class="op">=</span>
     await (Stdout.line <span class="str">"Type something press Enter:"</span>) \_ <span class="op">-&gt;</span>
         await Stdin.line \text <span class="op">-&gt;</span>
             Stdout.line <span class="str">"You just entered: \(text)"</span>

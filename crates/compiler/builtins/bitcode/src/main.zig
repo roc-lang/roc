@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const math = std.math;
 const utils = @import("utils.zig");
 const expect = @import("expect.zig");
+const panic_utils = @import("panic.zig");
 
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
@@ -166,12 +167,13 @@ comptime {
     exportUtilsFn(utils.decrefCheckNullC, "decref_check_null");
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
 
-    @export(utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
+    @export(panic_utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
 
     if (builtin.target.cpu.arch != .wasm32) {
         exportUtilsFn(expect.expectFailedStartSharedBuffer, "expect_failed_start_shared_buffer");
         exportUtilsFn(expect.expectFailedStartSharedFile, "expect_failed_start_shared_file");
         exportUtilsFn(expect.expectFailedFinalize, "expect_failed_finalize");
+        exportUtilsFn(expect.sendDbg, "send_dbg");
 
         // sets the buffer used for expect failures
         @export(expect.setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .Weak });

@@ -8,7 +8,8 @@ use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
-use roc_mono::ir::OptLevel;
+use roc_mono::ir::{CrashTag, OptLevel};
+use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_utils::zig;
@@ -80,6 +81,7 @@ fn create_llvm_module<'a>(
         module_src,
         src_dir,
         Default::default(),
+        RocCacheDir::Disallowed,
         load_config,
     );
 
@@ -544,7 +546,10 @@ macro_rules! assert_wasm_evals_to {
 }
 
 #[allow(dead_code)]
-pub fn try_run_lib_function<T>(main_fn_name: &str, lib: &libloading::Library) -> Result<T, String> {
+pub fn try_run_lib_function<T>(
+    main_fn_name: &str,
+    lib: &libloading::Library,
+) -> Result<T, (String, CrashTag)> {
     unsafe {
         let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<T>)> = lib
             .get(main_fn_name.as_bytes())
@@ -565,6 +570,7 @@ macro_rules! assert_llvm_evals_to {
         use bumpalo::Bump;
         use inkwell::context::Context;
         use roc_gen_llvm::llvm::build::LlvmBackendMode;
+        use roc_mono::ir::CrashTag;
 
         let arena = Bump::new();
         let context = Context::create();
@@ -594,7 +600,10 @@ macro_rules! assert_llvm_evals_to {
                 #[cfg(windows)]
                 std::mem::forget(given);
             }
-            Err(msg) => panic!("Roc failed with message: \"{}\"", msg),
+            Err((msg, tag)) => match tag {
+                CrashTag::Roc => panic!(r#"Roc failed with message: "{}""#, msg),
+                CrashTag::User => panic!(r#"User crash with message: "{}""#, msg),
+            },
         }
 
         // artificially extend the lifetime of `lib`
@@ -655,29 +664,6 @@ macro_rules! assert_evals_to {
     }};
 }
 
-#[allow(unused_macros)]
-macro_rules! expect_runtime_error_panic {
-    ($src:expr) => {{
-        #[cfg(feature = "gen-llvm-wasm")]
-        $crate::helpers::llvm::assert_wasm_evals_to!(
-            $src,
-            false, // fake value/type for eval
-            bool,
-            $crate::helpers::llvm::identity,
-            true // ignore problems
-        );
-
-        #[cfg(not(feature = "gen-llvm-wasm"))]
-        $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src,
-            false, // fake value/type for eval
-            bool,
-            $crate::helpers::llvm::identity,
-            true // ignore problems
-        );
-    }};
-}
-
 #[allow(dead_code)]
 pub fn identity<T>(value: T) -> T {
     value
@@ -689,5 +675,3 @@ pub(crate) use assert_evals_to;
 pub(crate) use assert_llvm_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_wasm_evals_to;
-#[allow(unused_imports)]
-pub(crate) use expect_runtime_error_panic;

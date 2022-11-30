@@ -13,18 +13,20 @@ roc_can = { path = "../can" }
 roc_types = { path = "../types" }
 roc_module = { path = "../module" }
 roc_collections = { path = "../collections" }
+roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
 
-bumpalo.workspace = true 
+bumpalo.workspace = true
 
 [build-dependencies]
 roc_builtins = { path = "../builtins" }
 roc_module = { path = "../module" }
+roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
 roc_target = { path = "../roc_target" }
 roc_can = { path = "../can" }
 
-bumpalo.workspace = true 
+bumpalo.workspace = true
 
 [target.'cfg(not(windows))'.build-dependencies]
 roc_load_internal = { path = "../load_internal" }

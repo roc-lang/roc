@@ -1,7 +1,7 @@
 app "file-io"
     packages { pf: "cli-platform/main.roc" }
     imports [
-        pf.Program.{ Program, ExitCode },
+        pf.Process,
         pf.Stdout,
         pf.Stderr,
         pf.Task.{ Task },
@@ -12,11 +12,8 @@ app "file-io"
     ]
     provides [main] to pf
 
-main : Program
-main = Program.noArgs mainTask
-
-mainTask : Task ExitCode [] [Write [File, Stdout, Stderr], Read [File, Env]]
-mainTask =
+main : Task {} []
+main =
     path = Path.fromStr "out.txt"
     task =
         cwd <- Env.cwd |> Task.await
@@ -34,10 +31,7 @@ mainTask =
 
     Task.attempt task \result ->
         when result is
-            Ok {} ->
-                Stdout.line "Successfully wrote a string to out.txt"
-                |> Program.exit 0
-
+            Ok {} -> Stdout.line "Successfully wrote a string to out.txt"
             Err err ->
                 msg =
                     when err is
@@ -47,5 +41,5 @@ mainTask =
                         FileReadErr _ _ -> "Error reading file"
                         _ -> "Uh oh, there was an error!"
 
-                Stderr.line msg
-                |> Program.exit 1
+                {} <- Stderr.line msg |> Task.await
+                Process.exit 1

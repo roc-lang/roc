@@ -54,6 +54,7 @@ roc_load = { path = "../compiler/load" }
 roc_build = { path = "../compiler/build" }
 roc_fmt = { path = "../compiler/fmt" }
 roc_target = { path = "../compiler/roc_target" }
+roc_packaging = { path = "../packaging" }
 roc_reporting = { path = "../reporting" }
 roc_error_macros = { path = "../error_macros" }
 roc_editor = { path = "../editor", optional = true }
@@ -79,7 +80,7 @@ strum.workspace = true
 libloading.workspace = true
 signal-hook.workspace = true
 
-inkwell.workspace = true 
+inkwell.workspace = true
 
 # for now, uses unix/libc functions that windows does not support
 [target.'cfg(not(windows))'.dependencies]

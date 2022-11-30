@@ -104,6 +104,13 @@ pub(crate) fn finalize(env: &Env) {
         .build_call(func, &[], "call_expect_failed_finalize");
 }
 
+pub(crate) fn send_dbg(env: &Env) {
+    let func = env.module.get_function(bitcode::UTILS_SEND_DBG).unwrap();
+
+    env.builder
+        .build_call(func, &[], "call_expect_failed_finalize");
+}
+
 pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,

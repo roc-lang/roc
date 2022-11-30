@@ -1,5 +1,6 @@
 #[allow(unused_imports)]
 use indoc::indoc;
+#[allow(unused_imports)]
 use roc_test_utils::assert_multiline_str_eq;
 
 #[cfg(not(feature = "wasm"))]

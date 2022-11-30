@@ -2,6 +2,7 @@ use std::fmt::Write as _; // import without risk of name clashing
 use std::path::PathBuf;
 
 use bumpalo::Bump;
+use roc_packaging::cache::RocCacheDir;
 use ven_pretty::DocAllocator;
 
 use crate::pretty_print::{pretty_print_def, Ctx};
@@ -490,6 +491,7 @@ where
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
         roc_reporting::report::DEFAULT_PALETTE,
+        RocCacheDir::Disallowed,
         Threading::AllAvailable,
     )
     .unwrap();

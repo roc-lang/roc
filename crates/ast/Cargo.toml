@@ -20,18 +20,19 @@ roc_solve = { path = "../compiler/solve"}
 roc_load = { path = "../compiler/load" }
 roc_target = { path = "../compiler/roc_target" }
 roc_error_macros = { path = "../error_macros" }
+roc_packaging = { path = "../packaging" }
 roc_reporting = { path = "../reporting" }
 
 ven_graph = { path = "../vendor/pathfinding" }
 
-arrayvec.workspace = true 
-bumpalo.workspace = true 
-page_size.workspace = true 
-snafu.workspace = true 
-libc.workspace = true 
+arrayvec.workspace = true
+bumpalo.workspace = true
+page_size.workspace = true
+snafu.workspace = true
+libc.workspace = true
 
 [dev-dependencies]
-indoc.workspace = true 
+indoc.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.9", features = ["memoryapi"]}

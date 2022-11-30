@@ -1,11 +1,7 @@
 app "helloWorld"
     packages { pf: "cli/cli-platform/main.roc" }
-    imports [pf.Stdout, pf.Program.{ Program }]
+    imports [pf.Stdout]
     provides [main] to pf
 
-main = Program.noArgs mainTask
-
-mainTask =
+main =
     Stdout.line "Hello, World!"
-    |> Program.exit 0
-

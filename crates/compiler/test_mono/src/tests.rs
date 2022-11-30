@@ -13,16 +13,15 @@ extern crate indoc;
 #[allow(dead_code)]
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+use roc_collections::all::MutMap;
 use roc_load::ExecutionMode;
 use roc_load::LoadConfig;
-use test_mono_macros::*;
-
-use roc_collections::all::MutMap;
 use roc_load::Threading;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::STLayoutInterner;
+use test_mono_macros::*;
 
 const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
 
@@ -76,6 +75,7 @@ fn promote_expr_to_module(src: &str) -> String {
 
 fn compiles_to_ir(test_name: &str, src: &str) {
     use bumpalo::Bump;
+    use roc_packaging::cache::RocCacheDir;
     use std::path::PathBuf;
 
     let arena = &Bump::new();
@@ -107,6 +107,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         module_src,
         src_dir,
         Default::default(),
+        RocCacheDir::Disallowed,
         load_config,
     );
 
@@ -1945,7 +1946,7 @@ fn unreachable_void_constructor() {
 
         x : []
 
-        main = if Bool.true then Ok x else Err "abc" 
+        main = if Bool.true then Ok x else Err "abc"
         "#
     )
 }
@@ -2027,6 +2028,24 @@ fn recursive_function_and_union_with_inference_hole() {
 
         main = when translateStatic (Element []) is
             _ -> ""
+        "#
+    )
+}
+
+#[mono_test]
+fn crash() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        getInfallible = \result -> when result is
+            Ok x -> x
+            _ -> crash "turns out this was fallible"
+
+        main =
+            x : [Ok U64, Err Str]
+            x = Ok 78
+            getInfallible x
         "#
     )
 }

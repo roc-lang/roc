@@ -20,6 +20,7 @@ roc_derive_key = { path = "../derive_key" }
 roc_derive = { path = "../derive", features = ["debug-derived-symbols", "open-extension-vars"] }
 roc_target = { path = "../roc_target" }
 roc_types = { path = "../types" }
+roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
 roc_constrain = { path = "../constrain" }
 roc_region = { path = "../region" }

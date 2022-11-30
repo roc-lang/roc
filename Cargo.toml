@@ -10,6 +10,7 @@ members = [
     "crates/highlight",
     "crates/error_macros",
     "crates/reporting",
+    "crates/packaging",
     "crates/repl_cli",
     "crates/repl_eval",
     "crates/repl_test",

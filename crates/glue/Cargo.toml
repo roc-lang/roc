@@ -13,6 +13,7 @@ roc_intern = { path = "../compiler/intern" }
 roc_mono = { path = "../compiler/mono" }
 roc_load = { path = "../compiler/load" }
 roc_reporting = { path = "../reporting" }
+roc_packaging = { path = "../packaging" }
 roc_types = { path = "../compiler/types" }
 roc_builtins = { path = "../compiler/builtins" }
 roc_module = { path = "../compiler/module" }

@@ -1086,7 +1086,36 @@ pub fn can_problem<'b>(
             } else {
                 "TOO FEW TYPE ARGUMENTS".to_string()
             };
-
+            severity = Severity::RuntimeError;
+        }
+        Problem::UnappliedCrash { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "), alloc.keyword("crash"), alloc.reflow(" doesn't have a message given to it:")
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.keyword("crash"), alloc.reflow(" must be passed a message to crash with at the exact place it's used. "),
+                    alloc.keyword("crash"), alloc.reflow(" can't be used as a value that's passed around, like functions can be - it must be applied immediately!"),
+                ])
+            ]);
+            title = "UNAPPLIED CRASH".to_string();
+            severity = Severity::RuntimeError;
+        }
+        Problem::OverAppliedCrash { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("crash"),
+                    alloc.reflow(" has too many values given to it:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.concat([
+                    alloc.keyword("crash"),
+                    alloc.reflow(" must be given exacly one message to crash with."),
+                ]),
+            ]);
+            title = "OVERAPPLIED CRASH".to_string();
             severity = Severity::RuntimeError;
         }
     };
@@ -1238,9 +1267,8 @@ fn to_bad_ident_expr_report<'b>(
                     lines.convert_region(surroundings),
                     lines.convert_region(region),
                 ),
-                alloc.concat([alloc.reflow(
-                    r"I recommend using camelCase, it is the standard in the Roc ecosystem.",
-                )]),
+                alloc.concat([alloc
+                    .reflow(r"I recommend using camelCase. It's the standard style in Roc code!")]),
             ])
         }
 

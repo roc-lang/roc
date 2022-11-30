@@ -3,10 +3,13 @@ name = "roc_wasm_interp"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[bin]]
+name = "roc_wasm_interp"
+path = "src/main.rs"
 
 [dependencies]
 roc_wasm_module = { path = "../wasm_module" }
 
 bitvec.workspace = true
 bumpalo.workspace = true
+clap.workspace = true

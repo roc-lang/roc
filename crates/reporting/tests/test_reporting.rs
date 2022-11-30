@@ -15,6 +15,10 @@ mod test_reporting {
     use roc_can::expr::PendingDerives;
     use roc_load::{self, ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
+    use roc_packaging::cache::RocCacheDir;
+    use roc_parse::module::parse_header;
+    use roc_parse::state::State;
+    use roc_parse::test_helpers::parse_expr_with;
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
         can_problem, parse_problem, type_problem, RenderTarget, Report, Severity, ANSI_STYLE_CODES,
@@ -54,6 +58,38 @@ mod test_reporting {
         buffer
     }
 
+    fn maybe_save_parse_test_case(test_name: &str, src: &str, is_expr: bool) {
+        // First check if the env var indicates we should migrate tests
+        if std::env::var("ROC_MIGRATE_REPORTING_TESTS").is_err() {
+            return;
+        }
+
+        // Check if we have parse errors
+        let arena = Bump::new();
+        let has_error = if is_expr {
+            parse_expr_with(&arena, src).is_err()
+        } else {
+            parse_header(&arena, State::new(src.trim().as_bytes())).is_err()
+            // TODO: also parse the module defs
+        };
+
+        if !has_error {
+            return;
+        }
+
+        let mut path = PathBuf::from(std::env!("ROC_WORKSPACE_DIR"));
+        path.push("crates");
+        path.push("compiler");
+        path.push("parse");
+        path.push("tests");
+        path.push("snapshots");
+        path.push("fail");
+        let kind = if is_expr { "expr" } else { "header" };
+        path.push(format!("{}.{}.roc", test_name, kind));
+
+        std::fs::write(path, src).unwrap();
+    }
+
     fn run_load_and_infer<'a>(
         subdir: &str,
         arena: &'a Bump,
@@ -63,9 +99,11 @@ mod test_reporting {
         use std::io::Write;
 
         let module_src = if src.starts_with("app") {
+            maybe_save_parse_test_case(subdir, src, false);
             // this is already a module
             src.to_string()
         } else {
+            maybe_save_parse_test_case(subdir, src, true);
             // this is an expression, promote it to a module
             promote_expr_to_module(src)
         };
@@ -90,8 +128,13 @@ mod test_reporting {
                 threading: Threading::Single,
                 exec_mode: ExecutionMode::Check,
             };
-            let result =
-                roc_load::load_and_typecheck(arena, full_file_path, exposed_types, load_config);
+            let result = roc_load::load_and_typecheck(
+                arena,
+                full_file_path,
+                exposed_types,
+                RocCacheDir::Disallowed,
+                load_config,
+            );
             drop(file);
 
             result
@@ -307,8 +350,6 @@ mod test_reporting {
     {
         use ven_pretty::DocAllocator;
 
-        use roc_parse::state::State;
-
         let state = State::new(src.as_bytes());
 
         let filename = filename_from_string(r"/code/proj/Main.roc");
@@ -380,7 +421,7 @@ mod test_reporting {
     }
 
     /// Do not call this directly! Use the test_report macro below!
-    fn __new_report_problem_as(subdir: &str, src: &str, check_render: impl FnOnce(&str)) {
+    fn __new_report_problem_as(test_name: &str, src: &str, check_render: impl FnOnce(&str)) {
         let arena = Bump::new();
 
         let finalize_render = |doc: RocDocBuilder<'_>, buf: &mut String| {
@@ -389,7 +430,7 @@ mod test_reporting {
                 .expect("list_reports")
         };
 
-        let buf = list_reports_new(subdir, &arena, src, finalize_render);
+        let buf = list_reports_new(test_name, &arena, src, finalize_render);
 
         check_render(buf.as_str());
     }
@@ -4387,16 +4428,20 @@ mod test_reporting {
     test_report!(
         comment_with_tab,
         "# comment with a \t\n4",
-        @r###"
-    ── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            &format!(
+                r###"── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
 
-    I encountered a tab character
+I encountered a tab character
 
-    4│      # comment with a 	
-                             ^
+4│      # comment with a {}
+                         ^
 
-    Tab characters are not allowed.
-    "###
+Tab characters are not allowed."###,
+                "\t"
+            )
+        )
     );
 
     // TODO bad error message
@@ -4410,13 +4455,14 @@ mod test_reporting {
         @r###"
     ── UNFINISHED PARENTHESES ────────────────── tmp/type_in_parens_start/Test.roc ─
 
-    I just started parsing a type in parentheses, but I got stuck here:
+    I am partway through parsing a type in parentheses, but I got stuck
+    here:
 
     4│      f : (
                  ^
 
-    Tag unions look like [Many I64, None], so I was expecting to see a tag
-    name next.
+    I was expecting to see a parenthesis before this, so try adding a )
+    and see if that helps?
 
     Note: I may be confused by indentation
     "###
@@ -4436,12 +4482,12 @@ mod test_reporting {
     here:
 
     4│      f : ( I64
-                     ^
+    5│
+    6│
+        ^
 
-    I was expecting to see a parenthesis before this, so try adding a )
-    and see if that helps?
-
-    Note: I may be confused by indentation
+    I was expecting to see a closing parenthesis before this, so try
+    adding a ) and see if that helps?
     "###
     );
 
@@ -5674,23 +5720,27 @@ All branches in an `if` must have the same type!
             main = 5 -> 3
             "#
         ),
-        @r###"
-    ── UNKNOWN OPERATOR ───────────────────────────── tmp/wild_case_arrow/Test.roc ─
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            &format!(
+                r###"── UNKNOWN OPERATOR ───────────────────────────── tmp/wild_case_arrow/Test.roc ─
 
-    This looks like an operator, but it's not one I recognize!
+This looks like an operator, but it's not one I recognize!
 
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      main = 5 -> 3
-                     ^^
+1│  app "test" provides [main] to "./platform"
+2│
+3│  main =
+4│      main = 5 -> 3
+                 ^^
 
-    Looks like you are trying to define a function. 
+Looks like you are trying to define a function.{}
 
-    In roc, functions are always written as a lambda, like 
+In roc, functions are always written as a lambda, like{}
 
-        increment = \n -> n + 1
-    "###
+    increment = \n -> n + 1"###,
+                ' ', ' '
+            )
+        )
     );
 
     #[test]
@@ -6046,33 +6096,6 @@ All branches in an `if` must have the same type!
     to see a field name next.
 
     Note: I may be confused by indentation
-    "###
-    );
-
-    test_report!(
-        outdented_in_parens,
-        indoc!(
-            r#"
-            Box : (
-                Str
-            )
-
-            4
-            "#
-        ),
-        @r###"
-    ── NEED MORE INDENTATION ──────────────────── tmp/outdented_in_parens/Test.roc ─
-
-    I am partway through parsing a type in parentheses, but I got stuck
-    here:
-
-    4│      Box : (
-    5│          Str
-    6│      )
-            ^
-
-    I need this parenthesis to be indented more. Try adding more spaces
-    before it!
     "###
     );
 
@@ -9959,16 +9982,21 @@ All branches in an `if` must have the same type!
             f 1 _ 1
             "#
         ),
-        @r###"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            &format!(
+                r###"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    Underscores are not allowed in identifier names:
+Underscores are not allowed in identifier names:
 
-    6│      f 1 _ 1
-      
+6│      f 1 _ 1
+{}
 
-    I recommend using camelCase, it is the standard in the Roc ecosystem.
-    "###
+I recommend using camelCase. It's the standard style in Roc code!
+"###,
+                "  " // TODO make the reporter not insert extraneous spaces here in the first place!
+            ),
+        )
     );
 
     test_report!(
@@ -10381,7 +10409,7 @@ All branches in an `if` must have the same type!
 
             u8 : [Good (List U8), Bad [DecodeProblem]]
 
-            fromBytes = 
+            fromBytes =
                 when u8 is
                     Good _ _ ->
                         Ok "foo"
@@ -10398,7 +10426,7 @@ All branches in an `if` must have the same type!
      6│>      when u8 is
      7│           Good _ _ ->
      8│               Ok "foo"
-     9│ 
+     9│
     10│           Bad _ ->
     11│               Ok "foo"
 
@@ -11141,7 +11169,7 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             x : U8
-            
+
             when x is
                 '☃' -> ""
                 _ -> ""
@@ -11688,7 +11716,7 @@ All branches in an `if` must have the same type!
         list_pattern_not_terminated,
         indoc!(
             r#"
-            when [] is 
+            when [] is
                 [1, 2, -> ""
             "#
         ),
@@ -11709,7 +11737,7 @@ All branches in an `if` must have the same type!
         list_pattern_weird_indent,
         indoc!(
             r#"
-            when [] is 
+            when [] is
                 [1, 2,
             3] -> ""
             "#
@@ -12444,6 +12472,104 @@ All branches in an `if` must have the same type!
     it will only produce a `Str` value of a single specific type. Maybe
     change the type annotation to be more specific? Maybe change the code
     to be more general?
+    "###
+    );
+
+    test_report!(
+        suggest_binding_rigid_var_to_ability,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./p"
+
+            f : List e -> List e
+            f = \l -> if l == l then l else l
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    4│  f = \l -> if l == l then l else l
+                     ^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        List e
+
+    In particular, an implementation for
+
+        e
+
+    cannot be generated.
+
+    Tip: This type variable is not bound to `Eq`. Consider adding a `has`
+    clause to bind the type variable, like `| e has Bool.Eq`
+    "###
+    );
+
+    test_report!(
+        crash_given_non_string,
+        indoc!(
+            r#"
+            crash {}
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This value passed to `crash` is not a string:
+
+    4│      crash {}
+                  ^^
+
+    The value is a record of type:
+
+        {}
+
+    But I can only `crash` with messages of type
+
+        Str
+    "###
+    );
+
+    test_report!(
+        crash_unapplied,
+        indoc!(
+            r#"
+            crash
+            "#
+        ),
+    @r###"
+    ── UNAPPLIED CRASH ─────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `crash` doesn't have a message given to it:
+
+    4│      crash
+            ^^^^^
+
+    `crash` must be passed a message to crash with at the exact place it's
+    used. `crash` can't be used as a value that's passed around, like
+    functions can be - it must be applied immediately!
+    "###
+    );
+
+    test_report!(
+        crash_overapplied,
+        indoc!(
+            r#"
+            crash "" ""
+            "#
+        ),
+    @r###"
+    ── OVERAPPLIED CRASH ───────────────────────────────────── /code/proj/Main.roc ─
+
+    This `crash` has too many values given to it:
+
+    4│      crash "" ""
+                  ^^^^^
+
+    `crash` must be given exacly one message to crash with.
     "###
     );
 }

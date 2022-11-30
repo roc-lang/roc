@@ -58,12 +58,16 @@ pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
+pub unsafe extern "C" fn roc_panic(msg: &RocStr, tag_id: u32) {
     match tag_id {
         0 => {
-            let slice = CStr::from_ptr(c_ptr as *const c_char);
-            let string = slice.to_str().unwrap();
-            eprintln!("Roc crashed with:\n\n\t{}\n", string);
+            eprintln!("Roc crashed with:\n\n\t{}\n", msg.as_str());
+
+            print_backtrace();
+            std::process::exit(1);
+        }
+        1 => {
+            eprintln!("The program crashed with:\n\n\t{}\n", msg.as_str());
 
             print_backtrace();
             std::process::exit(1);
@@ -213,7 +217,7 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 }
 
 #[no_mangle]
-pub extern "C" fn rust_main() -> u8 {
+pub extern "C" fn rust_main() {
     let size = unsafe { roc_main_size() } as usize;
     let layout = Layout::array::<u8>(size).unwrap();
 
@@ -223,11 +227,9 @@ pub extern "C" fn rust_main() -> u8 {
 
         roc_main(buffer);
 
-        let exit_code = call_the_closure(buffer);
+        call_the_closure(buffer);
 
         std::alloc::dealloc(buffer, layout);
-
-        exit_code
     }
 }
 
@@ -285,6 +287,11 @@ pub extern "C" fn roc_fx_setCwd(roc_path: &RocList<u8>) -> RocResult<(), ()> {
         Ok(()) => RocResult::ok(()),
         Err(_) => RocResult::err(()),
     }
+}
+
+#[no_mangle]
+pub extern "C" fn roc_fx_processExit(exit_code: u8) {
+    std::process::exit(exit_code as i32);
 }
 
 #[no_mangle]

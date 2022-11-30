@@ -8,7 +8,7 @@ use roc_collections::soa::{EitherIndex, Index, Slice};
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Spaces<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
     pub item: T,
@@ -81,11 +81,17 @@ impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Module<'a> {
-    Interface { header: InterfaceHeader<'a> },
-    App { header: AppHeader<'a> },
-    Platform { header: PlatformHeader<'a> },
-    Hosted { header: HostedHeader<'a> },
+pub struct Module<'a> {
+    pub comments: &'a [CommentOrNewline<'a>],
+    pub header: Header<'a>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Header<'a> {
+    Interface(InterfaceHeader<'a>),
+    App(AppHeader<'a>),
+    Platform(PlatformHeader<'a>),
+    Hosted(HostedHeader<'a>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -196,6 +202,9 @@ pub enum Expr<'a> {
 
     Underscore(&'a str),
 
+    // The "crash" keyword
+    Crash,
+
     // Tags
     Tag(&'a str),
 
@@ -208,6 +217,7 @@ pub enum Expr<'a> {
     Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
     Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
     Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
+    Dbg(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
@@ -337,6 +347,11 @@ pub enum ValueDef<'a> {
         comment: Option<&'a str>,
         body_pattern: &'a Loc<Pattern<'a>>,
         body_expr: &'a Loc<Expr<'a>>,
+    },
+
+    Dbg {
+        condition: &'a Loc<Expr<'a>>,
+        preceding_comment: Region,
     },
 
     Expect {
@@ -524,6 +539,13 @@ pub enum TypeAnnotation<'a> {
         fields: Collection<'a, Loc<AssignedField<'a, TypeAnnotation<'a>>>>,
         /// The row type variable in an open record, e.g. the `r` in `{ name: Str }r`.
         /// This is None if it's a closed record annotation like `{ name: Str }`.
+        ext: Option<&'a Loc<TypeAnnotation<'a>>>,
+    },
+
+    Tuple {
+        fields: Collection<'a, Loc<TypeAnnotation<'a>>>,
+        /// The row type variable in an open tuple, e.g. the `r` in `( Str, Str )r`.
+        /// This is None if it's a closed tuple annotation like `( Str, Str )`.
         ext: Option<&'a Loc<TypeAnnotation<'a>>>,
     },
 

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use bumpalo::Bump;
 use roc_module::symbol::ModuleId;
+use roc_packaging::cache::RocCacheDir;
 
 const SKIP_SUBS_CACHE: bool = {
     match option_env!("ROC_SKIP_SUBS_CACHE") {
@@ -72,7 +73,7 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
     use roc_reporting::cli::report_problems;
 
     let arena = Bump::new();
-    let src_dir = PathBuf::from(".");
+    let cwd = std::env::current_dir().unwrap();
     let source = roc_builtins::roc::module_source(module_id);
     let target_info = roc_target::TargetInfo::default_x86_64();
 
@@ -80,11 +81,12 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
         &arena,
         PathBuf::from(filename),
         source,
-        src_dir,
+        cwd,
         Default::default(),
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
         roc_reporting::report::DEFAULT_PALETTE,
+        RocCacheDir::Disallowed,
         Threading::AllAvailable,
     );
 

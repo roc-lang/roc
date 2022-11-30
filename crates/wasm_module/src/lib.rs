@@ -115,7 +115,11 @@ impl<'a> WasmModule<'a> {
             + self.names.size()
     }
 
-    pub fn preload(arena: &'a Bump, bytes: &[u8]) -> Result<Self, ParseError> {
+    pub fn preload(
+        arena: &'a Bump,
+        bytes: &[u8],
+        require_relocatable: bool,
+    ) -> Result<Self, ParseError> {
         let is_valid_magic_number = &bytes[0..4] == "\0asm".as_bytes();
         let is_valid_version = bytes[4..8] == Self::WASM_VERSION.to_le_bytes();
         if !is_valid_magic_number || !is_valid_version {
@@ -155,27 +159,36 @@ impl<'a> WasmModule<'a> {
         if code.bytes.is_empty() {
             module_errors.push_str("Missing Code section\n");
         }
-        if linking.symbol_table.is_empty() {
-            module_errors.push_str("Missing \"linking\" Custom section\n");
-        }
-        if reloc_code.entries.is_empty() {
-            module_errors.push_str("Missing \"reloc.CODE\" Custom section\n");
-        }
-        if global.count != 0 {
-            let global_err_msg =
+
+        if require_relocatable {
+            if linking.symbol_table.is_empty() {
+                module_errors.push_str("Missing \"linking\" Custom section\n");
+            }
+            if reloc_code.entries.is_empty() {
+                module_errors.push_str("Missing \"reloc.CODE\" Custom section\n");
+            }
+            if global.count != 0 {
+                let global_err_msg =
                 format!("All globals in a relocatable Wasm module should be imported, but found {} internally defined", global.count);
-            module_errors.push_str(&global_err_msg);
+                module_errors.push_str(&global_err_msg);
+            }
         }
 
         if !module_errors.is_empty() {
-            return Err(ParseError {
-                offset: 0,
-                message: format!("{}\n{}\n{}",
+            let message = if require_relocatable {
+                format!(
+                    "{}\n{}\n{}",
                     "The host file has the wrong structure. I need a relocatable WebAssembly binary file.",
                     "If you're using wasm-ld, try the --relocatable option.",
                     module_errors,
                 )
-            });
+            } else {
+                format!(
+                    "I wasn't able to understand this WebAssembly file.\n{}",
+                    module_errors,
+                )
+            };
+            return Err(ParseError { offset: 0, message });
         }
 
         Ok(WasmModule {
@@ -624,6 +637,10 @@ pub enum ValueType {
     F64 = 0x7c,
 }
 
+impl ValueType {
+    pub const VOID: u8 = 0x40;
+}
+
 impl Serialize for ValueType {
     fn serialize<T: SerialBuffer>(&self, buffer: &mut T) {
         buffer.append_u8(*self as u8);
@@ -639,6 +656,92 @@ impl From<u8> for ValueType {
             0x7c => Self::F64,
             _ => internal_error!("Invalid ValueType 0x{:02x}", x),
         }
+    }
+}
+
+impl From<Value> for ValueType {
+    fn from(x: Value) -> Self {
+        match x {
+            Value::I32(_) => Self::I32,
+            Value::I64(_) => Self::I64,
+            Value::F32(_) => Self::F32,
+            Value::F64(_) => Self::F64,
+        }
+    }
+}
+
+impl Parse<()> for ValueType {
+    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let byte = u8::parse((), bytes, cursor)?;
+        Ok(ValueType::from(byte))
+    }
+}
+
+// A group of local variable declarations
+impl Parse<()> for (u32, ValueType) {
+    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let count = u32::parse((), bytes, cursor)?;
+        let ty = ValueType::parse((), bytes, cursor)?;
+        Ok((count, ty))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Value {
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
+}
+
+impl Value {
+    pub fn unwrap_i32(&self) -> i32 {
+        match self {
+            Value::I32(x) => *x,
+            _ => panic!("Expected I32 but found {:?}", self),
+        }
+    }
+    pub fn unwrap_i64(&self) -> i64 {
+        match self {
+            Value::I64(x) => *x,
+            _ => panic!("Expected I64 but found {:?}", self),
+        }
+    }
+    pub fn unwrap_f32(&self) -> f32 {
+        match self {
+            Value::F32(x) => *x,
+            _ => panic!("Expected F32 but found {:?}", self),
+        }
+    }
+    pub fn unwrap_f64(&self) -> f64 {
+        match self {
+            Value::F64(x) => *x,
+            _ => panic!("Expected F64 but found {:?}", self),
+        }
+    }
+}
+
+impl From<u32> for Value {
+    fn from(x: u32) -> Self {
+        Value::I32(i32::from_ne_bytes(x.to_ne_bytes()))
+    }
+}
+
+impl From<u64> for Value {
+    fn from(x: u64) -> Self {
+        Value::I64(i64::from_ne_bytes(x.to_ne_bytes()))
+    }
+}
+
+impl From<i32> for Value {
+    fn from(x: i32) -> Self {
+        Value::I32(x)
+    }
+}
+
+impl From<i64> for Value {
+    fn from(x: i64) -> Self {
+        Value::I64(x)
     }
 }
 
@@ -705,6 +808,33 @@ macro_rules! round_up_to_alignment {
             aligned &= !$alignment_bytes + 1; // mask with a flag that has upper bits 1, lower bits 0
             aligned
         }
+    };
+}
+
+/// # dbg_hex
+/// display dbg result in hexadecimal `{:#x?}` format.
+#[macro_export]
+macro_rules! dbg_hex {
+    // NOTE: We cannot use `concat!` to make a static string as a format argument
+    // of `eprintln!` because `file!` could contain a `{` or
+    // `$val` expression could be a block (`{ .. }`), in which case the `eprintln!`
+    // will be malformed.
+    () => {
+        eprintln!("[{}:{}]", file!(), line!());
+    };
+    ($val:expr $(,)?) => {
+        // Use of `match` here is intentional because it affects the lifetimes
+        // of temporaries - https://stackoverflow.com/a/48732525/1063961
+        match $val {
+            tmp => {
+                eprintln!("[{}:{}] {} = {:#x?}",
+                    file!(), line!(), stringify!($val), &tmp);
+                tmp
+            }
+        }
+    };
+    ($($val:expr),+ $(,)?) => {
+        ($($crate::dbg_hex!($val)),+,)
     };
 }
 
