@@ -773,69 +773,173 @@ impl<'a> Pattern<'a> {
     pub fn equivalent(&self, other: &Self) -> bool {
         use Pattern::*;
 
-        match (self, other) {
-            (Identifier(x), Identifier(y)) => x == y,
-            (Tag(x), Tag(y)) => x == y,
-            (Apply(constructor_x, args_x), Apply(constructor_y, args_y)) => {
-                let equivalent_args = args_x
-                    .iter()
-                    .zip(args_y.iter())
-                    .all(|(p, q)| p.value.equivalent(&q.value));
+        match other {
+            SpaceBefore(y, _) | SpaceAfter(y, _) => {
+                return self.equivalent(y);
+            }
+            _ => {}
+        }
 
-                constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+        match self {
+            Tag(x) => {
+                if let Tag(y) = other {
+                    x == y
+                } else {
+                    false
+                }
             }
-            (RecordDestructure(fields_x), RecordDestructure(fields_y)) => fields_x
-                .iter()
-                .zip(fields_y.iter())
-                .all(|(p, q)| p.value.equivalent(&q.value)),
-            (RequiredField(x, inner_x), RequiredField(y, inner_y)) => {
-                x == y && inner_x.value.equivalent(&inner_y.value)
+            Apply(constructor_x, args_x) => {
+                if let Apply(constructor_y, args_y) = other {
+                    let equivalent_args = args_x
+                        .iter()
+                        .zip(args_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value));
+
+                    constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+                } else {
+                    false
+                }
             }
-            (OptionalField(x, _), OptionalField(y, _))
-            | (OptionalField(x, _), Identifier(y))
-            | (Identifier(x), OptionalField(y, _)) => {
-                // optional record fields can be annotated as:
-                //      { x, y } : { x : Int, y ? Bool }
-                //      { x, y ? False } = rec
-                x == y
+            RecordDestructure(fields_x) => {
+                if let RecordDestructure(fields_y) = other {
+                    fields_x
+                        .iter()
+                        .zip(fields_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value))
+                } else {
+                    false
+                }
             }
-            // Literal
-            (NumLiteral(x), NumLiteral(y)) => x == y,
-            (
-                NonBase10Literal {
-                    string: string_x,
-                    base: base_x,
-                    is_negative: is_negative_x,
-                },
-                NonBase10Literal {
+            RequiredField(x, inner_x) => {
+                if let RequiredField(y, inner_y) = other {
+                    x == y && inner_x.value.equivalent(&inner_y.value)
+                } else {
+                    false
+                }
+            }
+
+            // optional record fields can be annotated as:
+            //      { x, y } : { x : Int, y ? Bool }
+            //      { x, y ? False } = rec
+            OptionalField(x, _) => match other {
+                Identifier(y) | OptionalField(y, _) => x == y,
+                _ => false,
+            },
+            Identifier(x) => match other {
+                Identifier(y) | OptionalField(y, _) => x == y,
+                _ => false,
+            },
+            NumLiteral(x) => {
+                if let NumLiteral(y) = other {
+                    x == y
+                } else {
+                    false
+                }
+            }
+            NonBase10Literal {
+                string: string_x,
+                base: base_x,
+                is_negative: is_negative_x,
+            } => {
+                if let NonBase10Literal {
                     string: string_y,
                     base: base_y,
                     is_negative: is_negative_y,
-                },
-            ) => string_x == string_y && base_x == base_y && is_negative_x == is_negative_y,
-            (FloatLiteral(x), FloatLiteral(y)) => x == y,
-            (StrLiteral(x), StrLiteral(y)) => x == y,
-            (Underscore(x), Underscore(y)) => x == y,
-
-            // Space
-            (SpaceBefore(x, _), SpaceBefore(y, _)) => x.equivalent(y),
-            (SpaceAfter(x, _), SpaceAfter(y, _)) => x.equivalent(y),
-
-            // Malformed
-            (Malformed(x), Malformed(y)) => x == y,
-            (
-                QualifiedIdentifier {
-                    module_name: a,
-                    ident: x,
-                },
-                QualifiedIdentifier {
+                } = other
+                {
+                    string_x == string_y && base_x == base_y && is_negative_x == is_negative_y
+                } else {
+                    false
+                }
+            }
+            FloatLiteral(x) => {
+                if let FloatLiteral(y) = other {
+                    x == y
+                } else {
+                    false
+                }
+            }
+            StrLiteral(x) => {
+                if let StrLiteral(y) = other {
+                    x == y
+                } else {
+                    false
+                }
+            }
+            Underscore(x) => {
+                if let Underscore(y) = other {
+                    x == y
+                } else {
+                    false
+                }
+            }
+            SpaceBefore(x, _) | SpaceAfter(x, _) => match other {
+                SpaceBefore(y, _) | SpaceAfter(y, _) => x.equivalent(y),
+                y => x.equivalent(y),
+            },
+            Malformed(x) => {
+                if let Malformed(y) = other {
+                    x == y
+                } else {
+                    false
+                }
+            }
+            QualifiedIdentifier {
+                module_name: a,
+                ident: x,
+            } => {
+                if let QualifiedIdentifier {
                     module_name: b,
                     ident: y,
-                },
-            ) => (a == b) && (x == y),
-
-            // Different constructors
-            _ => false,
+                } = other
+                {
+                    a == b && x == y
+                } else {
+                    false
+                }
+            }
+            OpaqueRef(a) => {
+                if let OpaqueRef(b) = other {
+                    a == b
+                } else {
+                    false
+                }
+            }
+            SingleQuote(a) => {
+                if let SingleQuote(b) = other {
+                    a == b
+                } else {
+                    false
+                }
+            }
+            Tuple(items_x) => {
+                if let Tuple(items_y) = other {
+                    items_x
+                        .iter()
+                        .zip(items_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value))
+                } else {
+                    false
+                }
+            }
+            List(items_x) => {
+                if let List(items_y) = other {
+                    items_x
+                        .iter()
+                        .zip(items_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value))
+                } else {
+                    false
+                }
+            }
+            ListRest => matches!(other, ListRest),
+            MalformedIdent(str_x, _) => {
+                if let MalformedIdent(str_y, _) = other {
+                    str_x == str_y
+                } else {
+                    false
+                }
+            }
         }
     }
 }
