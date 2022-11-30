@@ -18,8 +18,8 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
         writer.reserve_shstrtab_section_index(),
     ];
 
+    // we need this later, but must allocate it here
     let soname = writer.add_dynamic_string(b"libapp.so");
-    let out_dynamic = [(elf::DT_SONAME, 1, Some(soname)), (elf::DT_NULL, 0, None)];
 
     // Assign dynamic symbol indices.
     let out_dynsyms: Vec<_> = custom_names
@@ -64,6 +64,13 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
 
     let dynstr_address = writer.reserved_len();
     writer.reserve_dynstr();
+
+    let out_dynamic = [
+        (elf::DT_SONAME, 1, Some(soname)),
+        (elf::DT_SYMTAB, dynsym_address as u64, None),
+        (elf::DT_STRTAB, dynstr_address as u64, None),
+        (elf::DT_NULL, 0, None),
+    ];
 
     // aligned to the next multiple of 8
     let dynamic_address = next_multiple_of(writer.reserved_len(), 8);
