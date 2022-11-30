@@ -17,8 +17,6 @@ jobs:
       LIBCLANG_PATH: C:\Users\nadp6\Downloads\LLVM-13.0.1-win64\bin
       LLVM_SYS_130_PREFIX: C:\Users\nadp6\Downloads\LLVM-13.0.1-win64
       RUSTC_WRAPPER: sccache
-      SCCACHE_ERROR_LOG: C:\actions-runner\sccache_log.txt
-      SCCACHE_LOG: debug
 
     timeout-minutes: 90
     steps:

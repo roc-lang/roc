@@ -427,6 +427,7 @@ mod cli_run {
     const LINE_ENDING: &str = "\n";
 
     #[test]
+    #[cfg_attr(windows, ignore)]
     // uses C platform
     fn platform_switching_main() {
         test_roc_app_slim(
