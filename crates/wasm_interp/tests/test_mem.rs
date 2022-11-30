@@ -1,5 +1,5 @@
 use bumpalo::{collections::Vec, Bump};
-use roc_wasm_interp::{test_utils::create_exported_function_no_locals, Action, Instance};
+use roc_wasm_interp::{test_utils::create_exported_function_no_locals, Instance};
 use roc_wasm_module::{
     opcodes::OpCode,
     sections::{DataMode, DataSegment, MemorySection},
@@ -76,12 +76,10 @@ fn test_load(load_op: OpCode, ty: ValueType, data: &[u8], addr: u32, offset: u32
         std::fs::write("/tmp/roc/interp_load_test.wasm", outfile_buf).unwrap();
     }
 
-    let mut state =
-        Instance::for_module(&arena, &module, start_fn_name, is_debug_mode, []).unwrap();
-
-    while let Action::Continue = state.execute_next_instruction(&module) {}
-
-    state.value_stack.pop()
+    let mut inst = Instance::for_module(&arena, &module, is_debug_mode).unwrap();
+    inst.call_export(&module, start_fn_name, [])
+        .unwrap()
+        .unwrap()
 }
 
 #[test]
@@ -275,11 +273,10 @@ fn test_store<'a>(
         buf.append_u8(OpCode::END as u8);
     });
 
-    let mut state = Instance::for_module(arena, module, start_fn_name, is_debug_mode, []).unwrap();
+    let mut inst = Instance::for_module(&arena, &module, is_debug_mode).unwrap();
+    inst.call_export(&module, start_fn_name, []).unwrap();
 
-    while let Action::Continue = state.execute_next_instruction(module) {}
-
-    state.memory
+    inst.memory
 }
 
 #[test]

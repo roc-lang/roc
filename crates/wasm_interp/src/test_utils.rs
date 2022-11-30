@@ -1,4 +1,4 @@
-use crate::{Action, Instance};
+use crate::Instance;
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::{
     opcodes::OpCode, Export, ExportType, SerialBuffer, Signature, Value, ValueType, WasmModule,
@@ -75,11 +75,11 @@ where
         std::fs::write(&filename, outfile_buf).unwrap();
     }
 
-    let mut state = Instance::for_module(&arena, &module, "test", true, []).unwrap();
+    let mut inst = Instance::for_module(&arena, &module, true).unwrap();
 
-    while let Action::Continue = state.execute_next_instruction(&module) {}
+    let return_val = inst.call_export(&module, "test", []).unwrap().unwrap();
 
-    assert_eq!(state.value_stack.pop(), expected);
+    assert_eq!(return_val, expected);
 }
 
 pub fn create_exported_function_no_locals<'a, F>(

@@ -517,11 +517,14 @@ fn test_call_return_no_args() {
         println!("Wrote to {}", filename);
     }
 
-    let mut state = Instance::for_module(&arena, &module, start_fn_name, true, []).unwrap();
+    let mut inst = Instance::for_module(&arena, &module, true).unwrap();
 
-    while let Action::Continue = state.execute_next_instruction(&module) {}
+    let return_val = inst
+        .call_export(&module, start_fn_name, [])
+        .unwrap()
+        .unwrap();
 
-    assert_eq!(state.value_stack.peek(), Value::I32(42));
+    assert_eq!(return_val, Value::I32(42));
 }
 
 #[test]
@@ -653,12 +656,10 @@ fn test_call_indirect_help(table_index: u32, elem_index: u32) -> Value {
         .unwrap();
     }
 
-    let mut state =
-        Instance::for_module(&arena, &module, start_fn_name, is_debug_mode, []).unwrap();
-
-    while let Action::Continue = state.execute_next_instruction(&module) {}
-
-    state.value_stack.pop()
+    let mut inst = Instance::for_module(&arena, &module, is_debug_mode).unwrap();
+    inst.call_export(&module, start_fn_name, [])
+        .unwrap()
+        .unwrap()
 }
 
 // #[test]

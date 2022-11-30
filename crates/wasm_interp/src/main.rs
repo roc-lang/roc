@@ -1,7 +1,6 @@
 use bumpalo::Bump;
 use clap::ArgAction;
 use clap::{Arg, Command};
-use roc_wasm_interp::Action;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -87,41 +86,31 @@ fn main() -> io::Result<()> {
         }
     };
 
-    // Initialise the execution state
+    // Create an execution instance
 
-    let mut state = Instance::for_module(
-        &arena,
-        &module,
-        start_fn_name,
-        is_debug_mode,
-        start_arg_strings,
-    )
-    .unwrap_or_else(|e| {
+    let mut inst = Instance::for_module(&arena, &module, is_debug_mode).unwrap_or_else(|e| {
         eprintln!("{}", e);
         process::exit(2);
     });
 
     // Run
 
-    while let Action::Continue = state.execute_next_instruction(&module) {}
+    let result = inst.call_export_from_cli(&module, start_fn_name, start_arg_strings);
 
-    // Print out return value(s), if any
+    // Print out return value, if any
 
-    match state.value_stack.len() {
-        0 => {}
-        1 => {
+    match result {
+        Ok(Some(val)) => {
             if is_hex_format {
-                println!("{:#x?}", state.value_stack.pop())
+                println!("{:#x?}", val)
             } else {
-                println!("{:?}", state.value_stack.pop())
+                println!("{:?}", val)
             }
         }
-        _ => {
-            if is_hex_format {
-                println!("{:#x?}", &state.value_stack)
-            } else {
-                println!("{:?}", &state.value_stack)
-            }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("{}", e);
+            process::exit(3);
         }
     }
 
