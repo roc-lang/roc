@@ -1,22 +1,14 @@
 use crate::docs::DocEntry::DetachedDoc;
 use crate::docs::TypeAnnotation::{Apply, BoundVariable, Function, NoTypeAnn, Record, TagUnion};
-use crate::file::LoadedModule;
 use roc_can::scope::Scope;
+use roc_collections::MutMap;
 use roc_module::ident::ModuleName;
-use roc_module::symbol::IdentIds;
+use roc_module::symbol::{IdentIds, ModuleId};
 use roc_parse::ast::AssignedField;
 use roc_parse::ast::{self, ExtractSpaces, TypeHeader};
 use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};
 
 // Documentation generation requirements
-
-#[derive(Debug)]
-pub struct Documentation {
-    pub name: String,
-    pub version: String,
-    pub docs: String,
-    pub modules: Vec<LoadedModule>,
-}
 
 #[derive(Debug)]
 pub struct ModuleDocumentation {
@@ -100,8 +92,9 @@ pub fn generate_module_docs(
     scope: Scope,
     module_name: ModuleName,
     parsed_defs: &roc_parse::ast::Defs,
+    exposed_module_ids: &[ModuleId],
 ) -> ModuleDocumentation {
-    let entries = generate_entry_docs(&scope.locals.ident_ids, parsed_defs);
+    let entries = generate_entry_docs(&scope.locals.ident_ids, parsed_defs, exposed_module_ids);
 
     ModuleDocumentation {
         name: module_name.as_str().to_string(),
@@ -140,6 +133,7 @@ fn detached_docs_from_comments_and_new_lines<'a>(
 fn generate_entry_docs<'a>(
     ident_ids: &'a IdentIds,
     defs: &roc_parse::ast::Defs<'a>,
+    exposed_module_ids: &[ModuleId],
 ) -> Vec<DocEntry> {
     use roc_parse::ast::Pattern;
 
@@ -165,7 +159,7 @@ fn generate_entry_docs<'a>(
             Err(value_index) => match &defs.value_defs[value_index.index()] {
                 ValueDef::Annotation(loc_pattern, loc_ann) => {
                     if let Pattern::Identifier(identifier) = loc_pattern.value {
-                        // Check if the definition is exposed
+                        // Check if this module exposes the def
                         if ident_ids.get_id(identifier).is_some() {
                             let name = identifier.to_string();
                             let doc_def = DocDef {
