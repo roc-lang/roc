@@ -3003,7 +3003,10 @@ fn update<'a>(
                         );
                     }
 
-                    log!("re-launching specializations pass");
+                    log!(
+                        "re-launching make-specializations: pass {}",
+                        state.make_specializations_pass.current_pass() + 1
+                    );
 
                     state.make_specializations_pass.inc();
 
