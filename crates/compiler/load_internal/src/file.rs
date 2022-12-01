@@ -654,6 +654,13 @@ impl LoadedModule {
             .map(|symbol| symbol.as_str(&self.interns))
             .collect()
     }
+
+    pub fn exposed_aliases_str(&self) -> Vec<&str> {
+        self.exposed_aliases
+            .keys()
+            .map(|symbol| symbol.as_str(&self.interns))
+            .collect()
+    }
 }
 
 #[derive(Debug)]
