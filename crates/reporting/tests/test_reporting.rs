@@ -12572,4 +12572,60 @@ I recommend using camelCase. It's the standard style in Roc code!
     `crash` must be given exacly one message to crash with.
     "###
     );
+
+    test_no_problem!(
+        resolve_eq_for_unbound_num,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            n : Num *
+
+            main = n == 1
+            "#
+        )
+    );
+
+    test_report!(
+        resolve_eq_for_unbound_num_float,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            n : Num *
+
+            main = n == 1f64
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = n == 1f64
+                    ^^^^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        FloatingPoint ?
+
+    Note: I can't derive `Bool.isEq` for floating-point types. That's
+    because Roc's floating-point numbers cannot be compared for total
+    equality - in Roc, `NaN` is never comparable to `NaN`. If a type
+    doesn't support total equality, it cannot support the `Eq` ability!
+    "###
+    );
+
+    test_no_problem!(
+        resolve_hash_for_unbound_num,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            n : Num *
+
+            main = \hasher -> Hash.hash hasher n
+            "#
+        )
+    );
 }
