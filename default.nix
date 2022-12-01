@@ -1,16 +1,20 @@
-{ rev ? "093268502280540a7f5bf1e2a6330a598ba3b7d0", # nixpkgs master. Keep up to date with "nixpkgs">"locked">"rev" in flake.lock
-nixpkgsSource ? builtins.fetchTarball {
-  url = "https://github.com/nixos/nixpkgs/tarball/${rev}";
-  sha256 = "sha256-5DGKX81wIPAAiLwUmUYECpA3vop94AHHR7WmGXSsQok=";
-}, pkgs ? import nixpkgsSource { }
-, cargoSha256 ? "sha256-AH/cWRbshJI2pweoz24AXcDcz/+fM6cGHJU7V9GH/w4", }:
+{ rev ? (builtins.fromJSON (builtins.readFile ./flake.lock)).nodes.nixpkgs.locked.rev
+, nixpkgsSource ? builtins.fetchTarball {
+    url = "https://github.com/nixos/nixpkgs/tarball/${rev}";
+    sha256 = (builtins.fromJSON (builtins.readFile ./flake.lock)).nodes.nixpkgs.locked.narHash;
+  }
+, pkgs ? import nixpkgsSource { }
+, cargoSha256 ? "sha256-AH/cWRbshJI2pweoz24AXcDcz/+fM6cGHJU7V9GH/w4"
+,
+}:
 # we only this file to release a nix package, use flake.nix for development
 let
   rustPlatform = pkgs.rustPlatform;
   llvmPkgs = pkgs.llvmPackages_13;
   # nix does not store libs in /usr/lib or /lib
   nixGlibcPath = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
-in rustPlatform.buildRustPackage {
+in
+rustPlatform.buildRustPackage {
   pname = "roc";
   version = "0.0.1";
 
@@ -77,15 +81,14 @@ in rustPlatform.buildRustPackage {
 
   # cp: to copy str.zig,list.zig...
   # wrapProgram pkgs.stdenv.cc: to make ld available for compiler/build/src/link.rs
-  postInstall = if pkgs.stdenv.isLinux then ''
-    cp -r target/x86_64-unknown-linux-gnu/release/lib* $out/lib
-    wrapProgram $out/bin/roc --set NIX_GLIBC_PATH ${nixGlibcPath} --prefix PATH : ${
-      pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
-    }
-  '' else ''
-    cp -r target/aarch64-apple-darwin/release/lib* $out/lib
-    wrapProgram $out/bin/roc --prefix PATH : ${
-      pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
-    }
-  '';
+  postInstall =
+    if pkgs.stdenv.isLinux then ''
+      wrapProgram $out/bin/roc --set NIX_GLIBC_PATH ${nixGlibcPath} --prefix PATH : ${
+        pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
+      }
+    '' else ''
+      wrapProgram $out/bin/roc --prefix PATH : ${
+        pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
+      }
+    '';
 }
