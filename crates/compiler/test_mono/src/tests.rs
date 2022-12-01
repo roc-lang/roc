@@ -2049,3 +2049,20 @@ fn crash() {
         "#
     )
 }
+
+#[mono_test]
+fn function_pointer_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        number = \{} -> 1u64
+
+        parse = \parser -> parser {}
+
+        main =
+            parser = number
+            parse parser
+        "#
+    )
+}

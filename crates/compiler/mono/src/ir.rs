@@ -2479,14 +2479,70 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, cont.value)
             }
-            Var(original, _) | AbilityMember(original, _, _) => {
+            Var(original, _) | AbilityMember(original, _, _)
+                if !procs.get_partial_proc(original).is_some() =>
+            {
                 // a variable is aliased, e.g.
                 //
                 //  foo = bar
                 //
-                // or
+                // We need to generate an IR that is free of local lvalue aliasing, as this aids in
+                // refcounting. As such, variable aliasing usually involves renaming the LHS in the
+                // rest of the program with the RHS (i.e. [foo->bar]); see `handle_variable_aliasing`
+                // below for the exact algorithm.
                 //
-                //  foo = RBTRee.empty
+                // However, do not attempt to eliminate aliasing to procedures
+                // (either a function pointer or a thunk) here. Doing so is not necessary - if we
+                // have `var = f` where `f` is either a proc or thunk, in either case, `f` will be
+                // resolved to an rvalue, not an lvalue:
+                //
+                // - If `f` is a proc, we assign to `var` its closure data (even if the lambda set
+                //   of `f` is unary with no captures, we leave behind the empty closure data)
+                //
+                // - If `f` is a thunk, we force the thunk and assign to `var` its value.
+                //
+                // With this in mind, when `f` is a thunk or proper function, we are free to follow
+                // the usual (non-lvalue-aliasing) branch of assignment, and end up with correct
+                // code.
+                //
+                // ===
+                //
+                // Recording that an lvalue references a procedure or a thunk may open up
+                // opportunities for optimization - and indeed, recording this information may
+                // sometimes eliminate such unused lvalues, or inline closure data. However, in
+                // general, making sure this kind of aliasing works correctly is very difficult. As
+                // illustration, consider
+                //
+                //     getNum1 = \{} -> 1u64
+                //     getNum2 = \{} -> 2u64
+                //
+                //     dispatch = \fun -> fun {}
+                //
+                //     main =
+                //         myFun1 = getNum1
+                //         myFun2 = getNum2
+                //         dispatch (if Bool.true then myFun1 else myFun2)
+                //
+                // Suppose we leave nothing behind for the assignments `myFun* = getNum*`, and
+                // instead simply associate that they reference procs. In the if-then-else
+                // expression, we then need to construct the closure data for both getNum1 and
+                // getNum2 - but we do not know what lambdas they represent, as we only have access
+                // to the symbols `myFun1` and `myFun2`.
+                //
+                // While associations of `myFun1 -> getNum1` could be propogated, the story gets
+                // more complicated when the referenced proc itself resolves a lambda set with
+                // indirection; for example consider the amendment
+                //
+                //     getNum1 = @Dispatcher \{} -> 1u64
+                //     getNum2 = @Dispatcher \{} -> 2u64
+                //
+                // Now, even the association of `myFun1 -> getNum1` is not enough, as the lambda
+                // set of (if Bool.true then myFun1 else myFun2) would not be { getNum1, getNum2 }
+                // - it would be the binary lambda set of the anonymous closures created under the
+                // `@Dispatcher` wrappers.
+                //
+                // Trying to keep all this information in line has been error prone, and is not
+                // attempted.
 
                 // TODO: right now we need help out rustc with the closure types;
                 // it isn't able to infer the right lifetime bounds. See if we
@@ -8014,15 +8070,11 @@ where
         }
     }
 
-    // 2. Handle references to a known proc - again, we may be either aliasing the proc, or another
-    //    alias to a proc.
-    if procs.partial_procs.contains_key(right) {
-        // This is an alias to a function defined in this module.
-        // Attach the alias, then build the rest of the module, so that we reference and specialize
-        // the correct proc.
-        procs.partial_procs.insert_alias(left, right);
-        return build_rest(env, procs, layout_cache);
-    }
+    // We should never reference a partial proc - instead, we want to generate closure data and
+    // leave it there, even if the lambda set is unary. That way, we avoid having to try to resolve
+    // lambda set of the proc based on the symbol name, which can cause many problems!
+    // See my git blame for details.
+    debug_assert!(!procs.partial_procs.contains_key(right));
 
     // Otherwise we're dealing with an alias whose usages will tell us what specializations we
     // need. So let's figure those out first.
