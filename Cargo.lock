@@ -5860,7 +5860,7 @@ dependencies = [
 [[package]]
 name = "wasm3"
 version = "0.5.0"
-source = "git+https://github.com/roc-lang/wasm3-rs?rev=e43d8115dcf2d0825226819b24f555941b862d22#e43d8115dcf2d0825226819b24f555941b862d22"
+source = "git+https://github.com/roc-lang/wasm3-rs?rev=ba0cdab7404f7f2995a8c18e614ce020dabd6da0#ba0cdab7404f7f2995a8c18e614ce020dabd6da0"
 dependencies = [
  "cty",
  "wasm3-sys",
@@ -5869,7 +5869,7 @@ dependencies = [
 [[package]]
 name = "wasm3-sys"
 version = "0.5.0"
-source = "git+https://github.com/roc-lang/wasm3-rs?rev=e43d8115dcf2d0825226819b24f555941b862d22#e43d8115dcf2d0825226819b24f555941b862d22"
+source = "git+https://github.com/roc-lang/wasm3-rs?rev=ba0cdab7404f7f2995a8c18e614ce020dabd6da0#ba0cdab7404f7f2995a8c18e614ce020dabd6da0"
 dependencies = [
  "cc",
  "cty",
