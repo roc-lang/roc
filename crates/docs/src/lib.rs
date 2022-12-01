@@ -10,7 +10,7 @@ use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::slow_pool::SlowPool;
 use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::{DocEntry, TypeAnnotation};
-use roc_load::docs::{Documentation, ModuleDocumentation, RecordField};
+use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_module::symbol::{IdentIdsByModule, Interns, ModuleId};
 use roc_packaging::cache::{self, RocCacheDir};
@@ -25,21 +25,20 @@ mod html;
 
 const BUILD_DIR: &str = "./generated-docs";
 
-pub fn generate_docs_html(filenames: Vec<PathBuf>) {
+pub fn generate_docs_html(root_file: PathBuf) {
     let build_dir = Path::new(BUILD_DIR);
-    let loaded_modules = load_modules_for_files(filenames);
+    let loaded_module = load_module_for_docs(root_file);
 
-    // TODO: get info from a package module; this is all hardcoded for now.
-    let package = Documentation {
-        name: "documentation".to_string(),
-        version: "".to_string(),
-        docs: "Package introduction or README.".to_string(),
-        modules: loaded_modules,
-    };
+    // TODO get these from the platform's source file rather than hardcoding them!
+    let package_name = "Documentation".to_string();
+    let version = String::new();
 
-    if !build_dir.exists() {
-        fs::create_dir_all(build_dir).expect("TODO gracefully handle unable to create build dir");
+    // Clear out the generated-docs dir (we'll create a fresh one at the end)
+    if build_dir.exists() {
+        fs::remove_dir_all(build_dir)
+            .expect("TODO gracefully handle being unable to delete build dir");
     }
+    fs::create_dir_all(build_dir).expect("TODO gracefully handle being unable to create build dir");
 
     // Copy over the assets
     fs::write(
@@ -60,29 +59,18 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
     )
     .expect("TODO gracefully handle failing to make the favicon");
 
-    let module_pairs = package.modules.iter().flat_map(|loaded_module| {
-        loaded_module
-            .documentation
-            .iter()
-            .filter_map(move |(module_id, module)| {
-                // TODO it seems this `documentation` dictionary has entries for
-                // every module, but only the current module has any info in it.
-                // We disregard the others, but probably this shouldn't bother
-                // being a hash map in the first place if only one of its entries
-                // actually has interesting information in it?
-                if *module_id == loaded_module.module_id {
-                    let exposed_values = loaded_module
-                        .exposed_values
-                        .iter()
-                        .map(|symbol| symbol.as_str(&loaded_module.interns).to_string())
-                        .collect::<Vec<String>>();
+    let module_pairs = loaded_module
+        .documentation
+        .iter()
+        .flat_map(|(module_id, module)| {
+            let exposed_values = loaded_module
+                .exposed_values
+                .iter()
+                .map(|symbol| symbol.as_str(&loaded_module.interns).to_string())
+                .collect::<Vec<String>>();
 
-                    Some((module, exposed_values))
-                } else {
-                    None
-                }
-            })
-    });
+            Some((module, exposed_values))
+        });
 
     let template_html = include_str!("./static/index.html")
         .replace("<!-- search.js -->", "/search.js")
@@ -93,7 +81,7 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
             &module_pairs
                 .clone()
                 .map(|(module, _)| {
-                    let href = sidebar_link_url(module);
+                    let href = sidebar_link_url(module.name.as_str());
 
                     format!(r#"<link rel="prefetch" href="{href}"/>"#)
                 })
@@ -106,48 +94,40 @@ pub fn generate_docs_html(filenames: Vec<PathBuf>) {
         );
 
     // Write each package's module docs html file
-    for loaded_module in package.modules.iter() {
-        for (module_id, module_docs) in loaded_module.documentation.iter() {
-            if *module_id == loaded_module.module_id {
-                let module_dir = build_dir.join(module_docs.name.replace('.', "/").as_str());
+    for (module_id, module_docs) in loaded_module.documentation.iter() {
+        let module_name = module_docs.name.as_str();
+        let module_dir = build_dir.join(module_name.replace('.', "/").as_str());
 
-                fs::create_dir_all(&module_dir)
-                    .expect("TODO gracefully handle not being able to create the module dir");
+        fs::create_dir_all(&module_dir)
+            .expect("TODO gracefully handle not being able to create the module dir");
 
-                let rendered_module = template_html
-                    .replace(
-                        "<!-- Page title -->",
-                        page_title(&package, module_docs).as_str(),
-                    )
-                    .replace(
-                        "<!-- Package Name and Version -->",
-                        render_name_and_version(package.name.as_str(), package.version.as_str())
-                            .as_str(),
-                    )
-                    .replace(
-                        "<!-- Module Docs -->",
-                        render_module_documentation(module_docs, loaded_module).as_str(),
-                    );
+        let rendered_module = template_html
+            .replace(
+                "<!-- Page title -->",
+                page_title(package_name.as_str(), module_name).as_str(),
+            )
+            .replace(
+                "<!-- Package Name and Version -->",
+                render_name_and_version(package_name.as_str(), version.as_str()).as_str(),
+            )
+            .replace(
+                "<!-- Module Docs -->",
+                render_module_documentation(module_docs, &loaded_module).as_str(),
+            );
 
-                fs::write(module_dir.join("index.html"), rendered_module).expect(
-                    "TODO gracefully handle failing to write index.html inside module's dir",
-                );
-            }
-        }
+        fs::write(module_dir.join("index.html"), rendered_module)
+            .expect("TODO gracefully handle failing to write index.html inside module's dir");
     }
 
     println!("🎉 Docs generated in {}", build_dir.display());
 }
 
-fn sidebar_link_url(module: &ModuleDocumentation) -> String {
-    format!("{}{}", base_url(), module.name.as_str())
+fn sidebar_link_url(module_name: &str) -> String {
+    format!("{}{}", base_url(), module_name)
 }
 
-fn page_title(package: &Documentation, module: &ModuleDocumentation) -> String {
-    let package_name = &package.name;
-    let module_name = &module.name;
-    let title = format!("<title>{module_name} - {package_name}</title>");
-    title
+fn page_title(package_name: &str, module_name: &str) -> String {
+    format!("<title>{module_name} - {package_name}</title>")
 }
 
 // converts plain-text code to highlighted html
@@ -222,12 +202,8 @@ fn render_module_documentation(
                 if should_render_entry {
                     buf.push_str("<section>");
 
-                    let mut href = String::new();
-                    href.push('#');
-                    href.push_str(doc_def.name.as_str());
-
                     let name = doc_def.name.as_str();
-
+                    let href = format!("#{name}");
                     let mut content = String::new();
 
                     content.push_str(
@@ -241,14 +217,10 @@ fn render_module_documentation(
 
                     let type_ann = &doc_def.type_annotation;
 
-                    match type_ann {
-                        TypeAnnotation::NoTypeAnn => {}
-                        _ => {
-                            content.push_str(" : ");
-                        }
+                    if !matches!(type_ann, TypeAnnotation::NoTypeAnn) {
+                        content.push_str(" : ");
+                        type_annotation_to_html(0, &mut content, type_ann, false);
                     }
-
-                    type_annotation_to_html(0, &mut content, type_ann, false);
 
                     buf.push_str(
                         html_to_string(
@@ -388,7 +360,7 @@ fn render_sidebar<'a, I: Iterator<Item = (&'a ModuleDocumentation, Vec<String>)>
     let mut buf = String::new();
 
     for (module, exposed_values) in modules {
-        let href = sidebar_link_url(module);
+        let href = sidebar_link_url(module.name.as_str());
         let mut sidebar_entry_content = String::new();
 
         sidebar_entry_content.push_str(
@@ -449,35 +421,29 @@ fn render_sidebar<'a, I: Iterator<Item = (&'a ModuleDocumentation, Vec<String>)>
     buf
 }
 
-pub fn load_modules_for_files(filenames: Vec<PathBuf>) -> Vec<LoadedModule> {
+pub fn load_module_for_docs(filename: PathBuf) -> LoadedModule {
     let arena = Bump::new();
-    let mut modules = Vec::with_capacity(filenames.len());
-
-    for filename in filenames {
-        let load_config = LoadConfig {
-            target_info: roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
-            render: roc_reporting::report::RenderTarget::ColorTerminal,
-            palette: roc_reporting::report::DEFAULT_PALETTE,
-            threading: Threading::AllAvailable,
-            exec_mode: ExecutionMode::Check,
-        };
-        match roc_load::load_and_typecheck(
-            &arena,
-            filename,
-            Default::default(),
-            RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
-            load_config,
-        ) {
-            Ok(loaded) => modules.push(loaded),
-            Err(LoadingProblem::FormattedReport(report)) => {
-                eprintln!("{}", report);
-                std::process::exit(1);
-            }
-            Err(e) => panic!("{:?}", e),
+    let load_config = LoadConfig {
+        target_info: roc_target::TargetInfo::default_x86_64(), // This is just type-checking for docs, so "target" doesn't matter
+        render: roc_reporting::report::RenderTarget::ColorTerminal,
+        palette: roc_reporting::report::DEFAULT_PALETTE,
+        threading: Threading::AllAvailable,
+        exec_mode: ExecutionMode::Check,
+    };
+    match roc_load::load_and_typecheck(
+        &arena,
+        filename,
+        Default::default(),
+        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        load_config,
+    ) {
+        Ok(loaded) => loaded,
+        Err(LoadingProblem::FormattedReport(report)) => {
+            eprintln!("{}", report);
+            std::process::exit(1);
         }
+        Err(e) => panic!("{:?}", e),
     }
-
-    modules
 }
 
 const INDENT: &str = "    ";
