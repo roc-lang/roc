@@ -565,7 +565,6 @@ pub fn parse_single_def<'a>(
 
     let start = state.pos();
 
-    let parse_dbg = crate::parser::keyword_e(crate::keyword::DBG, EExpect::Dbg);
     let parse_expect_vanilla = crate::parser::keyword_e(crate::keyword::EXPECT, EExpect::Expect);
     let parse_expect_fx = crate::parser::keyword_e(crate::keyword::EXPECT_FX, EExpect::Expect);
     let parse_expect = either!(parse_expect_fx, parse_expect_vanilla);
@@ -578,24 +577,8 @@ pub fn parse_single_def<'a>(
         Err((NoProgress, _)) => {
             match parse_expect.parse(arena, state.clone(), min_indent) {
                 Err((_, _)) => {
-                    match parse_dbg.parse(arena, state, min_indent) {
-                        Ok((_, _, state)) => parse_statement_inside_def(
-                            arena,
-                            state,
-                            min_indent,
-                            start,
-                            spaces_before_current_start,
-                            spaces_before_current,
-                            |preceding_comment, loc_def_expr| ValueDef::Dbg {
-                                condition: arena.alloc(loc_def_expr),
-                                preceding_comment,
-                            },
-                        ),
-                        Err((_, _)) => {
-                            // a hacky way to get expression-based error messages. TODO fix this
-                            Ok((NoProgress, None, initial))
-                        }
-                    }
+                    // a hacky way to get expression-based error messages. TODO fix this
+                    Ok((NoProgress, None, initial))
                 }
                 Ok((_, expect_flavor, state)) => parse_statement_inside_def(
                     arena,
@@ -1089,10 +1072,10 @@ fn opaque_signature_with_space_before<'a>(
                 EType::TIndentStart,
             ),
         ),
-        optional(specialize(
+        optional(backtrackable(specialize(
             EExpr::Type,
             space0_before_e(type_annotation::has_abilities(), EType::TIndentStart,),
-        ))
+        )))
     )
 }
 
@@ -2557,7 +2540,7 @@ fn record_help<'a>() -> impl Parser<
         and!(
             // You can optionally have an identifier followed by an '&' to
             // make this a record update, e.g. { Foo.user & username: "blah" }.
-            optional(skip_second!(
+            optional(backtrackable(skip_second!(
                 space0_around_ee(
                     // We wrap the ident in an Expr here,
                     // so that we have a Spaceable value to work with,
@@ -2568,7 +2551,7 @@ fn record_help<'a>() -> impl Parser<
                     ERecord::IndentAmpersand,
                 ),
                 word1(b'&', ERecord::Ampersand)
-            )),
+            ))),
             loc!(skip_first!(
                 // We specifically allow space characters inside here, so that
                 // `{  }` can be successfully parsed as an empty record, and then

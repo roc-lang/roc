@@ -852,13 +852,14 @@ where
             self.message
         );
 
+        let previous_state = state.clone();
         INDENT.with(|i| *i.borrow_mut() += 1);
         let res = self.parser.parse(arena, state, min_indent);
         INDENT.with(|i| *i.borrow_mut() = cur_indent);
 
         let (progress, value, state) = match &res {
             Ok((progress, result, state)) => (progress, Ok(result), state),
-            Err((progress, error)) => (progress, Err(error), state),
+            Err((progress, error)) => (progress, Err(error), &previous_state),
         };
 
         println!(
@@ -1229,11 +1230,8 @@ where
 
         match parser.parse(arena, state, min_indent) {
             Ok((progress, out1, state)) => Ok((progress, Some(out1), state)),
-            Err((_, _)) => {
-                // NOTE this will backtrack
-                // TODO can we get rid of some of the potential backtracking?
-                Ok((NoProgress, None, original_state))
-            }
+            Err((MadeProgress, e)) => Err((MadeProgress, e)),
+            Err((NoProgress, _)) => Ok((NoProgress, None, original_state)),
         }
     }
 }
@@ -1435,6 +1433,25 @@ macro_rules! and {
     };
 }
 
+/// Take as input something that looks like a struct literal where values are parsers
+/// and return a parser that runs each parser and returns a struct literal with the
+/// results.
+#[macro_export]
+macro_rules! record {
+    ($name:ident $(:: $name_ext:ident)* { $($field:ident: $parser:expr),* $(,)? }) => {
+        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
+            let mut state = state;
+            let mut progress = NoProgress;
+            $(
+                let (new_progress, $field, new_state) = $parser.parse(arena, state, min_indent)?;
+                state = new_state;
+                progress = progress.or(new_progress);
+            )*
+            Ok((progress, $name $(:: $name_ext)* { $($field),* }, state))
+        }
+    };
+}
+
 /// Similar to `and`, but we modify the min_indent of the second parser to be
 /// 1 greater than the line_indent() at the start of the first parser.
 #[macro_export]
@@ -1504,21 +1521,6 @@ macro_rules! one_of {
     };
     ($p1:expr, $($others:expr),+ $(,)?) => {
         one_of!($p1, $($others),+)
-    };
-}
-
-#[macro_export]
-macro_rules! maybe {
-    ($p1:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
-            let original_state = state.clone();
-
-            match $p1.parse(arena, state, min_indent) {
-                Ok((progress, value, state)) => Ok((progress, Some(value), state)),
-                Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
-                Err((NoProgress, _)) => Ok((NoProgress, None, original_state)),
-            }
-        }
     };
 }
 

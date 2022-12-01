@@ -235,14 +235,7 @@ mod cli_run {
                         )
                     }
                 }
-                CliMode::Roc => {
-                    if !extra_env.is_empty() {
-                        // TODO: `roc` and `roc dev` are currently buggy for `env.roc`
-                        continue;
-                    }
-
-                    run_roc_on(file, flags.clone(), stdin, roc_app_args, extra_env)
-                }
+                CliMode::Roc => run_roc_on(file, flags.clone(), stdin, roc_app_args, extra_env),
                 CliMode::RocRun => run_roc_on(
                     file,
                     iter::once(CMD_RUN).chain(flags.clone()),

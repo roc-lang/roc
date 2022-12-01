@@ -1,13 +1,13 @@
-use crate::ast::{Collection, CommentOrNewline, Spaced, StrLiteral, TypeAnnotation};
+use crate::ast::{Collection, CommentOrNewline, Spaced, Spaces, StrLiteral, TypeAnnotation};
 use crate::blankspace::space0_e;
 use crate::ident::{lowercase_ident, UppercaseIdent};
-use crate::parser::Progress::*;
+use crate::parser::{optional, then};
 use crate::parser::{specialize, word1, EPackageEntry, EPackageName, Parser};
-use crate::state::State;
 use crate::string_literal;
 use bumpalo::collections::Vec;
 use roc_module::symbol::Symbol;
 use roc_region::all::Loc;
+use std::fmt::Debug;
 
 #[derive(Debug)]
 pub enum HeaderFor<'a> {
@@ -124,40 +124,61 @@ impl<'a> ExposedName<'a> {
     }
 }
 
+pub trait Keyword: Copy + Clone + Debug {
+    const KEYWORD: &'static str;
+}
+
+macro_rules! keywords {
+    ($($name:ident => $string:expr),* $(,)?) => {
+        $(
+            #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+            pub struct $name;
+
+            impl Keyword for $name {
+                const KEYWORD: &'static str = $string;
+            }
+        )*
+    }
+}
+
+keywords! {
+    ExposesKeyword => "exposes",
+    ImportsKeyword => "imports",
+    WithKeyword => "with",
+    GeneratesKeyword => "generates",
+    PackageKeyword => "package",
+    PackagesKeyword => "packages",
+    RequiresKeyword => "requires",
+    ProvidesKeyword => "provides",
+    ToKeyword => "to",
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeywordItem<'a, K, V> {
+    pub keyword: Spaces<'a, K>,
+    pub item: V,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct InterfaceHeader<'a> {
+    pub before_name: &'a [CommentOrNewline<'a>],
     pub name: Loc<ModuleName<'a>>,
-    pub exposes: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
-    pub imports: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
 
-    // Potential comments and newlines - these will typically all be empty.
-    pub before_header: &'a [CommentOrNewline<'a>],
-    pub after_interface_keyword: &'a [CommentOrNewline<'a>],
-    pub before_exposes: &'a [CommentOrNewline<'a>],
-    pub after_exposes: &'a [CommentOrNewline<'a>],
-    pub before_imports: &'a [CommentOrNewline<'a>],
-    pub after_imports: &'a [CommentOrNewline<'a>],
+    pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
+    pub imports: KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostedHeader<'a> {
+    pub before_name: &'a [CommentOrNewline<'a>],
     pub name: Loc<ModuleName<'a>>,
-    pub exposes: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
-    pub imports: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
-    pub generates: UppercaseIdent<'a>,
-    pub generates_with: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
 
-    // Potential comments and newlines - these will typically all be empty.
-    pub before_header: &'a [CommentOrNewline<'a>],
-    pub after_hosted_keyword: &'a [CommentOrNewline<'a>],
-    pub before_exposes: &'a [CommentOrNewline<'a>],
-    pub after_exposes: &'a [CommentOrNewline<'a>],
-    pub before_imports: &'a [CommentOrNewline<'a>],
-    pub after_imports: &'a [CommentOrNewline<'a>],
-    pub before_generates: &'a [CommentOrNewline<'a>],
-    pub after_generates: &'a [CommentOrNewline<'a>],
-    pub before_with: &'a [CommentOrNewline<'a>],
-    pub after_with: &'a [CommentOrNewline<'a>],
+    pub imports: KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
+
+    pub generates: KeywordItem<'a, GeneratesKeyword, UppercaseIdent<'a>>,
+    pub generates_with:
+        KeywordItem<'a, WithKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -168,42 +189,39 @@ pub enum To<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppHeader<'a> {
+    pub before_name: &'a [CommentOrNewline<'a>],
     pub name: Loc<StrLiteral<'a>>,
-    pub packages: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
-    pub imports: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
-    pub provides: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
-    pub provides_types: Option<Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>>,
-    pub to: Loc<To<'a>>,
 
-    // Potential comments and newlines - these will typically all be empty.
-    pub before_header: &'a [CommentOrNewline<'a>],
-    pub after_app_keyword: &'a [CommentOrNewline<'a>],
-    pub before_packages: &'a [CommentOrNewline<'a>],
-    pub after_packages: &'a [CommentOrNewline<'a>],
-    pub before_imports: &'a [CommentOrNewline<'a>],
-    pub after_imports: &'a [CommentOrNewline<'a>],
-    pub before_provides: &'a [CommentOrNewline<'a>],
-    pub after_provides: &'a [CommentOrNewline<'a>],
-    pub before_to: &'a [CommentOrNewline<'a>],
-    pub after_to: &'a [CommentOrNewline<'a>],
+    pub packages:
+        Option<KeywordItem<'a, PackagesKeyword, Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>>,
+    pub imports:
+        Option<KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>>,
+    pub provides: ProvidesTo<'a>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProvidesTo<'a> {
+    pub provides_keyword: Spaces<'a, ProvidesKeyword>,
+    pub entries: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+    pub types: Option<Collection<'a, Loc<Spaced<'a, UppercaseIdent<'a>>>>>,
+
+    pub to_keyword: Spaces<'a, ToKeyword>,
+    pub to: Loc<To<'a>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PackageHeader<'a> {
+    pub before_name: &'a [CommentOrNewline<'a>],
     pub name: Loc<PackageName<'a>>,
-    pub exposes: Vec<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
-    pub packages: Vec<'a, (Loc<&'a str>, Loc<PackageName<'a>>)>,
-    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 
-    // Potential comments and newlines - these will typically all be empty.
-    pub before_header: &'a [CommentOrNewline<'a>],
-    pub after_package_keyword: &'a [CommentOrNewline<'a>],
-    pub before_exposes: &'a [CommentOrNewline<'a>],
-    pub after_exposes: &'a [CommentOrNewline<'a>],
-    pub before_packages: &'a [CommentOrNewline<'a>],
-    pub after_packages: &'a [CommentOrNewline<'a>],
-    pub before_imports: &'a [CommentOrNewline<'a>],
-    pub after_imports: &'a [CommentOrNewline<'a>],
+    pub exposes_keyword: Spaces<'a, ExposesKeyword>,
+    pub exposes: Vec<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+
+    pub packages_keyword: Spaces<'a, PackagesKeyword>,
+    pub packages: Vec<'a, (Loc<&'a str>, Loc<PackageName<'a>>)>,
+
+    pub imports_keyword: Spaces<'a, ImportsKeyword>,
+    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -214,26 +232,16 @@ pub struct PlatformRequires<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlatformHeader<'a> {
+    pub before_name: &'a [CommentOrNewline<'a>],
     pub name: Loc<PackageName<'a>>,
-    pub requires: PlatformRequires<'a>,
-    pub exposes: Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>,
-    pub packages: Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>,
-    pub imports: Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>,
-    pub provides: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
 
-    // Potential comments and newlines - these will typically all be empty.
-    pub before_header: &'a [CommentOrNewline<'a>],
-    pub after_platform_keyword: &'a [CommentOrNewline<'a>],
-    pub before_requires: &'a [CommentOrNewline<'a>],
-    pub after_requires: &'a [CommentOrNewline<'a>],
-    pub before_exposes: &'a [CommentOrNewline<'a>],
-    pub after_exposes: &'a [CommentOrNewline<'a>],
-    pub before_packages: &'a [CommentOrNewline<'a>],
-    pub after_packages: &'a [CommentOrNewline<'a>],
-    pub before_imports: &'a [CommentOrNewline<'a>],
-    pub after_imports: &'a [CommentOrNewline<'a>],
-    pub before_provides: &'a [CommentOrNewline<'a>],
-    pub after_provides: &'a [CommentOrNewline<'a>],
+    pub requires: KeywordItem<'a, RequiresKeyword, PlatformRequires<'a>>,
+    pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>>,
+    pub packages:
+        KeywordItem<'a, PackagesKeyword, Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>,
+    pub imports: KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
+    pub provides:
+        KeywordItem<'a, ProvidesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -270,50 +278,47 @@ pub struct PackageEntry<'a> {
 }
 
 pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPackageEntry<'a>> {
-    move |arena, state, min_indent| {
+    map!(
         // You may optionally have a package shorthand,
         // e.g. "uc" in `uc: roc/unicode 1.0.0`
         //
         // (Indirect dependencies don't have a shorthand.)
-        let (_, opt_shorthand, state) = maybe!(and!(
-            skip_second!(
-                specialize(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
-                word1(b':', EPackageEntry::Colon)
-            ),
-            space0_e(EPackageEntry::IndentPackage)
-        ))
-        .parse(arena, state, min_indent)?;
-
-        let (_, package_or_path, state) =
+        and!(
+            optional(and!(
+                skip_second!(
+                    specialize(|_, pos| EPackageEntry::Shorthand(pos), lowercase_ident()),
+                    word1(b':', EPackageEntry::Colon)
+                ),
+                space0_e(EPackageEntry::IndentPackage)
+            )),
             loc!(specialize(EPackageEntry::BadPackage, package_name()))
-                .parse(arena, state, min_indent)?;
+        ),
+        move |(opt_shorthand, package_or_path)| {
+            let entry = match opt_shorthand {
+                Some((shorthand, spaces_after_shorthand)) => PackageEntry {
+                    shorthand,
+                    spaces_after_shorthand,
+                    package_name: package_or_path,
+                },
+                None => PackageEntry {
+                    shorthand: "",
+                    spaces_after_shorthand: &[],
+                    package_name: package_or_path,
+                },
+            };
 
-        let entry = match opt_shorthand {
-            Some((shorthand, spaces_after_shorthand)) => PackageEntry {
-                shorthand,
-                spaces_after_shorthand,
-                package_name: package_or_path,
-            },
-            None => PackageEntry {
-                shorthand: "",
-                spaces_after_shorthand: &[],
-                package_name: package_or_path,
-            },
-        };
-
-        Ok((MadeProgress, Spaced::Item(entry), state))
-    }
+            Spaced::Item(entry)
+        }
+    )
 }
 
 pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> {
-    move |arena, state: State<'a>, min_indent: u32| {
-        let pos = state.pos();
-        specialize(EPackageName::BadPath, string_literal::parse())
-            .parse(arena, state, min_indent)
-            .and_then(|(progress, text, next_state)| match text {
-                StrLiteral::PlainLine(text) => Ok((progress, PackageName(text), next_state)),
-                StrLiteral::Line(_) => Err((progress, EPackageName::Escapes(pos))),
-                StrLiteral::Block(_) => Err((progress, EPackageName::Multiline(pos))),
-            })
-    }
+    then(
+        loc!(specialize(EPackageName::BadPath, string_literal::parse())),
+        move |_arena, state, progress, text| match text.value {
+            StrLiteral::PlainLine(text) => Ok((progress, PackageName(text), state)),
+            StrLiteral::Line(_) => Err((progress, EPackageName::Escapes(text.region.start()))),
+            StrLiteral::Block(_) => Err((progress, EPackageName::Multiline(text.region.start()))),
+        },
+    )
 }
