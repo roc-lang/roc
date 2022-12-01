@@ -12594,7 +12594,7 @@ I recommend using camelCase. It's the standard style in Roc code!
 
             n : Num *
 
-            main = n == 1.
+            main = n == 1f64
             "#
         ),
     @r###"
@@ -12602,12 +12602,12 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│  main = n == 1.
-                    ^^
+    5│  main = n == 1f64
+                    ^^^^
 
     I can't generate an implementation of the `Eq` ability for
 
-        FloatingPoint *
+        FloatingPoint ?
 
     Note: I can't derive `Bool.isEq` for floating-point types. That's
     because Roc's floating-point numbers cannot be compared for total

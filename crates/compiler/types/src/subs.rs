@@ -1588,7 +1588,7 @@ fn float_type(
                 num_binary64,
                 AliasVariables::default(),
                 Variable::EMPTY_TAG_UNION,
-                AliasKind::Structural,
+                AliasKind::Opaque,
             )
         });
     }
