@@ -12572,4 +12572,30 @@ I recommend using camelCase. It's the standard style in Roc code!
     `crash` must be given exacly one message to crash with.
     "###
     );
+
+    test_no_problem!(
+        resolve_eq_for_unbound_num,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            n : Num *
+
+            main = n == 1
+            "#
+        )
+    );
+
+    test_no_problem!(
+        resolve_hash_for_unbound_num,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            n : Num *
+
+            main = \hasher -> Hash.hash hasher n
+            "#
+        )
+    );
 }
