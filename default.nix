@@ -3,7 +3,7 @@ nixpkgsSource ? builtins.fetchTarball {
   url = "https://github.com/nixos/nixpkgs/tarball/${rev}";
   sha256 = "sha256-5DGKX81wIPAAiLwUmUYECpA3vop94AHHR7WmGXSsQok=";
 }, pkgs ? import nixpkgsSource { }
-, cargoSha256 ? "sha256-Qmriwe+xSL5/pU8oqqj5Qw6H179KYqOljWl0rpPD6MY=", }:
+, cargoSha256 ? "sha256-AH/cWRbshJI2pweoz24AXcDcz/+fM6cGHJU7V9GH/w4", }:
 # we only this file to release a nix package, use flake.nix for development
 let
   rustPlatform = pkgs.rustPlatform;
@@ -78,12 +78,12 @@ in rustPlatform.buildRustPackage {
   # cp: to copy str.zig,list.zig...
   # wrapProgram pkgs.stdenv.cc: to make ld available for compiler/build/src/link.rs
   postInstall = if pkgs.stdenv.isLinux then ''
-    cp -r target/x86_64-unknown-linux-gnu/release/lib/. $out/lib
+    cp -r target/x86_64-unknown-linux-gnu/release/lib* $out/lib
     wrapProgram $out/bin/roc --set NIX_GLIBC_PATH ${nixGlibcPath} --prefix PATH : ${
       pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
     }
   '' else ''
-    cp -r target/aarch64-apple-darwin/release/lib/. $out/lib
+    cp -r target/aarch64-apple-darwin/release/lib* $out/lib
     wrapProgram $out/bin/roc --prefix PATH : ${
       pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
     }
