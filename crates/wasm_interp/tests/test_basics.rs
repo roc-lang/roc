@@ -2,7 +2,7 @@
 
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_interp::test_utils::{const_value, create_exported_function_no_locals, default_state};
-use roc_wasm_interp::{Action, Instance, ValueStack};
+use roc_wasm_interp::{Action, Instance, ValueStack, DEFAULT_IMPORTS};
 use roc_wasm_module::{
     opcodes::OpCode, sections::ElementSegment, Export, ExportType, SerialBuffer, Serialize,
     Signature, Value, ValueType, WasmModule,
@@ -517,7 +517,7 @@ fn test_call_return_no_args() {
         println!("Wrote to {}", filename);
     }
 
-    let mut inst = Instance::for_module(&arena, &module, true).unwrap();
+    let mut inst = Instance::for_module(&arena, &module, DEFAULT_IMPORTS, true).unwrap();
 
     let return_val = inst
         .call_export(&module, start_fn_name, [])
@@ -656,7 +656,7 @@ fn test_call_indirect_help(table_index: u32, elem_index: u32) -> Value {
         .unwrap();
     }
 
-    let mut inst = Instance::for_module(&arena, &module, is_debug_mode).unwrap();
+    let mut inst = Instance::for_module(&arena, &module, DEFAULT_IMPORTS, is_debug_mode).unwrap();
     inst.call_export(&module, start_fn_name, [])
         .unwrap()
         .unwrap()

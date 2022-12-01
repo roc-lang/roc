@@ -10,6 +10,7 @@ use roc_wasm_module::{Value, ValueType};
 
 use crate::call_stack::CallStack;
 use crate::value_stack::ValueStack;
+use crate::ImportDispatcher;
 
 pub enum Action {
     Continue,
@@ -17,7 +18,7 @@ pub enum Action {
 }
 
 #[derive(Debug)]
-pub struct Instance<'a> {
+pub struct Instance<'a, I: ImportDispatcher> {
     /// Contents of the WebAssembly instance's memory
     pub memory: Vec<'a, u8>,
     /// Metadata for every currently-active function call
@@ -34,12 +35,22 @@ pub struct Instance<'a> {
     outermost_block: u32,
     /// Signature indices (in the TypeSection) of all imported (non-WebAssembly) functions
     import_signatures: Vec<'a, u32>,
+    /// Import dispatcher from user code
+    import_dispatcher: I,
+    /// Temporary storage for import arguments
+    import_arguments: Vec<'a, Value>,
     /// temporary storage for output using the --debug option
     debug_string: Option<String>,
 }
 
-impl<'a> Instance<'a> {
-    pub fn new<G>(arena: &'a Bump, memory_pages: u32, program_counter: usize, globals: G) -> Self
+impl<'a, I: ImportDispatcher> Instance<'a, I> {
+    pub fn new<G>(
+        arena: &'a Bump,
+        memory_pages: u32,
+        program_counter: usize,
+        globals: G,
+        import_dispatcher: I,
+    ) -> Self
     where
         G: IntoIterator<Item = Value>,
     {
@@ -53,6 +64,8 @@ impl<'a> Instance<'a> {
             block_loop_addrs: Vec::new_in(arena),
             outermost_block: 0,
             import_signatures: Vec::new_in(arena),
+            import_dispatcher,
+            import_arguments: Vec::new_in(arena),
             debug_string: Some(String::new()),
         }
     }
@@ -60,6 +73,7 @@ impl<'a> Instance<'a> {
     pub fn for_module(
         arena: &'a Bump,
         module: &WasmModule<'a>,
+        import_dispatcher: I,
         is_debug_mode: bool,
     ) -> Result<Self, std::string::String> {
         let mem_bytes = module.memory.min_bytes().map_err(|e| {
@@ -101,6 +115,8 @@ impl<'a> Instance<'a> {
             block_loop_addrs: Vec::new_in(arena),
             outermost_block: 0,
             import_signatures,
+            import_dispatcher,
+            import_arguments: Vec::new_in(arena),
             debug_string,
         })
     }
@@ -336,22 +352,51 @@ impl<'a> Instance<'a> {
 
         let arg_type_bytes = module.types.look_up_arg_type_bytes(signature_index);
 
-        let return_addr = self.program_counter as u32;
-        self.program_counter = module.code.function_offsets[fn_index] as usize;
+        if fn_index < n_imports {
+            // Call an imported non-Wasm function
+            let mut import_fns = module.import.imports.iter().filter(|imp| imp.is_function());
+            let import = import_fns
+                .nth(fn_index)
+                .unwrap_or_else(|| unreachable!("Imported function {} not found", fn_index));
 
-        let return_block_depth = self.outermost_block;
-        self.outermost_block = self.block_loop_addrs.len() as u32;
+            self.import_arguments.clear();
+            self.import_arguments
+                .extend(std::iter::repeat(Value::I64(0)).take(arg_type_bytes.len()));
+            for (i, type_byte) in arg_type_bytes.iter().copied().enumerate().rev() {
+                let arg = self.value_stack.pop();
+                assert_eq!(ValueType::from(arg), ValueType::from(type_byte));
+                self.import_arguments[i] = arg;
+            }
 
-        let _function_byte_length =
-            u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
-        self.call_stack.push_frame(
-            return_addr,
-            return_block_depth,
-            arg_type_bytes,
-            &mut self.value_stack,
-            &module.code.bytes,
-            &mut self.program_counter,
-        );
+            let optional_return_val = self.import_dispatcher.dispatch(
+                import.module,
+                import.name,
+                &self.import_arguments,
+                &mut self.memory,
+            );
+            if let Some(return_val) = optional_return_val {
+                self.value_stack.push(return_val);
+            }
+            return;
+        } else {
+            // call an internal Wasm function
+            let return_addr = self.program_counter as u32;
+            self.program_counter = module.code.function_offsets[fn_index] as usize;
+
+            let return_block_depth = self.outermost_block;
+            self.outermost_block = self.block_loop_addrs.len() as u32;
+
+            let _function_byte_length =
+                u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
+            self.call_stack.push_frame(
+                return_addr,
+                return_block_depth,
+                arg_type_bytes,
+                &mut self.value_stack,
+                &module.code.bytes,
+                &mut self.program_counter,
+            );
+        }
     }
 
     pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) -> Action {

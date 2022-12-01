@@ -6,7 +6,7 @@ use std::fs;
 use std::io;
 use std::process;
 
-use roc_wasm_interp::Instance;
+use roc_wasm_interp::{Instance, DEFAULT_IMPORTS};
 use roc_wasm_module::WasmModule;
 
 pub const FLAG_FUNCTION: &str = "function";
@@ -88,10 +88,11 @@ fn main() -> io::Result<()> {
 
     // Create an execution instance
 
-    let mut inst = Instance::for_module(&arena, &module, is_debug_mode).unwrap_or_else(|e| {
-        eprintln!("{}", e);
-        process::exit(2);
-    });
+    let mut inst = Instance::for_module(&arena, &module, DEFAULT_IMPORTS, is_debug_mode)
+        .unwrap_or_else(|e| {
+            eprintln!("{}", e);
+            process::exit(2);
+        });
 
     // Run
 
