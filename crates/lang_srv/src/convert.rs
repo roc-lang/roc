@@ -147,6 +147,12 @@ pub(crate) mod diag {
                 LoadingProblem::IncorrectModuleName(_) => {
                     msg = format!("Incorrect module name");
                 }
+                LoadingProblem::CouldNotFindCacheDir => {
+                    msg = format!(
+                        "Could not find Roc cache directory {}",
+                        roc_packaging::cache::roc_cache_dir().display()
+                    );
+                }
             };
 
             Some(Diagnostic {

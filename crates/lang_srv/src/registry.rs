@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use bumpalo::Bump;
 use roc_load::{LoadedModule, LoadingProblem};
+use roc_packaging::cache::{self, RocCacheDir};
 use roc_region::all::{LineInfo, Region};
 use roc_reporting::report::RocDocAllocator;
 use roc_types::subs::Variable;
@@ -76,6 +77,7 @@ impl Document {
             Default::default(),
             roc_target::TargetInfo::default_x86_64(),
             roc_reporting::report::RenderTarget::Generic,
+            RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
             roc_reporting::report::DEFAULT_PALETTE,
         );
 

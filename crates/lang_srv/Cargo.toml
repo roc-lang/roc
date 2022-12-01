@@ -16,6 +16,7 @@ roc_reporting = { path = "../reporting" }
 roc_solve_problem = { path = "../compiler/solve_problem" }
 roc_target = { path = "../compiler/roc_target" }
 roc_types = { path = "../compiler/types" }
+roc_packaging = {path = "../packaging"}
 
 bumpalo = { version = "3.8.0", features = ["collections"] }
 
