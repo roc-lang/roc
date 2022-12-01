@@ -4053,11 +4053,6 @@ fn specialize_naked_symbol<'a>(
         }
     }
 
-    let result = match hole {
-        Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([symbol])),
-        _ => Stmt::Ret(symbol),
-    };
-
     // if the symbol is a function symbol, ensure it is properly specialized!
     let original = symbol;
 
@@ -4069,8 +4064,8 @@ fn specialize_naked_symbol<'a>(
         procs,
         layout_cache,
         opt_fn_var,
-        symbol,
-        result,
+        assigned,
+        hole,
         original,
     )
 }
@@ -4413,7 +4408,7 @@ pub fn with_hole<'a>(
                             layout_cache,
                             Some(variable),
                             symbol,
-                            stmt,
+                            env.arena.alloc(stmt),
                             symbol,
                         );
                     }
@@ -5075,7 +5070,7 @@ pub fn with_hole<'a>(
                                     layout_cache,
                                     Some(record_var),
                                     specialized_structure_sym,
-                                    stmt,
+                                    env.arena.alloc(stmt),
                                     structure,
                                 );
                             }
@@ -8154,8 +8149,8 @@ fn specialize_symbol<'a>(
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     arg_var: Option<Variable>,
-    symbol: Symbol,
-    result: Stmt<'a>,
+    assign_to: Symbol,
+    result: &'a Stmt<'a>,
     original: Symbol,
 ) -> Stmt<'a> {
     match procs.get_partial_proc(original) {
@@ -8194,7 +8189,7 @@ fn specialize_symbol<'a>(
                             layout_cache,
                         );
 
-                        force_thunk(env, original, layout, symbol, env.arena.alloc(result))
+                        force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
                     } else {
                         // Imported symbol, so it must have no captures niche (since
                         // top-levels can't capture)
@@ -8212,7 +8207,7 @@ fn specialize_symbol<'a>(
                             layout_cache,
                         );
 
-                        let_empty_struct(symbol, env.arena.alloc(result))
+                        let_empty_struct(assign_to, env.arena.alloc(result))
                     }
                 }
 
@@ -8224,6 +8219,13 @@ fn specialize_symbol<'a>(
                         original,
                         (env.home, &arg_var),
                     );
+
+                    // Replaces references of `assign_to` in the rest of the block with `original`,
+                    // since we don't actually need to specialize the original symbol to a value.
+                    //
+                    // This usually means we are using a symbol received from a joinpoint.
+                    let mut result = result.clone();
+                    substitute_in_exprs(env.arena, &mut result, assign_to, original);
                     result
                 }
             }
@@ -8282,7 +8284,7 @@ fn specialize_symbol<'a>(
                             layout_cache,
                         );
 
-                        let closure_data = symbol;
+                        let closure_data = assign_to;
 
                         construct_closure_data(
                             env,
@@ -8311,7 +8313,7 @@ fn specialize_symbol<'a>(
                             layout_cache,
                         );
 
-                        force_thunk(env, original, layout, symbol, env.arena.alloc(result))
+                        force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
                     } else {
                         // even though this function may not itself capture,
                         // unification may still cause it to have an extra argument
@@ -8343,7 +8345,7 @@ fn specialize_symbol<'a>(
                             lambda_set,
                             lambda_name,
                             &[],
-                            symbol,
+                            assign_to,
                             env.arena.alloc(result),
                         )
                     }
@@ -8360,7 +8362,13 @@ fn specialize_symbol<'a>(
                         layout_cache,
                     );
 
-                    force_thunk(env, original, ret_layout, symbol, env.arena.alloc(result))
+                    force_thunk(
+                        env,
+                        original,
+                        ret_layout,
+                        assign_to,
+                        env.arena.alloc(result),
+                    )
                 }
             }
         }
@@ -8386,7 +8394,7 @@ fn assign_to_symbol<'a>(
                 layout_cache,
                 Some(arg_var),
                 symbol,
-                result,
+                env.arena.alloc(result),
                 original,
             )
         }
