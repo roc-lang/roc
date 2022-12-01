@@ -273,8 +273,8 @@ fn test_store<'a>(
         buf.append_u8(OpCode::END as u8);
     });
 
-    let mut inst = Instance::for_module(&arena, &module, DEFAULT_IMPORTS, is_debug_mode).unwrap();
-    inst.call_export(&module, start_fn_name, []).unwrap();
+    let mut inst = Instance::for_module(arena, module, DEFAULT_IMPORTS, is_debug_mode).unwrap();
+    inst.call_export(module, start_fn_name, []).unwrap();
 
     inst.memory
 }

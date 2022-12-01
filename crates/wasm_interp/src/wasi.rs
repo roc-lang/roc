@@ -1,6 +1,6 @@
 use roc_wasm_module::Value;
 
-pub const MODULE_NAME: &'static str = "wasi_snapshot_preview1";
+pub const MODULE_NAME: &str = "wasi_snapshot_preview1";
 
 pub fn dispatch(function_name: &str, arguments: &[Value], _memory: &mut [u8]) -> Option<Value> {
     match function_name {

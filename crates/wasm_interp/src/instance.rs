@@ -377,7 +377,6 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             if let Some(return_val) = optional_return_val {
                 self.value_stack.push(return_val);
             }
-            return;
         } else {
             // call an internal Wasm function
             let return_addr = self.program_counter as u32;
