@@ -2587,17 +2587,68 @@ fn from_can_let<'a>(
                 //              in
                 //                  answer
 
-                let new_def = roc_can::def::Def {
-                    loc_pattern: def.loc_pattern,
-                    loc_expr: *nested_cont,
-                    pattern_vars: def.pattern_vars,
-                    annotation: def.annotation,
-                    expr_var: def.expr_var,
+                use roc_can::{def::Def, expr::Expr, pattern::Pattern};
+
+                let new_outer = match &nested_cont.value {
+                    &Expr::Closure(ClosureData {
+                        name: anon_name, ..
+                    }) => {
+                        // A wrinkle:
+                        //
+                        //   let f =
+                        //      let n = 1 in
+                        //      \{} -[#lam]-> n
+                        //
+                        // must become
+                        //
+                        //   let n = 1 in
+                        //   let #lam = \{} -[#lam]-> n in
+                        //   let f = #lam
+
+                        debug_assert_ne!(*symbol, anon_name);
+
+                        // #lam = \...
+                        let def_anon_closure = Box::new(Def {
+                            loc_pattern: Loc::at_zero(Pattern::Identifier(anon_name)),
+                            loc_expr: *nested_cont,
+                            expr_var: def.expr_var,
+                            pattern_vars: std::iter::once((anon_name, def.expr_var)).collect(),
+                            annotation: None,
+                        });
+
+                        // f = #lam
+                        let new_def = Box::new(Def {
+                            loc_pattern: def.loc_pattern,
+                            loc_expr: Loc::at_zero(Expr::Var(anon_name, def.expr_var)),
+                            expr_var: def.expr_var,
+                            pattern_vars: def.pattern_vars,
+                            annotation: def.annotation,
+                        });
+
+                        let new_inner = LetNonRec(new_def, cont);
+
+                        LetNonRec(
+                            nested_def,
+                            Box::new(Loc::at_zero(LetNonRec(
+                                def_anon_closure,
+                                Box::new(Loc::at_zero(new_inner)),
+                            ))),
+                        )
+                    }
+                    _ => {
+                        let new_def = Def {
+                            loc_pattern: def.loc_pattern,
+                            loc_expr: *nested_cont,
+                            pattern_vars: def.pattern_vars,
+                            annotation: def.annotation,
+                            expr_var: def.expr_var,
+                        };
+
+                        let new_inner = LetNonRec(Box::new(new_def), cont);
+
+                        LetNonRec(nested_def, Box::new(Loc::at_zero(new_inner)))
+                    }
                 };
-
-                let new_inner = LetNonRec(Box::new(new_def), cont);
-
-                let new_outer = LetNonRec(nested_def, Box::new(Loc::at_zero(new_inner)));
 
                 lower_rest!(variable, new_outer)
             }

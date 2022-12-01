@@ -2066,3 +2066,19 @@ fn function_pointer_lambda_set() {
         "#
     )
 }
+
+#[mono_test]
+fn anonymous_closure_lifted_to_named_issue_2403() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            f =
+                n = 1
+                \{} -> n
+            g = f {}
+            g
+        "#
+    )
+}
