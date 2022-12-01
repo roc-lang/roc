@@ -9,7 +9,6 @@ use roc_can::scope::Scope;
 use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::slow_pool::SlowPool;
 use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
-use roc_load::docs::DocEntry::DocDef;
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{Documentation, ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
@@ -210,18 +209,17 @@ fn render_module_documentation(
     );
 
     let exposed_values = loaded_module.exposed_values_str();
+    let exposed_aliases = loaded_module.exposed_aliases_str();
 
     for entry in &module.entries {
-        let mut should_render_entry = true;
+        match entry {
+            DocEntry::DocDef(doc_def) => {
+                let name_str = doc_def.name.as_str();
+                // We dont want to render entries that arent exposed
+                let should_render_entry =
+                    exposed_values.contains(&name_str) || exposed_aliases.contains(&name_str);
 
-        if let DocDef(def) = entry {
-            // We dont want to render entries that arent exposed
-            should_render_entry = exposed_values.contains(&def.name.as_str());
-        }
-
-        if should_render_entry {
-            match entry {
-                DocEntry::DocDef(doc_def) => {
+                if should_render_entry {
                     buf.push_str("<section>");
 
                     let mut href = String::new();
@@ -275,17 +273,17 @@ fn render_module_documentation(
 
                     buf.push_str("</section>");
                 }
-                DocEntry::DetachedDoc(docs) => {
-                    let markdown = markdown_to_html(
-                        &exposed_values,
-                        &module.scope,
-                        docs.to_string(),
-                        loaded_module,
-                    );
-                    buf.push_str(markdown.as_str());
-                }
-            };
-        }
+            }
+            DocEntry::DetachedDoc(docs) => {
+                let markdown = markdown_to_html(
+                    &exposed_values,
+                    &module.scope,
+                    docs.to_string(),
+                    loaded_module,
+                );
+                buf.push_str(markdown.as_str());
+            }
+        };
     }
 
     buf
