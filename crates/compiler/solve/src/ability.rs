@@ -488,9 +488,18 @@ struct NotDerivable {
 
 struct Descend(bool);
 
+enum FPDerivable {
+    /// Whether the floating point type is derivable is based on its ground or unbound type.
+    Descend,
+    /// The FP type is never derivable.
+    No(NotDerivableContext),
+}
+
 trait DerivableVisitor {
     const ABILITY: Symbol;
     const ABILITY_SLICE: SubsSlice<Symbol>;
+
+    const IS_FLOATING_POINT_DERIVABLE: FPDerivable;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(_symbol: Symbol) -> bool {
@@ -717,13 +726,23 @@ trait DerivableVisitor {
                     EmptyTagUnion => Self::visit_empty_tag_union(var)?,
                 },
                 Alias(
-                    Symbol::NUM_NUM | Symbol::NUM_INTEGER | Symbol::NUM_FLOATINGPOINT,
+                    Symbol::NUM_NUM | Symbol::NUM_INTEGER,
                     _alias_variables,
                     real_var,
                     AliasKind::Opaque,
                 ) => {
-                    // Numbers: always decay until a ground is hit.
+                    // Unbound numbers and integers: always decay until a ground is hit,
+                    // since all of our builtin abilities currently support integers.
                     stack.push(real_var);
+                }
+                Alias(Symbol::NUM_FLOATINGPOINT, _alias_variables, real_var, AliasKind::Opaque) => {
+                    match Self::IS_FLOATING_POINT_DERIVABLE {
+                        FPDerivable::Descend => {
+                            // Decay to a ground
+                            stack.push(real_var)
+                        }
+                        FPDerivable::No(context) => return Err(NotDerivable { var, context }),
+                    }
                 }
                 Alias(opaque, _alias_variables, _real_var, AliasKind::Opaque) => {
                     if obligation_cache
@@ -768,6 +787,8 @@ struct DeriveEncoding;
 impl DerivableVisitor for DeriveEncoding {
     const ABILITY: Symbol = Symbol::ENCODE_ENCODING;
     const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_ENCODING;
+
+    const IS_FLOATING_POINT_DERIVABLE: FPDerivable = FPDerivable::Descend;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -847,6 +868,8 @@ struct DeriveDecoding;
 impl DerivableVisitor for DeriveDecoding {
     const ABILITY: Symbol = Symbol::DECODE_DECODING;
     const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_DECODING;
+
+    const IS_FLOATING_POINT_DERIVABLE: FPDerivable = FPDerivable::Descend;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -938,6 +961,8 @@ impl DerivableVisitor for DeriveHash {
     const ABILITY: Symbol = Symbol::HASH_HASH_ABILITY;
     const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_HASH;
 
+    const IS_FLOATING_POINT_DERIVABLE: FPDerivable = FPDerivable::Descend;
+
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
         is_builtin_number_alias(symbol)
@@ -1027,6 +1052,9 @@ struct DeriveEq;
 impl DerivableVisitor for DeriveEq {
     const ABILITY: Symbol = Symbol::BOOL_EQ;
     const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_EQ;
+
+    const IS_FLOATING_POINT_DERIVABLE: FPDerivable =
+        FPDerivable::No(NotDerivableContext::Eq(NotDerivableEq::FloatingPoint));
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
