@@ -488,18 +488,9 @@ struct NotDerivable {
 
 struct Descend(bool);
 
-enum FPDerivable {
-    /// Whether the floating point type is derivable is based on its ground or unbound type.
-    Descend,
-    /// The FP type is never derivable.
-    No(NotDerivableContext),
-}
-
 trait DerivableVisitor {
     const ABILITY: Symbol;
     const ABILITY_SLICE: SubsSlice<Symbol>;
-
-    const IS_FLOATING_POINT_DERIVABLE: FPDerivable;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(_symbol: Symbol) -> bool {
@@ -596,6 +587,18 @@ trait DerivableVisitor {
 
     #[inline(always)]
     fn visit_alias(var: Variable, _symbol: Symbol) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
+    fn visit_floating_point_content(
+        var: Variable,
+        _subs: &mut Subs,
+        _content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
         Err(NotDerivable {
             var,
             context: NotDerivableContext::NoContext,
@@ -736,12 +739,10 @@ trait DerivableVisitor {
                     stack.push(real_var);
                 }
                 Alias(Symbol::NUM_FLOATINGPOINT, _alias_variables, real_var, AliasKind::Opaque) => {
-                    match Self::IS_FLOATING_POINT_DERIVABLE {
-                        FPDerivable::Descend => {
-                            // Decay to a ground
-                            stack.push(real_var)
-                        }
-                        FPDerivable::No(context) => return Err(NotDerivable { var, context }),
+                    let descend = Self::visit_floating_point_content(var, subs, real_var)?;
+                    if descend.0 {
+                        // Decay to a ground
+                        stack.push(real_var)
                     }
                 }
                 Alias(opaque, _alias_variables, _real_var, AliasKind::Opaque) => {
@@ -787,8 +788,6 @@ struct DeriveEncoding;
 impl DerivableVisitor for DeriveEncoding {
     const ABILITY: Symbol = Symbol::ENCODE_ENCODING;
     const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_ENCODING;
-
-    const IS_FLOATING_POINT_DERIVABLE: FPDerivable = FPDerivable::Descend;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -862,14 +861,21 @@ impl DerivableVisitor for DeriveEncoding {
     fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
         Ok(())
     }
+
+    #[inline(always)]
+    fn visit_floating_point_content(
+        _var: Variable,
+        _subs: &mut Subs,
+        _content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(false))
+    }
 }
 
 struct DeriveDecoding;
 impl DerivableVisitor for DeriveDecoding {
     const ABILITY: Symbol = Symbol::DECODE_DECODING;
     const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_DECODING;
-
-    const IS_FLOATING_POINT_DERIVABLE: FPDerivable = FPDerivable::Descend;
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -953,6 +959,15 @@ impl DerivableVisitor for DeriveDecoding {
     #[inline(always)]
     fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
         Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_floating_point_content(
+        _var: Variable,
+        _subs: &mut Subs,
+        _content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(false))
     }
 }
 
@@ -961,8 +976,6 @@ impl DerivableVisitor for DeriveHash {
     const ABILITY: Symbol = Symbol::HASH_HASH_ABILITY;
     const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_HASH;
 
-    const IS_FLOATING_POINT_DERIVABLE: FPDerivable = FPDerivable::Descend;
-
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
         is_builtin_number_alias(symbol)
@@ -1046,15 +1059,21 @@ impl DerivableVisitor for DeriveHash {
     fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
         Ok(())
     }
+
+    #[inline(always)]
+    fn visit_floating_point_content(
+        _var: Variable,
+        _subs: &mut Subs,
+        _content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(false))
+    }
 }
 
 struct DeriveEq;
 impl DerivableVisitor for DeriveEq {
     const ABILITY: Symbol = Symbol::BOOL_EQ;
     const ABILITY_SLICE: SubsSlice<Symbol> = Subs::AB_EQ;
-
-    const IS_FLOATING_POINT_DERIVABLE: FPDerivable =
-        FPDerivable::No(NotDerivableContext::Eq(NotDerivableEq::FloatingPoint));
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
@@ -1141,6 +1160,32 @@ impl DerivableVisitor for DeriveEq {
             Ok(Descend(false))
         } else {
             Ok(Descend(true))
+        }
+    }
+
+    fn visit_floating_point_content(
+        var: Variable,
+        subs: &mut Subs,
+        content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        use roc_unify::unify::{unify, Mode};
+
+        // Of the floating-point types,
+        // only Dec implements Eq.
+        let mut env = Env::new(subs);
+        let unified = unify(
+            &mut env,
+            content_var,
+            Variable::DECIMAL,
+            Mode::EQ,
+            Polarity::Pos,
+        );
+        match unified {
+            roc_unify::unify::Unified::Success { .. } => Ok(Descend(false)),
+            roc_unify::unify::Unified::Failure(..) => Err(NotDerivable {
+                var,
+                context: NotDerivableContext::Eq(NotDerivableEq::FloatingPoint),
+            }),
         }
     }
 
