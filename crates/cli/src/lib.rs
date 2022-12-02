@@ -359,6 +359,7 @@ pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
 
 #[cfg(not(windows))]
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
+    use roc_build::program::report_problems_monomorphized;
     use roc_gen_llvm::llvm::build::LlvmBackendMode;
     use roc_load::{ExecutionMode, LoadConfig, LoadMonomorphizedError};
     use roc_packaging::cache;
@@ -442,9 +443,9 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
             return handle_error_module(module, start_time.elapsed(), filename, false);
         }
     };
+    let problems = report_problems_monomorphized(&mut loaded);
 
     let mut expectations = std::mem::take(&mut loaded.expectations);
-    let loaded = loaded;
 
     let interns = loaded.interns.clone();
 
@@ -457,6 +458,19 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     )
     .unwrap();
 
+    // Print warnings before running tests.
+    {
+        debug_assert_eq!(
+            problems.errors, 0,
+            "if there were errors, we would have already exited."
+        );
+        if problems.warnings > 0 {
+            print_problems(problems, start_time.elapsed());
+            println!(".\n\nRunning tests…\n\n\x1B[36m{}\x1B[39m", "─".repeat(80));
+        }
+    }
+
+    // Run the tests.
     let arena = &bumpalo::Bump::new();
     let interns = arena.alloc(interns);
 
