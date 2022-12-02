@@ -79,6 +79,7 @@ distance = "0.4.0"
 encode_unicode = "1.0.0"
 errno = "0.2.8"
 fnv = "1.0.7"
+fs_extra = "1.2.0"
 hashbrown = { version = "0.12.3", features = [ "bumpalo" ] }
 iced-x86 = { version = "1.15.0", default-features = false, features = ["std", "decoder", "op_code_info", "instr_info"] }
 im    = "15.0.0"
