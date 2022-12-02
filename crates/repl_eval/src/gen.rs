@@ -1,7 +1,8 @@
 use bumpalo::Bump;
 use roc_load::{ExecutionMode, LoadConfig, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_reporting::report::{Palette, Severity};
+use roc_problem::Severity;
+use roc_reporting::report::Palette;
 use std::path::PathBuf;
 
 use roc_fmt::annotation::Formattable;

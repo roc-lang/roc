@@ -4248,6 +4248,7 @@ dependencies = [
  "roc_mono",
  "roc_packaging",
  "roc_parse",
+ "roc_problem",
  "roc_region",
  "roc_reporting",
  "roc_std",
