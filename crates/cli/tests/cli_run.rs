@@ -15,7 +15,7 @@ mod cli_run {
     };
     use const_format::concatcp;
     use indoc::indoc;
-    use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN, CMD_TEST};
+    use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_FORMAT, CMD_RUN, CMD_TEST};
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
@@ -61,6 +61,7 @@ mod cli_run {
         RocBuild, // buildOnly
         RocRun,   // buildAndRun
         RocTest,
+        RocDev,
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -188,7 +189,7 @@ mod cli_run {
                 TestCliCommands::Many => vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc],
                 TestCliCommands::Run => vec![CliMode::Roc],
                 TestCliCommands::Test => vec![CliMode::RocTest],
-                TestCliCommands::Dev => vec![CliMode::Roc],
+                TestCliCommands::Dev => vec![CliMode::RocDev],
             }
         };
 
@@ -283,6 +284,17 @@ mod cli_run {
                     run_roc_on(
                         file,
                         iter::once(CMD_TEST).chain(flags.clone()),
+                        stdin,
+                        roc_app_args,
+                        extra_env,
+                    )
+                }
+                CliMode::RocDev => {
+                    // here failure is what we expect
+
+                    run_roc_on(
+                        file,
+                        iter::once(CMD_DEV).chain(flags.clone()),
                         stdin,
                         roc_app_args,
                         extra_env,
@@ -568,7 +580,7 @@ mod cli_run {
         );
 
         test_roc_app(
-            "examples/platform-switching",
+            "crates/cli_testing_examples/expects",
             "expects.roc",
             "expects",
             &[],
