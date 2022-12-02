@@ -326,8 +326,9 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
     when findIndexHelper metadata dataIndices data h2Key key probe 0 is
         Ok index ->
             last = List.len data - 1
+            dataIndex = listGetUnsafe dataIndices index
 
-            if index == last then
+            if dataIndex == last then
                 @Dict {
                     metadata: List.set metadata index deletedSlot,
                     dataIndices,
@@ -730,6 +731,15 @@ expect
         |> remove 1
         |> remove 3
     keys dict == [2]
+
+expect
+    list =
+        fromList [(T 1u8 1u8), (T 2u8 2u8), (T 3 3)]
+        |> remove 1
+        |> insert 0 0
+        |> remove 3
+        |> keys
+    list == [0, 2]
 
 # Reach capacity, no rehash.
 expect
