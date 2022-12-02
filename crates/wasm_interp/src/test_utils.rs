@@ -1,14 +1,14 @@
-use crate::{Action, Instance};
+use crate::{DefaultImportDispatcher, Instance, DEFAULT_IMPORTS};
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::{
     opcodes::OpCode, Export, ExportType, SerialBuffer, Signature, Value, ValueType, WasmModule,
 };
 
-pub fn default_state(arena: &Bump) -> Instance {
+pub fn default_state(arena: &Bump) -> Instance<DefaultImportDispatcher> {
     let pages = 1;
     let program_counter = 0;
     let globals = [];
-    Instance::new(arena, pages, program_counter, globals)
+    Instance::new(arena, pages, program_counter, globals, DEFAULT_IMPORTS)
 }
 
 pub fn const_value(buf: &mut Vec<'_, u8>, value: Value) {
@@ -75,11 +75,11 @@ where
         std::fs::write(&filename, outfile_buf).unwrap();
     }
 
-    let mut state = Instance::for_module(&arena, &module, "test", true, []).unwrap();
+    let mut inst = Instance::for_module(&arena, &module, DEFAULT_IMPORTS, true).unwrap();
 
-    while let Action::Continue = state.execute_next_instruction(&module) {}
+    let return_val = inst.call_export(&module, "test", []).unwrap().unwrap();
 
-    assert_eq!(state.value_stack.pop(), expected);
+    assert_eq!(return_val, expected);
 }
 
 pub fn create_exported_function_no_locals<'a, F>(

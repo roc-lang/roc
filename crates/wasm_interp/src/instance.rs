@@ -10,6 +10,7 @@ use roc_wasm_module::{Value, ValueType};
 
 use crate::call_stack::CallStack;
 use crate::value_stack::ValueStack;
+use crate::ImportDispatcher;
 
 pub enum Action {
     Continue,
@@ -17,7 +18,7 @@ pub enum Action {
 }
 
 #[derive(Debug)]
-pub struct Instance<'a> {
+pub struct Instance<'a, I: ImportDispatcher> {
     /// Contents of the WebAssembly instance's memory
     pub memory: Vec<'a, u8>,
     /// Metadata for every currently-active function call
@@ -32,14 +33,22 @@ pub struct Instance<'a> {
     block_loop_addrs: Vec<'a, Option<u32>>,
     /// Outermost block depth for the currently-executing function.
     outermost_block: u32,
-    /// Signature indices (in the TypeSection) of all imported (non-WebAssembly) functions
-    import_signatures: Vec<'a, u32>,
+    /// Import dispatcher from user code
+    import_dispatcher: I,
+    /// Temporary storage for import arguments
+    import_arguments: Vec<'a, Value>,
     /// temporary storage for output using the --debug option
     debug_string: Option<String>,
 }
 
-impl<'a> Instance<'a> {
-    pub fn new<G>(arena: &'a Bump, memory_pages: u32, program_counter: usize, globals: G) -> Self
+impl<'a, I: ImportDispatcher> Instance<'a, I> {
+    pub fn new<G>(
+        arena: &'a Bump,
+        memory_pages: u32,
+        program_counter: usize,
+        globals: G,
+        import_dispatcher: I,
+    ) -> Self
     where
         G: IntoIterator<Item = Value>,
     {
@@ -52,21 +61,18 @@ impl<'a> Instance<'a> {
             program_counter,
             block_loop_addrs: Vec::new_in(arena),
             outermost_block: 0,
-            import_signatures: Vec::new_in(arena),
+            import_dispatcher,
+            import_arguments: Vec::new_in(arena),
             debug_string: Some(String::new()),
         }
     }
 
-    pub fn for_module<'arg, A>(
+    pub fn for_module(
         arena: &'a Bump,
         module: &WasmModule<'a>,
-        start_fn_name: &str,
+        import_dispatcher: I,
         is_debug_mode: bool,
-        arg_strings: A,
-    ) -> Result<Self, std::string::String>
-    where
-        A: IntoIterator<Item = &'arg str>,
-    {
+    ) -> Result<Self, std::string::String> {
         let mem_bytes = module.memory.min_bytes().map_err(|e| {
             format!(
                 "Error parsing Memory section at offset {:#x}:\n{}",
@@ -78,66 +84,16 @@ impl<'a> Instance<'a> {
 
         let globals = module.global.initial_values(arena);
 
-        // Gather imported function signatures into a vector, for simpler lookup
-        let import_signatures = {
-            let imports_iter = module.import.imports.iter();
-            let sig_iter = imports_iter.filter_map(|imp| match imp.description {
-                ImportDesc::Func { signature_index } => Some(signature_index),
-                _ => None,
-            });
-            Vec::from_iter_in(sig_iter, arena)
-        };
-
-        let start_fn_index = {
-            let mut export_iter = module.export.exports.iter();
-            export_iter
-                .find_map(|ex| {
-                    if ex.ty == ExportType::Func && ex.name == start_fn_name {
-                        Some(ex.index)
-                    } else {
-                        None
-                    }
-                })
-                .ok_or(format!(
-                    "I couldn't find an exported function '{}' in this WebAssembly module",
-                    start_fn_name
-                ))?
-        };
-
-        let arg_type_bytes = {
-            let internal_fn_index = start_fn_index as usize - import_signatures.len();
-            let signature_index = module.function.signatures[internal_fn_index];
-            module.types.look_up_arg_type_bytes(signature_index)
-        };
-
-        let mut program_counter = {
-            let internal_fn_index = start_fn_index as usize - module.import.function_count();
-            let mut cursor = module.code.function_offsets[internal_fn_index] as usize;
-            let _start_fn_byte_length = u32::parse((), &module.code.bytes, &mut cursor);
-            cursor
-        };
-
-        let mut value_stack = ValueStack::new(arena);
-        for (value_str, type_byte) in arg_strings.into_iter().zip(arg_type_bytes.iter().copied()) {
-            use ValueType::*;
-            let value = match ValueType::from(type_byte) {
-                I32 => Value::I32(value_str.parse::<i32>().map_err(|e| e.to_string())?),
-                I64 => Value::I64(value_str.parse::<i64>().map_err(|e| e.to_string())?),
-                F32 => Value::F32(value_str.parse::<f32>().map_err(|e| e.to_string())?),
-                F64 => Value::F64(value_str.parse::<f64>().map_err(|e| e.to_string())?),
-            };
-            value_stack.push(value);
-        }
-
-        let mut call_stack = CallStack::new(arena);
-        call_stack.push_frame(
-            0, // return_addr
-            0, // return_block_depth
-            arg_type_bytes,
-            &mut value_stack,
-            &module.code.bytes,
-            &mut program_counter,
+        // We don't handle non-function import types (memories, tables, and globals),
+        // and it's nice for lookups to assume they're all functions, so let's assert that.
+        let all_imports_are_functions = module.import.imports.iter().all(|imp| imp.is_function());
+        assert!(
+            all_imports_are_functions,
+            "This Wasm interpreter doesn't support non-function imports"
         );
+
+        let value_stack = ValueStack::new(arena);
+        let call_stack = CallStack::new(arena);
 
         let debug_string = if is_debug_mode {
             Some(String::new())
@@ -150,12 +106,130 @@ impl<'a> Instance<'a> {
             call_stack,
             value_stack,
             globals,
-            program_counter,
+            program_counter: usize::MAX,
             block_loop_addrs: Vec::new_in(arena),
             outermost_block: 0,
-            import_signatures,
+            import_dispatcher,
+            import_arguments: Vec::new_in(arena),
             debug_string,
         })
+    }
+
+    pub fn call_export<A>(
+        &mut self,
+        module: &WasmModule<'a>,
+        fn_name: &str,
+        arg_values: A,
+    ) -> Result<Option<Value>, String>
+    where
+        A: IntoIterator<Item = Value>,
+    {
+        let arg_type_bytes = self.prepare_to_call_export(module, fn_name)?;
+
+        for (i, (value, type_byte)) in arg_values
+            .into_iter()
+            .zip(arg_type_bytes.iter().copied())
+            .enumerate()
+        {
+            let expected_type = ValueType::from(type_byte);
+            let actual_type = ValueType::from(value);
+            if actual_type != expected_type {
+                return Err(format!(
+                    "Type mismatch on argument {} of {}. Expected {:?} but got {:?}",
+                    i, fn_name, expected_type, value
+                ));
+            }
+            self.value_stack.push(value);
+        }
+
+        self.call_export_help(module, arg_type_bytes)
+    }
+
+    pub fn call_export_from_cli<'arg, A>(
+        &mut self,
+        module: &WasmModule<'a>,
+        fn_name: &str,
+        arg_strings: A,
+    ) -> Result<Option<Value>, String>
+    where
+        A: IntoIterator<Item = &'arg str>,
+    {
+        let arg_type_bytes = self.prepare_to_call_export(module, fn_name)?;
+
+        for (value_str, type_byte) in arg_strings.into_iter().zip(arg_type_bytes.iter().copied()) {
+            use ValueType::*;
+            let value = match ValueType::from(type_byte) {
+                I32 => Value::I32(value_str.parse::<i32>().map_err(|e| e.to_string())?),
+                I64 => Value::I64(value_str.parse::<i64>().map_err(|e| e.to_string())?),
+                F32 => Value::F32(value_str.parse::<f32>().map_err(|e| e.to_string())?),
+                F64 => Value::F64(value_str.parse::<f64>().map_err(|e| e.to_string())?),
+            };
+            self.value_stack.push(value);
+        }
+
+        self.call_export_help(module, arg_type_bytes)
+    }
+
+    fn prepare_to_call_export<'m>(
+        &mut self,
+        module: &'m WasmModule<'a>,
+        fn_name: &str,
+    ) -> Result<&'m [u8], String> {
+        let fn_index = {
+            let mut export_iter = module.export.exports.iter();
+            export_iter
+                .find_map(|ex| {
+                    if ex.ty == ExportType::Func && ex.name == fn_name {
+                        Some(ex.index)
+                    } else {
+                        None
+                    }
+                })
+                .ok_or(format!(
+                    "I couldn't find an exported function '{}' in this WebAssembly module",
+                    fn_name
+                ))?
+        };
+
+        self.program_counter = {
+            let internal_fn_index = fn_index as usize - module.import.function_count();
+            let mut cursor = module.code.function_offsets[internal_fn_index] as usize;
+            let _start_fn_byte_length = u32::parse((), &module.code.bytes, &mut cursor);
+            cursor
+        };
+
+        let arg_type_bytes = {
+            let internal_fn_index = fn_index as usize - module.import.imports.len();
+            let signature_index = module.function.signatures[internal_fn_index];
+            module.types.look_up_arg_type_bytes(signature_index)
+        };
+
+        Ok(arg_type_bytes)
+    }
+
+    fn call_export_help(
+        &mut self,
+        module: &WasmModule<'a>,
+        arg_type_bytes: &[u8],
+    ) -> Result<Option<Value>, String> {
+        self.call_stack.push_frame(
+            0, // return_addr
+            0, // return_block_depth
+            arg_type_bytes,
+            &mut self.value_stack,
+            &module.code.bytes,
+            &mut self.program_counter,
+        );
+
+        while let Action::Continue = self.execute_next_instruction(module) {}
+
+        let return_value = if !self.value_stack.is_empty() {
+            Some(self.value_stack.pop())
+        } else {
+            None
+        };
+
+        Ok(return_value)
     }
 
     fn fetch_immediate_u32(&mut self, module: &WasmModule<'a>) -> u32 {
@@ -255,11 +329,20 @@ impl<'a> Instance<'a> {
         fn_index: usize,
         module: &WasmModule<'a>,
     ) {
-        let n_imports = self.import_signatures.len();
-        let signature_index: u32 = if fn_index < n_imports {
-            self.import_signatures[fn_index]
+        let n_import_fns = module.import.imports.len();
+
+        let (signature_index, opt_import) = if fn_index < n_import_fns {
+            // Imported non-Wasm function
+            let import = &module.import.imports[fn_index];
+            let sig = match import.description {
+                ImportDesc::Func { signature_index } => signature_index,
+                _ => unreachable!(),
+            };
+            (sig, Some(import))
         } else {
-            module.function.signatures[fn_index - n_imports]
+            // Wasm function
+            let sig = module.function.signatures[fn_index - n_import_fns];
+            (sig, None)
         };
 
         if let Some(expected) = expected_signature {
@@ -272,22 +355,43 @@ impl<'a> Instance<'a> {
 
         let arg_type_bytes = module.types.look_up_arg_type_bytes(signature_index);
 
-        let return_addr = self.program_counter as u32;
-        self.program_counter = module.code.function_offsets[fn_index] as usize;
+        if let Some(import) = opt_import {
+            self.import_arguments.clear();
+            self.import_arguments
+                .extend(std::iter::repeat(Value::I64(0)).take(arg_type_bytes.len()));
+            for (i, type_byte) in arg_type_bytes.iter().copied().enumerate().rev() {
+                let arg = self.value_stack.pop();
+                assert_eq!(ValueType::from(arg), ValueType::from(type_byte));
+                self.import_arguments[i] = arg;
+            }
 
-        let return_block_depth = self.outermost_block;
-        self.outermost_block = self.block_loop_addrs.len() as u32;
+            let optional_return_val = self.import_dispatcher.dispatch(
+                import.module,
+                import.name,
+                &self.import_arguments,
+                &mut self.memory,
+            );
+            if let Some(return_val) = optional_return_val {
+                self.value_stack.push(return_val);
+            }
+        } else {
+            let return_addr = self.program_counter as u32;
+            self.program_counter = module.code.function_offsets[fn_index] as usize;
 
-        let _function_byte_length =
-            u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
-        self.call_stack.push_frame(
-            return_addr,
-            return_block_depth,
-            arg_type_bytes,
-            &mut self.value_stack,
-            &module.code.bytes,
-            &mut self.program_counter,
-        );
+            let return_block_depth = self.outermost_block;
+            self.outermost_block = self.block_loop_addrs.len() as u32;
+
+            let _function_byte_length =
+                u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
+            self.call_stack.push_frame(
+                return_addr,
+                return_block_depth,
+                arg_type_bytes,
+                &mut self.value_stack,
+                &module.code.bytes,
+                &mut self.program_counter,
+            );
+        }
     }
 
     pub fn execute_next_instruction(&mut self, module: &WasmModule<'a>) -> Action {
