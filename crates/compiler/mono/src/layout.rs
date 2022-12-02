@@ -1387,7 +1387,12 @@ impl<'a> LambdaSet<'a> {
     where
         I: Interner<'a, Layout<'a>>,
     {
-        debug_assert!(self.contains(function_symbol), "function symbol not in set");
+        debug_assert!(
+            self.contains(function_symbol),
+            "function symbol {:?} not in set {:?}",
+            function_symbol,
+            self
+        );
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
             other_name == function_symbol
