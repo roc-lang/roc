@@ -1411,6 +1411,13 @@ fn canonicalize_closure_body<'a>(
         }
     }
 
+    // // Discount the def name from the referenced arguments as well. This catches recursive
+    // // functions that only reference themselves.
+    // // Note that this will not catch mutually recursive functions whose reference closure is the
+    // // recursive closure. Doing so requires us to know what defs are in a cycle, which is only
+    // // calculated after enumeration of references.
+    // output.references.remove_value_lookup(&symbol);
+
     // store the references of this function in the Env. This information is used
     // when we canonicalize a surrounding def (if it exists)
     env.closures.insert(symbol, output.references.clone());

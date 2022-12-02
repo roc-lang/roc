@@ -40,6 +40,7 @@ pub enum Problem {
     /// Second symbol is the name of the argument that is unused
     UnusedArgument(Symbol, bool, Symbol, Region),
     UnusedBranchDef(Symbol, Region),
+    DefsOnlyUsedInRecursion(usize, Region),
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(BadPattern, Region),
@@ -333,7 +334,8 @@ impl Problem {
             | Problem::BadTypeArguments { region, .. }
             | Problem::UnnecessaryOutputWildcard { region }
             | Problem::OverAppliedCrash { region }
-            | Problem::UnappliedCrash { region } => Some(*region),
+            | Problem::UnappliedCrash { region }
+            | Problem::DefsOnlyUsedInRecursion(_, region) => Some(*region),
             Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
             | Problem::BadRecursion(cycle_entries) => {
                 cycle_entries.first().map(|entry| entry.expr_region)

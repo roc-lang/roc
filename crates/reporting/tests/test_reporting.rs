@@ -12628,4 +12628,147 @@ I recommend using camelCase. It's the standard style in Roc code!
             "#
         )
     );
+
+    test_report!(
+        self_recursive_not_reached,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+            f = h {}
+            h = \{} -> 1
+            g = \{} -> if Bool.true then "" else g {}
+            "#
+        ),
+    @r###"
+    ── DEFINITION ONLY USED IN RECURSION ───────────────────── /code/proj/Main.roc ─
+
+    This definition is only used in recursion with itself:
+
+    4│  g = \{} -> if Bool.true then "" else g {}
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    If you don't intend to use or export this definition, it should be
+    removed!
+    "###
+    );
+
+    test_no_problem!(
+        self_recursive_not_reached_but_exposed,
+        indoc!(
+            r#"
+            app "test" provides [g] to "./platform"
+            g = \{} -> if Bool.true then "" else g {}
+            "#
+        )
+    );
+
+    test_report!(
+        mutual_recursion_not_reached,
+        indoc!(
+            r#"
+            app "test" provides [h] to "./platform"
+            h = ""
+            f = \{} -> if Bool.true then "" else g {}
+            g = \{} -> if Bool.true then "" else f {}
+            "#
+        ),
+    @r###"
+    ── DEFINITIONs ONLY USED IN RECURSION ──────────────────── /code/proj/Main.roc ─
+
+    These 2 definitions are only used in mutual recursion with themselves:
+
+    3│>  f = \{} -> if Bool.true then "" else g {}
+    4│>  g = \{} -> if Bool.true then "" else f {}
+
+    If you don't intend to use or export any of them, they should all be
+    removed!
+    "###
+    );
+
+    test_report!(
+        mutual_recursion_not_reached_but_exposed,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+            f = \{} -> if Bool.true then "" else g {}
+            g = \{} -> if Bool.true then "" else f {}
+            "#
+        ),
+    @r###"
+    "###
+    );
+
+    test_report!(
+        self_recursive_not_reached_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main =
+                g = \{} -> if Bool.true then "" else g {}
+                ""
+            "#
+        ),
+    @r###"
+    ── DEFINITION ONLY USED IN RECURSION ───────────────────── /code/proj/Main.roc ─
+
+    This definition is only used in recursion with itself:
+
+    3│      g = \{} -> if Bool.true then "" else g {}
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    If you don't intend to use or export this definition, it should be
+    removed!
+    "###
+    );
+
+    test_no_problem!(
+        self_recursive_not_reached_but_exposed_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main =
+                g = \{} -> if Bool.true then "" else g {}
+                g
+            "#
+        )
+    );
+
+    test_report!(
+        mutual_recursion_not_reached_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main =
+                f = \{} -> if Bool.true then "" else g {}
+                g = \{} -> if Bool.true then "" else f {}
+                ""
+            "#
+        ),
+    @r###"
+    ── DEFINITIONs ONLY USED IN RECURSION ──────────────────── /code/proj/Main.roc ─
+
+    These 2 definitions are only used in mutual recursion with themselves:
+
+    3│>      f = \{} -> if Bool.true then "" else g {}
+    4│>      g = \{} -> if Bool.true then "" else f {}
+
+    If you don't intend to use or export any of them, they should all be
+    removed!
+    "###
+    );
+
+    test_report!(
+        mutual_recursion_not_reached_but_exposed_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main =
+                f = \{} -> if Bool.true then "" else g {}
+                g = \{} -> if Bool.true then "" else f {}
+                f
+            "#
+        ),
+    @r###"
+    "###
+    );
 }

@@ -376,6 +376,9 @@ pub fn canonicalize_module_defs<'a>(
 
     // See if any of the new idents we defined went unused.
     // If any were unused and also not exposed, report it.
+    //
+    // We'll catch symbols that are only referenced due to (mutual) recursion later,
+    // when sorting the defs.
     for (symbol, region) in symbols_introduced {
         if !output.references.has_type_or_value_lookup(symbol)
             && !exposed_symbols.contains(&symbol)
@@ -427,8 +430,14 @@ pub fn canonicalize_module_defs<'a>(
         ..Default::default()
     };
 
-    let (mut declarations, mut output) =
-        crate::def::sort_can_defs_new(&mut scope, var_store, defs, new_output);
+    let (mut declarations, mut output) = crate::def::sort_can_defs_new(
+        &mut env,
+        &mut scope,
+        var_store,
+        defs,
+        new_output,
+        exposed_symbols,
+    );
 
     debug_assert!(
         output.pending_derives.is_empty(),

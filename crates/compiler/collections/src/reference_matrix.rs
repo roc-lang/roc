@@ -200,6 +200,7 @@ impl Params {
             scc: Sccs {
                 matrix: ReferenceMatrix::new(length),
                 components: 0,
+                not_initial: BitVec::repeat(false, length),
             },
             scca: BitVec::repeat(false, length),
         }
@@ -253,6 +254,10 @@ fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
             }
         }
 
+        if !params.s.is_empty() {
+            params.scc.not_initial.set(params.scc.components, true);
+        }
+
         params.scc.components += 1;
     }
 }
@@ -261,6 +266,7 @@ fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
 pub struct Sccs {
     components: usize,
     matrix: ReferenceMatrix,
+    not_initial: BitVec,
 }
 
 impl Sccs {
@@ -271,7 +277,7 @@ impl Sccs {
     ///
     /// It is guaranteed that a group is non-empty, and that flattening the groups gives a valid
     /// topological ordering.
-    pub fn groups(&self) -> std::iter::Take<bitvec::slice::ChunksExact<'_, Element, Order>> {
+    pub fn groups(&self) -> impl DoubleEndedIterator<Item = (&'_ BitSlice, bool)> {
         // work around a panic when requesting a chunk size of 0
         let length = if self.matrix.length == 0 {
             // the `.take(self.components)` ensures the resulting iterator will be empty
@@ -286,13 +292,15 @@ impl Sccs {
             .bitvec
             .chunks_exact(length)
             .take(self.components)
+            .enumerate()
+            .map(|(c, slice)| (slice, !self.not_initial[c]))
     }
 
     /// Reorder the input slice based on the SCCs. This produces a topological sort
     pub fn reorder<T>(&self, slice: &mut [T]) {
         debug_assert_eq!(self.matrix.length, slice.len());
 
-        let mut indices: Vec<_> = self.groups().flat_map(|s| s.iter_ones()).collect();
+        let mut indices: Vec<_> = self.groups().flat_map(|(s, _)| s.iter_ones()).collect();
 
         for i in 0..slice.len() {
             let mut index = indices[i];
