@@ -519,8 +519,7 @@ swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIn
 
         Err NotFound ->
             # This should be impossible.
-            # TODO: Maybe crash, it would be a standard library bug?
-            @Dict { metadata, dataIndices, data, size }
+            crash "unreachable state in dict swapAndUpdateDataIndex hit. Definitely a standard library bug."
 
 insertNotFoundHelper : Dict k v, k, v, U64, I8 -> Dict k v
 insertNotFoundHelper = \@Dict { metadata, dataIndices, data, size }, key, value, h1Key, h2Key ->
