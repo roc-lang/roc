@@ -149,6 +149,7 @@ pub struct ModuleOutput {
     pub rigid_variables: RigidVariables,
     pub declarations: Declarations,
     pub exposed_imports: MutMap<Symbol, Region>,
+    pub exposed_symbols: VecSet<Symbol>,
     pub problems: Vec<Problem>,
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
@@ -280,7 +281,7 @@ pub fn canonicalize_module_defs<'a>(
     aliases: MutMap<Symbol, Alias>,
     imported_abilities_state: PendingAbilitiesStore,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    exposed_symbols: &VecSet<Symbol>,
+    exposed_symbols: VecSet<Symbol>,
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
 ) -> ModuleOutput {
@@ -810,6 +811,7 @@ pub fn canonicalize_module_defs<'a>(
         pending_derives,
         loc_expects: collected.expects,
         loc_dbgs: collected.dbgs,
+        exposed_symbols,
     }
 }
 

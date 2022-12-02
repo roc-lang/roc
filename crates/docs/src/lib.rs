@@ -8,15 +8,17 @@ use html::mark_node_to_html;
 use roc_can::scope::Scope;
 use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::slow_pool::SlowPool;
+use roc_collections::{default_hasher, MutMap, VecSet};
 use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
-use roc_module::symbol::{IdentIdsByModule, Interns, ModuleId};
+use roc_module::symbol::{IdentIdsByModule, Interns, ModuleId, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_parse::ident::{parse_ident, Ident};
 use roc_parse::state::State;
 use roc_region::all::Region;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -59,42 +61,41 @@ pub fn generate_docs_html(root_file: PathBuf) {
     )
     .expect("TODO gracefully handle failing to make the favicon");
 
-    let module_pairs = loaded_module
-        .documentation
-        .iter()
-        .flat_map(|(module_id, module)| {
-            let exposed_values = loaded_module
-                .exposed_values
-                .iter()
-                .map(|symbol| symbol.as_str(&loaded_module.interns).to_string())
-                .collect::<Vec<String>>();
-
-            Some((module, exposed_values))
-        });
-
     let template_html = include_str!("./static/index.html")
         .replace("<!-- search.js -->", "/search.js")
         .replace("<!-- styles.css -->", "/styles.css")
         .replace("<!-- favicon.svg -->", "/favicon.svg")
         .replace(
             "<!-- Prefetch links -->",
-            &module_pairs
-                .clone()
-                .map(|(module, _)| {
+            loaded_module
+                .docs_by_module
+                .iter()
+                .map(|(_, module)| {
                     let href = sidebar_link_url(module.name.as_str());
 
                     format!(r#"<link rel="prefetch" href="{href}"/>"#)
                 })
                 .collect::<Vec<String>>()
-                .join("\n    "),
+                .join("\n    ")
+                .as_str(),
         )
         .replace(
             "<!-- Module links -->",
-            render_sidebar(module_pairs).as_str(),
+            render_sidebar(loaded_module.docs_by_module.values()).as_str(),
         );
 
+    let all_exposed_symbols = {
+        let mut set = VecSet::default();
+
+        for docs in loaded_module.docs_by_module.values() {
+            set.insert_all(docs.exposed_symbols.iter().copied());
+        }
+
+        set
+    };
+
     // Write each package's module docs html file
-    for (module_id, module_docs) in loaded_module.documentation.iter() {
+    for (module_id, module_docs) in loaded_module.docs_by_module.iter() {
         let module_name = module_docs.name.as_str();
         let module_dir = build_dir.join(module_name.replace('.', "/").as_str());
 
@@ -112,7 +113,13 @@ pub fn generate_docs_html(root_file: PathBuf) {
             )
             .replace(
                 "<!-- Module Docs -->",
-                render_module_documentation(module_docs, &loaded_module).as_str(),
+                render_module_documentation(
+                    *module_id,
+                    module_docs,
+                    &loaded_module,
+                    &all_exposed_symbols,
+                )
+                .as_str(),
             );
 
         fs::write(module_dir.join("index.html"), rendered_module)
@@ -174,41 +181,38 @@ pub fn syntax_highlight_top_level_defs(code_str: &str) -> DocsResult<String> {
 }
 
 fn render_module_documentation(
+    home: ModuleId,
     module: &ModuleDocumentation,
-    loaded_module: &LoadedModule,
+    root_module: &LoadedModule,
+    all_exposed_symbols: &VecSet<Symbol>,
 ) -> String {
     let mut buf = String::new();
 
-    buf.push_str(
-        html_to_string(
-            "h2",
-            vec![("class", "module-name")],
-            html_to_string("a", vec![("href", "/#")], module.name.as_str()).as_str(),
-        )
-        .as_str(),
-    );
+    push_html(&mut buf, "h2", vec![("class", "module-name")], {
+        let mut link_buf = String::new();
 
-    let exposed_values = loaded_module.exposed_values_str();
-    let exposed_aliases = loaded_module.exposed_aliases_str();
+        push_html(
+            &mut link_buf,
+            "a",
+            vec![("href", "/#")],
+            module.name.as_str(),
+        );
+
+        link_buf
+    });
 
     for entry in &module.entries {
         match entry {
             DocEntry::DocDef(doc_def) => {
-                let name_str = doc_def.name.as_str();
-                // We dont want to render entries that arent exposed
-                let should_render_entry =
-                    exposed_values.contains(&name_str) || exposed_aliases.contains(&name_str);
-
-                if should_render_entry {
+                // Only redner entries that are exposed
+                if all_exposed_symbols.contains(&doc_def.symbol) {
                     buf.push_str("<section>");
 
                     let name = doc_def.name.as_str();
                     let href = format!("#{name}");
                     let mut content = String::new();
 
-                    content.push_str(
-                        html_to_string("a", vec![("href", href.as_str())], name).as_str(),
-                    );
+                    push_html(&mut content, "a", vec![("href", href.as_str())], name);
 
                     for type_var in &doc_def.type_vars {
                         content.push(' ');
@@ -222,24 +226,21 @@ fn render_module_documentation(
                         type_annotation_to_html(0, &mut content, type_ann, false);
                     }
 
-                    buf.push_str(
-                        html_to_string(
-                            "h3",
-                            vec![("id", name), ("class", "entry-name")],
-                            content.as_str(),
-                        )
-                        .as_str(),
+                    push_html(
+                        &mut buf,
+                        "h3",
+                        vec![("id", name), ("class", "entry-name")],
+                        content.as_str(),
                     );
 
                     if let Some(docs) = &doc_def.docs {
-                        buf.push_str(
-                            markdown_to_html(
-                                &exposed_values,
-                                &module.scope,
-                                docs.to_string(),
-                                loaded_module,
-                            )
-                            .as_str(),
+                        markdown_to_html(
+                            &mut buf,
+                            home,
+                            all_exposed_symbols,
+                            &module.scope,
+                            docs,
+                            root_module,
                         );
                     }
 
@@ -247,13 +248,14 @@ fn render_module_documentation(
                 }
             }
             DocEntry::DetachedDoc(docs) => {
-                let markdown = markdown_to_html(
-                    &exposed_values,
+                markdown_to_html(
+                    &mut buf,
+                    home,
+                    &all_exposed_symbols,
                     &module.scope,
-                    docs.to_string(),
-                    loaded_module,
+                    docs,
+                    root_module,
                 );
-                buf.push_str(markdown.as_str());
             }
         };
     }
@@ -261,9 +263,7 @@ fn render_module_documentation(
     buf
 }
 
-fn html_to_string(tag_name: &str, attrs: Vec<(&str, &str)>, content: &str) -> String {
-    let mut buf = String::new();
-
+fn push_html(buf: &mut String, tag_name: &str, attrs: Vec<(&str, &str)>, content: impl AsRef<str>) {
     buf.push('<');
     buf.push_str(tag_name);
 
@@ -281,13 +281,11 @@ fn html_to_string(tag_name: &str, attrs: Vec<(&str, &str)>, content: &str) -> St
 
     buf.push('>');
 
-    buf.push_str(content);
+    buf.push_str(content.as_ref());
 
     buf.push_str("</");
     buf.push_str(tag_name);
     buf.push('>');
-
-    buf
 }
 
 fn base_url() -> String {
@@ -326,14 +324,13 @@ fn render_name_and_version(name: &str, version: &str) -> String {
 
     url_str.push_str(name);
 
-    buf.push_str(
-        html_to_string(
-            "h1",
-            vec![("class", "pkg-full-name")],
-            html_to_string("a", vec![("href", url_str.as_str())], name).as_str(),
-        )
-        .as_str(),
-    );
+    push_html(&mut buf, "h1", vec![("class", "pkg-full-name")], {
+        let mut link_buf = String::new();
+
+        push_html(&mut link_buf, "a", vec![("href", url_str.as_str())], name);
+
+        link_buf
+    });
 
     let mut versions_url_str = base_url();
 
@@ -342,34 +339,28 @@ fn render_name_and_version(name: &str, version: &str) -> String {
     versions_url_str.push('/');
     versions_url_str.push_str(version);
 
-    buf.push_str(
-        html_to_string(
-            "a",
-            vec![("class", "version"), ("href", versions_url_str.as_str())],
-            version,
-        )
-        .as_str(),
+    push_html(
+        &mut buf,
+        "a",
+        vec![("class", "version"), ("href", versions_url_str.as_str())],
+        version,
     );
 
     buf
 }
 
-fn render_sidebar<'a, I: Iterator<Item = (&'a ModuleDocumentation, Vec<String>)>>(
-    modules: I,
-) -> String {
+fn render_sidebar<'a, I: Iterator<Item = &'a ModuleDocumentation>>(modules: I) -> String {
     let mut buf = String::new();
 
-    for (module, exposed_values) in modules {
+    for module in modules {
         let href = sidebar_link_url(module.name.as_str());
         let mut sidebar_entry_content = String::new();
 
-        sidebar_entry_content.push_str(
-            html_to_string(
-                "a",
-                vec![("class", "sidebar-module-link"), ("href", &href)],
-                module.name.as_str(),
-            )
-            .as_str(),
+        push_html(
+            &mut sidebar_entry_content,
+            "a",
+            vec![("class", "sidebar-module-link"), ("href", &href)],
+            module.name.as_str(),
         );
 
         let entries = {
@@ -377,20 +368,18 @@ fn render_sidebar<'a, I: Iterator<Item = (&'a ModuleDocumentation, Vec<String>)>
 
             for entry in &module.entries {
                 if let DocEntry::DocDef(doc_def) = entry {
-                    if exposed_values.contains(&doc_def.name) {
+                    if module.exposed_symbols.contains(&doc_def.symbol) {
                         let mut entry_href = String::new();
 
                         entry_href.push_str(href.as_str());
                         entry_href.push('#');
                         entry_href.push_str(doc_def.name.as_str());
 
-                        entries_buf.push_str(
-                            html_to_string(
-                                "a",
-                                vec![("href", entry_href.as_str())],
-                                doc_def.name.as_str(),
-                            )
-                            .as_str(),
+                        push_html(
+                            &mut entries_buf,
+                            "a",
+                            vec![("href", entry_href.as_str())],
+                            doc_def.name.as_str(),
                         );
                     }
                 }
@@ -399,22 +388,18 @@ fn render_sidebar<'a, I: Iterator<Item = (&'a ModuleDocumentation, Vec<String>)>
             entries_buf
         };
 
-        sidebar_entry_content.push_str(
-            html_to_string(
-                "div",
-                vec![("class", "sidebar-sub-entries")],
-                entries.as_str(),
-            )
-            .as_str(),
+        push_html(
+            &mut sidebar_entry_content,
+            "div",
+            vec![("class", "sidebar-sub-entries")],
+            entries.as_str(),
         );
 
-        buf.push_str(
-            html_to_string(
-                "div",
-                vec![("class", "sidebar-entry")],
-                sidebar_entry_content.as_str(),
-            )
-            .as_str(),
+        push_html(
+            &mut buf,
+            "div",
+            vec![("class", "sidebar-entry")],
+            sidebar_entry_content.as_str(),
         );
     }
 
@@ -736,7 +721,7 @@ struct DocUrl {
 
 fn doc_url<'a>(
     home: ModuleId,
-    exposed_values: &[&str],
+    all_exposed_symbols: &VecSet<Symbol>,
     dep_idents: &IdentIdsByModule,
     scope: &Scope,
     interns: &'a Interns,
@@ -765,38 +750,22 @@ fn doc_url<'a>(
     } else {
         match interns.module_ids.get_id(&module_name.into()) {
             Some(module_id) => {
-                // You can do qualified lookups on your own module, e.g.
+                let symbol = interns.symbol(module_id, ident.into());
+
+                // Note: You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
-                if module_id == home {
-                    // Check to see if the value is exposed in this module.
-                    // If it's not exposed, then we can't link to it!
-                    if !exposed_values.contains(&ident) {
-                        // TODO return Err here
-                        panic!(
+                if !all_exposed_symbols.contains(&symbol) {
+                    // TODO return Err here
+                    panic!(
                             "Tried to generate an automatic link in docs for `{}.{}`, but `{}` does not expose `{}`.",
                             module_name, ident, module_name, ident);
-                    }
-                } else {
-                    // This is not the home module
-                    match dep_idents
-                        .get(&module_id)
-                        .and_then(|exposed_ids| exposed_ids.get_id(ident))
-                    {
-                        Some(_) => {
-                            // This is a valid symbol for this dependency,
-                            // so proceed using the current module's name.
-                            //
-                            // TODO: In the future, this is where we'll
-                            // incorporate the package name into the link.
-                        }
-                        _ => {
-                            // TODO return Err here
-                            panic!(
-                                "Tried to generate an automatic link in docs for `{}.{}`, but `{}` is not exposed in `{}`.",
-                                module_name, ident, ident, module_name);
-                        }
-                    }
                 }
+
+                // This is a valid symbol for this dependency,
+                // so proceed using the current module's name.
+                //
+                // TODO: In the future, this is where we'll
+                // incorporate the package name into the link.
             }
             None => {
                 // TODO return Err here
@@ -821,11 +790,13 @@ fn doc_url<'a>(
 }
 
 fn markdown_to_html(
-    exposed_values: &[&str],
+    buf: &mut String,
+    home: ModuleId,
+    all_exposed_symbols: &VecSet<Symbol>,
     scope: &Scope,
-    markdown: String,
+    markdown: &str,
     loaded_module: &LoadedModule,
-) -> String {
+) {
     use pulldown_cmark::{BrokenLink, CodeBlockKind, CowStr, Event, LinkType, Tag::*};
 
     let mut arena = Bump::new();
@@ -851,8 +822,8 @@ fn markdown_to_html(
                         match iter.next() {
                             Some(symbol_name) if iter.next().is_none() => {
                                 let DocUrl { url, title } = doc_url(
-                                    loaded_module.module_id,
-                                    exposed_values,
+                                    home,
+                                    all_exposed_symbols,
                                     &loaded_module.dep_idents,
                                     scope,
                                     &loaded_module.interns,
@@ -874,8 +845,8 @@ fn markdown_to_html(
                         // This looks like a tag name, but it could
                         // be a type alias that's in scope, e.g. [I64]
                         let DocUrl { url, title } = doc_url(
-                            loaded_module.module_id,
-                            exposed_values,
+                            home,
+                            all_exposed_symbols,
                             &loaded_module.dep_idents,
                             scope,
                             &loaded_module.interns,
@@ -1002,9 +973,5 @@ fn markdown_to_html(
         }
     });
 
-    let mut docs_html = String::new();
-
-    pulldown_cmark::html::push_html(&mut docs_html, docs_parser.into_iter());
-
-    docs_html
+    pulldown_cmark::html::push_html(buf, docs_parser.into_iter());
 }

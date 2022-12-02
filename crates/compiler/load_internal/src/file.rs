@@ -636,7 +636,7 @@ pub struct LoadedModule {
     pub resolved_implementations: ResolvedImplementations,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
-    pub documentation: MutMap<ModuleId, ModuleDocumentation>,
+    pub docs_by_module: MutMap<ModuleId, ModuleDocumentation>,
     pub abilities_store: AbilitiesStore,
 }
 
@@ -3429,7 +3429,7 @@ fn finish(
         resolved_implementations,
         sources,
         timings: state.timings,
-        documentation,
+        docs_by_module: documentation,
         abilities_store,
     }
 }
@@ -5251,7 +5251,7 @@ fn canonicalize_and_constrain<'a>(
         aliases,
         imported_abilities_state,
         exposed_imports,
-        &exposed_symbols,
+        exposed_symbols,
         &symbols_from_requires,
         &mut var_store,
     );
@@ -5289,9 +5289,12 @@ fn canonicalize_and_constrain<'a>(
             scope.add_docs_imports();
             let docs = crate::docs::generate_module_docs(
                 scope,
+                module_id,
+                module_ids,
                 name.as_str().into(),
                 &parsed_defs_for_docs,
                 exposed_module_ids,
+                module_output.exposed_symbols.clone(),
             );
 
             Some(docs)
@@ -5364,7 +5367,7 @@ fn canonicalize_and_constrain<'a>(
     let module = Module {
         module_id,
         exposed_imports: module_output.exposed_imports,
-        exposed_symbols,
+        exposed_symbols: module_output.exposed_symbols,
         referenced_values: module_output.referenced_values,
         referenced_types: module_output.referenced_types,
         aliases,
