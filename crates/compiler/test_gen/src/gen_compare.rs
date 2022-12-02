@@ -465,7 +465,7 @@ fn eq_rosetree() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_different_rosetrees() {
     // Requires two different equality procedures for `List (Rose I64)` and `List (Rose Str)`
     // even though both appear in the mono Layout as `List(RecursivePointer)`
