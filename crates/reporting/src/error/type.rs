@@ -1,5 +1,5 @@
 use crate::error::canonicalize::{to_circular_def_doc, CIRCULAR_DEF};
-use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
+use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
 use roc_collections::VecMap;
@@ -8,6 +8,7 @@ use roc_exhaustive::{CtorName, ListArity};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
+use roc_problem::Severity;
 use roc_region::all::{LineInfo, Region};
 use roc_solve_problem::{
     NotDerivableContext, NotDerivableDecode, NotDerivableEq, TypeError, UnderivableReason,

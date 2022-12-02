@@ -29,9 +29,8 @@ pub fn report_problems(
     can_problems: &mut MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: &mut MutMap<ModuleId, Vec<TypeError>>,
 ) -> Problems {
-    use crate::report::{
-        can_problem, type_problem, Report, RocDocAllocator, Severity::*, DEFAULT_PALETTE,
-    };
+    use crate::report::{can_problem, type_problem, Report, RocDocAllocator, DEFAULT_PALETTE};
+    use roc_problem::Severity::*;
     let palette = DEFAULT_PALETTE;
 
     // This will often over-allocate total memory, but it means we definitely
