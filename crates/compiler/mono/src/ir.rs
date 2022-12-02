@@ -4116,13 +4116,7 @@ fn specialize_naked_symbol<'a>(
                     std::vec::Vec::new(),
                     layout_cache,
                     assigned,
-                    match hole {
-                        Stmt::Jump(id, _) => env
-                            .arena
-                            .alloc(Stmt::Jump(*id, env.arena.alloc([assigned]))),
-                        Stmt::Ret(_) => env.arena.alloc(Stmt::Ret(assigned)),
-                        hole => hole,
-                    },
+                    hole,
                 );
 
                 return result;
