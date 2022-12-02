@@ -34,7 +34,7 @@ jobs:
         run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
 
       - name: regular rust tests
-        run: cargo test --locked --release --features with_sound serde && sccache --show-stats
+        run: cargo test --locked --release && sccache --show-stats
 
       - name: check that the platform`s produced dylib is loadable
         run: cd examples/platform-switching/rust-platform && LD_LIBRARY_PATH=. cargo test --release --locked
