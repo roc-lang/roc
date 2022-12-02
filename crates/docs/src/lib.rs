@@ -8,17 +8,16 @@ use html::mark_node_to_html;
 use roc_can::scope::Scope;
 use roc_code_markup::markup::nodes::MarkupNode;
 use roc_code_markup::slow_pool::SlowPool;
-use roc_collections::{default_hasher, MutMap, VecSet};
+use roc_collections::VecSet;
 use roc_highlight::highlight_parser::{highlight_defs, highlight_expr};
 use roc_load::docs::{DocEntry, TypeAnnotation};
 use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
-use roc_module::symbol::{IdentIdsByModule, Interns, ModuleId, Symbol};
+use roc_module::symbol::{Interns, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_parse::ident::{parse_ident, Ident};
 use roc_parse::state::State;
 use roc_region::all::Region;
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -95,7 +94,7 @@ pub fn generate_docs_html(root_file: PathBuf) {
     };
 
     // Write each package's module docs html file
-    for (module_id, module_docs) in loaded_module.docs_by_module.iter() {
+    for module_docs in loaded_module.docs_by_module.values() {
         let module_name = module_docs.name.as_str();
         let module_dir = build_dir.join(module_name.replace('.', "/").as_str());
 
@@ -113,13 +112,8 @@ pub fn generate_docs_html(root_file: PathBuf) {
             )
             .replace(
                 "<!-- Module Docs -->",
-                render_module_documentation(
-                    *module_id,
-                    module_docs,
-                    &loaded_module,
-                    &all_exposed_symbols,
-                )
-                .as_str(),
+                render_module_documentation(module_docs, &loaded_module, &all_exposed_symbols)
+                    .as_str(),
             );
 
         fs::write(module_dir.join("index.html"), rendered_module)
@@ -181,7 +175,6 @@ pub fn syntax_highlight_top_level_defs(code_str: &str) -> DocsResult<String> {
 }
 
 fn render_module_documentation(
-    home: ModuleId,
     module: &ModuleDocumentation,
     root_module: &LoadedModule,
     all_exposed_symbols: &VecSet<Symbol>,
@@ -236,7 +229,6 @@ fn render_module_documentation(
                     if let Some(docs) = &doc_def.docs {
                         markdown_to_html(
                             &mut buf,
-                            home,
                             all_exposed_symbols,
                             &module.scope,
                             docs,
@@ -250,8 +242,7 @@ fn render_module_documentation(
             DocEntry::DetachedDoc(docs) => {
                 markdown_to_html(
                     &mut buf,
-                    home,
-                    &all_exposed_symbols,
+                    all_exposed_symbols,
                     &module.scope,
                     docs,
                     root_module,
@@ -720,9 +711,7 @@ struct DocUrl {
 }
 
 fn doc_url<'a>(
-    home: ModuleId,
     all_exposed_symbols: &VecSet<Symbol>,
-    dep_idents: &IdentIdsByModule,
     scope: &Scope,
     interns: &'a Interns,
     mut module_name: &'a str,
@@ -791,7 +780,6 @@ fn doc_url<'a>(
 
 fn markdown_to_html(
     buf: &mut String,
-    home: ModuleId,
     all_exposed_symbols: &VecSet<Symbol>,
     scope: &Scope,
     markdown: &str,
@@ -822,9 +810,7 @@ fn markdown_to_html(
                         match iter.next() {
                             Some(symbol_name) if iter.next().is_none() => {
                                 let DocUrl { url, title } = doc_url(
-                                    home,
                                     all_exposed_symbols,
-                                    &loaded_module.dep_idents,
                                     scope,
                                     &loaded_module.interns,
                                     module_name,
@@ -845,9 +831,7 @@ fn markdown_to_html(
                         // This looks like a tag name, but it could
                         // be a type alias that's in scope, e.g. [I64]
                         let DocUrl { url, title } = doc_url(
-                            home,
                             all_exposed_symbols,
-                            &loaded_module.dep_idents,
                             scope,
                             &loaded_module.interns,
                             "",
@@ -869,7 +853,7 @@ fn markdown_to_html(
 
     let mut docs_parser = vec![];
     let (_, _) = pulldown_cmark::Parser::new_with_broken_link_callback(
-        &markdown,
+        markdown,
         markdown_options,
         Some(&mut broken_link_callback),
     )
