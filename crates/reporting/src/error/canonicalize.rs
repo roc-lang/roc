@@ -131,7 +131,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = "DEFINITION ONLY USED IN RECURSION".to_string();
-            severity = Severity::Warning;
         }
         Problem::DefsOnlyUsedInRecursion(n, region) => {
             doc = alloc.stack([
@@ -147,7 +146,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = "DEFINITIONs ONLY USED IN RECURSION".to_string();
-            severity = Severity::Warning;
         }
         Problem::ExposedButNotDefined(symbol) => {
             doc = alloc.stack([

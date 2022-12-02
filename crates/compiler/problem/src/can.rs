@@ -268,6 +268,7 @@ impl Problem {
             // injecting a crash message
             Problem::UnappliedCrash { .. } => RuntimeError,
             Problem::OverAppliedCrash { .. } => RuntimeError,
+            Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
         }
     }
 
