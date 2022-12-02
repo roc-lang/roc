@@ -1,5 +1,5 @@
+use crate::{test_utils::create_exported_function_no_locals, Instance, DEFAULT_IMPORTS};
 use bumpalo::{collections::Vec, Bump};
-use roc_wasm_interp::{test_utils::create_exported_function_no_locals, Instance, DEFAULT_IMPORTS};
 use roc_wasm_module::{
     opcodes::OpCode,
     sections::{DataMode, DataSegment, MemorySection},
