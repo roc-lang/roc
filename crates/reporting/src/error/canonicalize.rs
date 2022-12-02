@@ -123,6 +123,34 @@ pub fn can_problem<'b>(
             title = UNUSED_IMPORT.to_string();
             severity = Severity::Warning;
         }
+        Problem::DefsOnlyUsedInRecursion(1, region) => {
+            doc = alloc.stack([
+                alloc.reflow("This definition is only used in recursion with itself:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow(
+                    "If you don't intend to use or export this definition, it should be removed!",
+                ),
+            ]);
+
+            title = "DEFINITION ONLY USED IN RECURSION".to_string();
+            severity = Severity::Warning;
+        }
+        Problem::DefsOnlyUsedInRecursion(n, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("These "),
+                    alloc.string(n.to_string()),
+                    alloc.reflow(" definitions are only used in mutual recursion with themselves:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow(
+                    "If you don't intend to use or export any of them, they should all be removed!",
+                ),
+            ]);
+
+            title = "DEFINITIONs ONLY USED IN RECURSION".to_string();
+            severity = Severity::Warning;
+        }
         Problem::ExposedButNotDefined(symbol) => {
             doc = alloc.stack([
                 alloc.symbol_unqualified(symbol).append(
