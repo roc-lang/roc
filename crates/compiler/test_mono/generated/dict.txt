@@ -1,23 +1,23 @@
 procedure Dict.1 ():
-    let Dict.493 : List {[], []} = Array [];
-    let Dict.500 : U64 = 0i64;
-    let Dict.501 : U64 = 8i64;
-    let Dict.494 : List U64 = CallByName List.11 Dict.500 Dict.501;
-    let Dict.497 : I8 = CallByName Dict.33;
-    let Dict.498 : U64 = 8i64;
-    let Dict.495 : List I8 = CallByName List.11 Dict.497 Dict.498;
-    let Dict.496 : U64 = 0i64;
-    let Dict.492 : {List {[], []}, List U64, List I8, U64} = Struct {Dict.493, Dict.494, Dict.495, Dict.496};
-    ret Dict.492;
+    let Dict.508 : List {[], []} = Array [];
+    let Dict.515 : U64 = 0i64;
+    let Dict.516 : U64 = 8i64;
+    let Dict.509 : List U64 = CallByName List.11 Dict.515 Dict.516;
+    let Dict.512 : I8 = CallByName Dict.34;
+    let Dict.513 : U64 = 8i64;
+    let Dict.510 : List I8 = CallByName List.11 Dict.512 Dict.513;
+    let Dict.511 : U64 = 0i64;
+    let Dict.507 : {List {[], []}, List U64, List I8, U64} = Struct {Dict.508, Dict.509, Dict.510, Dict.511};
+    ret Dict.507;
 
-procedure Dict.33 ():
-    let Dict.499 : I8 = -128i64;
-    ret Dict.499;
+procedure Dict.34 ():
+    let Dict.514 : I8 = -128i64;
+    ret Dict.514;
 
-procedure Dict.4 (Dict.480):
-    let Dict.84 : U64 = StructAtIndex 3 Dict.480;
-    dec Dict.480;
-    ret Dict.84;
+procedure Dict.4 (Dict.495):
+    let Dict.85 : U64 = StructAtIndex 3 Dict.495;
+    dec Dict.495;
+    ret Dict.85;
 
 procedure List.11 (List.113, List.114):
     let List.410 : List I8 = CallByName List.68 List.114;
