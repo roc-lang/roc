@@ -252,6 +252,20 @@ fn from_list_void() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn to_list_empty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Set.toList Set.empty
+            "#
+        ),
+        RocList::<std::convert::Infallible>::default(),
+        RocList<std::convert::Infallible>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn from_list_result() {
     assert_evals_to!(
         indoc!(
