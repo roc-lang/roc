@@ -150,18 +150,22 @@ struct ModuleCache<'a> {
 }
 
 impl<'a> ModuleCache<'a> {
-    pub fn total_problems(&self) -> usize {
-        let mut total = 0;
+    fn has_can_errors(&self) -> bool {
+        self.can_problems
+            .values()
+            .flatten()
+            .any(|problem| problem.severity() == Severity::RuntimeError)
+    }
 
-        for problems in self.can_problems.values() {
-            total += problems.len();
-        }
+    fn has_type_errors(&self) -> bool {
+        self.type_problems
+            .values()
+            .flatten()
+            .any(|problem| problem.severity() == Severity::RuntimeError)
+    }
 
-        for problems in self.type_problems.values() {
-            total += problems.len();
-        }
-
-        total
+    pub fn has_errors(&self) -> bool {
+        self.has_can_errors() || self.has_type_errors()
     }
 }
 
@@ -2624,7 +2628,7 @@ fn update<'a>(
             let finish_type_checking = is_host_exposed &&
                 (state.goal_phase() == Phase::SolveTypes)
                 // If we're running in check-and-then-build mode, only exit now there are errors.
-                && (!state.exec_mode.build_if_checks() || state.module_cache.total_problems() > 0);
+                && (!state.exec_mode.build_if_checks() || state.module_cache.has_errors());
 
             if finish_type_checking {
                 debug_assert!(work.is_empty());
