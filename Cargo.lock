@@ -4157,6 +4157,7 @@ dependencies = [
  "brotli",
  "bumpalo",
  "flate2",
+ "fs_extra",
  "indoc",
  "pretty_assertions",
  "reqwest",
