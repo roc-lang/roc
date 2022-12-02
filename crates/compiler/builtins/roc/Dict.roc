@@ -335,23 +335,7 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
                     size: size - 1,
                 }
             else
-                # Swap with last and update index of value that used to be last.
-                dataIndex = listGetUnsafe dataIndices index
-                (T lastKey _) = listGetUnsafe data last
-                nextData =
-                    data
-                    |> List.swap dataIndex last
-                    |> List.dropLast
-
-                nextDict =
-                    @Dict {
-                        metadata: List.set metadata index deletedSlot,
-                        dataIndices,
-                        data: nextData,
-                        size: size - 1,
-                    }
-
-                updateDataIndex nextDict lastKey dataIndex
+                swapAndUpdateDataIndex (@Dict { metadata, dataIndices, data, size }) index last
 
         Err NotFound ->
             @Dict { metadata, dataIndices, data, size }
@@ -503,8 +487,9 @@ removeAll : Dict k v, Dict k v -> Dict k v | k has Hash & Eq
 removeAll = \xs, ys ->
     walk ys xs (\state, k, _ -> remove state k)
 
-updateDataIndex : Dict k v, k, Nat -> Dict k v | k has Hash & Eq
-updateDataIndex = \@Dict { metadata, dataIndices, data, size }, key, dataIndex ->
+swapAndUpdateDataIndex : Dict k v, Nat, Nat -> Dict k v | k has Hash & Eq
+swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIndex, lastIndex ->
+    (T key _) = listGetUnsafe data lastIndex
     hashKey =
         createLowLevelHasher {}
         |> Hash.hash key
@@ -515,15 +500,25 @@ updateDataIndex = \@Dict { metadata, dataIndices, data, size }, key, dataIndex -
 
     when findIndexHelper metadata dataIndices data h2Key key probe 0 is
         Ok index ->
+            dataIndex = listGetUnsafe dataIndices removedIndex
+            # Swap and remove data.
+            nextData =
+                data
+                |> List.swap dataIndex lastIndex
+                |> List.dropLast
+
             @Dict {
-                metadata,
+                # Set old metadata as deleted.
+                metadata: List.set metadata removedIndex deletedSlot,
+                # Update index of swaped element.
                 dataIndices: List.set dataIndices index dataIndex,
-                data,
-                size,
+                data: nextData,
+                size: size - 1,
             }
 
         Err NotFound ->
             # This should be impossible.
+            # TODO: Maybe crash, it would be a standard library bug?
             @Dict { metadata, dataIndices, data, size }
 
 insertNotFoundHelper : Dict k v, k, v, U64, I8 -> Dict k v
@@ -730,6 +725,12 @@ expect
 
     contains dict "baz" && Bool.not (contains dict "other")
 
+expect
+    dict = fromList [(T 1u8 1u8), (T 2 2), (T 3 3)]
+        |> remove 1
+        |> remove 3
+    keys dict == [2]
+
 # Reach capacity, no rehash.
 expect
     val =
@@ -802,10 +803,10 @@ expect
     && (get dict "h" == Ok 7)
 
 expect
-    Dict.empty
-    |> Dict.insert "Some" "Value"
-    |> Dict.remove "Some"
-    |> Dict.len
+    empty
+    |> insert "Some" "Value"
+    |> remove "Some"
+    |> len
     |> Bool.isEq 0
 
 # We have decided not to expose the standard roc hashing algorithm.
