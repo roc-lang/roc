@@ -45,8 +45,9 @@ use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
+use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
-use roc_reporting::report::{Annotation, Palette, RenderTarget, Severity};
+use roc_reporting::report::{Annotation, Palette, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
@@ -2786,7 +2787,10 @@ fn update<'a>(
             layout_cache,
             ..
         } => {
-            debug_assert!(state.goal_phase() == Phase::MakeSpecializations || state.exec_mode.build_if_checks());
+            debug_assert!(
+                state.goal_phase() == Phase::MakeSpecializations
+                    || state.exec_mode.build_if_checks()
+            );
 
             log!("made specializations for {:?}", module_id);
 
@@ -5988,7 +5992,7 @@ fn run_task<'a>(
 }
 
 fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
     let src_lines: Vec<&str> = Vec::new();
@@ -6075,7 +6079,7 @@ fn to_import_cycle_report(
     filename: PathBuf,
     render: RenderTarget,
 ) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
     // import_cycle looks like CycleModule, Import1, ..., ImportN, CycleModule
@@ -6135,7 +6139,7 @@ fn to_incorrect_module_name_report<'a>(
     src: &'a [u8],
     render: RenderTarget,
 ) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
     let IncorrectModuleName {
@@ -6221,7 +6225,7 @@ fn to_parse_problem_report<'a>(
 }
 
 fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
     use PlatformPath::*;
 
