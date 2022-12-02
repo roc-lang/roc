@@ -7,12 +7,8 @@ pub mod wasi;
 // Main external interface
 pub use instance::Instance;
 
-// Exposed for testing only. Should eventually become private.
-pub use call_stack::CallStack;
-pub use instance::Action;
-pub use value_stack::ValueStack;
-
 use roc_wasm_module::Value;
+use value_stack::ValueStack;
 
 pub trait ImportDispatcher {
     /// Dispatch a call from WebAssembly to your own code, based on module and function name.
