@@ -10,6 +10,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use tar;
+use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compression {
@@ -124,7 +125,9 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
     let arena = Bump::new();
     let mut buf = Vec::new();
 
-    let _other_modules: &[Module<'_>] = match read_header(&arena, &mut buf, path)?.header {
+    // TODO use this when finding .roc files by discovering them from the root module.
+    // let other_modules: &[Module<'_>] =
+    match read_header(&arena, &mut buf, path)?.header {
         Header::Interface(_) => {
             todo!();
             // TODO report error
@@ -137,9 +140,10 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
             todo!();
             // TODO report error
         }
+        Header::Package(_) => {
+            add_dot_roc_files(root_dir, &mut builder)?;
+        }
         Header::Platform(PlatformHeader { imports: _, .. }) => {
-            use walkdir::WalkDir;
-
             // Add all the prebuilt host files to the archive.
             // These should all be in the same directory as the platform module.
             for entry in std::fs::read_dir(root_dir)? {
@@ -170,38 +174,7 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
                 }
             }
 
-            // Recursively find all the .roc files and add them.
-            // TODO we can do this more efficiently by parsing the platform module and finding
-            // all of its dependencies. See below for a commented-out WIP sketch of this.
-            //
-            // The WalkDir approach is easier to implement, but has the downside of doing things
-            // like traversing target/ and zig-cache/ which can be large but will never have
-            // any .roc files in them!
-            for entry in WalkDir::new(root_dir).into_iter().filter_entry(|entry| {
-                let path = entry.path();
-
-                // We already got the prebuilt host files, so the only other things
-                // we care about are .roc files.
-                path.is_dir() || path.extension().and_then(OsStr::to_str) == Some("roc")
-            }) {
-                let entry = entry?;
-
-                // Only include files, not directories or symlinks.
-                // Symlinks may not work on Windows, and directories will get automatically
-                // added based on the paths of the files inside anyway. (In fact, if we don't
-                // filter out directories in this step, then empty ones will end up getting added!)
-                if entry.path().is_file() {
-                    builder.append_path_with_name(
-                        entry.path(),
-                        // Store it without the root path, so that (for example) we don't store
-                        // `examples/cli/main.roc` and therefore end up with the root of the tarball
-                        // being an `examples/cli/` dir instead of having `main.roc` in the root.
-                        entry.path().strip_prefix(root_dir).unwrap(),
-                    )?;
-                }
-            }
-
-            &[]
+            add_dot_roc_files(root_dir, &mut builder)?;
         }
     };
 
@@ -244,6 +217,37 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
     // }
 
     builder.finish()
+}
+
+fn add_dot_roc_files<W: Write>(
+    root_dir: &Path,
+    builder: &mut tar::Builder<W>,
+) -> Result<(), io::Error> {
+    Ok(
+        for entry in WalkDir::new(root_dir).into_iter().filter_entry(|entry| {
+            let path = entry.path();
+
+            // Ignore everything except directories and .roc files
+            path.is_dir() || path.extension().and_then(OsStr::to_str) == Some("roc")
+        }) {
+            let entry = entry?;
+            let path = entry.path();
+
+            // Only include files, not directories or symlinks.
+            // Symlinks may not work on Windows, and directories will get automatically
+            // added based on the paths of the files inside anyway. (In fact, if we don't
+            // filter out directories in this step, then empty ones can sometimes be added!)
+            if path.is_file() {
+                builder.append_path_with_name(
+                    path,
+                    // Store it without the root path, so that (for example) we don't store
+                    // `examples/cli/main.roc` and therefore end up with the root of the tarball
+                    // being an `examples/cli/` dir instead of having `main.roc` in the root.
+                    path.strip_prefix(root_dir).unwrap(),
+                )?;
+            }
+        },
+    )
 }
 
 fn read_header<'a>(

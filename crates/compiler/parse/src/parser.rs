@@ -127,6 +127,7 @@ pub enum EHeader<'a> {
     Start(Position),
     ModuleName(Position),
     AppName(EString<'a>, Position),
+    PackageName(EPackageName<'a>, Position),
     PlatformName(EPackageName<'a>, Position),
     IndentStart(Position),
 

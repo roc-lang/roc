@@ -9,8 +9,8 @@ use roc_parse::{
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
-        ModuleName, PackageEntry, PackageName, PlatformHeader, PlatformRequires, ProvidesTo, To,
-        TypedIdent,
+        ModuleName, PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires,
+        ProvidesTo, To, TypedIdent,
     },
     ident::UppercaseIdent,
 };
@@ -289,6 +289,13 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                 packages: header.packages.remove_spaces(arena),
                 imports: header.imports.remove_spaces(arena),
                 provides: header.provides.remove_spaces(arena),
+            }),
+            Header::Package(header) => Header::Package(PackageHeader {
+                before_name: &[],
+                name: header.name.remove_spaces(arena),
+                exposes: header.exposes.remove_spaces(arena),
+                packages: header.packages.remove_spaces(arena),
+                imports: header.imports.remove_spaces(arena),
             }),
             Header::Platform(header) => Header::Platform(PlatformHeader {
                 before_name: &[],

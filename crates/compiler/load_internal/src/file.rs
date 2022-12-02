@@ -3337,6 +3337,19 @@ fn load_platform_module<'a>(
                 ))),
                 Ok((
                     ast::Module {
+                        header: ast::Header::Package(header),
+                        ..
+                    },
+                    parser_state,
+                )) => {
+                    todo!(
+                        "Send `packag` module using {:?} and {:?}",
+                        header,
+                        parser_state
+                    )
+                }
+                Ok((
+                    ast::Module {
                         header: ast::Header::Platform(header),
                         ..
                     },
@@ -3914,6 +3927,16 @@ fn parse_header<'a>(
                 To::NewPackage(_package_name) => Ok((module_id, app_module_header_msg)),
             }
         }
+        Ok((
+            ast::Module {
+                header: ast::Header::Package(header),
+                ..
+            },
+            parse_state,
+        )) => {
+            todo!("Parse header for {:?} --> {:?}", header, parse_state);
+        }
+
         Ok((
             ast::Module {
                 header: ast::Header::Platform(header),

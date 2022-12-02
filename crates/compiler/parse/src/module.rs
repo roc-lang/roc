@@ -3,8 +3,8 @@ use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
     package_entry, package_name, AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword,
     HostedHeader, ImportsEntry, ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName,
-    PackageEntry, PackagesKeyword, PlatformHeader, PlatformRequires, ProvidesKeyword, ProvidesTo,
-    RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
+    PackageEntry, PackageHeader, PackagesKeyword, PlatformHeader, PlatformRequires,
+    ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
 };
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
@@ -66,6 +66,13 @@ fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
                     increment_min_indent(app_header())
                 ),
                 Header::App
+            ),
+            map!(
+                skip_first!(
+                    keyword_e("package", EHeader::Start),
+                    increment_min_indent(package_header())
+                ),
+                Header::Package
             ),
             map!(
                 skip_first!(
@@ -181,6 +188,18 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
         provides: specialize(EHeader::Provides, provides_to()),
     })
     .trace("app_header")
+}
+
+#[inline(always)]
+fn package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
+    record!(PackageHeader {
+        before_name: space0_e(EHeader::IndentStart),
+        name: loc!(specialize(EHeader::PackageName, package_name())),
+        exposes: specialize(EHeader::Exposes, exposes_modules()),
+        packages: specialize(EHeader::Packages, packages()),
+        imports: specialize(EHeader::Imports, imports()),
+    })
+    .trace("package_header")
 }
 
 #[inline(always)]

@@ -4,7 +4,6 @@ use crate::ident::{lowercase_ident, UppercaseIdent};
 use crate::parser::{optional, then};
 use crate::parser::{specialize, word1, EPackageEntry, EPackageName, Parser};
 use crate::string_literal;
-use bumpalo::collections::Vec;
 use roc_module::symbol::Symbol;
 use roc_region::all::Loc;
 use std::fmt::Debug;
@@ -214,14 +213,10 @@ pub struct PackageHeader<'a> {
     pub before_name: &'a [CommentOrNewline<'a>],
     pub name: Loc<PackageName<'a>>,
 
-    pub exposes_keyword: Spaces<'a, ExposesKeyword>,
-    pub exposes: Vec<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
-
-    pub packages_keyword: Spaces<'a, PackagesKeyword>,
-    pub packages: Vec<'a, (Loc<&'a str>, Loc<PackageName<'a>>)>,
-
-    pub imports_keyword: Spaces<'a, ImportsKeyword>,
-    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
+    pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>>,
+    pub packages:
+        KeywordItem<'a, PackagesKeyword, Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>,
+    pub imports: KeywordItem<'a, ImportsKeyword, Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
