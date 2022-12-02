@@ -539,9 +539,12 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
-    fn expects_dev() {
+    fn expects_dev_and_test() {
+        // these are in the same test function so we don't have to worry about race conditions
+        // on the building of the platform
+
         test_roc_app(
-            "examples/platform-switching",
+            "crates/cli_testing_examples/expects",
             "expects.roc",
             "expects",
             &[],
@@ -563,12 +566,8 @@ mod cli_run {
             ),
             UseValgrind::Yes,
             TestCliCommands::Dev,
-        )
-    }
+        );
 
-    #[test]
-    #[cfg_attr(windows, ignore)]
-    fn expects_test() {
         test_roc_app(
             "examples/platform-switching",
             "expects.roc",
@@ -600,7 +599,7 @@ mod cli_run {
             ),
             UseValgrind::Yes,
             TestCliCommands::Test,
-        )
+        );
     }
 
     #[test]
