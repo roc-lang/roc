@@ -18,8 +18,15 @@ zig-cache
 *.ll
 *.bc
 
-#valgrind
+# valgrind
 vgcore.*
+
+# roc cache files
+*.rh1
+*.rm1
+preprocessedhost
+metadata
+roc-cheaty-lib.so
 
 #editors
 .idea/

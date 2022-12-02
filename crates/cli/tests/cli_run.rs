@@ -299,7 +299,6 @@ mod cli_run {
             }
 
             if !actual.ends_with(expected_ending) {
-                pretty_assertions::assert_eq!(expected_ending, actual);
                 panic!(
                     "expected output to end with:\n{}\nbut instead got:\n{}\n stderr was:\n{}",
                     expected_ending, actual, out.stderr
