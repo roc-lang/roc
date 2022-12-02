@@ -181,7 +181,7 @@ struct Params {
     p: Vec<u32>,
     s: Vec<u32>,
     scc: Sccs,
-    scca: BitVec,
+    scca: Vec<u32>,
 }
 
 impl Params {
@@ -202,7 +202,8 @@ impl Params {
                 components: 0,
                 not_initial: BitVec::repeat(false, length),
             },
-            scca: BitVec::repeat(false, length),
+            // use u32::MAX as the sentinel empty value
+            scca: vec![u32::MAX; length],
         }
     }
 }
@@ -216,7 +217,7 @@ fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
     params.p.push(v as u32);
 
     for w in bitvec[v * length..][..length].iter_ones() {
-        if !params.scca[w] {
+        if params.scca[w] == u32::MAX {
             match params.preorders[w] {
                 Preorder::Filled(pw) => loop {
                     let index = *params.p.last().unwrap();
@@ -236,6 +237,8 @@ fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
                 Preorder::Empty => recurse_onto(length, bitvec, w, params),
                 Preorder::Removed => {}
             }
+        } else {
+            params.scc.not_initial.set(params.scca[w] as _, true);
         }
     }
 
@@ -247,7 +250,7 @@ fn recurse_onto(length: usize, bitvec: &BitVec, v: usize, params: &mut Params) {
                 .scc
                 .matrix
                 .set_row_col(params.scc.components, node as usize, true);
-            params.scca.set(node as usize, true);
+            params.scca[node as usize] = params.scc.components as _;
             params.preorders[node as usize] = Preorder::Removed;
             if node as usize == v {
                 break;
