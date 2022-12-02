@@ -727,18 +727,21 @@ expect
     contains dict "baz" && Bool.not (contains dict "other")
 
 expect
-    dict = fromList [(T 1u8 1u8), (T 2 2), (T 3 3)]
+    dict =
+        fromList [T 1u8 1u8, T 2 2, T 3 3]
         |> remove 1
         |> remove 3
+
     keys dict == [2]
 
 expect
     list =
-        fromList [(T 1u8 1u8), (T 2u8 2u8), (T 3 3)]
+        fromList [T 1u8 1u8, T 2u8 2u8, T 3 3]
         |> remove 1
         |> insert 0 0
         |> remove 3
         |> keys
+
     list == [0, 2]
 
 # Reach capacity, no rehash.
