@@ -986,10 +986,32 @@ wymix = \a, b ->
 
 wymum : U64, U64 -> { lower : U64, upper : U64 }
 wymum = \a, b ->
-    r = Num.toU128 a * Num.toU128 b
-    lower = Num.toU64 r
-    upper = Num.shiftRightZfBy r 64 |> Num.toU64
+    # uint64_t ha=*A>>32, hb=*B>>32, la=(uint32_t)*A, lb=(uint32_t)*B, hi, lo;
+    # uint64_t rh=ha*hb, rm0=ha*lb, rm1=hb*la, rl=la*lb, t=rl+(rm0<<32), c=t<rl;
+    # lo=t+(rm1<<32); c+=lo<t; hi=rh+(rm0>>32)+(rm1>>32)+c;
+    ha = Num.shiftRightZfBy a 32
+    hb = Num.shiftRightZfBy b 32
+    la = Num.bitwiseAnd a 0x0000_0000_FFFF_FFFF
+    lb = Num.bitwiseAnd b 0x0000_0000_FFFF_FFFF
+    rh = ha * hb
+    rm0 = ha * lb
+    rm1 = hb * la
+    rl = la * lb
+    t = Num.addWrap rl (Num.shiftLeftBy rm0 32)
+    c = if t < rl then 1 else 0
+    lower = Num.addWrap t (Num.shiftLeftBy rm1 32)
+    c2 = c + (if lower < t then 1 else 0)
+    upper =
+        rh
+        |> Num.addWrap (Num.shiftRightZfBy rm0 32)
+        |> Num.addWrap (Num.shiftRightZfBy rm1 32)
+        |> Num.addWrap c2
 
+    # TODO: switch back to this once wasm supports bit shifting a U128.
+    # The above code is manually doing the 128bit multiplication.
+    # r = Num.toU128 a * Num.toU128 b
+    # lower = Num.toU64 r
+    # upper = Num.shiftRightZfBy r 64 |> Num.toU64
     # This is the more robust form.
     # { lower: Num.bitwiseXor a lower, upper: Num.bitwiseXor b upper }
     { lower, upper }
