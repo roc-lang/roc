@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use crate::error::canonicalize::{to_circular_def_doc, CIRCULAR_DEF};
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
 use roc_can::expected::{Expected, PExpected};
@@ -455,7 +457,6 @@ pub fn cyclic_alias<'b>(
     (doc, "CYCLIC ALIAS".to_string())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn report_mismatch<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
@@ -501,7 +502,6 @@ fn report_mismatch<'b>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn report_bad_type<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
@@ -4102,7 +4102,6 @@ fn type_problem_to_pretty<'b>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn report_record_field_typo<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
