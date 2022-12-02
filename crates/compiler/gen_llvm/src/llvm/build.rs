@@ -37,6 +37,7 @@ use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
+use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc,
@@ -5609,4 +5610,24 @@ pub fn add_func<'ctx>(
     spec.attach_attributes(ctx, fn_val);
 
     fn_val
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum WhenRecursive<'a> {
+    Unreachable,
+    Loop(UnionLayout<'a>),
+}
+
+impl<'a> WhenRecursive<'a> {
+    pub fn unwrap_recursive_pointer(&self, layout: Layout<'a>) -> Layout<'a> {
+        match layout {
+            Layout::RecursivePointer => match self {
+                WhenRecursive::Loop(lay) => Layout::Union(*lay),
+                WhenRecursive::Unreachable => {
+                    internal_error!("cannot compare recursive pointers outside of a structure")
+                }
+            },
+            _ => layout,
+        }
+    }
 }
