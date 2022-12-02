@@ -1,5 +1,5 @@
 use bumpalo::Bump;
-use roc_load::{ExecutionMode, LoadConfig, Threading};
+use roc_load::{ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_problem::Severity;
 use roc_reporting::report::Palette;
@@ -73,7 +73,13 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
 
     let mut loaded = match loaded {
         Ok(v) => v,
-        Err(LoadingProblem::FormattedReport(report)) => {
+        Err(LoadMonomorphizedError::ErrorModule(m)) => {
+            todo!(
+                "error while loading module: {:?}",
+                (m.can_problems, m.type_problems)
+            );
+        }
+        Err(LoadMonomorphizedError::LoadingProblem(LoadingProblem::FormattedReport(report))) => {
             return (
                 None,
                 Problems {
