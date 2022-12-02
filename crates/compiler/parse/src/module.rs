@@ -197,7 +197,6 @@ fn package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
         name: loc!(specialize(EHeader::PackageName, package_name())),
         exposes: specialize(EHeader::Exposes, exposes_modules()),
         packages: specialize(EHeader::Packages, packages()),
-        imports: specialize(EHeader::Imports, imports()),
     })
     .trace("package_header")
 }

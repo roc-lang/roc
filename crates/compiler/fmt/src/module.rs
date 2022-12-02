@@ -241,8 +241,6 @@ pub fn fmt_package_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PackageHead
     fmt_exposes(buf, header.exposes.item, indent);
     header.packages.keyword.format(buf, indent);
     fmt_packages(buf, header.packages.item, indent);
-    header.imports.keyword.format(buf, indent);
-    fmt_imports(buf, header.imports.item, indent);
 }
 
 pub fn fmt_platform_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PlatformHeader<'a>) {
