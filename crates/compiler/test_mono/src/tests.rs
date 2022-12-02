@@ -2082,3 +2082,17 @@ fn anonymous_closure_lifted_to_named_issue_2403() {
         "#
     )
 }
+
+#[mono_test]
+fn toplevel_accessor_fn_thunk() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        ra = .field
+
+        main =
+            ra { field : 15u8 }
+        "#
+    )
+}

@@ -132,11 +132,6 @@ pub struct PartialProcs<'a> {
     /// maps a function name (symbol) to an index
     symbols: Vec<'a, Symbol>,
 
-    /// An entry (a, b) means `a` directly references the lambda value of `b`,
-    /// i.e. this came from a `let a = b in ...` where `b` was defined as a
-    /// lambda earlier.
-    references: Vec<'a, (Symbol, Symbol)>,
-
     partial_procs: Vec<'a, PartialProc<'a>>,
 }
 
@@ -144,7 +139,6 @@ impl<'a> PartialProcs<'a> {
     fn new_in(arena: &'a Bump) -> Self {
         Self {
             symbols: Vec::new_in(arena),
-            references: Vec::new_in(arena),
             partial_procs: Vec::new_in(arena),
         }
     }
@@ -152,16 +146,7 @@ impl<'a> PartialProcs<'a> {
         self.symbol_to_id(symbol).is_some()
     }
 
-    fn symbol_to_id(&self, mut symbol: Symbol) -> Option<PartialProcId> {
-        while let Some(real_symbol) = self
-            .references
-            .iter()
-            .find(|(alias, _)| *alias == symbol)
-            .map(|(_, real)| real)
-        {
-            symbol = *real_symbol;
-        }
-
+    fn symbol_to_id(&self, symbol: Symbol) -> Option<PartialProcId> {
         self.symbols
             .iter()
             .position(|s| *s == symbol)
@@ -191,21 +176,6 @@ impl<'a> PartialProcs<'a> {
         self.partial_procs.push(partial_proc);
 
         id
-    }
-
-    pub fn insert_alias(&mut self, alias: Symbol, real_symbol: Symbol) {
-        debug_assert!(
-            !self.contains_key(alias),
-            "{:?} is inserted as a partial proc twice: that's a bug!",
-            alias,
-        );
-        debug_assert!(
-            self.contains_key(real_symbol),
-            "{:?} is not a partial proc or another alias: that's a bug!",
-            real_symbol,
-        );
-
-        self.references.push((alias, real_symbol));
     }
 
     pub fn drain(self) -> impl Iterator<Item = (Symbol, PartialProc<'a>)> {
@@ -4146,13 +4116,7 @@ fn specialize_naked_symbol<'a>(
                     std::vec::Vec::new(),
                     layout_cache,
                     assigned,
-                    match hole {
-                        Stmt::Jump(id, _) => env
-                            .arena
-                            .alloc(Stmt::Jump(*id, env.arena.alloc([assigned]))),
-                        Stmt::Ret(_) => env.arena.alloc(Stmt::Ret(assigned)),
-                        hole => hole,
-                    },
+                    hole,
                 );
 
                 return result;
