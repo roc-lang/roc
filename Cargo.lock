@@ -3880,6 +3880,7 @@ dependencies = [
  "roc_collections",
  "roc_error_macros",
  "roc_module",
+ "roc_problem",
  "roc_region",
 ]
 

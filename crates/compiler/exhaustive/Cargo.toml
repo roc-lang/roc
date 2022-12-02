@@ -11,3 +11,4 @@ roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_error_macros = { path = "../../error_macros" }
+roc_problem = { path = "../problem" }
