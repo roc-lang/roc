@@ -15,7 +15,7 @@ mod cli_run {
     };
     use const_format::concatcp;
     use indoc::indoc;
-    use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN};
+    use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN, CMD_TEST};
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
@@ -57,9 +57,10 @@ mod cli_run {
 
     #[derive(Debug)]
     enum CliMode {
+        Roc,      // buildAndRunIfNoErrors
         RocBuild, // buildOnly
         RocRun,   // buildAndRun
-        Roc,      // buildAndRunIfNoErrors
+        RocTest,
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -104,6 +105,25 @@ mod cli_run {
         assert_eq!(out.status.success(), expects_success_exit_code);
     }
 
+    fn run_roc_on_failure_is_panic<'a, I: IntoIterator<Item = &'a str>>(
+        file: &'a Path,
+        args: I,
+        stdin: &[&str],
+        roc_app_args: &[String],
+        env: &[(&str, &str)],
+    ) -> Out {
+        let compile_out = run_roc_on(file, args, stdin, roc_app_args, env);
+
+        assert!(
+            compile_out.status.success(),
+            "\n___________\nRoc command failed with status {:?}:\n\n  {:?}\n___________\n",
+            compile_out.status,
+            compile_out
+        );
+
+        compile_out
+    }
+
     fn run_roc_on<'a, I: IntoIterator<Item = &'a str>>(
         file: &'a Path,
         args: I,
@@ -132,13 +152,6 @@ mod cli_run {
         if !(stderr.is_empty() || is_reporting_runtime) {
             panic!("\n___________\nThe roc command:\n\n  {:?}\n\nhad unexpected stderr:\n\n  {}\n___________\n", compile_out.cmd_str, stderr);
         }
-
-        assert!(
-            compile_out.status.success(),
-            "\n___________\nRoc command failed with status {:?}:\n\n  {:?}\n___________\n",
-            compile_out.status,
-            compile_out
-        );
 
         compile_out
     }
@@ -174,7 +187,7 @@ mod cli_run {
             match test_cli_commands {
                 TestCliCommands::Many => vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc],
                 TestCliCommands::Run => vec![CliMode::Roc],
-                TestCliCommands::Test => vec![],
+                TestCliCommands::Test => vec![CliMode::RocTest],
                 TestCliCommands::Dev => vec![CliMode::Roc],
             }
         };
@@ -193,7 +206,7 @@ mod cli_run {
 
             let out = match cli_mode {
                 CliMode::RocBuild => {
-                    run_roc_on(
+                    run_roc_on_failure_is_panic(
                         file,
                         iter::once(CMD_BUILD).chain(flags.clone()),
                         &[],
@@ -254,26 +267,46 @@ mod cli_run {
                         )
                     }
                 }
-                CliMode::Roc => run_roc_on(file, flags.clone(), stdin, roc_app_args, extra_env),
-                CliMode::RocRun => run_roc_on(
+                CliMode::Roc => {
+                    run_roc_on_failure_is_panic(file, flags.clone(), stdin, roc_app_args, extra_env)
+                }
+                CliMode::RocRun => run_roc_on_failure_is_panic(
                     file,
                     iter::once(CMD_RUN).chain(flags.clone()),
                     stdin,
                     roc_app_args,
                     extra_env,
                 ),
+                CliMode::RocTest => {
+                    // here failure is what we expect
+
+                    run_roc_on(
+                        file,
+                        iter::once(CMD_TEST).chain(flags.clone()),
+                        stdin,
+                        roc_app_args,
+                        extra_env,
+                    )
+                }
             };
 
-            let actual = strip_colors(&out.stdout);
+            let mut actual = strip_colors(&out.stdout);
+
+            // e.g. "1 failed and 0 passed in 123 ms."
+            if let Some(split) = actual.rfind("passed in ") {
+                let (before_first_digit, _) = actual.split_at(split);
+                actual = format!("{}passed in <ignored for test> ms.", before_first_digit);
+            }
 
             if !actual.ends_with(expected_ending) {
+                pretty_assertions::assert_eq!(expected_ending, actual);
                 panic!(
                     "expected output to end with:\n{}\nbut instead got:\n{}\n stderr was:\n{}",
                     expected_ending, actual, out.stderr
                 );
             }
 
-            if !out.status.success() {
+            if !out.status.success() && !matches!(cli_mode, CliMode::RocTest) {
                 // We don't need stdout, Cargo prints it for us.
                 panic!(
                     "Example program exited with status {:?}\nstderr was:\n{:#?}",
@@ -506,7 +539,7 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
-    fn expects() {
+    fn expects_dev() {
         test_roc_app(
             "examples/platform-switching",
             "expects.roc",
@@ -530,6 +563,43 @@ mod cli_run {
             ),
             UseValgrind::Yes,
             TestCliCommands::Dev,
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn expects_test() {
+        test_roc_app(
+            "examples/platform-switching",
+            "expects.roc",
+            "expects",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 6│>  expect
+                 7│>      a = 1
+                 8│>      b = 2
+                 9│>
+                10│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Num *
+                a = 1
+
+                b : Num *
+                b = 2
+                
+
+
+                1 failed and 0 passed in <ignored for test> ms."#
+            ),
+            UseValgrind::Yes,
+            TestCliCommands::Test,
         )
     }
 

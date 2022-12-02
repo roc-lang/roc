@@ -3,13 +3,13 @@ app "expects"
     imports []
     provides [main] to pf
 
-expect 
+expect
     a = 1
     b = 2
 
     a == b
 
-main = 
+main =
     x = 42
-    expect x != x 
+    expect x != x
     "Program finished!"
