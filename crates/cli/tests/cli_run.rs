@@ -21,6 +21,14 @@ mod cli_run {
     use std::iter;
     use std::path::Path;
 
+    #[derive(Debug, Clone, Copy)]
+    enum TestCliCommands {
+        Many,
+        Run,
+        Test,
+        Dev,
+    }
+
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
     const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
     const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
@@ -138,7 +146,7 @@ mod cli_run {
         extra_env: &[(&str, &str)],
         expected_ending: &str,
         use_valgrind: bool,
-        test_many_cli_commands: bool, // buildOnly, buildAndRun and buildAndRunIfNoErrors
+        test_cli_commands: TestCliCommands,
     ) {
         // valgrind does not yet support avx512 instructions, see #1963.
         // we can't enable this only when testing with valgrind because of host re-use between tests
@@ -149,14 +157,18 @@ mod cli_run {
 
         // TODO: expects don't currently work on windows
         let cli_commands = if cfg!(windows) {
-            match test_many_cli_commands {
-                true => vec![CliMode::RocBuild, CliMode::RocRun],
-                false => vec![CliMode::RocRun],
+            match test_cli_commands {
+                TestCliCommands::Many => vec![CliMode::RocBuild, CliMode::RocRun],
+                TestCliCommands::Run => vec![CliMode::RocRun],
+                TestCliCommands::Test => vec![],
+                TestCliCommands::Dev => vec![],
             }
         } else {
-            match test_many_cli_commands {
-                true => vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc],
-                false => vec![CliMode::Roc],
+            match test_cli_commands {
+                TestCliCommands::Many => vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc],
+                TestCliCommands::Run => vec![CliMode::Roc],
+                TestCliCommands::Test => vec![],
+                TestCliCommands::Dev => vec![CliMode::Roc],
             }
         };
 
@@ -245,10 +257,12 @@ mod cli_run {
                 ),
             };
 
-            if !&out.stdout.ends_with(expected_ending) {
+            let actual = strip_colors(&out.stdout);
+
+            if !actual.ends_with(expected_ending) {
                 panic!(
-                    "expected output to end with {:?} but instead got {:#?} - stderr was: {:#?}",
-                    expected_ending, out.stdout, out.stderr
+                    "expected output to end with:\n{}\nbut instead got:\n{}\n stderr was:\n{}",
+                    expected_ending, actual, out.stderr
                 );
             }
 
@@ -279,7 +293,7 @@ mod cli_run {
             &[],
             expected_ending,
             use_valgrind,
-            false,
+            TestCliCommands::Run,
         )
     }
 
@@ -293,7 +307,7 @@ mod cli_run {
         extra_env: &[(&str, &str)],
         expected_ending: &str,
         use_valgrind: bool,
-        test_many_cli_commands: bool, // buildOnly, buildAndRun and buildAndRunIfNoErrors
+        test_cli_commands: TestCliCommands,
     ) {
         let file_name = file_path_from_root(dir_name, roc_filename);
         let mut roc_app_args: Vec<String> = Vec::new();
@@ -366,7 +380,7 @@ mod cli_run {
             extra_env,
             expected_ending,
             use_valgrind,
-            test_many_cli_commands,
+            test_cli_commands,
         );
 
         custom_flags.push(OPTIMIZE_FLAG);
@@ -382,7 +396,7 @@ mod cli_run {
             extra_env,
             expected_ending,
             use_valgrind,
-            test_many_cli_commands,
+            test_cli_commands,
         );
 
         // Also check with the legacy linker.
@@ -397,7 +411,7 @@ mod cli_run {
                 extra_env,
                 expected_ending,
                 use_valgrind,
-                test_many_cli_commands,
+                test_cli_commands,
             );
         }
     }
@@ -484,6 +498,35 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore)]
+    fn expects() {
+        test_roc_app(
+            "examples/platform-switching",
+            "expects.roc",
+            "expects",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                This expectation failed:
+
+                8│      expect x != x
+                               ^^^^^^
+
+                When it failed, these variables had these values:
+
+                x : Num *
+                x = 42
+
+                "#
+            ),
+            true,
+            TestCliCommands::Dev,
+        )
+    }
+
+    #[test]
     #[cfg_attr(
         windows,
         ignore = "this platform is broken, and `roc run --lib` is missing on windows"
@@ -551,7 +594,7 @@ mod cli_run {
             &[],
             "4\n",
             false,
-            false,
+            TestCliCommands::Run,
         )
     }
 
@@ -577,7 +620,7 @@ mod cli_run {
             &[],
             "hi there!\nIt is known\n",
             true,
-            false,
+            TestCliCommands::Run,
         )
     }
 
@@ -594,7 +637,7 @@ mod cli_run {
             &[],
             "Hello Worldfoo!\n",
             true,
-            false,
+            TestCliCommands::Run,
         )
     }
 
@@ -610,7 +653,7 @@ mod cli_run {
             &[],
             &("Hello, World!".to_string() + LINE_ENDING),
             false,
-            true,
+            TestCliCommands::Many,
         )
     }
 
@@ -631,7 +674,7 @@ mod cli_run {
             &[],
             "Processed 3 files with 3 successes and 0 errors\n",
             false,
-            false,
+            TestCliCommands::Run,
         )
     }
 
@@ -654,7 +697,7 @@ mod cli_run {
             Your current shell level is 3!\n\
             Your favorite letters are: a c e j\n",
             false,
-            false,
+            TestCliCommands::Run,
         )
     }
 
@@ -673,6 +716,7 @@ mod cli_run {
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
     // this is for testing the benchmarks, to perform proper benchmarks see crates/cli/benches/README.md
     mod test_benchmarks {
+        use super::TestCliCommands;
         use cli_utils::helpers::cli_testing_dir;
 
         use super::{check_output_with_stdin, OPTIMIZE_FLAG, PREBUILT_PLATFORM};
@@ -742,7 +786,7 @@ mod cli_run {
                     &[],
                     expected_ending,
                     use_valgrind,
-                    false,
+                    TestCliCommands::Run,
                 );
 
                 ran_without_optimizations = true;
@@ -762,7 +806,7 @@ mod cli_run {
                     &[],
                     expected_ending,
                     use_valgrind,
-                    false,
+                    TestCliCommands::Run,
                 );
             }
 
@@ -775,7 +819,7 @@ mod cli_run {
                 &[],
                 expected_ending,
                 use_valgrind,
-                false,
+                TestCliCommands::Run,
             );
         }
 
@@ -861,7 +905,7 @@ mod cli_run {
                 &[],
                 expected_ending,
                 use_valgrind,
-                false,
+                TestCliCommands::Run,
             );
 
             check_output_with_stdin(
@@ -872,7 +916,7 @@ mod cli_run {
                 &[],
                 expected_ending,
                 use_valgrind,
-                false,
+                TestCliCommands::Run,
             );
         }
 
@@ -987,7 +1031,7 @@ mod cli_run {
             &[],
             "I am Dep2.str2\n",
             true,
-            false,
+            TestCliCommands::Run,
         );
     }
 
@@ -1004,7 +1048,7 @@ mod cli_run {
             &[],
             "I am Dep2.str2\n",
             true,
-            false,
+            TestCliCommands::Run,
         );
     }
 
@@ -1021,7 +1065,7 @@ mod cli_run {
             &[],
             "I am Dep2.value2\n",
             true,
-            false,
+            TestCliCommands::Run,
         );
     }
 
@@ -1038,7 +1082,7 @@ mod cli_run {
             &[],
             "I am Dep2.value2\n",
             true,
-            false,
+            TestCliCommands::Run,
         );
     }
 
