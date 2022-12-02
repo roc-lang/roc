@@ -33,8 +33,8 @@ pub struct Instance<'a, I: ImportDispatcher> {
     block_loop_addrs: Vec<'a, Option<u32>>,
     /// Outermost block depth for the currently-executing function.
     outermost_block: u32,
-    /// Signature indices (in the TypeSection) of all imported (non-WebAssembly) functions
-    import_signatures: Vec<'a, u32>,
+    /// Cache to remember which imports are functions (rather than memories etc.)
+    import_fn_indices: Vec<'a, u32>,
     /// Import dispatcher from user code
     import_dispatcher: I,
     /// Temporary storage for import arguments
@@ -63,7 +63,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             program_counter,
             block_loop_addrs: Vec::new_in(arena),
             outermost_block: 0,
-            import_signatures: Vec::new_in(arena),
+            import_fn_indices: Vec::new_in(arena),
             import_dispatcher,
             import_arguments: Vec::new_in(arena),
             debug_string: Some(String::new()),
@@ -87,12 +87,16 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
 
         let globals = module.global.initial_values(arena);
 
-        // Gather imported function signatures into a vector, for simpler lookup
-        let import_signatures = {
+        // Find which import indices are functions, and cache them in a lookup vector.
+        // (We ignore other import types: memories, tables, and globals)
+        let import_fn_indices = {
             let imports_iter = module.import.imports.iter();
-            let sig_iter = imports_iter.filter_map(|imp| match imp.description {
-                ImportDesc::Func { signature_index } => Some(signature_index),
-                _ => None,
+            let sig_iter = imports_iter.enumerate().filter_map(|(i, imp)| {
+                if imp.is_function() {
+                    Some(i as u32)
+                } else {
+                    None
+                }
             });
             Vec::from_iter_in(sig_iter, arena)
         };
@@ -114,7 +118,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             program_counter: usize::MAX,
             block_loop_addrs: Vec::new_in(arena),
             outermost_block: 0,
-            import_signatures,
+            import_fn_indices,
             import_dispatcher,
             import_arguments: Vec::new_in(arena),
             debug_string,
@@ -205,7 +209,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         };
 
         let arg_type_bytes = {
-            let internal_fn_index = fn_index as usize - self.import_signatures.len();
+            let internal_fn_index = fn_index as usize - self.import_fn_indices.len();
             let signature_index = module.function.signatures[internal_fn_index];
             module.types.look_up_arg_type_bytes(signature_index)
         };
@@ -335,11 +339,21 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         fn_index: usize,
         module: &WasmModule<'a>,
     ) {
-        let n_imports = self.import_signatures.len();
-        let signature_index: u32 = if fn_index < n_imports {
-            self.import_signatures[fn_index]
+        let n_imports = self.import_fn_indices.len();
+
+        let (signature_index, opt_import) = if fn_index < n_imports {
+            // Imported non-Wasm function
+            let import_index = self.import_fn_indices[fn_index] as usize;
+            let import = &module.import.imports[import_index];
+            let sig = match import.description {
+                ImportDesc::Func { signature_index } => signature_index,
+                _ => unreachable!(),
+            };
+            (sig, Some(import))
         } else {
-            module.function.signatures[fn_index - n_imports]
+            // Wasm function
+            let sig = module.function.signatures[fn_index - n_imports];
+            (sig, None)
         };
 
         if let Some(expected) = expected_signature {
@@ -352,13 +366,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
 
         let arg_type_bytes = module.types.look_up_arg_type_bytes(signature_index);
 
-        if fn_index < n_imports {
-            // Call an imported non-Wasm function
-            let mut import_fns = module.import.imports.iter().filter(|imp| imp.is_function());
-            let import = import_fns
-                .nth(fn_index)
-                .unwrap_or_else(|| unreachable!("Imported function {} not found", fn_index));
-
+        if let Some(import) = opt_import {
             self.import_arguments.clear();
             self.import_arguments
                 .extend(std::iter::repeat(Value::I64(0)).take(arg_type_bytes.len()));
@@ -378,7 +386,6 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.value_stack.push(return_val);
             }
         } else {
-            // call an internal Wasm function
             let return_addr = self.program_counter as u32;
             self.program_counter = module.code.function_offsets[fn_index] as usize;
 
