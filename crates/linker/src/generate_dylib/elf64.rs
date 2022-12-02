@@ -34,26 +34,57 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
 
     writer.reserve_file_header();
 
+    const PLACEHOLDER: u64 = 0xAAAAAAAAAAAAAAAA;
     let mut program_headers = [
+        object::write::elf::ProgramHeader {
+            p_type: object::elf::PT_PHDR,
+            p_flags: object::elf::PF_R,
+            p_offset: 0x40,
+            p_vaddr: 0x40,
+            p_paddr: 0x40,
+            p_filesz: 0x188,
+            p_memsz: 0x188,
+            p_align: 1 << 3,
+        },
         object::write::elf::ProgramHeader {
             p_type: object::elf::PT_LOAD,
             p_flags: object::elf::PF_R | object::elf::PF_W,
-            p_offset: 0,
-            p_vaddr: 0,
-            p_paddr: 0,
-            p_filesz: 0,
-            p_memsz: 0,
+            p_offset: PLACEHOLDER,
+            p_vaddr: PLACEHOLDER,
+            p_paddr: PLACEHOLDER,
+            p_filesz: PLACEHOLDER,
+            p_memsz: PLACEHOLDER,
             p_align: 1 << 12,
         },
         object::write::elf::ProgramHeader {
             p_type: object::elf::PT_DYNAMIC,
             p_flags: object::elf::PF_R | object::elf::PF_W,
+            p_offset: PLACEHOLDER,
+            p_vaddr: PLACEHOLDER,
+            p_paddr: PLACEHOLDER,
+            p_filesz: PLACEHOLDER,
+            p_memsz: PLACEHOLDER,
+            p_align: 1 << 3,
+        },
+        object::write::elf::ProgramHeader {
+            p_type: object::elf::PT_GNU_RELRO,
+            p_flags: object::elf::PF_R,
+            p_offset: PLACEHOLDER,
+            p_vaddr: PLACEHOLDER,
+            p_paddr: PLACEHOLDER,
+            p_filesz: PLACEHOLDER,
+            p_memsz: PLACEHOLDER,
+            p_align: 1 << 1,
+        },
+        object::write::elf::ProgramHeader {
+            p_type: object::elf::PT_GNU_STACK,
+            p_flags: object::elf::PF_R,
             p_offset: 0,
             p_vaddr: 0,
             p_paddr: 0,
             p_filesz: 0,
             p_memsz: 0,
-            p_align: 1 << 3,
+            p_align: 0,
         },
     ];
 
@@ -72,6 +103,8 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
         (elf::DT_NULL, 0, None),
     ];
 
+    let dyn_size = std::mem::size_of::<elf::Dyn64<Endianness>>() * out_dynamic.len();
+
     // aligned to the next multiple of 8
     let dynamic_address = next_multiple_of(writer.reserved_len(), 8);
     writer.reserve_dynamic(out_dynamic.len());
@@ -84,12 +117,22 @@ pub fn create_dylib_elf64(custom_names: &[String]) -> object::read::Result<Vec<u
     // just enough program header info to satisfy the dynamic loader
     for program_header in program_headers.iter_mut() {
         match program_header.p_type {
-            object::elf::PT_LOAD | object::elf::PT_DYNAMIC => {
+            elf::PT_LOAD | elf::PT_DYNAMIC | elf::PT_GNU_RELRO => {
                 program_header.p_offset = dynamic_address as u64;
                 program_header.p_vaddr = dynamic_address as u64 + 0x1000;
                 program_header.p_paddr = dynamic_address as u64 + 0x1000;
-                program_header.p_filesz = 0x8;
-                program_header.p_memsz = 0x8;
+
+                // this puts the dynamic section inside of the segments, so
+                //
+                //  Section to Segment mapping:
+                //   Segment Sections...
+                //    00
+                //    01     .dynamic
+                //    02     .dynamic
+                //    03     .dynamic
+                //    04
+                program_header.p_filesz = dyn_size as u64;
+                program_header.p_memsz = dyn_size as u64;
             }
             _ => {}
         }
