@@ -2840,8 +2840,16 @@ fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
 
                 stack.push(&final_else.value);
             }
-            Expr::LetRec(_, _, _) => todo!(),
-            Expr::LetNonRec { .. } => todo!(),
+            Expr::LetRec(defs, expr, _illegal_cycle_mark) => {
+                for def in defs {
+                    stack.push(&def.loc_expr.value);
+                }
+                stack.push(&expr.value);
+            }
+            Expr::LetNonRec(def, expr) => {
+                stack.push(&def.loc_expr.value);
+                stack.push(&expr.value);
+            }
             Expr::Call(boxed_expr, args, _called_via) => {
                 stack.reserve(1 + args.len());
 
