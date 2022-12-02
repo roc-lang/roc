@@ -1,8 +1,8 @@
 #![cfg(test)]
 
+use super::{const_value, create_exported_function_no_locals, default_state};
+use crate::{instance::Action, ImportDispatcher, Instance, ValueStack, DEFAULT_IMPORTS};
 use bumpalo::{collections::Vec, Bump};
-use roc_wasm_interp::test_utils::{const_value, create_exported_function_no_locals, default_state};
-use roc_wasm_interp::{Action, ImportDispatcher, Instance, ValueStack, DEFAULT_IMPORTS};
 use roc_wasm_module::sections::{Import, ImportDesc};
 use roc_wasm_module::{
     opcodes::OpCode, sections::ElementSegment, Export, ExportType, SerialBuffer, Serialize,
