@@ -1092,3 +1092,22 @@ fn update_record_that_is_a_thunk_single_field() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn toplevel_accessor_fn_thunk() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            ra = .field
+
+            main =
+            ra { field : 15u8 }
+            "#
+        ),
+        15u8,
+        u8
+    )
+}
