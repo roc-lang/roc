@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::test_utils::test_op_example;
+use super::test_op_example;
 use roc_wasm_module::{opcodes::OpCode::*, Value};
 
 #[test]

@@ -1,7 +1,7 @@
 #![cfg(test)]
 
-use crate::test_utils::{const_value, create_exported_function_no_locals, default_state};
-use crate::{Action, ImportDispatcher, Instance, ValueStack, DEFAULT_IMPORTS};
+use super::{const_value, create_exported_function_no_locals, default_state};
+use crate::{instance::Action, ImportDispatcher, Instance, ValueStack, DEFAULT_IMPORTS};
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::sections::{Import, ImportDesc};
 use roc_wasm_module::{

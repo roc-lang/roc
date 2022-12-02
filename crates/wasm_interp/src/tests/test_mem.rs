@@ -1,4 +1,5 @@
-use crate::{test_utils::create_exported_function_no_locals, Instance, DEFAULT_IMPORTS};
+use super::create_exported_function_no_locals;
+use crate::{Instance, DEFAULT_IMPORTS};
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::{
     opcodes::OpCode,

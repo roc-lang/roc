@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::test_utils::test_op_example;
+use super::test_op_example;
 use roc_wasm_module::{opcodes::OpCode, opcodes::OpCode::*, Value};
 
 fn test_f64_comparison(op: OpCode, arg1: f64, arg2: f64, expected: bool) {

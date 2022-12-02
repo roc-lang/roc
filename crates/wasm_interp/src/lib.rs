@@ -1,6 +1,5 @@
 mod call_stack;
 mod instance;
-pub mod test_utils;
 mod tests;
 mod value_stack;
 pub mod wasi;
