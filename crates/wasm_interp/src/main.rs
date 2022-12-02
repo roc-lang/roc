@@ -42,10 +42,9 @@ fn main() -> io::Result<()> {
         .required(true);
 
     let args_for_app = Arg::new(ARGS_FOR_APP)
-        .help("Arguments to pass into the WebAssembly app\ne.g. `roc_wasm_interp app.wasm -- 123 123.45`")
+        .help("Arguments to pass into the WebAssembly app\ne.g. `roc_wasm_interp app.wasm 123 123.45`")
         .multiple_values(true)
-        .takes_value(true)
-        .last(true);
+        .takes_value(true);
 
     let app = Command::new("roc_wasm_interp")
         .about("Run the given .wasm file")
