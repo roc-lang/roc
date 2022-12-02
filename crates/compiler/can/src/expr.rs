@@ -2778,7 +2778,7 @@ pub struct DestructureDef {
     pub pattern_vars: VecMap<Symbol, Variable>,
 }
 
-fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
+pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
     let mut stack: Vec<&Expr> = vec![expr];
     let mut lookups: Vec<ExpectLookup> = Vec::new();
 
