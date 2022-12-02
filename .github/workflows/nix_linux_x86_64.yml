@@ -18,6 +18,12 @@ jobs:
       - uses: actions/checkout@v3
         with:
           clean: "true"
+          
+      - name: test building default.nix
+        run: nix-build
+
+      - name: test building flake
+        run: nix build    
 
       - name: execute tests with --release
         run: nix develop -c cargo test --locked --release
