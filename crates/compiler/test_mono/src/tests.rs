@@ -2049,3 +2049,50 @@ fn crash() {
         "#
     )
 }
+
+#[mono_test]
+fn function_pointer_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        number = \{} -> 1u64
+
+        parse = \parser -> parser {}
+
+        main =
+            parser = number
+            parse parser
+        "#
+    )
+}
+
+#[mono_test]
+fn anonymous_closure_lifted_to_named_issue_2403() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            f =
+                n = 1
+                \{} -> n
+            g = f {}
+            g
+        "#
+    )
+}
+
+#[mono_test]
+fn toplevel_accessor_fn_thunk() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        ra = .field
+
+        main =
+            ra { field : 15u8 }
+        "#
+    )
+}

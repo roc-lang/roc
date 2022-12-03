@@ -70,8 +70,27 @@ pub fn install_package<'a>(
                     // Create the destination dir's parent dir, since it may not exist yet.
                     fs::create_dir_all(parent_dir).map_err(Problem::IoErr)?;
 
-                    // This should be super cheap - just an inode change.
-                    fs::rename(tempdir_path, &dest_dir).map_err(Problem::IoErr)?;
+                    // This rename should be super cheap if it succeeds - just an inode change.
+                    if fs::rename(tempdir_path, &dest_dir).is_err() {
+                        // If the rename failed, try a recursive copy -
+                        // it could have failed due to std::io::ErrorKind::CrossesDevices
+                        // (e.g. if the source an destination directories are on different disks)
+                        // which as of this implementation is nightly-only
+                        // https://doc.rust-lang.org/std/io/enum.ErrorKind.html#variant.CrossesDevices                       match io_err.kind() {
+                        // but if that's what happened, this should work!
+
+                        // fs_extra::dir::copy needs the destination directory to exist already.
+                        fs::create_dir(&dest_dir).map_err(Problem::IoErr)?;
+                        fs_extra::dir::copy(
+                            tempdir_path,
+                            &dest_dir,
+                            &fs_extra::dir::CopyOptions {
+                                content_only: true,
+                                ..Default::default()
+                            },
+                        )
+                        .map_err(Problem::FsExtraErr)?;
+                    }
 
                     // The package's files are now in the cache. We're done!
                     Ok((dest_dir, root_module_filename))

@@ -1588,7 +1588,7 @@ fn float_type(
                 num_binary64,
                 AliasVariables::default(),
                 Variable::EMPTY_TAG_UNION,
-                AliasKind::Structural,
+                AliasKind::Opaque,
             )
         });
     }
@@ -2135,6 +2135,8 @@ impl Subs {
         is_inhabited(self, var)
     }
 
+    /// Is the ground constructor (in the layout-determination sense) of this type a function?
+    /// That is, is this a function modulo aliases and opaques?
     pub fn is_function(&self, mut var: Variable) -> bool {
         loop {
             match self.get_content_without_compacting(var) {

@@ -8414,4 +8414,21 @@ mod solve_expr {
             "[Ok a]* -> a",
         );
     }
+
+    #[test]
+    fn resolve_eq_for_float_forces_dec() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                n : Num *
+
+                main = n == 1.
+                #      ^
+                "#
+            ),
+        @"n : Dec"
+        );
+    }
 }

@@ -565,7 +565,6 @@ pub fn parse_single_def<'a>(
 
     let start = state.pos();
 
-    let parse_dbg = crate::parser::keyword_e(crate::keyword::DBG, EExpect::Dbg);
     let parse_expect_vanilla = crate::parser::keyword_e(crate::keyword::EXPECT, EExpect::Expect);
     let parse_expect_fx = crate::parser::keyword_e(crate::keyword::EXPECT_FX, EExpect::Expect);
     let parse_expect = either!(parse_expect_fx, parse_expect_vanilla);
@@ -578,24 +577,8 @@ pub fn parse_single_def<'a>(
         Err((NoProgress, _)) => {
             match parse_expect.parse(arena, state.clone(), min_indent) {
                 Err((_, _)) => {
-                    match parse_dbg.parse(arena, state, min_indent) {
-                        Ok((_, _, state)) => parse_statement_inside_def(
-                            arena,
-                            state,
-                            min_indent,
-                            start,
-                            spaces_before_current_start,
-                            spaces_before_current,
-                            |preceding_comment, loc_def_expr| ValueDef::Dbg {
-                                condition: arena.alloc(loc_def_expr),
-                                preceding_comment,
-                            },
-                        ),
-                        Err((_, _)) => {
-                            // a hacky way to get expression-based error messages. TODO fix this
-                            Ok((NoProgress, None, initial))
-                        }
-                    }
+                    // a hacky way to get expression-based error messages. TODO fix this
+                    Ok((NoProgress, None, initial))
                 }
                 Ok((_, expect_flavor, state)) => parse_statement_inside_def(
                     arena,

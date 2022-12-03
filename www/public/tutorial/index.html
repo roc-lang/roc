@@ -541,7 +541,7 @@ accessed these <code>r</code>, <code>g</code>, and <code>b</code> defs after the
 <p>A tag can also have a payload with more than one value. Instead of <code>Custom { r: 40, g: 60, b: 80 }</code> we could
 write <code>Custom 40 60 80</code>. If we did that, then instead of destructuring a record with <code>Custom { r, g, b } <span class="op">-&gt;</span></code>
 inside a <code>when</code>, we would write <code>Custom r g b <span class="op">-&gt;</span></code> to destructure the values directly out of the payload.</p>
-<p>We refer to whatever comes before a ode>-&gt;</code> in a <code>when</code> expression as a <em>pattern</em> - so for example, in the
+<p>We refer to whatever comes before a <code>-&gt;</code> in a <code>when</code> expression as a <em>pattern</em> - so for example, in the
 <code>Custom description <span class="op">-&gt;</span> description</code> branch, <code>Custom description</code> would be a pattern. In programming, using
 patterns in branching conditionals like <code>when</code> is known as <a href="https://en.wikipedia.org/wiki/Pattern_matching">pattern matching</a>. You may hear people say things like "let's pattern match on <code>Custom</code> here" as a way to
 suggest making a <code>when</code> branch that begins with something like <code>Custom description <span class="op">-&gt;</span></code>.</p>

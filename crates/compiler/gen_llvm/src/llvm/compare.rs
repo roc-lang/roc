@@ -1,4 +1,6 @@
-use crate::llvm::build::{get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV};
+use crate::llvm::build::{
+    get_tag_id, tag_pointer_clear_tag_id, Env, WhenRecursive, FAST_CALL_CONV,
+};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::basic_type_from_layout;
@@ -16,12 +18,6 @@ use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use super::build::{load_roc_value, use_roc_value};
 use super::convert::argument_type_from_union_layout;
 use super::lowlevel::dec_binop_with_unchecked;
-
-#[derive(Clone, Debug)]
-enum WhenRecursive<'a> {
-    Unreachable,
-    Loop(UnionLayout<'a>),
-}
 
 pub fn generic_eq<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -406,8 +402,9 @@ fn build_list_eq<'a, 'ctx, 'env>(
     let di_location = env.builder.get_current_debug_location().unwrap();
 
     let symbol = Symbol::LIST_EQ;
+    let element_layout = when_recursive.unwrap_recursive_pointer(*element_layout);
     let fn_name = layout_ids
-        .get(symbol, element_layout)
+        .get(symbol, &element_layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
@@ -427,7 +424,7 @@ fn build_list_eq<'a, 'ctx, 'env>(
                 layout_ids,
                 when_recursive,
                 function_value,
-                element_layout,
+                &element_layout,
             );
 
             function_value

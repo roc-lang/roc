@@ -700,12 +700,12 @@ dropLast = \list ->
 
 ## Returns the given number of elements from the beginning of the list.
 ##
-## >>> List.takeFirst 4 [1, 2, 3, 4, 5, 6, 7, 8]
+## >>> List.takeFirst [1, 2, 3, 4, 5, 6, 7, 8] 4
 ##
 ## If there are fewer elements in the list than the requested number,
 ## returns the entire list.
 ##
-## >>> List.takeFirst 5 [1, 2]
+## >>> List.takeFirst [1, 2] 5
 ##
 ## To *remove* elements from the beginning of the list, use `List.takeLast`.
 ##
@@ -720,7 +720,7 @@ dropLast = \list ->
 ## to the given length value, and frees the leftover elements. This runs very
 ## slightly faster than `List.takeLast`.
 ##
-## In fact, `List.takeFirst 1 list` runs faster than `List.first list` when given
+## In fact, `List.takeFirst list 1` runs faster than `List.first list` when given
 ## a Unique list, because [List.first] returns the first element as well -
 ## which introduces a conditional bounds check as well as a memory load.
 takeFirst : List elem, Nat -> List elem
@@ -729,12 +729,12 @@ takeFirst = \list, outputLength ->
 
 ## Returns the given number of elements from the end of the list.
 ##
-## >>> List.takeLast 4 [1, 2, 3, 4, 5, 6, 7, 8]
+## >>> List.takeLast [1, 2, 3, 4, 5, 6, 7, 8] 4
 ##
 ## If there are fewer elements in the list than the requested number,
 ## returns the entire list.
 ##
-## >>> List.takeLast 5 [1, 2]
+## >>> List.takeLast [1, 2] 5
 ##
 ## To *remove* elements from the end of the list, use `List.takeFirst`.
 ##
@@ -750,7 +750,7 @@ takeFirst = \list, outputLength ->
 ## and frees the leftover elements. This runs very nearly as fast as
 ## `List.takeFirst` on a Unique list.
 ##
-## In fact, `List.takeLast 1 list` runs faster than `List.first list` when given
+## In fact, `List.takeLast list 1` runs faster than `List.first list` when given
 ## a Unique list, because [List.first] returns the first element as well -
 ## which introduces a conditional bounds check as well as a memory load.
 takeLast : List elem, Nat -> List elem

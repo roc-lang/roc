@@ -442,8 +442,8 @@ mod test {
                 main = 0
 
                 expect
-                    vec1 = { x: 1.0, y: 2.0 }
-                    vec2 = { x: 4.0, y: 8.0 }
+                    vec1 = { x: 1.0f64, y: 2.0f64 }
+                    vec2 = { x: 4.0f64, y: 8.0f64 }
 
                     vec1 == vec2
                 "#
@@ -453,17 +453,17 @@ mod test {
                 This expectation failed:
 
                 5│>  expect
-                6│>      vec1 = { x: 1.0, y: 2.0 }
-                7│>      vec2 = { x: 4.0, y: 8.0 }
+                6│>      vec1 = { x: 1.0f64, y: 2.0f64 }
+                7│>      vec2 = { x: 4.0f64, y: 8.0f64 }
                 8│>
                 9│>      vec1 == vec2
 
                 When it failed, these variables had these values:
 
-                vec1 : { x : Frac *, y : Frac * }
+                vec1 : { x : F64, y : F64 }
                 vec1 = { x: 1, y: 2 }
 
-                vec2 : { x : Frac *, y : Frac * }
+                vec2 : { x : F64, y : F64 }
                 vec2 = { x: 4, y: 8 }
                 "#
             ),
