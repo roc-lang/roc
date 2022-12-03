@@ -20,10 +20,7 @@ jobs:
           clean: "true"
           
       - name: test building default.nix
-        run: nix-build
-
-      - name: test building flake
-        run: nix build    
+        run: nix-build 
 
       - name: execute tests with --release
         run: nix develop -c cargo test --locked --release
