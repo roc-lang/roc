@@ -145,15 +145,12 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         self.call_export_help(module, arg_type_bytes)
     }
 
-    pub fn call_export_from_cli<'arg, A>(
+    pub fn call_export_from_cli(
         &mut self,
         module: &WasmModule<'a>,
         fn_name: &str,
-        arg_strings: A,
-    ) -> Result<Option<Value>, String>
-    where
-        A: IntoIterator<Item = &'arg str>,
-    {
+        arg_strings: &'a [&'a String],
+    ) -> Result<Option<Value>, String> {
         let arg_type_bytes = self.prepare_to_call_export(module, fn_name)?;
 
         for (value_str, type_byte) in arg_strings.into_iter().zip(arg_type_bytes.iter().copied()) {
@@ -246,7 +243,6 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 // We just popped the stack frame for the entry function. Terminate the program.
                 Action::Break
             } else {
-                dbg!(return_addr, block_depth);
                 self.program_counter = return_addr as usize;
                 self.outermost_block = block_depth;
                 Action::Continue
@@ -374,9 +370,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             if let Some(return_val) = optional_return_val {
                 self.value_stack.push(return_val);
             }
+            if let Some(debug_string) = self.debug_string.as_mut() {
+                std::write!(debug_string, " {}.{}", import.module, import.name).unwrap();
+            }
         } else {
             let return_addr = self.program_counter as u32;
-            self.program_counter = module.code.function_offsets[fn_index] as usize;
+            let internal_fn_index = fn_index - n_import_fns;
+            self.program_counter = module.code.function_offsets[internal_fn_index] as usize;
 
             let return_block_depth = self.outermost_block;
             self.outermost_block = self.block_loop_addrs.len() as u32;
@@ -407,6 +407,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         }
 
         let mut action = Action::Continue;
+        let mut implicit_return = false;
 
         match op_code {
             UNREACHABLE => {
@@ -461,6 +462,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 if self.block_loop_addrs.len() == self.outermost_block as usize {
                     // implicit RETURN at end of function
                     action = self.do_return();
+                    implicit_return = true;
                 } else {
                     self.block_loop_addrs.pop().unwrap();
                 }
@@ -1457,6 +1459,18 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             let base = self.call_stack.value_stack_base();
             let slice = self.value_stack.get_slice(base as usize);
             eprintln!("{:#07x} {:17} {:?}", file_offset, debug_string, slice);
+            if op_code == RETURN || (op_code == END && implicit_return) {
+                let next_code_section_index = module
+                    .code
+                    .function_offsets
+                    .iter()
+                    .position(|o| *o as usize > self.program_counter)
+                    .unwrap_or(module.code.function_offsets.len());
+                let fn_index = module.import.imports.len() + next_code_section_index - 1;
+                eprintln!("returning to function {}\n", fn_index);
+            } else if op_code == CALL || op_code == CALLINDIRECT {
+                eprintln!("");
+            }
         }
 
         action

@@ -1,4 +1,4 @@
-use bumpalo::Bump;
+use bumpalo::{collections::Vec, Bump};
 use clap::ArgAction;
 use clap::{Arg, Command};
 use std::ffi::OsString;
@@ -6,7 +6,7 @@ use std::fs;
 use std::io;
 use std::process;
 
-use roc_wasm_interp::{Instance, DEFAULT_IMPORTS};
+use roc_wasm_interp::{DefaultImportDispatcher, Instance};
 use roc_wasm_module::WasmModule;
 
 pub const FLAG_FUNCTION: &str = "function";
@@ -61,10 +61,7 @@ fn main() -> io::Result<()> {
     let start_fn_name = matches.get_one::<String>(FLAG_FUNCTION).unwrap();
     let is_debug_mode = matches.get_flag(FLAG_DEBUG);
     let is_hex_format = matches.get_flag(FLAG_HEX);
-    let start_arg_strings = matches
-        .get_many::<String>(ARGS_FOR_APP)
-        .unwrap_or_default()
-        .map(|s| s.as_str());
+    let start_arg_strings = matches.get_many::<String>(ARGS_FOR_APP).unwrap_or_default();
 
     // Load the WebAssembly binary file
 
@@ -87,15 +84,17 @@ fn main() -> io::Result<()> {
 
     // Create an execution instance
 
-    let mut inst = Instance::for_module(&arena, &module, DEFAULT_IMPORTS, is_debug_mode)
-        .unwrap_or_else(|e| {
+    let args = Vec::from_iter_in(start_arg_strings, &arena);
+    let dispatcher = DefaultImportDispatcher::new(&args);
+    let mut inst =
+        Instance::for_module(&arena, &module, dispatcher, is_debug_mode).unwrap_or_else(|e| {
             eprintln!("{}", e);
             process::exit(2);
         });
 
     // Run
 
-    let result = inst.call_export_from_cli(&module, start_fn_name, start_arg_strings);
+    let result = inst.call_export_from_cli(&module, start_fn_name, &args);
 
     // Print out return value, if any
 
