@@ -1,22 +1,35 @@
-{ rev ? "a7855f2235a1876f97473a76151fec2afa02b287", # nixpkgs master. Keep up to date with "nixpkgs">"locked">"rev" in flake.lock
-nixpkgsSource ? builtins.fetchTarball {
-  url = "https://github.com/nixos/nixpkgs/tarball/${rev}";
-  sha256 = "sha256-5DGKX81wIPAAiLwUmUYECpA3vop94AHHR7WmGXSsQok=";
-}, pkgs ? import nixpkgsSource { }
-, cargoSha256 ? "sha256-Qmriwe+xSL5/pU8oqqj5Qw6H179KYqOljWl0rpPD6MY=", }:
+{ rev ? (builtins.fromJSON (builtins.readFile ./flake.lock)).nodes.nixpkgs.locked.rev
+, nixpkgsSource ? builtins.fetchTarball {
+    url = "https://github.com/nixos/nixpkgs/tarball/${rev}";
+    sha256 = (builtins.fromJSON (builtins.readFile ./flake.lock)).nodes.nixpkgs.locked.narHash;
+  }
+, pkgs ? import nixpkgsSource { }
+,
+}:
 # we only this file to release a nix package, use flake.nix for development
 let
   rustPlatform = pkgs.rustPlatform;
   llvmPkgs = pkgs.llvmPackages_13;
   # nix does not store libs in /usr/lib or /lib
   nixGlibcPath = if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
-in rustPlatform.buildRustPackage {
+in
+rustPlatform.buildRustPackage {
   pname = "roc";
   version = "0.0.1";
 
   src = pkgs.nix-gitignore.gitignoreSource [ ] ./.;
 
-  inherit cargoSha256;
+  cargoLock = {
+    lockFile = ./Cargo.lock;
+    outputHashes = {
+      "confy-0.5.0" = "sha256-BVTczVbURL1Id/k/5ArlDQTZxLuI3XxQl7BdIx230U4=";
+      "criterion-0.3.5" = "sha256-7REd3phV6PBzqWwKF8hwttw4FTq2tKGxxAAJDpLC50A=";
+      "inkwell-0.1.0" = "sha256-vhFbiGP8FxMoLkapctPYmkfV+tO6x4KkoC3FwCHcy/4=";
+      "plotters-0.3.1" = "sha256-noy/RSjoEPZZbOJTZw1yxGcX5S+2q/7mxnUrzDyxOFw=";
+      "rustyline-9.1.1" = "sha256-aqQqz6nSp+Qn44gm3jXmmQUO6/fYTx7iLph2tbA24Bs=";
+      "wasm3-0.5.0" = "sha256-Hi1LDBIYW6k+nmvPc6Kwh+l875xg7ikLMV9TvFHXZYQ=";
+    };
+  };
 
   LLVM_SYS_130_PREFIX = "${llvmPkgs.llvm.dev}";
 
@@ -77,15 +90,14 @@ in rustPlatform.buildRustPackage {
 
   # cp: to copy str.zig,list.zig...
   # wrapProgram pkgs.stdenv.cc: to make ld available for compiler/build/src/link.rs
-  postInstall = if pkgs.stdenv.isLinux then ''
-    cp -r target/x86_64-unknown-linux-gnu/release/lib/. $out/lib
-    wrapProgram $out/bin/roc --set NIX_GLIBC_PATH ${nixGlibcPath} --prefix PATH : ${
-      pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
-    }
-  '' else ''
-    cp -r target/aarch64-apple-darwin/release/lib/. $out/lib
-    wrapProgram $out/bin/roc --prefix PATH : ${
-      pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
-    }
-  '';
+  postInstall =
+    if pkgs.stdenv.isLinux then ''
+      wrapProgram $out/bin/roc --set NIX_GLIBC_PATH ${nixGlibcPath} --prefix PATH : ${
+        pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
+      }
+    '' else ''
+      wrapProgram $out/bin/roc --prefix PATH : ${
+        pkgs.lib.makeBinPath [ pkgs.stdenv.cc ]
+      }
+    '';
 }
