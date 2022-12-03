@@ -27,7 +27,7 @@ rustPlatform.buildRustPackage {
       "inkwell-0.1.0" = "sha256-vhFbiGP8FxMoLkapctPYmkfV+tO6x4KkoC3FwCHcy/4=";
       "plotters-0.3.1" = "sha256-noy/RSjoEPZZbOJTZw1yxGcX5S+2q/7mxnUrzDyxOFw=";
       "rustyline-9.1.1" = "sha256-aqQqz6nSp+Qn44gm3jXmmQUO6/fYTx7iLph2tbA24Bs=";
-      "wasm3-0.5.0" = "sha256-RwAZ4hjdDk/MvY1S1ymduqn+ubNPQdkMcXJHU2Zxq8k=";
+      "wasm3-0.5.0" = "sha256-Hi1LDBIYW6k+nmvPc6Kwh+l875xg7ikLMV9TvFHXZYQ=";
     };
   };
 
