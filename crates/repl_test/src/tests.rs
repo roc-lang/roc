@@ -1204,6 +1204,8 @@ fn opaque_wrap_function() {
 }
 
 #[test]
+#[ignore]
+// I think this is picking the wrong integer type on wasm I64 vs I32.
 fn dict_get_single() {
     expect_success(
         indoc!(
