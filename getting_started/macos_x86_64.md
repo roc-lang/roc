@@ -2,7 +2,9 @@
 
 ## How to install Roc
 
-:warning: we do not yet support MacOS 13
+:warning: We do not yet officially support MacOS 13. But, as long as you are not using a zig or wasm platform most things should work fine.
+
+:warning: Macos x86_64 nightly releases lag behind the others due to [unresolved test failures](https://github.com/roc-lang/roc/issues/4655). The `dbg` keyword is not yet supported, as well as importing platforms using URLs. For the platform you can use the path instead, like in [this example](https://github.com/roc-lang/roc/blob/main/examples/helloWorld.roc).
 
 In order to develop in Roc, you need to install the Roc CLI,
 which includes the Roc compiler and various helpful utilities.
