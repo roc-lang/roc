@@ -7,6 +7,8 @@ use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
 use roc_types::types::AliasKind;
 
+use crate::Severity;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CycleEntry {
     pub symbol: Symbol,
@@ -205,6 +207,71 @@ pub enum Problem {
 }
 
 impl Problem {
+    pub fn severity(&self) -> Severity {
+        use Severity::{RuntimeError, Warning};
+
+        match self {
+            Problem::UnusedDef(_, _) => Warning,
+            Problem::UnusedImport(_, _) => Warning,
+            Problem::UnusedModuleImport(_, _) => Warning,
+            Problem::ExposedButNotDefined(_) => RuntimeError,
+            Problem::UnknownGeneratesWith(_) => RuntimeError,
+            Problem::UnusedArgument(_, _, _, _) => Warning,
+            Problem::UnusedBranchDef(_, _) => Warning,
+            Problem::PrecedenceProblem(_) => RuntimeError,
+            Problem::UnsupportedPattern(_, _) => RuntimeError,
+            Problem::Shadowing { .. } => RuntimeError,
+            Problem::CyclicAlias(..) => RuntimeError,
+            Problem::BadRecursion(_) => RuntimeError,
+            Problem::PhantomTypeArgument { .. } => Warning,
+            Problem::UnboundTypeVariable { .. } => RuntimeError,
+            Problem::DuplicateRecordFieldValue { .. } => Warning,
+            Problem::DuplicateRecordFieldType { .. } => RuntimeError,
+            Problem::InvalidOptionalValue { .. } => RuntimeError,
+            Problem::DuplicateTag { .. } => RuntimeError,
+            Problem::RuntimeError(_) => RuntimeError,
+            Problem::SignatureDefMismatch { .. } => RuntimeError,
+            Problem::InvalidAliasRigid { .. } => RuntimeError,
+            Problem::InvalidInterpolation(_) => RuntimeError,
+            Problem::InvalidHexadecimal(_) => RuntimeError,
+            Problem::InvalidUnicodeCodePt(_) => RuntimeError,
+            Problem::NestedDatatype { .. } => RuntimeError,
+            Problem::InvalidExtensionType { .. } => RuntimeError,
+            Problem::AbilityHasTypeVariables { .. } => RuntimeError,
+            Problem::HasClauseIsNotAbility { .. } => RuntimeError,
+            Problem::IllegalHasClause { .. } => RuntimeError,
+            Problem::DuplicateHasAbility { .. } => Warning,
+            Problem::AbilityMemberMissingHasClause { .. } => RuntimeError,
+            Problem::AbilityMemberMultipleBoundVars { .. } => RuntimeError,
+            Problem::AbilityNotOnToplevel { .. } => RuntimeError, // Ideally, could be compiled
+            Problem::AbilityUsedAsType(_, _, _) => RuntimeError,
+            Problem::NestedSpecialization(_, _) => RuntimeError, // Ideally, could be compiled
+            Problem::IllegalDerivedAbility(_) => RuntimeError,
+            Problem::ImplementationNotFound { .. } => RuntimeError,
+            Problem::NotAnAbilityMember { .. } => RuntimeError,
+            Problem::OptionalAbilityImpl { .. } => RuntimeError,
+            Problem::QualifiedAbilityImpl { .. } => RuntimeError,
+            Problem::AbilityImplNotIdent { .. } => RuntimeError,
+            Problem::DuplicateImpl { .. } => Warning, // First impl is used at runtime
+            Problem::NotAnAbility(_) => Warning,
+            Problem::ImplementsNonRequired { .. } => Warning,
+            Problem::DoesNotImplementAbility { .. } => RuntimeError,
+            Problem::NotBoundInAllPatterns { .. } => RuntimeError,
+            Problem::NoIdentifiersIntroduced(_) => Warning,
+            Problem::OverloadedSpecialization { .. } => Warning, // Ideally, will compile
+            Problem::UnnecessaryOutputWildcard { .. } => Warning,
+            // TODO: sometimes this can just be a warning, e.g. if you have [1, .., .., 2] but we
+            // don't catch that yet.
+            Problem::MultipleListRestPattern { .. } => RuntimeError,
+            Problem::BadTypeArguments { .. } => RuntimeError,
+            // TODO: this can be a warning instead if we recover the program by
+            // injecting a crash message
+            Problem::UnappliedCrash { .. } => RuntimeError,
+            Problem::OverAppliedCrash { .. } => RuntimeError,
+            Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
+        }
+    }
+
     /// Returns a Region value from the Problem, if possible.
     /// Some problems have more than one region; in those cases,
     /// this tries to pick the one that's closest to the original

@@ -19,9 +19,10 @@ mod test_reporting {
     use roc_parse::module::parse_header;
     use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
+    use roc_problem::Severity;
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
-        can_problem, parse_problem, type_problem, RenderTarget, Report, Severity, ANSI_STYLE_CODES,
+        can_problem, parse_problem, type_problem, RenderTarget, Report, ANSI_STYLE_CODES,
         DEFAULT_PALETTE,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};

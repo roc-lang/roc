@@ -5,6 +5,8 @@ app "env"
 
 main : Task {} []
 main =
+    f = ""
+
     task =
         Env.decode "EDITOR"
         |> Task.await (\editor -> Stdout.line "Your favorite editor is \(editor)!")

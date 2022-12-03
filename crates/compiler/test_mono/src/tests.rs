@@ -16,6 +16,7 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 use roc_collections::all::MutMap;
 use roc_load::ExecutionMode;
 use roc_load::LoadConfig;
+use roc_load::LoadMonomorphizedError;
 use roc_load::Threading;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
@@ -113,7 +114,9 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
+        Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
+            report,
+        ))) => {
             println!("{}", report);
             panic!();
         }

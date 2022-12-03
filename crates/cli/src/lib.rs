@@ -359,8 +359,9 @@ pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
 
 #[cfg(not(windows))]
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
+    use roc_build::program::report_problems_monomorphized;
     use roc_gen_llvm::llvm::build::LlvmBackendMode;
-    use roc_load::{ExecutionMode, LoadConfig};
+    use roc_load::{ExecutionMode, LoadConfig, LoadMonomorphizedError};
     use roc_packaging::cache;
     use roc_target::TargetInfo;
 
@@ -425,18 +426,26 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         threading,
         exec_mode: ExecutionMode::Test,
     };
-    let loaded = roc_load::load_and_monomorphize(
+    let load_result = roc_load::load_and_monomorphize(
         arena,
         path.to_path_buf(),
         subs_by_module,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         load_config,
-    )
-    .unwrap();
+    );
 
-    let mut loaded = loaded;
+    let mut loaded = match load_result {
+        Ok(loaded) => loaded,
+        Err(LoadMonomorphizedError::LoadingProblem(problem)) => {
+            return handle_loading_problem(problem);
+        }
+        Err(LoadMonomorphizedError::ErrorModule(module)) => {
+            return handle_error_module(module, start_time.elapsed(), filename, false);
+        }
+    };
+    let problems = report_problems_monomorphized(&mut loaded);
+
     let mut expectations = std::mem::take(&mut loaded.expectations);
-    let loaded = loaded;
 
     let interns = loaded.interns.clone();
 
@@ -449,6 +458,19 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     )
     .unwrap();
 
+    // Print warnings before running tests.
+    {
+        debug_assert_eq!(
+            problems.errors, 0,
+            "if there were errors, we would have already exited."
+        );
+        if problems.warnings > 0 {
+            print_problems(problems, start_time.elapsed());
+            println!(".\n\nRunning tests…\n\n\x1B[36m{}\x1B[39m", "─".repeat(80));
+        }
+    }
+
+    // Run the tests.
     let arena = &bumpalo::Bump::new();
     let interns = arena.alloc(interns);
 
@@ -733,35 +755,51 @@ pub fn build(
                 }
             }
         }
-        Err(BuildFileError::ErrorModule {
-            mut module,
-            total_time,
-        }) => {
-            debug_assert!(module.total_problems() > 0);
-
-            let problems = roc_build::program::report_problems_typechecked(&mut module);
-
-            print_problems(problems, total_time);
-
-            print!(".\n\nYou can run the program anyway with \x1B[32mroc run");
-
-            // If you're running "main.roc" then you can just do `roc run`
-            // to re-run the program.
-            if filename != DEFAULT_ROC_FILENAME {
-                print!(" {}", &filename.to_string_lossy());
-            }
-
-            println!("\x1B[39m");
-
-            Ok(problems.exit_code())
+        Err(BuildFileError::ErrorModule { module, total_time }) => {
+            handle_error_module(module, total_time, filename, true)
         }
-        Err(BuildFileError::LoadingProblem(LoadingProblem::FormattedReport(report))) => {
-            print!("{}", report);
+        Err(BuildFileError::LoadingProblem(problem)) => handle_loading_problem(problem),
+    }
+}
 
+fn handle_error_module(
+    mut module: roc_load::LoadedModule,
+    total_time: std::time::Duration,
+    filename: &OsStr,
+    print_run_anyway_hint: bool,
+) -> io::Result<i32> {
+    debug_assert!(module.total_problems() > 0);
+
+    let problems = roc_build::program::report_problems_typechecked(&mut module);
+
+    print_problems(problems, total_time);
+
+    if print_run_anyway_hint {
+        // If you're running "main.roc" then you can just do `roc run`
+        // to re-run the program.
+        print!(".\n\nYou can run the program anyway with \x1B[32mroc run");
+
+        if filename != DEFAULT_ROC_FILENAME {
+            print!(" {}", &filename.to_string_lossy());
+        }
+
+        println!("\x1B[39m");
+    }
+
+    Ok(problems.exit_code())
+}
+
+fn handle_loading_problem(problem: LoadingProblem) -> io::Result<i32> {
+    match problem {
+        LoadingProblem::FormattedReport(report) => {
+            print!("{}", report);
             Ok(1)
         }
-        Err(other) => {
-            panic!("build_file failed with error:\n{:?}", other);
+        _ => {
+            // TODO: tighten up the types here, we should always end up with a
+            // formatted report from load.
+            print!("Failed with error: {:?}", problem);
+            Ok(1)
         }
     }
 }

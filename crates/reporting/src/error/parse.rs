@@ -1,8 +1,9 @@
 use roc_parse::parser::{ENumber, FileError, PList, SyntaxError};
+use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
 
-use crate::report::{Report, RocDocAllocator, RocDocBuilder, Severity};
+use crate::report::{Report, RocDocAllocator, RocDocBuilder};
 use ven_pretty::DocAllocator;
 
 pub fn parse_problem<'a>(
