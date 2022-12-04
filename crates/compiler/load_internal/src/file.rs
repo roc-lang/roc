@@ -1162,6 +1162,7 @@ enum BuildTask<'a> {
     },
 }
 
+#[derive(Debug)]
 enum WorkerMsg {
     Shutdown,
     TaskAdded,
@@ -2118,6 +2119,31 @@ fn worker_task<'a>(
                 // added. In that case, do nothing, and keep waiting
                 // until we receive a Shutdown message.
                 if let Some(task) = find_task(&worker, injector, stealers) {
+                    log!(
+                        ">>> {}",
+                        match &task {
+                            BuildTask::LoadModule { module_name, .. } => {
+                                format!("BuildTask::LoadModule({:?})", module_name)
+                            }
+                            BuildTask::Parse { header } => {
+                                format!("BuildTask::Parse({})", header.module_path.display())
+                            }
+                            BuildTask::CanonicalizeAndConstrain { parsed, .. } => format!(
+                                "BuildTask::CanonicalizeAndConstrain({})",
+                                parsed.module_path.display()
+                            ),
+                            BuildTask::Solve { module, .. } => {
+                                format!("BuildTask::Solve({:?})", module.module_id)
+                            }
+                            BuildTask::BuildPendingSpecializations { module_id, .. } => {
+                                format!("BuildTask::BuildPendingSpecializations({:?})", module_id)
+                            }
+                            BuildTask::MakeSpecializations { module_id, .. } => {
+                                format!("BuildTask::MakeSpecializations({:?})", module_id)
+                            }
+                        }
+                    );
+
                     let result = run_task(
                         task,
                         worker_arena,
@@ -2329,6 +2355,12 @@ fn update<'a>(
                             root_module,
                         }
                     };
+
+                    log!(
+                        "New package shorthand: {:?} => {:?}",
+                        shorthand,
+                        shorthand_path
+                    );
 
                     shorthands.insert(shorthand, shorthand_path);
                 }
