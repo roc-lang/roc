@@ -24,6 +24,7 @@ ROC_WORKSPACE_DIR = { value = "", relative = true }
 # Set = "1" to turn a debug flag on.
 ROC_PRETTY_PRINT_ALIAS_CONTENTS     = "0"
 ROC_PRINT_UNIFICATIONS              = "0"
+ROC_PRINT_UNDERIVABLE               = "0"
 ROC_TRACE_COMPACTION                = "0"
 ROC_PRINT_UNIFICATIONS_DERIVED      = "0"
 ROC_PRINT_MISMATCHES                = "0"

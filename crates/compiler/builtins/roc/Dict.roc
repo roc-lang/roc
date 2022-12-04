@@ -4,13 +4,18 @@ interface Dict
         empty,
         withCapacity,
         single,
-        get,
-        walk,
-        insert,
+        clear,
+        capacity,
         len,
+        get,
+        contains,
+        insert,
         remove,
         update,
-        contains,
+        walk,
+        walkUntil,
+        toList,
+        fromList,
         keys,
         values,
         insertAll,
@@ -22,8 +27,8 @@ interface Dict
         Result.{ Result },
         List,
         Str,
-        Num.{ Nat, U64, U8 },
-        Hash.{ Hasher },
+        Num.{ Nat, U64, U8, I8 },
+        Hash.{ Hasher, Hash },
     ]
 
 ## A [dictionary](https://en.wikipedia.org/wiki/Associative_array) that lets you
@@ -74,45 +79,103 @@ interface Dict
 ## does. It removes an element and moves the most recent insertion into the
 ## vacated spot.
 ##
-## This move is done as a performance optimization, and it lets [Dict.remove]
-## have [constant time complexity](https://en.wikipedia.org/wiki/Time_complexity#Constant_time).
+## This move is done as a performance optimization, and it lets [remove] have
+## [constant time complexity](https://en.wikipedia.org/wiki/Time_complexity#Constant_time). ##
 ##
-## ### Equality
-##
-## Two dictionaries are equal when their contents and orderings match. This
-## means that when `dict1 == dict2`, the expression `fn dict1 == fn dict2` will
-## also evaluate to `Bool.true`. The function `fn` can count on the ordering of
-## values in the dictionary to also match.
-Dict k v := List [Pair k v] has [Eq]
+## Dict is inspired by [IndexMap](https://docs.rs/indexmap/latest/indexmap/map/struct.IndexMap.html).
+## The internal implementation of a dictionary is similar to [absl::flat_hash_map](https://abseil.io/docs/cpp/guides/container).
+## It has a list of keys value pairs that is ordered based on insertion.
+## It uses a list of indices into the data as the backing of a hash map.
+Dict k v := {
+    # TODO: Add hashflooding ordered map fall back.
+    # TODO: Add Groups and SIMD h1 key comparison (initial tests where slower, but with proper SIMD should be fast).
+    # TODO: As an optimization, we can make all of these lists in one allocation
+    # TODO: Grow data with the rest of the hashmap. This will require creating a list of garbage data.
+    # TODO: Change remove to use tombstones. Store the tombstones in a bitmap.
+    # TODO: define Eq and Hash that are unordered. Only if value has hash/eq?
+    metadata : List I8,
+    dataIndices : List Nat,
+    data : List (T k v),
+    size : Nat,
+} | k has Hash & Eq
 
 ## Return an empty dictionary.
-empty : Dict k v
-empty = @Dict []
+empty : Dict k v | k has Hash & Eq
+empty =
+    @Dict {
+        metadata: List.repeat emptySlot 8,
+        dataIndices: List.repeat 0 8,
+        data: [],
+        size: 0,
+    }
+
+## Returns the max number of elements the dictionary can hold before requiring a rehash.
+capacity : Dict k v -> Nat | k has Hash & Eq
+capacity = \@Dict { dataIndices } ->
+    cap = List.len dataIndices
+
+    cap - Num.shiftRightZfBy cap 3
 
 ## Return a dictionary with space allocated for a number of entries. This
 ## may provide a performance optimisation if you know how many entries will be
 ## inserted.
-withCapacity : Nat -> Dict k v
-withCapacity = \n -> @Dict (List.withCapacity n)
+withCapacity : Nat -> Dict k v | k has Hash & Eq
+withCapacity = \_ ->
+    # TODO: power of 2 * 8 and actual implementation
+    empty
 
-## Get the value for a given key. If there is a value for the specified key it
-## will return [Ok value], otherwise return [Err KeyNotFound].
+## Returns a dictionary containing the key and value provided as input.
 ##
-##     dictionary =
+##     expect
+##         Dict.single "A" "B"
+##         |> Bool.isEq (Dict.insert Dict.empty "A" "B")
+single : k, v -> Dict k v | k has Hash & Eq
+single = \k, v ->
+    insert empty k v
+
+## Returns dictionary with the keys and values specified by the input [List].
+##
+##     expect
+##         Dict.single 1 "One"
+##         |> Dict.insert 2 "Two"
+##         |> Dict.insert 3 "Three"
+##         |> Dict.insert 4 "Four"
+##         |> Bool.isEq (Dict.fromList [T 1 "One", T 2 "Two", T 3 "Three", T 4 "Four"])
+fromList : List (T k v) -> Dict k v | k has Hash & Eq
+fromList = \data ->
+    # TODO: make this efficient. Should just set data and then set all indicies in the hashmap.
+    List.walk data empty (\dict, T k v -> insert dict k v)
+
+## Returns the number of values in the dictionary.
+##
+##     expect
 ##         Dict.empty
-##         |> Dict.insert 1 "Apple"
-##         |> Dict.insert 2 "Orange"
-##
-##     expect Dict.get dictionary 1 == Ok "Apple"
-##     expect Dict.get dictionary 2000 == Err KeyNotFound
-get : Dict k v, k -> Result v [KeyNotFound] | k has Eq
-get = \@Dict list, needle ->
-    when List.findFirst list (\Pair key _ -> key == needle) is
-        Ok (Pair _ v) ->
-            Ok v
+##         |> Dict.insert "One" "A Song"
+##         |> Dict.insert "Two" "Candy Canes"
+##         |> Dict.insert "Three" "Boughs of Holly"
+##         |> Dict.len
+##         |> Bool.isEq 3
+len : Dict k v -> Nat | k has Hash & Eq
+len = \@Dict { size } ->
+    size
 
-        Err NotFound ->
-            Err KeyNotFound
+## Clears all elements from a dictionary keeping around the allocation if it isn't huge.
+clear : Dict k v -> Dict k v | k has Hash & Eq
+clear = \@Dict { metadata, dataIndices, data } ->
+    cap = List.len dataIndices
+
+    # Only clear large allocations.
+    if cap > 128 * 8 then
+        empty
+    else
+        @Dict {
+            metadata: List.map metadata (\_ -> emptySlot),
+            # just leave data indicies as garbage, no need to clear.
+            dataIndices,
+            # use takeFirst to keep around the capacity.
+            data: List.takeFirst data 0,
+            size: 0,
+        }
 
 ## Iterate through the keys and values in the dictionary and call the provided
 ## function with signature `state, k, v -> state` for each value, with an
@@ -124,9 +187,78 @@ get = \@Dict list, needle ->
 ##         |> Dict.insert "Orange" 24
 ##         |> Dict.walk 0 (\count, _, qty -> count + qty)
 ##         |> Bool.isEq 36
-walk : Dict k v, state, (state, k, v -> state) -> state
-walk = \@Dict list, initialState, transform ->
-    List.walk list initialState (\state, Pair k v -> transform state k v)
+walk : Dict k v, state, (state, k, v -> state) -> state | k has Hash & Eq
+walk = \@Dict { data }, initialState, transform ->
+    List.walk data initialState (\state, T k v -> transform state k v)
+
+## Same as [Dict.walk], except you can stop walking early.
+##
+## ## Performance Details
+##
+## Compared to [Dict.walk], this can potentially visit fewer elements (which can
+## improve performance) at the cost of making each step take longer.
+## However, the added cost to each step is extremely small, and can easily
+## be outweighed if it results in skipping even a small number of elements.
+##
+## As such, it is typically better for performance to use this over [Dict.walk]
+## if returning `Break` earlier than the last element is expected to be common.
+walkUntil : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state | k has Hash & Eq
+walkUntil = \@Dict { data }, initialState, transform ->
+    List.walkUntil data initialState (\state, T k v -> transform state k v)
+
+## Get the value for a given key. If there is a value for the specified key it
+## will return [Ok value], otherwise return [Err KeyNotFound].
+##
+##     dictionary =
+##         Dict.empty
+##         |> Dict.insert 1 "Apple"
+##         |> Dict.insert 2 "Orange"
+##
+##     expect Dict.get dictionary 1 == Ok "Apple"
+##     expect Dict.get dictionary 2000 == Err KeyNotFound
+get : Dict k v, k -> Result v [KeyNotFound] | k has Hash & Eq
+get = \@Dict { metadata, dataIndices, data }, key ->
+    hashKey =
+        createLowLevelHasher {}
+        |> Hash.hash key
+        |> complete
+    h1Key = h1 hashKey
+    h2Key = h2 hashKey
+    probe = newProbe h1Key (div8 (List.len metadata))
+
+    when findIndexHelper metadata dataIndices data h2Key key probe 0 is
+        Ok index ->
+            dataIndex = listGetUnsafe dataIndices index
+            (T _ v) = listGetUnsafe data dataIndex
+
+            Ok v
+
+        Err NotFound ->
+            Err KeyNotFound
+
+## Check if the dictionary has a value for a specified key.
+##
+##     expect
+##         Dict.empty
+##         |> Dict.insert 1234 "5678"
+##         |> Dict.contains 1234
+##         |> Bool.isEq Bool.true
+contains : Dict k v, k -> Bool | k has Hash & Eq
+contains = \@Dict { metadata, dataIndices, data }, key ->
+    hashKey =
+        createLowLevelHasher {}
+        |> Hash.hash key
+        |> complete
+    h1Key = h1 hashKey
+    h2Key = h2 hashKey
+    probe = newProbe h1Key (div8 (List.len metadata))
+
+    when findIndexHelper metadata dataIndices data h2Key key probe 0 is
+        Ok _ ->
+            Bool.true
+
+        Err NotFound ->
+            Bool.false
 
 ## Insert a value into the dictionary at a specified key.
 ##
@@ -135,29 +267,42 @@ walk = \@Dict list, initialState, transform ->
 ##         |> Dict.insert "Apples" 12
 ##         |> Dict.get "Apples"
 ##         |> Bool.isEq (Ok 12)
-insert : Dict k v, k, v -> Dict k v | k has Eq
-insert = \@Dict list, k, v ->
-    when List.findFirstIndex list (\Pair key _ -> key == k) is
-        Err NotFound ->
-            insertFresh (@Dict list) k v
+insert : Dict k v, k, v -> Dict k v | k has Hash & Eq
+insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
+    hashKey =
+        createLowLevelHasher {}
+        |> Hash.hash key
+        |> complete
+    h1Key = h1 hashKey
+    h2Key = h2 hashKey
+    probe = newProbe h1Key (div8 (List.len metadata))
 
+    when findIndexHelper metadata dataIndices data h2Key key probe 0 is
         Ok index ->
-            list
-            |> List.set index (Pair k v)
-            |> @Dict
+            dataIndex = listGetUnsafe dataIndices index
 
-## Returns the number of values in the dictionary.
-##
-##     expect
-##         Dict.empty
-##         |> Dict.insert "One" "A Song"
-##         |> Dict.insert "Two" "Candy Canes"
-##         |> Dict.insert "Three" "Boughs of Holly"
-##         |> Dict.len
-##         |> Bool.isEq 3
-len : Dict k v -> Nat
-len = \@Dict list ->
-    List.len list
+            @Dict {
+                metadata,
+                dataIndices,
+                data: List.set data dataIndex (T key value),
+                size,
+            }
+
+        Err NotFound ->
+            # The dictionary has grown, it might need to rehash.
+            rehashedDict =
+                maybeRehash
+                    (
+                        @Dict {
+                            metadata,
+                            dataIndices,
+                            data,
+                            size: size + 1,
+                        }
+                    )
+
+            # Need to rescan searching for the first empty or deleted cell.
+            insertNotFoundHelper rehashedDict key value h1Key h2Key
 
 ## Remove a value from the dictionary for a specified key.
 ##
@@ -167,19 +312,34 @@ len = \@Dict list ->
 ##         |> Dict.remove "Some"
 ##         |> Dict.len
 ##         |> Bool.isEq 0
-remove : Dict k v, k -> Dict k v | k has Eq
-remove = \@Dict list, key ->
-    when List.findFirstIndex list (\Pair k _ -> k == key) is
-        Err NotFound ->
-            @Dict list
+remove : Dict k v, k -> Dict k v | k has Hash & Eq
+remove = \@Dict { metadata, dataIndices, data, size }, key ->
+    # TODO: change this from swap remove to tombstone and test is performance is still good.
+    hashKey =
+        createLowLevelHasher {}
+        |> Hash.hash key
+        |> complete
+    h1Key = h1 hashKey
+    h2Key = h2 hashKey
+    probe = newProbe h1Key (div8 (List.len metadata))
 
+    when findIndexHelper metadata dataIndices data h2Key key probe 0 is
         Ok index ->
-            lastIndex = List.len list - 1
+            last = List.len data - 1
+            dataIndex = listGetUnsafe dataIndices index
 
-            list
-            |> List.swap index lastIndex
-            |> List.dropLast
-            |> @Dict
+            if dataIndex == last then
+                @Dict {
+                    metadata: List.set metadata index deletedSlot,
+                    dataIndices,
+                    data: List.dropLast data,
+                    size: size - 1,
+                }
+            else
+                swapAndUpdateDataIndex (@Dict { metadata, dataIndices, data, size }) index last
+
+        Err NotFound ->
+            @Dict { metadata, dataIndices, data, size }
 
 ## Insert or remove a value for a specified key. This function enables a
 ## performance optimisation for the use case of providing a default when a value
@@ -195,8 +355,9 @@ remove = \@Dict list, key ->
 ##     expect Dict.update Dict.empty "a" alterValue == Dict.single "a" Bool.false
 ##     expect Dict.update (Dict.single "a" Bool.false) "a" alterValue == Dict.single "a" Bool.true
 ##     expect Dict.update (Dict.single "a" Bool.true) "a" alterValue == Dict.empty
-update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v | k has Eq
+update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v | k has Hash & Eq
 update = \dict, key, alter ->
+    # TODO: look into optimizing by merging substeps and reducing lookups.
     possibleValue =
         get dict key
         |> Result.map Present
@@ -206,46 +367,22 @@ update = \dict, key, alter ->
         Present value -> insert dict key value
         Missing -> remove dict key
 
-# Internal for testing only
-alterValue : [Present Bool, Missing] -> [Present Bool, Missing]
-alterValue = \possibleValue ->
-    when possibleValue is
-        Missing -> Present Bool.false
-        Present value -> if value then Missing else Present Bool.true
-
-expect update empty "a" alterValue == single "a" Bool.false
-expect update (single "a" Bool.false) "a" alterValue == single "a" Bool.true
-expect update (single "a" Bool.true) "a" alterValue == empty
-
-## Check if the dictionary has a value for a specified key.
+## Returns the keys and values of a dictionary as a [List].
+## This requires allocating a temporary list, prefer using [Dict.toList] or [Dict.walk] instead.
 ##
 ##     expect
-##         Dict.empty
-##         |> Dict.insert 1234 "5678"
-##         |> Dict.contains 1234
-contains : Dict k v, k -> Bool | k has Eq
-contains = \@Dict list, needle ->
-    List.any list \Pair key _val -> key == needle
-
-expect contains empty "a" == Bool.false
-expect contains (single "a" {}) "a" == Bool.true
-expect contains (single "b" {}) "a" == Bool.false
-expect
-    Dict.empty
-    |> Dict.insert 1234 "5678"
-    |> Dict.contains 1234
-    |> Bool.isEq Bool.true
-
-## Returns a dictionary containing the key and value provided as input.
-##
-##     expect
-##         Dict.single "A" "B"
-##         |> Bool.isEq (Dict.insert Dict.empty "A" "B")
-single : k, v -> Dict k v
-single = \key, value ->
-    @Dict [Pair key value]
+##         Dict.single 1 "One"
+##         |> Dict.insert 2 "Two"
+##         |> Dict.insert 3 "Three"
+##         |> Dict.insert 4 "Four"
+##         |> Dict.toList
+##         |> Bool.isEq [T 1 "One", T 2 "Two", T 3 "Three", T 4 "Four"]
+toList : Dict k v -> List (T k v) | k has Hash & Eq
+toList = \@Dict { data } ->
+    data
 
 ## Returns the keys of a dictionary as a [List].
+## This requires allocating a temporary [List], prefer using [Dict.toList] or [Dict.walk] instead.
 ##
 ##     expect
 ##         Dict.single 1 "One"
@@ -254,11 +391,12 @@ single = \key, value ->
 ##         |> Dict.insert 4 "Four"
 ##         |> Dict.keys
 ##         |> Bool.isEq [1,2,3,4]
-keys : Dict k v -> List k
-keys = \@Dict list ->
-    List.map list (\Pair k _ -> k)
+keys : Dict k v -> List k | k has Hash & Eq
+keys = \@Dict { data } ->
+    List.map data (\T k _ -> k)
 
 ## Returns the values of a dictionary as a [List].
+## This requires allocating a temporary [List], prefer using [Dict.toList] or [Dict.walk] instead.
 ##
 ##     expect
 ##         Dict.single 1 "One"
@@ -267,22 +405,22 @@ keys = \@Dict list ->
 ##         |> Dict.insert 4 "Four"
 ##         |> Dict.values
 ##         |> Bool.isEq ["One","Two","Three","Four"]
-values : Dict k v -> List v
-values = \@Dict list ->
-    List.map list (\Pair _ v -> v)
+values : Dict k v -> List v | k has Hash & Eq
+values = \@Dict { data } ->
+    List.map data (\T _ v -> v)
 
 ## Combine two dictionaries by keeping the [union](https://en.wikipedia.org/wiki/Union_(set_theory))
 ## of all the key-value pairs. This means that all the key-value pairs in
 ## both dictionaries will be combined. Note that where there are pairs
-## with the same key, the value contained in the first input will be
-## retained, and the value in the second input will be removed.
+## with the same key, the value contained in the second input will be
+## retained, and the value in the first input will be removed.
 ##
 ##     first =
-##         Dict.single 1 "Keep Me"
+##         Dict.single 1 "Not Me"
 ##         |> Dict.insert 2 "And Me"
 ##
 ##     second =
-##         Dict.single 1 "Not Me"
+##         Dict.single 1 "Keep Me"
 ##         |> Dict.insert 3 "Me Too"
 ##         |> Dict.insert 4 "And Also Me"
 ##
@@ -294,9 +432,9 @@ values = \@Dict list ->
 ##
 ##     expect
 ##         Dict.insertAll first second == expected
-insertAll : Dict k v, Dict k v -> Dict k v | k has Eq
-insertAll = \xs, @Dict ys ->
-    List.walk ys xs (\state, Pair k v -> Dict.insertIfVacant state k v)
+insertAll : Dict k v, Dict k v -> Dict k v | k has Hash & Eq
+insertAll = \xs, ys ->
+    walk ys xs insert
 
 ## Combine two dictionaries by keeping the [intersection](https://en.wikipedia.org/wiki/Intersection_(set_theory))
 ## of all the key-value pairs. This means that we keep only those pairs
@@ -315,10 +453,17 @@ insertAll = \xs, @Dict ys ->
 ##         |> Dict.insert 4 "Or Me"
 ##
 ##     expect Dict.keepShared first second == first
-keepShared : Dict k v, Dict k v -> Dict k v | k has Eq
-keepShared = \@Dict xs, ys ->
-    List.keepIf xs (\Pair k _ -> Dict.contains ys k)
-    |> @Dict
+keepShared : Dict k v, Dict k v -> Dict k v | k has Hash & Eq
+keepShared = \xs, ys ->
+    walk
+        xs
+        empty
+        (\state, k, v ->
+            if contains ys k then
+                insert state k v
+            else
+                state
+        )
 
 ## Remove the key-value pairs in the first input that are also in the second
 ## using the [set difference](https://en.wikipedia.org/wiki/Complement_(set_theory)#Relative_complement)
@@ -339,25 +484,342 @@ keepShared = \@Dict xs, ys ->
 ##         |> Dict.insert 2 "And Me"
 ##
 ##     expect Dict.removeAll first second == expected
-removeAll : Dict k v, Dict k v -> Dict k v | k has Eq
-removeAll = \xs, @Dict ys ->
-    List.walk ys xs (\state, Pair k _ -> Dict.remove state k)
+removeAll : Dict k v, Dict k v -> Dict k v | k has Hash & Eq
+removeAll = \xs, ys ->
+    walk ys xs (\state, k, _ -> remove state k)
 
-## Internal helper function to insert a new association
-##
-## Precondition: `k` should not exist in the Dict yet.
-insertFresh : Dict k v, k, v -> Dict k v
-insertFresh = \@Dict list, k, v ->
-    list
-    |> List.append (Pair k v)
-    |> @Dict
+swapAndUpdateDataIndex : Dict k v, Nat, Nat -> Dict k v | k has Hash & Eq
+swapAndUpdateDataIndex = \@Dict { metadata, dataIndices, data, size }, removedIndex, lastIndex ->
+    (T key _) = listGetUnsafe data lastIndex
+    hashKey =
+        createLowLevelHasher {}
+        |> Hash.hash key
+        |> complete
+    h1Key = h1 hashKey
+    h2Key = h2 hashKey
+    probe = newProbe h1Key (div8 (List.len metadata))
 
-insertIfVacant : Dict k v, k, v -> Dict k v | k has Eq
-insertIfVacant = \dict, key, value ->
-    if Dict.contains dict key then
-        dict
+    when findIndexHelper metadata dataIndices data h2Key key probe 0 is
+        Ok index ->
+            dataIndex = listGetUnsafe dataIndices removedIndex
+            # Swap and remove data.
+            nextData =
+                data
+                |> List.swap dataIndex lastIndex
+                |> List.dropLast
+
+            @Dict {
+                # Set old metadata as deleted.
+                metadata: List.set metadata removedIndex deletedSlot,
+                # Update index of swaped element.
+                dataIndices: List.set dataIndices index dataIndex,
+                data: nextData,
+                size: size - 1,
+            }
+
+        Err NotFound ->
+            # This should be impossible.
+            crash "unreachable state in dict swapAndUpdateDataIndex hit. Definitely a standard library bug."
+
+insertNotFoundHelper : Dict k v, k, v, U64, I8 -> Dict k v
+insertNotFoundHelper = \@Dict { metadata, dataIndices, data, size }, key, value, h1Key, h2Key ->
+    probe = newProbe h1Key (div8 (List.len metadata))
+    index = nextEmptyOrDeletedHelper metadata probe 0
+    dataIndex = List.len data
+    nextData = List.append data (T key value)
+
+    @Dict {
+        metadata: List.set metadata index h2Key,
+        dataIndices: List.set dataIndices index dataIndex,
+        data: nextData,
+        size,
+    }
+
+nextEmptyOrDeletedHelper : List I8, Probe, Nat -> Nat
+nextEmptyOrDeletedHelper = \metadata, probe, offset ->
+    # For inserting, we can use deleted indices.
+    index = Num.addWrap (mul8 probe.slotIndex) offset
+
+    md = listGetUnsafe metadata index
+
+    if md < 0 then
+        # Empty or deleted slot, no possibility of the element.
+        index
+    else if offset == 7 then
+        nextEmptyOrDeletedHelper metadata (nextProbe probe) 0
     else
-        Dict.insert dict key value
+        nextEmptyOrDeletedHelper metadata probe (Num.addWrap offset 1)
+
+# TODO: investigate if this needs to be split into more specific helper functions.
+# There is a chance that returning specific sub-info like the value would be faster.
+findIndexHelper : List I8, List Nat, List (T k v), I8, k, Probe, Nat -> Result Nat [NotFound] | k has Hash & Eq
+findIndexHelper = \metadata, dataIndices, data, h2Key, key, probe, offset ->
+    # For finding a value, we must search past all deleted element tombstones.
+    index = Num.addWrap (mul8 probe.slotIndex) offset
+
+    md = listGetUnsafe metadata index
+
+    if md == emptySlot then
+        # Empty slot, no possibility of the element.
+        Err NotFound
+    else if md == h2Key then
+        # Potentially matching slot, check if the key is a match.
+        dataIndex = listGetUnsafe dataIndices index
+        (T k _) = listGetUnsafe data dataIndex
+
+        if k == key then
+            # We have a match, return its index.
+            Ok index
+        else if offset == 7 then
+            # No match, keep checking.
+            findIndexHelper metadata dataIndices data h2Key key (nextProbe probe) 0
+        else
+            findIndexHelper metadata dataIndices data h2Key key probe (Num.addWrap offset 1)
+    else if offset == 7 then
+        # Used slot, check next slot.
+        findIndexHelper metadata dataIndices data h2Key key (nextProbe probe) 0
+    else
+        findIndexHelper metadata dataIndices data h2Key key probe (Num.addWrap offset 1)
+
+# This is how we grow the container.
+# If we aren't to the load factor yet, just ignore this.
+# The container must have an updated size including any elements about to be inserted.
+maybeRehash : Dict k v -> Dict k v | k has Hash & Eq
+maybeRehash = \@Dict { metadata, dataIndices, data, size } ->
+    cap = List.len dataIndices
+    maxLoadCap =
+        # This is 7/8 * capacity, which is the max load factor.
+        cap - Num.shiftRightZfBy cap 3
+
+    if size > maxLoadCap then
+        rehash (@Dict { metadata, dataIndices, data, size })
+    else
+        @Dict { metadata, dataIndices, data, size }
+
+# TODO: switch rehash to iterate data and eventually clear out tombstones as well.
+rehash : Dict k v -> Dict k v | k has Hash & Eq
+rehash = \@Dict { metadata, dataIndices, data, size } ->
+    newLen = 2 * List.len dataIndices
+    newDict =
+        @Dict {
+            metadata: List.repeat emptySlot newLen,
+            dataIndices: List.repeat 0 newLen,
+            data,
+            size,
+        }
+
+    rehashHelper newDict metadata dataIndices data 0
+
+rehashHelper : Dict k v, List I8, List Nat, List (T k v), Nat -> Dict k v | k has Hash & Eq
+rehashHelper = \dict, oldMetadata, oldDataIndices, oldData, index ->
+    when List.get oldMetadata index is
+        Ok md ->
+            nextDict =
+                if md >= 0 then
+                    # We have an actual element here
+                    dataIndex = listGetUnsafe oldDataIndices index
+                    (T k _) = listGetUnsafe oldData dataIndex
+
+                    insertForRehash dict k dataIndex
+                else
+                    # Empty or deleted data
+                    dict
+
+            rehashHelper nextDict oldMetadata oldDataIndices oldData (index + 1)
+
+        Err OutOfBounds ->
+            # Walked entire list, complete now.
+            dict
+
+insertForRehash : Dict k v, k, Nat -> Dict k v | k has Hash & Eq
+insertForRehash = \@Dict { metadata, dataIndices, data, size }, key, dataIndex ->
+    hashKey =
+        createLowLevelHasher {}
+        |> Hash.hash key
+        |> complete
+    h1Key = h1 hashKey
+    h2Key = h2 hashKey
+    probe = newProbe h1Key (div8 (List.len metadata))
+    index = nextEmptyOrDeletedHelper metadata probe 0
+
+    @Dict {
+        metadata: List.set metadata index h2Key,
+        dataIndices: List.set dataIndices index dataIndex,
+        data,
+        size,
+    }
+
+emptySlot : I8
+emptySlot = -128
+deletedSlot : I8
+deletedSlot = -2
+
+T k v : [T k v]
+
+# Capacity must be a power of 2.
+# We still will use slots of 8 even though this version has no true slots.
+# We just move an element at a time.
+# Thus, the true index is slotIndex * 8 + offset.
+Probe : { slotIndex : Nat, probeI : Nat, mask : Nat }
+
+newProbe : U64, Nat -> Probe
+newProbe = \h1Key, slots ->
+    mask = Num.subSaturated slots 1
+    slotIndex = Num.bitwiseAnd (Num.toNat h1Key) mask
+
+    { slotIndex, probeI: 1, mask }
+
+nextProbe : Probe -> Probe
+nextProbe = \{ slotIndex, probeI, mask } ->
+    nextSlotIndex = Num.bitwiseAnd (Num.addWrap slotIndex probeI) mask
+
+    { slotIndex: nextSlotIndex, probeI: Num.addWrap probeI 1, mask }
+
+mul8 = \val -> Num.shiftLeftBy val 3
+div8 = \val -> Num.shiftRightZfBy val 3
+
+h1 : U64 -> U64
+h1 = \hashKey ->
+    Num.shiftRightZfBy hashKey 7
+
+h2 : U64 -> I8
+h2 = \hashKey ->
+    Num.toI8 (Num.bitwiseAnd hashKey 0b0111_1111)
+
+expect
+    val =
+        empty
+        |> insert "foo" "bar"
+        |> get "foo"
+
+    val == Ok "bar"
+
+expect
+    val =
+        empty
+        |> insert "foo" "bar"
+        |> insert "foo" "baz"
+        |> get "foo"
+
+    val == Ok "baz"
+
+expect
+    val =
+        empty
+        |> insert "foo" "bar"
+        |> get "bar"
+
+    val == Err KeyNotFound
+
+expect
+    empty
+    |> insert "foo" {}
+    |> contains "foo"
+
+expect
+    dict =
+        empty
+        |> insert "foo" {}
+        |> insert "bar" {}
+        |> insert "baz" {}
+
+    contains dict "baz" && Bool.not (contains dict "other")
+
+expect
+    dict =
+        fromList [T 1u8 1u8, T 2 2, T 3 3]
+        |> remove 1
+        |> remove 3
+
+    keys dict == [2]
+
+expect
+    list =
+        fromList [T 1u8 1u8, T 2u8 2u8, T 3 3]
+        |> remove 1
+        |> insert 0 0
+        |> remove 3
+        |> keys
+
+    list == [0, 2]
+
+# Reach capacity, no rehash.
+expect
+    val =
+        empty
+        |> insert "a" 0
+        |> insert "b" 1
+        |> insert "c" 2
+        |> insert "d" 3
+        |> insert "e" 4
+        |> insert "f" 5
+        |> insert "g" 6
+        |> capacity
+
+    val == 7
+
+expect
+    dict =
+        empty
+        |> insert "a" 0
+        |> insert "b" 1
+        |> insert "c" 2
+        |> insert "d" 3
+        |> insert "e" 4
+        |> insert "f" 5
+        |> insert "g" 6
+
+    (get dict "a" == Ok 0)
+    && (get dict "b" == Ok 1)
+    && (get dict "c" == Ok 2)
+    && (get dict "d" == Ok 3)
+    && (get dict "e" == Ok 4)
+    && (get dict "f" == Ok 5)
+    && (get dict "g" == Ok 6)
+
+# Force rehash.
+expect
+    val =
+        empty
+        |> insert "a" 0
+        |> insert "b" 1
+        |> insert "c" 2
+        |> insert "d" 3
+        |> insert "e" 4
+        |> insert "f" 5
+        |> insert "g" 6
+        |> insert "h" 7
+        |> capacity
+
+    val == 14
+
+expect
+    dict =
+        empty
+        |> insert "a" 0
+        |> insert "b" 1
+        |> insert "c" 2
+        |> insert "d" 3
+        |> insert "e" 4
+        |> insert "f" 5
+        |> insert "g" 6
+        |> insert "h" 7
+
+    (get dict "a" == Ok 0)
+    && (get dict "b" == Ok 1)
+    && (get dict "c" == Ok 2)
+    && (get dict "d" == Ok 3)
+    && (get dict "e" == Ok 4)
+    && (get dict "f" == Ok 5)
+    && (get dict "g" == Ok 6)
+    && (get dict "h" == Ok 7)
+
+expect
+    empty
+    |> insert "Some" "Value"
+    |> remove "Some"
+    |> len
+    |> Bool.isEq 0
 
 # We have decided not to expose the standard roc hashing algorithm.
 # This is to avoid external dependence and the need for versioning.
@@ -524,10 +986,32 @@ wymix = \a, b ->
 
 wymum : U64, U64 -> { lower : U64, upper : U64 }
 wymum = \a, b ->
-    r = Num.toU128 a * Num.toU128 b
-    lower = Num.toU64 r
-    upper = Num.shiftRightZfBy r 64 |> Num.toU64
+    # uint64_t ha=*A>>32, hb=*B>>32, la=(uint32_t)*A, lb=(uint32_t)*B, hi, lo;
+    # uint64_t rh=ha*hb, rm0=ha*lb, rm1=hb*la, rl=la*lb, t=rl+(rm0<<32), c=t<rl;
+    # lo=t+(rm1<<32); c+=lo<t; hi=rh+(rm0>>32)+(rm1>>32)+c;
+    ha = Num.shiftRightZfBy a 32
+    hb = Num.shiftRightZfBy b 32
+    la = Num.bitwiseAnd a 0x0000_0000_FFFF_FFFF
+    lb = Num.bitwiseAnd b 0x0000_0000_FFFF_FFFF
+    rh = ha * hb
+    rm0 = ha * lb
+    rm1 = hb * la
+    rl = la * lb
+    t = Num.addWrap rl (Num.shiftLeftBy rm0 32)
+    c = if t < rl then 1 else 0
+    lower = Num.addWrap t (Num.shiftLeftBy rm1 32)
+    c2 = c + (if lower < t then 1 else 0)
+    upper =
+        rh
+        |> Num.addWrap (Num.shiftRightZfBy rm0 32)
+        |> Num.addWrap (Num.shiftRightZfBy rm1 32)
+        |> Num.addWrap c2
 
+    # TODO: switch back to this once wasm supports bit shifting a U128.
+    # The above code is manually doing the 128bit multiplication.
+    # r = Num.toU128 a * Num.toU128 b
+    # lower = Num.toU64 r
+    # upper = Num.shiftRightZfBy r 64 |> Num.toU64
     # This is the more robust form.
     # { lower: Num.bitwiseXor a lower, upper: Num.bitwiseXor b upper }
     { lower, upper }

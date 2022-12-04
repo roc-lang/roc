@@ -62,16 +62,6 @@ fn single_to_list() {
         RocList::from_slice(&[1]),
         RocList<i64>
     );
-
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Set.toList (Set.single 1.0)
-            "#
-        ),
-        RocList::from_slice(&[1.0]),
-        RocList<f64>
-    );
 }
 
 #[test]
@@ -257,6 +247,20 @@ fn from_list_void() {
         ),
         RocList::<i64>::default(),
         RocList<i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn to_list_empty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Set.toList Set.empty
+            "#
+        ),
+        RocList::<std::convert::Infallible>::default(),
+        RocList<std::convert::Infallible>
     );
 }
 
