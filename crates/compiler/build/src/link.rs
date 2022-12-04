@@ -1491,7 +1491,14 @@ pub fn llvm_module_to_dylib(
     )
     .unwrap();
 
-    child.wait().unwrap();
+    let exit_status = child.wait().unwrap();
+
+    assert!(
+        exit_status.success(),
+        "\n___________\nLinking command failed with status {:?}:\n\n  {:?}\n___________\n",
+        exit_status,
+        child
+    );
 
     // Load the dylib
     let path = dylib_path.as_path().to_str().unwrap();

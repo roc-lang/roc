@@ -650,7 +650,18 @@ fn unify_ranged_number<M: MetaCollector>(
             // Int a vs Int <range>, the rigid wins
             merge(env, ctx, RigidVar(*name))
         }
-        RecursionVar { .. } | Alias(..) | Structure(..) | RigidAbleVar(..) | FlexAbleVar(..) => {
+        FlexAbleVar(_, abilities) => {
+            // Range wins, modulo obligation checking.
+            merge_flex_able_with_concrete(
+                env,
+                ctx,
+                ctx.second,
+                *abilities,
+                RangedNumber(range_vars),
+                Obligated::Adhoc(ctx.first),
+            )
+        }
+        RecursionVar { .. } | Alias(..) | Structure(..) | RigidAbleVar(..) => {
             check_and_merge_valid_range(env, pool, ctx, ctx.first, range_vars, ctx.second)
         }
         &RangedNumber(other_range_vars) => match range_vars.intersection(&other_range_vars) {

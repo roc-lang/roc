@@ -16,6 +16,7 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 use roc_collections::all::MutMap;
 use roc_load::ExecutionMode;
 use roc_load::LoadConfig;
+use roc_load::LoadMonomorphizedError;
 use roc_load::Threading;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
@@ -113,7 +114,9 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
+        Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
+            report,
+        ))) => {
             println!("{}", report);
             panic!();
         }
@@ -2046,6 +2049,53 @@ fn crash() {
             x : [Ok U64, Err Str]
             x = Ok 78
             getInfallible x
+        "#
+    )
+}
+
+#[mono_test]
+fn function_pointer_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        number = \{} -> 1u64
+
+        parse = \parser -> parser {}
+
+        main =
+            parser = number
+            parse parser
+        "#
+    )
+}
+
+#[mono_test]
+fn anonymous_closure_lifted_to_named_issue_2403() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            f =
+                n = 1
+                \{} -> n
+            g = f {}
+            g
+        "#
+    )
+}
+
+#[mono_test]
+fn toplevel_accessor_fn_thunk() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        ra = .field
+
+        main =
+            ra { field : 15u8 }
         "#
     )
 }

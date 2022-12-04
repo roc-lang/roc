@@ -132,11 +132,6 @@ pub struct PartialProcs<'a> {
     /// maps a function name (symbol) to an index
     symbols: Vec<'a, Symbol>,
 
-    /// An entry (a, b) means `a` directly references the lambda value of `b`,
-    /// i.e. this came from a `let a = b in ...` where `b` was defined as a
-    /// lambda earlier.
-    references: Vec<'a, (Symbol, Symbol)>,
-
     partial_procs: Vec<'a, PartialProc<'a>>,
 }
 
@@ -144,7 +139,6 @@ impl<'a> PartialProcs<'a> {
     fn new_in(arena: &'a Bump) -> Self {
         Self {
             symbols: Vec::new_in(arena),
-            references: Vec::new_in(arena),
             partial_procs: Vec::new_in(arena),
         }
     }
@@ -152,16 +146,7 @@ impl<'a> PartialProcs<'a> {
         self.symbol_to_id(symbol).is_some()
     }
 
-    fn symbol_to_id(&self, mut symbol: Symbol) -> Option<PartialProcId> {
-        while let Some(real_symbol) = self
-            .references
-            .iter()
-            .find(|(alias, _)| *alias == symbol)
-            .map(|(_, real)| real)
-        {
-            symbol = *real_symbol;
-        }
-
+    fn symbol_to_id(&self, symbol: Symbol) -> Option<PartialProcId> {
         self.symbols
             .iter()
             .position(|s| *s == symbol)
@@ -191,21 +176,6 @@ impl<'a> PartialProcs<'a> {
         self.partial_procs.push(partial_proc);
 
         id
-    }
-
-    pub fn insert_alias(&mut self, alias: Symbol, real_symbol: Symbol) {
-        debug_assert!(
-            !self.contains_key(alias),
-            "{:?} is inserted as a partial proc twice: that's a bug!",
-            alias,
-        );
-        debug_assert!(
-            self.contains_key(real_symbol),
-            "{:?} is not a partial proc or another alias: that's a bug!",
-            real_symbol,
-        );
-
-        self.references.push((alias, real_symbol));
     }
 
     pub fn drain(self) -> impl Iterator<Item = (Symbol, PartialProc<'a>)> {
@@ -2479,14 +2449,70 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, cont.value)
             }
-            Var(original, _) | AbilityMember(original, _, _) => {
+            Var(original, _) | AbilityMember(original, _, _)
+                if procs.get_partial_proc(original).is_none() =>
+            {
                 // a variable is aliased, e.g.
                 //
                 //  foo = bar
                 //
-                // or
+                // We need to generate an IR that is free of local lvalue aliasing, as this aids in
+                // refcounting. As such, variable aliasing usually involves renaming the LHS in the
+                // rest of the program with the RHS (i.e. [foo->bar]); see `handle_variable_aliasing`
+                // below for the exact algorithm.
                 //
-                //  foo = RBTRee.empty
+                // However, do not attempt to eliminate aliasing to procedures
+                // (either a function pointer or a thunk) here. Doing so is not necessary - if we
+                // have `var = f` where `f` is either a proc or thunk, in either case, `f` will be
+                // resolved to an rvalue, not an lvalue:
+                //
+                // - If `f` is a proc, we assign to `var` its closure data (even if the lambda set
+                //   of `f` is unary with no captures, we leave behind the empty closure data)
+                //
+                // - If `f` is a thunk, we force the thunk and assign to `var` its value.
+                //
+                // With this in mind, when `f` is a thunk or proper function, we are free to follow
+                // the usual (non-lvalue-aliasing) branch of assignment, and end up with correct
+                // code.
+                //
+                // ===
+                //
+                // Recording that an lvalue references a procedure or a thunk may open up
+                // opportunities for optimization - and indeed, recording this information may
+                // sometimes eliminate such unused lvalues, or inline closure data. However, in
+                // general, making sure this kind of aliasing works correctly is very difficult. As
+                // illustration, consider
+                //
+                //     getNum1 = \{} -> 1u64
+                //     getNum2 = \{} -> 2u64
+                //
+                //     dispatch = \fun -> fun {}
+                //
+                //     main =
+                //         myFun1 = getNum1
+                //         myFun2 = getNum2
+                //         dispatch (if Bool.true then myFun1 else myFun2)
+                //
+                // Suppose we leave nothing behind for the assignments `myFun* = getNum*`, and
+                // instead simply associate that they reference procs. In the if-then-else
+                // expression, we then need to construct the closure data for both getNum1 and
+                // getNum2 - but we do not know what lambdas they represent, as we only have access
+                // to the symbols `myFun1` and `myFun2`.
+                //
+                // While associations of `myFun1 -> getNum1` could be propogated, the story gets
+                // more complicated when the referenced proc itself resolves a lambda set with
+                // indirection; for example consider the amendment
+                //
+                //     getNum1 = @Dispatcher \{} -> 1u64
+                //     getNum2 = @Dispatcher \{} -> 2u64
+                //
+                // Now, even the association of `myFun1 -> getNum1` is not enough, as the lambda
+                // set of (if Bool.true then myFun1 else myFun2) would not be { getNum1, getNum2 }
+                // - it would be the binary lambda set of the anonymous closures created under the
+                // `@Dispatcher` wrappers.
+                //
+                // Trying to keep all this information in line has been error prone, and is not
+                // attempted.
 
                 // TODO: right now we need help out rustc with the closure types;
                 // it isn't able to infer the right lifetime bounds. See if we
@@ -2531,17 +2557,68 @@ fn from_can_let<'a>(
                 //              in
                 //                  answer
 
-                let new_def = roc_can::def::Def {
-                    loc_pattern: def.loc_pattern,
-                    loc_expr: *nested_cont,
-                    pattern_vars: def.pattern_vars,
-                    annotation: def.annotation,
-                    expr_var: def.expr_var,
+                use roc_can::{def::Def, expr::Expr, pattern::Pattern};
+
+                let new_outer = match &nested_cont.value {
+                    &Expr::Closure(ClosureData {
+                        name: anon_name, ..
+                    }) => {
+                        // A wrinkle:
+                        //
+                        //   let f =
+                        //      let n = 1 in
+                        //      \{} -[#lam]-> n
+                        //
+                        // must become
+                        //
+                        //   let n = 1 in
+                        //   let #lam = \{} -[#lam]-> n in
+                        //   let f = #lam
+
+                        debug_assert_ne!(*symbol, anon_name);
+
+                        // #lam = \...
+                        let def_anon_closure = Box::new(Def {
+                            loc_pattern: Loc::at_zero(Pattern::Identifier(anon_name)),
+                            loc_expr: *nested_cont,
+                            expr_var: def.expr_var,
+                            pattern_vars: std::iter::once((anon_name, def.expr_var)).collect(),
+                            annotation: None,
+                        });
+
+                        // f = #lam
+                        let new_def = Box::new(Def {
+                            loc_pattern: def.loc_pattern,
+                            loc_expr: Loc::at_zero(Expr::Var(anon_name, def.expr_var)),
+                            expr_var: def.expr_var,
+                            pattern_vars: def.pattern_vars,
+                            annotation: def.annotation,
+                        });
+
+                        let new_inner = LetNonRec(new_def, cont);
+
+                        LetNonRec(
+                            nested_def,
+                            Box::new(Loc::at_zero(LetNonRec(
+                                def_anon_closure,
+                                Box::new(Loc::at_zero(new_inner)),
+                            ))),
+                        )
+                    }
+                    _ => {
+                        let new_def = Def {
+                            loc_pattern: def.loc_pattern,
+                            loc_expr: *nested_cont,
+                            pattern_vars: def.pattern_vars,
+                            annotation: def.annotation,
+                            expr_var: def.expr_var,
+                        };
+
+                        let new_inner = LetNonRec(Box::new(new_def), cont);
+
+                        LetNonRec(nested_def, Box::new(Loc::at_zero(new_inner)))
+                    }
                 };
-
-                let new_inner = LetNonRec(Box::new(new_def), cont);
-
-                let new_outer = LetNonRec(nested_def, Box::new(Loc::at_zero(new_inner)));
 
                 lower_rest!(variable, new_outer)
             }
@@ -4039,24 +4116,13 @@ fn specialize_naked_symbol<'a>(
                     std::vec::Vec::new(),
                     layout_cache,
                     assigned,
-                    match hole {
-                        Stmt::Jump(id, _) => env
-                            .arena
-                            .alloc(Stmt::Jump(*id, env.arena.alloc([assigned]))),
-                        Stmt::Ret(_) => env.arena.alloc(Stmt::Ret(assigned)),
-                        hole => hole,
-                    },
+                    hole,
                 );
 
                 return result;
             }
         }
     }
-
-    let result = match hole {
-        Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([symbol])),
-        _ => Stmt::Ret(symbol),
-    };
 
     // if the symbol is a function symbol, ensure it is properly specialized!
     let original = symbol;
@@ -4069,8 +4135,8 @@ fn specialize_naked_symbol<'a>(
         procs,
         layout_cache,
         opt_fn_var,
-        symbol,
-        result,
+        assigned,
+        hole,
         original,
     )
 }
@@ -4413,7 +4479,7 @@ pub fn with_hole<'a>(
                             layout_cache,
                             Some(variable),
                             symbol,
-                            stmt,
+                            env.arena.alloc(stmt),
                             symbol,
                         );
                     }
@@ -5075,7 +5141,7 @@ pub fn with_hole<'a>(
                                     layout_cache,
                                     Some(record_var),
                                     specialized_structure_sym,
-                                    stmt,
+                                    env.arena.alloc(stmt),
                                     structure,
                                 );
                             }
@@ -8019,15 +8085,11 @@ where
         }
     }
 
-    // 2. Handle references to a known proc - again, we may be either aliasing the proc, or another
-    //    alias to a proc.
-    if procs.partial_procs.contains_key(right) {
-        // This is an alias to a function defined in this module.
-        // Attach the alias, then build the rest of the module, so that we reference and specialize
-        // the correct proc.
-        procs.partial_procs.insert_alias(left, right);
-        return build_rest(env, procs, layout_cache);
-    }
+    // We should never reference a partial proc - instead, we want to generate closure data and
+    // leave it there, even if the lambda set is unary. That way, we avoid having to try to resolve
+    // lambda set of the proc based on the symbol name, which can cause many problems!
+    // See my git blame for details.
+    debug_assert!(!procs.partial_procs.contains_key(right));
 
     // Otherwise we're dealing with an alias whose usages will tell us what specializations we
     // need. So let's figure those out first.
@@ -8154,8 +8216,8 @@ fn specialize_symbol<'a>(
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     arg_var: Option<Variable>,
-    symbol: Symbol,
-    result: Stmt<'a>,
+    assign_to: Symbol,
+    result: &'a Stmt<'a>,
     original: Symbol,
 ) -> Stmt<'a> {
     match procs.get_partial_proc(original) {
@@ -8194,7 +8256,7 @@ fn specialize_symbol<'a>(
                             layout_cache,
                         );
 
-                        force_thunk(env, original, layout, symbol, env.arena.alloc(result))
+                        force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
                     } else {
                         // Imported symbol, so it must have no captures niche (since
                         // top-levels can't capture)
@@ -8212,7 +8274,7 @@ fn specialize_symbol<'a>(
                             layout_cache,
                         );
 
-                        let_empty_struct(symbol, env.arena.alloc(result))
+                        let_empty_struct(assign_to, env.arena.alloc(result))
                     }
                 }
 
@@ -8224,6 +8286,13 @@ fn specialize_symbol<'a>(
                         original,
                         (env.home, &arg_var),
                     );
+
+                    // Replaces references of `assign_to` in the rest of the block with `original`,
+                    // since we don't actually need to specialize the original symbol to a value.
+                    //
+                    // This usually means we are using a symbol received from a joinpoint.
+                    let mut result = result.clone();
+                    substitute_in_exprs(env.arena, &mut result, assign_to, original);
                     result
                 }
             }
@@ -8282,7 +8351,7 @@ fn specialize_symbol<'a>(
                             layout_cache,
                         );
 
-                        let closure_data = symbol;
+                        let closure_data = assign_to;
 
                         construct_closure_data(
                             env,
@@ -8311,7 +8380,7 @@ fn specialize_symbol<'a>(
                             layout_cache,
                         );
 
-                        force_thunk(env, original, layout, symbol, env.arena.alloc(result))
+                        force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
                     } else {
                         // even though this function may not itself capture,
                         // unification may still cause it to have an extra argument
@@ -8343,7 +8412,7 @@ fn specialize_symbol<'a>(
                             lambda_set,
                             lambda_name,
                             &[],
-                            symbol,
+                            assign_to,
                             env.arena.alloc(result),
                         )
                     }
@@ -8360,7 +8429,13 @@ fn specialize_symbol<'a>(
                         layout_cache,
                     );
 
-                    force_thunk(env, original, ret_layout, symbol, env.arena.alloc(result))
+                    force_thunk(
+                        env,
+                        original,
+                        ret_layout,
+                        assign_to,
+                        env.arena.alloc(result),
+                    )
                 }
             }
         }
@@ -8386,7 +8461,7 @@ fn assign_to_symbol<'a>(
                 layout_cache,
                 Some(arg_var),
                 symbol,
-                result,
+                env.arena.alloc(result),
                 original,
             )
         }

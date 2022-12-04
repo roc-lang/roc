@@ -10,7 +10,6 @@ use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::derive;
 use crate::env::Env;
-use crate::expr::AccessorData;
 use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
 use crate::expr::Declarations;
@@ -302,7 +301,7 @@ fn sort_type_defs_before_introduction(
     matrix
         .strongly_connected_components_all()
         .groups()
-        .flat_map(|group| group.iter_ones())
+        .flat_map(|(group, _)| group.iter_ones())
         .map(|index| symbols[index])
         .collect()
 }
@@ -1547,10 +1546,12 @@ impl DefOrdering {
 
 #[inline(always)]
 pub(crate) fn sort_can_defs_new(
+    env: &mut Env<'_>,
     scope: &mut Scope,
     var_store: &mut VarStore,
     defs: CanDefs,
     mut output: Output,
+    exposed_symbols: &VecSet<Symbol>,
 ) -> (Declarations, Output) {
     let CanDefs {
         defs,
@@ -1611,7 +1612,7 @@ pub(crate) fn sort_can_defs_new(
 
     sccs.reorder(&mut defs);
 
-    for group in sccs.groups().rev() {
+    for (group, is_initial) in sccs.groups().rev() {
         match group.count_ones() {
             1 => {
                 // a group with a single Def, nice and simple
@@ -1635,6 +1636,10 @@ pub(crate) fn sort_can_defs_new(
                             internal_error!("destructures cannot participate in a recursive group; it's always a type error")
                         }
                     };
+
+                    if is_initial && !exposed_symbols.contains(&symbol) {
+                        env.problem(Problem::DefsOnlyUsedInRecursion(1, def.region()));
+                    }
 
                     match def.loc_expr.value {
                         Closure(closure_data) => {
@@ -1720,6 +1725,9 @@ pub(crate) fn sort_can_defs_new(
                 let cycle_mark = IllegalCycleMark::new(var_store);
                 declarations.push_recursive_group(group_length as u16, cycle_mark);
 
+                let mut group_is_initial = is_initial;
+                let mut whole_region = None;
+
                 // then push the definitions of this group
                 for def in group_defs {
                     let (symbol, specializes) = match def.loc_pattern.value {
@@ -1732,6 +1740,12 @@ pub(crate) fn sort_can_defs_new(
                         _ => {
                             internal_error!("destructures cannot participate in a recursive group; it's always a type error")
                         }
+                    };
+
+                    group_is_initial = group_is_initial && !exposed_symbols.contains(&symbol);
+                    whole_region = match whole_region {
+                        None => Some(def.region()),
+                        Some(r) => Some(Region::span_across(&r, &def.region())),
                     };
 
                     match def.loc_expr.value {
@@ -1754,6 +1768,13 @@ pub(crate) fn sort_can_defs_new(
                             );
                         }
                     }
+                }
+
+                if group_is_initial {
+                    env.problem(Problem::DefsOnlyUsedInRecursion(
+                        group_length,
+                        whole_region.unwrap(),
+                    ));
                 }
             }
         }
@@ -1803,7 +1824,7 @@ pub(crate) fn sort_can_defs(
 
     let mut declarations = Vec::with_capacity(defs.len());
 
-    for group in sccs.groups() {
+    for (group, is_initial) in sccs.groups() {
         if group.count_ones() == 1 {
             // a group with a single Def, nice and simple
             let index = group.iter_ones().next().unwrap();
@@ -1816,6 +1837,16 @@ pub(crate) fn sort_can_defs(
 
             let declaration = if def_ordering.references.get_row_col(index, index) {
                 debug_assert!(!is_specialization, "Self-recursive specializations can only be determined during solving - but it was determined for {:?} now, that's a bug!", def);
+
+                if is_initial
+                    && !def
+                        .pattern_vars
+                        .keys()
+                        .any(|sym| output.references.has_value_lookup(*sym))
+                {
+                    // This defs is only used in recursion with itself.
+                    env.problem(Problem::DefsOnlyUsedInRecursion(1, def.region()));
+                }
 
                 // this function calls itself, and must be typechecked as a recursive def
                 Declaration::DeclareRec(vec![mark_def_recursive(def)], IllegalCycleMark::empty())
@@ -1862,10 +1893,25 @@ pub(crate) fn sort_can_defs(
 
                 Declaration::InvalidCycle(entries)
             } else {
-                let rec_defs = group
+                let rec_defs: Vec<Def> = group
                     .iter_ones()
                     .map(|index| mark_def_recursive(take_def!(index)))
                     .collect();
+
+                if is_initial
+                    && !rec_defs.iter().any(|def| {
+                        def.pattern_vars
+                            .keys()
+                            .any(|sym| output.references.has_value_lookup(*sym))
+                    })
+                {
+                    // These defs are only used in mutual recursion with themselves.
+                    let region = Region::span_across(
+                        &rec_defs.first().unwrap().region(),
+                        &rec_defs.last().unwrap().region(),
+                    );
+                    env.problem(Problem::DefsOnlyUsedInRecursion(rec_defs.len(), region));
+                }
 
                 Declaration::DeclareRec(rec_defs, IllegalCycleMark::new(var_store))
             };
@@ -2255,36 +2301,6 @@ fn canonicalize_pending_body<'a>(
                 (loc_can_expr, def_references)
             }
 
-            // Turn f = .foo into f = \rcd -[f]-> rcd.foo
-            (
-                Pattern::Identifier(defined_symbol)
-                | Pattern::AbilityMemberSpecialization {
-                    ident: defined_symbol,
-                    ..
-                },
-                ast::Expr::RecordAccessorFunction(field),
-            ) => {
-                let (loc_can_expr, can_output) = (
-                    Loc::at(
-                        loc_expr.region,
-                        Accessor(AccessorData {
-                            name: *defined_symbol,
-                            function_var: var_store.fresh(),
-                            record_var: var_store.fresh(),
-                            ext_var: var_store.fresh(),
-                            closure_var: var_store.fresh(),
-                            field_var: var_store.fresh(),
-                            field: (*field).into(),
-                        }),
-                    ),
-                    Output::default(),
-                );
-                let def_references = DefReferences::Value(can_output.references.clone());
-                output.union(can_output);
-
-                (loc_can_expr, def_references)
-            }
-
             _ => {
                 let (loc_can_expr, can_output) =
                     canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
@@ -2342,10 +2358,15 @@ pub fn can_defs_with_return<'a>(
     output
         .introduced_variables
         .union(&defs_output.introduced_variables);
+
+    // Sort the defs with the output of the return expression - we'll use this to catch unused defs
+    // due only to recursion.
+    let (declarations, mut output) = sort_can_defs(env, var_store, unsorted, output);
+
     output.references.union_mut(&defs_output.references);
 
     // Now that we've collected all the references, check to see if any of the new idents
-    // we defined went unused by the return expression. If any were unused, report it.
+    // we defined went unused by the return expression or any other def.
     for (symbol, region) in symbols_introduced {
         if !output.references.has_type_or_value_lookup(symbol)
             && !scope.abilities_store.is_specialization_name(symbol)
@@ -2353,8 +2374,6 @@ pub fn can_defs_with_return<'a>(
             env.problem(Problem::UnusedDef(symbol, region));
         }
     }
-
-    let (declarations, output) = sort_can_defs(env, var_store, unsorted, output);
 
     let mut loc_expr: Loc<Expr> = ret_expr;
 
@@ -2766,12 +2785,12 @@ fn correct_mutual_recursive_type_alias<'a>(
     // this is needed.
     let scratchpad_capacity = sccs
         .groups()
-        .map(|r| r.count_ones())
+        .map(|(r, _)| r.count_ones())
         .max()
         .unwrap_or_default();
     let mut scratchpad = Vec::with_capacity(scratchpad_capacity);
 
-    for cycle in sccs.groups() {
+    for (cycle, _is_initial) in sccs.groups() {
         debug_assert!(cycle.count_ones() > 0);
 
         // We need to instantiate the alias with any symbols in the currrent module it

@@ -6,12 +6,13 @@ use roc_problem::can::{
     BadPattern, CycleEntry, ExtensionTypeKind, FloatErrorKind, IntErrorKind, Problem, RuntimeError,
     ShadowKind,
 };
+use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Loc, Region};
 use roc_types::types::AliasKind;
 use std::path::PathBuf;
 
 use crate::error::r#type::suggest;
-use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
+use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
 use ven_pretty::DocAllocator;
 
 const SYNTAX_PROBLEM: &str = "SYNTAX PROBLEM";
@@ -67,7 +68,7 @@ pub fn can_problem<'b>(
 ) -> Report<'b> {
     let doc;
     let title;
-    let severity;
+    let severity = problem.severity();
 
     match problem {
         Problem::UnusedDef(symbol, region) => {
@@ -86,7 +87,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = UNUSED_DEF.to_string();
-            severity = Severity::Warning;
         }
         Problem::UnusedImport(symbol, region) => {
             doc = alloc.stack([
@@ -103,7 +103,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = UNUSED_IMPORT.to_string();
-            severity = Severity::Warning;
         }
         Problem::UnusedModuleImport(module_id, region) => {
             doc = alloc.stack([
@@ -121,7 +120,32 @@ pub fn can_problem<'b>(
             ]);
 
             title = UNUSED_IMPORT.to_string();
-            severity = Severity::Warning;
+        }
+        Problem::DefsOnlyUsedInRecursion(1, region) => {
+            doc = alloc.stack([
+                alloc.reflow("This definition is only used in recursion with itself:"),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow(
+                    "If you don't intend to use or export this definition, it should be removed!",
+                ),
+            ]);
+
+            title = "DEFINITION ONLY USED IN RECURSION".to_string();
+        }
+        Problem::DefsOnlyUsedInRecursion(n, region) => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("These "),
+                    alloc.string(n.to_string()),
+                    alloc.reflow(" definitions are only used in mutual recursion with themselves:"),
+                ]),
+                alloc.region(lines.convert_region(region)),
+                alloc.reflow(
+                    "If you don't intend to use or export any of them, they should all be removed!",
+                ),
+            ]);
+
+            title = "DEFINITIONs ONLY USED IN RECURSION".to_string();
         }
         Problem::ExposedButNotDefined(symbol) => {
             doc = alloc.stack([
@@ -137,7 +161,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = MISSING_DEFINITION.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::UnknownGeneratesWith(loc_ident) => {
             doc = alloc.stack([
@@ -152,7 +175,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = UNKNOWN_GENERATES_WITH.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::UnusedArgument(closure_symbol, is_anonymous, argument_symbol, region) => {
             let line = "\". Adding an underscore at the start of a variable name is a way of saying that the variable is not used.";
@@ -187,7 +209,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = UNUSED_ARG.to_string();
-            severity = Severity::Warning;
         }
         Problem::UnusedBranchDef(symbol, region) => {
             doc = alloc.stack([
@@ -208,7 +229,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = UNUSED_DEF.to_string();
-            severity = Severity::Warning;
         }
         Problem::PrecedenceProblem(BothNonAssociative(region, left_bin_op, right_bin_op)) => {
             doc = alloc.stack([
@@ -237,7 +257,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = SYNTAX_PROBLEM.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::UnsupportedPattern(BadPattern::Unsupported(pattern_type), region) => {
             use roc_parse::pattern::PatternType::*;
@@ -268,7 +287,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = SYNTAX_PROBLEM.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::Shadowing {
             original_region,
@@ -280,7 +298,6 @@ pub fn can_problem<'b>(
 
             doc = res_doc;
             title = res_title.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::CyclicAlias(symbol, region, others, alias_kind) => {
             let answer = crate::error::r#type::cyclic_alias(
@@ -289,7 +306,6 @@ pub fn can_problem<'b>(
 
             doc = answer.0;
             title = answer.1;
-            severity = Severity::RuntimeError;
         }
         Problem::PhantomTypeArgument {
             typ: alias,
@@ -317,7 +333,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = UNUSED_ALIAS_PARAM.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::UnboundTypeVariable {
             typ: alias,
@@ -354,12 +369,10 @@ pub fn can_problem<'b>(
             doc = alloc.stack(stack);
 
             title = UNBOUND_TYPE_VARIABLE.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::BadRecursion(entries) => {
             doc = to_circular_def_doc(alloc, lines, &entries);
             title = CIRCULAR_DEF.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::DuplicateRecordFieldValue {
             field_name,
@@ -394,7 +407,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = DUPLICATE_FIELD_NAME.to_string();
-            severity = Severity::Warning;
         }
         Problem::InvalidOptionalValue {
             field_name,
@@ -443,7 +455,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = DUPLICATE_FIELD_NAME.to_string();
-            severity = Severity::Warning;
         }
         Problem::DuplicateTag {
             tag_name,
@@ -478,7 +489,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = DUPLICATE_TAG_NAME.to_string();
-            severity = Severity::Warning;
         }
         Problem::SignatureDefMismatch {
             ref annotation_pattern,
@@ -495,7 +505,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = NAMING_PROBLEM.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::InvalidAliasRigid {
             alias_name: type_name,
@@ -518,7 +527,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = SYNTAX_PROBLEM.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::InvalidHexadecimal(region) => {
             doc = alloc.stack([
@@ -535,7 +543,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = INVALID_UNICODE.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::InvalidUnicodeCodePt(region) => {
             doc = alloc.stack([
@@ -545,7 +552,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = INVALID_UNICODE.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::InvalidInterpolation(region) => {
             doc = alloc.stack([
@@ -562,14 +568,12 @@ pub fn can_problem<'b>(
             ]);
 
             title = SYNTAX_PROBLEM.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::RuntimeError(runtime_error) => {
             let answer = pretty_runtime_error(alloc, lines, runtime_error);
 
             doc = answer.0;
             title = answer.1.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::NestedDatatype {
             alias,
@@ -597,7 +601,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = NESTED_DATATYPE.to_string();
-            severity = Severity::RuntimeError;
         }
 
         Problem::InvalidExtensionType { region, kind } => {
@@ -625,7 +628,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = INVALID_EXTENSION_TYPE.to_string();
-            severity = Severity::RuntimeError;
         }
 
         Problem::AbilityHasTypeVariables {
@@ -644,7 +646,6 @@ pub fn can_problem<'b>(
                 ),
             ]);
             title = ABILITY_HAS_TYPE_VARIABLES.to_string();
-            severity = Severity::RuntimeError;
         }
 
         Problem::HasClauseIsNotAbility {
@@ -655,7 +656,6 @@ pub fn can_problem<'b>(
                 alloc.region(lines.convert_region(clause_region)),
             ]);
             title = HAS_CLAUSE_IS_NOT_AN_ABILITY.to_string();
-            severity = Severity::RuntimeError;
         }
 
         Problem::IllegalHasClause { region } => {
@@ -674,7 +674,6 @@ pub fn can_problem<'b>(
                 ]),
             ]);
             title = ILLEGAL_HAS_CLAUSE.to_string();
-            severity = Severity::RuntimeError;
         }
 
         Problem::DuplicateHasAbility { ability, region } => {
@@ -692,7 +691,6 @@ pub fn can_problem<'b>(
                 ]),
             ]);
             title = "DUPLICATE BOUND ABILITY".to_string();
-            severity = Severity::Warning;
         }
 
         Problem::AbilityMemberMissingHasClause {
@@ -727,7 +725,6 @@ pub fn can_problem<'b>(
                     .reflow("Otherwise, the function does not need to be part of the ability!")]),
             ]);
             title = ABILITY_MEMBER_MISSING_HAS_CLAUSE.to_string();
-            severity = Severity::RuntimeError;
         }
 
         Problem::AbilityMemberMultipleBoundVars {
@@ -755,7 +752,6 @@ pub fn can_problem<'b>(
                 ])
             ]);
             title = ABILITY_MEMBER_BINDS_MULTIPLE_VARIABLES.to_string();
-            severity = Severity::RuntimeError;
         }
 
         Problem::AbilityNotOnToplevel { region } => {
@@ -767,7 +763,6 @@ pub fn can_problem<'b>(
                 alloc.reflow("Abilities can only be defined on the top-level of a Roc module."),
             ]);
             title = ABILITY_NOT_ON_TOPLEVEL.to_string();
-            severity = Severity::RuntimeError;
         }
 
         Problem::AbilityUsedAsType(suggested_var_name, ability, region) => {
@@ -795,7 +790,6 @@ pub fn can_problem<'b>(
                 ])),
             ]);
             title = ABILITY_USED_AS_TYPE.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::NestedSpecialization(member, region) => {
             doc = alloc.stack([
@@ -808,7 +802,6 @@ pub fn can_problem<'b>(
                 alloc.reflow("Specializations can only be defined on the top-level of a module."),
             ]);
             title = SPECIALIZATION_NOT_ON_TOPLEVEL.to_string();
-            severity = Severity::Warning;
         }
         Problem::IllegalDerivedAbility(region) => {
             doc = alloc.stack([
@@ -820,7 +813,6 @@ pub fn can_problem<'b>(
                     .append(list_builtin_abilities(alloc)),
             ]);
             title = ILLEGAL_DERIVE.to_string();
-            severity = Severity::Warning;
         }
         Problem::NotAnAbility(region) => {
             doc = alloc.stack([
@@ -829,7 +821,6 @@ pub fn can_problem<'b>(
                 alloc.reflow("Only abilities can be implemented."),
             ]);
             title = NOT_AN_ABILITY.to_string();
-            severity = Severity::Warning;
         }
         Problem::NotAnAbilityMember {
             ability,
@@ -844,7 +835,6 @@ pub fn can_problem<'b>(
                 alloc.reflow("Only implementations for members an ability has can be specified in this location.")
             ]);
             title = NOT_AN_ABILITY_MEMBER.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::ImplementationNotFound { member, region } => {
             let member_str = member.as_str(alloc.interns);
@@ -856,7 +846,6 @@ pub fn can_problem<'b>(
                 alloc.tip().append(alloc.concat([alloc.reflow("consider adding a value of name "), alloc.symbol_unqualified(member), alloc.reflow(" in this scope, or using another variable that implements this ability member, like "), alloc.type_str(&format!("{{ {}: my{} }}", member_str, member_str))]))
             ]);
             title = IMPLEMENTATION_NOT_FOUND.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::OptionalAbilityImpl { ability, region } => {
             let hint = if ability.is_builtin() {
@@ -875,7 +864,6 @@ pub fn can_problem<'b>(
                 hint,
             ]);
             title = OPTIONAL_ABILITY_IMPLEMENTATION.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::QualifiedAbilityImpl { region } => {
             doc = alloc.stack([
@@ -886,7 +874,6 @@ pub fn can_problem<'b>(
                 ),
             ]);
             title = QUALIFIED_ABILITY_IMPLEMENTATION.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::AbilityImplNotIdent { region } => {
             doc = alloc.stack([
@@ -898,7 +885,6 @@ pub fn can_problem<'b>(
                 alloc.tip().append(alloc.reflow("consider defining this expression as a variable."))
             ]);
             title = ABILITY_IMPLEMENTATION_NOT_IDENTIFIER.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::DuplicateImpl {
             original,
@@ -913,7 +899,6 @@ pub fn can_problem<'b>(
                     .reflow("Only one custom implementation can be defined for an ability member."),
             ]);
             title = DUPLICATE_IMPLEMENTATION.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::ImplementsNonRequired {
             region,
@@ -938,7 +923,6 @@ pub fn can_problem<'b>(
                 ),
             ]);
             title = UNNECESSARY_IMPLEMENTATIONS.to_string();
-            severity = Severity::Warning;
         }
         Problem::DoesNotImplementAbility {
             region,
@@ -963,7 +947,6 @@ pub fn can_problem<'b>(
                 ),
             ]);
             title = INCOMPLETE_ABILITY_IMPLEMENTATION.to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::NotBoundInAllPatterns {
             unbound_symbol,
@@ -984,7 +967,6 @@ pub fn can_problem<'b>(
                 ]),
             ]);
             title = "NAME NOT BOUND IN ALL PATTERNS".to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::NoIdentifiersIntroduced(region) => {
             doc = alloc.stack([
@@ -993,7 +975,6 @@ pub fn can_problem<'b>(
                 alloc.reflow("If you don't need to use the value on the right-hand-side of this assignment, consider removing the assignment. Since Roc is purely functional, assignments that don't introduce variables cannot affect a program's behavior!"),
             ]);
             title = "UNNECESSARY DEFINITION".to_string();
-            severity = Severity::Warning;
         }
         Problem::OverloadedSpecialization {
             ability_member,
@@ -1013,7 +994,6 @@ pub fn can_problem<'b>(
                 alloc.reflow("Ability specializations can only provide implementations for one opaque type, since all opaque types are different!"),
             ]);
             title = "OVERLOADED SPECIALIZATION".to_string();
-            severity = Severity::Warning;
         }
         Problem::UnnecessaryOutputWildcard { region } => {
             doc = alloc.stack([
@@ -1033,7 +1013,6 @@ pub fn can_problem<'b>(
                 alloc.reflow("You can safely remove this to make the code more concise without changing what it means."),
             ]);
             title = "UNNECESSARY WILDCARD".to_string();
-            severity = Severity::Warning;
         }
         Problem::MultipleListRestPattern { region } => {
             doc = alloc.stack([
@@ -1046,7 +1025,6 @@ pub fn can_problem<'b>(
                 ]),
             ]);
             title = "MULTIPLE LIST REST PATTERNS".to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::BadTypeArguments {
             symbol,
@@ -1086,7 +1064,6 @@ pub fn can_problem<'b>(
             } else {
                 "TOO FEW TYPE ARGUMENTS".to_string()
             };
-            severity = Severity::RuntimeError;
         }
         Problem::UnappliedCrash { region } => {
             doc = alloc.stack([
@@ -1100,7 +1077,6 @@ pub fn can_problem<'b>(
                 ])
             ]);
             title = "UNAPPLIED CRASH".to_string();
-            severity = Severity::RuntimeError;
         }
         Problem::OverAppliedCrash { region } => {
             doc = alloc.stack([
@@ -1116,7 +1092,6 @@ pub fn can_problem<'b>(
                 ]),
             ]);
             title = "OVERAPPLIED CRASH".to_string();
-            severity = Severity::RuntimeError;
         }
     };
 

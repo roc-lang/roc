@@ -45,6 +45,7 @@ use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
+use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_reporting::report::{Annotation, Palette, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
@@ -97,19 +98,27 @@ pub struct LoadConfig {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ExecutionMode {
-    Test,
     Check,
     Executable,
     /// Like [`ExecutionMode::Executable`], but stops in the presence of type errors.
     ExecutableIfCheck,
+    /// Test is like [`ExecutionMode::ExecutableIfCheck`], but rather than producing a proper
+    /// executable, run tests.
+    Test,
 }
 
 impl ExecutionMode {
     fn goal_phase(&self) -> Phase {
         match self {
-            ExecutionMode::Test | ExecutionMode::Executable => Phase::MakeSpecializations,
-            ExecutionMode::Check | ExecutionMode::ExecutableIfCheck => Phase::SolveTypes,
+            ExecutionMode::Executable => Phase::MakeSpecializations,
+            ExecutionMode::Check | ExecutionMode::ExecutableIfCheck | ExecutionMode::Test => {
+                Phase::SolveTypes
+            }
         }
+    }
+
+    fn build_if_checks(&self) -> bool {
+        matches!(self, Self::ExecutableIfCheck | Self::Test)
     }
 }
 
@@ -141,18 +150,22 @@ struct ModuleCache<'a> {
 }
 
 impl<'a> ModuleCache<'a> {
-    pub fn total_problems(&self) -> usize {
-        let mut total = 0;
+    fn has_can_errors(&self) -> bool {
+        self.can_problems
+            .values()
+            .flatten()
+            .any(|problem| problem.severity() == Severity::RuntimeError)
+    }
 
-        for problems in self.can_problems.values() {
-            total += problems.len();
-        }
+    fn has_type_errors(&self) -> bool {
+        self.type_problems
+            .values()
+            .flatten()
+            .any(|problem| problem.severity() == Severity::RuntimeError)
+    }
 
-        for problems in self.type_problems.values() {
-            total += problems.len();
-        }
-
-        total
+    pub fn has_errors(&self) -> bool {
+        self.has_can_errors() || self.has_type_errors()
     }
 }
 
@@ -2615,7 +2628,7 @@ fn update<'a>(
             let finish_type_checking = is_host_exposed &&
                 (state.goal_phase() == Phase::SolveTypes)
                 // If we're running in check-and-then-build mode, only exit now there are errors.
-                && (!matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck) || state.module_cache.total_problems() > 0);
+                && (!state.exec_mode.build_if_checks() || state.module_cache.has_errors());
 
             if finish_type_checking {
                 debug_assert!(work.is_empty());
@@ -2623,7 +2636,7 @@ fn update<'a>(
 
                 state.timings.insert(module_id, module_timing);
 
-                if matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck) {
+                if state.exec_mode.build_if_checks() {
                     // We there may outstanding modules in the typecheked cache whose ident IDs
                     // aren't registered; transfer all of their idents over to the state, since
                     // we're now done and ready to report errors.
@@ -2677,9 +2690,7 @@ fn update<'a>(
                     },
                 );
 
-                if state.goal_phase() > Phase::SolveTypes
-                    || matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck)
-                {
+                if state.goal_phase() > Phase::SolveTypes || state.exec_mode.build_if_checks() {
                     let layout_cache = state.layout_caches.pop().unwrap_or_else(|| {
                         LayoutCache::new(state.layout_interner.fork(), state.target_info)
                     });
@@ -2703,16 +2714,11 @@ fn update<'a>(
                     state.timings.insert(module_id, module_timing);
                 }
 
-                let work = if is_host_exposed
-                    && matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck)
-                {
+                let work = if is_host_exposed && state.exec_mode.build_if_checks() {
                     debug_assert!(
                         work.is_empty(),
                         "work left over after host exposed is checked"
                     );
-
-                    // Update the goal phase to target full codegen.
-                    state.exec_mode = ExecutionMode::Executable;
 
                     // Load the find + make specializations portion of the dependency graph.
                     state
@@ -2785,7 +2791,10 @@ fn update<'a>(
             layout_cache,
             ..
         } => {
-            debug_assert!(state.goal_phase() == Phase::MakeSpecializations);
+            debug_assert!(
+                state.goal_phase() == Phase::MakeSpecializations
+                    || state.exec_mode.build_if_checks()
+            );
 
             log!("made specializations for {:?}", module_id);
 
@@ -3003,7 +3012,10 @@ fn update<'a>(
                         );
                     }
 
-                    log!("re-launching specializations pass");
+                    log!(
+                        "re-launching make-specializations: pass {}",
+                        state.make_specializations_pass.current_pass() + 1
+                    );
 
                     state.make_specializations_pass.inc();
 
@@ -5984,7 +5996,7 @@ fn run_task<'a>(
 }
 
 fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
     let src_lines: Vec<&str> = Vec::new();
@@ -6071,7 +6083,7 @@ fn to_import_cycle_report(
     filename: PathBuf,
     render: RenderTarget,
 ) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
     // import_cycle looks like CycleModule, Import1, ..., ImportN, CycleModule
@@ -6131,7 +6143,7 @@ fn to_incorrect_module_name_report<'a>(
     src: &'a [u8],
     render: RenderTarget,
 ) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
     let IncorrectModuleName {
@@ -6217,7 +6229,7 @@ fn to_parse_problem_report<'a>(
 }
 
 fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
     use PlatformPath::*;
 

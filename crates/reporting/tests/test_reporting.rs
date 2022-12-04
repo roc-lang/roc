@@ -19,9 +19,10 @@ mod test_reporting {
     use roc_parse::module::parse_header;
     use roc_parse::state::State;
     use roc_parse::test_helpers::parse_expr_with;
+    use roc_problem::Severity;
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
-        can_problem, parse_problem, type_problem, RenderTarget, Report, Severity, ANSI_STYLE_CODES,
+        can_problem, parse_problem, type_problem, RenderTarget, Report, ANSI_STYLE_CODES,
         DEFAULT_PALETTE,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
@@ -12570,6 +12571,205 @@ I recommend using camelCase. It's the standard style in Roc code!
                   ^^^^^
 
     `crash` must be given exacly one message to crash with.
+    "###
+    );
+
+    test_no_problem!(
+        resolve_eq_for_unbound_num,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            n : Num *
+
+            main = n == 1
+            "#
+        )
+    );
+
+    test_report!(
+        resolve_eq_for_unbound_num_float,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            n : Num *
+
+            main = n == 1f64
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = n == 1f64
+                    ^^^^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        FloatingPoint ?
+
+    Note: I can't derive `Bool.isEq` for floating-point types. That's
+    because Roc's floating-point numbers cannot be compared for total
+    equality - in Roc, `NaN` is never comparable to `NaN`. If a type
+    doesn't support total equality, it cannot support the `Eq` ability!
+    "###
+    );
+
+    test_no_problem!(
+        resolve_hash_for_unbound_num,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            n : Num *
+
+            main = \hasher -> Hash.hash hasher n
+            "#
+        )
+    );
+
+    test_report!(
+        self_recursive_not_reached,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+            f = h {}
+            h = \{} -> 1
+            g = \{} -> if Bool.true then "" else g {}
+            "#
+        ),
+    @r###"
+    ── DEFINITION ONLY USED IN RECURSION ───────────────────── /code/proj/Main.roc ─
+
+    This definition is only used in recursion with itself:
+
+    4│  g = \{} -> if Bool.true then "" else g {}
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    If you don't intend to use or export this definition, it should be
+    removed!
+    "###
+    );
+
+    test_no_problem!(
+        self_recursive_not_reached_but_exposed,
+        indoc!(
+            r#"
+            app "test" provides [g] to "./platform"
+            g = \{} -> if Bool.true then "" else g {}
+            "#
+        )
+    );
+
+    test_report!(
+        mutual_recursion_not_reached,
+        indoc!(
+            r#"
+            app "test" provides [h] to "./platform"
+            h = ""
+            f = \{} -> if Bool.true then "" else g {}
+            g = \{} -> if Bool.true then "" else f {}
+            "#
+        ),
+    @r###"
+    ── DEFINITIONs ONLY USED IN RECURSION ──────────────────── /code/proj/Main.roc ─
+
+    These 2 definitions are only used in mutual recursion with themselves:
+
+    3│>  f = \{} -> if Bool.true then "" else g {}
+    4│>  g = \{} -> if Bool.true then "" else f {}
+
+    If you don't intend to use or export any of them, they should all be
+    removed!
+    "###
+    );
+
+    test_report!(
+        mutual_recursion_not_reached_but_exposed,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+            f = \{} -> if Bool.true then "" else g {}
+            g = \{} -> if Bool.true then "" else f {}
+            "#
+        ),
+    @r###"
+    "###
+    );
+
+    test_report!(
+        self_recursive_not_reached_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main =
+                g = \{} -> if Bool.true then "" else g {}
+                ""
+            "#
+        ),
+    @r###"
+    ── DEFINITION ONLY USED IN RECURSION ───────────────────── /code/proj/Main.roc ─
+
+    This definition is only used in recursion with itself:
+
+    3│      g = \{} -> if Bool.true then "" else g {}
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    If you don't intend to use or export this definition, it should be
+    removed!
+    "###
+    );
+
+    test_no_problem!(
+        self_recursive_not_reached_but_exposed_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main =
+                g = \{} -> if Bool.true then "" else g {}
+                g
+            "#
+        )
+    );
+
+    test_report!(
+        mutual_recursion_not_reached_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main =
+                f = \{} -> if Bool.true then "" else g {}
+                g = \{} -> if Bool.true then "" else f {}
+                ""
+            "#
+        ),
+    @r###"
+    ── DEFINITIONs ONLY USED IN RECURSION ──────────────────── /code/proj/Main.roc ─
+
+    These 2 definitions are only used in mutual recursion with themselves:
+
+    3│>      f = \{} -> if Bool.true then "" else g {}
+    4│>      g = \{} -> if Bool.true then "" else f {}
+
+    If you don't intend to use or export any of them, they should all be
+    removed!
+    "###
+    );
+
+    test_report!(
+        mutual_recursion_not_reached_but_exposed_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main =
+                f = \{} -> if Bool.true then "" else g {}
+                g = \{} -> if Bool.true then "" else f {}
+                f
+            "#
+        ),
+    @r###"
     "###
     );
 }

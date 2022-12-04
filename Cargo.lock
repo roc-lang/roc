@@ -3880,6 +3880,7 @@ dependencies = [
  "roc_collections",
  "roc_error_macros",
  "roc_module",
+ "roc_problem",
  "roc_region",
 ]
 
@@ -4157,6 +4158,7 @@ dependencies = [
  "brotli",
  "bumpalo",
  "flate2",
+ "fs_extra",
  "indoc",
  "pretty_assertions",
  "reqwest",
@@ -4246,6 +4248,7 @@ dependencies = [
  "roc_mono",
  "roc_packaging",
  "roc_parse",
+ "roc_problem",
  "roc_region",
  "roc_reporting",
  "roc_std",
@@ -5860,7 +5863,7 @@ dependencies = [
 [[package]]
 name = "wasm3"
 version = "0.5.0"
-source = "git+https://github.com/roc-lang/wasm3-rs?rev=f0f807d1fc0a50d1d68e5799e54ee62c05af00f5#f0f807d1fc0a50d1d68e5799e54ee62c05af00f5"
+source = "git+https://github.com/roc-lang/wasm3-rs?rev=ba0cdab7404f7f2995a8c18e614ce020dabd6da0#ba0cdab7404f7f2995a8c18e614ce020dabd6da0"
 dependencies = [
  "cty",
  "wasm3-sys",
@@ -5869,7 +5872,7 @@ dependencies = [
 [[package]]
 name = "wasm3-sys"
 version = "0.5.0"
-source = "git+https://github.com/roc-lang/wasm3-rs?rev=f0f807d1fc0a50d1d68e5799e54ee62c05af00f5#f0f807d1fc0a50d1d68e5799e54ee62c05af00f5"
+source = "git+https://github.com/roc-lang/wasm3-rs?rev=ba0cdab7404f7f2995a8c18e614ce020dabd6da0#ba0cdab7404f7f2995a8c18e614ce020dabd6da0"
 dependencies = [
  "cc",
  "cty",

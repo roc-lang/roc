@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use bumpalo::Bump;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_parse::ast::Expr;
+use roc_problem::Severity;
 use roc_region::all::{LineColumnRegion, LineInfo, Region};
 use roc_types::{
     subs::{Subs, Variable},
@@ -154,7 +155,7 @@ impl<'a> Renderer<'a> {
             title: "EXPECT FAILED".into(),
             doc,
             filename: self.filename.clone(),
-            severity: crate::report::Severity::RuntimeError,
+            severity: Severity::RuntimeError,
         };
 
         let mut buf = String::new();
@@ -225,7 +226,7 @@ impl<'a> Renderer<'a> {
             title: "EXPECT PANICKED".into(),
             doc,
             filename: self.filename.clone(),
-            severity: crate::report::Severity::RuntimeError,
+            severity: Severity::RuntimeError,
         };
 
         let mut buf = String::new();

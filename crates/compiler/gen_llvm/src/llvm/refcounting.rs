@@ -2,7 +2,7 @@ use crate::debug_info_init;
 use crate::llvm::bitcode::call_void_bitcode_fn;
 use crate::llvm::build::{
     add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, use_roc_value, Env,
-    FAST_CALL_CONV,
+    WhenRecursive, FAST_CALL_CONV,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
 use crate::llvm::convert::{basic_type_from_layout, RocUnion};
@@ -399,14 +399,8 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
 
     match builtin {
         List(element_layout) => {
-            let function = modify_refcount_list(
-                env,
-                layout_ids,
-                mode,
-                when_recursive,
-                layout,
-                element_layout,
-            );
+            let function =
+                modify_refcount_list(env, layout_ids, mode, when_recursive, element_layout);
 
             Some(function)
         }
@@ -435,12 +429,6 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
         value,
         layout,
     );
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum WhenRecursive<'a> {
-    Unreachable,
-    Loop(UnionLayout<'a>),
 }
 
 fn modify_refcount_layout_help<'a, 'ctx, 'env>(
@@ -609,25 +597,26 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
     when_recursive: &WhenRecursive<'a>,
-    layout: &Layout<'a>,
     element_layout: &Layout<'a>,
 ) -> FunctionValue<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
+    let element_layout = when_recursive.unwrap_recursive_pointer(*element_layout);
+    let list_layout = &Layout::Builtin(Builtin::List(env.arena.alloc(element_layout)));
     let (_, fn_name) = function_name_from_mode(
         layout_ids,
         &env.interns,
         "increment_list",
         "decrement_list",
-        layout,
+        list_layout,
         mode,
     );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = argument_type_from_layout(env, layout);
+            let basic_type = argument_type_from_layout(env, list_layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_list_help(
@@ -635,8 +624,8 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
                 layout_ids,
                 mode,
                 when_recursive,
-                layout,
-                element_layout,
+                list_layout,
+                &element_layout,
                 function_value,
             );
 

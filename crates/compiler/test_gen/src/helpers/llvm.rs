@@ -7,7 +7,7 @@ use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
-use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
+use roc_load::{EntryPoint, ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
 use roc_mono::ir::{CrashTag, OptLevel};
 use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
@@ -87,7 +87,9 @@ fn create_llvm_module<'a>(
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
+        Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
+            report,
+        ))) => {
             println!("{}", report);
             panic!();
         }
