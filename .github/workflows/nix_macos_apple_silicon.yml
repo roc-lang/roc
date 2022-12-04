@@ -28,6 +28,12 @@ jobs:
       - name: check code style with clippy --release
         run: cargo clippy --workspace --tests --release -- --deny warnings
 
+      - name: make a libapp.so
+        run: nix develop -c cargo run -- gen-stub-lib examples/platform-switching/rocLovesRust.roc
+
+      - name: check that the platform`s produced dylib is loadable
+        run: cd examples/platform-switching/rust-platform && nix develop -c cargo test test --release --locked
+
       - name: execute tests with --release
         run: nix develop -c cargo test --locked --release
 
