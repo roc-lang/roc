@@ -2177,7 +2177,7 @@ macro_rules! debug_print_ir {
             let procs_string = $state
                 .procedures
                 .values()
-                .map(|proc| proc.to_pretty($interner, 200))
+                .map(|proc| proc.to_pretty($interner, 200, true))
                 .collect::<Vec<_>>();
 
             let result = procs_string.join("\n");

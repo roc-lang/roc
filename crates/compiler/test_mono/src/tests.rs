@@ -13,11 +13,13 @@ extern crate indoc;
 #[allow(dead_code)]
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_load::ExecutionMode;
 use roc_load::LoadConfig;
 use roc_load::LoadMonomorphizedError;
 use roc_load::Threading;
+use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
 use roc_mono::ir::ProcLayout;
@@ -74,8 +76,7 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-fn compiles_to_ir(test_name: &str, src: &str) {
-    use bumpalo::Bump;
+fn compiles_to_ir(test_name: &str, src: &str, no_check: bool) {
     use roc_packaging::cache::RocCacheDir;
     use std::path::PathBuf;
 
@@ -129,6 +130,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         procedures,
         exposed_to_host,
         layout_interner,
+        interns,
         ..
     } = loaded;
 
@@ -145,7 +147,26 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let main_fn_symbol = exposed_to_host.values.keys().copied().next().unwrap();
 
+    if !no_check {
+        check_procedures(arena, &interns, &layout_interner, &procedures);
+    }
+
     verify_procedures(test_name, layout_interner, procedures, main_fn_symbol);
+}
+
+fn check_procedures<'a>(
+    arena: &'a Bump,
+    interns: &Interns,
+    interner: &STLayoutInterner<'a>,
+    procedures: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+) {
+    use roc_mono::debug::{check_procs, format_problems};
+    let problems = check_procs(arena, interner, procedures);
+    if problems.is_empty() {
+        return;
+    }
+    let formatted = format_problems(interns, interner, problems);
+    panic!("IR problems found:\n{formatted}");
 }
 
 fn verify_procedures<'a>(
@@ -161,7 +182,7 @@ fn verify_procedures<'a>(
 
     let mut procs_string = procedures
         .values()
-        .map(|proc| proc.to_pretty(&interner, 200))
+        .map(|proc| proc.to_pretty(&interner, 200, false))
         .collect::<Vec<_>>();
 
     let main_fn = procs_string.swap_remove(index);
@@ -564,7 +585,7 @@ fn record_optional_field_function_use_default() {
     "#
 }
 
-#[mono_test]
+#[mono_test(no_check)]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r#"
@@ -1282,7 +1303,7 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
     )
 }
 
-#[mono_test]
+#[mono_test(no_check)]
 fn issue_2810() {
     indoc!(
         r#"
