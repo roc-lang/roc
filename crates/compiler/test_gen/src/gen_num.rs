@@ -2156,6 +2156,16 @@ fn shift_right_zf_by() {
     assert_evals_to!("Num.shiftRightZfBy 0b0000_0010u8 1", 0b0000_0001u8, u8);
     assert_evals_to!("Num.shiftRightZfBy 0b0000_1100u8 2", 0b0000_0011u8, u8);
     assert_evals_to!("Num.shiftRightZfBy 0b1000_0000u8 12", 0b0000_0000u8, u8);
+    assert_evals_to!(
+        "Num.shiftRightZfBy 0xffff_0000_0000_0000_0000_0000_0000_ffffu128 4",
+        0x0fff_f000_0000_0000_0000_0000_0000_0fffu128,
+        u128
+    );
+    assert_evals_to!(
+        "Num.shiftRightZfBy 0xaaaa_0000_0000_bbbb_ffff_ffff_ffff_ffffu128 68",
+        0x0000_0000_0000_0000_0aaa_a000_0000_0bbbu128,
+        u128
+    );
 }
 
 #[test]
