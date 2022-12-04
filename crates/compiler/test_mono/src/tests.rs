@@ -76,7 +76,7 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-fn compiles_to_ir(test_name: &str, src: &str) {
+fn compiles_to_ir(test_name: &str, src: &str, no_check: bool) {
     use roc_packaging::cache::RocCacheDir;
     use std::path::PathBuf;
 
@@ -147,7 +147,9 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let main_fn_symbol = exposed_to_host.values.keys().copied().next().unwrap();
 
-    check_procedures(&arena, &interns, &layout_interner, &procedures);
+    if !no_check {
+        check_procedures(&arena, &interns, &layout_interner, &procedures);
+    }
 
     verify_procedures(test_name, layout_interner, procedures, main_fn_symbol);
 }
@@ -583,7 +585,7 @@ fn record_optional_field_function_use_default() {
     "#
 }
 
-#[mono_test]
+#[mono_test(no_check)]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r#"
@@ -1301,7 +1303,7 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
     )
 }
 
-#[mono_test]
+#[mono_test(no_check)]
 fn issue_2810() {
     indoc!(
         r#"
