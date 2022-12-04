@@ -183,7 +183,7 @@ pub struct HostedHeader<'a> {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum To<'a> {
     ExistingPackage(&'a str),
-    NewPackage(PackageName<'a>),
+    NewPackage(PackageName<'a>), // TODO is this obsolete? Seems like it should be deleted!
 }
 
 #[derive(Clone, Debug, PartialEq)]
