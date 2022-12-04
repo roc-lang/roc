@@ -7,7 +7,7 @@ pub mod wasi;
 // Main external interface
 pub use instance::Instance;
 
-use roc_wasm_module::{Value, ValueType};
+use roc_wasm_module::{Value, ValueType, WasmModule};
 use value_stack::ValueStack;
 use wasi::WasiDispatcher;
 
@@ -72,5 +72,20 @@ impl Error {
             (true, true) => ValueType::F64,
         };
         Error::ValueStackType(expected, ty)
+    }
+}
+
+// Determine which function the program counter is in
+pub(crate) fn pc_to_fn_index(program_counter: usize, module: &WasmModule<'_>) -> usize {
+    if module.code.function_offsets.is_empty() {
+        0
+    } else {
+        let next_code_section_index = module
+            .code
+            .function_offsets
+            .iter()
+            .position(|o| *o as usize > program_counter)
+            .unwrap_or(module.code.function_offsets.len());
+        module.import.imports.len() + next_code_section_index - 1
     }
 }

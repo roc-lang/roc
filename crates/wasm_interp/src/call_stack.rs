@@ -1,9 +1,12 @@
 use bitvec::vec::BitVec;
 use bumpalo::{collections::Vec, Bump};
-use roc_wasm_module::{parse::Parse, Value, ValueType};
+use roc_wasm_module::opcodes::OpCode;
+use roc_wasm_module::sections::ImportDesc;
+use roc_wasm_module::{parse::Parse, Value, ValueType, WasmModule};
+use std::fmt::{self, Write};
 use std::iter::repeat;
 
-use crate::ValueStack;
+use crate::{pc_to_fn_index, ValueStack};
 
 /// Struct-of-Arrays storage for the call stack.
 /// Type info is packed to avoid wasting space on padding.
@@ -102,8 +105,12 @@ impl<'a> CallStack<'a> {
     }
 
     pub fn get_local(&self, local_index: u32) -> Value {
-        let frame_offset = self.frame_offsets.last().unwrap();
-        let index = (*frame_offset + local_index) as usize;
+        self.get_local_help(self.frame_offsets.len() - 1, local_index)
+    }
+
+    fn get_local_help(&self, frame_index: usize, local_index: u32) -> Value {
+        let frame_offset = self.frame_offsets[frame_index];
+        let index = (frame_offset + local_index) as usize;
         let data64 = self.locals_data[index];
         let is_float = self.is_float[index];
         let is_64 = self.is_64[index];
@@ -157,6 +164,114 @@ impl<'a> CallStack<'a> {
 
     pub fn is_empty(&self) -> bool {
         self.is_64.is_empty()
+    }
+
+    /// Dump a debug view of the call stack
+    ///
+    /// --------------
+    /// function 123
+    ///   address  0x12345
+    ///   args     0: I64(234), 1: F64(7.15)
+    ///   locals   2: I32(412), 3: F64(3.14)
+    ///   stack    [I64(111), F64(3.14)]
+    /// --------------
+    pub fn dump(
+        &self,
+        module: &WasmModule<'a>,
+        value_stack: &ValueStack<'a>,
+        pc: usize,
+        writer: &mut String,
+    ) -> fmt::Result {
+        let divider = "-------------------";
+        writeln!(writer, "{}", divider)?;
+
+        let mut value_stack_iter = value_stack.iter();
+
+        for frame in 0..self.frame_offsets.len() {
+            let call_addr = {
+                let next_op = if frame + 1 < self.frame_offsets.len() {
+                    // Next op in this frame = return address of the next frame
+                    self.return_addrs_and_block_depths[frame + 1].0 as usize
+                } else {
+                    pc
+                };
+                // Call address is more intuitive than the return address when debugging. Search backward for it.
+                // Skip last byte of function index to avoid a false match with CALL/CALLINDIRECT.
+                // The more significant bytes won't match because of LEB-128 encoding.
+                let mut call_op = next_op - 2;
+                loop {
+                    let byte = module.code.bytes[call_op];
+                    if byte == OpCode::CALL as u8 || byte == OpCode::CALLINDIRECT as u8 {
+                        break;
+                    } else {
+                        call_op -= 1;
+                    }
+                }
+                call_op
+            };
+
+            let fn_index = pc_to_fn_index(call_addr, module);
+            let address = call_addr + module.code.section_offset as usize;
+            writeln!(writer, "function {}", fn_index)?;
+            writeln!(writer, "  address  {:06x}", address)?; // format matches wasm-objdump, for easy search
+
+            write!(writer, "  args     ")?;
+            let arg_count = {
+                let n_import_fns = module.import.imports.len();
+                let signature_index = if fn_index < n_import_fns {
+                    match module.import.imports[fn_index].description {
+                        ImportDesc::Func { signature_index } => signature_index,
+                        _ => unreachable!(),
+                    }
+                } else {
+                    module.function.signatures[fn_index - n_import_fns]
+                };
+                module.types.look_up_arg_type_bytes(signature_index).len()
+            };
+            let args_and_locals_count = {
+                let frame_offset = self.frame_offsets[frame] as usize;
+                let next_frame_offset = if frame == self.frame_offsets.len() - 1 {
+                    self.locals_data.len()
+                } else {
+                    self.frame_offsets[frame + 1] as usize
+                };
+                next_frame_offset - frame_offset
+            };
+            for index in 0..args_and_locals_count {
+                let value = self.get_local_help(frame, index as u32);
+                if index != 0 {
+                    write!(writer, ", ")?;
+                }
+                if index == arg_count {
+                    write!(writer, "\n  locals   ")?;
+                }
+                write!(writer, "{}: {:?}", index, value)?;
+            }
+            write!(writer, "\n  stack    [")?;
+
+            let frame_value_count = {
+                let value_stack_base = self.value_stack_bases[frame];
+                let next_value_stack_base = if frame == self.frame_offsets.len() - 1 {
+                    value_stack.len() as u32
+                } else {
+                    self.value_stack_bases[frame + 1]
+                };
+                next_value_stack_base - value_stack_base
+            };
+            for i in 0..frame_value_count {
+                if i != 0 {
+                    write!(writer, ", ")?;
+                }
+                if let Some(value) = value_stack_iter.next() {
+                    write!(writer, "{:?}", value)?;
+                }
+            }
+
+            writeln!(writer, "]")?;
+            writeln!(writer, "{}", divider)?;
+        }
+
+        Ok(())
     }
 }
 

@@ -199,6 +199,14 @@ impl<'a> ValueStack<'a> {
     pub(crate) fn get_slice<'b>(&'b self, index: usize) -> ValueStackSlice<'a, 'b> {
         ValueStackSlice { stack: self, index }
     }
+
+    pub(crate) fn iter<'b>(&'b self) -> ValueStackIter<'a, 'b> {
+        ValueStackIter {
+            stack: self,
+            index: 0,
+            bytes_index: 0,
+        }
+    }
 }
 
 impl Debug for ValueStack<'_> {
@@ -215,6 +223,29 @@ pub struct ValueStackSlice<'a, 'b> {
 impl Debug for ValueStackSlice<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.stack.fmt_from_index(f, self.index)
+    }
+}
+
+pub struct ValueStackIter<'a, 'b> {
+    stack: &'b ValueStack<'a>,
+    index: usize,
+    bytes_index: usize,
+}
+
+impl Iterator for ValueStackIter<'_, '_> {
+    type Item = Value;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.stack.is_64.len() {
+            None
+        } else {
+            let is_64 = self.stack.is_64[self.index];
+            let is_float = self.stack.is_float[self.index];
+            let value = self.stack.get(is_64, is_float, self.bytes_index);
+            self.index += 1;
+            self.bytes_index += if is_64 { 8 } else { 4 };
+            Some(value)
+        }
     }
 }
 

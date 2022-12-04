@@ -10,7 +10,7 @@ use roc_wasm_module::{Value, ValueType};
 
 use crate::call_stack::CallStack;
 use crate::value_stack::ValueStack;
-use crate::{Error, ImportDispatcher};
+use crate::{pc_to_fn_index, Error, ImportDispatcher};
 
 pub enum Action {
     Continue,
@@ -225,16 +225,35 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                     break;
                 }
                 Err(Error::ValueStackType(expected, actual)) => {
-                    return Err(format!(
-                        "I found a type mismatch in the Value Stack at file offset {:#x}. Expected {:?}, but found {:?}.", 
+                    let mut message = String::new();
+                    write!(&mut message,
+                        "ERROR: I found a type mismatch in the Value Stack at file offset {:#x}. Expected {:?}, but found {:?}.\n", 
                         self.program_counter + module.code.section_offset as usize, expected, actual
-                    ));
+                    ).unwrap();
+                    self.call_stack
+                        .dump(
+                            module,
+                            &self.value_stack,
+                            self.program_counter,
+                            &mut message,
+                        )
+                        .unwrap();
+                    return Err(message);
                 }
                 Err(Error::ValueStackEmpty) => {
-                    return Err(format!(
-                        "I tried to pop a value from the Value Stack at file offset {:#x}, but it was empty.",
+                    let mut message = format!(
+                        "ERROR: I tried to pop a value from the Value Stack at file offset {:#x}, but it was empty.\n",
                         self.program_counter + module.code.section_offset as usize
-                    ));
+                    );
+                    self.call_stack
+                        .dump(
+                            module,
+                            &self.value_stack,
+                            self.program_counter,
+                            &mut message,
+                        )
+                        .unwrap();
+                    return Err(message);
                 }
             }
         }
@@ -390,7 +409,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.value_stack.push(return_val);
             }
             if let Some(debug_string) = self.debug_string.as_mut() {
-                std::write!(debug_string, " {}.{}", import.module, import.name).unwrap();
+                write!(debug_string, " {}.{}", import.module, import.name).unwrap();
             }
         } else {
             let return_addr = self.program_counter as u32;
@@ -1486,13 +1505,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             let slice = self.value_stack.get_slice(base as usize);
             eprintln!("{:#07x} {:17} {:?}", file_offset, debug_string, slice);
             if op_code == RETURN || (op_code == END && implicit_return) {
-                let next_code_section_index = module
-                    .code
-                    .function_offsets
-                    .iter()
-                    .position(|o| *o as usize > self.program_counter)
-                    .unwrap_or(module.code.function_offsets.len());
-                let fn_index = module.import.imports.len() + next_code_section_index - 1;
+                let fn_index = pc_to_fn_index(self.program_counter, module);
                 eprintln!("returning to function {}\n", fn_index);
             } else if op_code == CALL || op_code == CALLINDIRECT {
                 eprintln!("");
