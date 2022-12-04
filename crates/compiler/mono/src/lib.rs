@@ -22,4 +22,4 @@ pub mod tail_recursion;
 //#[allow(clippy::ptr_arg)]
 pub mod decision_tree;
 
-pub mod checker;
+pub mod debug;

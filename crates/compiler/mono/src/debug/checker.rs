@@ -63,6 +63,7 @@ pub enum ProblemKind<'a> {
         num_given: usize,
     },
     CallingUndefinedProc {
+        symbol: Symbol,
         proc_layout: ProcLayout<'a>,
         similar: Vec<ProcLayout<'a>>,
     },
@@ -113,22 +114,24 @@ pub enum ProblemKind<'a> {
 }
 
 pub struct Problem<'a> {
-    pub proc_key: (Symbol, ProcLayout<'a>),
+    pub proc: &'a Proc<'a>,
+    pub proc_layout: ProcLayout<'a>,
     pub line: usize,
     pub kind: ProblemKind<'a>,
 }
 
 type Procs<'a> = MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>;
-pub type Problems<'a> = Vec<Problem<'a>>;
+pub struct Problems<'a>(pub(crate) Vec<Problem<'a>>);
 
-pub fn check_procs<'a>(arena: &'a Bump, procs: &Procs<'a>) -> Problems<'a> {
+pub fn check_procs<'a>(arena: &'a Bump, procs: &'a Procs<'a>) -> Problems<'a> {
     let mut problems = Default::default();
     let mut call_spec_ids = Default::default();
 
-    for (proc_key, proc) in procs.iter() {
+    for ((_, proc_layout), proc) in procs.iter() {
         let mut ctx = Ctx {
             arena,
-            proc_key: *proc_key,
+            proc,
+            proc_layout: *proc_layout,
             ret_layout: proc.ret_layout,
             problems: &mut problems,
             call_spec_ids: &mut call_spec_ids,
@@ -140,7 +143,7 @@ pub fn check_procs<'a>(arena: &'a Bump, procs: &Procs<'a>) -> Problems<'a> {
         ctx.check_proc(proc);
     }
 
-    problems
+    Problems(problems)
 }
 
 type VEnv<'a> = VecMap<Symbol, (usize, Layout<'a>)>;
@@ -148,10 +151,11 @@ type JoinPoints<'a> = VecMap<JoinPointId, (usize, &'a [Param<'a>])>;
 type CallSpecIds = VecMap<CallSpecId, usize>;
 struct Ctx<'a, 'r> {
     arena: &'a Bump,
-    problems: &'r mut Problems<'a>,
+    problems: &'r mut Vec<Problem<'a>>,
+    proc: &'a Proc<'a>,
+    proc_layout: ProcLayout<'a>,
     procs: &'r Procs<'a>,
     call_spec_ids: &'r mut CallSpecIds,
-    proc_key: (Symbol, ProcLayout<'a>),
     ret_layout: Layout<'a>,
     venv: VEnv<'a>,
     joinpoints: JoinPoints<'a>,
@@ -165,7 +169,8 @@ impl<'a, 'r> Ctx<'a, 'r> {
 
     fn problem(&mut self, problem_kind: ProblemKind<'a>) {
         self.problems.push(Problem {
-            proc_key: self.proc_key,
+            proc: self.proc,
+            proc_layout: self.proc_layout,
             line: self.line,
             kind: problem_kind,
         })
@@ -513,6 +518,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                         .map(|(_, lay)| *lay)
                         .collect();
                     self.problem(ProblemKind::CallingUndefinedProc {
+                        symbol: name.name(),
                         proc_layout,
                         similar,
                     });
@@ -584,7 +590,7 @@ enum TagPayloads<'a> {
     Payloads(&'a [Layout<'a>]),
 }
 
-fn get_tag_id_payloads<'a>(union_layout: UnionLayout<'a>, tag_id: TagIdIntType) -> TagPayloads<'a> {
+fn get_tag_id_payloads(union_layout: UnionLayout, tag_id: TagIdIntType) -> TagPayloads {
     macro_rules! check_tag_id_oob {
         ($len:expr) => {
             if tag_id as usize >= $len {

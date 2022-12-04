@@ -1204,7 +1204,7 @@ impl std::fmt::Debug for LambdaSet<'_> {
 ///
 /// See also https://github.com/roc-lang/roc/issues/3336.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct CapturesNiche<'a>(&'a [Layout<'a>]);
+pub struct CapturesNiche<'a>(pub(crate) &'a [Layout<'a>]);
 
 impl CapturesNiche<'_> {
     pub fn no_niche() -> Self {
