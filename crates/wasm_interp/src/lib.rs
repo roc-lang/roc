@@ -7,7 +7,7 @@ pub mod wasi;
 // Main external interface
 pub use instance::Instance;
 
-use roc_wasm_module::Value;
+use roc_wasm_module::{Value, ValueType};
 use value_stack::ValueStack;
 use wasi::WasiDispatcher;
 
@@ -54,5 +54,23 @@ impl<'a> ImportDispatcher for DefaultImportDispatcher<'a> {
                 module_name, function_name
             );
         }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum Error {
+    ValueStackType(ValueType, ValueType),
+    ValueStackEmpty,
+}
+
+impl Error {
+    fn value_stack_type(expected: ValueType, is_float: bool, is_64: bool) -> Self {
+        let ty = match (is_float, is_64) {
+            (false, false) => ValueType::I32,
+            (false, true) => ValueType::I64,
+            (true, false) => ValueType::F32,
+            (true, true) => ValueType::F64,
+        };
+        Error::ValueStackType(expected, ty)
     }
 }

@@ -18,7 +18,7 @@ fn test_currentmemory() {
     module.code.bytes.push(OpCode::CURRENTMEMORY as u8);
 
     let mut state = Instance::new(&arena, pages, pc, [], DEFAULT_IMPORTS);
-    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module).unwrap();
     assert_eq!(state.value_stack.pop(), Value::I32(3))
 }
 
@@ -36,8 +36,8 @@ fn test_growmemory() {
     module.code.bytes.push(OpCode::GROWMEMORY as u8);
 
     let mut state = Instance::new(&arena, existing_pages, pc, [], DEFAULT_IMPORTS);
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module).unwrap();
+    state.execute_next_instruction(&module).unwrap();
     assert_eq!(state.memory.len(), 5 * MemorySection::PAGE_SIZE as usize);
 }
 
