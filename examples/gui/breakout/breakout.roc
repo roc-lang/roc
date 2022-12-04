@@ -95,7 +95,7 @@ render : Model -> List Elem
 render = \model ->
 
     blocks = List.map
-        (List.range 0 numBlocks)
+        (List.range {start: At 0, end: Length numBlocks})
         \index ->
             col =
                 Num.rem index numCols
