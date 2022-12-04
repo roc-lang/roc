@@ -2338,17 +2338,17 @@ fn update<'a>(
                         // This wasn't a URL, so it must be a filesystem path.
                         let root_module: PathBuf = src_dir.join(package_str);
                         let root_module_dir = root_module.parent().unwrap_or_else(|| {
-                                if root_module.is_file() {
-                                    // Files must have parents!
-                                    internal_error!("Somehow I got a file path to a real file on the filesystem that has no parent!");
-                                } else {
-                                    // TODO make this a nice report
-                                    todo!(
-                                        "platform module {:?} was not a file.",
-                                        package_str
-                                    )
-                                }
-                            }).into();
+                            if root_module.is_file() {
+                                // Files must have parents!
+                                internal_error!("Somehow I got a file path to a real file on the filesystem that has no parent!");
+                            } else {
+                                // TODO make this a nice report
+                                todo!(
+                                    "platform module {:?} was not a file.",
+                                    package_str
+                                )
+                            }
+                        }).into();
 
                         ShorthandPath::RelativeToSrc {
                             root_module_dir,
