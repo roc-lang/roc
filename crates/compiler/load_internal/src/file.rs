@@ -3293,21 +3293,21 @@ fn finish(
     }
 }
 
-/// Load a `platform` module from disk
-fn load_platform_module<'a>(
+/// Load a `package` or `platform` module from disk
+fn load_package_from_disk<'a>(
     arena: &'a Bump,
     filename: &Path,
     shorthand: &'a str,
     app_module_id: ModuleId,
-    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: SharedIdentIdsByModule,
+    module_ids: &Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: &SharedIdentIdsByModule,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = Instant::now();
     let file_io_start = Instant::now();
-    let file = fs::read(filename);
+    let read_result = fs::read(filename);
     let file_io_duration = file_io_start.elapsed();
 
-    match file {
+    match read_result {
         Ok(bytes_vec) => {
             let parse_start = Instant::now();
             let bytes = arena.alloc(bytes_vec);
@@ -3360,7 +3360,7 @@ fn load_platform_module<'a>(
                     parser_state,
                 )) => {
                     todo!(
-                        "Send `packag` module using {:?} and {:?}",
+                        "Make a Msg for a `package` module using {:?} and {:?}",
                         header,
                         parser_state
                     )
@@ -3379,7 +3379,7 @@ fn load_platform_module<'a>(
                         Some(app_module_id),
                         filename.to_path_buf(),
                         parser_state,
-                        module_ids.clone(),
+                        module_ids,
                         ident_ids_by_module,
                         &header,
                         pkg_module_timing,
@@ -3854,95 +3854,41 @@ fn parse_header<'a>(
                 ident_ids_by_module.clone(),
                 module_timing,
             );
-            let app_module_header_msg = Msg::Header(resolved_header);
 
+            // Look at the app module's `to` keyword to determine which package was the platform.
             match header.provides.to.value {
                 To::ExistingPackage(existing_package) => {
-                    let opt_base_package = packages.iter().find_map(|loc_package_entry| {
-                        let Loc { value, .. } = loc_package_entry;
-
-                        if value.shorthand == existing_package {
-                            Some(value)
-                        } else {
-                            None
-                        }
-                    });
-
-                    if let Some(PackageEntry {
-                        shorthand,
-                        package_name:
-                            Loc {
-                                value: package_path,
-                                ..
-                            },
-                        ..
-                    }) = opt_base_package
-                    {
-                        let src = package_path.to_str();
-
-                        // check whether we can find a `platform` module file on disk
-                        let platform_module_path = if src.starts_with("https://") {
-                            #[cfg(not(target_family = "wasm"))]
-                            {
-                                // If this is a HTTPS package, synchronously download it
-                                // to the cache before proceeding.
-
-                                // TODO we should do this async; however, with the current
-                                // architecture of file.rs (which doesn't use async/await),
-                                // this would be very difficult!
-                                let (package_dir, opt_root_module) = cache::install_package(
-                                    roc_cache_dir,
-                                    src,
-                                )
-                                .unwrap_or_else(|err| {
-                                    todo!("TODO gracefully handle package install error {:?}", err);
-                                });
-
-                                // You can optionally specify the root module using the URL fragment,
-                                // e.g. #foo.roc
-                                // (defaults to main.roc)
-                                match opt_root_module {
-                                    Some(root_module) => package_dir.join(root_module),
-                                    None => package_dir.join("main.roc"),
-                                }
+                    let platform_entry = packages.iter()
+                        .find_map(|Loc { value, .. }| {
+                            if value.shorthand == existing_package {
+                                Some(value)
+                            } else {
+                                None
                             }
+                        })
+                        .unwrap_or_else(|| todo!("Gracefully handle platform shorthand after `to` that didn't map to a shorthand specified in `packages`"));
 
-                            #[cfg(target_family = "wasm")]
-                            {
-                                panic!(
-                                    "Specifying packages via URLs is curently unsupported in wasm."
-                                );
-                            }
-                        } else {
-                            app_file_dir.join(src)
-                        };
-
-                        if platform_module_path.as_path().exists() {
-                            let load_platform_module_msg = load_platform_module(
-                                arena,
-                                &platform_module_path,
-                                shorthand,
-                                module_id,
-                                module_ids,
-                                ident_ids_by_module,
-                            )?;
-
-                            Ok((
-                                module_id,
-                                Msg::Many(vec![app_module_header_msg, load_platform_module_msg]),
-                            ))
-                        } else {
-                            Err(LoadingProblem::FileProblem {
-                                filename: platform_module_path,
-                                error: io::ErrorKind::NotFound,
-                            })
-                        }
-                    } else {
-                        panic!("could not find base")
-                    }
+                    dbg!(
+                        "TODO Now that we know which platform was specified, record that in the State.",
+                        platform_entry
+                    );
                 }
-                To::NewPackage(_package_name) => Ok((module_id, app_module_header_msg)),
+                To::NewPackage(_package_name) => unreachable!("To::NewPackage is deprecated"),
             }
+
+            let mut messages = load_packages(
+                packages,
+                roc_cache_dir,
+                app_file_dir,
+                arena,
+                module_id,
+                module_ids,
+                ident_ids_by_module,
+            );
+
+            messages.push(Msg::Header(resolved_header));
+
+            Ok((module_id, Msg::Many(messages)))
         }
         Ok((
             ast::Module {
@@ -3966,8 +3912,8 @@ fn parse_header<'a>(
             None,
             filename,
             parse_state,
-            module_ids.clone(),
-            ident_ids_by_module,
+            &module_ids,
+            &ident_ids_by_module,
             &header,
             module_timing,
         )),
@@ -3977,6 +3923,90 @@ fn parse_header<'a>(
                 .into_file_error(filename),
         )),
     }
+}
+
+fn load_packages<'a>(
+    packages: &[Loc<PackageEntry<'a>>],
+    roc_cache_dir: RocCacheDir,
+    app_file_dir: PathBuf,
+    arena: &'a Bump,
+    module_id: ModuleId,
+    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
+) -> Vec<Msg<'a>> {
+    let mut load_messages = Vec::with_capacity(packages.len() + 1);
+    let mut problems = Vec::new();
+
+    // Load all the packages
+    for Loc { value: entry, .. } in packages.iter() {
+        let PackageEntry {
+            shorthand,
+            package_name:
+                Loc {
+                    value: package_path,
+                    ..
+                },
+            ..
+        } = entry;
+
+        let src = package_path.to_str();
+
+        // find the `package` or `platform` module on disk,
+        // downloading it into a cache dir first if necessary.
+        let root_module_path = if src.starts_with("https://") {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                // If this is a HTTPS package, synchronously download it
+                // to the cache before proceeding.
+
+                // TODO we should do this async; however, with the current
+                // architecture of file.rs (which doesn't use async/await),
+                // this would be very difficult!
+                let (package_dir, opt_root_module) = cache::install_package(roc_cache_dir, src)
+                    .unwrap_or_else(|err| {
+                        todo!("TODO gracefully handle package install error {:?}", err);
+                    });
+
+                // You can optionally specify the root module using the URL fragment,
+                // e.g. #foo.roc
+                // (defaults to main.roc)
+                match opt_root_module {
+                    Some(root_module) => package_dir.join(root_module),
+                    None => package_dir.join("main.roc"),
+                }
+            }
+
+            #[cfg(target_family = "wasm")]
+            {
+                panic!("Specifying packages via URLs is curently unsupported in wasm.");
+            }
+        } else {
+            app_file_dir.join(src)
+        };
+
+        match load_package_from_disk(
+            arena,
+            &root_module_path,
+            shorthand,
+            module_id,
+            &module_ids,
+            &ident_ids_by_module,
+        ) {
+            Ok(msg) => {
+                load_messages.push(msg);
+            }
+            Err(problem) => {
+                problems.push(problem);
+            }
+        }
+    }
+
+    dbg!("TODO Push extra msgs for any loading problems we encountered!");
+    for _problem in problems {
+        // TODO see dbg! message above
+    }
+
+    load_messages
 }
 
 /// Load a module by its filename
@@ -4286,11 +4316,11 @@ struct PlatformHeaderInfo<'a> {
 
 // TODO refactor so more logic is shared with `send_header`
 #[allow(clippy::too_many_arguments)]
-fn send_header_two<'a>(
+fn send_platform_header<'a>(
     info: PlatformHeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
-    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: SharedIdentIdsByModule,
+    module_ids: &Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: &SharedIdentIdsByModule,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
     let PlatformHeaderInfo {
@@ -4975,8 +5005,8 @@ fn fabricate_platform_module<'a>(
     opt_app_module_id: Option<ModuleId>,
     filename: PathBuf,
     parse_state: roc_parse::state::State<'a>,
-    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: SharedIdentIdsByModule,
+    module_ids: &Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: &SharedIdentIdsByModule,
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
@@ -4999,7 +5029,7 @@ fn fabricate_platform_module<'a>(
         imports: unspace(arena, header.imports.item.items),
     };
 
-    send_header_two(
+    send_platform_header(
         info,
         parse_state,
         module_ids,
