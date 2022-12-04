@@ -72,7 +72,14 @@ where
     let header = format_header(f, title);
     let proc_loc = format_proc_spec(f, interns, interner, proc.name.name(), proc_layout);
 
-    stack(f, [header, proc_loc, interpolated_docs])
+    stack(
+        f,
+        [
+            header,
+            f.concat([f.reflow("in "), proc_loc]),
+            interpolated_docs,
+        ],
+    )
 }
 
 fn format_sourced_doc<'d>(f: &'d Arena<'d>, line: usize, source: &str, doc: Doc<'d>) -> Doc<'d> {
@@ -89,7 +96,7 @@ fn format_sourced_doc<'d>(f: &'d Arena<'d>, line: usize, source: &str, doc: Doc<
             .append(f.text(if line_no == line { "> " } else { "  " }))
             .append(f.text(line_src.to_string()))
     });
-    let pretty_lines = stack(f, pretty_lines);
+    let pretty_lines = f.intersperse(pretty_lines, f.hardline());
     stack(f, [pretty_lines, doc])
 }
 
@@ -463,7 +470,7 @@ where
         f.reflow(", "),
     );
     let fun = f.concat([
-        args,
+        f.concat([f.reflow("("), args, f.reflow(")")]),
         f.reflow(" -> "),
         result.to_doc(f, interner, Parens::NotNeeded),
     ]);

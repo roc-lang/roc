@@ -9,7 +9,7 @@ use crate::{
         Call, CallSpecId, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
         ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
-    layout::{Builtin, Layout, TagIdIntType, UnionLayout},
+    layout::{Builtin, Layout, STLayoutInterner, TagIdIntType, UnionLayout},
 };
 
 pub enum UseKind {
@@ -123,18 +123,28 @@ pub struct Problem<'a> {
 type Procs<'a> = MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>;
 pub struct Problems<'a>(pub(crate) Vec<Problem<'a>>);
 
-pub fn check_procs<'a>(arena: &'a Bump, procs: &'a Procs<'a>) -> Problems<'a> {
+impl<'a> Problems<'a> {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+pub fn check_procs<'a>(
+    arena: &'a Bump,
+    interner: &'a STLayoutInterner<'a>,
+    procs: &'a Procs<'a>,
+) -> Problems<'a> {
     let mut problems = Default::default();
-    let mut call_spec_ids = Default::default();
 
     for ((_, proc_layout), proc) in procs.iter() {
         let mut ctx = Ctx {
             arena,
+            interner,
             proc,
             proc_layout: *proc_layout,
             ret_layout: proc.ret_layout,
             problems: &mut problems,
-            call_spec_ids: &mut call_spec_ids,
+            call_spec_ids: Default::default(),
             procs,
             venv: Default::default(),
             joinpoints: Default::default(),
@@ -151,11 +161,12 @@ type JoinPoints<'a> = VecMap<JoinPointId, (usize, &'a [Param<'a>])>;
 type CallSpecIds = VecMap<CallSpecId, usize>;
 struct Ctx<'a, 'r> {
     arena: &'a Bump,
+    interner: &'a STLayoutInterner<'a>,
     problems: &'r mut Vec<Problem<'a>>,
     proc: &'a Proc<'a>,
     proc_layout: ProcLayout<'a>,
     procs: &'r Procs<'a>,
-    call_spec_ids: &'r mut CallSpecIds,
+    call_spec_ids: CallSpecIds,
     ret_layout: Layout<'a>,
     venv: VEnv<'a>,
     joinpoints: JoinPoints<'a>,
@@ -181,6 +192,10 @@ impl<'a, 'r> Ctx<'a, 'r> {
         let r = f(self);
         self.venv = old_venv;
         r
+    }
+
+    fn resolve(&mut self, layout: Layout<'a>) -> Layout<'a> {
+        layout.runtime_representation(self.interner)
     }
 
     fn insert(&mut self, symbol: Symbol, layout: Layout<'a>) {
@@ -210,7 +225,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
 
     fn check_sym_layout(&mut self, symbol: Symbol, expected_layout: Layout<'a>, use_kind: UseKind) {
         if let Some(&(def_line, layout)) = self.venv.get(&symbol) {
-            if layout != expected_layout {
+            if self.resolve(layout) != self.resolve(expected_layout) {
                 self.problem(ProblemKind::SymbolUseMismatch {
                     symbol,
                     def_layout: layout,
@@ -238,7 +253,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         match body {
             Stmt::Let(x, e, x_layout, rest) => {
                 if let Some(e_layout) = self.check_expr(e) {
-                    if e_layout != *x_layout {
+                    if self.resolve(e_layout) != self.resolve(*x_layout) {
                         self.problem(ProblemKind::SymbolDefMismatch {
                             symbol: *x,
                             def_layout: *x_layout,
@@ -257,8 +272,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 ret_layout: _,
             } => {
                 self.check_sym_layout(*cond_symbol, *cond_layout, UseKind::SwitchCond);
-                match cond_layout {
+                match self.resolve(*cond_layout) {
                     Layout::Builtin(Builtin::Int(int_width)) if !int_width.is_signed() => {}
+                    Layout::Builtin(Builtin::Bool) => {}
                     _ => self.problem(ProblemKind::BadSwitchConditionLayout {
                         found_layout: *cond_layout,
                     }),
@@ -314,7 +330,18 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 if let Some((old_line, _)) = self.joinpoints.insert(id, (self.line, parameters)) {
                     self.problem(ProblemKind::RedefinedJoinPoint { id, old_line })
                 }
-                self.in_scope(|ctx| ctx.check_stmt(body));
+                self.in_scope(|ctx| {
+                    for Param {
+                        symbol,
+                        layout,
+                        borrow: _,
+                    } in parameters
+                    {
+                        ctx.insert(*symbol, *layout);
+                    }
+                    ctx.check_stmt(body)
+                });
+                self.line += 1; // `in` line
                 self.check_stmt(remainder);
             }
             &Stmt::Jump(id, symbols) => {
@@ -398,7 +425,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 Some(Layout::Boxed(ctx.alloc(layout)))
             }),
             &Expr::ExprUnbox { symbol } => {
-                self.with_sym_layout(symbol, |ctx, def_line, layout| match layout {
+                self.with_sym_layout(symbol, |ctx, def_line, layout| match ctx.resolve(layout) {
                     Layout::Boxed(inner) => Some(*inner),
                     _ => {
                         ctx.problem(ProblemKind::UnboxNotABox { symbol, def_line });
@@ -430,26 +457,28 @@ impl<'a, 'r> Ctx<'a, 'r> {
     }
 
     fn check_struct_at_index(&mut self, structure: Symbol, index: u64) -> Option<Layout<'a>> {
-        self.with_sym_layout(structure, |ctx, def_line, layout| match layout {
-            Layout::Struct { field_layouts, .. } => {
-                if index as usize >= field_layouts.len() {
-                    ctx.problem(ProblemKind::StructIndexOOB {
+        self.with_sym_layout(structure, |ctx, def_line, layout| {
+            match ctx.resolve(layout) {
+                Layout::Struct { field_layouts, .. } => {
+                    if index as usize >= field_layouts.len() {
+                        ctx.problem(ProblemKind::StructIndexOOB {
+                            structure,
+                            def_line,
+                            index,
+                            size: field_layouts.len(),
+                        });
+                        None
+                    } else {
+                        Some(field_layouts[index as usize])
+                    }
+                }
+                _ => {
+                    ctx.problem(ProblemKind::NotAStruct {
                         structure,
                         def_line,
-                        index,
-                        size: field_layouts.len(),
                     });
                     None
-                } else {
-                    Some(field_layouts[index as usize])
                 }
-            }
-            _ => {
-                ctx.problem(ProblemKind::NotAStruct {
-                    structure,
-                    def_line,
-                });
-                None
             }
         })
     }
@@ -483,10 +512,10 @@ impl<'a, 'r> Ctx<'a, 'r> {
                             index,
                             size: payloads.len(),
                         });
-                        None
-                    } else {
-                        Some(payloads[index as usize])
+                        return None;
                     }
+                    let layout = resolve_recursive_layout(payloads[index as usize], union_layout);
+                    Some(layout)
                 }
             }
         })
@@ -569,7 +598,8 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     });
                 }
                 for (arg, wanted_layout) in arguments.iter().zip(payloads.iter()) {
-                    self.check_sym_layout(*arg, *wanted_layout, UseKind::TagPayloadArg);
+                    let wanted_layout = resolve_recursive_layout(*wanted_layout, union_layout);
+                    self.check_sym_layout(*arg, wanted_layout, UseKind::TagPayloadArg);
                 }
             }
         }
@@ -582,6 +612,14 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 self.check_sym_exists(sym);
             }
         }
+    }
+}
+
+fn resolve_recursive_layout<'a>(layout: Layout<'a>, when_recursive: UnionLayout<'a>) -> Layout<'a> {
+    // TODO check if recursive pointer not in recursive union
+    match layout {
+        Layout::RecursivePointer => Layout::Union(when_recursive),
+        other => other,
     }
 }
 
@@ -612,7 +650,7 @@ fn get_tag_id_payloads(union_layout: UnionLayout, tag_id: TagIdIntType) -> TagPa
         }
         UnionLayout::NonNullableUnwrapped(payloads) => {
             if tag_id != 0 {
-                TagPayloads::IdNotInUnion
+                TagPayloads::Payloads(&[])
             } else {
                 TagPayloads::Payloads(payloads)
             }
@@ -622,7 +660,7 @@ fn get_tag_id_payloads(union_layout: UnionLayout, tag_id: TagIdIntType) -> TagPa
             other_tags,
         } => {
             if tag_id == nullable_id {
-                TagPayloads::IdNotInUnion
+                TagPayloads::Payloads(&[])
             } else {
                 check_tag_id_oob!(other_tags.len());
                 let payloads = other_tags[tag_id as usize];
@@ -634,7 +672,7 @@ fn get_tag_id_payloads(union_layout: UnionLayout, tag_id: TagIdIntType) -> TagPa
             other_fields,
         } => {
             if tag_id == nullable_id as _ {
-                TagPayloads::IdNotInUnion
+                TagPayloads::Payloads(&[])
             } else {
                 check_tag_id_oob!(2);
                 TagPayloads::Payloads(other_fields)
