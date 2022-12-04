@@ -41,7 +41,7 @@ use roc_packaging::cache::{self, RocCacheDir};
 use roc_packaging::https::PackageMetadata;
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
-use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
+use roc_parse::header::{HeaderType, ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
@@ -633,7 +633,7 @@ struct ModuleHeader<'a> {
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parse_state: roc_parse::state::State<'a>,
-    header_for: HeaderFor<'a>,
+    header_type: HeaderType<'a>,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     module_timing: ModuleTiming,
 }
@@ -773,7 +773,7 @@ struct ParsedModule<'a> {
     parsed_defs: Defs<'a>,
     module_name: ModuleNameEnum<'a>,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
-    header_for: HeaderFor<'a>,
+    header_type: HeaderType<'a>,
 }
 
 type LocExpects = VecMap<Region, Vec<ExpectLookup>>;
@@ -2271,8 +2271,6 @@ fn update<'a>(
             Ok(state)
         }
         Header(header) => {
-            use HeaderFor::*;
-
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
 
@@ -2350,14 +2348,14 @@ fn update<'a>(
                     shorthands.insert(shorthand, shorthand_path);
                 }
 
-                match header.header_for {
-                    App { to_platform } => {
+                match header.header_type {
+                    HeaderType::App { to_platform } => {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::Valid(to_platform);
                     }
-                    Platform {
+                    HeaderType::Platform {
                         main_for_host,
-                        config_shorthand,
+                        shorthand: config_shorthand,
                         ..
                     } => {
                         debug_assert!(matches!(state.platform_data, None));
@@ -2388,7 +2386,7 @@ fn update<'a>(
                             is_prebuilt,
                         });
                     }
-                    Builtin { .. } | Interface => {
+                    HeaderType::Builtin { .. } | HeaderType::Interface { .. } => {
                         if header.is_root_module {
                             debug_assert!(matches!(
                                 state.platform_path,
@@ -2397,7 +2395,7 @@ fn update<'a>(
                             state.platform_path = PlatformPath::RootIsInterface;
                         }
                     }
-                    Hosted { .. } => {
+                    HeaderType::Hosted { .. } => {
                         if header.is_root_module {
                             debug_assert!(matches!(
                                 state.platform_path,
@@ -3373,7 +3371,7 @@ fn load_package_from_disk<'a>(
                     parser_state,
                 )) => {
                     // make a `platform` module that ultimately exposes `main` to the host
-                    let platform_module_msg = fabricate_platform_module(
+                    Ok(fabricate_platform_module(
                         arena,
                         Some(shorthand),
                         Some(app_module_id),
@@ -3384,9 +3382,7 @@ fn load_package_from_disk<'a>(
                         &header,
                         pkg_module_timing,
                     )
-                    .1;
-
-                    Ok(platform_module_msg)
+                    .1)
                 }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
                     fail.map_problem(SyntaxError::Header)
@@ -3434,7 +3430,7 @@ fn load_builtin_module_help<'a>(
                 packages: &[],
                 exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
-                extra: HeaderFor::Builtin {
+                header_type: HeaderType::Builtin {
                     generates_with: &[],
                 },
             };
@@ -3727,11 +3723,10 @@ fn parse_header<'a>(
                 },
                 filename,
                 is_root_module,
-                opt_shorthand,
-                packages: &[],
-                exposes: unspace(arena, header.exposes.item.items),
-                imports: unspace(arena, header.imports.item.items),
-                extra: HeaderFor::Interface,
+                header_type: HeaderType::Interface {
+                    exposes: unspace(arena, header.exposes.item.items),
+                    imports: unspace(arena, header.imports.item.items),
+                },
             };
 
             let (module_id, module_name, header) = build_header(
@@ -3776,13 +3771,11 @@ fn parse_header<'a>(
                 },
                 filename,
                 is_root_module,
-                opt_shorthand,
-                packages: &[],
-                exposes: unspace(arena, header.exposes.item.items),
-                imports: unspace(arena, header.imports.item.items),
-                extra: HeaderFor::Hosted {
+                header_type: HeaderType::Hosted {
                     generates: header.generates.item,
                     generates_with: unspace(arena, header.generates_with.item.items),
+                    exposes: unspace(arena, header.exposes.item.items),
+                    imports: unspace(arena, header.imports.item.items),
                 },
             };
 
@@ -3834,16 +3827,15 @@ fn parse_header<'a>(
                 },
                 filename,
                 is_root_module,
-                opt_shorthand,
-                packages,
-                exposes,
-                imports: if let Some(imports) = header.imports {
-                    unspace(arena, imports.item.items)
-                } else {
-                    &[]
-                },
-                extra: HeaderFor::App {
+                header_type: HeaderType::App {
                     to_platform: header.provides.to.value,
+                    packages,
+                    exposes,
+                    imports: if let Some(imports) = header.imports {
+                        unspace(arena, imports.item.items)
+                    } else {
+                        &[]
+                    },
                 },
             };
 
@@ -4077,18 +4069,6 @@ fn load_from_str<'a>(
     )
 }
 
-#[derive(Debug)]
-struct HeaderInfo<'a> {
-    loc_name: Loc<ModuleNameEnum<'a>>,
-    filename: PathBuf,
-    is_root_module: bool,
-    opt_shorthand: Option<&'a str>,
-    packages: &'a [Loc<PackageEntry<'a>>],
-    exposes: &'a [Loc<ExposedName<'a>>],
-    imports: &'a [Loc<ImportsEntry<'a>>],
-    extra: HeaderFor<'a>,
-}
-
 #[allow(clippy::too_many_arguments)]
 fn build_header<'a>(
     info: HeaderInfo<'a>,
@@ -4103,11 +4083,7 @@ fn build_header<'a>(
         loc_name,
         filename,
         is_root_module,
-        opt_shorthand,
-        packages,
-        exposes,
-        imports,
-        extra,
+        header_type: extra,
     } = info;
 
     let declared_name: ModuleName = match &loc_name.value {
@@ -4271,7 +4247,7 @@ fn build_header<'a>(
     // and we just have a bunch of definitions with runtime errors in their bodies
     let extra = {
         match extra {
-            HeaderFor::Interface if home.is_builtin() => HeaderFor::Builtin {
+            HeaderType::Interface if home.is_builtin() => HeaderType::Builtin {
                 generates_with: &[],
             },
             _ => extra,
@@ -4295,44 +4271,35 @@ fn build_header<'a>(
             parse_state,
             exposed_imports: scope,
             symbols_from_requires: Vec::new(),
-            header_for: extra,
+            header_type: extra,
             module_timing,
         },
     )
 }
 
 #[derive(Debug)]
-struct PlatformHeaderInfo<'a> {
+struct HeaderInfo<'a> {
+    loc_name: Loc<ModuleNameEnum<'a>>,
     filename: PathBuf,
     is_root_module: bool,
-    opt_shorthand: Option<&'a str>,
-    opt_app_module_id: Option<ModuleId>,
-    packages: &'a [Loc<PackageEntry<'a>>],
-    provides: &'a [Loc<ExposedName<'a>>],
-    requires: &'a [Loc<TypedIdent<'a>>],
-    requires_types: &'a [Loc<UppercaseIdent<'a>>],
-    imports: &'a [Loc<ImportsEntry<'a>>],
+    header_type: HeaderType<'a>,
 }
 
-// TODO refactor so more logic is shared with `send_header`
 #[allow(clippy::too_many_arguments)]
-fn send_platform_header<'a>(
-    info: PlatformHeaderInfo<'a>,
+fn send_package_header<'a>(
+    info: HeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
     module_ids: &Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: &SharedIdentIdsByModule,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
-    let PlatformHeaderInfo {
+    let HeaderInfo {
         filename,
         opt_shorthand,
         is_root_module,
         opt_app_module_id,
         packages,
-        provides,
-        requires,
-        requires_types,
-        imports,
+        package_type,
     } = info;
 
     let declared_name: ModuleName = "".into();
@@ -4347,8 +4314,8 @@ fn send_platform_header<'a>(
         HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
 
     // Add standard imports, if there is an app module.
-    // (There might not be, e.g. when running `roc check myplatform.roc` or
-    // when generating bindings.)
+    // (There might not be, e.g. when running `roc check mypackage.roc` or
+    // when generating glue.)
     if let Some(app_module_id) = opt_app_module_id {
         imported_modules.insert(app_module_id, Region::zero());
         deps_by_name.insert(
@@ -4522,9 +4489,9 @@ fn send_platform_header<'a>(
         Symbol::new(home, ident_id)
     };
 
-    let extra = HeaderFor::Platform {
+    let extra = HeaderType::Platform {
         // A config_shorthand of "" should be fine
-        config_shorthand: opt_shorthand.unwrap_or_default(),
+        shorthand: opt_shorthand.unwrap_or_default(),
         platform_main_type: requires[0].value,
         main_for_host,
     };
@@ -4560,7 +4527,7 @@ fn send_platform_header<'a>(
             exposed_imports: scope,
             module_timing,
             symbols_from_requires,
-            header_for: extra,
+            header_type: extra,
         }),
     )
 }
@@ -5010,11 +4977,11 @@ fn fabricate_platform_module<'a>(
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
 ) -> (ModuleId, Msg<'a>) {
-    // If we have an app module, then it's the root module;
+    // If we have an app module, then that app module is the root module;
     // otherwise, we must be the root.
     let is_root_module = opt_app_module_id.is_none();
 
-    let info = PlatformHeaderInfo {
+    let info = PackageHeaderInfo {
         filename,
         is_root_module,
         opt_shorthand,
@@ -5029,7 +4996,7 @@ fn fabricate_platform_module<'a>(
         imports: unspace(arena, header.imports.item.items),
     };
 
-    send_platform_header(
+    send_package_header(
         info,
         parse_state,
         module_ids,
@@ -5055,7 +5022,7 @@ fn canonicalize_and_constrain<'a>(
     let ParsedModule {
         module_id,
         module_name,
-        header_for,
+        header_type: header_for,
         exposed_ident_ids,
         parsed_defs,
         exposed_imports,
@@ -5249,7 +5216,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         exposed_ident_ids,
         exposed_imports,
         module_path,
-        header_for,
+        header_type: header_for,
         symbols_from_requires,
         ..
     } = header;
@@ -5266,7 +5233,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         exposed_imports,
         parsed_defs,
         symbols_from_requires,
-        header_for,
+        header_type: header_for,
     };
 
     Ok(Msg::Parsed(parsed))

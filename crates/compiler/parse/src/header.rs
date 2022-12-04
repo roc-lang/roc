@@ -8,30 +8,50 @@ use roc_module::symbol::Symbol;
 use roc_region::all::Loc;
 use std::fmt::Debug;
 
+/// Extra information in HeaderInfo that's specific to the type of module header we've parsed
 #[derive(Debug)]
-pub enum HeaderFor<'a> {
+pub enum HeaderType<'a> {
     App {
+        packages: &'a [Loc<PackageEntry<'a>>],
+        exposes: &'a [Loc<ExposedName<'a>>],
+        imports: &'a [Loc<ImportsEntry<'a>>],
         to_platform: To<'a>,
     },
     Hosted {
+        exposes: &'a [Loc<ExposedName<'a>>],
+        imports: &'a [Loc<ImportsEntry<'a>>],
         generates: UppercaseIdent<'a>,
         generates_with: &'a [Loc<ExposedName<'a>>],
     },
     /// Only created during canonicalization, never actually parsed from source
-    Builtin {
-        generates_with: &'a [Symbol],
-    },
+    Builtin { generates_with: &'a [Symbol] },
     Platform {
-        /// usually `pf`
-        config_shorthand: &'a str,
+        /// usually `pf` - this is not actually something we parse out of the file.
+        shorthand: &'a str,
         /// the type scheme of the main function (required by the platform)
         /// (currently unused)
         #[allow(dead_code)]
         platform_main_type: TypedIdent<'a>,
         /// provided symbol to host (commonly `mainForHost`)
-        main_for_host: roc_module::symbol::Symbol,
+        main_for_host: Symbol,
+
+        packages: &'a [Loc<PackageEntry<'a>>],
+        provides: &'a [Loc<ExposedName<'a>>],
+        requires: &'a [Loc<TypedIdent<'a>>],
+        requires_types: &'a [Loc<UppercaseIdent<'a>>],
+        imports: &'a [Loc<ImportsEntry<'a>>],
     },
-    Interface,
+    Interface {
+        exposes: &'a [Loc<ExposedName<'a>>],
+        imports: &'a [Loc<ImportsEntry<'a>>],
+    },
+    Package {
+        /// usually not `pf` since that's what the platform typically uses
+        shorthand: &'a str,
+        packages: &'a [Loc<PackageEntry<'a>>],
+        /// The modules this package exposes
+        exposes: &'a [Loc<UppercaseIdent<'a>>],
+    },
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
