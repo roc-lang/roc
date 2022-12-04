@@ -1154,7 +1154,7 @@ struct SetElement<'a> {
 
 impl std::fmt::Debug for SetElement<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let symbol_string = crate::ir::symbol_to_doc_string(self.symbol);
+        let symbol_string = crate::ir::symbol_to_doc_string(self.symbol, false);
 
         write!(f, "( {}, {:?})", symbol_string, self.layout)
     }

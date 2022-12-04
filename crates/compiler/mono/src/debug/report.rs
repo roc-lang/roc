@@ -58,7 +58,7 @@ where
     docs.sort_by_key(|(line, _)| *line);
 
     let src = proc
-        .to_doc(f, interner, Parens::NotNeeded)
+        .to_doc(f, interner, true, Parens::NotNeeded)
         .1
         .pretty(80)
         .to_string();
@@ -127,12 +127,12 @@ where
             docs_before = vec![(
                 old_line,
                 f.concat([
-                    f.as_string(symbol.as_str(interns)),
+                    format_symbol(f, interns, symbol),
                     f.reflow(" first defined here"),
                 ]),
             )];
             f.concat([
-                f.as_string(symbol.as_str(interns)),
+                format_symbol(f, interns, symbol),
                 f.reflow(" re-defined here"),
             ])
         }
@@ -140,7 +140,7 @@ where
             title = "SYMBOL NOT DEFINED";
             docs_before = vec![];
             f.concat([
-                f.as_string(symbol.as_str(interns)),
+                format_symbol(f, interns, symbol),
                 f.reflow(" not found in the present scope"),
             ])
         }
@@ -155,13 +155,13 @@ where
             docs_before = vec![(
                 def_line,
                 f.concat([
-                    f.as_string(symbol.as_str(interns)),
+                    format_symbol(f, interns, symbol),
                     f.reflow(" defined here with layout "),
                     def_layout.to_doc(f, interner, Parens::NotNeeded),
                 ]),
             )];
             f.concat([
-                f.as_string(symbol.as_str(interns)),
+                format_symbol(f, interns, symbol),
                 f.reflow(" used as a "),
                 f.reflow(format_use_kind(use_kind)),
                 f.reflow(" here with layout "),
@@ -176,7 +176,7 @@ where
             title = "SYMBOL INITIALIZER HAS THE WRONG LAYOUT";
             docs_before = vec![];
             f.concat([
-                f.as_string(symbol.as_str(interns)),
+                format_symbol(f, interns, symbol),
                 f.reflow(" is defined as "),
                 def_layout.to_doc(f, interner, Parens::NotNeeded),
                 f.reflow(" but its initializer is "),
@@ -261,7 +261,7 @@ where
                     f,
                     [f.concat([
                         f.reflow("The following specializations of "),
-                        f.as_string(symbol.as_str(interns)),
+                        format_symbol(f, interns, symbol),
                         f.reflow(" were built:"),
                         stack(f, similars),
                     ])],
@@ -285,7 +285,7 @@ where
                 def_line,
                 f.concat([
                     f.reflow("The struct "),
-                    f.as_string(structure.as_str(interns)),
+                    format_symbol(f, interns, structure),
                     f.reflow(" defined here has "),
                     f.as_string(size),
                     f.reflow(" fields"),
@@ -305,7 +305,7 @@ where
                 def_line,
                 f.concat([
                     f.reflow("The value "),
-                    f.as_string(structure.as_str(interns)),
+                    format_symbol(f, interns, structure),
                     f.reflow(" defined here"),
                 ]),
             )];
@@ -322,7 +322,7 @@ where
                 def_line,
                 f.concat([
                     f.reflow("The union "),
-                    f.as_string(structure.as_str(interns)),
+                    format_symbol(f, interns, structure),
                     f.reflow(" defined here has layout "),
                     Layout::Union(union_layout).to_doc(f, interner, Parens::NotNeeded),
                 ]),
@@ -341,7 +341,7 @@ where
                 def_line,
                 f.concat([
                     f.reflow("The union "),
-                    f.as_string(structure.as_str(interns)),
+                    format_symbol(f, interns, structure),
                     f.reflow(" defined here has "),
                     f.as_string(size),
                     f.reflow(" payloads at ID "),
@@ -365,7 +365,7 @@ where
                 def_line,
                 f.concat([
                     f.reflow("The union "),
-                    f.as_string(structure.as_str(interns)),
+                    format_symbol(f, interns, structure),
                     f.reflow(" defined here has layout "),
                     Layout::Union(union_layout).to_doc(f, interner, Parens::NotNeeded),
                 ]),
@@ -380,10 +380,7 @@ where
             title = "ATTEMPTING TO UNBOX A NON-BOX";
             docs_before = vec![(
                 def_line,
-                f.concat([
-                    f.as_string(symbol.as_str(interns)),
-                    f.reflow(" is not a box"),
-                ]),
+                f.concat([format_symbol(f, interns, symbol), f.reflow(" is not a box")]),
             )];
             f.reflow("but is being unboxed here")
         }
@@ -415,6 +412,12 @@ where
         }
     };
     (title, docs_before, doc)
+}
+
+fn format_symbol<'d>(f: &'d Arena<'d>, interns: &'d Interns, symbol: Symbol) -> Doc<'d> {
+    f.text(symbol.module_string(interns).to_string())
+        .append(f.text("."))
+        .append(f.text(symbol.as_str(interns)))
 }
 
 fn format_use_kind(use_kind: UseKind) -> &'static str {

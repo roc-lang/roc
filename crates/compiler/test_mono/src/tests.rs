@@ -180,7 +180,7 @@ fn verify_procedures<'a>(
 
     let mut procs_string = procedures
         .values()
-        .map(|proc| proc.to_pretty(&interner, 200))
+        .map(|proc| proc.to_pretty(&interner, 200, false))
         .collect::<Vec<_>>();
 
     let main_fn = procs_string.swap_remove(index);
