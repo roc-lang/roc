@@ -744,7 +744,7 @@ impl<'a> WasmBackend<'a> {
         let mut current_stmt = stmt;
         while let Stmt::Let(sym, expr, layout, following) = current_stmt {
             if DEBUG_SETTINGS.let_stmt_ir {
-                print!("\nlet {:?} = {}", sym, expr.to_pretty(200));
+                print!("\nlet {:?} = {}", sym, expr.to_pretty(200, true));
             }
 
             let kind = match following {
@@ -974,7 +974,7 @@ impl<'a> WasmBackend<'a> {
             self.register_symbol_debug_names();
             println!(
                 "## rc_stmt:\n{}\n{:?}",
-                rc_stmt.to_pretty(self.env.layout_interner, 200),
+                rc_stmt.to_pretty(self.env.layout_interner, 200, true),
                 rc_stmt
             );
         }
@@ -1078,7 +1078,7 @@ impl<'a> WasmBackend<'a> {
             Expr::Reset { symbol: arg, .. } => self.expr_reset(*arg, sym, storage),
 
             Expr::RuntimeErrorFunction(_) => {
-                todo!("Expression `{}`", expr.to_pretty(100))
+                todo!("Expression `{}`", expr.to_pretty(100, false))
             }
         }
     }

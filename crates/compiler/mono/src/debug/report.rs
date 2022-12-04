@@ -102,12 +102,11 @@ fn format_sourced_doc<'d>(f: &'d Arena<'d>, line: usize, source: &str, doc: Doc<
 
 fn format_header<'d>(f: &'d Arena<'d>, title: &str) -> Doc<'d> {
     let title_width = title.len() + 4;
-    let header = f.text(format!(
+    f.text(format!(
         "── {} {}",
         title,
         "─".repeat(HEADER_WIDTH - title_width)
-    ));
-    header
+    ))
 }
 
 fn format_kind<'a, 'd, I>(
