@@ -194,8 +194,16 @@ impl<'a, 'r> Ctx<'a, 'r> {
         r
     }
 
-    fn resolve(&mut self, layout: Layout<'a>) -> Layout<'a> {
-        layout.runtime_representation(self.interner)
+    fn resolve(&mut self, mut layout: Layout<'a>) -> Layout<'a> {
+        // Note that we are more aggressive than the usual `runtime_representation`
+        // here because we need strict equality, and so cannot unwrap lambda sets
+        // lazily.
+        loop {
+            match layout {
+                Layout::LambdaSet(ls) => layout = ls.runtime_representation(self.interner),
+                layout => return layout,
+            }
+        }
     }
 
     fn insert(&mut self, symbol: Symbol, layout: Layout<'a>) {
