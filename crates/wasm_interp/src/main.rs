@@ -1,9 +1,9 @@
 use bumpalo::{collections::Vec, Bump};
 use clap::ArgAction;
 use clap::{Arg, Command};
-use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::iter::once;
 use std::process;
 
 use roc_wasm_interp::{DefaultImportDispatcher, Instance};
@@ -16,6 +16,8 @@ pub const WASM_FILE: &str = "WASM_FILE";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 fn main() -> io::Result<()> {
+    let arena = Bump::new();
+
     // Define the command line arguments
 
     let flag_function = Arg::new(FLAG_FUNCTION)
@@ -38,7 +40,6 @@ fn main() -> io::Result<()> {
 
     let wasm_file_to_run = Arg::new(WASM_FILE)
         .help("The .wasm file to run")
-        .allow_invalid_utf8(true)
         .required(true);
 
     let args_for_app = Arg::new(ARGS_FOR_APP)
@@ -62,15 +63,16 @@ fn main() -> io::Result<()> {
     let is_debug_mode = matches.get_flag(FLAG_DEBUG);
     let is_hex_format = matches.get_flag(FLAG_HEX);
     let start_arg_strings = matches.get_many::<String>(ARGS_FOR_APP).unwrap_or_default();
+    let wasm_path = matches.get_one::<String>(WASM_FILE).unwrap();
+    // WASI expects the .wasm file to be argv[0]
+    let wasi_argv = Vec::from_iter_in(once(wasm_path).chain(start_arg_strings), &arena);
 
     // Load the WebAssembly binary file
 
-    let wasm_path = matches.get_one::<OsString>(WASM_FILE).unwrap();
     let module_bytes = fs::read(wasm_path)?;
 
     // Parse the binary data
 
-    let arena = Bump::new();
     let require_relocatable = false;
     let module = match WasmModule::preload(&arena, &module_bytes, require_relocatable) {
         Ok(m) => m,
@@ -84,8 +86,7 @@ fn main() -> io::Result<()> {
 
     // Create an execution instance
 
-    let args = Vec::from_iter_in(start_arg_strings, &arena);
-    let dispatcher = DefaultImportDispatcher::new(&args);
+    let dispatcher = DefaultImportDispatcher::new(&wasi_argv);
     let mut inst =
         Instance::for_module(&arena, &module, dispatcher, is_debug_mode).unwrap_or_else(|e| {
             eprintln!("{}", e);
@@ -94,7 +95,7 @@ fn main() -> io::Result<()> {
 
     // Run
 
-    let result = inst.call_export_from_cli(&module, start_fn_name, &args);
+    let result = inst.call_export_from_cli(&module, start_fn_name, &wasi_argv);
 
     // Print out return value, if any
 

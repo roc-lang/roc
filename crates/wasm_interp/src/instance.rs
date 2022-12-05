@@ -153,7 +153,11 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
     ) -> Result<Option<Value>, String> {
         let arg_type_bytes = self.prepare_to_call_export(module, fn_name)?;
 
-        for (value_str, type_byte) in arg_strings.into_iter().zip(arg_type_bytes.iter().copied()) {
+        for (value_str, type_byte) in arg_strings
+            .into_iter()
+            .skip(1) // first string is the .wasm filename
+            .zip(arg_type_bytes.iter().copied())
+        {
             use ValueType::*;
             let value = match ValueType::from(type_byte) {
                 I32 => Value::I32(value_str.parse::<i32>().map_err(|e| e.to_string())?),
