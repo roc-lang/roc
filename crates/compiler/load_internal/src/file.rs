@@ -976,7 +976,6 @@ impl<'a> State<'a> {
         self.exec_mode.goal_phase()
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn new(
         root_id: ModuleId,
         target_info: TargetInfo,
@@ -1221,7 +1220,6 @@ fn enqueue_task<'a>(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn load_and_typecheck_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -1508,7 +1506,6 @@ pub enum Threading {
 ///     and then linking them together, and possibly caching them by the hash of their
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
-#[allow(clippy::too_many_arguments)]
 pub fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
@@ -1569,7 +1566,6 @@ pub fn load<'a>(
 }
 
 /// Load using only a single thread; used when compiling to webassembly
-#[allow(clippy::too_many_arguments)]
 pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
@@ -1834,7 +1830,6 @@ fn state_thread_step<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn load_multi_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
@@ -2010,7 +2005,6 @@ fn load_multi_threaded<'a>(
     .unwrap()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn worker_task_step<'a>(
     worker_arena: &'a Bump,
     worker: &Worker<BuildTask<'a>>,
@@ -2085,7 +2079,6 @@ fn worker_task_step<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn worker_task<'a>(
     worker_arena: &'a Bump,
     worker: Worker<BuildTask<'a>>,
@@ -3214,7 +3207,6 @@ fn finish_specialization<'a>(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn finish(
     mut state: State,
     solved: Solved<Subs>,
@@ -3653,7 +3645,6 @@ fn verify_interface_matches_file_path<'a>(
     Err(problem)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn parse_header<'a>(
     arena: &'a Bump,
     read_file_duration: Duration,
@@ -3940,7 +3931,6 @@ fn parse_header<'a>(
 }
 
 /// Load a module by its filename
-#[allow(clippy::too_many_arguments)]
 fn load_filename<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -3979,7 +3969,6 @@ fn load_filename<'a>(
 
 /// Load a module from a str
 /// the `filename` is never read, but used for the module name
-#[allow(clippy::too_many_arguments)]
 fn load_from_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -4019,7 +4008,6 @@ struct HeaderInfo<'a> {
     extra: HeaderFor<'a>,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_header<'a>(
     info: HeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
@@ -4245,7 +4233,6 @@ struct PlatformHeaderInfo<'a> {
 }
 
 // TODO refactor so more logic is shared with `send_header`
-#[allow(clippy::too_many_arguments)]
 fn send_header_two<'a>(
     info: PlatformHeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
@@ -4497,7 +4484,6 @@ fn send_header_two<'a>(
 
 impl<'a> BuildTask<'a> {
     // TODO trim down these arguments - possibly by moving Constraint into Module
-    #[allow(clippy::too_many_arguments)]
     fn solve_module(
         module: Module,
         ident_ids: IdentIds,
@@ -4895,7 +4881,6 @@ fn run_solve_solve(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_solve<'a>(
     module: Module,
     ident_ids: IdentIds,
@@ -5009,7 +4994,6 @@ fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [L
     .into_bump_slice()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn fabricate_platform_module<'a>(
     arena: &'a Bump,
     opt_shorthand: Option<&'a str>,
@@ -5049,7 +5033,6 @@ fn fabricate_platform_module<'a>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::unnecessary_wraps)]
 fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
@@ -5323,7 +5306,6 @@ fn ident_from_exposed(entry: &Spaced<'_, ExposedName<'_>>) -> Ident {
     entry.extract_spaces().item.as_str().into()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn make_specializations<'a>(
     arena: &'a Bump,
     home: ModuleId,
@@ -5400,7 +5382,6 @@ fn make_specializations<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
     solved_subs: Solved<Subs>,
@@ -5831,7 +5812,6 @@ fn build_pending_specializations<'a>(
 /// their specializations.
 // TODO: right now, this runs sequentially, and no other modules are mono'd in parallel to the
 // derived module.
-#[allow(clippy::too_many_arguments)]
 fn load_derived_partial_procs<'a>(
     home: ModuleId,
     arena: &'a Bump,
