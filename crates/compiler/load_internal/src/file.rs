@@ -4584,7 +4584,8 @@ pub fn add_imports(
     mut pending_abilities: PendingAbilitiesStore,
     exposed_for_module: &ExposedForModule,
     def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
-    rigid_vars: &mut Vec<Variable>,
+    imported_rigid_vars: &mut Vec<Variable>,
+    imported_flex_vars: &mut Vec<Variable>,
 ) -> (Vec<Variable>, AbilitiesStore) {
     let mut import_variables = Vec::new();
 
@@ -4596,7 +4597,8 @@ pub fn add_imports(
             constraints,
             def_types,
             &mut import_variables,
-            rigid_vars,
+            imported_rigid_vars,
+            imported_flex_vars,
             &mut cached_symbol_vars,
             &exposed_for_module.exposed_by_module,
             symbol,
@@ -4630,6 +4632,7 @@ pub fn add_imports(
         exposed_by_module: &'a ExposedByModule,
         imported_variables: &'a mut Vec<Variable>,
         imported_rigids: &'a mut Vec<Variable>,
+        imported_flex: &'a mut Vec<Variable>,
     }
 
     let abilities_store = pending_abilities.resolve_for_module(
@@ -4638,7 +4641,8 @@ pub fn add_imports(
             subs,
             exposed_by_module: &exposed_for_module.exposed_by_module,
             imported_variables: &mut import_variables,
-            imported_rigids: rigid_vars,
+            imported_rigids: imported_rigid_vars,
+            imported_flex: imported_flex_vars,
         },
         |ctx, symbol| match cached_symbol_vars.get(&symbol).copied() {
             Some(var) => var,
@@ -4649,6 +4653,7 @@ pub fn add_imports(
                     def_types,
                     ctx.imported_variables,
                     ctx.imported_rigids,
+                    ctx.imported_flex,
                     &mut cached_symbol_vars,
                     &exposed_for_module.exposed_by_module,
                     symbol,
@@ -4676,6 +4681,7 @@ pub fn add_imports(
                     copied_import,
                     ctx.imported_variables,
                     ctx.imported_rigids,
+                    ctx.imported_flex,
                 );
 
                 copied_import_var
@@ -4696,17 +4702,16 @@ fn extend_imports_data_with_copied_import(
     copied_import: CopiedImport,
     imported_variables: &mut Vec<Variable>,
     imported_rigids: &mut Vec<Variable>,
+    imported_flex: &mut Vec<Variable>,
 ) -> Variable {
     // not a typo; rigids are turned into flex during type inference, but when imported we must
     // consider them rigid variables
-    // TODO: this used to be the case because only rigids would be intialized to a certain rank; is
-    // it still relevant??
     imported_rigids.extend(copied_import.rigid);
-    imported_rigids.extend(copied_import.flex);
+    imported_flex.extend(copied_import.flex);
 
     // Rigid vars bound to abilities are also treated like rigids.
     imported_rigids.extend(copied_import.rigid_able);
-    imported_rigids.extend(copied_import.flex_able);
+    imported_flex.extend(copied_import.flex_able);
 
     imported_variables.extend(copied_import.registered);
 
@@ -4719,6 +4724,7 @@ fn import_variable_for_symbol(
     def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
     imported_variables: &mut Vec<Variable>,
     imported_rigids: &mut Vec<Variable>,
+    imported_flex: &mut Vec<Variable>,
     cached_symbol_vars: &mut VecMap<Symbol, Variable>,
     exposed_by_module: &ExposedByModule,
     symbol: Symbol,
@@ -4761,6 +4767,7 @@ fn import_variable_for_symbol(
                 copied_import,
                 imported_variables,
                 imported_rigids,
+                imported_flex,
             );
 
             let copied_import_index = constraints.push_variable(copied_import_var);
@@ -4800,7 +4807,8 @@ fn run_solve_solve(
         ..
     } = module;
 
-    let mut rigid_vars: Vec<Variable> = Vec::new();
+    let mut imported_rigid_vars: Vec<Variable> = Vec::new();
+    let mut imported_flex_vars: Vec<Variable> = Vec::new();
     let mut def_types: Vec<(Symbol, Loc<TypeOrVar>)> = Vec::new();
 
     let mut subs = Subs::new_from_varstore(var_store);
@@ -4812,11 +4820,17 @@ fn run_solve_solve(
         pending_abilities,
         &exposed_for_module,
         &mut def_types,
-        &mut rigid_vars,
+        &mut imported_rigid_vars,
+        &mut imported_flex_vars,
     );
 
-    let actual_constraint =
-        constraints.let_import_constraint(rigid_vars, def_types, constraint, &import_variables);
+    let actual_constraint = constraints.let_import_constraint(
+        imported_rigid_vars,
+        imported_flex_vars,
+        def_types,
+        constraint,
+        &import_variables,
+    );
 
     let mut solve_aliases = roc_solve::solve::Aliases::with_capacity(aliases.len());
     for (name, (_, alias)) in aliases.iter() {
