@@ -1,5 +1,6 @@
 use roc_wasm_module::Value;
 use std::io::{self, Write};
+use std::process::exit;
 
 pub const MODULE_NAME: &str = "wasi_snapshot_preview1";
 
@@ -149,7 +150,10 @@ impl<'a> WasiDispatcher<'a> {
             "path_symlink" => todo!("WASI {}({:?})", function_name, arguments),
             "path_unlink_file" => todo!("WASI {}({:?})", function_name, arguments),
             "poll_oneoff" => todo!("WASI {}({:?})", function_name, arguments),
-            "proc_exit" => todo!("WASI {}({:?})", function_name, arguments),
+            "proc_exit" => {
+                let exit_code = arguments[0].unwrap_i32();
+                exit(exit_code);
+            }
             "proc_raise" => todo!("WASI {}({:?})", function_name, arguments),
             "sched_yield" => todo!("WASI {}({:?})", function_name, arguments),
             "random_get" => todo!("WASI {}({:?})", function_name, arguments),
