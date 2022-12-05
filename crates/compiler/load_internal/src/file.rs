@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use crate::docs::ModuleDocumentation;
 use bumpalo::Bump;
 use crossbeam::channel::{bounded, Sender};
@@ -4663,6 +4665,7 @@ pub fn add_imports(
                     .storage_subs
                     .export_variable_to(ctx.subs, *var);
 
+                #[allow(clippy::let_and_return)]
                 let copied_import_var = extend_imports_data_with_copied_import(
                     copied_import,
                     ctx.imported_variables,
