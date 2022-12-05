@@ -51,7 +51,7 @@ use roc_reporting::report::{Annotation, Palette, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
-use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
+use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
@@ -4590,55 +4590,18 @@ pub fn add_imports(
 
     let mut cached_symbol_vars = VecMap::default();
 
-    macro_rules! import_var_for_symbol  {
-        ($subs:expr, $exposed_by_module:expr, $symbol:ident, $break:stmt) => {
-            let module_id = $symbol.module_id();
-            match $exposed_by_module.get(&module_id) {
-                Some(ExposedModuleTypes {
-                    exposed_types_storage_subs: exposed_types,
-                    resolved_implementations: _,
-                }) => {
-                    let variable = match exposed_types.stored_vars_by_symbol.iter().find(|(s, _)| **s == $symbol) {
-                        None => {
-                            // Today we define builtins in each module that uses them
-                            // so even though they have a different module name from
-                            // the surrounding module, they are not technically imported
-                            debug_assert!($symbol.is_builtin());
-                            $break
-                        }
-                        Some((_, x)) => *x,
-                    };
-
-                    let copied_import = exposed_types.storage_subs.export_variable_to($subs, variable);
-                    let copied_import_index = constraints.push_variable(copied_import.variable);
-
-                    def_types.push((
-                        $symbol,
-                        Loc::at_zero(copied_import_index),
-                    ));
-
-                    // not a typo; rigids are turned into flex during type inference, but when imported we must
-                    // consider them rigid variables
-                    rigid_vars.extend(copied_import.rigid);
-                    rigid_vars.extend(copied_import.flex);
-
-                    // Rigid vars bound to abilities are also treated like rigids.
-                    rigid_vars.extend(copied_import.rigid_able);
-                    rigid_vars.extend(copied_import.flex_able);
-
-                    import_variables.extend(copied_import.registered);
-
-                    cached_symbol_vars.insert($symbol, copied_import.variable);
-                }
-                None => {
-                    internal_error!("Imported module {:?} is not available", module_id)
-                }
-            }
-        }
-    }
-
     for &symbol in &exposed_for_module.imported_values {
-        import_var_for_symbol!(subs, exposed_for_module.exposed_by_module, symbol, continue);
+        import_variable_for_symbol(
+            subs,
+            constraints,
+            def_types,
+            &mut import_variables,
+            rigid_vars,
+            &mut cached_symbol_vars,
+            &exposed_for_module.exposed_by_module,
+            symbol,
+            OnSymbolNotFound::AssertIsBuiltin,
+        );
     }
 
     // Patch used symbols from circular dependencies.
@@ -4665,6 +4628,8 @@ pub fn add_imports(
     struct Ctx<'a> {
         subs: &'a mut Subs,
         exposed_by_module: &'a ExposedByModule,
+        imported_variables: &'a mut Vec<Variable>,
+        imported_rigids: &'a mut Vec<Variable>,
     }
 
     let abilities_store = pending_abilities.resolve_for_module(
@@ -4672,16 +4637,24 @@ pub fn add_imports(
         &mut Ctx {
             subs,
             exposed_by_module: &exposed_for_module.exposed_by_module,
+            imported_variables: &mut import_variables,
+            imported_rigids: rigid_vars,
         },
         |ctx, symbol| match cached_symbol_vars.get(&symbol).copied() {
             Some(var) => var,
             None => {
-                import_var_for_symbol!(
+                import_variable_for_symbol(
                     ctx.subs,
-                    ctx.exposed_by_module,
+                    constraints,
+                    def_types,
+                    ctx.imported_variables,
+                    ctx.imported_rigids,
+                    &mut cached_symbol_vars,
+                    &exposed_for_module.exposed_by_module,
                     symbol,
-                    internal_error!("Import ability member {:?} not available", symbol)
+                    OnSymbolNotFound::AbilityMemberMustBeAvailable,
                 );
+
                 *cached_symbol_vars.get(&symbol).unwrap()
             }
         },
@@ -4699,13 +4672,107 @@ pub fn add_imports(
                     .storage_subs
                     .export_variable_to(ctx.subs, *var);
 
-                copied_import.variable
+                let copied_import_var = extend_imports_data_with_copied_import(
+                    copied_import,
+                    ctx.imported_variables,
+                    ctx.imported_rigids,
+                );
+
+                copied_import_var
             }
             None => internal_error!("Imported module {:?} is not available", module),
         },
     );
 
     (import_variables, abilities_store)
+}
+
+enum OnSymbolNotFound {
+    AssertIsBuiltin,
+    AbilityMemberMustBeAvailable,
+}
+
+fn extend_imports_data_with_copied_import(
+    copied_import: CopiedImport,
+    imported_variables: &mut Vec<Variable>,
+    imported_rigids: &mut Vec<Variable>,
+) -> Variable {
+    // not a typo; rigids are turned into flex during type inference, but when imported we must
+    // consider them rigid variables
+    // TODO: this used to be the case because only rigids would be intialized to a certain rank; is
+    // it still relevant??
+    imported_rigids.extend(copied_import.rigid);
+    imported_rigids.extend(copied_import.flex);
+
+    // Rigid vars bound to abilities are also treated like rigids.
+    imported_rigids.extend(copied_import.rigid_able);
+    imported_rigids.extend(copied_import.flex_able);
+
+    imported_variables.extend(copied_import.registered);
+
+    copied_import.variable
+}
+
+fn import_variable_for_symbol(
+    subs: &mut Subs,
+    constraints: &mut Constraints,
+    def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
+    imported_variables: &mut Vec<Variable>,
+    imported_rigids: &mut Vec<Variable>,
+    cached_symbol_vars: &mut VecMap<Symbol, Variable>,
+    exposed_by_module: &ExposedByModule,
+    symbol: Symbol,
+    on_symbol_not_found: OnSymbolNotFound,
+) {
+    let module_id = symbol.module_id();
+    match exposed_by_module.get(&module_id) {
+        Some(ExposedModuleTypes {
+            exposed_types_storage_subs: exposed_types,
+            resolved_implementations: _,
+        }) => {
+            let variable = match exposed_types
+                .stored_vars_by_symbol
+                .iter()
+                .find(|(s, _)| **s == symbol)
+            {
+                None => {
+                    use OnSymbolNotFound::*;
+                    match on_symbol_not_found {
+                        AssertIsBuiltin => {
+                            // Today we define builtins in each module that uses them
+                            // so even though they have a different module name from
+                            // the surrounding module, they are not technically imported
+                            debug_assert!(symbol.is_builtin());
+                            return;
+                        }
+                        AbilityMemberMustBeAvailable => {
+                            internal_error!("Import ability member {:?} not available", symbol);
+                        }
+                    }
+                }
+                Some((_, x)) => *x,
+            };
+
+            let copied_import = exposed_types
+                .storage_subs
+                .export_variable_to(subs, variable);
+
+            let copied_import_var = extend_imports_data_with_copied_import(
+                copied_import,
+                imported_variables,
+                imported_rigids,
+            );
+
+            let copied_import_index = constraints.push_variable(copied_import_var);
+
+            def_types.push((symbol, Loc::at_zero(copied_import_index)));
+
+            cached_symbol_vars.insert(symbol, copied_import_var);
+        }
+        None => {
+            internal_error!("Imported module {:?} is not available", module_id)
+        }
+    }
 }
 
 #[allow(clippy::complexity)]
