@@ -61,6 +61,7 @@ impl<'a> ImportDispatcher for DefaultImportDispatcher<'a> {
 pub(crate) enum Error {
     ValueStackType(ValueType, ValueType),
     ValueStackEmpty,
+    UnreachableOp,
 }
 
 impl Error {

@@ -224,12 +224,28 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 Ok(Action::Break) => {
                     break;
                 }
-                Err(Error::ValueStackType(expected, actual)) => {
-                    let mut message = String::new();
-                    write!(&mut message,
-                        "ERROR: I found a type mismatch in the Value Stack at file offset {:#x}. Expected {:?}, but found {:?}.\n", 
-                        self.program_counter + module.code.section_offset as usize, expected, actual
-                    ).unwrap();
+                Err(e) => {
+                    let file_offset = self.program_counter + module.code.section_offset as usize;
+                    let mut message = match e {
+                        Error::ValueStackType(expected, actual) => {
+                            format!(
+                                "ERROR: I found a type mismatch in the Value Stack at file offset {:#x}. Expected {:?}, but found {:?}.\n", 
+                                file_offset, expected, actual
+                            )
+                        }
+                        Error::ValueStackEmpty => {
+                            format!(
+                                "ERROR: I tried to pop a value from the Value Stack at file offset {:#x}, but it was empty.\n",
+                                file_offset
+                            )
+                        }
+                        Error::UnreachableOp => {
+                            format!(
+                                "WebAssembly `unreachable` instruction at file offset {:#x}.\n",
+                                file_offset
+                            )
+                        }
+                    };
                     self.call_stack
                         .dump(
                             module,
@@ -240,22 +256,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                         .unwrap();
                     return Err(message);
                 }
-                Err(Error::ValueStackEmpty) => {
-                    let mut message = format!(
-                        "ERROR: I tried to pop a value from the Value Stack at file offset {:#x}, but it was empty.\n",
-                        self.program_counter + module.code.section_offset as usize
-                    );
-                    self.call_stack
-                        .dump(
-                            module,
-                            &self.value_stack,
-                            self.program_counter,
-                            &mut message,
-                        )
-                        .unwrap();
-                    return Err(message);
-                }
-            }
+            };
         }
 
         let return_value = if !self.value_stack.is_empty() {
@@ -454,10 +455,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
 
         match op_code {
             UNREACHABLE => {
-                unreachable!(
-                    "WebAssembly `unreachable` instruction at file offset {:#x?}.",
-                    file_offset
-                );
+                return Err(Error::UnreachableOp);
             }
             NOP => {}
             BLOCK => {
