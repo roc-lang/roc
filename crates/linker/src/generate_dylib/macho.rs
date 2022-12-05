@@ -740,7 +740,7 @@ fn dylib_command(
     // string data starts after the 6 u32 fields
     let string_offset = 6 * 4u32;
 
-    // commands round up to a multiple of 8 (when targetting 64-bit)
+    // commands round up to a multiple of 8 (when targeting 64-bit)
     // string must be null-terminated
     let size = next_multiple_of(string_offset as usize + name.len() + 1, 8);
 
