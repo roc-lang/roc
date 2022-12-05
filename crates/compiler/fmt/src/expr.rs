@@ -298,17 +298,7 @@ impl<'a> Formattable for Expr<'a> {
             }
             SingleQuote(string) => {
                 buf.indent(indent);
-                buf.push('\'');
-                for c in string.chars() {
-                    if c == '"' {
-                        buf.push_char_literal('"')
-                    } else {
-                        for escaped in c.escape_default() {
-                            buf.push_char_literal(escaped);
-                        }
-                    }
-                }
-                buf.push('\'');
+                format_sq_literal(buf, string);
             }
             &NonBase10Int {
                 base,
@@ -436,6 +426,20 @@ impl<'a> Formattable for Expr<'a> {
             PrecedenceConflict { .. } => {}
         }
     }
+}
+
+pub(crate) fn format_sq_literal(buf: &mut Buf, s: &str) {
+    buf.push('\'');
+    for c in s.chars() {
+        if c == '"' {
+            buf.push_char_literal('"')
+        } else {
+            for escaped in c.escape_default() {
+                buf.push_char_literal(escaped);
+            }
+        }
+    }
+    buf.push('\'');
 }
 
 fn starts_with_newline(expr: &Expr) -> bool {
