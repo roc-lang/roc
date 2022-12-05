@@ -2810,22 +2810,6 @@ fn cleanup_because_exception() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn list_range() {
-    assert_evals_to!(
-        "List.range 0 -1",
-        RocList::<i64>::from_slice(&[]),
-        RocList<i64>
-    );
-    assert_evals_to!("List.range 0 0", RocList::from_slice(&[0]), RocList<i64>);
-    assert_evals_to!(
-        "List.range 0 5",
-        RocList::from_slice(&[0, 1, 2, 3, 4]),
-        RocList<i64>
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_sort_with() {
     assert_evals_to!(
         "List.sortWith [] Num.compare",
