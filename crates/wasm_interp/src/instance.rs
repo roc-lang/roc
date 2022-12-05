@@ -541,8 +541,8 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.do_call(None, fn_index, module);
             }
             CALLINDIRECT => {
-                let table_index = self.fetch_immediate_u32(module);
                 let expected_signature = self.fetch_immediate_u32(module);
+                let table_index = self.fetch_immediate_u32(module);
                 let element_index = self.value_stack.pop_u32()?;
 
                 // So far, all compilers seem to be emitting MVP-compatible code. (Rust, Zig, Roc...)

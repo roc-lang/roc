@@ -709,8 +709,8 @@ fn test_call_indirect_help(table_index: u32, elem_index: u32) -> Value {
         buf.append_u8(OpCode::I32CONST as u8);
         buf.encode_u32(elem_index);
         buf.append_u8(OpCode::CALLINDIRECT as u8);
-        buf.encode_u32(table_index);
         buf.encode_u32(0); // signature index
+        buf.encode_u32(table_index);
         buf.append_u8(OpCode::END as u8);
     });
 
