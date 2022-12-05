@@ -21,28 +21,6 @@ mod cli_run {
     use std::iter;
     use std::path::Path;
 
-    const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
-    const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
-    const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
-    const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT, "=true");
-    #[allow(dead_code)]
-    const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
-
-    #[derive(Debug)]
-    enum CliMode {
-        RocBuild, // buildOnly
-        RocRun,   // buildAndRun
-        Roc,      // buildAndRunIfNoErrors
-    }
-
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    const TEST_LEGACY_LINKER: bool = true;
-
-    // Surgical linker currently only supports linux x86_64,
-    // so we're always testing the legacy linker on other targets.
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-    const TEST_LEGACY_LINKER: bool = false;
-
     #[cfg(all(unix, not(target_os = "macos")))]
     const ALLOW_VALGRIND: bool = true;
 
@@ -54,6 +32,41 @@ mod cli_run {
 
     #[cfg(windows)]
     const ALLOW_VALGRIND: bool = false;
+
+    // use valgrind (if supported on the current platform)
+    #[derive(Debug, Clone, Copy)]
+    enum UseValgrind {
+        Yes,
+        No,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum TestCliCommands {
+        Many,
+        Run,
+    }
+
+    const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
+    const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
+    const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
+    const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT, "=true");
+    #[allow(dead_code)]
+    const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
+
+    #[derive(Debug)]
+    enum CliMode {
+        Roc,      // buildAndRunIfNoErrors
+        RocBuild, // buildOnly
+        RocRun,   // buildAndRun
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    const TEST_LEGACY_LINKER: bool = true;
+
+    // Surgical linker currently only supports linux x86_64,
+    // so we're always testing the legacy linker on other targets.
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    const TEST_LEGACY_LINKER: bool = false;
 
     #[derive(Debug, PartialEq, Eq)]
     enum Arg<'a> {
@@ -89,6 +102,25 @@ mod cli_run {
         assert_eq!(out.status.success(), expects_success_exit_code);
     }
 
+    fn run_roc_on_failure_is_panic<'a, I: IntoIterator<Item = &'a str>>(
+        file: &'a Path,
+        args: I,
+        stdin: &[&str],
+        roc_app_args: &[String],
+        env: &[(&str, &str)],
+    ) -> Out {
+        let compile_out = run_roc_on(file, args, stdin, roc_app_args, env);
+
+        assert!(
+            compile_out.status.success(),
+            "\n___________\nRoc command failed with status {:?}:\n\n  {:?}\n___________\n",
+            compile_out.status,
+            compile_out
+        );
+
+        compile_out
+    }
+
     fn run_roc_on<'a, I: IntoIterator<Item = &'a str>>(
         file: &'a Path,
         args: I,
@@ -118,13 +150,6 @@ mod cli_run {
             panic!("\n___________\nThe roc command:\n\n  {:?}\n\nhad unexpected stderr:\n\n  {}\n___________\n", compile_out.cmd_str, stderr);
         }
 
-        assert!(
-            compile_out.status.success(),
-            "\n___________\nRoc command failed with status {:?}:\n\n  {:?}\n___________\n",
-            compile_out.status,
-            compile_out
-        );
-
         compile_out
     }
 
@@ -137,8 +162,8 @@ mod cli_run {
         roc_app_args: &[String],
         extra_env: &[(&str, &str)],
         expected_ending: &str,
-        use_valgrind: bool,
-        test_many_cli_commands: bool, // buildOnly, buildAndRun and buildAndRunIfNoErrors
+        use_valgrind: UseValgrind,
+        test_cli_commands: TestCliCommands,
     ) {
         // valgrind does not yet support avx512 instructions, see #1963.
         // we can't enable this only when testing with valgrind because of host re-use between tests
@@ -149,14 +174,14 @@ mod cli_run {
 
         // TODO: expects don't currently work on windows
         let cli_commands = if cfg!(windows) {
-            match test_many_cli_commands {
-                true => vec![CliMode::RocBuild, CliMode::RocRun],
-                false => vec![CliMode::RocRun],
+            match test_cli_commands {
+                TestCliCommands::Many => vec![CliMode::RocBuild, CliMode::RocRun],
+                TestCliCommands::Run => vec![CliMode::RocRun],
             }
         } else {
-            match test_many_cli_commands {
-                true => vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc],
-                false => vec![CliMode::Roc],
+            match test_cli_commands {
+                TestCliCommands::Many => vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc],
+                TestCliCommands::Run => vec![CliMode::Roc],
             }
         };
 
@@ -174,7 +199,7 @@ mod cli_run {
 
             let out = match cli_mode {
                 CliMode::RocBuild => {
-                    run_roc_on(
+                    run_roc_on_failure_is_panic(
                         file,
                         iter::once(CMD_BUILD).chain(flags.clone()),
                         &[],
@@ -182,7 +207,7 @@ mod cli_run {
                         &[],
                     );
 
-                    if use_valgrind && ALLOW_VALGRIND {
+                    if matches!(use_valgrind, UseValgrind::Yes) && ALLOW_VALGRIND {
                         let mut valgrind_args = vec![file
                             .with_file_name(executable_filename)
                             .to_str()
@@ -235,8 +260,10 @@ mod cli_run {
                         )
                     }
                 }
-                CliMode::Roc => run_roc_on(file, flags.clone(), stdin, roc_app_args, extra_env),
-                CliMode::RocRun => run_roc_on(
+                CliMode::Roc => {
+                    run_roc_on_failure_is_panic(file, flags.clone(), stdin, roc_app_args, extra_env)
+                }
+                CliMode::RocRun => run_roc_on_failure_is_panic(
                     file,
                     iter::once(CMD_RUN).chain(flags.clone()),
                     stdin,
@@ -245,10 +272,11 @@ mod cli_run {
                 ),
             };
 
-            if !&out.stdout.ends_with(expected_ending) {
+            let actual = strip_colors(&out.stdout);
+            if !actual.ends_with(expected_ending) {
                 panic!(
-                    "expected output to end with {:?} but instead got {:#?} - stderr was: {:#?}",
-                    expected_ending, out.stdout, out.stderr
+                    "expected output to end with:\n{}\nbut instead got:\n{}\n stderr was:\n{}",
+                    expected_ending, actual, out.stderr
                 );
             }
 
@@ -268,7 +296,7 @@ mod cli_run {
         roc_filename: &str,
         executable_filename: &str,
         expected_ending: &str,
-        use_valgrind: bool,
+        use_valgrind: UseValgrind,
     ) {
         test_roc_app(
             dir_name,
@@ -279,7 +307,7 @@ mod cli_run {
             &[],
             expected_ending,
             use_valgrind,
-            false,
+            TestCliCommands::Run,
         )
     }
 
@@ -292,8 +320,8 @@ mod cli_run {
         args: &[Arg],
         extra_env: &[(&str, &str)],
         expected_ending: &str,
-        use_valgrind: bool,
-        test_many_cli_commands: bool, // buildOnly, buildAndRun and buildAndRunIfNoErrors
+        use_valgrind: UseValgrind,
+        test_cli_commands: TestCliCommands,
     ) {
         let file_name = file_path_from_root(dir_name, roc_filename);
         let mut roc_app_args: Vec<String> = Vec::new();
@@ -366,7 +394,7 @@ mod cli_run {
             extra_env,
             expected_ending,
             use_valgrind,
-            test_many_cli_commands,
+            test_cli_commands,
         );
 
         custom_flags.push(OPTIMIZE_FLAG);
@@ -382,7 +410,7 @@ mod cli_run {
             extra_env,
             expected_ending,
             use_valgrind,
-            test_many_cli_commands,
+            test_cli_commands,
         );
 
         // Also check with the legacy linker.
@@ -397,7 +425,7 @@ mod cli_run {
                 extra_env,
                 expected_ending,
                 use_valgrind,
-                test_many_cli_commands,
+                test_cli_commands,
             );
         }
     }
@@ -411,7 +439,7 @@ mod cli_run {
             "helloWorld.roc",
             "helloWorld",
             "Hello, World!\n",
-            true,
+            UseValgrind::Yes,
         )
     }
 
@@ -429,7 +457,7 @@ mod cli_run {
             "main.roc",
             "rocLovesPlatforms",
             &("Which platform am I running on now?".to_string() + LINE_ENDING),
-            true,
+            UseValgrind::Yes,
         )
     }
 
@@ -445,7 +473,7 @@ mod cli_run {
             "rocLovesRust.roc",
             "rocLovesRust",
             "Roc <3 Rust!\n",
-            true,
+            UseValgrind::Yes,
         )
     }
 
@@ -457,7 +485,7 @@ mod cli_run {
             "rocLovesZig.roc",
             "rocLovesZig",
             "Roc <3 Zig!\n",
-            true,
+            UseValgrind::Yes,
         )
     }
 
@@ -468,7 +496,7 @@ mod cli_run {
             "rocLovesWebAssembly.roc",
             "rocLovesWebAssembly",
             "Roc <3 Web Assembly!\n",
-            true,
+            UseValgrind::Yes,
         )
     }
 
@@ -479,7 +507,7 @@ mod cli_run {
             "rocLovesSwift.roc",
             "rocLovesSwift",
             "Roc <3 Swift!\n",
-            true,
+            UseValgrind::Yes,
         )
     }
 
@@ -489,7 +517,13 @@ mod cli_run {
         ignore = "this platform is broken, and `roc run --lib` is missing on windows"
     )]
     fn ruby_interop() {
-        test_roc_app_slim("examples/ruby-interop", "main.roc", "libhello", "", true)
+        test_roc_app_slim(
+            "examples/ruby-interop",
+            "main.roc",
+            "libhello",
+            "",
+            UseValgrind::Yes,
+        )
     }
 
     #[test]
@@ -500,13 +534,19 @@ mod cli_run {
             "fibonacci.roc",
             "fibonacci",
             "",
-            true,
+            UseValgrind::Yes,
         )
     }
 
     #[test]
     fn hello_gui() {
-        test_roc_app_slim("examples/gui", "hello.roc", "hello-gui", "", false)
+        test_roc_app_slim(
+            "examples/gui",
+            "hello.roc",
+            "hello-gui",
+            "",
+            UseValgrind::No,
+        )
     }
 
     #[test]
@@ -516,7 +556,7 @@ mod cli_run {
             "breakout.roc",
             "breakout",
             "",
-            false,
+            UseValgrind::No,
         )
     }
 
@@ -528,7 +568,7 @@ mod cli_run {
             "quicksort.roc",
             "quicksort",
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-            true,
+            UseValgrind::Yes,
         )
     }
 
@@ -550,8 +590,8 @@ mod cli_run {
             ],
             &[],
             "4\n",
-            false,
-            false,
+            UseValgrind::No,
+            TestCliCommands::Run,
         )
     }
 
@@ -576,8 +616,8 @@ mod cli_run {
             &[],
             &[],
             "hi there!\nIt is known\n",
-            true,
-            false,
+            UseValgrind::Yes,
+            TestCliCommands::Run,
         )
     }
 
@@ -593,8 +633,8 @@ mod cli_run {
             &[],
             &[],
             "Hello Worldfoo!\n",
-            true,
-            false,
+            UseValgrind::Yes,
+            TestCliCommands::Run,
         )
     }
 
@@ -609,14 +649,20 @@ mod cli_run {
             &[Arg::ExamplePath("examples/hello.false")],
             &[],
             &("Hello, World!".to_string() + LINE_ENDING),
-            false,
-            true,
+            UseValgrind::No,
+            TestCliCommands::Many,
         )
     }
 
     #[test]
     fn swift_ui() {
-        test_roc_app_slim("examples/swiftui", "main.roc", "swiftui", "", false)
+        test_roc_app_slim(
+            "examples/swiftui",
+            "main.roc",
+            "swiftui",
+            "",
+            UseValgrind::No,
+        )
     }
 
     #[test]
@@ -630,8 +676,8 @@ mod cli_run {
             &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
             &[],
             "Processed 3 files with 3 successes and 0 errors\n",
-            false,
-            false,
+            UseValgrind::No,
+            TestCliCommands::Run,
         )
     }
 
@@ -653,8 +699,8 @@ mod cli_run {
             "Your favorite editor is roc-editor!\n\
             Your current shell level is 3!\n\
             Your favorite letters are: a c e j\n",
-            false,
-            false,
+            UseValgrind::No,
+            TestCliCommands::Run,
         )
     }
 
@@ -666,13 +712,14 @@ mod cli_run {
             "parse-movies-csv.roc",
             "parse-movies-csv",
             "Parse success!\n",
-            false,
+            UseValgrind::No,
         )
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
     // this is for testing the benchmarks, to perform proper benchmarks see crates/cli/benches/README.md
     mod test_benchmarks {
+        use super::{TestCliCommands, UseValgrind};
         use cli_utils::helpers::cli_testing_dir;
 
         use super::{check_output_with_stdin, OPTIMIZE_FLAG, PREBUILT_PLATFORM};
@@ -686,7 +733,7 @@ mod cli_run {
             executable_filename: &str,
             stdin: &[&str],
             expected_ending: &str,
-            use_valgrind: bool,
+            use_valgrind: UseValgrind,
         ) {
             let file_name = cli_testing_dir("benchmarks").join(roc_filename);
 
@@ -739,7 +786,7 @@ mod cli_run {
             stdin: &[&str],
             executable_filename: &str,
             expected_ending: &str,
-            use_valgrind: bool,
+            use_valgrind: UseValgrind,
         ) {
             let mut ran_without_optimizations = false;
 
@@ -754,7 +801,7 @@ mod cli_run {
                     &[],
                     expected_ending,
                     use_valgrind,
-                    false,
+                    TestCliCommands::Run,
                 );
 
                 ran_without_optimizations = true;
@@ -774,7 +821,7 @@ mod cli_run {
                     &[],
                     expected_ending,
                     use_valgrind,
-                    false,
+                    TestCliCommands::Run,
                 );
             }
 
@@ -787,7 +834,7 @@ mod cli_run {
                 &[],
                 expected_ending,
                 use_valgrind,
-                false,
+                TestCliCommands::Run,
             );
         }
 
@@ -873,7 +920,7 @@ mod cli_run {
                 &[],
                 expected_ending,
                 use_valgrind,
-                false,
+                TestCliCommands::Run,
             );
 
             check_output_with_stdin(
@@ -884,20 +931,20 @@ mod cli_run {
                 &[],
                 expected_ending,
                 use_valgrind,
-                false,
+                TestCliCommands::Run,
             );
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn nqueens() {
-            test_benchmark("NQueens.roc", "nqueens", &["6"], "4\n", true)
+            test_benchmark("NQueens.roc", "nqueens", &["6"], "4\n", UseValgrind::Yes)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn cfold() {
-            test_benchmark("CFold.roc", "cfold", &["3"], "11 & 11\n", true)
+            test_benchmark("CFold.roc", "cfold", &["3"], "11 & 11\n", UseValgrind::Yes)
         }
 
         #[test]
@@ -908,14 +955,20 @@ mod cli_run {
                 "deriv",
                 &["2"],
                 "1 count: 6\n2 count: 22\n",
-                true,
+                UseValgrind::Yes,
             )
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn rbtree_ck() {
-            test_benchmark("RBTreeCk.roc", "rbtree-ck", &["100"], "10\n", true)
+            test_benchmark(
+                "RBTreeCk.roc",
+                "rbtree-ck",
+                &["100"],
+                "10\n",
+                UseValgrind::Yes,
+            )
         }
 
         #[test]
@@ -926,7 +979,7 @@ mod cli_run {
                 "rbtree-insert",
                 &[],
                 "Node Black 0 {} Empty Empty\n",
-                true,
+                UseValgrind::Yes,
             )
         }
 
@@ -947,7 +1000,13 @@ mod cli_run {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
-            test_benchmark("TestAStar.roc", "test-astar", &[], "True\n", false)
+            test_benchmark(
+                "TestAStar.roc",
+                "test-astar",
+                &[],
+                "True\n",
+                UseValgrind::No,
+            )
         }
 
         #[test]
@@ -958,20 +1017,26 @@ mod cli_run {
                 "test-base64",
                 &[],
                 "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
-                true,
+                UseValgrind::Yes,
             )
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn closure() {
-            test_benchmark("Closure.roc", "closure", &[], "", false)
+            test_benchmark("Closure.roc", "closure", &[], "", UseValgrind::No)
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn issue2279() {
-            test_benchmark("Issue2279.roc", "issue2279", &[], "Hello, world!\n", true)
+            test_benchmark(
+                "Issue2279.roc",
+                "issue2279",
+                &[],
+                "Hello, world!\n",
+                UseValgrind::Yes,
+            )
         }
 
         #[test]
@@ -981,7 +1046,7 @@ mod cli_run {
                 "quicksortapp",
                 &[],
                 "todo put the correct quicksort answer here",
-                true,
+                UseValgrind::Yes,
             )
         }
     }
@@ -998,8 +1063,8 @@ mod cli_run {
             &[],
             &[],
             "I am Dep2.str2\n",
-            true,
-            false,
+            UseValgrind::Yes,
+            TestCliCommands::Run,
         );
     }
 
@@ -1015,8 +1080,8 @@ mod cli_run {
             &[],
             &[],
             "I am Dep2.str2\n",
-            true,
-            false,
+            UseValgrind::Yes,
+            TestCliCommands::Run,
         );
     }
 
@@ -1032,8 +1097,8 @@ mod cli_run {
             &[],
             &[],
             "I am Dep2.value2\n",
-            true,
-            false,
+            UseValgrind::Yes,
+            TestCliCommands::Run,
         );
     }
 
@@ -1049,8 +1114,8 @@ mod cli_run {
             &[],
             &[],
             "I am Dep2.value2\n",
-            true,
-            false,
+            UseValgrind::Yes,
+            TestCliCommands::Run,
         );
     }
 
