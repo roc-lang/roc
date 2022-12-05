@@ -2120,3 +2120,17 @@ fn toplevel_accessor_fn_thunk() {
         "#
     )
 }
+
+#[mono_test]
+fn list_one_vs_one_spread_issue_4685() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = when [""] is
+            [] -> "A"
+            [_] -> "B"
+            [_, ..] -> "C"
+        "#
+    )
+}
