@@ -446,7 +446,7 @@ pub fn create_dylib_macho(
 
     bytes.extend(load_dylinker_command("/usr/lib/dyld"));
 
-    bytes.extend(dylib_id_command("librocthing.dylib", 0x2, 0x10000, 0x10000));
+    bytes.extend(dylib_id_command("libapp.so", 0x2, 0x10000, 0x10000));
 
     bytes.extend(dylib_load_command(
         "/usr/lib/libSystem.B.dylib",
