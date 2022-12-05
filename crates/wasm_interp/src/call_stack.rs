@@ -188,13 +188,10 @@ impl<'a> CallStack<'a> {
         let mut value_stack_iter = value_stack.iter();
 
         for frame in 0..self.frame_offsets.len() {
-            let call_addr = {
-                let next_op = if frame + 1 < self.frame_offsets.len() {
-                    // Next op in this frame = return address of the next frame
-                    self.return_addrs_and_block_depths[frame + 1].0 as usize
-                } else {
-                    pc
-                };
+            let next_frame = frame + 1;
+            let op_offset = if next_frame < self.frame_offsets.len() {
+                // return address of next frame = next op in this frame
+                let next_op = self.return_addrs_and_block_depths[next_frame].0 as usize;
                 // Call address is more intuitive than the return address when debugging. Search backward for it.
                 // Skip last byte of function index to avoid a false match with CALL/CALLINDIRECT.
                 // The more significant bytes won't match because of LEB-128 encoding.
@@ -208,10 +205,12 @@ impl<'a> CallStack<'a> {
                     }
                 }
                 call_op
+            } else {
+                pc
             };
 
-            let fn_index = pc_to_fn_index(call_addr, module);
-            let address = call_addr + module.code.section_offset as usize;
+            let fn_index = pc_to_fn_index(op_offset, module);
+            let address = op_offset + module.code.section_offset as usize;
             writeln!(writer, "function {}", fn_index)?;
             writeln!(writer, "  address  {:06x}", address)?; // format matches wasm-objdump, for easy search
 
