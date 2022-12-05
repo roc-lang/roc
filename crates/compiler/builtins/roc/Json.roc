@@ -205,7 +205,7 @@ takeWhile = \list, predicate ->
     helper { taken: [], rest: list }
 
 digits : List U8
-digits = List.range {start: At '0', end: At '9'}
+digits = List.range { start: At '0', end: At '9' }
 
 takeDigits = \bytes ->
     takeWhile bytes \n -> List.contains digits n
