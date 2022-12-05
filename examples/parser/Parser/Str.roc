@@ -177,7 +177,7 @@ anyString = buildPrimitiveParser \fieldRawString ->
 digit : Parser RawStr U8
 digit =
     digitParsers =
-        List.range {start: At '0', end: At '9'}
+        List.range { start: At '0', end: At '9' }
         |> List.map \digitNum ->
             digitNum
             |> codeunit
