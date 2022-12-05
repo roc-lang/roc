@@ -2,7 +2,9 @@
 
 ## How to install Roc
 
-:warning: we do not yet support MacOS 13
+:warning: We do not yet officially support MacOS 13. But, as long as you are not using a zig or wasm platform most things should work fine.
+
+:warning: Macos x86_64 nightly releases lag behind the others due to [unresolved test failures](https://github.com/roc-lang/roc/issues/4655). The `dbg` keyword is not yet supported, as well as importing platforms using URLs. For the platform you can use the path instead, like in [this example](https://github.com/roc-lang/roc/blob/main/examples/helloWorld.roc).
 
 In order to develop in Roc, you need to install the Roc CLI,
 which includes the Roc compiler and various helpful utilities.
@@ -34,11 +36,7 @@ you need to install one or more of these platform language compilers, too.
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     ```
 
-1. Install the Zig compiler, for apps with Zig-based platforms:
-
-    ```sh
-    brew install zig@0.9.1
-    ```
+1. If you'd like to use Zig-based platforms: download [zig 0.9.1](https://ziglang.org/download/0.9.1/zig-macos-x86_64-0.9.1.tar.xz), extract the archive and add `export PATH=$PATH:~/path/to/zig`  to your shell startup script (.profile, .zshrc, …).
 
 1. Run examples:
 
