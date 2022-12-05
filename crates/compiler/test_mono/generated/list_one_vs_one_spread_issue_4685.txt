@@ -1,24 +1,18 @@
 procedure Test.0 ():
-    let Test.8 : Str = "";
-    let Test.1 : List Str = Array [Test.8];
-    joinpoint Test.6:
-        let Test.4 : Str = "C";
-        ret Test.4;
-    in
-    joinpoint Test.5:
-        let Test.3 : Str = "B";
-        ret Test.3;
-    in
-    let Test.7 : U64 = lowlevel ListLen Test.1;
+    let Test.6 : Str = "";
+    let Test.1 : List Str = Array [Test.6];
+    let Test.5 : U64 = lowlevel ListLen Test.1;
     dec Test.1;
-    switch Test.7:
+    switch Test.5:
         case 0:
             let Test.2 : Str = "A";
             ret Test.2;
     
         case 1:
-            jump Test.5;
+            let Test.3 : Str = "B";
+            ret Test.3;
     
         default:
-            jump Test.5;
+            let Test.4 : Str = "C";
+            ret Test.4;
     
