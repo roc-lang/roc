@@ -378,6 +378,7 @@ fn check_derived_typechecks_and_golden(
     );
     let mut def_types = Default::default();
     let mut rigid_vars = Default::default();
+    let mut flex_vars = Default::default();
     let (import_variables, abilities_store) = add_imports(
         test_module,
         &mut constraints,
@@ -386,9 +387,15 @@ fn check_derived_typechecks_and_golden(
         &exposed_for_module,
         &mut def_types,
         &mut rigid_vars,
+        &mut flex_vars,
     );
-    let constr =
-        constraints.let_import_constraint(rigid_vars, def_types, constr, &import_variables);
+    let constr = constraints.let_import_constraint(
+        rigid_vars,
+        flex_vars,
+        def_types,
+        constr,
+        &import_variables,
+    );
 
     // run the solver, print and fail if we have errors
     dbg_do!(
