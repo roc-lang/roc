@@ -16,6 +16,7 @@ fn test_currentmemory() {
     let pc = 0;
     module.memory = MemorySection::new(&arena, pages * MemorySection::PAGE_SIZE);
     module.code.bytes.push(OpCode::CURRENTMEMORY as u8);
+    module.code.bytes.encode_i32(0);
 
     let mut state = Instance::new(&arena, pages, pc, [], DEFAULT_IMPORTS);
     state.execute_next_instruction(&module).unwrap();
@@ -34,6 +35,7 @@ fn test_growmemory() {
     module.code.bytes.push(OpCode::I32CONST as u8);
     module.code.bytes.encode_i32(grow_pages);
     module.code.bytes.push(OpCode::GROWMEMORY as u8);
+    module.code.bytes.encode_i32(0);
 
     let mut state = Instance::new(&arena, existing_pages, pc, [], DEFAULT_IMPORTS);
     state.execute_next_instruction(&module).unwrap();

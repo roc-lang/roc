@@ -749,10 +749,14 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 target.copy_from_slice(&unwrapped.to_le_bytes()[..4]);
             }
             CURRENTMEMORY => {
+                let memory_index = self.fetch_immediate_u32(module);
+                assert_eq!(memory_index, 0);
                 let size = self.memory.len() as i32 / MemorySection::PAGE_SIZE as i32;
                 self.value_stack.push(Value::I32(size));
             }
             GROWMEMORY => {
+                let memory_index = self.fetch_immediate_u32(module);
+                assert_eq!(memory_index, 0);
                 let old_bytes = self.memory.len() as u32;
                 let old_pages = old_bytes / MemorySection::PAGE_SIZE as u32;
                 let grow_pages = self.value_stack.pop_u32()?;
