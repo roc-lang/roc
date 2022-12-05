@@ -276,6 +276,8 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
     }
 
     fn do_return(&mut self) -> Action {
+        self.block_loop_addrs
+            .truncate(self.outermost_block as usize);
         if let Some((return_addr, block_depth)) = self.call_stack.pop_frame() {
             if self.call_stack.is_empty() {
                 // We just popped the stack frame for the entry function. Terminate the program.
