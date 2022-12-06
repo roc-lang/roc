@@ -74,8 +74,18 @@ impl<'a> CallStack<'a> {
         // Pop arguments off the value stack and into locals
         for (i, type_byte) in arg_type_bytes.iter().copied().enumerate().rev() {
             let arg = value_stack.pop();
-            assert_eq!(ValueType::from(arg), ValueType::from(type_byte));
+            let ty = ValueType::from(arg);
+            let expected_type = ValueType::from(type_byte);
+            assert_eq!(ty, expected_type);
             self.set_local_help(i as u32, arg);
+            self.is_64.set(
+                frame_offset + i,
+                matches!(ty, ValueType::I64 | ValueType::F64),
+            );
+            self.is_float.set(
+                frame_offset + i,
+                matches!(ty, ValueType::F32 | ValueType::F64),
+            );
         }
 
         self.value_stack_bases.push(value_stack.len() as u32);
