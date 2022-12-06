@@ -43,7 +43,7 @@ use roc_packaging::cache::{self, RocCacheDir};
 use roc_packaging::https::PackageMetadata;
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To};
-use roc_parse::header::{HeaderType, ModuleNameEnum, PackageName};
+use roc_parse::header::{HeaderType, PackageName};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
@@ -638,7 +638,6 @@ pub enum BuildProblem<'a> {
 #[derive(Debug)]
 struct ModuleHeader<'a> {
     module_id: ModuleId,
-    module_name: ModuleNameEnum<'a>,
     module_path: PathBuf,
     is_root_module: bool,
     exposed_ident_ids: IdentIds,
@@ -786,9 +785,8 @@ struct ParsedModule<'a> {
     exposed_ident_ids: IdentIds,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parsed_defs: Defs<'a>,
-    module_name: ModuleNameEnum<'a>,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
-    header_for: HeaderType<'a>,
+    header_type: HeaderType<'a>,
 }
 
 type LocExpects = VecMap<Region, Vec<ExpectLookup>>;
@@ -1308,7 +1306,7 @@ impl<'a> LoadStart<'a> {
                 Ok((module_id, msg)) => {
                     if let Msg::Header(ModuleHeader {
                         module_id: header_id,
-                        module_name,
+                        header_type,
                         is_root_module,
                         ..
                     }) = &msg
@@ -1316,7 +1314,7 @@ impl<'a> LoadStart<'a> {
                         debug_assert_eq!(*header_id, module_id);
                         debug_assert!(is_root_module);
 
-                        if let ModuleNameEnum::Interface(name) = module_name {
+                        if let HeaderType::Interface { name, .. } = header_type {
                             // Interface modules can have names like Foo.Bar.Baz,
                             // in which case we need to adjust the src_dir to
                             // remove the "Bar/Baz" directories in order to correctly
@@ -2353,7 +2351,7 @@ fn update<'a>(
                 }
 
                 match header.header_type {
-                    App { to_platform } => {
+                    App { to_platform, .. } => {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::Valid(to_platform);
                     }
@@ -2390,7 +2388,7 @@ fn update<'a>(
                             is_prebuilt,
                         });
                     }
-                    Builtin { .. } | Interface => {
+                    Builtin { .. } | Interface { .. } => {
                         if header.is_root_module {
                             debug_assert!(matches!(
                                 state.platform_path,
@@ -2501,18 +2499,15 @@ fn update<'a>(
             // the module's declared "name".
             //
             // e.g. for `app "blah"` we should generate an output file named "blah"
-            match &parsed.module_name {
-                ModuleNameEnum::App(output_str) => match output_str {
+            if let HeaderType::App { output_name, .. } = &parsed.header_type {
+                match output_name {
                     StrLiteral::PlainLine(path) => {
                         state.output_path = Some(path);
                     }
                     _ => {
                         todo!("TODO gracefully handle a malformed string literal after `app` keyword.");
                     }
-                },
-                ModuleNameEnum::Platform(_)
-                | ModuleNameEnum::Interface(_)
-                | ModuleNameEnum::Hosted(_) => {}
+                }
             }
 
             let module_id = parsed.module_id;
@@ -3442,10 +3437,6 @@ fn load_builtin_module_help<'a>(
             parse_state,
         )) => {
             let info = HeaderInfo {
-                loc_name: Loc {
-                    region: header.name.region,
-                    value: ModuleNameEnum::Interface(header.name.value),
-                },
                 filename,
                 is_root_module,
                 opt_shorthand,
@@ -3453,6 +3444,7 @@ fn load_builtin_module_help<'a>(
                 exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
                 header_type: HeaderType::Builtin {
+                    name: header.name.value,
                     generates_with: &[],
                 },
             };
@@ -3738,17 +3730,15 @@ fn parse_header<'a>(
             let header_name_region = header.name.region;
 
             let info = HeaderInfo {
-                loc_name: Loc {
-                    region: header_name_region,
-                    value: ModuleNameEnum::Interface(header.name.value),
-                },
                 filename,
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
                 exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
-                header_type: HeaderType::Interface,
+                header_type: HeaderType::Interface {
+                    name: header.name.value,
+                },
             };
 
             let (module_id, module_name, header) = build_header(
@@ -3787,10 +3777,6 @@ fn parse_header<'a>(
             parse_state,
         )) => {
             let info = HeaderInfo {
-                loc_name: Loc {
-                    region: header.name.region,
-                    value: ModuleNameEnum::Hosted(header.name.value),
-                },
                 filename,
                 is_root_module,
                 opt_shorthand,
@@ -3798,6 +3784,7 @@ fn parse_header<'a>(
                 exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
                 header_type: HeaderType::Hosted {
+                    name: header.name.value,
                     generates: header.generates.item,
                     generates_with: unspace(arena, header.generates_with.item.items),
                 },
@@ -3845,10 +3832,6 @@ fn parse_header<'a>(
             let exposes = exposes.into_bump_slice();
 
             let info = HeaderInfo {
-                loc_name: Loc {
-                    region: header.name.region,
-                    value: ModuleNameEnum::App(header.name.value),
-                },
                 filename,
                 is_root_module,
                 opt_shorthand,
@@ -3860,6 +3843,7 @@ fn parse_header<'a>(
                     &[]
                 },
                 header_type: HeaderType::App {
+                    output_name: header.name.value,
                     to_platform: header.provides.to.value,
                 },
             };
@@ -4058,7 +4042,6 @@ fn load_from_str<'a>(
 
 #[derive(Debug)]
 struct HeaderInfo<'a> {
-    loc_name: Loc<ModuleNameEnum<'a>>,
     filename: PathBuf,
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
@@ -4075,10 +4058,7 @@ fn build_header<'a>(
     ident_ids_by_module: SharedIdentIdsByModule,
     module_timing: ModuleTiming,
 ) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
-    use ModuleNameEnum::*;
-
     let HeaderInfo {
-        loc_name,
         filename,
         is_root_module,
         opt_shorthand,
@@ -4088,14 +4068,16 @@ fn build_header<'a>(
         header_type,
     } = info;
 
-    let declared_name: ModuleName = match &loc_name.value {
-        App(_) => ModuleName::APP.into(),
-        Platform(package_name) => package_name.as_str().into(),
-        Interface(module_name) | Hosted(module_name) => {
-            // TODO check to see if module_name is consistent with filename.
+    let declared_name: ModuleName = match &header_type {
+        HeaderType::App { .. } => ModuleName::APP.into(),
+        HeaderType::Platform { name, .. } => name.as_str().into(),
+        HeaderType::Interface { name, .. }
+        | HeaderType::Builtin { name, .. }
+        | HeaderType::Hosted { name, .. } => {
+            // TODO check to see if name is consistent with filename.
             // If it isn't, report a problem!
 
-            module_name.as_str().into()
+            name.as_str().into()
         }
     };
 
@@ -4195,6 +4177,7 @@ fn build_header<'a>(
             config_shorthand,
             platform_main_type,
             opt_app_module_id,
+            name: _,
         } = header_type
         {
             // If we don't have an app module id (e.g. because we're doing
@@ -4336,7 +4319,8 @@ fn build_header<'a>(
     // and we just have a bunch of definitions with runtime errors in their bodies
     let header_type = {
         match header_type {
-            HeaderType::Interface if home.is_builtin() => HeaderType::Builtin {
+            HeaderType::Interface { name } if home.is_builtin() => HeaderType::Builtin {
+                name,
                 generates_with: &[],
             },
             _ => header_type,
@@ -4351,7 +4335,6 @@ fn build_header<'a>(
             module_path: filename,
             is_root_module,
             exposed_ident_ids: ident_ids,
-            module_name: loc_name.value,
             packages: package_entries,
             imported_modules,
             package_qualified_imported_modules,
@@ -4903,6 +4886,7 @@ fn build_platform_header<'a>(
     let imports = unspace(arena, header.imports.item.items);
 
     let header_type = HeaderType::Platform {
+        name: header.name.value,
         // A config_shorthand of "" should be fine
         config_shorthand: opt_shorthand.unwrap_or_default(),
         platform_main_type: requires[0].value,
@@ -4913,10 +4897,6 @@ fn build_platform_header<'a>(
     };
 
     let info = HeaderInfo {
-        loc_name: Loc {
-            region: header.name.region,
-            value: ModuleNameEnum::Platform(header.name.value),
-        },
         filename,
         is_root_module,
         opt_shorthand,
@@ -4950,8 +4930,7 @@ fn canonicalize_and_constrain<'a>(
 
     let ParsedModule {
         module_id,
-        module_name,
-        header_for,
+        header_type,
         exposed_ident_ids,
         parsed_defs,
         exposed_imports,
@@ -4971,7 +4950,7 @@ fn canonicalize_and_constrain<'a>(
     let module_output = canonicalize_module_defs(
         arena,
         parsed_defs,
-        &header_for,
+        &header_type,
         module_id,
         module_ids,
         exposed_ident_ids,
@@ -5002,9 +4981,11 @@ fn canonicalize_and_constrain<'a>(
 
     // Generate documentation information
     // TODO: store timing information?
-    let module_docs = match module_name {
-        ModuleNameEnum::Platform(_) | ModuleNameEnum::App(_) => None,
-        ModuleNameEnum::Interface(name) | ModuleNameEnum::Hosted(name) => {
+    let module_docs = match header_type {
+        HeaderType::Platform { .. } | HeaderType::App { .. } => None,
+        HeaderType::Interface { name, .. }
+        | HeaderType::Builtin { name, .. }
+        | HeaderType::Hosted { name, .. } => {
             let mut scope = module_output.scope.clone();
             scope.add_docs_imports();
             let docs = crate::docs::generate_module_docs(
@@ -5139,19 +5120,17 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
 
     let ModuleHeader {
         module_id,
-        module_name,
         deps_by_name,
         exposed_ident_ids,
         exposed_imports,
         module_path,
-        header_type: header_for,
+        header_type,
         symbols_from_requires,
         ..
     } = header;
 
     let parsed = ParsedModule {
         module_id,
-        module_name,
         module_path,
         src,
         module_timing,
@@ -5161,7 +5140,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         exposed_imports,
         parsed_defs,
         symbols_from_requires,
-        header_for,
+        header_type,
     };
 
     Ok(Msg::Parsed(parsed))

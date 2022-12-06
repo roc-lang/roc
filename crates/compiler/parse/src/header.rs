@@ -12,17 +12,21 @@ use std::fmt::Debug;
 #[derive(Debug)]
 pub enum HeaderType<'a> {
     App {
+        output_name: StrLiteral<'a>,
         to_platform: To<'a>,
     },
     Hosted {
+        name: ModuleName<'a>,
         generates: UppercaseIdent<'a>,
         generates_with: &'a [Loc<ExposedName<'a>>],
     },
     /// Only created during canonicalization, never actually parsed from source
     Builtin {
+        name: ModuleName<'a>,
         generates_with: &'a [Symbol],
     },
     Platform {
+        name: PackageName<'a>,
         opt_app_module_id: Option<ModuleId>,
         provides: &'a [Loc<ExposedName<'a>>],
         requires: &'a [Loc<TypedIdent<'a>>],
@@ -35,7 +39,9 @@ pub enum HeaderType<'a> {
         #[allow(dead_code)]
         platform_main_type: TypedIdent<'a>,
     },
-    Interface,
+    Interface {
+        name: ModuleName<'a>,
+    },
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -97,15 +103,6 @@ impl<'a> ModuleName<'a> {
     pub const fn as_str(&'a self) -> &'a str {
         self.0
     }
-}
-
-#[derive(Debug)]
-pub enum ModuleNameEnum<'a> {
-    /// A filename
-    App(StrLiteral<'a>),
-    Interface(ModuleName<'a>),
-    Hosted(ModuleName<'a>),
-    Platform(PackageName<'a>),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]

@@ -204,6 +204,7 @@ impl GeneratedInfo {
             HeaderType::Hosted {
                 generates,
                 generates_with,
+                name: _,
             } => {
                 let name: &str = generates.into();
                 let (generated_functions, unknown_generated) =
@@ -236,7 +237,10 @@ impl GeneratedInfo {
                     generated_functions,
                 }
             }
-            HeaderType::Builtin { generates_with } => {
+            HeaderType::Builtin {
+                generates_with,
+                name: _,
+            } => {
                 debug_assert!(generates_with.is_empty());
                 GeneratedInfo::Builtin
             }
