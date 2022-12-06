@@ -15,7 +15,7 @@ use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{Defs, TypeAnnotation};
-use roc_parse::header::HeaderType;
+use roc_parse::header::HeaderFor;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -194,18 +194,16 @@ enum GeneratedInfo {
 }
 
 impl GeneratedInfo {
-    fn from_header_type<'a>(
+    fn from_header_for<'a>(
         env: &mut Env,
         scope: &mut Scope,
         var_store: &mut VarStore,
-        header_type: &HeaderType<'a>,
+        header_for: &HeaderFor<'a>,
     ) -> Self {
-        match header_type {
-            HeaderType::Hosted {
+        match header_for {
+            HeaderFor::Hosted {
                 generates,
                 generates_with,
-                exposes: _,
-                imports: _,
             } => {
                 let name: &str = generates.into();
                 let (generated_functions, unknown_generated) =
@@ -238,14 +236,11 @@ impl GeneratedInfo {
                     generated_functions,
                 }
             }
-            HeaderType::Builtin { generates_with } => {
+            HeaderFor::Builtin { generates_with } => {
                 debug_assert!(generates_with.is_empty());
                 GeneratedInfo::Builtin
             }
-            HeaderType::App { .. }
-            | HeaderType::Platform { .. }
-            | HeaderType::Interface { .. }
-            | HeaderType::Package { .. } => GeneratedInfo::NotSpecial,
+            _ => GeneratedInfo::NotSpecial,
         }
     }
 }
@@ -271,7 +266,7 @@ fn has_no_implementation(expr: &Expr) -> bool {
 pub fn canonicalize_module_defs<'a>(
     arena: &'a Bump,
     loc_defs: &'a mut Defs<'a>,
-    header_for: &roc_parse::header::HeaderType,
+    header_for: &roc_parse::header::HeaderFor,
     home: ModuleId,
     module_ids: &'a ModuleIds,
     exposed_ident_ids: IdentIds,
@@ -299,7 +294,7 @@ pub fn canonicalize_module_defs<'a>(
     }
 
     let generated_info =
-        GeneratedInfo::from_header_type(&mut env, &mut scope, var_store, header_for);
+        GeneratedInfo::from_header_for(&mut env, &mut scope, var_store, header_for);
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
