@@ -5,7 +5,7 @@ use crate::parser::{optional, then};
 use crate::parser::{specialize, word1, EPackageEntry, EPackageName, Parser};
 use crate::string_literal;
 use bumpalo::collections::Vec;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::Loc;
 use std::fmt::Debug;
 
@@ -23,6 +23,11 @@ pub enum HeaderFor<'a> {
         generates_with: &'a [Symbol],
     },
     Platform {
+        opt_app_module_id: Option<ModuleId>,
+        provides: &'a [Loc<ExposedName<'a>>],
+        requires: &'a [Loc<TypedIdent<'a>>],
+        requires_types: &'a [Loc<UppercaseIdent<'a>>],
+
         /// usually `pf`
         config_shorthand: &'a str,
         /// the type scheme of the main function (required by the platform)

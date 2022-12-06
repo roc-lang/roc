@@ -4468,6 +4468,10 @@ fn send_header_two<'a>(
         config_shorthand: opt_shorthand.unwrap_or_default(),
         platform_main_type: requires[0].value,
         main_for_host,
+        opt_app_module_id,
+        provides,
+        requires,
+        requires_types,
     };
 
     let mut package_qualified_imported_modules = MutSet::default();
