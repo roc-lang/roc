@@ -225,14 +225,16 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         module: &WasmModule<'a>,
         arg_type_bytes: &[u8],
     ) -> Result<Option<Value>, String> {
-        self.call_stack.push_frame(
-            0, // return_addr
-            0, // return_block_depth
-            arg_type_bytes,
-            &mut self.value_stack,
-            &module.code.bytes,
-            &mut self.program_counter,
-        );
+        self.call_stack
+            .push_frame(
+                0, // return_addr
+                0, // return_block_depth
+                arg_type_bytes,
+                &mut self.value_stack,
+                &module.code.bytes,
+                &mut self.program_counter,
+            )
+            .map_err(|e| e.to_string_at(self.program_counter))?;
 
         loop {
             match self.execute_next_instruction(module) {
@@ -242,26 +244,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 }
                 Err(e) => {
                     let file_offset = self.program_counter + module.code.section_offset as usize;
-                    let mut message = match e {
-                        Error::ValueStackType(expected, actual) => {
-                            format!(
-                                "ERROR: I found a type mismatch in the Value Stack at file offset {:#x}. Expected {:?}, but found {:?}.\n", 
-                                file_offset, expected, actual
-                            )
-                        }
-                        Error::ValueStackEmpty => {
-                            format!(
-                                "ERROR: I tried to pop a value from the Value Stack at file offset {:#x}, but it was empty.\n",
-                                file_offset
-                            )
-                        }
-                        Error::UnreachableOp => {
-                            format!(
-                                "WebAssembly `unreachable` instruction at file offset {:#x}.\n",
-                                file_offset
-                            )
-                        }
-                    };
+                    let mut message = e.to_string_at(file_offset);
                     self.call_stack
                         .dump_trace(
                             module,
@@ -381,7 +364,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         expected_signature: Option<u32>,
         fn_index: usize,
         module: &WasmModule<'a>,
-    ) {
+    ) -> Result<(), Error> {
         let n_import_fns = module.import.imports.len();
 
         let (signature_index, opt_import) = if fn_index < n_import_fns {
@@ -447,8 +430,9 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 &mut self.value_stack,
                 &module.code.bytes,
                 &mut self.program_counter,
-            );
+            )?;
         }
+        Ok(())
     }
 
     pub(crate) fn execute_next_instruction(
@@ -554,7 +538,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             }
             CALL => {
                 let fn_index = self.fetch_immediate_u32(module) as usize;
-                self.do_call(None, fn_index, module);
+                self.do_call(None, fn_index, module)?;
             }
             CALLINDIRECT => {
                 let expected_signature = self.fetch_immediate_u32(module);
@@ -576,7 +560,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                     )
                 });
 
-                self.do_call(Some(expected_signature), fn_index as usize, module);
+                self.do_call(Some(expected_signature), fn_index as usize, module)?;
             }
             DROP => {
                 self.value_stack.pop();
@@ -601,12 +585,12 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             SETLOCAL => {
                 let index = self.fetch_immediate_u32(module);
                 let value = self.value_stack.pop();
-                self.call_stack.set_local(index, value);
+                self.call_stack.set_local(index, value)?;
             }
             TEELOCAL => {
                 let index = self.fetch_immediate_u32(module);
                 let value = self.value_stack.peek();
-                self.call_stack.set_local(index, value);
+                self.call_stack.set_local(index, value)?;
             }
             GETGLOBAL => {
                 let index = self.fetch_immediate_u32(module);
@@ -712,55 +696,55 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             }
             I32STORE => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i32();
+                let unwrapped = value.expect_i32().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..4];
                 target.copy_from_slice(&unwrapped.to_le_bytes());
             }
             I64STORE => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i64();
+                let unwrapped = value.expect_i64().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..8];
                 target.copy_from_slice(&unwrapped.to_le_bytes());
             }
             F32STORE => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_f32();
+                let unwrapped = value.expect_f32().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..4];
                 target.copy_from_slice(&unwrapped.to_le_bytes());
             }
             F64STORE => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_f64();
+                let unwrapped = value.expect_f64().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..8];
                 target.copy_from_slice(&unwrapped.to_le_bytes());
             }
             I32STORE8 => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i32();
+                let unwrapped = value.expect_i32().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..1];
                 target.copy_from_slice(&unwrapped.to_le_bytes()[..1]);
             }
             I32STORE16 => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i32();
+                let unwrapped = value.expect_i32().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..2];
                 target.copy_from_slice(&unwrapped.to_le_bytes()[..2]);
             }
             I64STORE8 => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i64();
+                let unwrapped = value.expect_i64().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..1];
                 target.copy_from_slice(&unwrapped.to_le_bytes()[..1]);
             }
             I64STORE16 => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i64();
+                let unwrapped = value.expect_i64().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..2];
                 target.copy_from_slice(&unwrapped.to_le_bytes()[..2]);
             }
             I64STORE32 => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i64();
+                let unwrapped = value.expect_i64().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..4];
                 target.copy_from_slice(&unwrapped.to_le_bytes()[..4]);
             }
@@ -1523,7 +1507,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         if let Some(debug_string) = &self.debug_string {
             let base = self.call_stack.value_stack_base();
             let slice = self.value_stack.get_slice(base as usize);
-            eprintln!("{:#07x} {:17} {:?}", file_offset, debug_string, slice);
+            eprintln!("{:06x} {:17} {:?}", file_offset, debug_string, slice);
             if op_code == RETURN || (op_code == END && implicit_return) {
                 let fn_index = pc_to_fn_index(self.program_counter, module);
                 eprintln!("returning to function {}\n", fn_index);

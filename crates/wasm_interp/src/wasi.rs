@@ -28,9 +28,9 @@ impl<'a> WasiDispatcher<'a> {
         match function_name {
             "args_get" => {
                 // uint8_t ** argv,
-                let mut ptr_ptr_argv = arguments[0].unwrap_i32() as usize;
+                let mut ptr_ptr_argv = arguments[0].expect_i32().unwrap() as usize;
                 // uint8_t * argv_buf
-                let mut ptr_argv_buf = arguments[1].unwrap_i32() as usize;
+                let mut ptr_argv_buf = arguments[1].expect_i32().unwrap() as usize;
 
                 for arg in self.args {
                     write_u32(memory, ptr_ptr_argv, ptr_argv_buf as u32);
@@ -47,9 +47,9 @@ impl<'a> WasiDispatcher<'a> {
                 // (i32, i32) -> i32
 
                 // number of string arguments
-                let ptr_argc = arguments[0].unwrap_i32() as usize;
+                let ptr_argc = arguments[0].expect_i32().unwrap() as usize;
                 // size of string arguments buffer
-                let ptr_argv_buf_size = arguments[1].unwrap_i32() as usize;
+                let ptr_argv_buf_size = arguments[1].expect_i32().unwrap() as usize;
 
                 let argc = self.args.len() as u32;
                 write_u32(memory, ptr_argc, argc);
@@ -61,8 +61,8 @@ impl<'a> WasiDispatcher<'a> {
             }
             "environ_get" => todo!("WASI {}({:?})", function_name, arguments),
             "environ_sizes_get" => todo!("WASI {}({:?})", function_name, arguments),
-            "clock_res_get" => todo!("WASI {}({:?})", function_name, arguments),
-            "clock_time_get" => todo!("WASI {}({:?})", function_name, arguments),
+            "clock_res_get" => success_code,
+            "clock_time_get" => success_code,
             "fd_advise" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_allocate" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_close" => todo!("WASI {}({:?})", function_name, arguments),
@@ -85,13 +85,13 @@ impl<'a> WasiDispatcher<'a> {
             "fd_tell" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_write" => {
                 // file descriptor
-                let fd = arguments[0].unwrap_i32();
+                let fd = arguments[0].expect_i32().unwrap();
                 // Array of IO vectors
-                let ptr_iovs = arguments[1].unwrap_i32() as usize;
+                let ptr_iovs = arguments[1].expect_i32().unwrap() as usize;
                 // Length of array
-                let iovs_len = arguments[2].unwrap_i32();
+                let iovs_len = arguments[2].expect_i32().unwrap();
                 // Out param: number of bytes written
-                let ptr_nwritten = arguments[3].unwrap_i32() as usize;
+                let ptr_nwritten = arguments[3].expect_i32().unwrap() as usize;
 
                 let mut write_lock = match fd {
                     1 => Ok(io::stdout().lock()),
@@ -151,7 +151,7 @@ impl<'a> WasiDispatcher<'a> {
             "path_unlink_file" => todo!("WASI {}({:?})", function_name, arguments),
             "poll_oneoff" => todo!("WASI {}({:?})", function_name, arguments),
             "proc_exit" => {
-                let exit_code = arguments[0].unwrap_i32();
+                let exit_code = arguments[0].expect_i32().unwrap();
                 exit(exit_code);
             }
             "proc_raise" => todo!("WASI {}({:?})", function_name, arguments),

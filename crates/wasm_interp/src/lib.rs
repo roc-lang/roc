@@ -67,14 +67,47 @@ pub(crate) enum Error {
 }
 
 impl Error {
+    pub fn to_string_at(&self, file_offset: usize) -> String {
+        match self {
+            Error::ValueStackType(expected, actual) => {
+                format!(
+                    "ERROR: I found a type mismatch in the Value Stack at file offset {:#x}. Expected {:?}, but found {:?}.\n", 
+                    file_offset, expected, actual
+                )
+            }
+            Error::ValueStackEmpty => {
+                format!(
+                    "ERROR: I tried to pop a value from the Value Stack at file offset {:#x}, but it was empty.\n",
+                    file_offset
+                )
+            }
+            Error::UnreachableOp => {
+                format!(
+                    "WebAssembly `unreachable` instruction at file offset {:#x}.\n",
+                    file_offset
+                )
+            }
+        }
+    }
+
     fn value_stack_type(expected: ValueType, is_float: bool, is_64: bool) -> Self {
-        let ty = match (is_float, is_64) {
-            (false, false) => ValueType::I32,
-            (false, true) => ValueType::I64,
-            (true, false) => ValueType::F32,
-            (true, true) => ValueType::F64,
-        };
+        let ty = type_from_flags_f_64(is_float, is_64);
         Error::ValueStackType(expected, ty)
+    }
+}
+
+impl From<(ValueType, ValueType)> for Error {
+    fn from((expected, actual): (ValueType, ValueType)) -> Self {
+        Error::ValueStackType(expected, actual)
+    }
+}
+
+pub(crate) fn type_from_flags_f_64(is_float: bool, is_64: bool) -> ValueType {
+    match (is_float, is_64) {
+        (false, false) => ValueType::I32,
+        (false, true) => ValueType::I64,
+        (true, false) => ValueType::F32,
+        (true, true) => ValueType::F64,
     }
 }
 
