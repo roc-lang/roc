@@ -154,7 +154,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         let arg_type_bytes = self.prepare_to_call_export(module, fn_name)?;
 
         for (value_str, type_byte) in arg_strings
-            .into_iter()
+            .iter()
             .skip(1) // first string is the .wasm filename
             .zip(arg_type_bytes.iter().copied())
         {
@@ -1516,7 +1516,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 let fn_index = pc_to_fn_index(self.program_counter, module);
                 eprintln!("returning to function {}\n", fn_index);
             } else if op_code == CALL || op_code == CALLINDIRECT {
-                eprintln!("");
+                eprintln!();
             }
         }
 
