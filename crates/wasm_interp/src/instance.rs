@@ -151,8 +151,20 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         fn_name: &str,
         arg_strings: &'a [&'a String],
     ) -> Result<Option<Value>, String> {
-        let arg_type_bytes = self.prepare_to_call_export(module, fn_name)?;
+        // We have two different mechanisms for handling CLI arguments!
+        // 1. Basic numbers:
+        //      e.g. `roc_wasm_interp fibonacci 12`
+        //      Below, we check if the called Wasm function takes numeric arguments and, if so, parse them from the CLI.
+        //      This is good for low-level test cases, for example while developing this interpreter.
+        // 2. WASI:
+        //      POSIX-style array of strings. Much more high-level and complex than the "basic" version.
+        //      The WASI `_start` function itself takes no arguments (its Wasm type signature is `() -> nil`).
+        //      The program uses WASI syscalls to copy strings into Wasm memory and process them.
+        //      But that happens *elsewhere*! Here, `arg_strings` is ignored because `_start` takes no arguments.
 
+        // Implement the "basic numbers" CLI
+        // Check if the called Wasm function takes numeric arguments, and if so, try to parse them from the CLI.
+        let arg_type_bytes = self.prepare_to_call_export(module, fn_name)?;
         for (value_str, type_byte) in arg_strings
             .iter()
             .skip(1) // first string is the .wasm filename
