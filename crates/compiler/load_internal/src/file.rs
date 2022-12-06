@@ -43,7 +43,7 @@ use roc_packaging::cache::{self, RocCacheDir};
 use roc_packaging::https::PackageMetadata;
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
-use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
+use roc_parse::header::{HeaderType, ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
@@ -650,7 +650,7 @@ struct ModuleHeader<'a> {
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parse_state: roc_parse::state::State<'a>,
-    header_for: HeaderFor<'a>,
+    header_for: HeaderType<'a>,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     module_timing: ModuleTiming,
 }
@@ -790,7 +790,7 @@ struct ParsedModule<'a> {
     parsed_defs: Defs<'a>,
     module_name: ModuleNameEnum<'a>,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
-    header_for: HeaderFor<'a>,
+    header_for: HeaderType<'a>,
 }
 
 type LocExpects = VecMap<Region, Vec<ExpectLookup>>;
@@ -2276,7 +2276,7 @@ fn update<'a>(
             Ok(state)
         }
         Header(header) => {
-            use HeaderFor::*;
+            use HeaderType::*;
 
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
@@ -3420,7 +3420,7 @@ fn load_builtin_module_help<'a>(
                 packages: &[],
                 exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
-                extra: HeaderFor::Builtin {
+                header_type: HeaderType::Builtin {
                     generates_with: &[],
                 },
             };
@@ -3716,7 +3716,7 @@ fn parse_header<'a>(
                 packages: &[],
                 exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
-                extra: HeaderFor::Interface,
+                header_type: HeaderType::Interface,
             };
 
             let (module_id, module_name, header) = build_header(
@@ -3765,7 +3765,7 @@ fn parse_header<'a>(
                 packages: &[],
                 exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
-                extra: HeaderFor::Hosted {
+                header_type: HeaderType::Hosted {
                     generates: header.generates.item,
                     generates_with: unspace(arena, header.generates_with.item.items),
                 },
@@ -3827,7 +3827,7 @@ fn parse_header<'a>(
                 } else {
                     &[]
                 },
-                extra: HeaderFor::App {
+                header_type: HeaderType::App {
                     to_platform: header.provides.to.value,
                 },
             };
@@ -4029,7 +4029,7 @@ struct HeaderInfo<'a> {
     packages: &'a [Loc<PackageEntry<'a>>],
     exposes: &'a [Loc<ExposedName<'a>>],
     imports: &'a [Loc<ImportsEntry<'a>>],
-    extra: HeaderFor<'a>,
+    header_type: HeaderType<'a>,
 }
 
 fn build_header<'a>(
@@ -4049,7 +4049,7 @@ fn build_header<'a>(
         packages,
         exposes,
         imports,
-        extra,
+        header_type,
     } = info;
 
     let declared_name: ModuleName = match &loc_name.value {
@@ -4212,11 +4212,11 @@ fn build_header<'a>(
     // mark these modules as Builtin. Otherwise the builtin functions are not instantiated
     // and we just have a bunch of definitions with runtime errors in their bodies
     let extra = {
-        match extra {
-            HeaderFor::Interface if home.is_builtin() => HeaderFor::Builtin {
+        match header_type {
+            HeaderType::Interface if home.is_builtin() => HeaderType::Builtin {
                 generates_with: &[],
             },
-            _ => extra,
+            _ => header_type,
         }
     };
 
@@ -4463,7 +4463,7 @@ fn send_header_two<'a>(
         Symbol::new(home, ident_id)
     };
 
-    let extra = HeaderFor::Platform {
+    let extra = HeaderType::Platform {
         // A config_shorthand of "" should be fine
         config_shorthand: opt_shorthand.unwrap_or_default(),
         platform_main_type: requires[0].value,

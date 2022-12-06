@@ -15,7 +15,7 @@ use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{Defs, TypeAnnotation};
-use roc_parse::header::HeaderFor;
+use roc_parse::header::HeaderType;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -198,10 +198,10 @@ impl GeneratedInfo {
         env: &mut Env,
         scope: &mut Scope,
         var_store: &mut VarStore,
-        header_for: &HeaderFor<'a>,
+        header_for: &HeaderType<'a>,
     ) -> Self {
         match header_for {
-            HeaderFor::Hosted {
+            HeaderType::Hosted {
                 generates,
                 generates_with,
             } => {
@@ -236,7 +236,7 @@ impl GeneratedInfo {
                     generated_functions,
                 }
             }
-            HeaderFor::Builtin { generates_with } => {
+            HeaderType::Builtin { generates_with } => {
                 debug_assert!(generates_with.is_empty());
                 GeneratedInfo::Builtin
             }
@@ -266,7 +266,7 @@ fn has_no_implementation(expr: &Expr) -> bool {
 pub fn canonicalize_module_defs<'a>(
     arena: &'a Bump,
     loc_defs: &'a mut Defs<'a>,
-    header_for: &roc_parse::header::HeaderFor,
+    header_for: &roc_parse::header::HeaderType,
     home: ModuleId,
     module_ids: &'a ModuleIds,
     exposed_ident_ids: IdentIds,

@@ -10,7 +10,7 @@ use roc_region::all::Loc;
 use std::fmt::Debug;
 
 #[derive(Debug)]
-pub enum HeaderFor<'a> {
+pub enum HeaderType<'a> {
     App {
         to_platform: To<'a>,
     },
