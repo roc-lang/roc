@@ -821,6 +821,13 @@ expect
     |> len
     |> Bool.isEq 0
 
+# Makes sure a Dict with Nat keys works
+expect
+    empty
+    |> insert 7nat "Testing"
+    |> get 7
+    |> Bool.isEq (Ok "Testing")
+
 # We have decided not to expose the standard roc hashing algorithm.
 # This is to avoid external dependence and the need for versioning.
 # The current implementation is a form of [Wyhash final3](https://github.com/wangyi-fudan/wyhash/blob/a5995b98ebfa7bd38bfadc0919326d2e7aabb805/wyhash.h).
