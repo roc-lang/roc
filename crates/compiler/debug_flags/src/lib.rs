@@ -119,6 +119,9 @@ flags! {
 
     // ===Mono===
 
+    /// Type-checks the mono IR after specialization.
+    ROC_CHECK_MONO_IR
+
     /// Writes a pretty-printed mono IR to stderr after function specialization.
     ROC_PRINT_IR_AFTER_SPECIALIZATION
 

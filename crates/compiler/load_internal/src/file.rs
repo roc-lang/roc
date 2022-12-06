@@ -19,8 +19,8 @@ use roc_constrain::module::constrain_module;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
-    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
-    ROC_PRINT_LOAD_LOG,
+    ROC_CHECK_MONO_IR, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
+    ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_LOAD_LOG,
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
@@ -2182,6 +2182,27 @@ macro_rules! debug_print_ir {
     };
 }
 
+macro_rules! debug_check_ir {
+    ($state:expr, $arena:expr, $interner:expr, $flag:path) => {
+        dbg_do!($flag, {
+            use roc_mono::debug::{check_procs, format_problems};
+
+            let interns = Interns {
+                module_ids: $state.arc_modules.lock().clone().into_module_ids(),
+                all_ident_ids: $state.constrained_ident_ids.clone(),
+            };
+
+            let procedures = &$state.procedures;
+
+            let problems = check_procs($arena, $interner, procedures);
+            if !problems.is_empty() {
+                let formatted = format_problems(&interns, $interner, problems);
+                eprintln!("IR PROBLEMS FOUND:\n{formatted}");
+            }
+        })
+    };
+}
+
 /// Report modules that are imported, but from which nothing is used
 fn report_unused_imported_modules<'a>(
     state: &mut State<'a>,
@@ -2900,6 +2921,7 @@ fn update<'a>(
                     log!("specializations complete from {:?}", module_id);
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_SPECIALIZATION);
+                    debug_check_ir!(state, arena, &layout_interner, ROC_CHECK_MONO_IR);
 
                     let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
 
