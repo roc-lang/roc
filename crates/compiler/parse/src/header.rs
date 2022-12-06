@@ -30,7 +30,7 @@ pub enum HeaderFor<'a> {
         #[allow(dead_code)]
         platform_main_type: TypedIdent<'a>,
         /// provided symbol to host (commonly `mainForHost`)
-        main_for_host: roc_module::symbol::Symbol,
+        main_for_host: Symbol,
     },
     Interface,
 }
