@@ -3563,6 +3563,27 @@ fn list_walk_from_until_sum() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn concat_unique_to_nonunique_overlapping_issue_4697() {
+    assert_evals_to!(
+        r#"
+        # originalList is shared, but others is unique.
+        # When we concat originalList with others, others should be re-used.
+
+        originalList = [1u8]
+        others = [2u8, 3u8, 4u8]
+        new = List.concat originalList others
+        {a: originalList, b: new}
+        "#,
+        (
+            RocList::from_slice(&[1u8]),
+            RocList::from_slice(&[1u8, 2, 3, 4]),
+        ),
+        (RocList<u8>, RocList<u8>)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_walk_from_even_prefix_sum() {
     assert_evals_to!(
         r#"
