@@ -26,8 +26,6 @@ pub enum HeaderType<'a> {
     /// Only created during canonicalization, never actually parsed from source
     Builtin { generates_with: &'a [Symbol] },
     Platform {
-        /// usually `pf` - this is not actually something we parse out of the file.
-        shorthand: &'a str,
         /// the type scheme of the main function (required by the platform)
         /// (currently unused)
         #[allow(dead_code)]
