@@ -601,12 +601,12 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             SETLOCAL => {
                 let index = self.fetch_immediate_u32(module);
                 let value = self.value_stack.pop();
-                self.call_stack.set_local(index, value);
+                self.call_stack.set_local(index, value)?;
             }
             TEELOCAL => {
                 let index = self.fetch_immediate_u32(module);
                 let value = self.value_stack.peek();
-                self.call_stack.set_local(index, value);
+                self.call_stack.set_local(index, value)?;
             }
             GETGLOBAL => {
                 let index = self.fetch_immediate_u32(module);
@@ -1523,7 +1523,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         if let Some(debug_string) = &self.debug_string {
             let base = self.call_stack.value_stack_base();
             let slice = self.value_stack.get_slice(base as usize);
-            eprintln!("{:#07x} {:17} {:?}", file_offset, debug_string, slice);
+            eprintln!("{:06x} {:17} {:?}", file_offset, debug_string, slice);
             if op_code == RETURN || (op_code == END && implicit_return) {
                 let fn_index = pc_to_fn_index(self.program_counter, module);
                 eprintln!("returning to function {}\n", fn_index);

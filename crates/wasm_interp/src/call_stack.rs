@@ -6,7 +6,7 @@ use roc_wasm_module::{parse::Parse, Value, ValueType, WasmModule};
 use std::fmt::{self, Write};
 use std::iter::repeat;
 
-use crate::{pc_to_fn_index, ValueStack};
+use crate::{pc_to_fn_index, type_from_flags_f_64, Error, ValueStack};
 
 /// Struct-of-Arrays storage for the call stack.
 /// Type info is packed to avoid wasting space on padding.
@@ -130,32 +130,34 @@ impl<'a> CallStack<'a> {
         }
     }
 
-    pub fn set_local(&mut self, local_index: u32, value: Value) {
-        let type_check_ok = self.set_local_help(local_index, value);
-        debug_assert!(type_check_ok);
+    pub(crate) fn set_local(&mut self, local_index: u32, value: Value) -> Result<(), Error> {
+        let expected_type = self.set_local_help(local_index, value);
+        let actual_type = ValueType::from(value);
+        if actual_type == expected_type {
+            Ok(())
+        } else {
+            Err(Error::ValueStackType(expected_type, actual_type))
+        }
     }
 
-    fn set_local_help(&mut self, local_index: u32, value: Value) -> bool {
+    fn set_local_help(&mut self, local_index: u32, value: Value) -> ValueType {
         let frame_offset = *self.frame_offsets.last().unwrap();
         let index = (frame_offset + local_index) as usize;
         match value {
             Value::I32(x) => {
                 self.locals_data[index] = u64::from_ne_bytes((x as i64).to_ne_bytes());
-                !self.is_64[index] && !self.is_float[index]
             }
             Value::I64(x) => {
                 self.locals_data[index] = u64::from_ne_bytes((x).to_ne_bytes());
-                !self.is_float[index] && self.is_64[index]
             }
             Value::F32(x) => {
                 self.locals_data[index] = x.to_bits() as u64;
-                self.is_float[index] && !self.is_64[index]
             }
             Value::F64(x) => {
                 self.locals_data[index] = x.to_bits();
-                self.is_float[index] && self.is_64[index]
             }
         }
+        type_from_flags_f_64(self.is_float[index], self.is_64[index])
     }
 
     pub fn value_stack_base(&self) -> u32 {
@@ -283,7 +285,7 @@ mod tests {
     const RETURN_ADDR: u32 = 0x12345;
 
     fn test_get_set(call_stack: &mut CallStack<'_>, index: u32, value: Value) {
-        call_stack.set_local(index, value);
+        call_stack.set_local(index, value).unwrap();
         assert_eq!(call_stack.get_local(index), value);
     }
 
