@@ -772,7 +772,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         // This first call must use mem.copy because the slices might overlap.
         const byte_count_a = list_a.len() * element_width;
         const byte_count_b = list_b.len() * element_width;
-        mem.copy(u8, source_b[byte_count_a .. byte_count_a + byte_count_b], source_b[0..byte_count_b]);
+        mem.copyBackwards(u8, source_b[byte_count_a .. byte_count_a + byte_count_b], source_b[0..byte_count_b]);
         @memcpy(source_b, source_a, byte_count_a);
 
         // decrement list a.
@@ -869,7 +869,7 @@ test "listConcat: non-unique with unique overlapping" {
     defer unique.deinit(u8);
 
     var concatted = listConcat(nonUnique, unique, 1, 1);
-    var wanted = RocList.fromSlice(u8, ([_]u8{ 1, 2, 2, 2 })[0..]);
+    var wanted = RocList.fromSlice(u8, ([_]u8{ 1, 2, 3, 4 })[0..]);
     defer wanted.deinit(u8);
 
     try expect(concatted.eql(wanted));
