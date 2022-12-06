@@ -4243,19 +4243,6 @@ fn build_header<'a>(
     )
 }
 
-#[derive(Debug)]
-struct PlatformHeaderInfo<'a> {
-    filename: PathBuf,
-    is_root_module: bool,
-    opt_shorthand: Option<&'a str>,
-    opt_app_module_id: Option<ModuleId>,
-    packages: &'a [Loc<PackageEntry<'a>>],
-    provides: &'a [Loc<ExposedName<'a>>],
-    requires: &'a [Loc<TypedIdent<'a>>],
-    requires_types: &'a [Loc<UppercaseIdent<'a>>],
-    imports: &'a [Loc<ImportsEntry<'a>>],
-}
-
 impl<'a> BuildTask<'a> {
     // TODO trim down these arguments - possibly by moving Constraint into Module
     fn solve_module(
@@ -4784,34 +4771,15 @@ fn fabricate_platform_module<'a>(
     // otherwise, we must be the root.
     let is_root_module = opt_app_module_id.is_none();
 
-    let info = PlatformHeaderInfo {
-        filename,
-        is_root_module,
-        opt_shorthand,
-        opt_app_module_id,
-        packages: &[],
-        provides: unspace(arena, header.provides.item.items),
-        requires: &*arena.alloc([Loc::at(
-            header.requires.item.signature.region,
-            header.requires.item.signature.extract_spaces().item,
-        )]),
-        requires_types: unspace(arena, header.requires.item.rigids.items),
-        imports: unspace(arena, header.imports.item.items),
-    };
+    let provides = unspace(arena, header.provides.item.items);
+    let requires = arena.alloc([Loc::at(
+        header.requires.item.signature.region,
+        header.requires.item.signature.extract_spaces().item,
+    )]);
+    let requires_types = unspace(arena, header.requires.item.rigids.items);
+    let imports = unspace(arena, header.imports.item.items);
 
     {
-        let PlatformHeaderInfo {
-            filename,
-            opt_shorthand,
-            is_root_module,
-            opt_app_module_id,
-            packages,
-            provides,
-            requires,
-            requires_types,
-            imports,
-        } = info;
-
         let declared_name: ModuleName = "".into();
         let mut symbols_from_requires = Vec::with_capacity(requires.len());
 
@@ -4926,7 +4894,7 @@ fn fabricate_platform_module<'a>(
                 let module_id = opt_app_module_id.unwrap_or(home);
                 let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
-                for entry in requires {
+                for entry in requires.iter() {
                     let entry = entry.value;
                     let ident: Ident = entry.ident.value.into();
                     let ident_id = ident_ids.get_or_insert(entry.ident.value);
@@ -4980,10 +4948,7 @@ fn fabricate_platform_module<'a>(
             ident_ids.clone()
         };
 
-        let package_entries = packages
-            .iter()
-            .map(|pkg| (pkg.value.shorthand, pkg.value.package_name.value))
-            .collect::<MutMap<_, _>>();
+        let package_entries = MutMap::default(); // TODO support packages in platforms!
 
         // Send the deps to the coordinator thread for processing,
         // then continue on to parsing and canonicalizing defs.
