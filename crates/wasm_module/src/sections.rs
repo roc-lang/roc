@@ -1537,6 +1537,7 @@ impl<'a> DataSection<'a> {
             target_slice
                 .write(&self.bytes[cursor..][..len])
                 .map_err(|e| format!("{:?}", e))?;
+            cursor += len;
         }
         Ok(())
     }

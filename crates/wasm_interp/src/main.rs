@@ -1,12 +1,12 @@
-use bumpalo::Bump;
+use bumpalo::{collections::Vec, Bump};
 use clap::ArgAction;
 use clap::{Arg, Command};
-use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::iter::once;
 use std::process;
 
-use roc_wasm_interp::{Instance, DEFAULT_IMPORTS};
+use roc_wasm_interp::{DefaultImportDispatcher, Instance};
 use roc_wasm_module::WasmModule;
 
 pub const FLAG_FUNCTION: &str = "function";
@@ -16,6 +16,8 @@ pub const WASM_FILE: &str = "WASM_FILE";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
 fn main() -> io::Result<()> {
+    let arena = Bump::new();
+
     // Define the command line arguments
 
     let flag_function = Arg::new(FLAG_FUNCTION)
@@ -38,14 +40,12 @@ fn main() -> io::Result<()> {
 
     let wasm_file_to_run = Arg::new(WASM_FILE)
         .help("The .wasm file to run")
-        .allow_invalid_utf8(true)
         .required(true);
 
     let args_for_app = Arg::new(ARGS_FOR_APP)
-        .help("Arguments to pass into the WebAssembly app\ne.g. `roc_wasm_interp app.wasm -- 123 123.45`")
+        .help("Arguments to pass into the WebAssembly app\ne.g. `roc_wasm_interp app.wasm 123 123.45`")
         .multiple_values(true)
-        .takes_value(true)
-        .last(true);
+        .takes_value(true);
 
     let app = Command::new("roc_wasm_interp")
         .about("Run the given .wasm file")
@@ -62,19 +62,17 @@ fn main() -> io::Result<()> {
     let start_fn_name = matches.get_one::<String>(FLAG_FUNCTION).unwrap();
     let is_debug_mode = matches.get_flag(FLAG_DEBUG);
     let is_hex_format = matches.get_flag(FLAG_HEX);
-    let start_arg_strings = matches
-        .get_many::<String>(ARGS_FOR_APP)
-        .unwrap_or_default()
-        .map(|s| s.as_str());
+    let start_arg_strings = matches.get_many::<String>(ARGS_FOR_APP).unwrap_or_default();
+    let wasm_path = matches.get_one::<String>(WASM_FILE).unwrap();
+    // WASI expects the .wasm file to be argv[0]
+    let wasi_argv = Vec::from_iter_in(once(wasm_path).chain(start_arg_strings), &arena);
 
     // Load the WebAssembly binary file
 
-    let wasm_path = matches.get_one::<OsString>(WASM_FILE).unwrap();
     let module_bytes = fs::read(wasm_path)?;
 
     // Parse the binary data
 
-    let arena = Bump::new();
     let require_relocatable = false;
     let module = match WasmModule::preload(&arena, &module_bytes, require_relocatable) {
         Ok(m) => m,
@@ -88,15 +86,16 @@ fn main() -> io::Result<()> {
 
     // Create an execution instance
 
-    let mut inst = Instance::for_module(&arena, &module, DEFAULT_IMPORTS, is_debug_mode)
-        .unwrap_or_else(|e| {
+    let dispatcher = DefaultImportDispatcher::new(&wasi_argv);
+    let mut inst =
+        Instance::for_module(&arena, &module, dispatcher, is_debug_mode).unwrap_or_else(|e| {
             eprintln!("{}", e);
             process::exit(2);
         });
 
     // Run
 
-    let result = inst.call_export_from_cli(&module, start_fn_name, start_arg_strings);
+    let result = inst.call_export_from_cli(&module, start_fn_name, &wasi_argv);
 
     // Print out return value, if any
 

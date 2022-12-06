@@ -93,9 +93,9 @@ fn test_loop_help(end: i32, expected: i32) {
         &mut state.program_counter,
     );
 
-    while let Action::Continue = state.execute_next_instruction(&module) {}
+    while let Ok(Action::Continue) = state.execute_next_instruction(&module) {}
 
-    assert_eq!(state.value_stack.pop_i32(), expected);
+    assert_eq!(state.value_stack.pop_i32(), Ok(expected));
 }
 
 #[test]
@@ -161,9 +161,9 @@ fn test_if_else_help(condition: i32, expected: i32) {
         &mut state.program_counter,
     );
 
-    while let Action::Continue = state.execute_next_instruction(&module) {}
+    while let Ok(Action::Continue) = state.execute_next_instruction(&module) {}
 
-    assert_eq!(state.value_stack.pop_i32(), expected);
+    assert_eq!(state.value_stack.pop_i32(), Ok(expected));
 }
 
 #[test]
@@ -250,7 +250,7 @@ fn test_br() {
         &mut state.program_counter,
     );
 
-    while let Action::Continue = state.execute_next_instruction(&module) {}
+    while let Ok(Action::Continue) = state.execute_next_instruction(&module) {}
 
     assert_eq!(state.value_stack.pop(), Value::I32(111))
 }
@@ -348,7 +348,7 @@ fn test_br_if_help(condition: i32, expected: i32) {
         &mut state.program_counter,
     );
 
-    while let Action::Continue = state.execute_next_instruction(&module) {}
+    while let Ok(Action::Continue) = state.execute_next_instruction(&module) {}
 
     assert_eq!(state.value_stack.pop(), Value::I32(expected))
 }
@@ -452,7 +452,7 @@ fn test_br_table_help(condition: i32, expected: i32) {
         &mut state.program_counter,
     );
 
-    while let Action::Continue = state.execute_next_instruction(&module) {}
+    while let Ok(Action::Continue) = state.execute_next_instruction(&module) {}
 
     assert_eq!(state.value_stack.pop(), Value::I32(expected))
 }
@@ -664,7 +664,7 @@ fn test_call_return_with_args() {
 
     state.program_counter = func0_first_instruction as usize;
 
-    while let Action::Continue = state.execute_next_instruction(&module) {}
+    while let Ok(Action::Continue) = state.execute_next_instruction(&module) {}
 
     assert_eq!(state.value_stack.peek(), Value::I32(4));
 }
@@ -709,8 +709,8 @@ fn test_call_indirect_help(table_index: u32, elem_index: u32) -> Value {
         buf.append_u8(OpCode::I32CONST as u8);
         buf.encode_u32(elem_index);
         buf.append_u8(OpCode::CALLINDIRECT as u8);
-        buf.encode_u32(table_index);
         buf.encode_u32(0); // signature index
+        buf.encode_u32(table_index);
         buf.append_u8(OpCode::END as u8);
     });
 
@@ -785,7 +785,7 @@ fn test_select_help(first: Value, second: Value, condition: i32, expected: Value
         &mut state.program_counter,
     );
 
-    while let Action::Continue = state.execute_next_instruction(&module) {}
+    while let Ok(Action::Continue) = state.execute_next_instruction(&module) {}
 
     assert_eq!(state.value_stack.pop(), expected);
 }
@@ -818,9 +818,9 @@ fn test_set_get_local() {
     module.code.bytes.push(OpCode::GETLOCAL as u8);
     module.code.bytes.encode_u32(2);
 
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module).unwrap();
+    state.execute_next_instruction(&module).unwrap();
+    state.execute_next_instruction(&module).unwrap();
     assert_eq!(state.value_stack.len(), 1);
     assert_eq!(state.value_stack.pop(), Value::I32(12345));
 }
@@ -853,9 +853,9 @@ fn test_tee_get_local() {
     module.code.bytes.push(OpCode::GETLOCAL as u8);
     module.code.bytes.encode_u32(2);
 
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module).unwrap();
+    state.execute_next_instruction(&module).unwrap();
+    state.execute_next_instruction(&module).unwrap();
     assert_eq!(state.value_stack.len(), 2);
     assert_eq!(state.value_stack.pop(), Value::I32(12345));
     assert_eq!(state.value_stack.pop(), Value::I32(12345));
@@ -879,10 +879,10 @@ fn test_global() {
     module.code.bytes.push(OpCode::GETGLOBAL as u8);
     module.code.bytes.encode_u32(1);
 
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
-    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module).unwrap();
+    state.execute_next_instruction(&module).unwrap();
+    state.execute_next_instruction(&module).unwrap();
+    state.execute_next_instruction(&module).unwrap();
     assert_eq!(state.value_stack.len(), 2);
     assert_eq!(state.value_stack.pop(), Value::I32(555));
     assert_eq!(state.value_stack.pop(), Value::I32(222));
@@ -897,7 +897,7 @@ fn test_i32const() {
     module.code.bytes.push(OpCode::I32CONST as u8);
     module.code.bytes.encode_i32(12345);
 
-    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module).unwrap();
     assert_eq!(state.value_stack.pop(), Value::I32(12345))
 }
 
@@ -910,7 +910,7 @@ fn test_i64const() {
     module.code.bytes.push(OpCode::I64CONST as u8);
     module.code.bytes.encode_i64(1234567890);
 
-    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module).unwrap();
     assert_eq!(state.value_stack.pop(), Value::I64(1234567890))
 }
 
@@ -923,7 +923,7 @@ fn test_f32const() {
     module.code.bytes.push(OpCode::F32CONST as u8);
     module.code.bytes.encode_f32(123.45);
 
-    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module).unwrap();
     assert_eq!(state.value_stack.pop(), Value::F32(123.45))
 }
 
@@ -936,6 +936,6 @@ fn test_f64const() {
     module.code.bytes.push(OpCode::F64CONST as u8);
     module.code.bytes.encode_f64(12345.67890);
 
-    state.execute_next_instruction(&module);
+    state.execute_next_instruction(&module).unwrap();
     assert_eq!(state.value_stack.pop(), Value::F64(12345.67890))
 }
