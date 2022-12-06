@@ -225,14 +225,16 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         module: &WasmModule<'a>,
         arg_type_bytes: &[u8],
     ) -> Result<Option<Value>, String> {
-        self.call_stack.push_frame(
-            0, // return_addr
-            0, // return_block_depth
-            arg_type_bytes,
-            &mut self.value_stack,
-            &module.code.bytes,
-            &mut self.program_counter,
-        );
+        self.call_stack
+            .push_frame(
+                0, // return_addr
+                0, // return_block_depth
+                arg_type_bytes,
+                &mut self.value_stack,
+                &module.code.bytes,
+                &mut self.program_counter,
+            )
+            .map_err(|e| e.to_string_at(self.program_counter))?;
 
         loop {
             match self.execute_next_instruction(module) {
@@ -242,26 +244,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 }
                 Err(e) => {
                     let file_offset = self.program_counter + module.code.section_offset as usize;
-                    let mut message = match e {
-                        Error::ValueStackType(expected, actual) => {
-                            format!(
-                                "ERROR: I found a type mismatch in the Value Stack at file offset {:#x}. Expected {:?}, but found {:?}.\n", 
-                                file_offset, expected, actual
-                            )
-                        }
-                        Error::ValueStackEmpty => {
-                            format!(
-                                "ERROR: I tried to pop a value from the Value Stack at file offset {:#x}, but it was empty.\n",
-                                file_offset
-                            )
-                        }
-                        Error::UnreachableOp => {
-                            format!(
-                                "WebAssembly `unreachable` instruction at file offset {:#x}.\n",
-                                file_offset
-                            )
-                        }
-                    };
+                    let mut message = e.to_string_at(file_offset);
                     self.call_stack
                         .dump_trace(
                             module,
@@ -381,7 +364,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         expected_signature: Option<u32>,
         fn_index: usize,
         module: &WasmModule<'a>,
-    ) {
+    ) -> Result<(), Error> {
         let n_import_fns = module.import.imports.len();
 
         let (signature_index, opt_import) = if fn_index < n_import_fns {
@@ -447,8 +430,9 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 &mut self.value_stack,
                 &module.code.bytes,
                 &mut self.program_counter,
-            );
+            )?;
         }
+        Ok(())
     }
 
     pub(crate) fn execute_next_instruction(
@@ -554,7 +538,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             }
             CALL => {
                 let fn_index = self.fetch_immediate_u32(module) as usize;
-                self.do_call(None, fn_index, module);
+                self.do_call(None, fn_index, module)?;
             }
             CALLINDIRECT => {
                 let expected_signature = self.fetch_immediate_u32(module);
@@ -576,7 +560,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                     )
                 });
 
-                self.do_call(Some(expected_signature), fn_index as usize, module);
+                self.do_call(Some(expected_signature), fn_index as usize, module)?;
             }
             DROP => {
                 self.value_stack.pop();
