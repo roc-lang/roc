@@ -68,13 +68,23 @@ pub(crate) enum Error {
 
 impl Error {
     fn value_stack_type(expected: ValueType, is_float: bool, is_64: bool) -> Self {
-        let ty = match (is_float, is_64) {
-            (false, false) => ValueType::I32,
-            (false, true) => ValueType::I64,
-            (true, false) => ValueType::F32,
-            (true, true) => ValueType::F64,
-        };
+        let ty = type_from_flags_f_64(is_float, is_64);
         Error::ValueStackType(expected, ty)
+    }
+}
+
+impl From<(ValueType, ValueType)> for Error {
+    fn from((expected, actual): (ValueType, ValueType)) -> Self {
+        Error::ValueStackType(expected, actual)
+    }
+}
+
+pub(crate) fn type_from_flags_f_64(is_float: bool, is_64: bool) -> ValueType {
+    match (is_float, is_64) {
+        (false, false) => ValueType::I32,
+        (false, true) => ValueType::I64,
+        (true, false) => ValueType::F32,
+        (true, true) => ValueType::F64,
     }
 }
 

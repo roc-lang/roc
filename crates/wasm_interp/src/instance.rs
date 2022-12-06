@@ -712,55 +712,55 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             }
             I32STORE => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i32();
+                let unwrapped = value.expect_i32().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..4];
                 target.copy_from_slice(&unwrapped.to_le_bytes());
             }
             I64STORE => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i64();
+                let unwrapped = value.expect_i64().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..8];
                 target.copy_from_slice(&unwrapped.to_le_bytes());
             }
             F32STORE => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_f32();
+                let unwrapped = value.expect_f32().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..4];
                 target.copy_from_slice(&unwrapped.to_le_bytes());
             }
             F64STORE => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_f64();
+                let unwrapped = value.expect_f64().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..8];
                 target.copy_from_slice(&unwrapped.to_le_bytes());
             }
             I32STORE8 => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i32();
+                let unwrapped = value.expect_i32().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..1];
                 target.copy_from_slice(&unwrapped.to_le_bytes()[..1]);
             }
             I32STORE16 => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i32();
+                let unwrapped = value.expect_i32().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..2];
                 target.copy_from_slice(&unwrapped.to_le_bytes()[..2]);
             }
             I64STORE8 => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i64();
+                let unwrapped = value.expect_i64().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..1];
                 target.copy_from_slice(&unwrapped.to_le_bytes()[..1]);
             }
             I64STORE16 => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i64();
+                let unwrapped = value.expect_i64().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..2];
                 target.copy_from_slice(&unwrapped.to_le_bytes()[..2]);
             }
             I64STORE32 => {
                 let (addr, value) = self.get_store_addr_value(module)?;
-                let unwrapped = value.unwrap_i64();
+                let unwrapped = value.expect_i64().map_err(Error::from)?;
                 let target = &mut self.memory[addr..][..4];
                 target.copy_from_slice(&unwrapped.to_le_bytes()[..4]);
             }

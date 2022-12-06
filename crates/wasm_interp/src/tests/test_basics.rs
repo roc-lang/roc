@@ -472,7 +472,7 @@ impl ImportDispatcher for TestDispatcher {
         assert_eq!(module_name, "env");
         assert_eq!(function_name, "increment_state");
         assert_eq!(arguments.len(), 1);
-        let val = arguments[0].unwrap_i32();
+        let val = arguments[0].expect_i32().unwrap();
         self.internal_state += val;
         dbg!(val, self.internal_state);
         Some(Value::I32(self.internal_state))
