@@ -61,8 +61,8 @@ impl<'a> WasiDispatcher<'a> {
             }
             "environ_get" => todo!("WASI {}({:?})", function_name, arguments),
             "environ_sizes_get" => todo!("WASI {}({:?})", function_name, arguments),
-            "clock_res_get" => success_code,
-            "clock_time_get" => success_code,
+            "clock_res_get" => success_code, // this dummy implementation seems to be good enough
+            "clock_time_get" => success_code, // this dummy implementation seems to be good enough
             "fd_advise" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_allocate" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_close" => todo!("WASI {}({:?})", function_name, arguments),
