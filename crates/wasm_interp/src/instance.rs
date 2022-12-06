@@ -251,7 +251,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                         }
                     };
                     self.call_stack
-                        .dump(
+                        .dump_trace(
                             module,
                             &self.value_stack,
                             self.program_counter,

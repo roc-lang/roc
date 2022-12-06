@@ -57,6 +57,8 @@ impl<'a> ImportDispatcher for DefaultImportDispatcher<'a> {
     }
 }
 
+/// Errors that can happen while interpreting the program
+/// All of these cause a WebAssembly stack trace to be dumped
 #[derive(Debug, PartialEq)]
 pub(crate) enum Error {
     ValueStackType(ValueType, ValueType),
@@ -81,12 +83,16 @@ pub(crate) fn pc_to_fn_index(program_counter: usize, module: &WasmModule<'_>) ->
     if module.code.function_offsets.is_empty() {
         0
     } else {
-        let next_code_section_index = module
+        // Find the first function that starts *after* the given program counter
+        let next_internal_fn_index = module
             .code
             .function_offsets
             .iter()
             .position(|o| *o as usize > program_counter)
             .unwrap_or(module.code.function_offsets.len());
-        module.import.imports.len() + next_code_section_index - 1
+        // Go back 1
+        let internal_fn_index = next_internal_fn_index - 1;
+        // Adjust for imports, whose indices come before the code section
+        module.import.imports.len() + internal_fn_index
     }
 }

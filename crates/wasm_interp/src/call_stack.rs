@@ -166,7 +166,7 @@ impl<'a> CallStack<'a> {
         self.is_64.is_empty()
     }
 
-    /// Dump a debug view of the call stack
+    /// Dump a stack trace of the WebAssembly program
     ///
     /// --------------
     /// function 123
@@ -175,15 +175,15 @@ impl<'a> CallStack<'a> {
     ///   locals   2: I32(412), 3: F64(3.14)
     ///   stack    [I64(111), F64(3.14)]
     /// --------------
-    pub fn dump(
+    pub fn dump_trace(
         &self,
         module: &WasmModule<'a>,
         value_stack: &ValueStack<'a>,
         pc: usize,
-        writer: &mut String,
+        buffer: &mut String,
     ) -> fmt::Result {
         let divider = "-------------------";
-        writeln!(writer, "{}", divider)?;
+        writeln!(buffer, "{}", divider)?;
 
         let mut value_stack_iter = value_stack.iter();
 
@@ -211,10 +211,10 @@ impl<'a> CallStack<'a> {
 
             let fn_index = pc_to_fn_index(op_offset, module);
             let address = op_offset + module.code.section_offset as usize;
-            writeln!(writer, "function {}", fn_index)?;
-            writeln!(writer, "  address  {:06x}", address)?; // format matches wasm-objdump, for easy search
+            writeln!(buffer, "function {}", fn_index)?;
+            writeln!(buffer, "  address  {:06x}", address)?; // format matches wasm-objdump, for easy search
 
-            write!(writer, "  args     ")?;
+            write!(buffer, "  args     ")?;
             let arg_count = {
                 let n_import_fns = module.import.imports.len();
                 let signature_index = if fn_index < n_import_fns {
@@ -239,14 +239,14 @@ impl<'a> CallStack<'a> {
             for index in 0..args_and_locals_count {
                 let value = self.get_local_help(frame, index as u32);
                 if index != 0 {
-                    write!(writer, ", ")?;
+                    write!(buffer, ", ")?;
                 }
                 if index == arg_count {
-                    write!(writer, "\n  locals   ")?;
+                    write!(buffer, "\n  locals   ")?;
                 }
-                write!(writer, "{}: {:?}", index, value)?;
+                write!(buffer, "{}: {:?}", index, value)?;
             }
-            write!(writer, "\n  stack    [")?;
+            write!(buffer, "\n  stack    [")?;
 
             let frame_value_count = {
                 let value_stack_base = self.value_stack_bases[frame];
@@ -259,15 +259,15 @@ impl<'a> CallStack<'a> {
             };
             for i in 0..frame_value_count {
                 if i != 0 {
-                    write!(writer, ", ")?;
+                    write!(buffer, ", ")?;
                 }
                 if let Some(value) = value_stack_iter.next() {
-                    write!(writer, "{:?}", value)?;
+                    write!(buffer, "{:?}", value)?;
                 }
             }
 
-            writeln!(writer, "]")?;
-            writeln!(writer, "{}", divider)?;
+            writeln!(buffer, "]")?;
+            writeln!(buffer, "{}", divider)?;
         }
 
         Ok(())
