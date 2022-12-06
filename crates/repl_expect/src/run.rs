@@ -708,11 +708,11 @@ pub fn expect_mono_module_to_dylib<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let opt_entry_point = match entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
-            Some(roc_mono::ir::EntryPoint { symbol, layout })
-        }
-        EntryPoint::Test => None,
+    let entry_points = match entry_point {
+        EntryPoint::Executable {
+            exposed_to_host, ..
+        } => exposed_to_host,
+        EntryPoint::Test => &[],
     };
 
     let capacity = toplevel_expects.pure.len() + toplevel_expects.fx.len();
@@ -726,7 +726,7 @@ pub fn expect_mono_module_to_dylib<'a>(
         opt_level,
         &expect_symbols,
         procedures,
-        opt_entry_point,
+        entry_points,
     );
 
     let expects_fx = bumpalo::collections::Vec::from_iter_in(

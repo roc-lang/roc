@@ -238,10 +238,10 @@ fn create_llvm_module<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let entry_point = match entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
-            roc_mono::ir::EntryPoint { symbol, layout }
-        }
+    let entry_points = match entry_point {
+        EntryPoint::Executable {
+            exposed_to_host, ..
+        } => exposed_to_host,
         EntryPoint::Test => {
             unreachable!()
         }
@@ -254,13 +254,13 @@ fn create_llvm_module<'a>(
             &env,
             config.opt_level,
             procedures,
-            entry_point,
+            entry_points,
         ),
         LlvmBackendMode::GenTest => roc_gen_llvm::llvm::build::build_procedures_return_main(
             &env,
             config.opt_level,
             procedures,
-            entry_point,
+            entry_points,
         ),
     };
 

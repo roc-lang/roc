@@ -42,9 +42,8 @@ use roc_packaging::cache::{self, RocCacheDir};
 #[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::PackageMetadata;
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
-use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
+use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To};
 use roc_parse::header::{HeaderType, ModuleNameEnum, PackageName};
-use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
@@ -650,7 +649,7 @@ struct ModuleHeader<'a> {
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parse_state: roc_parse::state::State<'a>,
-    header_for: HeaderType<'a>,
+    header_type: HeaderType<'a>,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     module_timing: ModuleTiming,
 }
@@ -737,8 +736,7 @@ pub struct ExpectMetadata<'a> {
 #[derive(Debug)]
 pub enum EntryPoint<'a> {
     Executable {
-        symbol: Symbol,
-        layout: ProcLayout<'a>,
+        exposed_to_host: &'a [(Symbol, ProcLayout<'a>)],
         platform_path: PathBuf,
     },
     Test,
@@ -884,9 +882,9 @@ enum PlatformPath<'a> {
 }
 
 #[derive(Debug)]
-struct PlatformData {
+struct PlatformData<'a> {
     module_id: ModuleId,
-    provides: Symbol,
+    provides: &'a [Loc<ExposedName<'a>>],
     is_prebuilt: bool,
 }
 
@@ -919,7 +917,7 @@ struct State<'a> {
     pub root_id: ModuleId,
     pub root_subs: Option<Subs>,
     pub cache_dir: PathBuf,
-    pub platform_data: Option<PlatformData>,
+    pub platform_data: Option<PlatformData<'a>>,
     pub exposed_types: ExposedByModule,
     pub output_path: Option<&'a str>,
     pub platform_path: PlatformPath<'a>,
@@ -1712,8 +1710,13 @@ fn state_thread_step<'a>(
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
 
-                    let monomorphized =
-                        finish_specialization(state, subs, layout_interner, exposed_to_host)?;
+                    let monomorphized = finish_specialization(
+                        arena,
+                        state,
+                        subs,
+                        layout_interner,
+                        exposed_to_host,
+                    )?;
 
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
@@ -2349,14 +2352,14 @@ fn update<'a>(
                     shorthands.insert(shorthand, shorthand_path);
                 }
 
-                match header.header_for {
+                match header.header_type {
                     App { to_platform } => {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::Valid(to_platform);
                     }
                     Platform {
-                        main_for_host,
                         config_shorthand,
+                        provides,
                         ..
                     } => {
                         debug_assert!(matches!(state.platform_data, None));
@@ -2383,7 +2386,7 @@ fn update<'a>(
 
                         state.platform_data = Some(PlatformData {
                             module_id: header.module_id,
-                            provides: main_for_host,
+                            provides,
                             is_prebuilt,
                         });
                     }
@@ -2507,7 +2510,7 @@ fn update<'a>(
                         todo!("TODO gracefully handle a malformed string literal after `app` keyword.");
                     }
                 },
-                ModuleNameEnum::Platform
+                ModuleNameEnum::Platform(_)
                 | ModuleNameEnum::Interface(_)
                 | ModuleNameEnum::Hosted(_) => {}
             }
@@ -3092,6 +3095,7 @@ fn log_layout_stats(module_id: ModuleId, layout_cache: &LayoutCache) {
 }
 
 fn finish_specialization<'a>(
+    arena: &'a Bump,
     state: State<'a>,
     subs: Subs,
     layout_interner: STLayoutInterner<'a>,
@@ -3119,7 +3123,7 @@ fn finish_specialization<'a>(
     ModuleId::DERIVED_SYNTH.register_debug_idents(&derived_synth_ident_ids);
     all_ident_ids.insert(ModuleId::DERIVED_SYNTH, derived_synth_ident_ids);
 
-    let interns = Interns {
+    let mut interns = Interns {
         module_ids,
         all_ident_ids,
     };
@@ -3153,6 +3157,7 @@ fn finish_specialization<'a>(
             ExecutionMode::Test => EntryPoint::Test,
             ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
                 use PlatformPath::*;
+
                 let platform_path = match platform_path {
                     Valid(To::ExistingPackage(shorthand)) => {
                         match (*state.arc_shorthands).lock().get(shorthand) {
@@ -3167,33 +3172,43 @@ fn finish_specialization<'a>(
                     }
                 };
 
-                let symbol = match platform_data {
+                let exposed_symbols_and_layouts = match platform_data {
                     None => {
-                        debug_assert_eq!(exposed_to_host.values.len(), 1);
-                        *exposed_to_host.values.iter().next().unwrap().0
+                        let src = &exposed_to_host.values;
+                        let mut buf = bumpalo::collections::Vec::with_capacity_in(src.len(), arena);
+
+                        for &symbol in src.keys() {
+                            let proc_layout = proc_layout_for(procedures.keys().copied(), symbol);
+
+                            buf.push((symbol, proc_layout));
+                        }
+
+                        buf.into_bump_slice()
                     }
-                    Some(PlatformData { provides, .. }) => provides,
+                    Some(PlatformData {
+                        module_id,
+                        provides,
+                        ..
+                    }) => {
+                        let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
+                        let mut buf =
+                            bumpalo::collections::Vec::with_capacity_in(provides.len(), arena);
+
+                        for loc_name in provides {
+                            let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
+                            let symbol = Symbol::new(module_id, ident_id);
+                            let proc_layout = proc_layout_for(procedures.keys().copied(), symbol);
+
+                            buf.push((symbol, proc_layout));
+                        }
+
+                        buf.into_bump_slice()
+                    }
                 };
 
-                match procedures.keys().find(|(s, _)| *s == symbol) {
-                    Some((_, layout)) => EntryPoint::Executable {
-                        layout: *layout,
-                        symbol,
-                        platform_path,
-                    },
-                    None => {
-                        // the entry point is not specialized. This can happen if the repl output
-                        // is a function value
-                        EntryPoint::Executable {
-                            layout: roc_mono::ir::ProcLayout {
-                                arguments: &[],
-                                result: Layout::struct_no_name_order(&[]),
-                                captures_niche: CapturesNiche::no_niche(),
-                            },
-                            symbol,
-                            platform_path,
-                        }
-                    }
+                EntryPoint::Executable {
+                    exposed_to_host: exposed_symbols_and_layouts,
+                    platform_path,
                 }
             }
             ExecutionMode::Check => unreachable!(),
@@ -3229,6 +3244,24 @@ fn finish_specialization<'a>(
         toplevel_expects,
         uses_prebuilt_platform,
     })
+}
+
+fn proc_layout_for<'a>(
+    mut proc_symbols: impl Iterator<Item = (Symbol, ProcLayout<'a>)>,
+    symbol: Symbol,
+) -> ProcLayout<'a> {
+    match proc_symbols.find(|(s, _)| *s == symbol) {
+        Some((_, layout)) => layout,
+        None => {
+            // the entry point is not specialized. This can happen if the repl output
+            // is a function value
+            roc_mono::ir::ProcLayout {
+                arguments: &[],
+                result: Layout::struct_no_name_order(&[]),
+                captures_niche: CapturesNiche::no_niche(),
+            }
+        }
+    }
 }
 
 fn finish(
@@ -3359,7 +3392,7 @@ fn load_platform_module<'a>(
                     parser_state,
                 )) => {
                     // make a `platform` module that ultimately exposes `main` to the host
-                    let platform_module_msg = fabricate_platform_module(
+                    let (_, _, platform_module_msg) = build_platform_header(
                         arena,
                         Some(shorthand),
                         Some(app_module_id),
@@ -3369,10 +3402,9 @@ fn load_platform_module<'a>(
                         ident_ids_by_module,
                         &header,
                         pkg_module_timing,
-                    )
-                    .1;
+                    );
 
-                    Ok(platform_module_msg)
+                    Ok(Msg::Header(platform_module_msg))
                 }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
                     fail.map_problem(SyntaxError::Header)
@@ -3935,17 +3967,21 @@ fn parse_header<'a>(
                 ..
             },
             parse_state,
-        )) => Ok(fabricate_platform_module(
-            arena,
-            None,
-            None,
-            filename,
-            parse_state,
-            module_ids.clone(),
-            ident_ids_by_module,
-            &header,
-            module_timing,
-        )),
+        )) => {
+            let (module_id, _, header) = build_platform_header(
+                arena,
+                None,
+                None,
+                filename.to_path_buf(),
+                parse_state,
+                module_ids.clone(),
+                ident_ids_by_module,
+                &header,
+                module_timing,
+            );
+
+            Ok((module_id, Msg::Header(header)))
+        }
 
         Err(fail) => Err(LoadingProblem::ParsingFailed(
             fail.map_problem(SyntaxError::Header)
@@ -4053,8 +4089,8 @@ fn build_header<'a>(
     } = info;
 
     let declared_name: ModuleName = match &loc_name.value {
-        Platform => unreachable!(),
         App(_) => ModuleName::APP.into(),
+        Platform(package_name) => package_name.as_str().into(),
         Interface(module_name) | Hosted(module_name) => {
             // TODO check to see if module_name is consistent with filename.
             // If it isn't, report a problem!
@@ -4127,6 +4163,7 @@ fn build_header<'a>(
             };
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
+
             imported_modules.insert(module_id, region);
 
             deps_by_name.insert(pq_module_name, module_id);
@@ -4151,7 +4188,96 @@ fn build_header<'a>(
             }
         }
 
-        let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
+        let mut ident_ids = if let HeaderType::Platform {
+            provides,
+            requires,
+            requires_types,
+            config_shorthand,
+            platform_main_type,
+            opt_app_module_id,
+        } = header_type
+        {
+            // If we don't have an app module id (e.g. because we're doing
+            // `roc check myplatform.roc` or because we're generating glue code),
+            // insert the `requires` symbols into the platform module's IdentIds.
+            //
+            // Otherwise, get them from the app module's IdentIds, because it
+            // should already have a symbol for each `requires` entry, and we
+            // want to make sure we're referencing the same symbols!
+            let module_id = opt_app_module_id.unwrap_or(home);
+            let ident_ids = ident_ids_by_module.get_or_insert(module_id);
+            let num_provides = provides.len();
+            let mut provided: Vec<Symbol> = Vec::with_capacity(num_provides);
+            let mut symbols_from_requires = Vec::with_capacity(requires.len());
+
+            // Add standard imports, if there is an app module.
+            // (There might not be, e.g. when running `roc check myplatform.roc` or
+            // when generating bindings.)
+            if let Some(app_module_id) = opt_app_module_id {
+                imported_modules.insert(app_module_id, Region::zero());
+                deps_by_name.insert(
+                    PQModuleName::Unqualified(ModuleName::APP.into()),
+                    app_module_id,
+                );
+            }
+
+            // If we don't have an app module id (e.g. because we're doing
+            // `roc check myplatform.roc` or because we're generating glue code),
+            // insert the `requires` symbols into the platform module's IdentIds.
+            //
+            // Otherwise, get them from the app module's IdentIds, because it
+            // should already have a symbol for each `requires` entry, and we
+            // want to make sure we're referencing the same symbols!
+            for entry in requires.iter() {
+                let entry = entry.value;
+                let ident: Ident = entry.ident.value.into();
+                let ident_id = ident_ids.get_or_insert(entry.ident.value);
+                let symbol = Symbol::new(module_id, ident_id);
+
+                // Since this value is exposed, add it to our module's default scope.
+                debug_assert!(!scope.contains_key(&ident.clone()));
+
+                scope.insert(ident, (symbol, entry.ident.region));
+                symbols_from_requires.push((Loc::at(entry.ident.region, symbol), entry.ann));
+            }
+
+            for entry in requires_types {
+                let string: &str = entry.value.into();
+                let ident: Ident = string.into();
+                let ident_id = ident_ids.get_or_insert(string);
+                let symbol = Symbol::new(module_id, ident_id);
+
+                // Since this value is exposed, add it to our module's default scope.
+                debug_assert!(!scope.contains_key(&ident));
+                scope.insert(ident, (symbol, entry.region));
+            }
+
+            // Generate IdentIds entries for all values this module exposes.
+            // This way, when we encounter them in Defs later, they already
+            // have an IdentIds entry.
+            //
+            // We must *not* add them to scope yet, or else the Defs will
+            // incorrectly think they're shadowing them!
+            for loc_provides in provides.iter() {
+                // Use get_or_insert here because the ident_ids may already
+                // created an IdentId for this, when it was imported exposed
+                // in a dependent module.
+                //
+                // For example, if module A has [B.{ foo }], then
+                // when we get here for B, `foo` will already have
+                // an IdentId. We must reuse that!
+                let ident_id = ident_ids.get_or_insert(loc_provides.value.as_str());
+                let symbol = Symbol::new(home, ident_id);
+
+                provided.push(symbol);
+            }
+
+            ident_ids.clone()
+        } else {
+            let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
+
+            ident_ids.clone()
+        };
 
         // Generate IdentIds entries for all values this module exposes.
         // This way, when we encounter them in Defs later, they already
@@ -4174,10 +4300,10 @@ fn build_header<'a>(
         }
 
         if cfg!(debug_assertions) {
-            home.register_debug_idents(ident_ids);
+            home.register_debug_idents(&ident_ids);
         }
 
-        ident_ids.clone()
+        ident_ids
     };
 
     let package_entries = packages
@@ -4211,7 +4337,7 @@ fn build_header<'a>(
     // make sure when we run the bulitin modules in /compiler/builtins/roc that we
     // mark these modules as Builtin. Otherwise the builtin functions are not instantiated
     // and we just have a bunch of definitions with runtime errors in their bodies
-    let extra = {
+    let header_type = {
         match header_type {
             HeaderType::Interface if home.is_builtin() => HeaderType::Builtin {
                 generates_with: &[],
@@ -4237,7 +4363,7 @@ fn build_header<'a>(
             parse_state,
             exposed_imports: scope,
             symbols_from_requires: Vec::new(),
-            header_for: extra,
+            header_type,
             module_timing,
         },
     )
@@ -4756,7 +4882,7 @@ fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [L
     .into_bump_slice()
 }
 
-fn fabricate_platform_module<'a>(
+fn build_platform_header<'a>(
     arena: &'a Bump,
     opt_shorthand: Option<&'a str>,
     opt_app_module_id: Option<ModuleId>,
@@ -4766,7 +4892,7 @@ fn fabricate_platform_module<'a>(
     ident_ids_by_module: SharedIdentIdsByModule,
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
-) -> (ModuleId, Msg<'a>) {
+) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
     // If we have an app module, then it's the root module;
     // otherwise, we must be the root.
     let is_root_module = opt_app_module_id.is_none();
@@ -4779,237 +4905,37 @@ fn fabricate_platform_module<'a>(
     let requires_types = unspace(arena, header.requires.item.rigids.items);
     let imports = unspace(arena, header.imports.item.items);
 
-    {
-        let declared_name: ModuleName = "".into();
-        let mut symbols_from_requires = Vec::with_capacity(requires.len());
+    let header_type = HeaderType::Platform {
+        // A config_shorthand of "" should be fine
+        config_shorthand: opt_shorthand.unwrap_or_default(),
+        platform_main_type: requires[0].value,
+        opt_app_module_id,
+        provides,
+        requires,
+        requires_types,
+    };
 
-        let mut imported: Vec<(QualifiedModuleName, Vec<Loc<Ident>>, Region)> =
-            Vec::with_capacity(imports.len());
-        let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
+    let info = HeaderInfo {
+        loc_name: Loc {
+            region: header.name.region,
+            value: ModuleNameEnum::Platform(header.name.value),
+        },
+        filename,
+        is_root_module,
+        opt_shorthand,
+        packages: &[],
+        exposes: &[], // These are exposed values. TODO move this into header_type!
+        imports: unspace(arena, header.imports.item.items),
+        header_type,
+    };
 
-        let num_exposes = provides.len();
-        let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
-            HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
-
-        // Add standard imports, if there is an app module.
-        // (There might not be, e.g. when running `roc check myplatform.roc` or
-        // when generating bindings.)
-        if let Some(app_module_id) = opt_app_module_id {
-            imported_modules.insert(app_module_id, Region::zero());
-            deps_by_name.insert(
-                PQModuleName::Unqualified(ModuleName::APP.into()),
-                app_module_id,
-            );
-        }
-
-        let mut scope_size = 0;
-
-        for loc_entry in imports {
-            let (qualified_module_name, exposed) = exposed_from_import(&loc_entry.value);
-
-            scope_size += exposed.len();
-
-            imported.push((qualified_module_name, exposed, loc_entry.region));
-        }
-
-        let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
-
-        // Make sure the module_ids has ModuleIds for all our deps,
-        // then record those ModuleIds in can_module_ids for later.
-        let mut scope: MutMap<Ident, (Symbol, Region)> =
-            HashMap::with_capacity_and_hasher(scope_size, default_hasher());
-        let home: ModuleId;
-
-        let mut ident_ids = {
-            // Lock just long enough to perform the minimal operations necessary.
-            let mut module_ids = (*module_ids).lock();
-            let mut ident_ids_by_module = (*ident_ids_by_module).lock();
-
-            let name = match opt_shorthand {
-                Some(shorthand) => PQModuleName::Qualified(shorthand, declared_name),
-                None => PQModuleName::Unqualified(declared_name),
-            };
-            home = module_ids.get_or_insert(&name);
-
-            // Ensure this module has an entry in the exposed_ident_ids map.
-            ident_ids_by_module.get_or_insert(home);
-
-            // For each of our imports, add an entry to deps_by_name
-            //
-            // e.g. for `imports [pf.Foo.{ bar }]`, add `Foo` to deps_by_name
-            //
-            // Also build a list of imported_values_to_expose (like `bar` above.)
-            for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
-                let cloned_module_name = qualified_module_name.module.clone();
-                let pq_module_name = if qualified_module_name.is_builtin() {
-                    // If this is a builtin, it must be unqualified, and we should *never* prefix it
-                    // with the package shorthand! The user intended to import the module as-is here.
-                    debug_assert!(qualified_module_name.opt_package.is_none());
-                    PQModuleName::Unqualified(qualified_module_name.module)
-                } else {
-                    match qualified_module_name.opt_package {
-                        None => match opt_shorthand {
-                            Some(shorthand) => {
-                                PQModuleName::Qualified(shorthand, qualified_module_name.module)
-                            }
-                            None => PQModuleName::Unqualified(qualified_module_name.module),
-                        },
-                        Some(package) => PQModuleName::Qualified(package, cloned_module_name),
-                    }
-                };
-
-                let module_id = module_ids.get_or_insert(&pq_module_name);
-                imported_modules.insert(module_id, region);
-
-                deps_by_name.insert(pq_module_name, module_id);
-
-                // Add the new exposed idents to the dep module's IdentIds, so
-                // once that module later gets loaded, its lookups will resolve
-                // to the same symbols as the ones we're using here.
-                let ident_ids = ident_ids_by_module.get_or_insert(module_id);
-
-                for Loc {
-                    region,
-                    value: ident,
-                } in exposed_idents
-                {
-                    let ident_id = ident_ids.get_or_insert(ident.as_str());
-                    let symbol = Symbol::new(module_id, ident_id);
-
-                    // Since this value is exposed, add it to our module's default scope.
-                    debug_assert!(!scope.contains_key(&ident.clone()));
-
-                    scope.insert(ident, (symbol, region));
-                }
-            }
-
-            {
-                // If we don't have an app module id (e.g. because we're doing
-                // `roc check myplatform.roc` or because we're generating glue code),
-                // insert the `requires` symbols into the platform module's IdentIds.
-                //
-                // Otherwise, get them from the app module's IdentIds, because it
-                // should already have a symbol for each `requires` entry, and we
-                // want to make sure we're referencing the same symbols!
-                let module_id = opt_app_module_id.unwrap_or(home);
-                let ident_ids = ident_ids_by_module.get_or_insert(module_id);
-
-                for entry in requires.iter() {
-                    let entry = entry.value;
-                    let ident: Ident = entry.ident.value.into();
-                    let ident_id = ident_ids.get_or_insert(entry.ident.value);
-                    let symbol = Symbol::new(module_id, ident_id);
-
-                    // Since this value is exposed, add it to our module's default scope.
-                    debug_assert!(!scope.contains_key(&ident.clone()));
-
-                    scope.insert(ident, (symbol, entry.ident.region));
-                    symbols_from_requires.push((Loc::at(entry.ident.region, symbol), entry.ann));
-                }
-
-                for entry in requires_types {
-                    let string: &str = entry.value.into();
-                    let ident: Ident = string.into();
-                    let ident_id = ident_ids.get_or_insert(string);
-                    let symbol = Symbol::new(module_id, ident_id);
-
-                    // Since this value is exposed, add it to our module's default scope.
-                    debug_assert!(!scope.contains_key(&ident));
-                    scope.insert(ident, (symbol, entry.region));
-                }
-            }
-
-            let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
-
-            // Generate IdentIds entries for all values this module exposes.
-            // This way, when we encounter them in Defs later, they already
-            // have an IdentIds entry.
-            //
-            // We must *not* add them to scope yet, or else the Defs will
-            // incorrectly think they're shadowing them!
-            for loc_exposed in provides.iter() {
-                // Use get_or_insert here because the ident_ids may already
-                // created an IdentId for this, when it was imported exposed
-                // in a dependent module.
-                //
-                // For example, if module A has [B.{ foo }], then
-                // when we get here for B, `foo` will already have
-                // an IdentId. We must reuse that!
-                let ident_id = ident_ids.get_or_insert(loc_exposed.value.as_str());
-                let symbol = Symbol::new(home, ident_id);
-
-                exposed.push(symbol);
-            }
-
-            if cfg!(debug_assertions) {
-                home.register_debug_idents(ident_ids);
-            }
-
-            ident_ids.clone()
-        };
-
-        let package_entries = MutMap::default(); // TODO support packages in platforms!
-
-        // Send the deps to the coordinator thread for processing,
-        // then continue on to parsing and canonicalizing defs.
-        //
-        // We always need to send these, even if deps is empty,
-        // because the coordinator thread needs to receive this message
-        // to decrement its "pending" count.
-        let module_name = ModuleNameEnum::Platform;
-
-        let main_for_host = {
-            let ident_id = ident_ids.get_or_insert(provides[0].value.as_str());
-
-            Symbol::new(home, ident_id)
-        };
-
-        let extra = HeaderType::Platform {
-            // A config_shorthand of "" should be fine
-            config_shorthand: opt_shorthand.unwrap_or_default(),
-            platform_main_type: requires[0].value,
-            main_for_host,
-            opt_app_module_id,
-            provides,
-            requires,
-            requires_types,
-        };
-
-        let mut package_qualified_imported_modules = MutSet::default();
-        for (pq_module_name, module_id) in &deps_by_name {
-            match pq_module_name {
-                PackageQualified::Unqualified(_) => {
-                    package_qualified_imported_modules
-                        .insert(PackageQualified::Unqualified(*module_id));
-                }
-                PackageQualified::Qualified(shorthand, _) => {
-                    package_qualified_imported_modules
-                        .insert(PackageQualified::Qualified(shorthand, *module_id));
-                }
-            }
-        }
-
-        (
-            home,
-            Msg::Header(ModuleHeader {
-                module_id: home,
-                module_path: filename,
-                is_root_module,
-                exposed_ident_ids: ident_ids,
-                module_name,
-                packages: package_entries,
-                imported_modules,
-                package_qualified_imported_modules,
-                deps_by_name,
-                exposes: exposed,
-                parse_state: parse_state,
-                exposed_imports: scope,
-                module_timing: module_timing,
-                symbols_from_requires,
-                header_for: extra,
-            }),
-        )
-    }
+    build_header(
+        info,
+        parse_state,
+        module_ids,
+        ident_ids_by_module,
+        module_timing,
+    )
 }
 
 #[allow(clippy::unnecessary_wraps)]
@@ -5080,8 +5006,7 @@ fn canonicalize_and_constrain<'a>(
     // Generate documentation information
     // TODO: store timing information?
     let module_docs = match module_name {
-        ModuleNameEnum::Platform => None,
-        ModuleNameEnum::App(_) => None,
+        ModuleNameEnum::Platform(_) | ModuleNameEnum::App(_) => None,
         ModuleNameEnum::Interface(name) | ModuleNameEnum::Hosted(name) => {
             let mut scope = module_output.scope.clone();
             scope.add_docs_imports();
@@ -5222,7 +5147,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         exposed_ident_ids,
         exposed_imports,
         module_path,
-        header_for,
+        header_type: header_for,
         symbols_from_requires,
         ..
     } = header;

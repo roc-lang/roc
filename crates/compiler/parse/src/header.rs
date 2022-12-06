@@ -34,8 +34,6 @@ pub enum HeaderType<'a> {
         /// (currently unused)
         #[allow(dead_code)]
         platform_main_type: TypedIdent<'a>,
-        /// provided symbol to host (commonly `mainForHost`)
-        main_for_host: Symbol,
     },
     Interface,
 }
@@ -107,7 +105,7 @@ pub enum ModuleNameEnum<'a> {
     App(StrLiteral<'a>),
     Interface(ModuleName<'a>),
     Hosted(ModuleName<'a>),
-    Platform,
+    Platform(PackageName<'a>),
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]

@@ -75,6 +75,7 @@ impl ModuleName {
     // NOTE: After adding one of these, go to `impl ModuleId` and
     // add a corresponding ModuleId to there!
     pub const APP: &'static str = "#UserApp"; // app modules have this hardcoded name
+    pub const PLATFORM: &'static str = "#Platform"; // platform modules have this hardcoded name
     pub const BOOL: &'static str = "Bool";
     pub const STR: &'static str = "Str";
     pub const NUM: &'static str = "Num";

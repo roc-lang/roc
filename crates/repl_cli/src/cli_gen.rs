@@ -233,10 +233,10 @@ fn mono_module_to_dylib<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let entry_point = match entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
-            roc_mono::ir::EntryPoint { symbol, layout }
-        }
+    let entry_points = match entry_point {
+        EntryPoint::Executable {
+            exposed_to_host, ..
+        } => exposed_to_host,
         EntryPoint::Test => {
             unreachable!()
         }
@@ -246,7 +246,7 @@ fn mono_module_to_dylib<'a>(
         &env,
         opt_level,
         procedures,
-        entry_point,
+        entry_points,
     );
 
     env.dibuilder.finalize();
