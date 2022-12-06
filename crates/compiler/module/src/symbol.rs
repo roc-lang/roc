@@ -1522,10 +1522,11 @@ define_builtins! {
         11 HASH_HASH_I32: "hashI32"
         12 HASH_HASH_I64: "hashI64"
         13 HASH_HASH_I128: "hashI128"
-        14 HASH_COMPLETE: "complete"
-        15 HASH_HASH_STR_BYTES: "hashStrBytes"
-        16 HASH_HASH_LIST: "hashList"
-        17 HASH_HASH_UNORDERED: "hashUnordered"
+        14 HASH_HASH_NAT: "hashNat"
+        15 HASH_COMPLETE: "complete"
+        16 HASH_HASH_STR_BYTES: "hashStrBytes"
+        17 HASH_HASH_LIST: "hashList"
+        18 HASH_HASH_UNORDERED: "hashUnordered"
     }
     14 JSON: "Json" => {
         0 JSON_JSON: "Json"

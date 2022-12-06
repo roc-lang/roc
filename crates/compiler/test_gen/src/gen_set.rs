@@ -1,4 +1,7 @@
-#![cfg(feature = "gen-llvm")]
+#![cfg(all(
+    any(feature = "gen-llvm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
 
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
@@ -282,5 +285,28 @@ fn from_list_result() {
         ),
         1,
         i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn resolve_set_eq_issue_4671() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                s1 : Set U8
+                s1 = Set.fromList [1, 2, 3]
+
+                s2 : Set U8
+                s2 = Set.fromList [3, 2, 1]
+
+                s1 == s2
+            "#
+        ),
+        true,
+        bool
     );
 }

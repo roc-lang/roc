@@ -5674,6 +5674,18 @@ mod test_fmt {
     }
 
     #[test]
+    fn format_char_pattern() {
+        expr_formats_same(indoc!(
+            r#"
+            when x is
+                ' ' -> x
+                '\n' -> x
+                '\t' -> x
+            "#
+        ));
+    }
+
+    #[test]
     fn format_nested_pipeline() {
         expr_formats_same(indoc!(
             r#"

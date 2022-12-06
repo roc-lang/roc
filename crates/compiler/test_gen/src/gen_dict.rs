@@ -1,4 +1,7 @@
-#![cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#![cfg(all(
+    any(feature = "gen-llvm", feature = "gen-wasm"),
+    not(debug_assertions) // https://github.com/roc-lang/roc/issues/3898
+))]
 
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
