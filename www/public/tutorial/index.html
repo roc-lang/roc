@@ -46,7 +46,7 @@
             <li><a href="#crashing">Crashing</a></li>
             <li><a href="#tests-and-expectations">Tests and Expectations</a></li>
             <li><a href="#modules">Modules</a></li>
-            <li><a href="#modules">Platforms and Packages</a></li>
+            <li><a href="#platforms-and-packages">Platforms and Packages</a></li>
             <li><a href="#tasks">Tasks</a></li>
             <li><a href="#abilities">Abilities</a></li>
             <li><a href="#appendix-advanced-concepts">Advanced Concepts</a></li>
@@ -1241,6 +1241,7 @@ Roc compiler. That's why they're called "builtins!"</p>
 <li>They are always imported. You never need to add them to <code>imports</code>.</li>
 <li>All their types are imported unqualified automatically. So you never need to write <code>Num.Nat</code>, because it's as if the <code>Num</code> module was imported using <code>imports [Num.{ Nat }]</code> (and the same for all the other types in the <code>Num</code> module).</li>
 </ul>
+<span id="platforms-and-packages"></span>
 <h2 id="the-app-module-header"><a href="#the-app-module-header">The app module header</a></h2>
 <p>Let's take a closer look at the part of <code>main.roc</code> above the <code>main</code> def:</p>
 <samp><span class="hljs-selector-tag">app</span> "<span class="hljs-selector-tag">hello</span>"
