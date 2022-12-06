@@ -4308,10 +4308,7 @@ fn build_header<'a>(
 
     let package_entries = packages
         .iter()
-        .map(|pkg| {
-            let pkg = pkg.value;
-            (pkg.shorthand, pkg.package_name.value)
-        })
+        .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_name.value))
         .collect::<MutMap<_, _>>();
 
     // Send the deps to the coordinator thread for processing,
