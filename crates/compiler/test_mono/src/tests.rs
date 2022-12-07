@@ -2139,3 +2139,20 @@ fn list_one_vs_one_spread_issue_4685() {
         "#
     )
 }
+
+#[mono_test(mode = "test")]
+fn issue_4705() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports []
+
+        go : {} -> Bool
+        go = \{} -> Bool.true
+
+        expect
+            input = {}
+            x = go input
+            x
+        "###
+    )
+}
