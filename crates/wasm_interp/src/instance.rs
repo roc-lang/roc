@@ -10,7 +10,7 @@ use roc_wasm_module::{Value, ValueType};
 
 use crate::call_stack::CallStack;
 use crate::value_stack::ValueStack;
-use crate::{pc_to_fn_index, Error, ImportDispatcher};
+use crate::{Error, ImportDispatcher};
 
 pub enum Action {
     Continue,
@@ -451,7 +451,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         }
 
         let mut action = Action::Continue;
-        let mut implicit_return = false;
+        // let mut implicit_return = false;
 
         match op_code {
             UNREACHABLE => {
@@ -503,7 +503,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 if self.block_loop_addrs.len() == self.outermost_block as usize {
                     // implicit RETURN at end of function
                     action = self.do_return();
-                    implicit_return = true;
+                    // implicit_return = true;
                 } else {
                     self.block_loop_addrs.pop().unwrap();
                 }
@@ -1504,17 +1504,17 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             }
         }
 
-        if let Some(debug_string) = &self.debug_string {
-            let base = self.call_stack.value_stack_base();
-            let slice = self.value_stack.get_slice(base as usize);
-            eprintln!("{:06x} {:17} {:?}", file_offset, debug_string, slice);
-            if op_code == RETURN || (op_code == END && implicit_return) {
-                let fn_index = pc_to_fn_index(self.program_counter, module);
-                eprintln!("returning to function {}\n", fn_index);
-            } else if op_code == CALL || op_code == CALLINDIRECT {
-                eprintln!();
-            }
-        }
+        // if let Some(debug_string) = &self.debug_string {
+        //     let base = self.call_stack.value_stack_base();
+        //     let slice = self.value_stack.get_slice(base as usize);
+        //     eprintln!("{:06x} {:17} {:?}", file_offset, debug_string, slice);
+        //     if op_code == RETURN || (op_code == END && implicit_return) {
+        //         let fn_index = pc_to_fn_index(self.program_counter, module);
+        //         eprintln!("returning to function {}\n", fn_index);
+        //     } else if op_code == CALL || op_code == CALLINDIRECT {
+        //         eprintln!();
+        //     }
+        // }
 
         Ok(action)
     }
