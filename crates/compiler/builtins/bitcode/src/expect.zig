@@ -1,8 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const SIGUSR1: c_int = if (builtin.os.tag.isDarwin()) 30 else 10;
-const SIGUSR2: c_int = if (builtin.os.tag.isDarwin()) 31 else 12;
+const Atomic = std.atomic.Atomic;
 
 const O_RDWR: c_int = 2;
 const O_CREAT: c_int = 64;
@@ -45,13 +44,14 @@ pub fn expectFailedStartSharedFile() callconv(.C) [*]u8 {
 
         const ptr = @ptrCast([*]u8, shared_ptr);
 
+        SHARED_BUFFER = ptr[0..length];
+
         return ptr;
     } else {
         unreachable;
     }
 }
 
-extern fn roc_send_signal(pid: c_int, sig: c_int) c_int;
 extern fn roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
 extern fn roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
 extern fn roc_getppid() c_int;
@@ -81,18 +81,35 @@ pub fn readSharedBufferEnv() callconv(.C) void {
     }
 }
 
+fn get_atomic_ptr() *Atomic(u32) {
+    const usize_ptr = @ptrCast([*]u32, @alignCast(@alignOf(usize), SHARED_BUFFER.ptr));
+    const atomic_ptr = @ptrCast(*Atomic(u32), &usize_ptr[5]);
+
+    return atomic_ptr;
+}
+
 pub fn expectFailedFinalize() callconv(.C) void {
     if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        const parent_pid = roc_getppid();
+        const atomic_ptr = get_atomic_ptr();
+        atomic_ptr.storeUnchecked(1);
 
-        _ = roc_send_signal(parent_pid, SIGUSR1);
+        // wait till the parent is done before proceeding
+        const Ordering = std.atomic.Ordering;
+        while (atomic_ptr.load(Ordering.Acquire) != 0) {
+            std.atomic.spinLoopHint();
+        }
     }
 }
 
 pub fn sendDbg() callconv(.C) void {
     if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        const parent_pid = roc_getppid();
+        const atomic_ptr = get_atomic_ptr();
+        atomic_ptr.storeUnchecked(2);
 
-        _ = roc_send_signal(parent_pid, SIGUSR2);
+        // wait till the parent is done before proceeding
+        const Ordering = std.atomic.Ordering;
+        while (atomic_ptr.load(Ordering.Acquire) != 0) {
+            std.atomic.spinLoopHint();
+        }
     }
 }
