@@ -184,14 +184,17 @@ fn verify_procedures<'a>(
         .map(|proc| proc.to_pretty(&interner, 200, false))
         .collect::<Vec<_>>();
 
-    procs_string.sort();
-
-    if let Some(main_fn_symbol) = opt_main_fn_symbol {
+    let opt_main_fn = opt_main_fn_symbol.map(|main_fn_symbol| {
         let index = procedures
             .keys()
             .position(|(s, _)| *s == main_fn_symbol)
             .unwrap();
-        let main_fn = procs_string.swap_remove(index);
+        procs_string.swap_remove(index)
+    });
+
+    procs_string.sort();
+
+    if let Some(main_fn) = opt_main_fn {
         procs_string.push(main_fn);
     }
 
