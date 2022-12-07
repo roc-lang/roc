@@ -76,9 +76,15 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-fn compiles_to_ir(test_name: &str, src: &str, no_check: bool) {
+fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
     use roc_packaging::cache::RocCacheDir;
     use std::path::PathBuf;
+
+    let exec_mode = match mode {
+        "exec" => ExecutionMode::Executable,
+        "test" => ExecutionMode::Test,
+        _ => panic!("Invalid test_mono exec mode {mode}"),
+    };
 
     let arena = &Bump::new();
 
@@ -87,7 +93,7 @@ fn compiles_to_ir(test_name: &str, src: &str, no_check: bool) {
 
     let module_src;
     let temp;
-    if src.starts_with("app") {
+    if src.starts_with("app") || src.starts_with("interface") {
         // this is already a module
         module_src = src;
     } else {
@@ -101,7 +107,7 @@ fn compiles_to_ir(test_name: &str, src: &str, no_check: bool) {
         threading: Threading::Single,
         render: roc_reporting::report::RenderTarget::Generic,
         palette: roc_reporting::report::DEFAULT_PALETTE,
-        exec_mode: ExecutionMode::Executable,
+        exec_mode,
     };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
@@ -143,9 +149,7 @@ fn compiles_to_ir(test_name: &str, src: &str, no_check: bool) {
 
     assert!(type_problems.is_empty());
 
-    debug_assert_eq!(exposed_to_host.values.len(), 1);
-
-    let main_fn_symbol = exposed_to_host.values.keys().copied().next().unwrap();
+    let main_fn_symbol = exposed_to_host.values.keys().copied().next();
 
     if !no_check {
         check_procedures(arena, &interns, &layout_interner, &procedures);
@@ -173,22 +177,23 @@ fn verify_procedures<'a>(
     test_name: &str,
     interner: STLayoutInterner<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    main_fn_symbol: Symbol,
+    opt_main_fn_symbol: Option<Symbol>,
 ) {
-    let index = procedures
-        .keys()
-        .position(|(s, _)| *s == main_fn_symbol)
-        .unwrap();
-
     let mut procs_string = procedures
         .values()
         .map(|proc| proc.to_pretty(&interner, 200, false))
         .collect::<Vec<_>>();
 
-    let main_fn = procs_string.swap_remove(index);
-
     procs_string.sort();
-    procs_string.push(main_fn);
+
+    if let Some(main_fn_symbol) = opt_main_fn_symbol {
+        let index = procedures
+            .keys()
+            .position(|(s, _)| *s == main_fn_symbol)
+            .unwrap();
+        let main_fn = procs_string.swap_remove(index);
+        procs_string.push(main_fn);
+    }
 
     let result = procs_string.join("\n");
 
