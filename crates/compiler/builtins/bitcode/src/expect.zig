@@ -44,8 +44,6 @@ pub fn expectFailedStartSharedFile() callconv(.C) [*]u8 {
 
         const ptr = @ptrCast([*]u8, shared_ptr);
 
-        SHARED_BUFFER = ptr[0..length];
-
         return ptr;
     } else {
         unreachable;
@@ -81,17 +79,11 @@ pub fn readSharedBufferEnv() callconv(.C) void {
     }
 }
 
-fn get_atomic_ptr() *Atomic(u32) {
-    const usize_ptr = @ptrCast([*]u32, @alignCast(@alignOf(usize), SHARED_BUFFER.ptr));
-    const atomic_ptr = @ptrCast(*Atomic(u32), &usize_ptr[5]);
-
-    return atomic_ptr;
-}
-
-pub fn expectFailedFinalize() callconv(.C) void {
+pub fn notifyParent(shared_buffer: [*]u8, tag: u32) callconv(.C) void {
     if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        const atomic_ptr = get_atomic_ptr();
-        atomic_ptr.storeUnchecked(1);
+        const usize_ptr = @ptrCast([*]u32, @alignCast(@alignOf(usize), shared_buffer));
+        const atomic_ptr = @ptrCast(*Atomic(u32), &usize_ptr[5]);
+        atomic_ptr.storeUnchecked(tag);
 
         // wait till the parent is done before proceeding
         const Ordering = std.atomic.Ordering;
@@ -101,15 +93,10 @@ pub fn expectFailedFinalize() callconv(.C) void {
     }
 }
 
-pub fn sendDbg() callconv(.C) void {
-    if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        const atomic_ptr = get_atomic_ptr();
-        atomic_ptr.storeUnchecked(2);
+pub fn notifyParentExpect(shared_buffer: [*]u8) callconv(.C) void {
+    notifyParent(shared_buffer, 1);
+}
 
-        // wait till the parent is done before proceeding
-        const Ordering = std.atomic.Ordering;
-        while (atomic_ptr.load(Ordering.Acquire) != 0) {
-            std.atomic.spinLoopHint();
-        }
-    }
+pub fn notifyParentDbg(shared_buffer: [*]u8) callconv(.C) void {
+    notifyParent(shared_buffer, 2);
 }
