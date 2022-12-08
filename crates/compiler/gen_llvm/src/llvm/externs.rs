@@ -169,7 +169,7 @@ fn unreachable_function(env: &Env, name: &str) {
     // already been defined by the builtins, which rely on it.
     let fn_val = match env.module.get_function(name) {
         Some(f) => f,
-        None => panic!("extern function {name} is not defined by the bulitins"),
+        None => panic!("extern function {name} is not defined by the builtins"),
     };
 
     // Add a basic block for the entry point
