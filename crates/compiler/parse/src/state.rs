@@ -98,7 +98,7 @@ impl<'a> State<'a> {
         self.offset += 1;
         self.line_start = self.pos();
 
-        // WARNING! COULD CAUSE BUGS IF WE FORGET TO CALL mark_current_ident LATER!
+        // WARNING! COULD CAUSE BUGS IF WE FORGET TO CALL mark_current_indent LATER!
         // We really need to be stricter about this.
         self.line_start_after_whitespace = self.line_start;
 
