@@ -41,3 +41,15 @@ pub fn parse_defs_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Defs<'a>, 
         Err(tuple) => Err(tuple.1),
     }
 }
+
+pub fn parse_header_with<'a>(
+    arena: &'a Bump,
+    input: &'a str,
+) -> Result<ast::Module<'a>, SyntaxError<'a>> {
+    let state = State::new(input.trim().as_bytes());
+
+    match crate::module::parse_header(arena, state.clone()) {
+        Ok((header, _)) => Ok(header),
+        Err(fail) => Err(SyntaxError::Header(fail.problem)),
+    }
+}
