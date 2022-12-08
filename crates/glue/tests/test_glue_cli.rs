@@ -164,7 +164,7 @@ mod glue_cli_run {
         args: I,
     ) -> Out {
         let platform_module_path = platform_dir.join("platform.roc");
-        let glue_file = platform_dir.join("src").join("test_glue.rs");
+        let glue_dir = platform_dir.join("src").join("test_glue");
         let fixture_templates_dir = platform_dir
             .parent()
             .unwrap()
@@ -179,18 +179,18 @@ mod glue_cli_run {
             .unwrap();
 
         // Delete the glue file to make sure we're actually regenerating it!
-        if glue_file.exists() {
-            fs::remove_file(&glue_file)
-                .expect("Unable to remove test_glue.rs in order to regenerate it in the test");
+        if glue_dir.exists() {
+            fs::remove_dir_all(&glue_dir)
+                .expect("Unable to remove test_glue dir in order to regenerate it in the test");
         }
 
-        // Generate a fresh test_glue.rs for this platform
+        // Generate a fresh test_glue for this platform
         let glue_out = run_glue(
             // converting these all to String avoids lifetime issues
             std::iter::once("glue".to_string()).chain(
                 args.into_iter().map(|arg| arg.to_string()).chain([
                     platform_module_path.to_str().unwrap().to_string(),
-                    glue_file.to_str().unwrap().to_string(),
+                    glue_dir.to_str().unwrap().to_string(),
                 ]),
             ),
         );
@@ -208,7 +208,7 @@ mod glue_cli_run {
     }
 
     fn run_app<'a, I: IntoIterator<Item = &'a str>>(app_file: &'a Path, args: I) -> Out {
-        // Generate test_glue.rs for this platform
+        // Generate test_glue for this platform
         let compile_out = run_roc(
             // converting these all to String avoids lifetime issues
             args.into_iter()
