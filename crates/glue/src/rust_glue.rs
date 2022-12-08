@@ -3,7 +3,7 @@ use indexmap::IndexMap;
 use roc_target::{Architecture, TargetInfo};
 use std::fmt::{Display, Write};
 
-static HEADER: &[u8] = include_bytes!("../templates/header.rs");
+pub static HEADER: &[u8] = include_bytes!("../templates/header.rs");
 const INDENT: &str = "    ";
 const DISCRIMINANT_DOC_COMMENT: &str =
     "/// Returns which variant this tag union holds. Note that this never includes a payload!";
