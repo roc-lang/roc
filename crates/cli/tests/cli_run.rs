@@ -310,6 +310,9 @@ mod cli_run {
                 actual = format!("{}passed in <ignored for test> ms.", before_first_digit);
             }
 
+            let self_path = file.display().to_string();
+            actual = actual.replace(&self_path, "<ignored for tests>");
+
             if !actual.ends_with(expected_ending) {
                 panic!(
                     "expected output to end with:\n{}\nbut instead got:\n{}\n stderr was:\n{}",
@@ -573,6 +576,9 @@ mod cli_run {
                 x : Num *
                 x = 42
 
+                [<ignored for tests> 15:9] 42
+                [<ignored for tests> 16:9] "Fjoer en ferdjer frieten oan dyn geve lea"
+                Program finished!
                 "#
             ),
             UseValgrind::Yes,

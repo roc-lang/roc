@@ -12,4 +12,6 @@ expect
 main =
     x = 42
     expect x != x
-    "Program finished!"
+    dbg x
+    dbg "Fjoer en ferdjer frieten oan dyn geve lea"
+    "Program finished!\n"
