@@ -61,9 +61,9 @@ pub fn emit(types: &[Types]) -> Vec<File> {
     let mut buf = std::str::from_utf8(HEADER).unwrap().to_string();
     let mut impls: Impls = IndexMap::default();
 
-    for (types, target_info) in types_and_targets {
+    for types in types {
         for id in types.sorted_ids() {
-            add_type(*target_info, id, types, &mut impls);
+            add_type(types.target(), id, types, &mut impls);
         }
     }
 

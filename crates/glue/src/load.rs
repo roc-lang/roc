@@ -98,7 +98,7 @@ pub fn load_types(
     full_file_path: PathBuf,
     threading: Threading,
     ignore_errors: IgnoreErrors,
-) -> Result<Vec<(Types, TargetInfo)>, io::Error> {
+) -> Result<Vec<Types>, io::Error> {
     let target_info = (&Triple::host()).into();
     let arena = &Bump::new();
     let LoadedModule {
@@ -170,7 +170,7 @@ pub fn load_types(
     let layout_interner = GlobalLayoutInterner::with_capacity(128, target_info);
 
     let architectures = Architecture::iter();
-    let mut types_and_targets = Vec::with_capacity(architectures.len());
+    let mut arch_types = Vec::with_capacity(architectures.len());
     for arch in architectures {
         let target_info = TargetInfo {
             architecture: arch,
@@ -183,8 +183,8 @@ pub fn load_types(
             env.vars_to_types(variables.clone())
         };
 
-        types_and_targets.push((types, target_info));
+        arch_types.push(types);
     }
 
-    Ok(types_and_targets)
+    Ok(arch_types)
 }

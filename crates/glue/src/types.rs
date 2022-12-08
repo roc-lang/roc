@@ -492,6 +492,10 @@ impl Types {
             } => unreachable!("Cyclic type definitions: {:?}", nodes_in_cycle),
         }
     }
+
+    pub fn target(&self) -> TargetInfo {
+        self.target
+    }
 }
 
 enum RocTypeOrPending<'a> {
