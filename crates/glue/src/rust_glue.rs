@@ -1,9 +1,9 @@
-use crate::types::{RocNum, RocTagUnion, RocType, TypeId, Types};
+use crate::types::{File, RocNum, RocTagUnion, RocType, TypeId, Types};
 use indexmap::IndexMap;
 use roc_target::{Architecture, TargetInfo};
 use std::fmt::{Display, Write};
 
-pub static HEADER: &[u8] = include_bytes!("../templates/header.rs");
+static HEADER: &[u8] = include_bytes!("../templates/header.rs");
 const INDENT: &str = "    ";
 const DISCRIMINANT_DOC_COMMENT: &str =
     "/// Returns which variant this tag union holds. Note that this never includes a payload!";
@@ -57,8 +57,8 @@ fn add_decl(impls: &mut Impls, opt_impl: Impl, target_info: TargetInfo, body: St
     targets.push(target_info);
 }
 
-pub fn emit(types_and_targets: &[(Types, TargetInfo)]) -> String {
-    let mut buf = String::new();
+pub fn emit(types: &[Types]) -> Vec<File> {
+    let mut buf = std::str::from_utf8(HEADER).unwrap().to_string();
     let mut impls: Impls = IndexMap::default();
 
     for (types, target_info) in types_and_targets {
@@ -135,7 +135,10 @@ pub fn emit(types_and_targets: &[(Types, TargetInfo)]) -> String {
         }
     }
 
-    buf
+    vec![crate::types::File {
+        name: "mod.rs".to_string(),
+        content: buf,
+    }]
 }
 
 fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impls) {

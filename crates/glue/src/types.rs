@@ -22,6 +22,12 @@ use roc_types::{
 };
 use std::fmt::Display;
 
+#[derive(Debug)]
+pub struct File {
+    pub name: String,
+    pub content: String,
+}
+
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(usize);
 
