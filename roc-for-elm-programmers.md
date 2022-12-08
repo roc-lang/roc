@@ -1240,6 +1240,14 @@ If you put these into a hypothetical Roc REPL, here's what you'd see:
 28 : Int *
 ```
 
+## Testing
+
+Instead of a separate testing tool, Roc has a built-in `expect` keyword, which
+you can use in conjunction with `roc test` to run tests.
+
+See [the tutorial section on testing](https://www.roc-lang.org/tutorial#tests-and-expectations)
+for details.
+
 ## Abilities
 
 `comparable`, `appendable`, and `number` don't exist in Roc.
