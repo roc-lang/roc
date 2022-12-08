@@ -22,7 +22,7 @@ use roc_types::{
 };
 use std::fmt::Display;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct File {
     pub name: String,
     pub content: String,
