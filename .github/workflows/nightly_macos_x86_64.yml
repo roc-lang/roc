@@ -33,26 +33,18 @@ jobs:
         
       # build has to be done before tests #2572
       - name: build release
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --release --locked
+        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --features with_sound --release --locked
+        # target-cpu=x86-64 -> For maximal compatibility for all CPU's. Note that this setting will likely make the compiler slower.
           
       - name: execute rust tests if macos 12
         if: endsWith(matrix.os, '12')
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --locked -- --skip opaque_wrap_function --skip bool_list_literal
+        run: cargo test --release --locked -- --skip opaque_wrap_function --skip bool_list_literal
           
       - name: execute rust tests if macos 11
         if: endsWith(matrix.os, '11')
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --locked -- --skip opaque_wrap_function --skip bool_list_literal --skip platform_switching_swift --skip swift_ui
-          # swift tests are skipped because of "Could not find or use auto-linked library 'swiftCompatibilityConcurrency'" on macos-11 x86_64 CI machine
-          # this issue may be caused by using older versions of XCode
+        run: cargo test --release --locked -- --skip opaque_wrap_function --skip bool_list_literal --skip platform_switching_swift --skip swift_ui
+        # swift tests are skipped because of "Could not find or use auto-linked library 'swiftCompatibilityConcurrency'" on macos-11 x86_64 CI machine
+        # this issue may be caused by using older versions of XCode
           
       - name: get commit SHA
         run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV

@@ -101,14 +101,14 @@ pub fn load_and_monomorphize_from_str<'a>(
     exposed_types: ExposedByModule,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
-) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
+) -> Result<MonomorphizedModule<'a>, LoadMonomorphizedError<'a>> {
     use LoadResult::*;
 
     let load_start = LoadStart::from_str(arena, filename, src, roc_cache_dir, src_dir)?;
 
     match load(arena, load_start, exposed_types, roc_cache_dir, load_config)? {
         Monomorphized(module) => Ok(module),
-        TypeChecked(_) => unreachable!(""),
+        TypeChecked(module) => Err(LoadMonomorphizedError::ErrorModule(module)),
     }
 }
 

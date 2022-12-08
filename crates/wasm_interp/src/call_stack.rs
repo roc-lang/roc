@@ -1,9 +1,12 @@
 use bitvec::vec::BitVec;
 use bumpalo::{collections::Vec, Bump};
-use roc_wasm_module::{parse::Parse, Value, ValueType};
+use roc_wasm_module::opcodes::OpCode;
+use roc_wasm_module::sections::ImportDesc;
+use roc_wasm_module::{parse::Parse, Value, ValueType, WasmModule};
+use std::fmt::{self, Write};
 use std::iter::repeat;
 
-use crate::ValueStack;
+use crate::{pc_to_fn_index, type_from_flags_f_64, Error, ValueStack};
 
 /// Struct-of-Arrays storage for the call stack.
 /// Type info is packed to avoid wasting space on padding.
@@ -47,7 +50,7 @@ impl<'a> CallStack<'a> {
     }
 
     /// On entering a Wasm call, save the return address, and make space for locals
-    pub fn push_frame(
+    pub(crate) fn push_frame(
         &mut self,
         return_addr: u32,
         return_block_depth: u32,
@@ -55,7 +58,7 @@ impl<'a> CallStack<'a> {
         value_stack: &mut ValueStack<'a>,
         code_bytes: &[u8],
         pc: &mut usize,
-    ) {
+    ) -> Result<(), crate::Error> {
         self.return_addrs_and_block_depths
             .push((return_addr, return_block_depth));
         let frame_offset = self.is_64.len();
@@ -71,8 +74,20 @@ impl<'a> CallStack<'a> {
         // Pop arguments off the value stack and into locals
         for (i, type_byte) in arg_type_bytes.iter().copied().enumerate().rev() {
             let arg = value_stack.pop();
-            assert_eq!(ValueType::from(arg), ValueType::from(type_byte));
+            let ty = ValueType::from(arg);
+            let expected_type = ValueType::from(type_byte);
+            if ty != expected_type {
+                return Err(Error::ValueStackType(expected_type, ty));
+            }
             self.set_local_help(i as u32, arg);
+            self.is_64.set(
+                frame_offset + i,
+                matches!(ty, ValueType::I64 | ValueType::F64),
+            );
+            self.is_float.set(
+                frame_offset + i,
+                matches!(ty, ValueType::F32 | ValueType::F64),
+            );
         }
 
         self.value_stack_bases.push(value_stack.len() as u32);
@@ -89,6 +104,7 @@ impl<'a> CallStack<'a> {
                 .extend(repeat(matches!(ty, ValueType::F32 | ValueType::F64)).take(n));
         }
         self.locals_data.extend(repeat(0).take(total));
+        Ok(())
     }
 
     /// On returning from a Wasm call, drop its locals and retrieve the return address
@@ -102,8 +118,12 @@ impl<'a> CallStack<'a> {
     }
 
     pub fn get_local(&self, local_index: u32) -> Value {
-        let frame_offset = self.frame_offsets.last().unwrap();
-        let index = (*frame_offset + local_index) as usize;
+        self.get_local_help(self.frame_offsets.len() - 1, local_index)
+    }
+
+    fn get_local_help(&self, frame_index: usize, local_index: u32) -> Value {
+        let frame_offset = self.frame_offsets[frame_index];
+        let index = (frame_offset + local_index) as usize;
         let data64 = self.locals_data[index];
         let is_float = self.is_float[index];
         let is_64 = self.is_64[index];
@@ -123,32 +143,34 @@ impl<'a> CallStack<'a> {
         }
     }
 
-    pub fn set_local(&mut self, local_index: u32, value: Value) {
-        let type_check_ok = self.set_local_help(local_index, value);
-        debug_assert!(type_check_ok);
+    pub(crate) fn set_local(&mut self, local_index: u32, value: Value) -> Result<(), Error> {
+        let expected_type = self.set_local_help(local_index, value);
+        let actual_type = ValueType::from(value);
+        if actual_type == expected_type {
+            Ok(())
+        } else {
+            Err(Error::ValueStackType(expected_type, actual_type))
+        }
     }
 
-    fn set_local_help(&mut self, local_index: u32, value: Value) -> bool {
+    fn set_local_help(&mut self, local_index: u32, value: Value) -> ValueType {
         let frame_offset = *self.frame_offsets.last().unwrap();
         let index = (frame_offset + local_index) as usize;
         match value {
             Value::I32(x) => {
                 self.locals_data[index] = u64::from_ne_bytes((x as i64).to_ne_bytes());
-                !self.is_64[index] && !self.is_float[index]
             }
             Value::I64(x) => {
                 self.locals_data[index] = u64::from_ne_bytes((x).to_ne_bytes());
-                !self.is_float[index] && self.is_64[index]
             }
             Value::F32(x) => {
                 self.locals_data[index] = x.to_bits() as u64;
-                self.is_float[index] && !self.is_64[index]
             }
             Value::F64(x) => {
                 self.locals_data[index] = x.to_bits();
-                self.is_float[index] && self.is_64[index]
             }
         }
+        type_from_flags_f_64(self.is_float[index], self.is_64[index])
     }
 
     pub fn value_stack_base(&self) -> u32 {
@@ -157,6 +179,113 @@ impl<'a> CallStack<'a> {
 
     pub fn is_empty(&self) -> bool {
         self.is_64.is_empty()
+    }
+
+    /// Dump a stack trace of the WebAssembly program
+    ///
+    /// --------------
+    /// function 123
+    ///   address  0x12345
+    ///   args     0: I64(234), 1: F64(7.15)
+    ///   locals   2: I32(412), 3: F64(3.14)
+    ///   stack    [I64(111), F64(3.14)]
+    /// --------------
+    pub fn dump_trace(
+        &self,
+        module: &WasmModule<'a>,
+        value_stack: &ValueStack<'a>,
+        pc: usize,
+        buffer: &mut String,
+    ) -> fmt::Result {
+        let divider = "-------------------";
+        writeln!(buffer, "{}", divider)?;
+
+        let mut value_stack_iter = value_stack.iter();
+
+        for frame in 0..self.frame_offsets.len() {
+            let next_frame = frame + 1;
+            let op_offset = if next_frame < self.frame_offsets.len() {
+                // return address of next frame = next op in this frame
+                let next_op = self.return_addrs_and_block_depths[next_frame].0 as usize;
+                // Call address is more intuitive than the return address when debugging. Search backward for it.
+                // Skip last byte of function index to avoid a false match with CALL/CALLINDIRECT.
+                // The more significant bytes won't match because of LEB-128 encoding.
+                let mut call_op = next_op - 2;
+                loop {
+                    let byte = module.code.bytes[call_op];
+                    if byte == OpCode::CALL as u8 || byte == OpCode::CALLINDIRECT as u8 {
+                        break;
+                    } else {
+                        call_op -= 1;
+                    }
+                }
+                call_op
+            } else {
+                pc
+            };
+
+            let fn_index = pc_to_fn_index(op_offset, module);
+            let address = op_offset + module.code.section_offset as usize;
+            writeln!(buffer, "function {}", fn_index)?;
+            writeln!(buffer, "  address  {:06x}", address)?; // format matches wasm-objdump, for easy search
+
+            write!(buffer, "  args     ")?;
+            let arg_count = {
+                let n_import_fns = module.import.imports.len();
+                let signature_index = if fn_index < n_import_fns {
+                    match module.import.imports[fn_index].description {
+                        ImportDesc::Func { signature_index } => signature_index,
+                        _ => unreachable!(),
+                    }
+                } else {
+                    module.function.signatures[fn_index - n_import_fns]
+                };
+                module.types.look_up_arg_type_bytes(signature_index).len()
+            };
+            let args_and_locals_count = {
+                let frame_offset = self.frame_offsets[frame] as usize;
+                let next_frame_offset = if frame == self.frame_offsets.len() - 1 {
+                    self.locals_data.len()
+                } else {
+                    self.frame_offsets[frame + 1] as usize
+                };
+                next_frame_offset - frame_offset
+            };
+            for index in 0..args_and_locals_count {
+                let value = self.get_local_help(frame, index as u32);
+                if index != 0 {
+                    write!(buffer, ", ")?;
+                }
+                if index == arg_count {
+                    write!(buffer, "\n  locals   ")?;
+                }
+                write!(buffer, "{}: {:?}", index, value)?;
+            }
+            write!(buffer, "\n  stack    [")?;
+
+            let frame_value_count = {
+                let value_stack_base = self.value_stack_bases[frame];
+                let next_value_stack_base = if frame == self.frame_offsets.len() - 1 {
+                    value_stack.len() as u32
+                } else {
+                    self.value_stack_bases[frame + 1]
+                };
+                next_value_stack_base - value_stack_base
+            };
+            for i in 0..frame_value_count {
+                if i != 0 {
+                    write!(buffer, ", ")?;
+                }
+                if let Some(value) = value_stack_iter.next() {
+                    write!(buffer, "{:?}", value)?;
+                }
+            }
+
+            writeln!(buffer, "]")?;
+            writeln!(buffer, "{}", divider)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -169,7 +298,7 @@ mod tests {
     const RETURN_ADDR: u32 = 0x12345;
 
     fn test_get_set(call_stack: &mut CallStack<'_>, index: u32, value: Value) {
-        call_stack.set_local(index, value);
+        call_stack.set_local(index, value).unwrap();
         assert_eq!(call_stack.get_local(index), value);
     }
 
@@ -180,13 +309,19 @@ mod tests {
 
         // Push a other few frames before the test frame, just to make the scenario more typical.
         [(1u32, ValueType::I32)].serialize(&mut buffer);
-        call_stack.push_frame(0x11111, 0, &[], &mut vs, &buffer, &mut cursor);
+        call_stack
+            .push_frame(0x11111, 0, &[], &mut vs, &buffer, &mut cursor)
+            .unwrap();
 
         [(2u32, ValueType::I32)].serialize(&mut buffer);
-        call_stack.push_frame(0x22222, 0, &[], &mut vs, &buffer, &mut cursor);
+        call_stack
+            .push_frame(0x22222, 0, &[], &mut vs, &buffer, &mut cursor)
+            .unwrap();
 
         [(3u32, ValueType::I32)].serialize(&mut buffer);
-        call_stack.push_frame(0x33333, 0, &[], &mut vs, &buffer, &mut cursor);
+        call_stack
+            .push_frame(0x33333, 0, &[], &mut vs, &buffer, &mut cursor)
+            .unwrap();
 
         // Create a test call frame with local variables of every type
         [
@@ -196,7 +331,9 @@ mod tests {
             (1u32, ValueType::F64),
         ]
         .serialize(&mut buffer);
-        call_stack.push_frame(RETURN_ADDR, 0, &[], &mut vs, &buffer, &mut cursor);
+        call_stack
+            .push_frame(RETURN_ADDR, 0, &[], &mut vs, &buffer, &mut cursor)
+            .unwrap();
     }
 
     #[test]

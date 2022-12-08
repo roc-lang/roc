@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use crate::docs::ModuleDocumentation;
 use bumpalo::Bump;
 use crossbeam::channel::{bounded, Sender};
@@ -17,8 +19,8 @@ use roc_constrain::module::constrain_module;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
-    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
-    ROC_PRINT_LOAD_LOG,
+    ROC_CHECK_MONO_IR, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
+    ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_LOAD_LOG,
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
@@ -45,12 +47,13 @@ use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
 use roc_parse::ident::UppercaseIdent;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
+use roc_problem::Severity;
 use roc_region::all::{LineInfo, Loc, Region};
 use roc_reporting::report::{Annotation, Palette, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
-use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
+use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
@@ -97,19 +100,27 @@ pub struct LoadConfig {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ExecutionMode {
-    Test,
     Check,
     Executable,
     /// Like [`ExecutionMode::Executable`], but stops in the presence of type errors.
     ExecutableIfCheck,
+    /// Test is like [`ExecutionMode::ExecutableIfCheck`], but rather than producing a proper
+    /// executable, run tests.
+    Test,
 }
 
 impl ExecutionMode {
     fn goal_phase(&self) -> Phase {
         match self {
-            ExecutionMode::Test | ExecutionMode::Executable => Phase::MakeSpecializations,
-            ExecutionMode::Check | ExecutionMode::ExecutableIfCheck => Phase::SolveTypes,
+            ExecutionMode::Executable => Phase::MakeSpecializations,
+            ExecutionMode::Check | ExecutionMode::ExecutableIfCheck | ExecutionMode::Test => {
+                Phase::SolveTypes
+            }
         }
+    }
+
+    fn build_if_checks(&self) -> bool {
+        matches!(self, Self::ExecutableIfCheck | Self::Test)
     }
 }
 
@@ -141,18 +152,22 @@ struct ModuleCache<'a> {
 }
 
 impl<'a> ModuleCache<'a> {
-    pub fn total_problems(&self) -> usize {
-        let mut total = 0;
+    fn has_can_errors(&self) -> bool {
+        self.can_problems
+            .values()
+            .flatten()
+            .any(|problem| problem.severity() == Severity::RuntimeError)
+    }
 
-        for problems in self.can_problems.values() {
-            total += problems.len();
-        }
+    fn has_type_errors(&self) -> bool {
+        self.type_problems
+            .values()
+            .flatten()
+            .any(|problem| problem.severity() == Severity::RuntimeError)
+    }
 
-        for problems in self.type_problems.values() {
-            total += problems.len();
-        }
-
-        total
+    pub fn has_errors(&self) -> bool {
+        self.has_can_errors() || self.has_type_errors()
     }
 }
 
@@ -963,7 +978,6 @@ impl<'a> State<'a> {
         self.exec_mode.goal_phase()
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn new(
         root_id: ModuleId,
         target_info: TargetInfo,
@@ -1208,7 +1222,6 @@ fn enqueue_task<'a>(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn load_and_typecheck_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -1495,7 +1508,6 @@ pub enum Threading {
 ///     and then linking them together, and possibly caching them by the hash of their
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
-#[allow(clippy::too_many_arguments)]
 pub fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
@@ -1556,7 +1568,6 @@ pub fn load<'a>(
 }
 
 /// Load using only a single thread; used when compiling to webassembly
-#[allow(clippy::too_many_arguments)]
 pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
@@ -1821,7 +1832,6 @@ fn state_thread_step<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn load_multi_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
@@ -1997,7 +2007,6 @@ fn load_multi_threaded<'a>(
     .unwrap()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn worker_task_step<'a>(
     worker_arena: &'a Bump,
     worker: &Worker<BuildTask<'a>>,
@@ -2072,7 +2081,6 @@ fn worker_task_step<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn worker_task<'a>(
     worker_arena: &'a Bump,
     worker: Worker<BuildTask<'a>>,
@@ -2164,12 +2172,33 @@ macro_rules! debug_print_ir {
             let procs_string = $state
                 .procedures
                 .values()
-                .map(|proc| proc.to_pretty($interner, 200))
+                .map(|proc| proc.to_pretty($interner, 200, true))
                 .collect::<Vec<_>>();
 
             let result = procs_string.join("\n");
 
             eprintln!("{}", result);
+        })
+    };
+}
+
+macro_rules! debug_check_ir {
+    ($state:expr, $arena:expr, $interner:expr, $flag:path) => {
+        dbg_do!($flag, {
+            use roc_mono::debug::{check_procs, format_problems};
+
+            let interns = Interns {
+                module_ids: $state.arc_modules.lock().clone().into_module_ids(),
+                all_ident_ids: $state.constrained_ident_ids.clone(),
+            };
+
+            let procedures = &$state.procedures;
+
+            let problems = check_procs($arena, $interner, procedures);
+            if !problems.is_empty() {
+                let formatted = format_problems(&interns, $interner, problems);
+                eprintln!("IR PROBLEMS FOUND:\n{formatted}");
+            }
         })
     };
 }
@@ -2615,7 +2644,7 @@ fn update<'a>(
             let finish_type_checking = is_host_exposed &&
                 (state.goal_phase() == Phase::SolveTypes)
                 // If we're running in check-and-then-build mode, only exit now there are errors.
-                && (!matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck) || state.module_cache.total_problems() > 0);
+                && (!state.exec_mode.build_if_checks() || state.module_cache.has_errors());
 
             if finish_type_checking {
                 debug_assert!(work.is_empty());
@@ -2623,7 +2652,7 @@ fn update<'a>(
 
                 state.timings.insert(module_id, module_timing);
 
-                if matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck) {
+                if state.exec_mode.build_if_checks() {
                     // We there may outstanding modules in the typecheked cache whose ident IDs
                     // aren't registered; transfer all of their idents over to the state, since
                     // we're now done and ready to report errors.
@@ -2677,9 +2706,7 @@ fn update<'a>(
                     },
                 );
 
-                if state.goal_phase() > Phase::SolveTypes
-                    || matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck)
-                {
+                if state.goal_phase() > Phase::SolveTypes || state.exec_mode.build_if_checks() {
                     let layout_cache = state.layout_caches.pop().unwrap_or_else(|| {
                         LayoutCache::new(state.layout_interner.fork(), state.target_info)
                     });
@@ -2703,16 +2730,11 @@ fn update<'a>(
                     state.timings.insert(module_id, module_timing);
                 }
 
-                let work = if is_host_exposed
-                    && matches!(state.exec_mode, ExecutionMode::ExecutableIfCheck)
-                {
+                let work = if is_host_exposed && state.exec_mode.build_if_checks() {
                     debug_assert!(
                         work.is_empty(),
                         "work left over after host exposed is checked"
                     );
-
-                    // Update the goal phase to target full codegen.
-                    state.exec_mode = ExecutionMode::Executable;
 
                     // Load the find + make specializations portion of the dependency graph.
                     state
@@ -2785,7 +2807,10 @@ fn update<'a>(
             layout_cache,
             ..
         } => {
-            debug_assert!(state.goal_phase() == Phase::MakeSpecializations);
+            debug_assert!(
+                state.goal_phase() == Phase::MakeSpecializations
+                    || state.exec_mode.build_if_checks()
+            );
 
             log!("made specializations for {:?}", module_id);
 
@@ -2896,6 +2921,7 @@ fn update<'a>(
                     log!("specializations complete from {:?}", module_id);
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_SPECIALIZATION);
+                    debug_check_ir!(state, arena, &layout_interner, ROC_CHECK_MONO_IR);
 
                     let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
 
@@ -3205,7 +3231,6 @@ fn finish_specialization<'a>(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn finish(
     mut state: State,
     solved: Solved<Subs>,
@@ -3644,7 +3669,6 @@ fn verify_interface_matches_file_path<'a>(
     Err(problem)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn parse_header<'a>(
     arena: &'a Bump,
     read_file_duration: Duration,
@@ -3931,7 +3955,6 @@ fn parse_header<'a>(
 }
 
 /// Load a module by its filename
-#[allow(clippy::too_many_arguments)]
 fn load_filename<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -3970,7 +3993,6 @@ fn load_filename<'a>(
 
 /// Load a module from a str
 /// the `filename` is never read, but used for the module name
-#[allow(clippy::too_many_arguments)]
 fn load_from_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -4010,7 +4032,6 @@ struct HeaderInfo<'a> {
     extra: HeaderFor<'a>,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_header<'a>(
     info: HeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
@@ -4236,7 +4257,6 @@ struct PlatformHeaderInfo<'a> {
 }
 
 // TODO refactor so more logic is shared with `send_header`
-#[allow(clippy::too_many_arguments)]
 fn send_header_two<'a>(
     info: PlatformHeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
@@ -4488,7 +4508,6 @@ fn send_header_two<'a>(
 
 impl<'a> BuildTask<'a> {
     // TODO trim down these arguments - possibly by moving Constraint into Module
-    #[allow(clippy::too_many_arguments)]
     fn solve_module(
         module: Module,
         ident_ids: IdentIds,
@@ -4575,61 +4594,26 @@ pub fn add_imports(
     mut pending_abilities: PendingAbilitiesStore,
     exposed_for_module: &ExposedForModule,
     def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
-    rigid_vars: &mut Vec<Variable>,
+    imported_rigid_vars: &mut Vec<Variable>,
+    imported_flex_vars: &mut Vec<Variable>,
 ) -> (Vec<Variable>, AbilitiesStore) {
     let mut import_variables = Vec::new();
 
     let mut cached_symbol_vars = VecMap::default();
 
-    macro_rules! import_var_for_symbol  {
-        ($subs:expr, $exposed_by_module:expr, $symbol:ident, $break:stmt) => {
-            let module_id = $symbol.module_id();
-            match $exposed_by_module.get(&module_id) {
-                Some(ExposedModuleTypes {
-                    exposed_types_storage_subs: exposed_types,
-                    resolved_implementations: _,
-                }) => {
-                    let variable = match exposed_types.stored_vars_by_symbol.iter().find(|(s, _)| **s == $symbol) {
-                        None => {
-                            // Today we define builtins in each module that uses them
-                            // so even though they have a different module name from
-                            // the surrounding module, they are not technically imported
-                            debug_assert!($symbol.is_builtin());
-                            $break
-                        }
-                        Some((_, x)) => *x,
-                    };
-
-                    let copied_import = exposed_types.storage_subs.export_variable_to($subs, variable);
-                    let copied_import_index = constraints.push_variable(copied_import.variable);
-
-                    def_types.push((
-                        $symbol,
-                        Loc::at_zero(copied_import_index),
-                    ));
-
-                    // not a typo; rigids are turned into flex during type inference, but when imported we must
-                    // consider them rigid variables
-                    rigid_vars.extend(copied_import.rigid);
-                    rigid_vars.extend(copied_import.flex);
-
-                    // Rigid vars bound to abilities are also treated like rigids.
-                    rigid_vars.extend(copied_import.rigid_able);
-                    rigid_vars.extend(copied_import.flex_able);
-
-                    import_variables.extend(copied_import.registered);
-
-                    cached_symbol_vars.insert($symbol, copied_import.variable);
-                }
-                None => {
-                    internal_error!("Imported module {:?} is not available", module_id)
-                }
-            }
-        }
-    }
-
     for &symbol in &exposed_for_module.imported_values {
-        import_var_for_symbol!(subs, exposed_for_module.exposed_by_module, symbol, continue);
+        import_variable_for_symbol(
+            subs,
+            constraints,
+            def_types,
+            &mut import_variables,
+            imported_rigid_vars,
+            imported_flex_vars,
+            &mut cached_symbol_vars,
+            &exposed_for_module.exposed_by_module,
+            symbol,
+            OnSymbolNotFound::AssertIsBuiltin,
+        );
     }
 
     // Patch used symbols from circular dependencies.
@@ -4656,6 +4640,9 @@ pub fn add_imports(
     struct Ctx<'a> {
         subs: &'a mut Subs,
         exposed_by_module: &'a ExposedByModule,
+        imported_variables: &'a mut Vec<Variable>,
+        imported_rigids: &'a mut Vec<Variable>,
+        imported_flex: &'a mut Vec<Variable>,
     }
 
     let abilities_store = pending_abilities.resolve_for_module(
@@ -4663,16 +4650,26 @@ pub fn add_imports(
         &mut Ctx {
             subs,
             exposed_by_module: &exposed_for_module.exposed_by_module,
+            imported_variables: &mut import_variables,
+            imported_rigids: imported_rigid_vars,
+            imported_flex: imported_flex_vars,
         },
         |ctx, symbol| match cached_symbol_vars.get(&symbol).copied() {
             Some(var) => var,
             None => {
-                import_var_for_symbol!(
+                import_variable_for_symbol(
                     ctx.subs,
-                    ctx.exposed_by_module,
+                    constraints,
+                    def_types,
+                    ctx.imported_variables,
+                    ctx.imported_rigids,
+                    ctx.imported_flex,
+                    &mut cached_symbol_vars,
+                    &exposed_for_module.exposed_by_module,
                     symbol,
-                    internal_error!("Import ability member {:?} not available", symbol)
+                    OnSymbolNotFound::AbilityMemberMustBeAvailable,
                 );
+
                 *cached_symbol_vars.get(&symbol).unwrap()
             }
         },
@@ -4690,13 +4687,110 @@ pub fn add_imports(
                     .storage_subs
                     .export_variable_to(ctx.subs, *var);
 
-                copied_import.variable
+                #[allow(clippy::let_and_return)]
+                let copied_import_var = extend_imports_data_with_copied_import(
+                    copied_import,
+                    ctx.imported_variables,
+                    ctx.imported_rigids,
+                    ctx.imported_flex,
+                );
+
+                copied_import_var
             }
             None => internal_error!("Imported module {:?} is not available", module),
         },
     );
 
     (import_variables, abilities_store)
+}
+
+enum OnSymbolNotFound {
+    AssertIsBuiltin,
+    AbilityMemberMustBeAvailable,
+}
+
+fn extend_imports_data_with_copied_import(
+    copied_import: CopiedImport,
+    imported_variables: &mut Vec<Variable>,
+    imported_rigids: &mut Vec<Variable>,
+    imported_flex: &mut Vec<Variable>,
+) -> Variable {
+    // not a typo; rigids are turned into flex during type inference, but when imported we must
+    // consider them rigid variables
+    imported_rigids.extend(copied_import.rigid);
+    imported_flex.extend(copied_import.flex);
+
+    // Rigid vars bound to abilities are also treated like rigids.
+    imported_rigids.extend(copied_import.rigid_able);
+    imported_flex.extend(copied_import.flex_able);
+
+    imported_variables.extend(copied_import.registered);
+
+    copied_import.variable
+}
+
+fn import_variable_for_symbol(
+    subs: &mut Subs,
+    constraints: &mut Constraints,
+    def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
+    imported_variables: &mut Vec<Variable>,
+    imported_rigids: &mut Vec<Variable>,
+    imported_flex: &mut Vec<Variable>,
+    cached_symbol_vars: &mut VecMap<Symbol, Variable>,
+    exposed_by_module: &ExposedByModule,
+    symbol: Symbol,
+    on_symbol_not_found: OnSymbolNotFound,
+) {
+    let module_id = symbol.module_id();
+    match exposed_by_module.get(&module_id) {
+        Some(ExposedModuleTypes {
+            exposed_types_storage_subs: exposed_types,
+            resolved_implementations: _,
+        }) => {
+            let variable = match exposed_types
+                .stored_vars_by_symbol
+                .iter()
+                .find(|(s, _)| **s == symbol)
+            {
+                None => {
+                    use OnSymbolNotFound::*;
+                    match on_symbol_not_found {
+                        AssertIsBuiltin => {
+                            // Today we define builtins in each module that uses them
+                            // so even though they have a different module name from
+                            // the surrounding module, they are not technically imported
+                            debug_assert!(symbol.is_builtin());
+                            return;
+                        }
+                        AbilityMemberMustBeAvailable => {
+                            internal_error!("Import ability member {:?} not available", symbol);
+                        }
+                    }
+                }
+                Some((_, x)) => *x,
+            };
+
+            let copied_import = exposed_types
+                .storage_subs
+                .export_variable_to(subs, variable);
+
+            let copied_import_var = extend_imports_data_with_copied_import(
+                copied_import,
+                imported_variables,
+                imported_rigids,
+                imported_flex,
+            );
+
+            let copied_import_index = constraints.push_variable(copied_import_var);
+
+            def_types.push((symbol, Loc::at_zero(copied_import_index)));
+
+            cached_symbol_vars.insert(symbol, copied_import_var);
+        }
+        None => {
+            internal_error!("Imported module {:?} is not available", module_id)
+        }
+    }
 }
 
 #[allow(clippy::complexity)]
@@ -4724,7 +4818,8 @@ fn run_solve_solve(
         ..
     } = module;
 
-    let mut rigid_vars: Vec<Variable> = Vec::new();
+    let mut imported_rigid_vars: Vec<Variable> = Vec::new();
+    let mut imported_flex_vars: Vec<Variable> = Vec::new();
     let mut def_types: Vec<(Symbol, Loc<TypeOrVar>)> = Vec::new();
 
     let mut subs = Subs::new_from_varstore(var_store);
@@ -4736,11 +4831,17 @@ fn run_solve_solve(
         pending_abilities,
         &exposed_for_module,
         &mut def_types,
-        &mut rigid_vars,
+        &mut imported_rigid_vars,
+        &mut imported_flex_vars,
     );
 
-    let actual_constraint =
-        constraints.let_import_constraint(rigid_vars, def_types, constraint, &import_variables);
+    let actual_constraint = constraints.let_import_constraint(
+        imported_rigid_vars,
+        imported_flex_vars,
+        def_types,
+        constraint,
+        &import_variables,
+    );
 
     let mut solve_aliases = roc_solve::solve::Aliases::with_capacity(aliases.len());
     for (name, (_, alias)) in aliases.iter() {
@@ -4805,7 +4906,6 @@ fn run_solve_solve(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_solve<'a>(
     module: Module,
     ident_ids: IdentIds,
@@ -4919,7 +5019,6 @@ fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [L
     .into_bump_slice()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn fabricate_platform_module<'a>(
     arena: &'a Bump,
     opt_shorthand: Option<&'a str>,
@@ -4959,7 +5058,6 @@ fn fabricate_platform_module<'a>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::unnecessary_wraps)]
 fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
@@ -5233,7 +5331,6 @@ fn ident_from_exposed(entry: &Spaced<'_, ExposedName<'_>>) -> Ident {
     entry.extract_spaces().item.as_str().into()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn make_specializations<'a>(
     arena: &'a Bump,
     home: ModuleId,
@@ -5310,7 +5407,6 @@ fn make_specializations<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
     solved_subs: Solved<Subs>,
@@ -5741,7 +5837,6 @@ fn build_pending_specializations<'a>(
 /// their specializations.
 // TODO: right now, this runs sequentially, and no other modules are mono'd in parallel to the
 // derived module.
-#[allow(clippy::too_many_arguments)]
 fn load_derived_partial_procs<'a>(
     home: ModuleId,
     arena: &'a Bump,
@@ -5987,7 +6082,7 @@ fn run_task<'a>(
 }
 
 fn to_file_problem_report(filename: &Path, error: io::ErrorKind) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
     let src_lines: Vec<&str> = Vec::new();
@@ -6074,7 +6169,7 @@ fn to_import_cycle_report(
     filename: PathBuf,
     render: RenderTarget,
 ) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
     // import_cycle looks like CycleModule, Import1, ..., ImportN, CycleModule
@@ -6134,7 +6229,7 @@ fn to_incorrect_module_name_report<'a>(
     src: &'a [u8],
     render: RenderTarget,
 ) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
 
     let IncorrectModuleName {
@@ -6220,7 +6315,7 @@ fn to_parse_problem_report<'a>(
 }
 
 fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> String {
-    use roc_reporting::report::{Report, RocDocAllocator, Severity, DEFAULT_PALETTE};
+    use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
     use PlatformPath::*;
 

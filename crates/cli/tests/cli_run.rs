@@ -840,12 +840,24 @@ mod cli_run {
             let file_name = cli_testing_dir("benchmarks").join(roc_filename);
 
             // TODO fix QuicksortApp and then remove this!
-            if roc_filename == "QuicksortApp.roc" {
-                eprintln!(
+            match roc_filename {
+                "QuicksortApp.roc" => {
+                    eprintln!(
                     "WARNING: skipping testing benchmark {} because the test is broken right now!",
                     roc_filename
                 );
-                return;
+                    return;
+                }
+                "TestAStar.roc" => {
+                    if cfg!(feature = "wasm32-cli-run") {
+                        eprintln!(
+                        "WARNING: skipping testing benchmark {} because it currently does not work on wasm32 due to dictionaries.",
+                        roc_filename
+                    );
+                        return;
+                    }
+                }
+                _ => {}
             }
 
             #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]

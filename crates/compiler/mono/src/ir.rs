@@ -326,6 +326,7 @@ impl<'a> Proc<'a> {
         &'b self,
         alloc: &'b D,
         interner: &'b I,
+        pretty: bool,
         _parens: Parens,
     ) -> DocBuilder<'b, D, A>
     where
@@ -335,7 +336,7 @@ impl<'a> Proc<'a> {
         I: Interner<'a, Layout<'a>>,
     {
         let args_doc = self.args.iter().map(|(layout, symbol)| {
-            let arg_doc = symbol_to_doc(alloc, *symbol);
+            let arg_doc = symbol_to_doc(alloc, *symbol, pretty);
             if pretty_print_ir_symbols() {
                 arg_doc.append(alloc.reflow(": ")).append(layout.to_doc(
                     alloc,
@@ -350,36 +351,36 @@ impl<'a> Proc<'a> {
         if pretty_print_ir_symbols() {
             alloc
                 .text("procedure : ")
-                .append(symbol_to_doc(alloc, self.name.name()))
+                .append(symbol_to_doc(alloc, self.name.name(), pretty))
                 .append(" ")
                 .append(self.ret_layout.to_doc(alloc, interner, Parens::NotNeeded))
                 .append(alloc.hardline())
                 .append(alloc.text("procedure = "))
-                .append(symbol_to_doc(alloc, self.name.name()))
+                .append(symbol_to_doc(alloc, self.name.name(), pretty))
                 .append(" (")
                 .append(alloc.intersperse(args_doc, ", "))
                 .append("):")
                 .append(alloc.hardline())
-                .append(self.body.to_doc(alloc, interner).indent(4))
+                .append(self.body.to_doc(alloc, interner, pretty).indent(4))
         } else {
             alloc
                 .text("procedure ")
-                .append(symbol_to_doc(alloc, self.name.name()))
+                .append(symbol_to_doc(alloc, self.name.name(), pretty))
                 .append(" (")
                 .append(alloc.intersperse(args_doc, ", "))
                 .append("):")
                 .append(alloc.hardline())
-                .append(self.body.to_doc(alloc, interner).indent(4))
+                .append(self.body.to_doc(alloc, interner, pretty).indent(4))
         }
     }
 
-    pub fn to_pretty<I>(&self, interner: &I, width: usize) -> String
+    pub fn to_pretty<I>(&self, interner: &I, width: usize, pretty: bool) -> String
     where
         I: Interner<'a, Layout<'a>>,
     {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
-        self.to_doc::<_, (), _>(&allocator, interner, Parens::NotNeeded)
+        self.to_doc::<_, (), _>(&allocator, interner, pretty, Parens::NotNeeded)
             .1
             .render(width, &mut w)
             .unwrap();
@@ -1675,35 +1676,13 @@ pub enum BranchInfo<'a> {
 }
 
 impl<'a> BranchInfo<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _pretty: bool) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
     {
-        use BranchInfo::*;
-
-        match self {
-            Constructor {
-                tag_id,
-                scrutinee,
-                layout: _,
-            } if pretty_print_ir_symbols() => alloc
-                .hardline()
-                .append("    BranchInfo: { scrutinee: ")
-                .append(symbol_to_doc(alloc, *scrutinee))
-                .append(", tag_id: ")
-                .append(format!("{}", tag_id))
-                .append("} "),
-
-            _ => {
-                if pretty_print_ir_symbols() {
-                    alloc.text(" <no branch info>")
-                } else {
-                    alloc.text("")
-                }
-            }
-        }
+        alloc.text("")
     }
 }
 
@@ -1724,7 +1703,7 @@ pub enum ModifyRc {
 }
 
 impl ModifyRc {
-    pub fn to_doc<'a, D, A>(self, alloc: &'a D) -> DocBuilder<'a, D, A>
+    pub fn to_doc<'a, D, A>(self, alloc: &'a D, pretty: bool) -> DocBuilder<'a, D, A>
     where
         D: DocAllocator<'a, A>,
         D::Doc: Clone,
@@ -1735,20 +1714,20 @@ impl ModifyRc {
         match self {
             Inc(symbol, 1) => alloc
                 .text("inc ")
-                .append(symbol_to_doc(alloc, symbol))
+                .append(symbol_to_doc(alloc, symbol, pretty))
                 .append(";"),
             Inc(symbol, n) => alloc
                 .text("inc ")
                 .append(alloc.text(format!("{} ", n)))
-                .append(symbol_to_doc(alloc, symbol))
+                .append(symbol_to_doc(alloc, symbol, pretty))
                 .append(";"),
             Dec(symbol) => alloc
                 .text("dec ")
-                .append(symbol_to_doc(alloc, symbol))
+                .append(symbol_to_doc(alloc, symbol, pretty))
                 .append(";"),
             DecRef(symbol) => alloc
                 .text("decref ")
-                .append(symbol_to_doc(alloc, symbol))
+                .append(symbol_to_doc(alloc, symbol, pretty))
                 .append(";"),
         }
     }
@@ -1808,7 +1787,7 @@ pub struct Call<'a> {
 }
 
 impl<'a> Call<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, pretty: bool) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
@@ -1822,19 +1801,19 @@ impl<'a> Call<'a> {
             CallType::ByName { name, .. } => {
                 let it = std::iter::once(name.name())
                     .chain(arguments.iter().copied())
-                    .map(|s| symbol_to_doc(alloc, s));
+                    .map(|s| symbol_to_doc(alloc, s, pretty));
 
                 alloc.text("CallByName ").append(alloc.intersperse(it, " "))
             }
             LowLevel { op: lowlevel, .. } => {
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 alloc
                     .text(format!("lowlevel {:?} ", lowlevel))
                     .append(alloc.intersperse(it, " "))
             }
             HigherOrder(higher_order) => {
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 alloc
                     .text(format!("lowlevel {:?} ", higher_order.op))
@@ -1843,7 +1822,7 @@ impl<'a> Call<'a> {
             Foreign {
                 ref foreign_symbol, ..
             } => {
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 alloc
                     .text(format!("foreign {:?} ", foreign_symbol.as_str()))
@@ -2034,10 +2013,10 @@ impl<'a> Literal<'a> {
     }
 }
 
-pub(crate) fn symbol_to_doc_string(symbol: Symbol) -> String {
+pub(crate) fn symbol_to_doc_string(symbol: Symbol, force_pretty: bool) -> String {
     use roc_module::ident::ModuleName;
 
-    if pretty_print_ir_symbols() {
+    if pretty_print_ir_symbols() || force_pretty {
         format!("{:?}", symbol)
     } else {
         let text = format!("{}", symbol);
@@ -2051,26 +2030,30 @@ pub(crate) fn symbol_to_doc_string(symbol: Symbol) -> String {
     }
 }
 
-fn symbol_to_doc<'b, D, A>(alloc: &'b D, symbol: Symbol) -> DocBuilder<'b, D, A>
+fn symbol_to_doc<'b, D, A>(alloc: &'b D, symbol: Symbol, force_pretty: bool) -> DocBuilder<'b, D, A>
 where
     D: DocAllocator<'b, A>,
     D::Doc: Clone,
     A: Clone,
 {
-    alloc.text(symbol_to_doc_string(symbol))
+    alloc.text(symbol_to_doc_string(symbol, force_pretty))
 }
 
-fn join_point_to_doc<'b, D, A>(alloc: &'b D, symbol: JoinPointId) -> DocBuilder<'b, D, A>
+fn join_point_to_doc<'b, D, A>(
+    alloc: &'b D,
+    symbol: JoinPointId,
+    pretty: bool,
+) -> DocBuilder<'b, D, A>
 where
     D: DocAllocator<'b, A>,
     D::Doc: Clone,
     A: Clone,
 {
-    symbol_to_doc(alloc, symbol.0)
+    symbol_to_doc(alloc, symbol.0, pretty)
 }
 
 impl<'a> Expr<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, pretty: bool) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
@@ -2081,7 +2064,7 @@ impl<'a> Expr<'a> {
         match self {
             Literal(lit) => lit.to_doc(alloc),
 
-            Call(call) => call.to_doc(alloc),
+            Call(call) => call.to_doc(alloc, pretty),
 
             Tag {
                 tag_id, arguments, ..
@@ -2091,7 +2074,7 @@ impl<'a> Expr<'a> {
                     .append(alloc.text(tag_id.to_string()))
                     .append(")");
 
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 doc_tag
                     .append(alloc.space())
@@ -2109,11 +2092,11 @@ impl<'a> Expr<'a> {
                     .append(alloc.text(tag_id.to_string()))
                     .append(")");
 
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 alloc
                     .text("Reuse ")
-                    .append(symbol_to_doc(alloc, *symbol))
+                    .append(symbol_to_doc(alloc, *symbol, pretty))
                     .append(alloc.space())
                     .append(format!("{:?}", update_mode))
                     .append(alloc.space())
@@ -2130,7 +2113,7 @@ impl<'a> Expr<'a> {
             )),
 
             Struct(args) => {
-                let it = args.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = args.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 alloc
                     .text("Struct {")
@@ -2140,7 +2123,7 @@ impl<'a> Expr<'a> {
             Array { elems, .. } => {
                 let it = elems.iter().map(|e| match e {
                     ListLiteralElement::Literal(l) => l.to_doc(alloc),
-                    ListLiteralElement::Symbol(s) => symbol_to_doc(alloc, *s),
+                    ListLiteralElement::Symbol(s) => symbol_to_doc(alloc, *s, pretty),
                 });
 
                 alloc
@@ -2154,17 +2137,21 @@ impl<'a> Expr<'a> {
                 index, structure, ..
             } => alloc
                 .text(format!("StructAtIndex {} ", index))
-                .append(symbol_to_doc(alloc, *structure)),
+                .append(symbol_to_doc(alloc, *structure, pretty)),
 
             RuntimeErrorFunction(s) => alloc.text(format!("ErrorFunction {}", s)),
 
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
-                .append(symbol_to_doc(alloc, *structure)),
+                .append(symbol_to_doc(alloc, *structure, pretty)),
 
-            ExprBox { symbol, .. } => alloc.text("Box ").append(symbol_to_doc(alloc, *symbol)),
+            ExprBox { symbol, .. } => alloc
+                .text("Box ")
+                .append(symbol_to_doc(alloc, *symbol, pretty)),
 
-            ExprUnbox { symbol, .. } => alloc.text("Unbox ").append(symbol_to_doc(alloc, *symbol)),
+            ExprUnbox { symbol, .. } => alloc
+                .text("Unbox ")
+                .append(symbol_to_doc(alloc, *symbol, pretty)),
 
             UnionAtIndex {
                 tag_id,
@@ -2173,14 +2160,14 @@ impl<'a> Expr<'a> {
                 ..
             } => alloc
                 .text(format!("UnionAtIndex (Id {}) (Index {}) ", tag_id, index))
-                .append(symbol_to_doc(alloc, *structure)),
+                .append(symbol_to_doc(alloc, *structure, pretty)),
         }
     }
 
-    pub fn to_pretty(&self, width: usize) -> String {
+    pub fn to_pretty(&self, width: usize, pretty: bool) -> String {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
-        self.to_doc::<_, ()>(&allocator)
+        self.to_doc::<_, ()>(&allocator, pretty)
             .1
             .render(width, &mut w)
             .unwrap();
@@ -2200,7 +2187,12 @@ impl<'a> Stmt<'a> {
         from_can(env, var, can_expr, procs, layout_cache)
     }
 
-    pub fn to_doc<'b, D, A, I>(&'b self, alloc: &'b D, interner: &I) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A, I>(
+        &'b self,
+        alloc: &'b D,
+        interner: &I,
+        pretty: bool,
+    ) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
@@ -2212,19 +2204,19 @@ impl<'a> Stmt<'a> {
         match self {
             Let(symbol, expr, layout, cont) => alloc
                 .text("let ")
-                .append(symbol_to_doc(alloc, *symbol))
+                .append(symbol_to_doc(alloc, *symbol, pretty))
                 .append(" : ")
                 .append(layout.to_doc(alloc, interner, Parens::NotNeeded))
                 .append(" = ")
-                .append(expr.to_doc(alloc))
+                .append(expr.to_doc(alloc, pretty))
                 .append(";")
                 .append(alloc.hardline())
-                .append(cont.to_doc(alloc, interner)),
+                .append(cont.to_doc(alloc, interner, pretty)),
 
             Refcounting(modify, cont) => modify
-                .to_doc(alloc)
+                .to_doc(alloc, pretty)
                 .append(alloc.hardline())
-                .append(cont.to_doc(alloc, interner)),
+                .append(cont.to_doc(alloc, interner, pretty)),
 
             Expect {
                 condition,
@@ -2232,10 +2224,10 @@ impl<'a> Stmt<'a> {
                 ..
             } => alloc
                 .text("expect ")
-                .append(symbol_to_doc(alloc, *condition))
+                .append(symbol_to_doc(alloc, *condition, pretty))
                 .append(";")
                 .append(alloc.hardline())
-                .append(remainder.to_doc(alloc, interner)),
+                .append(remainder.to_doc(alloc, interner, pretty)),
 
             ExpectFx {
                 condition,
@@ -2243,14 +2235,14 @@ impl<'a> Stmt<'a> {
                 ..
             } => alloc
                 .text("expect-fx ")
-                .append(symbol_to_doc(alloc, *condition))
+                .append(symbol_to_doc(alloc, *condition, pretty))
                 .append(";")
                 .append(alloc.hardline())
-                .append(remainder.to_doc(alloc, interner)),
+                .append(remainder.to_doc(alloc, interner, pretty)),
 
             Ret(symbol) => alloc
                 .text("ret ")
-                .append(symbol_to_doc(alloc, *symbol))
+                .append(symbol_to_doc(alloc, *symbol, pretty))
                 .append(";"),
 
             Switch {
@@ -2264,23 +2256,23 @@ impl<'a> Stmt<'a> {
                         let fail = default_branch.1;
                         alloc
                             .text("if ")
-                            .append(symbol_to_doc(alloc, *cond_symbol))
+                            .append(symbol_to_doc(alloc, *cond_symbol, pretty))
                             .append(" then")
-                            .append(info.to_doc(alloc))
+                            .append(info.to_doc(alloc, pretty))
                             .append(alloc.hardline())
-                            .append(pass.to_doc(alloc, interner).indent(4))
+                            .append(pass.to_doc(alloc, interner, pretty).indent(4))
                             .append(alloc.hardline())
                             .append(alloc.text("else"))
-                            .append(default_branch.0.to_doc(alloc))
+                            .append(default_branch.0.to_doc(alloc, pretty))
                             .append(alloc.hardline())
-                            .append(fail.to_doc(alloc, interner).indent(4))
+                            .append(fail.to_doc(alloc, interner, pretty).indent(4))
                     }
 
                     _ => {
                         let default_doc = alloc
                             .text("default:")
                             .append(alloc.hardline())
-                            .append(default_branch.1.to_doc(alloc, interner).indent(4))
+                            .append(default_branch.1.to_doc(alloc, interner, pretty).indent(4))
                             .indent(4);
 
                         let branches_docs = branches
@@ -2289,14 +2281,14 @@ impl<'a> Stmt<'a> {
                                 alloc
                                     .text(format!("case {}:", tag))
                                     .append(alloc.hardline())
-                                    .append(expr.to_doc(alloc, interner).indent(4))
+                                    .append(expr.to_doc(alloc, interner, pretty).indent(4))
                                     .indent(4)
                             })
                             .chain(std::iter::once(default_doc));
                         //
                         alloc
                             .text("switch ")
-                            .append(symbol_to_doc(alloc, *cond_symbol))
+                            .append(symbol_to_doc(alloc, *cond_symbol, pretty))
                             .append(":")
                             .append(alloc.hardline())
                             .append(alloc.intersperse(
@@ -2308,7 +2300,9 @@ impl<'a> Stmt<'a> {
                 }
             }
 
-            Crash(s, _src) => alloc.text("Crash ").append(symbol_to_doc(alloc, *s)),
+            Crash(s, _src) => alloc
+                .text("Crash ")
+                .append(symbol_to_doc(alloc, *s, pretty)),
 
             Join {
                 id,
@@ -2316,29 +2310,31 @@ impl<'a> Stmt<'a> {
                 body: continuation,
                 remainder,
             } => {
-                let it = parameters.iter().map(|p| symbol_to_doc(alloc, p.symbol));
+                let it = parameters
+                    .iter()
+                    .map(|p| symbol_to_doc(alloc, p.symbol, pretty));
 
                 alloc.intersperse(
                     vec![
                         alloc
                             .text("joinpoint ")
-                            .append(join_point_to_doc(alloc, *id))
+                            .append(join_point_to_doc(alloc, *id, pretty))
                             .append(" ".repeat(parameters.len().min(1)))
                             .append(alloc.intersperse(it, alloc.space()))
                             .append(":"),
-                        continuation.to_doc(alloc, interner).indent(4),
+                        continuation.to_doc(alloc, interner, pretty).indent(4),
                         alloc.text("in"),
-                        remainder.to_doc(alloc, interner),
+                        remainder.to_doc(alloc, interner, pretty),
                     ],
                     alloc.hardline(),
                 )
             }
             Jump(id, arguments) => {
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 alloc
                     .text("jump ")
-                    .append(join_point_to_doc(alloc, *id))
+                    .append(join_point_to_doc(alloc, *id, pretty))
                     .append(" ".repeat(arguments.len().min(1)))
                     .append(alloc.intersperse(it, alloc.space()))
                     .append(";")
@@ -2346,13 +2342,13 @@ impl<'a> Stmt<'a> {
         }
     }
 
-    pub fn to_pretty<I>(&self, interner: &I, width: usize) -> String
+    pub fn to_pretty<I>(&self, interner: &I, width: usize, pretty: bool) -> String
     where
         I: Interner<'a, Layout<'a>>,
     {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
-        self.to_doc::<_, (), _>(&allocator, interner)
+        self.to_doc::<_, (), _>(&allocator, interner, pretty)
             .1
             .render(width, &mut w)
             .unwrap();

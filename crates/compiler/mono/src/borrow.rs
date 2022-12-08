@@ -68,7 +68,7 @@ pub fn infer_borrow<'a>(
 
     let sccs = matrix.strongly_connected_components_all();
 
-    for group in sccs.groups() {
+    for (group, _) in sccs.groups() {
         // This is a fixed-point analysis
         //
         // all functions initiall own all their parameters

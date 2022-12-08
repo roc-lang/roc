@@ -13,10 +13,13 @@ extern crate indoc;
 #[allow(dead_code)]
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_load::ExecutionMode;
 use roc_load::LoadConfig;
+use roc_load::LoadMonomorphizedError;
 use roc_load::Threading;
+use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
 use roc_mono::ir::ProcLayout;
@@ -73,10 +76,15 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-fn compiles_to_ir(test_name: &str, src: &str) {
-    use bumpalo::Bump;
+fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
     use roc_packaging::cache::RocCacheDir;
     use std::path::PathBuf;
+
+    let exec_mode = match mode {
+        "exec" => ExecutionMode::Executable,
+        "test" => ExecutionMode::Test,
+        _ => panic!("Invalid test_mono exec mode {mode}"),
+    };
 
     let arena = &Bump::new();
 
@@ -85,7 +93,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let module_src;
     let temp;
-    if src.starts_with("app") {
+    if src.starts_with("app") || src.starts_with("interface") {
         // this is already a module
         module_src = src;
     } else {
@@ -99,7 +107,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         threading: Threading::Single,
         render: roc_reporting::report::RenderTarget::Generic,
         palette: roc_reporting::report::DEFAULT_PALETTE,
-        exec_mode: ExecutionMode::Executable,
+        exec_mode,
     };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
@@ -113,7 +121,9 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
+        Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
+            report,
+        ))) => {
             println!("{}", report);
             panic!();
         }
@@ -126,6 +136,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         procedures,
         exposed_to_host,
         layout_interner,
+        interns,
         ..
     } = loaded;
 
@@ -138,33 +149,54 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     assert!(type_problems.is_empty());
 
-    debug_assert_eq!(exposed_to_host.values.len(), 1);
+    let main_fn_symbol = exposed_to_host.values.keys().copied().next();
 
-    let main_fn_symbol = exposed_to_host.values.keys().copied().next().unwrap();
+    if !no_check {
+        check_procedures(arena, &interns, &layout_interner, &procedures);
+    }
 
     verify_procedures(test_name, layout_interner, procedures, main_fn_symbol);
+}
+
+fn check_procedures<'a>(
+    arena: &'a Bump,
+    interns: &Interns,
+    interner: &STLayoutInterner<'a>,
+    procedures: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+) {
+    use roc_mono::debug::{check_procs, format_problems};
+    let problems = check_procs(arena, interner, procedures);
+    if problems.is_empty() {
+        return;
+    }
+    let formatted = format_problems(interns, interner, problems);
+    panic!("IR problems found:\n{formatted}");
 }
 
 fn verify_procedures<'a>(
     test_name: &str,
     interner: STLayoutInterner<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    main_fn_symbol: Symbol,
+    opt_main_fn_symbol: Option<Symbol>,
 ) {
-    let index = procedures
-        .keys()
-        .position(|(s, _)| *s == main_fn_symbol)
-        .unwrap();
-
     let mut procs_string = procedures
         .values()
-        .map(|proc| proc.to_pretty(&interner, 200))
+        .map(|proc| proc.to_pretty(&interner, 200, false))
         .collect::<Vec<_>>();
 
-    let main_fn = procs_string.swap_remove(index);
+    let opt_main_fn = opt_main_fn_symbol.map(|main_fn_symbol| {
+        let index = procedures
+            .keys()
+            .position(|(s, _)| *s == main_fn_symbol)
+            .unwrap();
+        procs_string.swap_remove(index)
+    });
 
     procs_string.sort();
-    procs_string.push(main_fn);
+
+    if let Some(main_fn) = opt_main_fn {
+        procs_string.push(main_fn);
+    }
 
     let result = procs_string.join("\n");
 
@@ -561,7 +593,7 @@ fn record_optional_field_function_use_default() {
     "#
 }
 
-#[mono_test]
+#[mono_test(no_check)]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r#"
@@ -1279,7 +1311,7 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
     )
 }
 
-#[mono_test]
+#[mono_test(no_check)]
 fn issue_2810() {
     indoc!(
         r#"
@@ -2094,5 +2126,36 @@ fn toplevel_accessor_fn_thunk() {
         main =
             ra { field : 15u8 }
         "#
+    )
+}
+
+#[mono_test]
+fn list_one_vs_one_spread_issue_4685() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = when [""] is
+            [] -> "A"
+            [_] -> "B"
+            [_, ..] -> "C"
+        "#
+    )
+}
+
+#[mono_test(mode = "test")]
+fn issue_4705() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports []
+
+        go : {} -> Bool
+        go = \{} -> Bool.true
+
+        expect
+            input = {}
+            x = go input
+            x
+        "###
     )
 }

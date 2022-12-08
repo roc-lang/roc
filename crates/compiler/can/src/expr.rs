@@ -3003,7 +3003,7 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
 
     let mut loc_expr = Loc::at(expect_region, expect);
 
-    for stored in stack {
+    for stored in stack.into_iter().rev() {
         match stored {
             StoredDef::NonRecursive(region, boxed_def) => {
                 loc_expr = Loc::at(region, Expr::LetNonRec(boxed_def, Box::new(loc_expr)));
