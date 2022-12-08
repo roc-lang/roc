@@ -3,7 +3,7 @@ use crate::llvm::build_list::{self, allocate_list, empty_polymorphic_list};
 use crate::llvm::convert::{
     argument_type_from_layout, basic_type_from_builtin, basic_type_from_layout, zig_str_type,
 };
-use crate::llvm::expect::clone_to_shared_memory;
+use crate::llvm::expect::{clone_to_shared_memory, SharedMemoryPointer};
 use crate::llvm::refcounting::{
     build_reset, decrement_refcount_layout, increment_refcount_layout, PointerToRefcount,
 };
@@ -2611,17 +2611,20 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
                 match env.target_info.ptr_width() {
                     roc_target::PtrWidth::Bytes8 => {
+                        let shared_memory = SharedMemoryPointer::get(env);
+
                         clone_to_shared_memory(
                             env,
                             scope,
                             layout_ids,
+                            &shared_memory,
                             *cond_symbol,
                             *region,
                             lookups,
                         );
 
                         if let LlvmBackendMode::BinaryDev = env.mode {
-                            crate::llvm::expect::finalize(env);
+                            crate::llvm::expect::notify_parent_expect(env, &shared_memory);
                         }
 
                         bd.build_unconditional_branch(then_block);
@@ -2677,10 +2680,13 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
 
                 match env.target_info.ptr_width() {
                     roc_target::PtrWidth::Bytes8 => {
+                        let shared_memory = SharedMemoryPointer::get(env);
+
                         clone_to_shared_memory(
                             env,
                             scope,
                             layout_ids,
+                            &shared_memory,
                             *cond_symbol,
                             *region,
                             lookups,
