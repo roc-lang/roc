@@ -64,7 +64,7 @@ pub const FLAG_CHECK: &str = "check";
 pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
-pub const GLUE_FILE: &str = "GLUE_FILE";
+pub const GLUE_DIR: &str = "GLUE_DIR";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
@@ -285,8 +285,8 @@ pub fn build_app<'a>() -> Command<'a> {
                     .required(true)
             )
             .arg(
-                Arg::new(GLUE_FILE)
-                    .help("The filename for the generated glue code\n(Currently, this must be a .rs file because only Rust glue generation is supported so far.)")
+                Arg::new(GLUE_DIR)
+                    .help("The directory for the generated glue code.\nNote: The implementation can write to any file in the directory.")
                     .allow_invalid_utf8(true)
                     .required(true)
             )

@@ -8,7 +8,7 @@ use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::{Architecture, OperatingSystem, TargetInfo};
 use std::fs::File;
 use std::io::{self, ErrorKind, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process;
 use strum::IntoEnumIterator;
 use target_lexicon::Triple;
@@ -27,31 +27,48 @@ pub fn generate(input_path: &Path, output_path: &Path) -> io::Result<i32> {
         Threading::AllAvailable,
         IgnoreErrors::NONE,
     ) {
-        Ok(types_and_targets) => {
-            let mut file = File::create(output_path).unwrap_or_else(|err| {
-                eprintln!(
-                    "Unable to create output file {} - {:?}",
-                    output_path.display(),
-                    err
-                );
+        Ok(types) => {
+            for crate::types::File { name, content } in rust_glue::emit(&types) {
+                let valid_name = PathBuf::from(&name)
+                    .components()
+                    .all(|comp| matches!(comp, Component::CurDir | Component::Normal(_)));
+                if !valid_name {
+                    eprintln!("File name was invalid: {}", &name);
 
-                process::exit(1);
-            });
+                    process::exit(1);
+                }
+                let full_path = output_path.join(name);
+                if let Some(dir_path) = full_path.parent() {
+                    std::fs::create_dir_all(&dir_path).unwrap_or_else(|err| {
+                        eprintln!(
+                            "Unable to create output directory {} - {:?}",
+                            dir_path.display(),
+                            err
+                        );
 
-            let mut buf = std::str::from_utf8(rust_glue::HEADER).unwrap().to_string();
-            let body = rust_glue::emit(&types_and_targets);
+                        process::exit(1);
+                    });
+                }
+                let mut file = File::create(&full_path).unwrap_or_else(|err| {
+                    eprintln!(
+                        "Unable to create output file {} - {:?}",
+                        full_path.display(),
+                        err
+                    );
 
-            buf.push_str(&body);
+                    process::exit(1);
+                });
 
-            file.write_all(buf.as_bytes()).unwrap_or_else(|err| {
-                eprintln!(
-                    "Unable to write bindings to output file {} - {:?}",
-                    output_path.display(),
-                    err
-                );
+                file.write_all(content.as_bytes()).unwrap_or_else(|err| {
+                    eprintln!(
+                        "Unable to write bindings to output file {} - {:?}",
+                        full_path.display(),
+                        err
+                    );
 
-                process::exit(1);
-            });
+                    process::exit(1);
+                });
+            }
 
             println!(
                 "🎉 Generated type declarations in:\n\n\t{}",
