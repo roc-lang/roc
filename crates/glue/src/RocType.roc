@@ -1,12 +1,14 @@
-platform "roc-lang/rbt"
-    requires {} { makeGlue : Str -> Types }
+platform "roc-lang/glue"
+    requires {} { makeGlue : List Types -> Result (List File) Str }
     exposes []
     packages {}
     imports []
     provides [makeGlueForHost]
 
-makeGlueForHost : Str -> Types
+makeGlueForHost : List Types -> Result (List File) Str
 makeGlueForHost = makeGlue
+
+File : { name: Str, content: Str }
 
 # TODO move into separate Target.roc interface once glue works across interfaces.
 Target : {
@@ -28,9 +30,21 @@ OperatingSystem : [
     Wasi,
 ]
 
-TypeId := Nat
+# TODO change this to an opaque type once glue supports abilities.
+TypeId : Nat
+#      has [
+#          Eq {
+#              isEq: isEqTypeId,
+#          },
+#          Hash {
+#              hash: hashTypeId,
+#          }
+#      ]
 
-Types := {
+# isEqTypeId = \@TypeId lhs, @TypeId rhs -> lhs == rhs
+# hashTypeId = \hasher, @TypeId id -> Hash.hash hasher id
+
+Types : {
     # These are all indexed by TypeId
     types: List RocType,
     sizes: List U32,
