@@ -637,13 +637,26 @@ mapWithIndexHelp = \src, dest, func, index, length ->
     else
         dest
 
-## Returns a list of all the integers from start to end.
-## The start is inclusive if it use `At x` and exclusive if it uses `After x`.
-## The end is inclusive if it use `At x` and exclusive if it uses `Before x`.
-## If end is `Length x`, the final list will contain x elements.
-## If step is specified, the values are incremented by step.
+## Returns a list of all the integers between `start` and `end`.
 ##
-## >>> List.range { start: At 2, end: Before 8, step: 3 }
+## To include the `start` and `end` integers themselves, use `At` like so:
+##
+##     List.range { start: At 2, end: At 5 } # returns [2, 3, 4, 5]
+##
+## To exclude them, use `After` and `Before`, like so:
+##
+##     List.range { start: After 2, end: Before 5 } # returns [3, 4]
+##
+## You can have the list end at a certain length rather than a certain integer:
+##
+##     List.range { start: At 6, end: Length 4 } # returns [6, 7, 8, 9]
+##
+## If `step` is specified, each integer increases by that much. (`step: 1` is the default.)
+##
+##     List.range { start: After 1, end: Before 10, step: 3 } # returns [2, 5, 8]
+##
+## All of these options are compatible with the others. For example, you can use `At` or `After`
+## with `start` regardless of what `end` and `step` are set to.
 # TODO: Make the type annotation work
 # range :
 #     {
