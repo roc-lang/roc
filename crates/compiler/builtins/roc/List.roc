@@ -637,26 +637,117 @@ mapWithIndexHelp = \src, dest, func, index, length ->
     else
         dest
 
-## Returns a list of all the integers between one and another,
-## including both of the given numbers.
+## Returns a list of all the integers from start to end.
+## The start is inclusive if it use `At x` and exclusive if it uses `After x`.
+## The end is inclusive if it use `At x` and exclusive if it uses `Before x`.
+## If end is `Length x`, the final list will contain x elements.
+## If step is specified, the values are incremented by step.
 ##
-## >>> List.range 2 8
-range : Int a, Int a -> List (Int a)
-range = \start, end ->
-    when Num.compare start end is
-        GT -> []
-        EQ -> [start]
-        LT ->
-            length = Num.intCast (end - start)
+## >>> List.range { start: At 2, end: Before 8, step: 3 }
+# TODO: Make the type annotation work
+# range :
+#     {
+#         start : [At (Int a), After (Int a)],
+#         end : [At (Int a), Before (Int a), Length Nat],
+#          # TODO: We want this to be Int *, but that requires the ability to convert or add from Int * to Int a
+#         step ? Int a
+#     }
+#     -> List (Int a) | a has Bool.Eq
+range = \{ start, end, step ? 0 } ->
+    { incByStep, stepIsPositive } =
+        if step == 0 then
+            when T start end is
+                T (At x) (At y) | T (At x) (Before y) | T (After x) (At y) | T (After x) (Before y) ->
+                    if x < y then
+                        {
+                            incByStep: \i -> i + 1,
+                            stepIsPositive: Bool.true,
+                        }
+                    else
+                        {
+                            incByStep: \i -> i - 1,
+                            stepIsPositive: Bool.false,
+                        }
 
-            rangeHelp (List.withCapacity length) start end
+                T (At _) (Length _) | T (After _) (Length _) ->
+                    {
+                        incByStep: \i -> i + 1,
+                        stepIsPositive: Bool.true,
+                    }
+        else
+            {
+                incByStep: \i -> i + step,
+                stepIsPositive: step > 0,
+            }
 
-rangeHelp : List (Int a), Int a, Int a -> List (Int a)
-rangeHelp = \accum, start, end ->
-    if end <= start then
+    inclusiveStart =
+        when start is
+            At x -> x
+            After x -> incByStep x
+
+    when end is
+        At at ->
+            isComplete =
+                if stepIsPositive then
+                    \i -> i > at
+                else
+                    \i -> i < at
+
+            # TODO: switch to List.withCapacity
+            rangeHelp [] inclusiveStart incByStep isComplete
+
+        Before before ->
+            isComplete =
+                if stepIsPositive then
+                    \i -> i >= before
+                else
+                    \i -> i <= before
+
+            # TODO: switch to List.withCapacity
+            rangeHelp [] inclusiveStart incByStep isComplete
+
+        Length l ->
+            rangeLengthHelp (List.withCapacity l) inclusiveStart l incByStep
+
+rangeHelp = \accum, i, incByStep, isComplete ->
+    if isComplete i then
         accum
     else
-        rangeHelp (List.appendUnsafe accum start) (start + 1) end
+        # TODO: change this to List.appendUnsafe once capacity is set correctly
+        rangeHelp (List.append accum i) (incByStep i) incByStep isComplete
+
+rangeLengthHelp = \accum, i, remaining, incByStep ->
+    if remaining == 0 then
+        accum
+    else
+        rangeLengthHelp (List.appendUnsafe accum i) (incByStep i) (remaining - 1) incByStep
+
+expect
+    List.range { start: At 0, end: At 4 } == [0, 1, 2, 3, 4]
+
+expect
+    List.range { start: After 0, end: At 4 } == [1, 2, 3, 4]
+
+expect
+    List.range { start: At 0, end: At 4, step: 2 } == [0, 2, 4]
+
+expect
+    List.range { start: At 0, end: Before 4 } == [0, 1, 2, 3]
+
+expect
+    List.range { start: After 0, end: Before 4 } == [1, 2, 3]
+
+expect
+    List.range { start: At 0, end: Before 4, step: 2 } == [0, 2]
+
+expect
+    List.range { start: At 4, end: Length 5 } == [4, 5, 6, 7, 8]
+
+expect
+    List.range { start: At 4, end: Length 5, step: 10 } == [4, 14, 24, 34, 44]
+
+expect
+    List.range { start: At 4, end: Length 5, step: -3 } == [4, 1, -2, -5, -8]
 
 ## Sort with a custom comparison function
 sortWith : List a, (a, a -> [LT, EQ, GT]) -> List a
