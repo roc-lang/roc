@@ -204,9 +204,7 @@ No implementation of Rank-2 types can remove any of these downsides. Thus far, w
 with sufficiently nice APIs that only require Rank-1 types, and we haven't seen a really compelling use case
 where the gap between the Rank-2 and Rank-1 designs was big enough to justify switching to Rank-2.
 
-Since I prefer Roc being simpler and having a faster compiler with nicer error messages, my hope is that Roc
-will never get Rank-2 types. However, it may turn out that in the future we learn about currently-unknown
-upsides that somehow outweigh these downsides, so I'm open to considering the possibility - while rooting against it.
+As such, the plan is for Roc to stick with Rank-1 types indefinitely. In Roc's case, the benefits of Rank-1's faster compilation with nicer error messages and a simpler type system outweigh Rank-2's benefits of expanded API options.
 
 ### Higher-kinded polymorphism
 
