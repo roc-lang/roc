@@ -140,7 +140,7 @@ and `Optional` (like in Java).
 By design, Roc does not have one of these. There are several reasons for this.
 
 First, if a function returns a potential error, Roc has the convention to use `Result` with an error type that
-has a single tag describing what went wrong. (For example, `List.first : List a -> Result a [ListWasEmpty]*`
+has a single tag describing what went wrong. (For example, `List.first : List a -> Result a [ListWasEmpty]`
 instead of `List.first : List a -> Maybe a`.) This is not only more self-descriptive, it also composes better with
 other operations that can fail; there's no need to have functions like `Result.toMaybe` or `Maybe.toResult`,
 because in Roc, the convention is that operations that can fail always use `Result`.
@@ -170,7 +170,7 @@ for using `Maybe` even when it's less self-descriptive), we'd have to rewrite al
 helper functions. As such, a subtle downside of these helper functions is that they discourage any change to
 the data model that would break their call sites, even if that change would improve the data model overall.
 
-On a historical note, `Maybe` may have been thought of as a substitute for null references—as opposed to something that emerged organically based on specific motivating use cases after `Result` already existed. That said, in languages that do not have an equivalent of Roc's tag unions, it's much less ergonomic to write something like `Result a [ListWasEmpty]*`, so that design would not fit those languages as well as it fits Roc.
+On a historical note, `Maybe` may have been thought of as a substitute for null references—as opposed to something that emerged organically based on specific motivating use cases after `Result` already existed. That said, in languages that do not have an equivalent of Roc's tag unions, it's much less ergonomic to write something like `Result a [ListWasEmpty]`, so that design would not fit those languages as well as it fits Roc.
 
 ## Why doesn't Roc have higher-kinded polymorphism or arbitrary-rank types?
 
