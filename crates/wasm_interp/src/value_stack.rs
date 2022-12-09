@@ -90,6 +90,10 @@ impl<'a> ValueStack<'a> {
     pub(crate) fn iter(&self) -> std::slice::Iter<Value> {
         self.values.iter()
     }
+
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.values.truncate(len)
+    }
 }
 
 impl Debug for ValueStack<'_> {

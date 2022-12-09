@@ -19,6 +19,12 @@ pub enum Action {
 }
 
 #[derive(Debug)]
+enum Block {
+    Loop { vstack: usize, start_addr: usize },
+    Normal { vstack: usize },
+}
+
+#[derive(Debug)]
 pub struct Instance<'a, I: ImportDispatcher> {
     /// Contents of the WebAssembly instance's memory
     pub memory: Vec<'a, u8>,
@@ -31,7 +37,7 @@ pub struct Instance<'a, I: ImportDispatcher> {
     /// Index in the code section of the current instruction
     pub program_counter: usize,
     /// One entry per nested block. For loops, stores the address of the first instruction.
-    block_loop_addrs: Vec<'a, Option<u32>>,
+    blocks: Vec<'a, Block>,
     /// Outermost block depth for the currently-executing function.
     outermost_block: u32,
     /// Import dispatcher from user code
@@ -60,7 +66,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             value_stack: ValueStack::new(arena),
             globals: Vec::from_iter_in(globals, arena),
             program_counter,
-            block_loop_addrs: Vec::new_in(arena),
+            blocks: Vec::new_in(arena),
             outermost_block: 0,
             import_dispatcher,
             import_arguments: Vec::new_in(arena),
@@ -108,7 +114,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             value_stack,
             globals,
             program_counter: usize::MAX,
-            block_loop_addrs: Vec::new_in(arena),
+            blocks: Vec::new_in(arena),
             outermost_block: 0,
             import_dispatcher,
             import_arguments: Vec::new_in(arena),
@@ -277,8 +283,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
     }
 
     fn do_return(&mut self) -> Action {
-        self.block_loop_addrs
-            .truncate(self.outermost_block as usize);
+        self.blocks.truncate(self.outermost_block as usize);
         if let Some((return_addr, block_depth)) = self.call_stack.pop_frame() {
             if self.call_stack.is_empty() {
                 // We just popped the stack frame for the entry function. Terminate the program.
@@ -323,14 +328,16 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
     }
 
     fn do_break(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>) {
-        let block_index = self.block_loop_addrs.len() - 1 - relative_blocks_outward as usize;
-        match self.block_loop_addrs[block_index] {
-            Some(addr) => {
-                self.block_loop_addrs.truncate(block_index + 1);
-                self.program_counter = addr as usize;
+        let block_index = self.blocks.len() - 1 - relative_blocks_outward as usize;
+        match self.blocks[block_index] {
+            Block::Loop { start_addr, vstack } => {
+                self.blocks.truncate(block_index + 1);
+                self.value_stack.truncate(vstack);
+                self.program_counter = start_addr;
             }
-            None => {
+            Block::Normal { vstack } => {
                 self.break_forward(relative_blocks_outward, module);
+                self.value_stack.truncate(vstack);
             }
         }
     }
@@ -339,7 +346,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
     fn break_forward(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>) {
         use OpCode::*;
 
-        let mut depth = self.block_loop_addrs.len();
+        let mut depth = self.blocks.len();
         let target_block_depth = depth - (relative_blocks_outward + 1) as usize;
         loop {
             let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
@@ -357,7 +364,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 _ => {}
             }
         }
-        self.block_loop_addrs.truncate(target_block_depth);
+        self.blocks.truncate(target_block_depth);
     }
 
     fn do_call(
@@ -420,7 +427,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             self.program_counter = module.code.function_offsets[internal_fn_index] as usize;
 
             let return_block_depth = self.outermost_block;
-            self.outermost_block = self.block_loop_addrs.len() as u32;
+            self.outermost_block = self.blocks.len() as u32;
 
             let _function_byte_length =
                 u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
@@ -461,19 +468,25 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             NOP => {}
             BLOCK => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
-                self.block_loop_addrs.push(None);
+                self.blocks.push(Block::Normal {
+                    vstack: self.value_stack.len(),
+                });
             }
             LOOP => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
-                self.block_loop_addrs
-                    .push(Some(self.program_counter as u32));
+                self.blocks.push(Block::Loop {
+                    vstack: self.value_stack.len(),
+                    start_addr: self.program_counter,
+                });
             }
             IF => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
                 let condition = self.value_stack.pop_i32()?;
-                self.block_loop_addrs.push(None);
+                self.blocks.push(Block::Normal {
+                    vstack: self.value_stack.len(),
+                });
                 if condition == 0 {
-                    let mut depth = self.block_loop_addrs.len();
+                    let mut depth = self.blocks.len();
                     loop {
                         let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
                         OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
@@ -485,7 +498,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                                 depth -= 1;
                             }
                             ELSE => {
-                                if depth == self.block_loop_addrs.len() {
+                                if depth == self.blocks.len() {
                                     break;
                                 }
                             }
@@ -501,12 +514,12 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.do_break(0, module);
             }
             END => {
-                if self.block_loop_addrs.len() == self.outermost_block as usize {
+                if self.blocks.len() == self.outermost_block as usize {
                     // implicit RETURN at end of function
                     action = self.do_return();
                     // implicit_return = true;
                 } else {
-                    self.block_loop_addrs.pop().unwrap();
+                    self.blocks.pop().unwrap();
                 }
             }
             BR => {
