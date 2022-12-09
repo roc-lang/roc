@@ -1,8 +1,7 @@
-use std::path::PathBuf;
-
 use bumpalo::Bump;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use roc_parse::{module, module::module_defs, parser::Parser, state::State};
+use std::path::PathBuf;
 
 pub fn parse_benchmark(c: &mut Criterion) {
     c.bench_function("parse false-interpreter", |b| {
