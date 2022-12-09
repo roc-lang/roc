@@ -42,7 +42,7 @@ use roc_packaging::cache::{self, RocCacheDir};
 #[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::PackageMetadata;
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
-use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To};
+use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
 use roc_parse::header::{HeaderType, PackageName};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
@@ -882,7 +882,7 @@ enum PlatformPath<'a> {
 #[derive(Debug)]
 struct PlatformData<'a> {
     module_id: ModuleId,
-    provides: &'a [Loc<ExposedName<'a>>],
+    provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
     is_prebuilt: bool,
 }
 
@@ -3189,7 +3189,7 @@ fn finish_specialization<'a>(
                         let mut buf =
                             bumpalo::collections::Vec::with_capacity_in(provides.len(), arena);
 
-                        for loc_name in provides {
+                        for (loc_name, _loc_typed_ident) in provides {
                             let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
                             let symbol = Symbol::new(module_id, ident_id);
                             let proc_layout = proc_layout_for(procedures.keys().copied(), symbol);
@@ -3956,7 +3956,7 @@ fn parse_header<'a>(
                 arena,
                 None,
                 None,
-                filename.to_path_buf(),
+                filename,
                 parse_state,
                 module_ids.clone(),
                 ident_ids_by_module,
@@ -4241,7 +4241,7 @@ fn build_header<'a>(
             //
             // We must *not* add them to scope yet, or else the Defs will
             // incorrectly think they're shadowing them!
-            for loc_provides in provides.iter() {
+            for (loc_name, _loc_typed_ident) in provides.iter() {
                 // Use get_or_insert here because the ident_ids may already
                 // created an IdentId for this, when it was imported exposed
                 // in a dependent module.
@@ -4249,7 +4249,7 @@ fn build_header<'a>(
                 // For example, if module A has [B.{ foo }], then
                 // when we get here for B, `foo` will already have
                 // an IdentId. We must reuse that!
-                let ident_id = ident_ids.get_or_insert(loc_provides.value.as_str());
+                let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
                 let symbol = Symbol::new(home, ident_id);
 
                 provided.push(symbol);
@@ -4877,11 +4877,17 @@ fn build_platform_header<'a>(
     // otherwise, we must be the root.
     let is_root_module = opt_app_module_id.is_none();
 
-    let provides = unspace(arena, header.provides.item.items);
     let requires = arena.alloc([Loc::at(
         header.requires.item.signature.region,
         header.requires.item.signature.extract_spaces().item,
     )]);
+    let provides = bumpalo::collections::Vec::from_iter_in(
+        unspace(arena, header.provides.item.items)
+            .iter()
+            .copied()
+            .zip(requires.iter().copied()),
+        arena,
+    );
     let requires_types = unspace(arena, header.requires.item.rigids.items);
     let imports = unspace(arena, header.imports.item.items);
 
@@ -4889,9 +4895,8 @@ fn build_platform_header<'a>(
         name: header.name.value,
         // A config_shorthand of "" should be fine
         config_shorthand: opt_shorthand.unwrap_or_default(),
-        platform_main_type: requires[0].value,
         opt_app_module_id,
-        provides,
+        provides: provides.into_bump_slice(),
         requires,
         requires_types,
     };
@@ -4902,7 +4907,7 @@ fn build_platform_header<'a>(
         opt_shorthand,
         packages: &[],
         exposes: &[], // These are exposed values. TODO move this into header_type!
-        imports: unspace(arena, header.imports.item.items),
+        imports,
         header_type,
     };
 

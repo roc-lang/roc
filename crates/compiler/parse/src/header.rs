@@ -28,16 +28,14 @@ pub enum HeaderType<'a> {
     Platform {
         name: PackageName<'a>,
         opt_app_module_id: Option<ModuleId>,
-        provides: &'a [Loc<ExposedName<'a>>],
+        /// the name and type scheme of the main function (required by the platform)
+        /// (type scheme is currently unused)
+        provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
         requires: &'a [Loc<TypedIdent<'a>>],
         requires_types: &'a [Loc<UppercaseIdent<'a>>],
 
         /// usually `pf`
         config_shorthand: &'a str,
-        /// the type scheme of the main function (required by the platform)
-        /// (currently unused)
-        #[allow(dead_code)]
-        platform_main_type: TypedIdent<'a>,
     },
     Interface {
         name: ModuleName<'a>,
