@@ -20,8 +20,7 @@ jobs:
         run: echo "RELEASE_URL=$(./ci/get_latest_release_url.sh silicon)" >> $GITHUB_ENV
 
       - name: Get the archive from the url.
-        run: |
-          curl -OL ${{ env.RELEASE_URL }} header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
+        run: curl -OL ${{ env.RELEASE_URL }}
 
       - name: remove everything in this dir except the tar # we want to test like a user who would have downloaded the release, so we clean up all files from the repo checkout
         run: ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
