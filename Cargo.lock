@@ -220,7 +220,7 @@ dependencies = [
  "quote",
  "regex",
  "rustc-hash",
- "shlex 1.1.0",
+ "shlex",
 ]
 
 [[package]]
@@ -4849,12 +4849,6 @@ dependencies = [
 
 [[package]]
 name = "shlex"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7fdf1b9db47230893d76faad238fd6097fd6d6a9245cd7a4d90dbd639536bbd2"
-
-[[package]]
-name = "shlex"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43b2853a4d09f215c24cc5489c992ce46052d359b5109343cbafbf26bc62f8a3"
@@ -5281,11 +5275,11 @@ dependencies = [
  "roc_types",
  "roc_unify",
  "roc_utils",
+ "roc_wasm_interp",
  "roc_wasm_module",
  "target-lexicon",
  "tempfile",
  "wasi_libc_sys",
- "wasm3",
 ]
 
 [[package]]
@@ -5858,25 +5852,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f76068e87fe9b837a6bc2ccded66784173eadb828c4168643e9fddf6f9ed2e61"
 dependencies = [
  "leb128",
-]
-
-[[package]]
-name = "wasm3"
-version = "0.5.0"
-source = "git+https://github.com/roc-lang/wasm3-rs?rev=ba0cdab7404f7f2995a8c18e614ce020dabd6da0#ba0cdab7404f7f2995a8c18e614ce020dabd6da0"
-dependencies = [
- "cty",
- "wasm3-sys",
-]
-
-[[package]]
-name = "wasm3-sys"
-version = "0.5.0"
-source = "git+https://github.com/roc-lang/wasm3-rs?rev=ba0cdab7404f7f2995a8c18e614ce020dabd6da0#ba0cdab7404f7f2995a8c18e614ce020dabd6da0"
-dependencies = [
- "cc",
- "cty",
- "shlex 0.1.1",
 ]
 
 [[package]]

@@ -6,10 +6,10 @@ pub mod wasi;
 
 // Main external interface
 pub use instance::Instance;
+pub use wasi::WasiDispatcher;
 
 use roc_wasm_module::{Value, ValueType, WasmModule};
 use value_stack::ValueStack;
-use wasi::WasiDispatcher;
 
 pub trait ImportDispatcher {
     /// Dispatch a call from WebAssembly to your own code, based on module and function name.
