@@ -4174,9 +4174,8 @@ fn build_header<'a>(
             provides,
             requires,
             requires_types,
-            config_shorthand,
-            platform_main_type,
             opt_app_module_id,
+            config_shorthand: _,
             name: _,
         } = header_type
         {
