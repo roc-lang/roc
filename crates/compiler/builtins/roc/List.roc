@@ -653,7 +653,7 @@ mapWithIndexHelp = \src, dest, func, index, length ->
 ##
 ## If `step` is specified, each integer increases by that much. (`step: 1` is the default.)
 ##
-##     List.range { start: After 1, end: Before 10, step: 3 } # returns [2, 5, 8]
+##     List.range { start: After 0, end: Before 9, step: 3 } # returns [3, 6]
 ##
 ## All of these options are compatible with the others. For example, you can use `At` or `After`
 ## with `start` regardless of what `end` and `step` are set to.
