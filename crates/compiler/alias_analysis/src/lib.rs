@@ -267,22 +267,22 @@ where
                     captures_niche: CapturesNiche::no_niche(),
                 };
 
-                let mut env = Env::new(arena);
-
                 let host_exposed: Vec<_> = symbols
                     .iter()
                     .map(|symbol| {
-                        let bytes = func_name_bytes_help(
-                            *symbol,
-                            [],
-                            CapturesNiche::no_niche(),
-                            &layout.result,
-                        );
-
-                        (bytes, [].as_slice())
+                        (
+                            func_name_bytes_help(
+                                *symbol,
+                                [],
+                                CapturesNiche::no_niche(),
+                                &layout.result,
+                            ),
+                            [].as_slice(),
+                        )
                     })
                     .collect();
 
+                let mut env = Env::new(arena);
                 let entry_point_function =
                     build_entry_point(&mut env, interner, layout, None, &host_exposed)?;
 
@@ -327,22 +327,11 @@ where
         let mut p = ProgramBuilder::new();
         p.add_mod(MOD_APP, main_module)?;
 
-        match entry_point {
-            EntryPoint::Single { .. } => {
-                p.add_entry_point(
-                    EntryPointName(ENTRY_POINT_NAME),
-                    MOD_APP,
-                    FuncName(ENTRY_POINT_NAME),
-                )?;
-            }
-            EntryPoint::Expects { .. } => {
-                p.add_entry_point(
-                    EntryPointName(ENTRY_POINT_NAME),
-                    MOD_APP,
-                    FuncName(ENTRY_POINT_NAME),
-                )?;
-            }
-        }
+        p.add_entry_point(
+            EntryPointName(ENTRY_POINT_NAME),
+            MOD_APP,
+            FuncName(ENTRY_POINT_NAME),
+        )?;
 
         p.build()?
     };
