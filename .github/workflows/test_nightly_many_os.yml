@@ -1,7 +1,6 @@
 on:
-  [pull_request]
-#  schedule:
-#    - cron:  '0 13 * * *'
+  schedule:
+    - cron:  '0 13 * * *'
 
 name: Test latest nightly release for macOS, ubu 20.04, ubu 22.04 x86_64
 
