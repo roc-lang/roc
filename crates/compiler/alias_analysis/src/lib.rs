@@ -374,37 +374,33 @@ fn build_entry_point<'a>(
 
     let mut cases = Vec::new();
 
-    match entry_point_function {
-        Some(entry_point_function) => {
-            let block = builder.add_block();
+    if let Some(entry_point_function) = entry_point_function {
+        let block = builder.add_block();
 
-            // to the modelling language, the arguments appear out of thin air
-            let argument_type = build_tuple_type(
-                env,
-                &mut builder,
-                interner,
-                layout.arguments,
-                &WhenRecursive::Unreachable,
-            )?;
+        // to the modelling language, the arguments appear out of thin air
+        let argument_type = build_tuple_type(
+            env,
+            &mut builder,
+            interner,
+            layout.arguments,
+            &WhenRecursive::Unreachable,
+        )?;
 
-            // does not make any assumptions about the input
-            // let argument = builder.add_unknown_with(block, &[], argument_type)?;
+        // does not make any assumptions about the input
+        // let argument = builder.add_unknown_with(block, &[], argument_type)?;
 
-            // assumes the input can be updated in-place
-            let argument = terrible_hack(&mut builder, block, argument_type)?;
+        // assumes the input can be updated in-place
+        let argument = terrible_hack(&mut builder, block, argument_type)?;
 
-            let name_bytes = [0; 16];
-            let spec_var = CalleeSpecVar(&name_bytes);
-            let result =
-                builder.add_call(block, spec_var, MOD_APP, entry_point_function, argument)?;
+        let name_bytes = [0; 16];
+        let spec_var = CalleeSpecVar(&name_bytes);
+        let result = builder.add_call(block, spec_var, MOD_APP, entry_point_function, argument)?;
 
-            // to the modelling language, the result disappears into the void
-            let unit_type = builder.add_tuple_type(&[])?;
-            let unit_value = builder.add_unknown_with(block, &[result], unit_type)?;
+        // to the modelling language, the result disappears into the void
+        let unit_type = builder.add_tuple_type(&[])?;
+        let unit_value = builder.add_unknown_with(block, &[result], unit_type)?;
 
-            cases.push(BlockExpr(block, unit_value));
-        }
-        _ => {}
+        cases.push(BlockExpr(block, unit_value));
     }
 
     // add fake calls to host-exposed functions so they are specialized
