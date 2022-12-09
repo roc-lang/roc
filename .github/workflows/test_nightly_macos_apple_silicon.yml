@@ -1,6 +1,7 @@
 on:
-  schedule:
-    - cron:  '0 13 * * *'
+  [pull_request]
+  #schedule:
+  #  - cron:  '0 13 * * *'
 
 name: Test latest nightly release for macOS Apple Silicon
 
@@ -29,6 +30,15 @@ jobs:
 
       - name: test roc hello world
         run: ./roc examples/helloWorld.roc
+
+      - name: test platform switching rust
+        run: ./roc examples/platform-switching/rocLovesRust.roc
+
+      - name: test platform switching zig
+        run: ./roc examples/platform-switching/rocLovesZig.roc
+
+      - name: test platform switching c
+        run: ./roc examples/platform-switching/rocLovesC.roc
 
 
         
