@@ -178,7 +178,7 @@ impl<'a> CallStack<'a> {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.is_64.is_empty()
+        self.frame_offsets.is_empty()
     }
 
     /// Dump a stack trace of the WebAssembly program

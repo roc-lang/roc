@@ -12,6 +12,7 @@ use crate::call_stack::CallStack;
 use crate::value_stack::ValueStack;
 use crate::{Error, ImportDispatcher};
 
+#[derive(Debug)]
 pub enum Action {
     Continue,
     Break,
