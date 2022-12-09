@@ -1,26 +1,13 @@
 interface Simple
     exposes [
-    v, x
-     ]
-    imports       []
+        v,
+        x,
+    ]
+    imports []
 
-
-
-
-
-
-
-
-
-v :      Str
-
-
-
-
+v : Str
 
 v = "Value!"
-
-
 
 x : Int
 x = 4

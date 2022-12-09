@@ -30,8 +30,13 @@ Defs(
                         ),
                         typ: @18-36 Function(
                             [
-                                @18-19 BoundVariable(
-                                    "a",
+                                @18-19 SpaceAfter(
+                                    BoundVariable(
+                                        "a",
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
                                 ),
                             ],
                             @33-36 Apply(

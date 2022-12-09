@@ -1,0 +1,40 @@
+Defs(
+    Defs {
+        tags: [
+            Index(0),
+        ],
+        regions: [
+            @0-4,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [
+            Alias {
+                header: TypeHeader {
+                    name: @0-1 "R",
+                    vars: [],
+                },
+                ann: @3-4 Apply(
+                    "",
+                    "D",
+                    [],
+                ),
+            },
+        ],
+        value_defs: [],
+    },
+    @5-6 SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "a",
+        },
+        [
+            Newline,
+        ],
+    ),
+)
