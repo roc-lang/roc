@@ -161,7 +161,7 @@ where
     }
 }
 
-fn eat_whitespace(bytes: &[u8]) -> usize {
+pub fn simple_eat_whitespace(bytes: &[u8]) -> usize {
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
@@ -172,7 +172,36 @@ fn eat_whitespace(bytes: &[u8]) -> usize {
     i
 }
 
-fn eat_until_newline(bytes: &[u8]) -> usize {
+pub fn fast_eat_whitespace(bytes: &[u8]) -> usize {
+    // Load 8 bytes at a time, keeping in mind that the initial offset may not be aligned
+    let mut i = 0;
+    while i + 8 <= bytes.len() {
+        let chunk = unsafe {
+            // Safe because we know the pointer is in bounds
+            (bytes.as_ptr().add(i) as *const u64).read_unaligned().to_le()
+        };
+        // Space character is 0x20, which has a single bit set
+        // We can check for any space character by checking if any other bit is set
+        let spaces = 0x2020_2020_2020_2020;
+        let mask = chunk ^ spaces;
+        let mask = mask | ((mask & 0xf0f0_f0f0_f0f0_f0f0) >> 4);
+        let mask = mask | ((mask & 0xcccc_cccc_cccc_cccc) >> 2);
+        let mask = mask | ((mask & 0xaaaa_aaaa_aaaa_aaaa) >> 1);
+
+        let count = (mask & 0x0101_0101_0101_0101).trailing_zeros() as usize / 8;
+
+        if count == 8 {
+            i += 8;
+        } else {
+            return i + count;
+        }
+    }
+
+    // Check the remaining bytes
+    simple_eat_whitespace(&bytes[i..]) + i
+}
+
+pub fn simple_eat_until_control_character(bytes: &[u8]) -> usize {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] < b' ' {
@@ -182,6 +211,72 @@ fn eat_until_newline(bytes: &[u8]) -> usize {
         }
     }
     i
+}
+
+pub fn fast_eat_until_control_character(bytes: &[u8]) -> usize {
+    // Load 8 bytes at a time, keeping in mind that the initial offset may not be aligned
+    let mut i = 0;
+    while i + 8 <= bytes.len() {
+        let chunk = unsafe {
+            // Safe because we know the pointer is in bounds
+            (bytes.as_ptr().add(i) as *const u64).read_unaligned().to_le()
+        };
+        
+        // Control characters are 0x00-0x1F, and don't have any high bits set.
+        // They only have bits set that fall under the 0x1F mask.
+
+        let control = 0x1F1F_1F1F_1F1F_1F1F;
+
+        let mask = chunk & !control;
+        let mask = mask | ((mask & 0xf0f0_f0f0_f0f0_f0f0) >> 4);
+        let mask = mask | ((mask & 0xcccc_cccc_cccc_cccc) >> 2);
+        let mask = mask | ((mask & 0xaaaa_aaaa_aaaa_aaaa) >> 1);
+
+        let count = (mask | !0x0101_0101_0101_0101).trailing_ones() as usize / 8;
+
+        if count == 8 {
+            i += 8;
+        } else {
+            return i + count;
+        }
+    }
+
+    // Check the remaining bytes
+    simple_eat_until_control_character(&bytes[i..]) + i
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn test_eat_whitespace_simple() {
+        let bytes = &[32, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(simple_eat_whitespace(bytes), fast_eat_whitespace(bytes));
+    }
+
+    proptest! {
+        #[test]
+        fn test_eat_whitespace(bytes in proptest::collection::vec(any::<u8>(), 0..100)) {
+            prop_assert_eq!(simple_eat_whitespace(&bytes), fast_eat_whitespace(&bytes));
+        }
+    }
+
+    #[test]
+    fn test_eat_until_control_character_simple() {
+        let bytes = &[32, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(simple_eat_until_control_character(bytes), fast_eat_until_control_character(bytes));
+    }
+
+    proptest! {
+        #[test]
+        fn test_eat_until_control_character(bytes in proptest::collection::vec(any::<u8>(), 0..100)) {
+            prop_assert_eq!(
+                simple_eat_until_control_character(&bytes),
+                fast_eat_until_control_character(&bytes));
+        }
+    }
 }
 
 pub fn space0_e<'a, E>(
@@ -213,7 +308,7 @@ where
         let mut newlines = Vec::new_in(arena);
         let mut progress = NoProgress;
         loop {
-            let whitespace = eat_whitespace(state.bytes());
+            let whitespace = fast_eat_whitespace(state.bytes());
             if whitespace > 0 {
                 state.advance_mut(whitespace);
                 progress = MadeProgress;
@@ -235,7 +330,7 @@ where
                         }
                     }
 
-                    let len = eat_until_newline(state.bytes());
+                    let len =fast_eat_until_control_character(state.bytes());
 
                     // We already checked that the string is valid UTF-8
                     debug_assert!(std::str::from_utf8(&state.bytes()[..len]).is_ok());
