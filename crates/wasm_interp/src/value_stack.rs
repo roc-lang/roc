@@ -86,6 +86,10 @@ impl<'a> ValueStack<'a> {
             None => Err(Error::ValueStackEmpty),
         }
     }
+
+    pub(crate) fn iter(&self) -> std::slice::Iter<Value> {
+        self.values.iter()
+    }
 }
 
 impl Debug for ValueStack<'_> {

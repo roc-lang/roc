@@ -1,4 +1,3 @@
-use bitvec::vec::BitVec;
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::opcodes::OpCode;
 use roc_wasm_module::sections::ImportDesc;
@@ -6,7 +5,7 @@ use roc_wasm_module::{parse::Parse, Value, ValueType, WasmModule};
 use std::fmt::{self, Write};
 use std::iter::repeat;
 
-use crate::{pc_to_fn_index, type_from_flags_f_64, Error, ValueStack};
+use crate::{pc_to_fn_index, Error, ValueStack};
 
 /// Struct-of-Arrays storage for the call stack.
 /// Type info is packed to avoid wasting space on padding.
@@ -19,23 +18,9 @@ pub struct CallStack<'a> {
     frame_offsets: Vec<'a, u32>,
     /// base size of the value stack before executing (one entry per frame)
     value_stack_bases: Vec<'a, u32>,
-    /// binary data for local variables (one entry per local)
-    locals_data: Vec<'a, u64>,
-    /// int/float type info (one entry per local)
-    is_float: BitVec,
-    /// bitwidth type info (one entry per local)
-    is_64: BitVec,
+    /// local variables (one entry per local)
+    locals: Vec<'a, Value>,
 }
-
-/*
-TODO, maybe?
-Store data as `Vec<u8>` and a current frame offset.
-To find a local by index, take a slice of `is_64` starting at current frame offset,
-and use count_ones to know how many of the locals in-between are 64-bit vs 32.
-Big size reduction, since most locals are i32. And we're loading that word from is_64 anyway.
-When pushing/popping frames, move the current frame offset using a similar calculation.
-Not clear if this would be better! Stack access pattern is pretty cache-friendly anyway.
-*/
 
 impl<'a> CallStack<'a> {
     pub fn new(arena: &'a Bump) -> Self {
@@ -43,9 +28,7 @@ impl<'a> CallStack<'a> {
             return_addrs_and_block_depths: Vec::with_capacity_in(256, arena),
             frame_offsets: Vec::with_capacity_in(256, arena),
             value_stack_bases: Vec::with_capacity_in(256, arena),
-            locals_data: Vec::with_capacity_in(16 * 256, arena),
-            is_float: BitVec::with_capacity(256),
-            is_64: BitVec::with_capacity(256),
+            locals: Vec::with_capacity_in(16 * 256, arena),
         }
     }
 
@@ -61,15 +44,12 @@ impl<'a> CallStack<'a> {
     ) -> Result<(), crate::Error> {
         self.return_addrs_and_block_depths
             .push((return_addr, return_block_depth));
-        let frame_offset = self.is_64.len();
+        let frame_offset = self.locals.len();
         self.frame_offsets.push(frame_offset as u32);
-        let mut total = 0;
 
         // Make space for arguments
         let n_args = arg_type_bytes.len();
-        self.is_64.extend(repeat(false).take(n_args));
-        self.is_float.extend(repeat(false).take(n_args));
-        self.locals_data.extend(repeat(0).take(n_args));
+        self.locals.extend(repeat(Value::I64(0)).take(n_args));
 
         // Pop arguments off the value stack and into locals
         for (i, type_byte) in arg_type_bytes.iter().copied().enumerate().rev() {
@@ -80,14 +60,6 @@ impl<'a> CallStack<'a> {
                 return Err(Error::ValueStackType(expected_type, ty));
             }
             self.set_local_help(i as u32, arg);
-            self.is_64.set(
-                frame_offset + i,
-                matches!(ty, ValueType::I64 | ValueType::F64),
-            );
-            self.is_float.set(
-                frame_offset + i,
-                matches!(ty, ValueType::F32 | ValueType::F64),
-            );
         }
 
         self.value_stack_bases.push(value_stack.len() as u32);
@@ -97,13 +69,14 @@ impl<'a> CallStack<'a> {
         for _ in 0..local_group_count {
             let (group_size, ty) = <(u32, ValueType)>::parse((), code_bytes, pc).unwrap();
             let n = group_size as usize;
-            total += n;
-            self.is_64
-                .extend(repeat(matches!(ty, ValueType::I64 | ValueType::F64)).take(n));
-            self.is_float
-                .extend(repeat(matches!(ty, ValueType::F32 | ValueType::F64)).take(n));
+            let zero = match ty {
+                ValueType::I32 => Value::I32(0),
+                ValueType::I64 => Value::I64(0),
+                ValueType::F32 => Value::F32(0.0),
+                ValueType::F64 => Value::F64(0.0),
+            };
+            self.locals.extend(repeat(zero).take(n));
         }
-        self.locals_data.extend(repeat(0).take(total));
         Ok(())
     }
 
@@ -111,9 +84,7 @@ impl<'a> CallStack<'a> {
     pub fn pop_frame(&mut self) -> Option<(u32, u32)> {
         let frame_offset = self.frame_offsets.pop()? as usize;
         self.value_stack_bases.pop()?;
-        self.locals_data.truncate(frame_offset);
-        self.is_64.truncate(frame_offset);
-        self.is_64.truncate(frame_offset);
+        self.locals.truncate(frame_offset);
         self.return_addrs_and_block_depths.pop()
     }
 
@@ -124,23 +95,7 @@ impl<'a> CallStack<'a> {
     fn get_local_help(&self, frame_index: usize, local_index: u32) -> Value {
         let frame_offset = self.frame_offsets[frame_index];
         let index = (frame_offset + local_index) as usize;
-        let data64 = self.locals_data[index];
-        let is_float = self.is_float[index];
-        let is_64 = self.is_64[index];
-        if is_64 {
-            if is_float {
-                Value::F64(f64::from_ne_bytes(data64.to_ne_bytes()))
-            } else {
-                Value::I64(i64::from_ne_bytes(data64.to_ne_bytes()))
-            }
-        } else {
-            let data32 = data64 as u32;
-            if is_float {
-                Value::F32(f32::from_ne_bytes(data32.to_ne_bytes()))
-            } else {
-                Value::I32(i32::from_ne_bytes(data32.to_ne_bytes()))
-            }
-        }
+        self.locals[index]
     }
 
     pub(crate) fn set_local(&mut self, local_index: u32, value: Value) -> Result<(), Error> {
@@ -156,21 +111,9 @@ impl<'a> CallStack<'a> {
     fn set_local_help(&mut self, local_index: u32, value: Value) -> ValueType {
         let frame_offset = *self.frame_offsets.last().unwrap();
         let index = (frame_offset + local_index) as usize;
-        match value {
-            Value::I32(x) => {
-                self.locals_data[index] = u64::from_ne_bytes((x as i64).to_ne_bytes());
-            }
-            Value::I64(x) => {
-                self.locals_data[index] = u64::from_ne_bytes((x).to_ne_bytes());
-            }
-            Value::F32(x) => {
-                self.locals_data[index] = x.to_bits() as u64;
-            }
-            Value::F64(x) => {
-                self.locals_data[index] = x.to_bits();
-            }
-        }
-        type_from_flags_f_64(self.is_float[index], self.is_64[index])
+        let old_value = self.locals[index];
+        self.locals[index] = value;
+        ValueType::from(old_value)
     }
 
     pub fn value_stack_base(&self) -> u32 {
@@ -197,93 +140,93 @@ impl<'a> CallStack<'a> {
         pc: usize,
         buffer: &mut String,
     ) -> fmt::Result {
-        // let divider = "-------------------";
-        // writeln!(buffer, "{}", divider)?;
+        let divider = "-------------------";
+        writeln!(buffer, "{}", divider)?;
 
-        // let mut value_stack_iter = value_stack.iter();
+        let mut value_stack_iter = value_stack.iter();
 
-        // for frame in 0..self.frame_offsets.len() {
-        //     let next_frame = frame + 1;
-        //     let op_offset = if next_frame < self.frame_offsets.len() {
-        //         // return address of next frame = next op in this frame
-        //         let next_op = self.return_addrs_and_block_depths[next_frame].0 as usize;
-        //         // Call address is more intuitive than the return address when debugging. Search backward for it.
-        //         // Skip last byte of function index to avoid a false match with CALL/CALLINDIRECT.
-        //         // The more significant bytes won't match because of LEB-128 encoding.
-        //         let mut call_op = next_op - 2;
-        //         loop {
-        //             let byte = module.code.bytes[call_op];
-        //             if byte == OpCode::CALL as u8 || byte == OpCode::CALLINDIRECT as u8 {
-        //                 break;
-        //             } else {
-        //                 call_op -= 1;
-        //             }
-        //         }
-        //         call_op
-        //     } else {
-        //         pc
-        //     };
+        for frame in 0..self.frame_offsets.len() {
+            let next_frame = frame + 1;
+            let op_offset = if next_frame < self.frame_offsets.len() {
+                // return address of next frame = next op in this frame
+                let next_op = self.return_addrs_and_block_depths[next_frame].0 as usize;
+                // Call address is more intuitive than the return address when debugging. Search backward for it.
+                // Skip last byte of function index to avoid a false match with CALL/CALLINDIRECT.
+                // The more significant bytes won't match because of LEB-128 encoding.
+                let mut call_op = next_op - 2;
+                loop {
+                    let byte = module.code.bytes[call_op];
+                    if byte == OpCode::CALL as u8 || byte == OpCode::CALLINDIRECT as u8 {
+                        break;
+                    } else {
+                        call_op -= 1;
+                    }
+                }
+                call_op
+            } else {
+                pc
+            };
 
-        //     let fn_index = pc_to_fn_index(op_offset, module);
-        //     let address = op_offset + module.code.section_offset as usize;
-        //     writeln!(buffer, "function {}", fn_index)?;
-        //     writeln!(buffer, "  address  {:06x}", address)?; // format matches wasm-objdump, for easy search
+            let fn_index = pc_to_fn_index(op_offset, module);
+            let address = op_offset + module.code.section_offset as usize;
+            writeln!(buffer, "function {}", fn_index)?;
+            writeln!(buffer, "  address  {:06x}", address)?; // format matches wasm-objdump, for easy search
 
-        //     write!(buffer, "  args     ")?;
-        //     let arg_count = {
-        //         let n_import_fns = module.import.imports.len();
-        //         let signature_index = if fn_index < n_import_fns {
-        //             match module.import.imports[fn_index].description {
-        //                 ImportDesc::Func { signature_index } => signature_index,
-        //                 _ => unreachable!(),
-        //             }
-        //         } else {
-        //             module.function.signatures[fn_index - n_import_fns]
-        //         };
-        //         module.types.look_up_arg_type_bytes(signature_index).len()
-        //     };
-        //     let args_and_locals_count = {
-        //         let frame_offset = self.frame_offsets[frame] as usize;
-        //         let next_frame_offset = if frame == self.frame_offsets.len() - 1 {
-        //             self.locals_data.len()
-        //         } else {
-        //             self.frame_offsets[frame + 1] as usize
-        //         };
-        //         next_frame_offset - frame_offset
-        //     };
-        //     for index in 0..args_and_locals_count {
-        //         let value = self.get_local_help(frame, index as u32);
-        //         if index != 0 {
-        //             write!(buffer, ", ")?;
-        //         }
-        //         if index == arg_count {
-        //             write!(buffer, "\n  locals   ")?;
-        //         }
-        //         write!(buffer, "{}: {:?}", index, value)?;
-        //     }
-        //     write!(buffer, "\n  stack    [")?;
+            write!(buffer, "  args     ")?;
+            let arg_count = {
+                let n_import_fns = module.import.imports.len();
+                let signature_index = if fn_index < n_import_fns {
+                    match module.import.imports[fn_index].description {
+                        ImportDesc::Func { signature_index } => signature_index,
+                        _ => unreachable!(),
+                    }
+                } else {
+                    module.function.signatures[fn_index - n_import_fns]
+                };
+                module.types.look_up_arg_type_bytes(signature_index).len()
+            };
+            let args_and_locals_count = {
+                let frame_offset = self.frame_offsets[frame] as usize;
+                let next_frame_offset = if frame == self.frame_offsets.len() - 1 {
+                    self.locals.len()
+                } else {
+                    self.frame_offsets[frame + 1] as usize
+                };
+                next_frame_offset - frame_offset
+            };
+            for index in 0..args_and_locals_count {
+                let value = self.get_local_help(frame, index as u32);
+                if index != 0 {
+                    write!(buffer, ", ")?;
+                }
+                if index == arg_count {
+                    write!(buffer, "\n  locals   ")?;
+                }
+                write!(buffer, "{}: {:?}", index, value)?;
+            }
+            write!(buffer, "\n  stack    [")?;
 
-        //     let frame_value_count = {
-        //         let value_stack_base = self.value_stack_bases[frame];
-        //         let next_value_stack_base = if frame == self.frame_offsets.len() - 1 {
-        //             value_stack.len() as u32
-        //         } else {
-        //             self.value_stack_bases[frame + 1]
-        //         };
-        //         next_value_stack_base - value_stack_base
-        //     };
-        //     for i in 0..frame_value_count {
-        //         if i != 0 {
-        //             write!(buffer, ", ")?;
-        //         }
-        //         if let Some(value) = value_stack_iter.next() {
-        //             write!(buffer, "{:?}", value)?;
-        //         }
-        //     }
+            let frame_value_count = {
+                let value_stack_base = self.value_stack_bases[frame];
+                let next_value_stack_base = if frame == self.frame_offsets.len() - 1 {
+                    value_stack.len() as u32
+                } else {
+                    self.value_stack_bases[frame + 1]
+                };
+                next_value_stack_base - value_stack_base
+            };
+            for i in 0..frame_value_count {
+                if i != 0 {
+                    write!(buffer, ", ")?;
+                }
+                if let Some(value) = value_stack_iter.next() {
+                    write!(buffer, "{:?}", value)?;
+                }
+            }
 
-        //     writeln!(buffer, "]")?;
-        //     writeln!(buffer, "{}", divider)?;
-        // }
+            writeln!(buffer, "]")?;
+            writeln!(buffer, "{}", divider)?;
+        }
 
         Ok(())
     }
