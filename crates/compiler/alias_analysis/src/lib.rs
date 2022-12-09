@@ -10,8 +10,8 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
 use roc_mono::ir::{
-    Call, CallType, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement, Literal,
-    ModifyRc, OptLevel, Proc, Stmt,
+    Call, CallType, EntryPoint, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement,
+    Literal, ModifyRc, OptLevel, Proc, SingleEntryPoint, Stmt,
 };
 use roc_mono::layout::{
     Builtin, CapturesNiche, Layout, RawFunctionLayout, STLayoutInterner, UnionLayout,
@@ -136,7 +136,7 @@ pub fn spec_program<'a, I>(
     arena: &'a Bump,
     interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
-    opt_entry_point: Option<roc_mono::ir::EntryPoint<'a>>,
+    entry_point: roc_mono::ir::EntryPoint<'a>,
     procs: I,
 ) -> Result<morphic_lib::Solutions>
 where
@@ -226,30 +226,38 @@ where
             m.add_func(func_name, spec)?;
         }
 
-        if let Some(entry_point) = opt_entry_point {
-            // the entry point wrapper
-            let roc_main_bytes = func_name_bytes_help(
-                entry_point.symbol,
-                entry_point.layout.arguments.iter().copied(),
-                CapturesNiche::no_niche(),
-                &entry_point.layout.result,
-            );
-            let roc_main = FuncName(&roc_main_bytes);
+        match entry_point {
+            EntryPoint::Single(SingleEntryPoint {
+                symbol: entry_point_symbol,
+                layout: entry_point_layout,
+            }) => {
+                // the entry point wrapper
+                let roc_main_bytes = func_name_bytes_help(
+                    entry_point_symbol,
+                    entry_point_layout.arguments.iter().copied(),
+                    CapturesNiche::no_niche(),
+                    &entry_point_layout.result,
+                );
+                let roc_main = FuncName(&roc_main_bytes);
 
-            let mut env = Env::new(arena);
+                let mut env = Env::new(arena);
 
-            let entry_point_function = build_entry_point(
-                &mut env,
-                interner,
-                entry_point.layout,
-                roc_main,
-                &host_exposed_functions,
-            )?;
+                let entry_point_function = build_entry_point(
+                    &mut env,
+                    interner,
+                    entry_point_layout,
+                    roc_main,
+                    &host_exposed_functions,
+                )?;
 
-            type_definitions.extend(env.type_names);
+                type_definitions.extend(env.type_names);
 
-            let entry_point_name = FuncName(ENTRY_POINT_NAME);
-            m.add_func(entry_point_name, entry_point_function)?;
+                let entry_point_name = FuncName(ENTRY_POINT_NAME);
+                m.add_func(entry_point_name, entry_point_function)?;
+            }
+            EntryPoint::Expects { symbols } => {
+                // construct a big pattern match picking one of the expects at random
+            }
         }
 
         for union_layout in type_definitions {
@@ -286,9 +294,15 @@ where
         let mut p = ProgramBuilder::new();
         p.add_mod(MOD_APP, main_module)?;
 
-        if opt_entry_point.is_some() {
-            let entry_point_name = FuncName(ENTRY_POINT_NAME);
-            p.add_entry_point(EntryPointName(ENTRY_POINT_NAME), MOD_APP, entry_point_name)?;
+        match entry_point {
+            EntryPoint::Single { .. } => {
+                p.add_entry_point(
+                    EntryPointName(ENTRY_POINT_NAME),
+                    MOD_APP,
+                    FuncName(ENTRY_POINT_NAME),
+                )?;
+            }
+            EntryPoint::Expects { .. } => todo!(),
         }
 
         p.build()?
