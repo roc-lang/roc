@@ -83,12 +83,6 @@ pub unsafe extern "C" fn roc_shm_open(
     libc::shm_open(name, oflag, mode as libc::c_uint)
 }
 
-#[cfg(unix)]
-#[no_mangle]
-pub unsafe extern "C" fn roc_send_signal(pid: libc::pid_t, sig: libc::c_int) -> libc::c_int {
-    libc::kill(pid, sig)
-}
-
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     let mut roc_str = RocStr::default();

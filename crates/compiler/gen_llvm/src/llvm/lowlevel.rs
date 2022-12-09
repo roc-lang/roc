@@ -1126,16 +1126,19 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             if env.mode.runs_expects() {
                 let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(args[0]) };
 
+                let shared_memory = crate::llvm::expect::SharedMemoryPointer::get(env);
+
                 crate::llvm::expect::clone_to_shared_memory(
                     env,
                     scope,
                     layout_ids,
+                    &shared_memory,
                     args[0],
                     region,
                     &[args[0]],
                 );
 
-                crate::llvm::expect::send_dbg(env);
+                crate::llvm::expect::notify_parent_dbg(env, &shared_memory);
             }
 
             condition
