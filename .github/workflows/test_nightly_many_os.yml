@@ -5,6 +5,9 @@ on:
 
 name: Test latest nightly release for macOS, ubu 20.04, ubu 22.04 x86_64
 
+env:
+  ZIG_VERSION: 0.9.1
+
 jobs:
   test-nightly:
     name: test nightly macos 11, macos 12, ubu 20.04, ubu 22.04
@@ -58,7 +61,7 @@ jobs:
 
       - name: Install zig
         run: |
-          curl -L -o zig.tar.xz https://ziglang.org/download/${ZIG_VERSION}/zig-macos-x86_64-${ZIG_VERSION}.tar.xz && tar -xf zig.tar.xz
+          curl -L -o zig.tar.xz https://ziglang.org/download/${ZIG_VERSION}/zig-${{env.OS_TYPE}}-x86_64-${ZIG_VERSION}.tar.xz && tar -xf zig.tar.xz
           echo "${GITHUB_WORKSPACE}/zig-${{env.OS_TYPE}}-x86_64-${ZIG_VERSION}" >> $GITHUB_PATH
       - name: zig version
         run: zig version
