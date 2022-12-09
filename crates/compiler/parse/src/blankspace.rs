@@ -183,12 +183,25 @@ pub fn fast_eat_whitespace(bytes: &[u8]) -> usize {
         // Space character is 0x20, which has a single bit set
         // We can check for any space character by checking if any other bit is set
         let spaces = 0x2020_2020_2020_2020;
-        let mask = chunk ^ spaces;
-        let mask = mask | ((mask & 0xf0f0_f0f0_f0f0_f0f0) >> 4);
-        let mask = mask | ((mask & 0xcccc_cccc_cccc_cccc) >> 2);
-        let mask = mask | ((mask & 0xaaaa_aaaa_aaaa_aaaa) >> 1);
 
-        let count = (mask & 0x0101_0101_0101_0101).trailing_zeros() as usize / 8;
+        // println!();
+        // println!("{:064b}", chunk);
+        // println!("{:064b}", (chunk ^ spaces));
+        // println!("{:064b}", !(chunk ^ spaces) & !0x8080_8080_8080_8080);
+        // println!("{:064b}", (!(chunk ^ spaces) & !0x8080_8080_8080_8080) + 0x0101_0101_0101_0101);
+        let mask = (!(chunk ^ spaces) & !0x8080_8080_8080_8080) + 0x0101_0101_0101_0101;
+        // println!("{:064b}", mask & !(chunk & 0x8080_8080_8080_8080));
+        let mask = mask & !(chunk & 0x8080_8080_8080_8080);
+
+        // println!("{:064b}", ((mask & 0x8080_8080_8080_8080) | !0x8080_8080_8080_8080));
+        let count = ((mask | !0x8080_8080_8080_8080).trailing_ones() as usize) / 8;
+
+        // let mask = chunk ^ spaces;
+        // let mask = mask | ((mask & 0xf0f0_f0f0_f0f0_f0f0) >> 4);
+        // let mask = mask | ((mask & 0xcccc_cccc_cccc_cccc) >> 2);
+        // let mask = mask | ((mask & 0xaaaa_aaaa_aaaa_aaaa) >> 1);
+
+        // let count = (mask & 0x0101_0101_0101_0101).trailing_zeros() as usize / 8;
 
         if count == 8 {
             i += 8;
@@ -252,7 +265,7 @@ mod tests {
 
     #[test]
     fn test_eat_whitespace_simple() {
-        let bytes = &[32, 0, 0, 0, 0, 0, 0, 0];
+        let bytes = &[0, 0, 0, 0, 0, 0, 0, 0];
         assert_eq!(simple_eat_whitespace(bytes), fast_eat_whitespace(bytes));
     }
 
