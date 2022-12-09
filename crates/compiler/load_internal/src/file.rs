@@ -4068,9 +4068,32 @@ fn build_header<'a>(
         header_type,
     } = info;
 
+    let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
+    let num_exposes = exposes.len();
+    let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
+        HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
     let declared_name: ModuleName = match &header_type {
         HeaderType::App { .. } => ModuleName::APP.into(),
-        HeaderType::Platform { name, .. } => name.as_str().into(),
+        HeaderType::Platform {
+            name,
+            opt_app_module_id,
+            ..
+        } => {
+            // Add standard imports, if there is an app module.
+            // (There might not be, e.g. when running `roc check myplatform.roc` or
+            // when generating bindings.)
+            if let Some(app_module_id) = opt_app_module_id {
+                imported_modules.insert(*app_module_id, Region::zero());
+                deps_by_name.insert(
+                    PQModuleName::Unqualified(ModuleName::APP.into()),
+                    *app_module_id,
+                );
+            }
+
+            // Do NOT use | here, since we don't want to verify the filename
+            // like we do in other contexts. Any platform filename is okay!
+            name.as_str().into()
+        }
         HeaderType::Interface { name, .. }
         | HeaderType::Builtin { name, .. }
         | HeaderType::Hosted { name, .. } => {
@@ -4083,20 +4106,16 @@ fn build_header<'a>(
 
     let mut imported: Vec<(QualifiedModuleName, Vec<Loc<Ident>>, Region)> =
         Vec::with_capacity(imports.len());
-    let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
     let mut scope_size = 0;
 
     for loc_entry in imports {
         let (qualified_module_name, exposed) = exposed_from_import(&loc_entry.value);
 
-        scope_size += exposed.len();
+        scope_size += num_exposes;
 
         imported.push((qualified_module_name, exposed, loc_entry.region));
     }
 
-    let num_exposes = exposes.len();
-    let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
-        HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
     // Make sure the module_ids has ModuleIds for all our deps,
@@ -4170,13 +4189,11 @@ fn build_header<'a>(
             }
         }
 
-        let mut ident_ids = if let HeaderType::Platform {
-            provides,
+        if let HeaderType::Platform {
             requires,
             requires_types,
             opt_app_module_id,
-            config_shorthand: _,
-            name: _,
+            ..
         } = header_type
         {
             // If we don't have an app module id (e.g. because we're doing
@@ -4187,31 +4204,14 @@ fn build_header<'a>(
             // should already have a symbol for each `requires` entry, and we
             // want to make sure we're referencing the same symbols!
             let module_id = opt_app_module_id.unwrap_or(home);
-            let ident_ids = ident_ids_by_module.get_or_insert(module_id);
-            let num_provides = provides.len();
-            let mut provided: Vec<Symbol> = Vec::with_capacity(num_provides);
             let mut symbols_from_requires = Vec::with_capacity(requires.len());
+            let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
-            // Add standard imports, if there is an app module.
-            // (There might not be, e.g. when running `roc check myplatform.roc` or
-            // when generating bindings.)
-            if let Some(app_module_id) = opt_app_module_id {
-                imported_modules.insert(app_module_id, Region::zero());
-                deps_by_name.insert(
-                    PQModuleName::Unqualified(ModuleName::APP.into()),
-                    app_module_id,
-                );
-            }
-
-            // If we don't have an app module id (e.g. because we're doing
-            // `roc check myplatform.roc` or because we're generating glue code),
-            // insert the `requires` symbols into the platform module's IdentIds.
-            //
-            // Otherwise, get them from the app module's IdentIds, because it
-            // should already have a symbol for each `requires` entry, and we
-            // want to make sure we're referencing the same symbols!
-            for entry in requires.iter() {
-                let entry = entry.value;
+            for Loc {
+                value: entry,
+                region: _,
+            } in requires.iter()
+            {
                 let ident: Ident = entry.ident.value.into();
                 let ident_id = ident_ids.get_or_insert(entry.ident.value);
                 let symbol = Symbol::new(module_id, ident_id);
@@ -4224,42 +4224,18 @@ fn build_header<'a>(
             }
 
             for entry in requires_types {
-                let string: &str = entry.value.into();
-                let ident: Ident = string.into();
-                let ident_id = ident_ids.get_or_insert(string);
+                let str_entry: &str = entry.value.into();
+                let ident: Ident = str_entry.into();
+                let ident_id = ident_ids.get_or_insert(str_entry);
                 let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
                 debug_assert!(!scope.contains_key(&ident));
                 scope.insert(ident, (symbol, entry.region));
             }
+        }
 
-            // Generate IdentIds entries for all values this module exposes.
-            // This way, when we encounter them in Defs later, they already
-            // have an IdentIds entry.
-            //
-            // We must *not* add them to scope yet, or else the Defs will
-            // incorrectly think they're shadowing them!
-            for (loc_name, _loc_typed_ident) in provides.iter() {
-                // Use get_or_insert here because the ident_ids may already
-                // created an IdentId for this, when it was imported exposed
-                // in a dependent module.
-                //
-                // For example, if module A has [B.{ foo }], then
-                // when we get here for B, `foo` will already have
-                // an IdentId. We must reuse that!
-                let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
-                let symbol = Symbol::new(home, ident_id);
-
-                provided.push(symbol);
-            }
-
-            ident_ids.clone()
-        } else {
-            let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
-
-            ident_ids.clone()
-        };
+        let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
 
         // Generate IdentIds entries for all values this module exposes.
         // This way, when we encounter them in Defs later, they already
@@ -4281,11 +4257,36 @@ fn build_header<'a>(
             exposed.push(symbol);
         }
 
+        // Generate IdentIds entries for all values this module provides,
+        // and treat them as `exposes` values for later purposes.
+        // This way, when we encounter them in Defs later, they already
+        // have an IdentIds entry.
+        //
+        // We must *not* add them to scope yet, or else the Defs will
+        // incorrectly think they're shadowing them!
+        if let HeaderType::Platform { provides, .. } = header_type {
+            exposed.reserve(provides.len());
+
+            for (loc_name, _loc_typed_ident) in provides.iter() {
+                // Use get_or_insert here because the ident_ids may already
+                // created an IdentId for this, when it was imported exposed
+                // in a dependent module.
+                //
+                // For example, if module A has [B.{ foo }], then
+                // when we get here for B, `foo` will already have
+                // an IdentId. We must reuse that!
+                let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
+                let symbol = Symbol::new(home, ident_id);
+
+                exposed.push(symbol);
+            }
+        }
+
         if cfg!(debug_assertions) {
             home.register_debug_idents(&ident_ids);
         }
 
-        ident_ids
+        ident_ids.clone()
     };
 
     let package_entries = packages
