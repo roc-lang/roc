@@ -238,13 +238,18 @@ fn create_llvm_module<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let entry_point = match entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
-            roc_mono::ir::SingleEntryPoint { symbol, layout }
+    let entry_point = match loaded.entry_point {
+        EntryPoint::Executable {
+            exposed_to_host,
+            platform_path: _,
+        } => {
+            // TODO support multiple of these!
+            debug_assert_eq!(exposed_to_host.len(), 1);
+            let (symbol, layout) = exposed_to_host[0];
+
+            roc_mono::ir::EntryPoint::Single(SingleEntryPoint { symbol, layout })
         }
-        EntryPoint::Test => {
-            unreachable!()
-        }
+        EntryPoint::Test => roc_mono::ir::EntryPoint::Expects { symbols: &[] },
     };
     let (main_fn_name, main_fn) = match config.mode {
         LlvmBackendMode::Binary => unreachable!(),
