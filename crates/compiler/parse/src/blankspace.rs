@@ -240,12 +240,19 @@ pub fn fast_eat_until_control_character(bytes: &[u8]) -> usize {
 
         let control = 0x1F1F_1F1F_1F1F_1F1F;
 
-        let mask = chunk & !control;
-        let mask = mask | ((mask & 0xf0f0_f0f0_f0f0_f0f0) >> 4);
-        let mask = mask | ((mask & 0xcccc_cccc_cccc_cccc) >> 2);
-        let mask = mask | ((mask & 0xaaaa_aaaa_aaaa_aaaa) >> 1);
 
-        let count = (mask | !0x0101_0101_0101_0101).trailing_ones() as usize / 8;
+        println!("{:064b}", chunk);
+        println!("{:064b}", (chunk & !control));
+        println!("{:064b}", !(chunk & !control) & !control);
+        let mask = (!(chunk & !control) & !control) >> 1;
+        println!();
+        println!("{:064b}", 0x1010_1010_1010_1010u64);
+        println!("{:064b}", mask.wrapping_add(0x1010_1010_1010_1010));
+        println!("{:064b}", mask.wrapping_add(0x1010_1010_1010_1010) & 0x0808_0808_0808_0808);
+
+        let mask = mask.wrapping_add(0x1010_1010_1010_1010);
+
+        let count = (mask & 0x8080_8080_8080_8080).trailing_zeros() as usize / 8;
 
         if count == 8 {
             i += 8;
