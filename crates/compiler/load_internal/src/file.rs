@@ -4075,9 +4075,7 @@ fn build_header<'a>(
     let declared_name: ModuleName = match &header_type {
         HeaderType::App { .. } => ModuleName::APP.into(),
         HeaderType::Platform {
-            name,
-            opt_app_module_id,
-            ..
+            opt_app_module_id, ..
         } => {
             // Add standard imports, if there is an app module.
             // (There might not be, e.g. when running `roc check myplatform.roc` or
@@ -4090,9 +4088,10 @@ fn build_header<'a>(
                 );
             }
 
-            // Do NOT use | here, since we don't want to verify the filename
-            // like we do in other contexts. Any platform filename is okay!
-            name.as_str().into()
+            // Platforms do not have names. This is important because otherwise
+            // those names end up in host-generated symbols, and they may contain
+            // characters that hosts might not allow in their function names.
+            String::new().into()
         }
         HeaderType::Interface { name, .. }
         | HeaderType::Builtin { name, .. }
@@ -4892,7 +4891,6 @@ fn build_platform_header<'a>(
     let imports = unspace(arena, header.imports.item.items);
 
     let header_type = HeaderType::Platform {
-        name: header.name.value,
         // A config_shorthand of "" should be fine
         config_shorthand: opt_shorthand.unwrap_or_default(),
         opt_app_module_id,
