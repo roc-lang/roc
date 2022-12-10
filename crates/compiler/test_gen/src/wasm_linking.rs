@@ -342,20 +342,34 @@ fn test_linking_without_dce() {
 
 #[test]
 fn test_linking_with_dce() {
+    // let expected_final_import_names = &[
+    //     "js_called_indirectly_from_roc",
+    //     "js_called_indirectly_from_main",
+    //     // js_unused removed from imports
+    //     "js_called_directly_from_roc",
+    //     "js_called_directly_from_main",
+    // ];
     let expected_final_import_names = &[
         "js_called_indirectly_from_roc",
-        "js_called_indirectly_from_main",
-        // js_unused removed from imports
+        "js_unused",
         "js_called_directly_from_roc",
         "js_called_directly_from_main",
+        "js_called_indirectly_from_main",
     ];
 
+    // let expected_name_section_start = &[
+    //     (0, "js_called_indirectly_from_roc"),
+    //     (1, "js_called_indirectly_from_main"),
+    //     (2, "js_called_directly_from_roc"),  // index changed
+    //     (3, "js_called_directly_from_main"), // index changed
+    //     (4, "js_unused"), // still exists, but now an internal dummy, with index changed
+    // ];
     let expected_name_section_start = &[
         (0, "js_called_indirectly_from_roc"),
-        (1, "js_called_indirectly_from_main"),
-        (2, "js_called_directly_from_roc"),  // index changed
-        (3, "js_called_directly_from_main"), // index changed
-        (4, "js_unused"), // still exists, but now an internal dummy, with index changed
+        (1, "js_unused"),
+        (2, "js_called_directly_from_roc"),
+        (3, "js_called_directly_from_main"),
+        (4, "js_called_indirectly_from_main"),
     ];
 
     let eliminate_dead_code = true;
@@ -368,4 +382,5 @@ fn test_linking_with_dce() {
         expected_name_section_start,
         dump_filename,
     );
+    panic!("I wanted to keep host exports but I broke DCE on imports!");
 }
