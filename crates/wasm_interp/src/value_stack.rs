@@ -94,6 +94,10 @@ impl<'a> ValueStack<'a> {
     pub(crate) fn truncate(&mut self, depth: usize) {
         self.values.truncate(depth)
     }
+
+    pub(crate) fn get_slice(&mut self, from: usize) -> &[Value] {
+        &self.values[from..]
+    }
 }
 
 impl Debug for ValueStack<'_> {
