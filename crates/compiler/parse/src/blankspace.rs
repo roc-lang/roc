@@ -241,14 +241,14 @@ pub fn fast_eat_until_control_character(bytes: &[u8]) -> usize {
         let control = 0x1F1F_1F1F_1F1F_1F1F;
 
 
-        println!("{:064b}", chunk);
-        println!("{:064b}", (chunk & !control));
-        println!("{:064b}", !(chunk & !control) & !control);
+        // println!("{:064b}", chunk);
+        // println!("{:064b}", (chunk & !control));
+        // println!("{:064b}", !(chunk & !control) & !control);
         let mask = (!(chunk & !control) & !control) >> 1;
-        println!();
-        println!("{:064b}", 0x1010_1010_1010_1010u64);
-        println!("{:064b}", mask.wrapping_add(0x1010_1010_1010_1010));
-        println!("{:064b}", mask.wrapping_add(0x1010_1010_1010_1010) & 0x0808_0808_0808_0808);
+        // println!();
+        // println!("{:064b}", 0x1010_1010_1010_1010u64);
+        // println!("{:064b}", mask.wrapping_add(0x1010_1010_1010_1010));
+        // println!("{:064b}", mask.wrapping_add(0x1010_1010_1010_1010) & 0x0808_0808_0808_0808);
 
         let mask = mask.wrapping_add(0x1010_1010_1010_1010);
 
