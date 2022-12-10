@@ -3677,6 +3677,7 @@ dependencies = [
 name = "roc_glue"
 version = "0.0.1"
 dependencies = [
+ "backtrace",
  "bumpalo",
  "clap 3.2.20",
  "cli_utils",
@@ -3684,6 +3685,7 @@ dependencies = [
  "fnv",
  "indexmap",
  "indoc",
+ "libc",
  "pretty_assertions",
  "roc_builtins",
  "roc_can",
