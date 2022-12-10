@@ -3686,6 +3686,7 @@ dependencies = [
  "indexmap",
  "indoc",
  "libc",
+ "libloading",
  "pretty_assertions",
  "roc_builtins",
  "roc_can",
