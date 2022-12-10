@@ -349,31 +349,71 @@ pub const WASM_SYM_EXPLICIT_NAME: u32 = 0x40; // use the name from the symbol ta
 pub const WASM_SYM_NO_STRIP: u32 = 0x80;
 
 #[derive(Clone, Debug)]
+pub struct SymbolFlags(u32);
+
+impl SymbolFlags {
+    #[inline(always)]
+    pub fn is_set(&self, mask: u32) -> bool {
+        self.0 & mask != 0
+    }
+
+    #[inline(always)]
+    pub fn is_global(&self) -> bool {
+        !self.is_set(WASM_SYM_BINDING_LOCAL)
+    }
+
+    #[inline(always)]
+    pub fn is_visible(&self) -> bool {
+        !self.is_set(WASM_SYM_VISIBILITY_HIDDEN)
+    }
+
+    #[inline(always)]
+    pub fn is_import(&self) -> bool {
+        // "Undefined symbol" is linker jargon, and "import" is Wasm jargon.
+        self.is_set(WASM_SYM_UNDEFINED)
+    }
+
+    #[inline(always)]
+    pub fn is_export(&self) -> bool {
+        !self.is_import()
+            && (self.is_set(WASM_SYM_EXPORTED) || (self.is_global() && self.is_visible()))
+    }
+}
+
+impl Default for SymbolFlags {
+    fn default() -> Self {
+        SymbolFlags(0)
+    }
+}
+
+impl Parse<()> for SymbolFlags {
+    fn parse(_: (), bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let flags = u32::parse((), bytes, cursor)?;
+        Ok(SymbolFlags(flags))
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum WasmObjectSymbol<'a> {
     ExplicitlyNamed {
-        flags: u32,
+        flags: SymbolFlags,
         index: u32,
         name: &'a str,
     },
     ImplicitlyNamed {
-        flags: u32,
+        flags: SymbolFlags,
         index: u32,
     },
 }
 
 impl<'a> Parse<&'a Bump> for WasmObjectSymbol<'a> {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
-        let flags = u32::parse((), bytes, cursor)?;
+        let flags = SymbolFlags::parse((), bytes, cursor)?;
         let index = u32::parse((), bytes, cursor)?;
 
         // If a symbol refers to an import, then we already have the name in the import section.
         // The linking section doesn't repeat it, unless the "explicit name" flag is set (used for renaming).
-        // ("Undefined symbol" is linker jargon, and "import" is Wasm jargon. For functions, they're equivalent.)
-        let is_import = (flags & WASM_SYM_UNDEFINED) != 0;
-        let external_syms_have_explicit_names = (flags & WASM_SYM_EXPLICIT_NAME) != 0;
-        let has_explicit_name = !is_import || external_syms_have_explicit_names;
-
-        if has_explicit_name {
+        if !flags.is_import() || flags.is_set(WASM_SYM_EXPLICIT_NAME) {
             let name = <&'a str>::parse(arena, bytes, cursor)?;
             Ok(Self::ExplicitlyNamed { flags, index, name })
         } else {
@@ -588,7 +628,7 @@ impl<'a> LinkingSection<'a> {
             .position(|sym| match sym {
                 SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { flags, index, .. })
                 | SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, .. }) => {
-                    *flags & WASM_SYM_UNDEFINED != 0 && *index == fn_index
+                    flags.is_import() && *index == fn_index
                 }
                 _ => false,
             })
@@ -606,7 +646,7 @@ impl<'a> LinkingSection<'a> {
             .position(|sym| match sym {
                 SymInfo::Function(WasmObjectSymbol::ImplicitlyNamed { flags, index, .. })
                 | SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, .. }) => {
-                    let found = *flags & WASM_SYM_UNDEFINED != 0 && *index == old_fn_index;
+                    let found = flags.is_import() && *index == old_fn_index;
                     if found {
                         *index = new_fn_index;
                     }

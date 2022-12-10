@@ -11,6 +11,7 @@ use roc_intern::Interner;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
 use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 use roc_target::TargetInfo;
+use roc_wasm_module::linking::SymbolFlags;
 use roc_wasm_module::{
     linking::SymInfo, linking::WasmObjectSymbol, Align, Export, ExportType, LocalId, Signature,
     ValueType, WasmModule,
@@ -108,7 +109,7 @@ fn insert_wrapper_metadata<'a>(
     });
 
     let linker_symbol = SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed {
-        flags: 0,
+        flags: SymbolFlags::default(),
         index,
         name: wrapper_name,
     });

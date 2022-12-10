@@ -14,7 +14,7 @@ use roc_mono::ir::{
 use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
 use roc_std::RocDec;
 
-use roc_wasm_module::linking::{DataSymbol, WasmObjectSymbol};
+use roc_wasm_module::linking::{DataSymbol, SymbolFlags, WasmObjectSymbol};
 use roc_wasm_module::sections::{
     ConstExpr, DataMode, DataSegment, Export, Global, GlobalType, Import, ImportDesc, Limits,
     MemorySection, NameSection,
@@ -268,7 +268,7 @@ impl<'a> WasmBackend<'a> {
         self.called_fns.push(true);
 
         let linker_symbol = SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed {
-            flags: 0,
+            flags: SymbolFlags::default(),
             index: wasm_fn_index,
             name,
         });

@@ -581,8 +581,7 @@ impl<'a> WasmModule<'a> {
                 .iter()
                 .filter_map(|sym_info| match sym_info {
                     SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, name })
-                        if flags & linking::WASM_SYM_BINDING_LOCAL == 0
-                            && name.starts_with("roc_") =>
+                        if flags.is_global() && name.starts_with("roc_") =>
                     {
                         Some((*name, *index))
                     }
@@ -595,8 +594,7 @@ impl<'a> WasmModule<'a> {
                 .iter()
                 .filter_map(|sym_info| match sym_info {
                     SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, name })
-                        if flags & linking::WASM_SYM_BINDING_LOCAL == 0
-                            && !name.starts_with("roc_") =>
+                        if flags.is_global() && !name.starts_with("roc_") =>
                     {
                         Some((*name, *index))
                     }
