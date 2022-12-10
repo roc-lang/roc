@@ -1,6 +1,6 @@
 platform "roc-lang/glue"
     requires {} { makeGlue : List Types -> Result (List File) Str }
-    exposes []
+    exposes [File, Target, Architecture, OperatingSystem, Types, RocType, RocNum, RocTagUnion]
     packages {}
     imports []
     provides [makeGlueForHost]
