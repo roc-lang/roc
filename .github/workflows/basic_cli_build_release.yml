@@ -7,11 +7,12 @@ concurrency:
 
 jobs:
   build-macos-apple-silicon-files:
+    name: build apple silicon .o file
     runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@v3
 
-      - run: ./ci/build_platform_w_latest_roc.sh
+      - run: ./ci/build_basic_cli.sh
 
       - name: Save macos-arm64.o file
         uses: actions/upload-artifact@v3

@@ -5,7 +5,7 @@ set -euxo pipefail
 
 git clone https://github.com/roc-lang/basic-cli.git
 
-# get the url of the latest release for linux_x86_64
+# Get the url of the latest release. We're not using the latest main source code for easier reproducibility.
 RELEASE_URL=$(./ci/get_latest_release_url.sh $1)
 
 # get the archive from the url
