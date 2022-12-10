@@ -1672,6 +1672,7 @@ impl<'a> LowLevelCall<'a> {
                         backend
                             .storage
                             .load_symbols(&mut backend.code_builder, &[num, bits]);
+                        backend.code_builder.i64_extend_u_i32();
                         backend.code_builder.i64_shr_s();
                     }
                     I128 => todo!("{:?} for I128", self.lowlevel),
