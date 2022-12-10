@@ -10,6 +10,7 @@ use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::derive;
 use crate::env::Env;
+use crate::expr::get_lookup_symbols;
 use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
 use crate::expr::Declarations;
@@ -2414,10 +2415,12 @@ fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
 
             for ((expect_region, condition_region), condition) in it {
                 let region = Region::span_across(&expect_region, &loc_ret.region);
+                let lookups_in_cond = get_lookup_symbols(&condition);
+
                 let expr = Expr::Expect {
                     loc_condition: Box::new(Loc::at(condition_region, condition)),
                     loc_continuation: Box::new(loc_ret),
-                    lookups_in_cond: vec![],
+                    lookups_in_cond,
                 };
 
                 loc_ret = Loc::at(region, expr);

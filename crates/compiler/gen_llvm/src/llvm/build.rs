@@ -41,7 +41,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc,
-    OptLevel, ProcLayout,
+    OptLevel, ProcLayout, SingleEntryPoint,
 };
 use roc_mono::layout::{
     Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, RawFunctionLayout,
@@ -4170,29 +4170,23 @@ pub fn build_procedures<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    opt_entry_point: Option<EntryPoint<'a>>,
+    entry_point: EntryPoint<'a>,
     debug_output_file: Option<&Path>,
 ) {
-    build_procedures_help(
-        env,
-        opt_level,
-        procedures,
-        opt_entry_point,
-        debug_output_file,
-    );
+    build_procedures_help(env, opt_level, procedures, entry_point, debug_output_file);
 }
 
 pub fn build_wasm_test_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    entry_point: EntryPoint<'a>,
+    entry_point: SingleEntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let mod_solutions = build_procedures_help(
         env,
         opt_level,
         procedures,
-        Some(entry_point),
+        EntryPoint::Single(entry_point),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -4203,13 +4197,13 @@ pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    entry_point: EntryPoint<'a>,
+    entry_point: SingleEntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
     let mod_solutions = build_procedures_help(
         env,
         opt_level,
         procedures,
-        Some(entry_point),
+        EntryPoint::Single(entry_point),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -4221,13 +4215,14 @@ pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
     opt_level: OptLevel,
     expects: &[Symbol],
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    opt_entry_point: Option<EntryPoint<'a>>,
 ) -> Vec<'a, &'a str> {
+    let entry_point = EntryPoint::Expects { symbols: expects };
+
     let mod_solutions = build_procedures_help(
         env,
         opt_level,
         procedures,
-        opt_entry_point,
+        entry_point,
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -4249,7 +4244,11 @@ pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
         let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
         let mut it = func_solutions.specs();
-        let func_spec = it.next().unwrap();
+        let func_spec = match it.next() {
+            Some(spec) => spec,
+            None => panic!("no specialization for expect {}", symbol),
+        };
+
         debug_assert!(
             it.next().is_none(),
             "we expect only one specialization of this symbol"
@@ -4289,7 +4288,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    opt_entry_point: Option<EntryPoint<'a>>,
+    entry_point: EntryPoint<'a>,
     debug_output_file: Option<&Path>,
 ) -> &'a ModSolutions {
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
@@ -4301,7 +4300,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
         env.arena,
         env.layout_interner,
         opt_level,
-        opt_entry_point,
+        entry_point,
         it,
     ) {
         Err(e) => panic!("Error in alias analysis: {}", e),

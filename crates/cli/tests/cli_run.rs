@@ -15,7 +15,7 @@ mod cli_run {
     };
     use const_format::concatcp;
     use indoc::indoc;
-    use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN};
+    use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_FORMAT, CMD_RUN, CMD_TEST};
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
@@ -44,6 +44,8 @@ mod cli_run {
     enum TestCliCommands {
         Many,
         Run,
+        Test,
+        Dev,
     }
 
     const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
@@ -58,6 +60,8 @@ mod cli_run {
         Roc,      // buildAndRunIfNoErrors
         RocBuild, // buildOnly
         RocRun,   // buildAndRun
+        RocTest,
+        RocDev,
     }
 
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -177,11 +181,15 @@ mod cli_run {
             match test_cli_commands {
                 TestCliCommands::Many => vec![CliMode::RocBuild, CliMode::RocRun],
                 TestCliCommands::Run => vec![CliMode::RocRun],
+                TestCliCommands::Test => vec![],
+                TestCliCommands::Dev => vec![],
             }
         } else {
             match test_cli_commands {
                 TestCliCommands::Many => vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc],
                 TestCliCommands::Run => vec![CliMode::Roc],
+                TestCliCommands::Test => vec![CliMode::RocTest],
+                TestCliCommands::Dev => vec![CliMode::RocDev],
             }
         };
 
@@ -270,9 +278,41 @@ mod cli_run {
                     roc_app_args,
                     extra_env,
                 ),
+                CliMode::RocTest => {
+                    // here failure is what we expect
+
+                    run_roc_on(
+                        file,
+                        iter::once(CMD_TEST).chain(flags.clone()),
+                        stdin,
+                        roc_app_args,
+                        extra_env,
+                    )
+                }
+                CliMode::RocDev => {
+                    // here failure is what we expect
+
+                    run_roc_on(
+                        file,
+                        iter::once(CMD_DEV).chain(flags.clone()),
+                        stdin,
+                        roc_app_args,
+                        extra_env,
+                    )
+                }
             };
 
-            let actual = strip_colors(&out.stdout);
+            let mut actual = strip_colors(&out.stdout);
+
+            // e.g. "1 failed and 0 passed in 123 ms."
+            if let Some(split) = actual.rfind("passed in ") {
+                let (before_first_digit, _) = actual.split_at(split);
+                actual = format!("{}passed in <ignored for test> ms.", before_first_digit);
+            }
+
+            let self_path = file.display().to_string();
+            actual = actual.replace(&self_path, "<ignored for tests>");
+
             if !actual.ends_with(expected_ending) {
                 panic!(
                     "expected output to end with:\n{}\nbut instead got:\n{}\n stderr was:\n{}",
@@ -280,7 +320,7 @@ mod cli_run {
                 );
             }
 
-            if !out.status.success() {
+            if !out.status.success() && !matches!(cli_mode, CliMode::RocTest) {
                 // We don't need stdout, Cargo prints it for us.
                 panic!(
                     "Example program exited with status {:?}\nstderr was:\n{:#?}",
@@ -509,6 +549,74 @@ mod cli_run {
             "Roc <3 Swift!\n",
             UseValgrind::Yes,
         )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn expects_dev_and_test() {
+        // these are in the same test function so we don't have to worry about race conditions
+        // on the building of the platform
+
+        test_roc_app(
+            "crates/cli_testing_examples/expects",
+            "expects.roc",
+            "expects",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                This expectation failed:
+
+                14│      expect x != x
+                                ^^^^^^
+
+                When it failed, these variables had these values:
+
+                x : Num *
+                x = 42
+
+                [<ignored for tests> 15:9] 42
+                [<ignored for tests> 16:9] "Fjoer en ferdjer frieten oan dyn geve lea"
+                Program finished!
+                "#
+            ),
+            UseValgrind::Yes,
+            TestCliCommands::Dev,
+        );
+
+        test_roc_app(
+            "crates/cli_testing_examples/expects",
+            "expects.roc",
+            "expects",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 6│>  expect
+                 7│>      a = 1
+                 8│>      b = 2
+                 9│>
+                10│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Num *
+                a = 1
+
+                b : Num *
+                b = 2
+                
+
+
+                1 failed and 0 passed in <ignored for test> ms."#
+            ),
+            UseValgrind::Yes,
+            TestCliCommands::Test,
+        );
     }
 
     #[test]

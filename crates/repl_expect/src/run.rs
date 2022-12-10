@@ -19,7 +19,7 @@ use roc_gen_llvm::{
     run_roc_dylib,
 };
 use roc_intern::{GlobalInterner, SingleThreadedInterner};
-use roc_load::{EntryPoint, Expectations, MonomorphizedModule};
+use roc_load::{Expectations, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::{ir::OptLevel, layout::Layout};
 use roc_region::all::Region;
@@ -724,7 +724,6 @@ pub fn expect_mono_module_to_dylib<'a>(
     let MonomorphizedModule {
         toplevel_expects,
         procedures,
-        entry_point,
         interns,
         layout_interner,
         ..
@@ -762,13 +761,6 @@ pub fn expect_mono_module_to_dylib<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let opt_entry_point = match entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
-            Some(roc_mono::ir::EntryPoint { symbol, layout })
-        }
-        EntryPoint::Test => None,
-    };
-
     let capacity = toplevel_expects.pure.len() + toplevel_expects.fx.len();
     let mut expect_symbols = BumpVec::with_capacity_in(capacity, env.arena);
 
@@ -780,7 +772,6 @@ pub fn expect_mono_module_to_dylib<'a>(
         opt_level,
         &expect_symbols,
         procedures,
-        opt_entry_point,
     );
 
     let expects_fx = bumpalo::collections::Vec::from_iter_in(
