@@ -44,6 +44,10 @@ TypeId : Nat
 # isEqTypeId = \@TypeId lhs, @TypeId rhs -> lhs == rhs
 # hashTypeId = \hasher, @TypeId id -> Hash.hash hasher id
 
+# TODO: switch AssocList uses to Dict once roc_std is updated.
+Tuple1 : [ T Str TypeId ]
+Tuple2 : [ T TypeId (List TypeId) ]
+
 Types : {
     # These are all indexed by TypeId
     types: List RocType,
@@ -51,12 +55,12 @@ Types : {
     aligns: List U32,
 
     # Needed to check for duplicates
-    typesByName: Dict Str TypeId,
+    typesByName: List Tuple1,
 
     ## Dependencies - that is, which type depends on which other type.
     ## This is important for declaration order in C; we need to output a
     ## type declaration earlier in the file than where it gets referenced by another type.
-    deps: Dict TypeId (List TypeId),
+    deps: List Tuple2,
     target: Target,
 }
 
