@@ -1,5 +1,5 @@
-use crate::rust_glue;
 use crate::types::{Env, Types};
+use crate::{roc_type, rust_glue};
 use bumpalo::Bump;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_mono::layout::GlobalLayoutInterner;
@@ -21,13 +21,16 @@ impl IgnoreErrors {
     const NONE: Self = IgnoreErrors { can: false };
 }
 
-pub fn generate(input_path: &Path, output_path: &Path) -> io::Result<i32> {
+pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::Result<i32> {
     match load_types(
         input_path.to_path_buf(),
         Threading::AllAvailable,
         IgnoreErrors::NONE,
     ) {
         Ok(types) => {
+            // TODO: compile the spec and load it as a dynamic library.
+            let roc_types: roc_std::RocList<roc_type::Types> =
+                types.iter().map(|x| x.into()).collect();
             for crate::types::File { name, content } in rust_glue::emit(&types) {
                 let valid_name = PathBuf::from(&name)
                     .components()

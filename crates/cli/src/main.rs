@@ -5,7 +5,7 @@ use roc_cli::{
     build_app, format, test, BuildConfig, FormatMode, Target, CMD_BUILD, CMD_CHECK, CMD_DEV,
     CMD_DOCS, CMD_EDIT, CMD_FORMAT, CMD_GEN_STUB_LIB, CMD_GLUE, CMD_REPL, CMD_RUN, CMD_TEST,
     CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_LIB, FLAG_NO_LINK, FLAG_TARGET, FLAG_TIME,
-    GLUE_DIR, ROC_FILE,
+    GLUE_DIR, GLUE_SPEC, ROC_FILE,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::user_error;
@@ -89,9 +89,10 @@ fn main() -> io::Result<()> {
         Some((CMD_GLUE, matches)) => {
             let input_path = Path::new(matches.value_of_os(ROC_FILE).unwrap());
             let output_path = Path::new(matches.value_of_os(GLUE_DIR).unwrap());
+            let spec_path = Path::new(matches.value_of_os(GLUE_SPEC).unwrap());
 
             if !output_path.exists() || output_path.is_dir() {
-                roc_glue::generate(input_path, output_path)
+                roc_glue::generate(input_path, output_path, spec_path)
             } else {
                 eprintln!("`roc glue` requries that the output is a directory. The individual implementations might generate multiple files.");
 

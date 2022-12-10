@@ -65,6 +65,7 @@ pub const FLAG_WASM_STACK_SIZE_KB: &str = "wasm-stack-size-kb";
 pub const ROC_FILE: &str = "ROC_FILE";
 pub const ROC_DIR: &str = "ROC_DIR";
 pub const GLUE_DIR: &str = "GLUE_DIR";
+pub const GLUE_SPEC: &str = "GLUE_SPEC";
 pub const DIRECTORY_OR_FILES: &str = "DIRECTORY_OR_FILES";
 pub const ARGS_FOR_APP: &str = "ARGS_FOR_APP";
 
@@ -287,6 +288,12 @@ pub fn build_app<'a>() -> Command<'a> {
             .arg(
                 Arg::new(GLUE_DIR)
                     .help("The directory for the generated glue code.\nNote: The implementation can write to any file in the directory.")
+                    .allow_invalid_utf8(true)
+                    .required(true)
+            )
+            .arg(
+                Arg::new(GLUE_SPEC)
+                    .help("The specification for how to convert roc types into another programming language")
                     .allow_invalid_utf8(true)
                     .required(true)
             )

@@ -544,7 +544,7 @@ pub struct R1 {
     target_arch = "aarch64",
     target_arch = "x86_64"
 ))]
-#[repr(transparent)]
+#[repr(C)]
 #[derive(Clone, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 pub struct Tuple1 {
     f0: roc_std::RocStr,
@@ -598,7 +598,7 @@ pub struct R3 {
     target_arch = "aarch64",
     target_arch = "x86_64"
 ))]
-#[repr(transparent)]
+#[repr(C)]
 #[derive(Clone, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 pub struct Tuple2 {
     f0: u64,
