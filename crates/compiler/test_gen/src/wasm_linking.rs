@@ -183,7 +183,10 @@ impl<'a> BackendInputs<'a> {
     }
 }
 
-fn execute_wasm_bytes(wasm_bytes: &[u8]) -> i32 {
+fn execute_wasm_module(final_module: WasmModule<'_>) -> i32 {
+    let mut wasm_bytes = Vec::with_capacity(final_module.size());
+    final_module.serialize(&mut wasm_bytes);
+
     let env = Environment::new().unwrap();
     let rt = env.create_runtime(1024 * 60).unwrap();
 
@@ -253,9 +256,9 @@ fn test_help(
         final_module.eliminate_dead_code(env.arena, called_fns);
     }
 
-    let mut buffer = Vec::with_capacity(final_module.size());
-    final_module.serialize(&mut buffer);
     if std::env::var("DEBUG_WASM").is_ok() {
+        let mut buffer = Vec::with_capacity(final_module.size());
+        final_module.serialize(&mut buffer);
         fs::write(dump_filename, &buffer).unwrap();
     }
 
@@ -269,7 +272,7 @@ fn test_help(
         expected_name_section_start
     );
 
-    let wasm_result = execute_wasm_bytes(&buffer);
+    let wasm_result = execute_wasm_module(final_module);
 
     // As well as having the right structure, it should return the right result!
     assert_eq!(wasm_result, get_native_result());
