@@ -4,32 +4,16 @@ on:
 
 name: Nightly Release macOS x86_64
 
-env:
-  ZIG_VERSION: 0.9.1
-  LLVM_SYS_130_PREFIX: /usr/local/opt/llvm@13
-
 jobs:
   test-build-upload:
     name: build, test, package and upload nightly release
-    strategy:
-      matrix:
-        os: [ macos-11, macos-12 ]
-    runs-on: ${{ matrix.os }}
+    runs-on: [self-hosted, macOS, X64]
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v3
           
       - name: write version to file
         run: ./ci/write_version.sh
-
-      - name: Install zig
-        run: |
-          curl -L -o zig.tar.xz https://ziglang.org/download/${ZIG_VERSION}/zig-macos-x86_64-${ZIG_VERSION}.tar.xz && tar -xf zig.tar.xz
-          echo "${GITHUB_WORKSPACE}/zig-macos-x86_64-${ZIG_VERSION}" >> $GITHUB_PATH
-      - name: zig version
-        run: zig version
-      - name: Install LLVM
-        run: brew install llvm@13
         
       # build has to be done before tests #2572
       - name: build release
