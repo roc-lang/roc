@@ -18,8 +18,8 @@ use roc_mono::ir::{
     UpdateModeId,
 };
 use roc_mono::layout::{Builtin, CapturesNiche, LambdaName, Layout, STLayoutInterner};
-use roc_wasm_module::WasmModule;
-use wasm3::{Environment, Module};
+use roc_wasm_interp::{wasi, ImportDispatcher, Instance, WasiDispatcher};
+use roc_wasm_module::{Value, WasmModule};
 
 const LINKING_TEST_HOST_WASM: &str = "build/wasm_linking_test_host.wasm";
 const LINKING_TEST_HOST_NATIVE: &str = "build/wasm_linking_test_host";
@@ -183,39 +183,61 @@ impl<'a> BackendInputs<'a> {
     }
 }
 
-fn execute_wasm_module(final_module: WasmModule<'_>) -> i32 {
-    let mut wasm_bytes = Vec::with_capacity(final_module.size());
-    final_module.serialize(&mut wasm_bytes);
+struct TestDispatcher<'a> {
+    wasi: WasiDispatcher<'a>,
+}
 
-    let env = Environment::new().unwrap();
-    let rt = env.create_runtime(1024 * 60).unwrap();
+impl ImportDispatcher for TestDispatcher<'_> {
+    fn dispatch(
+        &mut self,
+        module_name: &str,
+        function_name: &str,
+        arguments: &[Value],
+        memory: &mut [u8],
+    ) -> Option<Value> {
+        if module_name == wasi::MODULE_NAME {
+            self.wasi.dispatch(function_name, arguments, memory)
+        } else if module_name == "env" {
+            match function_name {
+                "js_called_directly_from_roc" => Some(Value::I32(0x01)),
+                "js_called_indirectly_from_roc" => Some(Value::I32(0x02)),
+                "js_called_directly_from_main" => Some(Value::I32(0x04)),
+                "js_called_indirectly_from_main" => Some(Value::I32(0x08)),
+                "js_unused" => Some(Value::I32(0x10)),
+                _ => panic!("Unknown import env.{}", function_name),
+            }
+        } else {
+            panic!(
+                "TestDispatcher does not implement {}.{}",
+                module_name, function_name
+            );
+        }
+    }
+}
 
-    let parsed_module = Module::parse(&env, &wasm_bytes[..]).unwrap();
-    let mut module = rt.load_module(parsed_module).unwrap();
-    module
-        .link_closure("env", "js_called_directly_from_roc", |_, ()| Ok(0x01i32))
-        .unwrap();
-    module
-        .link_closure("env", "js_called_indirectly_from_roc", |_, ()| Ok(0x02i32))
-        .unwrap();
-    module
-        .link_closure("env", "js_called_directly_from_main", |_, ()| Ok(0x04i32))
-        .unwrap();
-    module
-        .link_closure("env", "js_called_indirectly_from_main", |_, ()| Ok(0x08i32))
-        .unwrap();
-    module
-        .link_closure("env", "js_unused", |_, ()| Ok(0x10i32))
-        .unwrap_or_else(|_| {});
+fn execute_wasm_module<'a>(arena: &'a Bump, orig_module: WasmModule<'a>) -> Result<i32, String> {
+    // FIXME: see if we can skip serializing and re-parsing!
+    // Some metadata seems to be left over from the host file. e.g. CodeSection::section_start
+    let module = {
+        let mut buffer = Vec::with_capacity(orig_module.size());
+        orig_module.serialize(&mut buffer);
+        WasmModule::preload(arena, &buffer, false).map_err(|e| format!("{:?}", e))?
+    };
+
+    let dispatcher = TestDispatcher {
+        wasi: wasi::WasiDispatcher { args: &[] },
+    };
+    let is_debug_mode = true;
+    let mut inst = Instance::for_module(&arena, &module, dispatcher, is_debug_mode)?;
 
     // In Zig, main can only return u8 or void, but our result is too wide for that.
     // But I want to use main so that I can test that _start is created for it!
     // So return void from main, and call another function to get the result.
-    let start = module.find_function::<(), ()>("_start").unwrap();
-    start.call().unwrap();
-
-    let read_host_result = module.find_function::<(), i32>("read_host_result").unwrap();
-    read_host_result.call().unwrap()
+    inst.call_export(&module, "_start", [])?;
+    inst.call_export(&module, "read_host_result", [])?
+        .ok_or(String::from("expected a return value"))?
+        .expect_i32()
+        .map_err(|type_err| format!("{:?}", type_err))
 }
 
 fn get_native_result() -> i32 {
@@ -272,9 +294,7 @@ fn test_help(
         expected_name_section_start
     );
 
-    let wasm_result = execute_wasm_module(final_module);
-
-    // As well as having the right structure, it should return the right result!
+    let wasm_result = execute_wasm_module(&arena, final_module).unwrap();
     assert_eq!(wasm_result, get_native_result());
 }
 
@@ -282,11 +302,11 @@ const EXPECTED_HOST_IMPORT_NAMES: [&'static str; 9] = [
     "__linear_memory",
     "__stack_pointer",
     "js_called_indirectly_from_roc",
-    "js_called_indirectly_from_main",
     "js_unused",
     "js_called_directly_from_roc",
     "js_called_directly_from_main",
     "roc__app_proc_1_exposed",
+    "js_called_indirectly_from_main",
     "__indirect_function_table",
 ];
 
@@ -294,18 +314,18 @@ const EXPECTED_HOST_IMPORT_NAMES: [&'static str; 9] = [
 fn test_linking_without_dce() {
     let expected_final_import_names = &[
         "js_called_indirectly_from_roc",
-        "js_called_indirectly_from_main",
         "js_unused", // not eliminated
         "js_called_directly_from_roc",
         "js_called_directly_from_main",
+        "js_called_indirectly_from_main",
     ];
 
     let expected_name_section_start = &[
         (0, "js_called_indirectly_from_roc"),
-        (1, "js_called_indirectly_from_main"),
-        (2, "js_unused"), // not eliminated
-        (3, "js_called_directly_from_roc"),
-        (4, "js_called_directly_from_main"),
+        (1, "js_unused"), // not eliminated
+        (2, "js_called_directly_from_roc"),
+        (3, "js_called_directly_from_main"),
+        (4, "js_called_indirectly_from_main"),
     ];
 
     let eliminate_dead_code = false;
