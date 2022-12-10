@@ -224,6 +224,15 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             module.types.look_up_arg_type_bytes(signature_index)
         };
 
+        if self.debug_string.is_some() {
+            println!(
+                "Calling export func[{}] '{}' at address {:#x}",
+                fn_index,
+                fn_name,
+                self.program_counter + module.code.section_offset as usize
+            );
+        }
+
         Ok(arg_type_bytes)
     }
 
