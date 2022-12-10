@@ -40,7 +40,8 @@ use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
-    BranchInfo, CallType, CrashTag, JoinPointId, ListLiteralElement, ModifyRc, OptLevel, ProcLayout,
+    BranchInfo, CallType, CrashTag, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc,
+    OptLevel, ProcLayout,
 };
 use roc_mono::layout::{
     Builtin, CapturesNiche, LambdaName, LambdaSet, Layout, LayoutIds, RawFunctionLayout,
@@ -4163,60 +4164,50 @@ pub fn build_procedures<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    entry_points: &[(Symbol, ProcLayout<'a>)],
+    opt_entry_point: Option<EntryPoint<'a>>,
     debug_output_file: Option<&Path>,
 ) {
-    build_procedures_help(env, opt_level, procedures, entry_points, debug_output_file);
+    build_procedures_help(
+        env,
+        opt_level,
+        procedures,
+        opt_entry_point,
+        debug_output_file,
+    );
 }
 
 pub fn build_wasm_test_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    entry_points: &'a [(Symbol, ProcLayout<'a>)],
+    entry_point: EntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
-    assert_eq!(
-        entry_points.len(),
-        1,
-        "Currently, build_wasm_test_wrapper() only supports receiving one entrypoint."
-    );
-
     let mod_solutions = build_procedures_help(
         env,
         opt_level,
         procedures,
-        entry_points,
+        Some(entry_point),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
-    let (symbol, proc_layout) = entry_points[0];
-
-    promote_to_wasm_test_wrapper(env, mod_solutions, symbol, proc_layout)
+    promote_to_wasm_test_wrapper(env, mod_solutions, entry_point.symbol, entry_point.layout)
 }
 
 pub fn build_procedures_return_main<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    entry_points: &'a [(Symbol, ProcLayout<'a>)],
+    entry_point: EntryPoint<'a>,
 ) -> (&'static str, FunctionValue<'ctx>) {
-    assert_eq!(
-        entry_points.len(),
-        1,
-        "Currently, build_procedures_return_main() only supports receiving one entrypoint."
-    );
-
     let mod_solutions = build_procedures_help(
         env,
         opt_level,
         procedures,
-        entry_points,
+        Some(entry_point),
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
-    let (symbol, proc_layout) = entry_points[0];
-
-    promote_to_main_function(env, mod_solutions, symbol, proc_layout)
+    promote_to_main_function(env, mod_solutions, entry_point.symbol, entry_point.layout)
 }
 
 pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
@@ -4224,13 +4215,13 @@ pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
     opt_level: OptLevel,
     expects: &[Symbol],
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    entry_points: &'a [(Symbol, ProcLayout<'a>)],
+    opt_entry_point: Option<EntryPoint<'a>>,
 ) -> Vec<'a, &'a str> {
     let mod_solutions = build_procedures_help(
         env,
         opt_level,
         procedures,
-        entry_points,
+        opt_entry_point,
         Some(&std::env::temp_dir().join("test.ll")),
     );
 
@@ -4292,7 +4283,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     opt_level: OptLevel,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
-    entry_points: &[(Symbol, ProcLayout<'a>)],
+    opt_entry_point: Option<EntryPoint<'a>>,
     debug_output_file: Option<&Path>,
 ) -> &'a ModSolutions {
     let mut layout_ids = roc_mono::layout::LayoutIds::default();
@@ -4304,7 +4295,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
         env.arena,
         env.layout_interner,
         opt_level,
-        entry_points,
+        opt_entry_point,
         it,
     ) {
         Err(e) => panic!("Error in alias analysis: {}", e),

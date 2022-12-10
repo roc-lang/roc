@@ -188,18 +188,25 @@ fn gen_from_mono_module_llvm<'a>(
     // expects that would confuse the surgical linker
     add_default_roc_externs(&env);
 
-    let exposed_to_host = match loaded.entry_point {
+    let opt_entry_point = match loaded.entry_point {
         EntryPoint::Executable {
-            exposed_to_host, ..
-        } => exposed_to_host,
-        EntryPoint::Test => &[],
+            exposed_to_host,
+            platform_path: _,
+        } => {
+            // TODO support multiple of these!
+            debug_assert_eq!(exposed_to_host.len(), 1);
+            let (symbol, layout) = exposed_to_host[0];
+
+            Some(roc_mono::ir::EntryPoint { symbol, layout })
+        }
+        EntryPoint::Test => None,
     };
 
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
         opt_level,
         loaded.procedures,
-        exposed_to_host,
+        opt_entry_point,
         Some(&app_ll_file),
     );
 

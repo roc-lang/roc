@@ -11,7 +11,7 @@ use roc_module::symbol::Symbol;
 
 use roc_mono::ir::{
     Call, CallType, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement, Literal,
-    ModifyRc, OptLevel, Proc, ProcLayout, Stmt,
+    ModifyRc, OptLevel, Proc, Stmt,
 };
 use roc_mono::layout::{
     Builtin, CapturesNiche, Layout, RawFunctionLayout, STLayoutInterner, UnionLayout,
@@ -136,15 +136,12 @@ pub fn spec_program<'a, I>(
     arena: &'a Bump,
     interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
-    entry_points: &'a [(Symbol, ProcLayout<'a>)],
+    opt_entry_point: Option<roc_mono::ir::EntryPoint<'a>>,
     procs: I,
 ) -> Result<morphic_lib::Solutions>
 where
     I: Iterator<Item = &'a Proc<'a>>,
 {
-    // TODO support multiple entry points here!
-    let opt_entry_point = entry_points.first();
-
     let main_module = {
         let mut m = ModDefBuilder::new();
 
@@ -229,13 +226,13 @@ where
             m.add_func(func_name, spec)?;
         }
 
-        if let Some((symbol, proc_layout)) = opt_entry_point {
+        if let Some(entry_point) = opt_entry_point {
             // the entry point wrapper
             let roc_main_bytes = func_name_bytes_help(
-                *symbol,
-                proc_layout.arguments.iter().copied(),
+                entry_point.symbol,
+                entry_point.layout.arguments.iter().copied(),
                 CapturesNiche::no_niche(),
-                &proc_layout.result,
+                &entry_point.layout.result,
             );
             let roc_main = FuncName(&roc_main_bytes);
 
@@ -244,7 +241,7 @@ where
             let entry_point_function = build_entry_point(
                 &mut env,
                 interner,
-                *proc_layout,
+                entry_point.layout,
                 roc_main,
                 &host_exposed_functions,
             )?;

@@ -118,6 +118,12 @@ pub enum OptLevel {
     Optimize,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct EntryPoint<'a> {
+    pub symbol: Symbol,
+    pub layout: ProcLayout<'a>,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct PartialProcId(usize);
 
