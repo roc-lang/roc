@@ -3,7 +3,7 @@ use roc_error_macros::internal_error;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_load::{EntryPoint, ExpectMetadata, LoadedModule, MonomorphizedModule};
-use roc_mono::ir::OptLevel;
+use roc_mono::ir::{OptLevel, SingleEntryPoint};
 use roc_reporting::cli::{report_problems, Problems};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -188,7 +188,7 @@ fn gen_from_mono_module_llvm<'a>(
     // expects that would confuse the surgical linker
     add_default_roc_externs(&env);
 
-    let opt_entry_point = match loaded.entry_point {
+    let entry_point = match loaded.entry_point {
         EntryPoint::Executable {
             exposed_to_host,
             platform_path: _,
@@ -197,16 +197,16 @@ fn gen_from_mono_module_llvm<'a>(
             debug_assert_eq!(exposed_to_host.len(), 1);
             let (symbol, layout) = exposed_to_host[0];
 
-            Some(roc_mono::ir::EntryPoint { symbol, layout })
+            roc_mono::ir::EntryPoint::Single(SingleEntryPoint { symbol, layout })
         }
-        EntryPoint::Test => None,
+        EntryPoint::Test => roc_mono::ir::EntryPoint::Expects { symbols: &[] },
     };
 
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
         opt_level,
         loaded.procedures,
-        opt_entry_point,
+        entry_point,
         Some(&app_ll_file),
     );
 

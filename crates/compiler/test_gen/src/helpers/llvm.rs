@@ -240,7 +240,7 @@ fn create_llvm_module<'a>(
 
     let entry_point = match entry_point {
         EntryPoint::Executable { symbol, layout, .. } => {
-            roc_mono::ir::EntryPoint { symbol, layout }
+            roc_mono::ir::SingleEntryPoint { symbol, layout }
         }
         EntryPoint::Test => {
             unreachable!()

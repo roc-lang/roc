@@ -180,7 +180,7 @@ to use them for more than that.</p>
 <p>Let's move out of the REPL and create our first Roc application!</p>
 <p>Make a file named <code>main.roc</code> and put this in it:</p>
 <samp><span class="kw">app</span> <span class="str">"hello"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.1/zAoiC9xtQPHywYk350_b7ust04BmWLW00sjb9ZPtSQk.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
     <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 
@@ -301,7 +301,6 @@ on the same line, although the convention is to use the original version's style
 </p>
 </section>
 <section><h2 id="debugging"><a href="#debugging">Debugging</a></h2>
-<p><code>dbg doesn't work yet on MacOS x86_64</code></p>
 <p><a href="https://en.wikipedia.org/wiki/Debugging#Techniques">Print debugging</a> is the most
 common debugging technique in the history of programming, and Roc has a <code>dbg</code>
 keyword to facilitate it. Here's an example of how to use <code>dbg</code>:</p>
@@ -1243,7 +1242,7 @@ Roc compiler. That's why they're called "builtins!"</p>
 <h2 id="the-app-module-header"><a href="#the-app-module-header">The app module header</a></h2>
 <p>Let's take a closer look at the part of <code>main.roc</code> above the <code>main</code> def:</p>
 <samp><span class="hljs-selector-tag">app</span> "<span class="hljs-selector-tag">hello</span>"
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.1/zAoiC9xtQPHywYk350_b7ust04BmWLW00sjb9ZPtSQk.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
     <span class="hljs-selector-tag">imports</span> <span class="hljs-selector-attr">[pf.Stdout]</span>
     <span class="hljs-selector-tag">provides</span> <span class="hljs-selector-tag">main</span> <span class="hljs-selector-tag">to</span> <span class="hljs-selector-tag">pf</span>
 </samp>
@@ -1256,7 +1255,7 @@ means when you run <code>roc dev</code>, the Roc compiler will build an executab
 named <code>hello</code> (or <code>hello.exe</code> on Windows) and run it. You can also build the executable
 without running it by running <code>roc build</code>.</p>
 <p>The remaining lines all involve the <em>platform</em> this application is built on:</p>
-<samp><span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.1/zAoiC9xtQPHywYk350_b7ust04BmWLW00sjb9ZPtSQk.tar.br"</span> <span class="brace">}</span>
+<samp><span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
 <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
 <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 </samp>
@@ -1301,7 +1300,7 @@ we've been using up to this point as an example!</p>
 <p>We'll use these four operations to learn about tasks.</p>
 <p>Let's start with a basic "Hello World" program.</p>
 <samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.1/zAoiC9xtQPHywYk350_b7ust04BmWLW00sjb9ZPtSQk.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
     imports [pf.Stdout]
     provides [main] to pf
 
@@ -1326,7 +1325,7 @@ when it runs (hence the <code>*</code>).</p>
 </samp>
 <p>Let's change <code>main</code> to read a line from <code>stdin</code>, and then print it back out again:</p>
 <samp>app <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.1/zAoiC9xtQPHywYk350_b7ust04BmWLW00sjb9ZPtSQk.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
     imports [pf.Stdout, pf.Stdin, pf.Task]
     provides [main] to pf
 
@@ -1361,7 +1360,7 @@ the program isn't doing anything when we start it up:</p>
 </samp>
 <p>This works, but we can make it a little nicer to read. Let's change it to the following:</p>
 <samp>app <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.1/zAoiC9xtQPHywYk350_b7ust04BmWLW00sjb9ZPtSQk.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
     imports [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     provides [main] to pf
 
@@ -1859,5 +1858,6 @@ For example, <code>[Foo Str][Bar Bool][Baz (List Str)]</code> is equivalent to <
 </table>
 </main>
 <footer>Made by people who like to make nice things. © 2022</footer>
+<script src="/site.js"></script>
 </body>
 </html>

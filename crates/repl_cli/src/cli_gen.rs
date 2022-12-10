@@ -242,7 +242,7 @@ fn mono_module_to_dylib<'a>(
             debug_assert_eq!(exposed_to_host.len(), 1);
             let (symbol, layout) = exposed_to_host[0];
 
-            roc_mono::ir::EntryPoint { symbol, layout }
+            roc_mono::ir::SingleEntryPoint { symbol, layout }
         }
         EntryPoint::Test => {
             unreachable!()

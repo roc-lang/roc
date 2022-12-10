@@ -1042,12 +1042,9 @@ fn roc_dev_native(
     envp: bumpalo::collections::Vec<*const c_char>,
     expect_metadata: ExpectMetadata,
 ) -> ! {
-    use roc_repl_expect::run::ExpectMemory;
-    use signal_hook::{
-        consts::signal::SIGCHLD,
-        consts::signal::{SIGUSR1, SIGUSR2},
-        iterator::Signals,
-    };
+    use std::sync::{atomic::AtomicBool, Arc};
+
+    use roc_repl_expect::run::{ChildProcessMsg, ExpectMemory};
 
     let ExpectMetadata {
         mut expectations,
@@ -1055,11 +1052,9 @@ fn roc_dev_native(
         layout_interner,
     } = expect_metadata;
 
-    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1, SIGUSR2]).unwrap();
-
     // let shm_name =
     let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
-    let memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
+    let mut memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
 
     let layout_interner = layout_interner.into_global();
 
@@ -1085,12 +1080,14 @@ fn roc_dev_native(
             std::process::exit(1)
         }
         1.. => {
-            for sig in &mut signals {
-                match sig {
-                    SIGCHLD => break,
-                    SIGUSR1 => {
-                        // this is the signal we use for an expect failure. Let's see what the child told us
+            let sigchld = Arc::new(AtomicBool::new(false));
+            signal_hook::flag::register(signal_hook::consts::SIGCHLD, Arc::clone(&sigchld))
+                .unwrap();
 
+            loop {
+                match memory.wait_for_child(sigchld.clone()) {
+                    ChildProcessMsg::Terminate => break,
+                    ChildProcessMsg::Expect => {
                         roc_repl_expect::run::render_expects_in_memory(
                             &mut writer,
                             arena,
@@ -1100,10 +1097,10 @@ fn roc_dev_native(
                             &memory,
                         )
                         .unwrap();
-                    }
-                    SIGUSR2 => {
-                        // this is the signal we use for a dbg
 
+                        memory.reset();
+                    }
+                    ChildProcessMsg::Dbg => {
                         roc_repl_expect::run::render_dbgs_in_memory(
                             &mut writer,
                             arena,
@@ -1113,8 +1110,9 @@ fn roc_dev_native(
                             &memory,
                         )
                         .unwrap();
+
+                        memory.reset();
                     }
-                    _ => println!("received signal {}", sig),
                 }
             }
 

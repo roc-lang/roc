@@ -106,7 +106,7 @@ pub fn helper(
     debug_assert_eq!(exposed_to_host.values.len(), 1);
     let entry_point = match loaded.entry_point {
         EntryPoint::Executable { symbol, layout, .. } => {
-            roc_mono::ir::EntryPoint { symbol, layout }
+            roc_mono::ir::SingleEntryPoint { symbol, layout }
         }
         EntryPoint::Test => {
             unreachable!()
