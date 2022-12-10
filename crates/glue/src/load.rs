@@ -44,8 +44,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
             };
             let roc_types: roc_std::RocList<roc_type::Types> =
                 types.iter().map(|x| x.into()).collect();
-            let mut files = roc_std::RocResult::err("test".into());
-            dbg!(&files);
+            let mut files = roc_std::RocResult::err(roc_std::RocStr::empty());
             unsafe { make_glue(&mut files, &roc_types) };
             dbg!(files);
             for crate::types::File { name, content } in rust_glue::emit(&types) {
