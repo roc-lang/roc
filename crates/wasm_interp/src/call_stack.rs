@@ -62,7 +62,7 @@ impl<'a> CallStack<'a> {
             self.set_local_help(i as u32, arg);
         }
 
-        self.value_stack_bases.push(value_stack.len() as u32);
+        self.value_stack_bases.push(value_stack.depth() as u32);
 
         // Parse local variable declarations in the function header. They're grouped by type.
         let local_group_count = u32::parse((), code_bytes, pc).unwrap();
@@ -209,7 +209,7 @@ impl<'a> CallStack<'a> {
             let frame_value_count = {
                 let value_stack_base = self.value_stack_bases[frame];
                 let next_value_stack_base = if frame == self.frame_offsets.len() - 1 {
-                    value_stack.len() as u32
+                    value_stack.depth() as u32
                 } else {
                     self.value_stack_bases[frame + 1]
                 };

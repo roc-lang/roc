@@ -18,7 +18,7 @@ impl<'a> ValueStack<'a> {
         }
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub(crate) fn depth(&self) -> usize {
         self.values.len()
     }
 
@@ -91,8 +91,8 @@ impl<'a> ValueStack<'a> {
         self.values.iter()
     }
 
-    pub(crate) fn truncate(&mut self, len: usize) {
-        self.values.truncate(len)
+    pub(crate) fn truncate(&mut self, depth: usize) {
+        self.values.truncate(depth)
     }
 }
 

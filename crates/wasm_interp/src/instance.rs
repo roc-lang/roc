@@ -469,13 +469,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             BLOCK => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
                 self.blocks.push(Block::Normal {
-                    vstack: self.value_stack.len(),
+                    vstack: self.value_stack.depth(),
                 });
             }
             LOOP => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
                 self.blocks.push(Block::Loop {
-                    vstack: self.value_stack.len(),
+                    vstack: self.value_stack.depth(),
                     start_addr: self.program_counter,
                 });
             }
@@ -483,7 +483,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
                 let condition = self.value_stack.pop_i32()?;
                 self.blocks.push(Block::Normal {
-                    vstack: self.value_stack.len(),
+                    vstack: self.value_stack.depth(),
                 });
                 if condition == 0 {
                     let mut depth = self.blocks.len();
