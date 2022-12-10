@@ -224,63 +224,13 @@ fn get_native_result() -> i32 {
     result_str.parse().unwrap()
 }
 
-#[test]
-fn test_linking_without_dce() {
-    let arena = Bump::new();
-    let layout_interner = STLayoutInterner::with_capacity(4);
-
-    let BackendInputs {
-        env,
-        mut interns,
-        host_module,
-        procedures,
-    } = BackendInputs::new(&arena, &layout_interner);
-
-    let host_import_names = Vec::from_iter(host_module.import.imports.iter().map(|i| i.name));
-    assert_eq!(
-        &host_import_names,
-        &[
-            "__linear_memory",
-            "__stack_pointer",
-            "js_called_indirectly_from_roc",
-            "js_called_indirectly_from_main",
-            "js_unused",
-            "js_called_directly_from_roc",
-            "js_called_directly_from_main",
-            "roc__app_proc_1_exposed",
-            "__indirect_function_table",
-        ]
-    );
-
-    let (final_module, _called_fns, _roc_main_index) =
-        roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
-
-    let mut buffer = Vec::with_capacity(final_module.size());
-    final_module.serialize(&mut buffer);
-
-    if std::env::var("DEBUG_WASM").is_ok() {
-        fs::write("build/without_dce.wasm", &buffer).unwrap();
-    }
-
-    let final_import_names = Vec::from_iter(final_module.import.imports.iter().map(|i| i.name));
-
-    assert_eq!(
-        &final_import_names,
-        &[
-            "js_called_indirectly_from_roc",
-            "js_called_indirectly_from_main",
-            "js_unused",
-            "js_called_directly_from_roc",
-            "js_called_directly_from_main",
-        ]
-    );
-
-    let wasm_result = execute_wasm_bytes(&buffer);
-    assert_eq!(wasm_result, get_native_result());
-}
-
-#[test]
-fn test_linking_with_dce() {
+fn test_help(
+    eliminate_dead_code: bool,
+    expected_host_import_names: &[&str],
+    expected_final_import_names: &[&str],
+    expected_name_section_start: &[(u32, &str)],
+    dump_filename: &str,
+) {
     let arena = Bump::new();
     let layout_interner = STLayoutInterner::with_capacity(4);
 
@@ -292,57 +242,107 @@ fn test_linking_with_dce() {
     } = BackendInputs::new(&arena, &layout_interner);
 
     let host_import_names = Vec::from_iter(host_module.import.imports.iter().map(|imp| imp.name));
-    assert_eq!(
-        &host_import_names,
-        &[
-            "__linear_memory",
-            "__stack_pointer",
-            "js_called_indirectly_from_roc",
-            "js_called_indirectly_from_main",
-            "js_unused",
-            "js_called_directly_from_roc",
-            "js_called_directly_from_main",
-            "roc__app_proc_1_exposed",
-            "__indirect_function_table",
-        ]
-    );
+    assert_eq!(&host_import_names, expected_host_import_names);
 
     assert!(&host_module.names.function_names.is_empty());
 
     let (mut final_module, called_fns, _roc_main_index) =
         roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
 
-    final_module.eliminate_dead_code(env.arena, called_fns);
+    if eliminate_dead_code {
+        final_module.eliminate_dead_code(env.arena, called_fns);
+    }
 
     let mut buffer = Vec::with_capacity(final_module.size());
     final_module.serialize(&mut buffer);
     if std::env::var("DEBUG_WASM").is_ok() {
-        fs::write("build/with_dce.wasm", &buffer).unwrap();
+        fs::write(dump_filename, &buffer).unwrap();
     }
 
     let final_import_names = Vec::from_iter(final_module.import.imports.iter().map(|i| i.name));
 
-    assert_eq!(
-        &final_import_names,
-        &[
-            "js_called_indirectly_from_roc",
-            "js_called_indirectly_from_main",
-            "js_called_directly_from_roc",
-            "js_called_directly_from_main",
-        ]
-    );
+    assert_eq!(&final_import_names, expected_final_import_names);
 
+    let name_count = expected_name_section_start.len();
     assert_eq!(
-        &final_module.names.function_names[0..5],
-        &[
-            (0, "js_called_indirectly_from_roc"),
-            (1, "js_called_indirectly_from_main"),
-            (2, "js_called_directly_from_roc"),
-            (3, "js_called_directly_from_main"),
-            (4, "js_unused"),
-        ]
+        &final_module.names.function_names[0..name_count],
+        expected_name_section_start
     );
 
     let wasm_result = execute_wasm_bytes(&buffer);
+
+    // As well as having the right structure, it should return the right result!
     assert_eq!(wasm_result, get_native_result());
+}
+
+const EXPECTED_HOST_IMPORT_NAMES: [&'static str; 9] = [
+    "__linear_memory",
+    "__stack_pointer",
+    "js_called_indirectly_from_roc",
+    "js_called_indirectly_from_main",
+    "js_unused",
+    "js_called_directly_from_roc",
+    "js_called_directly_from_main",
+    "roc__app_proc_1_exposed",
+    "__indirect_function_table",
+];
+
+#[test]
+fn test_linking_without_dce() {
+    let expected_final_import_names = &[
+        "js_called_indirectly_from_roc",
+        "js_called_indirectly_from_main",
+        "js_unused", // not eliminated
+        "js_called_directly_from_roc",
+        "js_called_directly_from_main",
+    ];
+
+    let expected_name_section_start = &[
+        (0, "js_called_indirectly_from_roc"),
+        (1, "js_called_indirectly_from_main"),
+        (2, "js_unused"), // not eliminated
+        (3, "js_called_directly_from_roc"),
+        (4, "js_called_directly_from_main"),
+    ];
+
+    let eliminate_dead_code = false;
+    let dump_filename = "build/without_dce.wasm";
+
+    test_help(
+        eliminate_dead_code,
+        &EXPECTED_HOST_IMPORT_NAMES,
+        expected_final_import_names,
+        expected_name_section_start,
+        dump_filename,
+    );
+}
+
+#[test]
+fn test_linking_with_dce() {
+    let expected_final_import_names = &[
+        "js_called_indirectly_from_roc",
+        "js_called_indirectly_from_main",
+        // js_unused removed from imports
+        "js_called_directly_from_roc",
+        "js_called_directly_from_main",
+    ];
+
+    let expected_name_section_start = &[
+        (0, "js_called_indirectly_from_roc"),
+        (1, "js_called_indirectly_from_main"),
+        (2, "js_called_directly_from_roc"),  // index changed
+        (3, "js_called_directly_from_main"), // index changed
+        (4, "js_unused"), // still exists, but now an internal dummy, with index changed
+    ];
+
+    let eliminate_dead_code = true;
+    let dump_filename = "build/with_dce.wasm";
+
+    test_help(
+        eliminate_dead_code,
+        &EXPECTED_HOST_IMPORT_NAMES,
+        expected_final_import_names,
+        expected_name_section_start,
+        dump_filename,
+    );
 }
