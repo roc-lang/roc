@@ -6,7 +6,7 @@ platform "roc-lang/glue"
     provides [makeGlueForHost]
 
 makeGlueForHost : List Types -> Result (List File) Str
-makeGlueForHost = makeGlue
+makeGlueForHost = \x -> makeGlue x
 
 File : { name: Str, content: Str }
 
