@@ -1,0 +1,21 @@
+on: [pull_request, workflow_dispatch] # TODO remove pull_request
+
+# this cancels runs currently in progress if you start a new one
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-macos-apple-silicon-files:
+    runs-on: [self-hosted, macOS, ARM64]
+    steps:
+      - uses: actions/checkout@v3
+
+      - run: ./ci/build_platform_w_latest_roc.sh
+
+      - name: Save macos-arm64.o file
+        uses: actions/upload-artifact@v3
+        with:
+          name: macos-apple-silicon-files
+          path: |
+            src/macos-arm64.o
