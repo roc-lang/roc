@@ -32,19 +32,34 @@ pub struct File {
 
 #[cfg(any(
     target_arch = "arm",
+    target_arch = "aarch64",
     target_arch = "wasm32",
-    target_arch = "x86"
+    target_arch = "x86",
+    target_arch = "x86_64"
 ))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct Types {
     pub aligns: roc_std::RocList<u32>,
-    pub deps: roc_std::RocDict<u32, roc_std::RocList<u32>>,
+    pub deps: roc_std::RocList<Tuple2>,
     pub sizes: roc_std::RocList<u32>,
     pub types: roc_std::RocList<RocType>,
-    pub typesByName: roc_std::RocDict<roc_std::RocStr, u32>,
+    pub typesByName: roc_std::RocList<Tuple1>,
     pub target: Target,
 }
+
+#[cfg(any(
+    target_arch = "arm",
+    target_arch = "wasm32",
+    target_arch = "x86"
+))]
+#[repr(C)]
+#[derive(Clone, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
+pub struct Tuple1 {
+    f0: roc_std::RocStr,
+    f1: u32,
+}
+
 
 #[cfg(any(
     target_arch = "arm",
@@ -153,6 +168,19 @@ pub struct R3 {
     pub name: roc_std::RocStr,
     pub r#type: u32,
 }
+
+#[cfg(any(
+    target_arch = "arm",
+    target_arch = "wasm32",
+    target_arch = "x86"
+))]
+#[repr(C)]
+#[derive(Clone, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
+pub struct Tuple2 {
+    f0: u32,
+    f1: roc_std::RocList<u32>,
+}
+
 
 #[cfg(any(
     target_arch = "arm",
@@ -516,16 +544,13 @@ pub struct R1 {
     target_arch = "aarch64",
     target_arch = "x86_64"
 ))]
-#[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
-#[repr(C)]
-pub struct Types {
-    pub aligns: roc_std::RocList<u32>,
-    pub deps: roc_std::RocDict<u64, roc_std::RocList<u64>>,
-    pub sizes: roc_std::RocList<u32>,
-    pub types: roc_std::RocList<RocType>,
-    pub typesByName: roc_std::RocDict<roc_std::RocStr, u64>,
-    pub target: Target,
+#[repr(transparent)]
+#[derive(Clone, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
+pub struct Tuple1 {
+    f0: roc_std::RocStr,
+    f1: u64,
 }
+
 
 #[cfg(any(
     target_arch = "aarch64",
@@ -568,6 +593,18 @@ pub struct R3 {
     pub name: roc_std::RocStr,
     pub r#type: u64,
 }
+
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "x86_64"
+))]
+#[repr(transparent)]
+#[derive(Clone, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
+pub struct Tuple2 {
+    f0: u64,
+    f1: roc_std::RocList<u64>,
+}
+
 
 #[cfg(any(
     target_arch = "aarch64",
@@ -693,6 +730,88 @@ pub struct R1 {
     pub args: roc_std::RocList<u64>,
     pub name: roc_std::RocStr,
     pub ret: u64,
+}
+
+impl Tuple1 {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named T, with the given payload.
+    pub fn T(f0: roc_std::RocStr, f1: u32) -> Self {
+        Self {
+            f0,
+            f1,
+        }
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// Since `T` only has one tag (namely, `T`),
+    /// convert it to `T`'s payload.
+    pub fn into_T(self) -> (roc_std::RocStr, u32) {
+        (self.f0, self.f1)
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// Since `T` only has one tag (namely, `T`),
+    /// convert it to `T`'s payload.
+    pub fn as_T(&self) -> (&roc_std::RocStr, &u32) {
+        (&self.f0, &self.f1)
+    }
+
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "x86_64"
+    ))]
+    /// A tag named T, with the given payload.
+    pub fn T(f0: roc_std::RocStr, f1: u64) -> Self {
+        Self {
+            f0,
+            f1,
+        }
+    }
+
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "x86_64"
+    ))]
+    /// Since `T` only has one tag (namely, `T`),
+    /// convert it to `T`'s payload.
+    pub fn into_T(self) -> (roc_std::RocStr, u64) {
+        (self.f0, self.f1)
+    }
+
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "x86_64"
+    ))]
+    /// Since `T` only has one tag (namely, `T`),
+    /// convert it to `T`'s payload.
+    pub fn as_T(&self) -> (&roc_std::RocStr, &u64) {
+        (&self.f0, &self.f1)
+    }
+}
+
+impl core::fmt::Debug for Tuple1 {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_tuple("Tuple1::T")                .field(&self.f0)                .field(&self.f1)                .finish()    }
+
 }
 
 impl RocType {
@@ -2173,6 +2292,88 @@ impl core::fmt::Debug for RocType {
             }
         }
     }
+}
+
+impl Tuple2 {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// A tag named T, with the given payload.
+    pub fn T(f0: u32, f1: roc_std::RocList<u32>) -> Self {
+        Self {
+            f0,
+            f1,
+        }
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// Since `T` only has one tag (namely, `T`),
+    /// convert it to `T`'s payload.
+    pub fn into_T(self) -> (u32, roc_std::RocList<u32>) {
+        (self.f0, self.f1)
+    }
+
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "wasm32",
+        target_arch = "x86"
+    ))]
+    /// Since `T` only has one tag (namely, `T`),
+    /// convert it to `T`'s payload.
+    pub fn as_T(&self) -> (&u32, &roc_std::RocList<u32>) {
+        (&self.f0, &self.f1)
+    }
+
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "x86_64"
+    ))]
+    /// A tag named T, with the given payload.
+    pub fn T(f0: u64, f1: roc_std::RocList<u64>) -> Self {
+        Self {
+            f0,
+            f1,
+        }
+    }
+
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "x86_64"
+    ))]
+    /// Since `T` only has one tag (namely, `T`),
+    /// convert it to `T`'s payload.
+    pub fn into_T(self) -> (u64, roc_std::RocList<u64>) {
+        (self.f0, self.f1)
+    }
+
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "x86_64"
+    ))]
+    /// Since `T` only has one tag (namely, `T`),
+    /// convert it to `T`'s payload.
+    pub fn as_T(&self) -> (&u64, &roc_std::RocList<u64>) {
+        (&self.f0, &self.f1)
+    }
+}
+
+impl core::fmt::Debug for Tuple2 {
+    #[cfg(any(
+        target_arch = "arm",
+        target_arch = "aarch64",
+        target_arch = "wasm32",
+        target_arch = "x86",
+        target_arch = "x86_64"
+    ))]
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_tuple("Tuple2::T")                .field(&self.f0)                .field(&self.f1)                .finish()    }
+
 }
 
 impl RocTagUnion {
