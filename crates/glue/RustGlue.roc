@@ -1,5 +1,5 @@
 app "rust-glue"
-    packages { pf: "RocType.roc" }
+    packages { pf: "platform/main.roc" }
     imports []
     provides [makeGlue] to pf
 
