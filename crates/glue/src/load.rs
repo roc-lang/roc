@@ -1,6 +1,7 @@
 use crate::types::{Env, Types};
 use crate::{roc_type, rust_glue};
 use bumpalo::Bump;
+use libloading::Library;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_mono::layout::GlobalLayoutInterner;
 use roc_packaging::cache::{self, RocCacheDir};
@@ -29,8 +30,24 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
     ) {
         Ok(types) => {
             // TODO: compile the spec and load it as a dynamic library.
+            let lib = unsafe { Library::new(spec_path) }.unwrap();
+            type MakeGlue = unsafe extern "C" fn(
+                *mut roc_std::RocResult<roc_std::RocList<roc_type::File>, roc_std::RocStr>,
+                &roc_std::RocList<roc_type::Types>,
+            );
+
+            let make_glue: libloading::Symbol<MakeGlue> = unsafe {
+                lib.get("roc__makeGlueForHost_1_exposed_generic".as_bytes())
+                    .ok()
+                    .ok_or(format!("Unable to load glue function"))
+                    .expect("errored")
+            };
             let roc_types: roc_std::RocList<roc_type::Types> =
                 types.iter().map(|x| x.into()).collect();
+            let mut files = roc_std::RocResult::err("test".into());
+            dbg!(&files);
+            unsafe { make_glue(&mut files, &roc_types) };
+            dbg!(files);
             for crate::types::File { name, content } in rust_glue::emit(&types) {
                 let valid_name = PathBuf::from(&name)
                     .components()
