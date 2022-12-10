@@ -22,12 +22,12 @@ fn host_called_directly_from_main() i32 {
     return 0x200 | host_called_indirectly_from_main() | js_called_indirectly_from_main();
 }
 
-export fn host_unused() i32 {
+fn host_unused() i32 {
     // Call some functions from here to get them included in the output file
     return 0x400 | js_unused() | js_called_directly_from_roc();
 }
 
-var host_result: i32 = 0;
+extern var host_result: i32;
 
 export fn read_host_result() i32 {
     return host_result;
