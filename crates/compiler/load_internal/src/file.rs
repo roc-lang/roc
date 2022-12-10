@@ -4282,7 +4282,7 @@ fn build_header<'a>(
         }
 
         if cfg!(debug_assertions) {
-            home.register_debug_idents(&ident_ids);
+            home.register_debug_idents(ident_ids);
         }
 
         ident_ids.clone()
