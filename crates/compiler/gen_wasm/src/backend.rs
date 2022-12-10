@@ -205,9 +205,10 @@ impl<'a> WasmBackend<'a> {
         }
     }
 
-    /// If the host has some `extern` global variables, we need to create them in the final binary
-    /// and make them visible to JavaScript by exporting them
-    fn export_globals(&mut self) {
+    /// We may need to expose some of the host's symbols to JavaScript
+    /// - exposed host functions not called from the Roc app
+    /// - `extern` global variables
+    fn export_host_symbols(&mut self) {
         for (sym_index, sym) in self.module.linking.symbol_table.iter().enumerate() {
             match sym {
                 SymInfo::Data(DataSymbol::Imported { name, .. }) if *name != "__heap_base" => {
@@ -234,6 +235,23 @@ impl<'a> WasmBackend<'a> {
                         ty: ExportType::Global,
                         index: global_index,
                     });
+                }
+                SymInfo::Function(WasmObjectSymbol::ExplicitlyNamed { flags, index, name }) => {
+                    if self.called_fns[*index as usize] || !flags.is_export() {
+                        continue;
+                    }
+                    let new = Export {
+                        name,
+                        ty: ExportType::Func,
+                        index: *index,
+                    };
+                    let mut existing = self.module.export.exports.iter();
+                    let is_exported = existing
+                        .find(|e| e.ty == new.ty && e.index == new.index)
+                        .is_some();
+                    if !is_exported {
+                        self.module.export.append(new);
+                    }
                 }
                 _ => {}
             }
@@ -279,9 +297,8 @@ impl<'a> WasmBackend<'a> {
 
     pub fn finalize(mut self) -> (WasmModule<'a>, BitVec<usize>) {
         self.set_memory_layout(self.env.stack_bytes);
-        self.export_globals();
-
         self.maybe_call_host_main();
+        self.export_host_symbols();
         let fn_table_size = 1 + self.module.element.max_table_index();
         self.module.table.function_table.limits = Limits::MinMax(fn_table_size, fn_table_size);
         (self.module, self.called_fns)
