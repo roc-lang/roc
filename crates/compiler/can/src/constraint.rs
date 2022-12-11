@@ -488,17 +488,19 @@ impl Constraints {
     /// then need to find their way to the pool, and a convenient approach turned out to be to
     /// tag them onto the `Let` that we used to add the imported values.
     #[inline(always)]
-    pub fn let_import_constraint<I1, I2>(
+    pub fn let_import_constraint<I1, I2, I3>(
         &mut self,
         rigid_vars: I1,
-        def_types: I2,
+        flex_vars: I2,
+        def_types: I3,
         module_constraint: Constraint,
         pool_variables: &[Variable],
     ) -> Constraint
     where
         I1: IntoIterator<Item = Variable>,
-        I2: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
-        I2::IntoIter: ExactSizeIterator,
+        I2: IntoIterator<Item = Variable>,
+        I3: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
+        I3::IntoIter: ExactSizeIterator,
     {
         // defs and ret constraint are stored consequtively, so we only need to store one index
         let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
@@ -508,7 +510,7 @@ impl Constraints {
 
         let let_contraint = LetConstraint {
             rigid_vars: self.variable_slice(rigid_vars),
-            flex_vars: Slice::default(),
+            flex_vars: self.variable_slice(flex_vars),
             def_types: self.def_types_slice(def_types),
             defs_and_ret_constraint,
         };

@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use crate::docs::ModuleDocumentation;
 use bumpalo::Bump;
 use crossbeam::channel::{bounded, Sender};
@@ -17,8 +19,8 @@ use roc_constrain::module::constrain_module;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::{
-    ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE, ROC_PRINT_IR_AFTER_SPECIALIZATION,
-    ROC_PRINT_LOAD_LOG,
+    ROC_CHECK_MONO_IR, ROC_PRINT_IR_AFTER_REFCOUNT, ROC_PRINT_IR_AFTER_RESET_REUSE,
+    ROC_PRINT_IR_AFTER_SPECIALIZATION, ROC_PRINT_LOAD_LOG,
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
@@ -41,8 +43,7 @@ use roc_packaging::cache::{self, RocCacheDir};
 use roc_packaging::https::PackageMetadata;
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
-use roc_parse::header::{HeaderFor, ModuleNameEnum, PackageName};
-use roc_parse::ident::UppercaseIdent;
+use roc_parse::header::{HeaderType, PackageName};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
@@ -51,7 +52,7 @@ use roc_reporting::report::{Annotation, Palette, RenderTarget};
 use roc_solve::module::{extract_module_owned_implementations, Solved, SolvedModule};
 use roc_solve_problem::TypeError;
 use roc_target::TargetInfo;
-use roc_types::subs::{ExposedTypesStorageSubs, Subs, VarStore, Variable};
+use roc_types::subs::{CopiedImport, ExposedTypesStorageSubs, Subs, VarStore, Variable};
 use roc_types::types::{Alias, Types};
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::collections::HashMap;
@@ -622,7 +623,6 @@ pub enum BuildProblem<'a> {
 #[derive(Debug)]
 struct ModuleHeader<'a> {
     module_id: ModuleId,
-    module_name: ModuleNameEnum<'a>,
     module_path: PathBuf,
     is_root_module: bool,
     exposed_ident_ids: IdentIds,
@@ -633,7 +633,7 @@ struct ModuleHeader<'a> {
     exposes: Vec<Symbol>,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parse_state: roc_parse::state::State<'a>,
-    header_for: HeaderFor<'a>,
+    header_type: HeaderType<'a>,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     module_timing: ModuleTiming,
 }
@@ -720,8 +720,7 @@ pub struct ExpectMetadata<'a> {
 #[derive(Debug)]
 pub enum EntryPoint<'a> {
     Executable {
-        symbol: Symbol,
-        layout: ProcLayout<'a>,
+        exposed_to_host: &'a [(Symbol, ProcLayout<'a>)],
         platform_path: PathBuf,
     },
     Test,
@@ -771,9 +770,8 @@ struct ParsedModule<'a> {
     exposed_ident_ids: IdentIds,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parsed_defs: Defs<'a>,
-    module_name: ModuleNameEnum<'a>,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
-    header_for: HeaderFor<'a>,
+    header_type: HeaderType<'a>,
 }
 
 type LocExpects = VecMap<Region, Vec<ExpectLookup>>;
@@ -867,9 +865,9 @@ enum PlatformPath<'a> {
 }
 
 #[derive(Debug)]
-struct PlatformData {
+struct PlatformData<'a> {
     module_id: ModuleId,
-    provides: Symbol,
+    provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
     is_prebuilt: bool,
 }
 
@@ -902,7 +900,7 @@ struct State<'a> {
     pub root_id: ModuleId,
     pub root_subs: Option<Subs>,
     pub cache_dir: PathBuf,
-    pub platform_data: Option<PlatformData>,
+    pub platform_data: Option<PlatformData<'a>>,
     pub exposed_types: ExposedByModule,
     pub output_path: Option<&'a str>,
     pub platform_path: PlatformPath<'a>,
@@ -961,7 +959,6 @@ impl<'a> State<'a> {
         self.exec_mode.goal_phase()
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn new(
         root_id: ModuleId,
         target_info: TargetInfo,
@@ -1207,7 +1204,6 @@ fn enqueue_task<'a>(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn load_and_typecheck_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -1296,7 +1292,7 @@ impl<'a> LoadStart<'a> {
                 Ok((module_id, msg)) => {
                     if let Msg::Header(ModuleHeader {
                         module_id: header_id,
-                        module_name,
+                        header_type,
                         is_root_module,
                         ..
                     }) = &msg
@@ -1304,7 +1300,7 @@ impl<'a> LoadStart<'a> {
                         debug_assert_eq!(*header_id, module_id);
                         debug_assert!(is_root_module);
 
-                        if let ModuleNameEnum::Interface(name) = module_name {
+                        if let HeaderType::Interface { name, .. } = header_type {
                             // Interface modules can have names like Foo.Bar.Baz,
                             // in which case we need to adjust the src_dir to
                             // remove the "Bar/Baz" directories in order to correctly
@@ -1494,7 +1490,6 @@ pub enum Threading {
 ///     and then linking them together, and possibly caching them by the hash of their
 ///     specializations, so if none of their specializations changed, we don't even need
 ///     to rebuild the module and can link in the cached one directly.)
-#[allow(clippy::too_many_arguments)]
 pub fn load<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
@@ -1555,7 +1550,6 @@ pub fn load<'a>(
 }
 
 /// Load using only a single thread; used when compiling to webassembly
-#[allow(clippy::too_many_arguments)]
 pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
@@ -1700,8 +1694,13 @@ fn state_thread_step<'a>(
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
 
-                    let monomorphized =
-                        finish_specialization(state, subs, layout_interner, exposed_to_host)?;
+                    let monomorphized = finish_specialization(
+                        arena,
+                        state,
+                        subs,
+                        layout_interner,
+                        exposed_to_host,
+                    )?;
 
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
                 }
@@ -1820,7 +1819,6 @@ fn state_thread_step<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn load_multi_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
@@ -1996,7 +1994,6 @@ fn load_multi_threaded<'a>(
     .unwrap()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn worker_task_step<'a>(
     worker_arena: &'a Bump,
     worker: &Worker<BuildTask<'a>>,
@@ -2071,7 +2068,6 @@ fn worker_task_step<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn worker_task<'a>(
     worker_arena: &'a Bump,
     worker: Worker<BuildTask<'a>>,
@@ -2188,12 +2184,33 @@ macro_rules! debug_print_ir {
             let procs_string = $state
                 .procedures
                 .values()
-                .map(|proc| proc.to_pretty($interner, 200))
+                .map(|proc| proc.to_pretty($interner, 200, true))
                 .collect::<Vec<_>>();
 
             let result = procs_string.join("\n");
 
             eprintln!("{}", result);
+        })
+    };
+}
+
+macro_rules! debug_check_ir {
+    ($state:expr, $arena:expr, $interner:expr, $flag:path) => {
+        dbg_do!($flag, {
+            use roc_mono::debug::{check_procs, format_problems};
+
+            let interns = Interns {
+                module_ids: $state.arc_modules.lock().clone().into_module_ids(),
+                all_ident_ids: $state.constrained_ident_ids.clone(),
+            };
+
+            let procedures = &$state.procedures;
+
+            let problems = check_procs($arena, $interner, procedures);
+            if !problems.is_empty() {
+                let formatted = format_problems(&interns, $interner, problems);
+                eprintln!("IR PROBLEMS FOUND:\n{formatted}");
+            }
         })
     };
 }
@@ -2271,7 +2288,7 @@ fn update<'a>(
             Ok(state)
         }
         Header(header) => {
-            use HeaderFor::*;
+            use HeaderType::*;
 
             log!("loaded header for {:?}", header.module_id);
             let home = header.module_id;
@@ -2350,14 +2367,14 @@ fn update<'a>(
                     shorthands.insert(shorthand, shorthand_path);
                 }
 
-                match header.header_for {
-                    App { to_platform } => {
+                match header.header_type {
+                    App { to_platform, .. } => {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::Valid(to_platform);
                     }
                     Platform {
-                        main_for_host,
                         config_shorthand,
+                        provides,
                         ..
                     } => {
                         debug_assert!(matches!(state.platform_data, None));
@@ -2384,11 +2401,11 @@ fn update<'a>(
 
                         state.platform_data = Some(PlatformData {
                             module_id: header.module_id,
-                            provides: main_for_host,
+                            provides,
                             is_prebuilt,
                         });
                     }
-                    Builtin { .. } | Interface => {
+                    Builtin { .. } | Interface { .. } => {
                         if header.is_root_module {
                             debug_assert!(matches!(
                                 state.platform_path,
@@ -2499,18 +2516,15 @@ fn update<'a>(
             // the module's declared "name".
             //
             // e.g. for `app "blah"` we should generate an output file named "blah"
-            match &parsed.module_name {
-                ModuleNameEnum::App(output_str) => match output_str {
+            if let HeaderType::App { output_name, .. } = &parsed.header_type {
+                match output_name {
                     StrLiteral::PlainLine(path) => {
                         state.output_path = Some(path);
                     }
                     _ => {
                         todo!("TODO gracefully handle a malformed string literal after `app` keyword.");
                     }
-                },
-                ModuleNameEnum::Platform
-                | ModuleNameEnum::Interface(_)
-                | ModuleNameEnum::Hosted(_) => {}
+                }
             }
 
             let module_id = parsed.module_id;
@@ -2922,6 +2936,7 @@ fn update<'a>(
                     log!("specializations complete from {:?}", module_id);
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_SPECIALIZATION);
+                    debug_check_ir!(state, arena, &layout_interner, ROC_CHECK_MONO_IR);
 
                     let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
 
@@ -3092,6 +3107,7 @@ fn log_layout_stats(module_id: ModuleId, layout_cache: &LayoutCache) {
 }
 
 fn finish_specialization<'a>(
+    arena: &'a Bump,
     state: State<'a>,
     subs: Subs,
     layout_interner: STLayoutInterner<'a>,
@@ -3119,7 +3135,7 @@ fn finish_specialization<'a>(
     ModuleId::DERIVED_SYNTH.register_debug_idents(&derived_synth_ident_ids);
     all_ident_ids.insert(ModuleId::DERIVED_SYNTH, derived_synth_ident_ids);
 
-    let interns = Interns {
+    let mut interns = Interns {
         module_ids,
         all_ident_ids,
     };
@@ -3153,6 +3169,7 @@ fn finish_specialization<'a>(
             ExecutionMode::Test => EntryPoint::Test,
             ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
                 use PlatformPath::*;
+
                 let platform_path = match platform_path {
                     Valid(To::ExistingPackage(shorthand)) => {
                         match (*state.arc_shorthands).lock().get(shorthand) {
@@ -3167,33 +3184,43 @@ fn finish_specialization<'a>(
                     }
                 };
 
-                let symbol = match platform_data {
+                let exposed_symbols_and_layouts = match platform_data {
                     None => {
-                        debug_assert_eq!(exposed_to_host.values.len(), 1);
-                        *exposed_to_host.values.iter().next().unwrap().0
+                        let src = &exposed_to_host.values;
+                        let mut buf = bumpalo::collections::Vec::with_capacity_in(src.len(), arena);
+
+                        for &symbol in src.keys() {
+                            let proc_layout = proc_layout_for(procedures.keys().copied(), symbol);
+
+                            buf.push((symbol, proc_layout));
+                        }
+
+                        buf.into_bump_slice()
                     }
-                    Some(PlatformData { provides, .. }) => provides,
+                    Some(PlatformData {
+                        module_id,
+                        provides,
+                        ..
+                    }) => {
+                        let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
+                        let mut buf =
+                            bumpalo::collections::Vec::with_capacity_in(provides.len(), arena);
+
+                        for (loc_name, _loc_typed_ident) in provides {
+                            let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
+                            let symbol = Symbol::new(module_id, ident_id);
+                            let proc_layout = proc_layout_for(procedures.keys().copied(), symbol);
+
+                            buf.push((symbol, proc_layout));
+                        }
+
+                        buf.into_bump_slice()
+                    }
                 };
 
-                match procedures.keys().find(|(s, _)| *s == symbol) {
-                    Some((_, layout)) => EntryPoint::Executable {
-                        layout: *layout,
-                        symbol,
-                        platform_path,
-                    },
-                    None => {
-                        // the entry point is not specialized. This can happen if the repl output
-                        // is a function value
-                        EntryPoint::Executable {
-                            layout: roc_mono::ir::ProcLayout {
-                                arguments: &[],
-                                result: Layout::struct_no_name_order(&[]),
-                                captures_niche: CapturesNiche::no_niche(),
-                            },
-                            symbol,
-                            platform_path,
-                        }
-                    }
+                EntryPoint::Executable {
+                    exposed_to_host: exposed_symbols_and_layouts,
+                    platform_path,
                 }
             }
             ExecutionMode::Check => unreachable!(),
@@ -3231,7 +3258,24 @@ fn finish_specialization<'a>(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+fn proc_layout_for<'a>(
+    mut proc_symbols: impl Iterator<Item = (Symbol, ProcLayout<'a>)>,
+    symbol: Symbol,
+) -> ProcLayout<'a> {
+    match proc_symbols.find(|(s, _)| *s == symbol) {
+        Some((_, layout)) => layout,
+        None => {
+            // the entry point is not specialized. This can happen if the repl output
+            // is a function value
+            roc_mono::ir::ProcLayout {
+                arguments: &[],
+                result: Layout::struct_no_name_order(&[]),
+                captures_niche: CapturesNiche::no_niche(),
+            }
+        }
+    }
+}
+
 fn finish(
     mut state: State,
     solved: Solved<Subs>,
@@ -3299,8 +3343,8 @@ fn load_package_from_disk<'a>(
     filename: &Path,
     shorthand: &'a str,
     app_module_id: ModuleId,
-    module_ids: &Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: &SharedIdentIdsByModule,
+    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = Instant::now();
     let file_io_start = Instant::now();
@@ -3373,7 +3417,7 @@ fn load_package_from_disk<'a>(
                     parser_state,
                 )) => {
                     // make a `platform` module that ultimately exposes `main` to the host
-                    let platform_module_msg = fabricate_platform_module(
+                    let (_, _, platform_module_msg) = build_platform_header(
                         arena,
                         Some(shorthand),
                         Some(app_module_id),
@@ -3383,10 +3427,9 @@ fn load_package_from_disk<'a>(
                         ident_ids_by_module,
                         &header,
                         pkg_module_timing,
-                    )
-                    .1;
+                    );
 
-                    Ok(platform_module_msg)
+                    Ok(Msg::Header(platform_module_msg))
                 }
                 Err(fail) => Err(LoadingProblem::ParsingFailed(
                     fail.map_problem(SyntaxError::Header)
@@ -3424,17 +3467,14 @@ fn load_builtin_module_help<'a>(
             parse_state,
         )) => {
             let info = HeaderInfo {
-                loc_name: Loc {
-                    region: header.name.region,
-                    value: ModuleNameEnum::Interface(header.name.value),
-                },
                 filename,
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
                 exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
-                extra: HeaderFor::Builtin {
+                header_type: HeaderType::Builtin {
+                    name: header.name.value,
                     generates_with: &[],
                 },
             };
@@ -3683,7 +3723,6 @@ fn verify_interface_matches_file_path<'a>(
     Err(problem)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn parse_header<'a>(
     arena: &'a Bump,
     read_file_duration: Duration,
@@ -3721,17 +3760,15 @@ fn parse_header<'a>(
             let header_name_region = header.name.region;
 
             let info = HeaderInfo {
-                loc_name: Loc {
-                    region: header_name_region,
-                    value: ModuleNameEnum::Interface(header.name.value),
-                },
                 filename,
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
                 exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
-                extra: HeaderFor::Interface,
+                header_type: HeaderType::Interface {
+                    name: header.name.value,
+                },
             };
 
             let (module_id, module_name, header) = build_header(
@@ -3770,17 +3807,14 @@ fn parse_header<'a>(
             parse_state,
         )) => {
             let info = HeaderInfo {
-                loc_name: Loc {
-                    region: header.name.region,
-                    value: ModuleNameEnum::Hosted(header.name.value),
-                },
                 filename,
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
                 exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
-                extra: HeaderFor::Hosted {
+                header_type: HeaderType::Hosted {
+                    name: header.name.value,
                     generates: header.generates.item,
                     generates_with: unspace(arena, header.generates_with.item.items),
                 },
@@ -3828,10 +3862,6 @@ fn parse_header<'a>(
             let exposes = exposes.into_bump_slice();
 
             let info = HeaderInfo {
-                loc_name: Loc {
-                    region: header.name.region,
-                    value: ModuleNameEnum::App(header.name.value),
-                },
                 filename,
                 is_root_module,
                 opt_shorthand,
@@ -3842,7 +3872,8 @@ fn parse_header<'a>(
                 } else {
                     &[]
                 },
-                extra: HeaderFor::App {
+                header_type: HeaderType::App {
+                    output_name: header.name.value,
                     to_platform: header.provides.to.value,
                 },
             };
@@ -3906,17 +3937,21 @@ fn parse_header<'a>(
                 ..
             },
             parse_state,
-        )) => Ok(fabricate_platform_module(
-            arena,
-            None,
-            None,
-            filename,
-            parse_state,
-            &module_ids,
-            &ident_ids_by_module,
-            &header,
-            module_timing,
-        )),
+        )) => {
+            let (module_id, _, header) = build_platform_header(
+                arena,
+                None,
+                None,
+                filename,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                &header,
+                module_timing,
+            );
+
+            Ok((module_id, Msg::Header(header)))
+        }
 
         Err(fail) => Err(LoadingProblem::ParsingFailed(
             fail.map_problem(SyntaxError::Header)
@@ -3989,8 +4024,8 @@ fn load_packages<'a>(
             &root_module_path,
             shorthand,
             module_id,
-            &module_ids,
-            &ident_ids_by_module,
+            module_ids.clone(),
+            ident_ids_by_module.clone(),
         ) {
             Ok(msg) => {
                 load_messages.push(msg);
@@ -4010,7 +4045,6 @@ fn load_packages<'a>(
 }
 
 /// Load a module by its filename
-#[allow(clippy::too_many_arguments)]
 fn load_filename<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -4049,7 +4083,6 @@ fn load_filename<'a>(
 
 /// Load a module from a str
 /// the `filename` is never read, but used for the module name
-#[allow(clippy::too_many_arguments)]
 fn load_from_str<'a>(
     arena: &'a Bump,
     filename: PathBuf,
@@ -4079,17 +4112,15 @@ fn load_from_str<'a>(
 
 #[derive(Debug)]
 struct HeaderInfo<'a> {
-    loc_name: Loc<ModuleNameEnum<'a>>,
     filename: PathBuf,
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     packages: &'a [Loc<PackageEntry<'a>>],
     exposes: &'a [Loc<ExposedName<'a>>],
     imports: &'a [Loc<ImportsEntry<'a>>],
-    extra: HeaderFor<'a>,
+    header_type: HeaderType<'a>,
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_header<'a>(
     info: HeaderInfo<'a>,
     parse_state: roc_parse::state::State<'a>,
@@ -4097,46 +4128,63 @@ fn build_header<'a>(
     ident_ids_by_module: SharedIdentIdsByModule,
     module_timing: ModuleTiming,
 ) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
-    use ModuleNameEnum::*;
-
     let HeaderInfo {
-        loc_name,
         filename,
         is_root_module,
         opt_shorthand,
         packages,
         exposes,
         imports,
-        extra,
+        header_type,
     } = info;
 
-    let declared_name: ModuleName = match &loc_name.value {
-        Platform => unreachable!(),
-        App(_) => ModuleName::APP.into(),
-        Interface(module_name) | Hosted(module_name) => {
-            // TODO check to see if module_name is consistent with filename.
+    let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
+    let num_exposes = exposes.len();
+    let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
+        HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
+    let declared_name: ModuleName = match &header_type {
+        HeaderType::App { .. } => ModuleName::APP.into(),
+        HeaderType::Platform {
+            opt_app_module_id, ..
+        } => {
+            // Add standard imports, if there is an app module.
+            // (There might not be, e.g. when running `roc check myplatform.roc` or
+            // when generating bindings.)
+            if let Some(app_module_id) = opt_app_module_id {
+                imported_modules.insert(*app_module_id, Region::zero());
+                deps_by_name.insert(
+                    PQModuleName::Unqualified(ModuleName::APP.into()),
+                    *app_module_id,
+                );
+            }
+
+            // Platforms do not have names. This is important because otherwise
+            // those names end up in host-generated symbols, and they may contain
+            // characters that hosts might not allow in their function names.
+            String::new().into()
+        }
+        HeaderType::Interface { name, .. }
+        | HeaderType::Builtin { name, .. }
+        | HeaderType::Hosted { name, .. } => {
+            // TODO check to see if name is consistent with filename.
             // If it isn't, report a problem!
 
-            module_name.as_str().into()
+            name.as_str().into()
         }
     };
 
     let mut imported: Vec<(QualifiedModuleName, Vec<Loc<Ident>>, Region)> =
         Vec::with_capacity(imports.len());
-    let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
     let mut scope_size = 0;
 
     for loc_entry in imports {
         let (qualified_module_name, exposed) = exposed_from_import(&loc_entry.value);
 
-        scope_size += exposed.len();
+        scope_size += num_exposes;
 
         imported.push((qualified_module_name, exposed, loc_entry.region));
     }
 
-    let num_exposes = exposes.len();
-    let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
-        HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
     let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
 
     // Make sure the module_ids has ModuleIds for all our deps,
@@ -4145,6 +4193,7 @@ fn build_header<'a>(
         HashMap::with_capacity_and_hasher(scope_size, default_hasher());
     let home: ModuleId;
     let name: PQModuleName;
+    let symbols_from_requires;
 
     let ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
@@ -4185,6 +4234,7 @@ fn build_header<'a>(
             };
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
+
             imported_modules.insert(module_id, region);
 
             deps_by_name.insert(pq_module_name, module_id);
@@ -4209,14 +4259,58 @@ fn build_header<'a>(
             }
         }
 
+        symbols_from_requires = if let HeaderType::Platform {
+            requires,
+            requires_types,
+            opt_app_module_id,
+            ..
+        } = header_type
+        {
+            // If we don't have an app module id (e.g. because we're doing
+            // `roc check myplatform.roc` or because we're generating glue code),
+            // insert the `requires` symbols into the platform module's IdentIds.
+            //
+            // Otherwise, get them from the app module's IdentIds, because it
+            // should already have a symbol for each `requires` entry, and we
+            // want to make sure we're referencing the same symbols!
+            let module_id = opt_app_module_id.unwrap_or(home);
+            let mut symbols_from_requires = Vec::with_capacity(requires.len());
+            let ident_ids = ident_ids_by_module.get_or_insert(module_id);
+
+            for Loc {
+                value: entry,
+                region: _,
+            } in requires
+            {
+                let ident: Ident = entry.ident.value.into();
+                let ident_id = ident_ids.get_or_insert(entry.ident.value);
+                let symbol = Symbol::new(module_id, ident_id);
+
+                // Since this value is exposed, add it to our module's default scope.
+                debug_assert!(!scope.contains_key(&ident.clone()));
+
+                scope.insert(ident, (symbol, entry.ident.region));
+                symbols_from_requires.push((Loc::at(entry.ident.region, symbol), entry.ann));
+            }
+
+            for entry in requires_types {
+                let str_entry: &str = entry.value.into();
+                let ident: Ident = str_entry.into();
+                let ident_id = ident_ids.get_or_insert(str_entry);
+                let symbol = Symbol::new(module_id, ident_id);
+
+                // Since this value is exposed, add it to our module's default scope.
+                debug_assert!(!scope.contains_key(&ident));
+                scope.insert(ident, (symbol, entry.region));
+            }
+
+            symbols_from_requires
+        } else {
+            Vec::new()
+        };
+
         let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
 
-        // Generate IdentIds entries for all values this module exposes.
-        // This way, when we encounter them in Defs later, they already
-        // have an IdentIds entry.
-        //
-        // We must *not* add them to scope yet, or else the Defs will
-        // incorrectly think they're shadowing them!
         for loc_exposed in exposes.iter() {
             // Use get_or_insert here because the ident_ids may already
             // created an IdentId for this, when it was imported exposed
@@ -4231,6 +4325,31 @@ fn build_header<'a>(
             exposed.push(symbol);
         }
 
+        // Generate IdentIds entries for all values this module provides,
+        // and treat them as `exposes` values for later purposes.
+        // This way, when we encounter them in Defs later, they already
+        // have an IdentIds entry.
+        //
+        // We must *not* add them to scope yet, or else the Defs will
+        // incorrectly think they're shadowing them!
+        if let HeaderType::Platform { provides, .. } = header_type {
+            exposed.reserve(provides.len());
+
+            for (loc_name, _loc_typed_ident) in provides.iter() {
+                // Use get_or_insert here because the ident_ids may already
+                // created an IdentId for this, when it was imported exposed
+                // in a dependent module.
+                //
+                // For example, if module A has [B.{ foo }], then
+                // when we get here for B, `foo` will already have
+                // an IdentId. We must reuse that!
+                let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
+                let symbol = Symbol::new(home, ident_id);
+
+                exposed.push(symbol);
+            }
+        }
+
         if cfg!(debug_assertions) {
             home.register_debug_idents(ident_ids);
         }
@@ -4240,10 +4359,7 @@ fn build_header<'a>(
 
     let package_entries = packages
         .iter()
-        .map(|pkg| {
-            let pkg = pkg.value;
-            (pkg.shorthand, pkg.package_name.value)
-        })
+        .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_name.value))
         .collect::<MutMap<_, _>>();
 
     // Send the deps to the coordinator thread for processing,
@@ -4269,12 +4385,13 @@ fn build_header<'a>(
     // make sure when we run the bulitin modules in /compiler/builtins/roc that we
     // mark these modules as Builtin. Otherwise the builtin functions are not instantiated
     // and we just have a bunch of definitions with runtime errors in their bodies
-    let extra = {
-        match extra {
-            HeaderFor::Interface if home.is_builtin() => HeaderFor::Builtin {
+    let header_type = {
+        match header_type {
+            HeaderType::Interface { name } if home.is_builtin() => HeaderType::Builtin {
+                name,
                 generates_with: &[],
             },
-            _ => extra,
+            _ => header_type,
         }
     };
 
@@ -4286,7 +4403,6 @@ fn build_header<'a>(
             module_path: filename,
             is_root_module,
             exposed_ident_ids: ident_ids,
-            module_name: loc_name.value,
             packages: package_entries,
             imported_modules,
             package_qualified_imported_modules,
@@ -4294,280 +4410,15 @@ fn build_header<'a>(
             exposes: exposed,
             parse_state,
             exposed_imports: scope,
-            symbols_from_requires: Vec::new(),
-            header_for: extra,
+            symbols_from_requires,
+            header_type,
             module_timing,
         },
     )
 }
 
-#[derive(Debug)]
-struct PlatformHeaderInfo<'a> {
-    filename: PathBuf,
-    is_root_module: bool,
-    opt_shorthand: Option<&'a str>,
-    opt_app_module_id: Option<ModuleId>,
-    packages: &'a [Loc<PackageEntry<'a>>],
-    provides: &'a [Loc<ExposedName<'a>>],
-    requires: &'a [Loc<TypedIdent<'a>>],
-    requires_types: &'a [Loc<UppercaseIdent<'a>>],
-    imports: &'a [Loc<ImportsEntry<'a>>],
-}
-
-// TODO refactor so more logic is shared with `send_header`
-#[allow(clippy::too_many_arguments)]
-fn send_platform_header<'a>(
-    info: PlatformHeaderInfo<'a>,
-    parse_state: roc_parse::state::State<'a>,
-    module_ids: &Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: &SharedIdentIdsByModule,
-    module_timing: ModuleTiming,
-) -> (ModuleId, Msg<'a>) {
-    let PlatformHeaderInfo {
-        filename,
-        opt_shorthand,
-        is_root_module,
-        opt_app_module_id,
-        packages,
-        provides,
-        requires,
-        requires_types,
-        imports,
-    } = info;
-
-    let declared_name: ModuleName = "".into();
-    let mut symbols_from_requires = Vec::with_capacity(requires.len());
-
-    let mut imported: Vec<(QualifiedModuleName, Vec<Loc<Ident>>, Region)> =
-        Vec::with_capacity(imports.len());
-    let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
-
-    let num_exposes = provides.len();
-    let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
-        HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
-
-    // Add standard imports, if there is an app module.
-    // (There might not be, e.g. when running `roc check myplatform.roc` or
-    // when generating bindings.)
-    if let Some(app_module_id) = opt_app_module_id {
-        imported_modules.insert(app_module_id, Region::zero());
-        deps_by_name.insert(
-            PQModuleName::Unqualified(ModuleName::APP.into()),
-            app_module_id,
-        );
-    }
-
-    let mut scope_size = 0;
-
-    for loc_entry in imports {
-        let (qualified_module_name, exposed) = exposed_from_import(&loc_entry.value);
-
-        scope_size += exposed.len();
-
-        imported.push((qualified_module_name, exposed, loc_entry.region));
-    }
-
-    let mut exposed: Vec<Symbol> = Vec::with_capacity(num_exposes);
-
-    // Make sure the module_ids has ModuleIds for all our deps,
-    // then record those ModuleIds in can_module_ids for later.
-    let mut scope: MutMap<Ident, (Symbol, Region)> =
-        HashMap::with_capacity_and_hasher(scope_size, default_hasher());
-    let home: ModuleId;
-
-    let mut ident_ids = {
-        // Lock just long enough to perform the minimal operations necessary.
-        let mut module_ids = (*module_ids).lock();
-        let mut ident_ids_by_module = (*ident_ids_by_module).lock();
-
-        let name = match opt_shorthand {
-            Some(shorthand) => PQModuleName::Qualified(shorthand, declared_name),
-            None => PQModuleName::Unqualified(declared_name),
-        };
-        home = module_ids.get_or_insert(&name);
-
-        // Ensure this module has an entry in the exposed_ident_ids map.
-        ident_ids_by_module.get_or_insert(home);
-
-        // For each of our imports, add an entry to deps_by_name
-        //
-        // e.g. for `imports [pf.Foo.{ bar }]`, add `Foo` to deps_by_name
-        //
-        // Also build a list of imported_values_to_expose (like `bar` above.)
-        for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
-            let cloned_module_name = qualified_module_name.module.clone();
-            let pq_module_name = if qualified_module_name.is_builtin() {
-                // If this is a builtin, it must be unqualified, and we should *never* prefix it
-                // with the package shorthand! The user intended to import the module as-is here.
-                debug_assert!(qualified_module_name.opt_package.is_none());
-                PQModuleName::Unqualified(qualified_module_name.module)
-            } else {
-                match qualified_module_name.opt_package {
-                    None => match opt_shorthand {
-                        Some(shorthand) => {
-                            PQModuleName::Qualified(shorthand, qualified_module_name.module)
-                        }
-                        None => PQModuleName::Unqualified(qualified_module_name.module),
-                    },
-                    Some(package) => PQModuleName::Qualified(package, cloned_module_name),
-                }
-            };
-
-            let module_id = module_ids.get_or_insert(&pq_module_name);
-            imported_modules.insert(module_id, region);
-
-            deps_by_name.insert(pq_module_name, module_id);
-
-            // Add the new exposed idents to the dep module's IdentIds, so
-            // once that module later gets loaded, its lookups will resolve
-            // to the same symbols as the ones we're using here.
-            let ident_ids = ident_ids_by_module.get_or_insert(module_id);
-
-            for Loc {
-                region,
-                value: ident,
-            } in exposed_idents
-            {
-                let ident_id = ident_ids.get_or_insert(ident.as_str());
-                let symbol = Symbol::new(module_id, ident_id);
-
-                // Since this value is exposed, add it to our module's default scope.
-                debug_assert!(!scope.contains_key(&ident.clone()));
-
-                scope.insert(ident, (symbol, region));
-            }
-        }
-
-        {
-            // If we don't have an app module id (e.g. because we're doing
-            // `roc check myplatform.roc` or because we're generating glue code),
-            // insert the `requires` symbols into the platform module's IdentIds.
-            //
-            // Otherwise, get them from the app module's IdentIds, because it
-            // should already have a symbol for each `requires` entry, and we
-            // want to make sure we're referencing the same symbols!
-            let module_id = opt_app_module_id.unwrap_or(home);
-            let ident_ids = ident_ids_by_module.get_or_insert(module_id);
-
-            for entry in requires {
-                let entry = entry.value;
-                let ident: Ident = entry.ident.value.into();
-                let ident_id = ident_ids.get_or_insert(entry.ident.value);
-                let symbol = Symbol::new(module_id, ident_id);
-
-                // Since this value is exposed, add it to our module's default scope.
-                debug_assert!(!scope.contains_key(&ident.clone()));
-
-                scope.insert(ident, (symbol, entry.ident.region));
-                symbols_from_requires.push((Loc::at(entry.ident.region, symbol), entry.ann));
-            }
-
-            for entry in requires_types {
-                let string: &str = entry.value.into();
-                let ident: Ident = string.into();
-                let ident_id = ident_ids.get_or_insert(string);
-                let symbol = Symbol::new(module_id, ident_id);
-
-                // Since this value is exposed, add it to our module's default scope.
-                debug_assert!(!scope.contains_key(&ident));
-                scope.insert(ident, (symbol, entry.region));
-            }
-        }
-
-        let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
-
-        // Generate IdentIds entries for all values this module exposes.
-        // This way, when we encounter them in Defs later, they already
-        // have an IdentIds entry.
-        //
-        // We must *not* add them to scope yet, or else the Defs will
-        // incorrectly think they're shadowing them!
-        for loc_exposed in provides.iter() {
-            // Use get_or_insert here because the ident_ids may already
-            // created an IdentId for this, when it was imported exposed
-            // in a dependent module.
-            //
-            // For example, if module A has [B.{ foo }], then
-            // when we get here for B, `foo` will already have
-            // an IdentId. We must reuse that!
-            let ident_id = ident_ids.get_or_insert(loc_exposed.value.as_str());
-            let symbol = Symbol::new(home, ident_id);
-
-            exposed.push(symbol);
-        }
-
-        if cfg!(debug_assertions) {
-            home.register_debug_idents(ident_ids);
-        }
-
-        ident_ids.clone()
-    };
-
-    let package_entries = packages
-        .iter()
-        .map(|pkg| (pkg.value.shorthand, pkg.value.package_name.value))
-        .collect::<MutMap<_, _>>();
-
-    // Send the deps to the coordinator thread for processing,
-    // then continue on to parsing and canonicalizing defs.
-    //
-    // We always need to send these, even if deps is empty,
-    // because the coordinator thread needs to receive this message
-    // to decrement its "pending" count.
-    let module_name = ModuleNameEnum::Platform;
-
-    let main_for_host = {
-        let ident_id = ident_ids.get_or_insert(provides[0].value.as_str());
-
-        Symbol::new(home, ident_id)
-    };
-
-    let extra = HeaderFor::Platform {
-        // A config_shorthand of "" should be fine
-        config_shorthand: opt_shorthand.unwrap_or_default(),
-        platform_main_type: requires[0].value,
-        main_for_host,
-    };
-
-    let mut package_qualified_imported_modules = MutSet::default();
-    for (pq_module_name, module_id) in &deps_by_name {
-        match pq_module_name {
-            PackageQualified::Unqualified(_) => {
-                package_qualified_imported_modules
-                    .insert(PackageQualified::Unqualified(*module_id));
-            }
-            PackageQualified::Qualified(shorthand, _) => {
-                package_qualified_imported_modules
-                    .insert(PackageQualified::Qualified(shorthand, *module_id));
-            }
-        }
-    }
-
-    (
-        home,
-        Msg::Header(ModuleHeader {
-            module_id: home,
-            module_path: filename,
-            is_root_module,
-            exposed_ident_ids: ident_ids,
-            module_name,
-            packages: package_entries,
-            imported_modules,
-            package_qualified_imported_modules,
-            deps_by_name,
-            exposes: exposed,
-            parse_state,
-            exposed_imports: scope,
-            module_timing,
-            symbols_from_requires,
-            header_for: extra,
-        }),
-    )
-}
-
 impl<'a> BuildTask<'a> {
     // TODO trim down these arguments - possibly by moving Constraint into Module
-    #[allow(clippy::too_many_arguments)]
     fn solve_module(
         module: Module,
         ident_ids: IdentIds,
@@ -4654,61 +4505,26 @@ pub fn add_imports(
     mut pending_abilities: PendingAbilitiesStore,
     exposed_for_module: &ExposedForModule,
     def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
-    rigid_vars: &mut Vec<Variable>,
+    imported_rigid_vars: &mut Vec<Variable>,
+    imported_flex_vars: &mut Vec<Variable>,
 ) -> (Vec<Variable>, AbilitiesStore) {
     let mut import_variables = Vec::new();
 
     let mut cached_symbol_vars = VecMap::default();
 
-    macro_rules! import_var_for_symbol  {
-        ($subs:expr, $exposed_by_module:expr, $symbol:ident, $break:stmt) => {
-            let module_id = $symbol.module_id();
-            match $exposed_by_module.get(&module_id) {
-                Some(ExposedModuleTypes {
-                    exposed_types_storage_subs: exposed_types,
-                    resolved_implementations: _,
-                }) => {
-                    let variable = match exposed_types.stored_vars_by_symbol.iter().find(|(s, _)| **s == $symbol) {
-                        None => {
-                            // Today we define builtins in each module that uses them
-                            // so even though they have a different module name from
-                            // the surrounding module, they are not technically imported
-                            debug_assert!($symbol.is_builtin());
-                            $break
-                        }
-                        Some((_, x)) => *x,
-                    };
-
-                    let copied_import = exposed_types.storage_subs.export_variable_to($subs, variable);
-                    let copied_import_index = constraints.push_variable(copied_import.variable);
-
-                    def_types.push((
-                        $symbol,
-                        Loc::at_zero(copied_import_index),
-                    ));
-
-                    // not a typo; rigids are turned into flex during type inference, but when imported we must
-                    // consider them rigid variables
-                    rigid_vars.extend(copied_import.rigid);
-                    rigid_vars.extend(copied_import.flex);
-
-                    // Rigid vars bound to abilities are also treated like rigids.
-                    rigid_vars.extend(copied_import.rigid_able);
-                    rigid_vars.extend(copied_import.flex_able);
-
-                    import_variables.extend(copied_import.registered);
-
-                    cached_symbol_vars.insert($symbol, copied_import.variable);
-                }
-                None => {
-                    internal_error!("Imported module {:?} is not available", module_id)
-                }
-            }
-        }
-    }
-
     for &symbol in &exposed_for_module.imported_values {
-        import_var_for_symbol!(subs, exposed_for_module.exposed_by_module, symbol, continue);
+        import_variable_for_symbol(
+            subs,
+            constraints,
+            def_types,
+            &mut import_variables,
+            imported_rigid_vars,
+            imported_flex_vars,
+            &mut cached_symbol_vars,
+            &exposed_for_module.exposed_by_module,
+            symbol,
+            OnSymbolNotFound::AssertIsBuiltin,
+        );
     }
 
     // Patch used symbols from circular dependencies.
@@ -4735,6 +4551,9 @@ pub fn add_imports(
     struct Ctx<'a> {
         subs: &'a mut Subs,
         exposed_by_module: &'a ExposedByModule,
+        imported_variables: &'a mut Vec<Variable>,
+        imported_rigids: &'a mut Vec<Variable>,
+        imported_flex: &'a mut Vec<Variable>,
     }
 
     let abilities_store = pending_abilities.resolve_for_module(
@@ -4742,16 +4561,26 @@ pub fn add_imports(
         &mut Ctx {
             subs,
             exposed_by_module: &exposed_for_module.exposed_by_module,
+            imported_variables: &mut import_variables,
+            imported_rigids: imported_rigid_vars,
+            imported_flex: imported_flex_vars,
         },
         |ctx, symbol| match cached_symbol_vars.get(&symbol).copied() {
             Some(var) => var,
             None => {
-                import_var_for_symbol!(
+                import_variable_for_symbol(
                     ctx.subs,
-                    ctx.exposed_by_module,
+                    constraints,
+                    def_types,
+                    ctx.imported_variables,
+                    ctx.imported_rigids,
+                    ctx.imported_flex,
+                    &mut cached_symbol_vars,
+                    &exposed_for_module.exposed_by_module,
                     symbol,
-                    internal_error!("Import ability member {:?} not available", symbol)
+                    OnSymbolNotFound::AbilityMemberMustBeAvailable,
                 );
+
                 *cached_symbol_vars.get(&symbol).unwrap()
             }
         },
@@ -4769,13 +4598,110 @@ pub fn add_imports(
                     .storage_subs
                     .export_variable_to(ctx.subs, *var);
 
-                copied_import.variable
+                #[allow(clippy::let_and_return)]
+                let copied_import_var = extend_imports_data_with_copied_import(
+                    copied_import,
+                    ctx.imported_variables,
+                    ctx.imported_rigids,
+                    ctx.imported_flex,
+                );
+
+                copied_import_var
             }
             None => internal_error!("Imported module {:?} is not available", module),
         },
     );
 
     (import_variables, abilities_store)
+}
+
+enum OnSymbolNotFound {
+    AssertIsBuiltin,
+    AbilityMemberMustBeAvailable,
+}
+
+fn extend_imports_data_with_copied_import(
+    copied_import: CopiedImport,
+    imported_variables: &mut Vec<Variable>,
+    imported_rigids: &mut Vec<Variable>,
+    imported_flex: &mut Vec<Variable>,
+) -> Variable {
+    // not a typo; rigids are turned into flex during type inference, but when imported we must
+    // consider them rigid variables
+    imported_rigids.extend(copied_import.rigid);
+    imported_flex.extend(copied_import.flex);
+
+    // Rigid vars bound to abilities are also treated like rigids.
+    imported_rigids.extend(copied_import.rigid_able);
+    imported_flex.extend(copied_import.flex_able);
+
+    imported_variables.extend(copied_import.registered);
+
+    copied_import.variable
+}
+
+fn import_variable_for_symbol(
+    subs: &mut Subs,
+    constraints: &mut Constraints,
+    def_types: &mut Vec<(Symbol, Loc<TypeOrVar>)>,
+    imported_variables: &mut Vec<Variable>,
+    imported_rigids: &mut Vec<Variable>,
+    imported_flex: &mut Vec<Variable>,
+    cached_symbol_vars: &mut VecMap<Symbol, Variable>,
+    exposed_by_module: &ExposedByModule,
+    symbol: Symbol,
+    on_symbol_not_found: OnSymbolNotFound,
+) {
+    let module_id = symbol.module_id();
+    match exposed_by_module.get(&module_id) {
+        Some(ExposedModuleTypes {
+            exposed_types_storage_subs: exposed_types,
+            resolved_implementations: _,
+        }) => {
+            let variable = match exposed_types
+                .stored_vars_by_symbol
+                .iter()
+                .find(|(s, _)| **s == symbol)
+            {
+                None => {
+                    use OnSymbolNotFound::*;
+                    match on_symbol_not_found {
+                        AssertIsBuiltin => {
+                            // Today we define builtins in each module that uses them
+                            // so even though they have a different module name from
+                            // the surrounding module, they are not technically imported
+                            debug_assert!(symbol.is_builtin());
+                            return;
+                        }
+                        AbilityMemberMustBeAvailable => {
+                            internal_error!("Import ability member {:?} not available", symbol);
+                        }
+                    }
+                }
+                Some((_, x)) => *x,
+            };
+
+            let copied_import = exposed_types
+                .storage_subs
+                .export_variable_to(subs, variable);
+
+            let copied_import_var = extend_imports_data_with_copied_import(
+                copied_import,
+                imported_variables,
+                imported_rigids,
+                imported_flex,
+            );
+
+            let copied_import_index = constraints.push_variable(copied_import_var);
+
+            def_types.push((symbol, Loc::at_zero(copied_import_index)));
+
+            cached_symbol_vars.insert(symbol, copied_import_var);
+        }
+        None => {
+            internal_error!("Imported module {:?} is not available", module_id)
+        }
+    }
 }
 
 #[allow(clippy::complexity)]
@@ -4803,7 +4729,8 @@ fn run_solve_solve(
         ..
     } = module;
 
-    let mut rigid_vars: Vec<Variable> = Vec::new();
+    let mut imported_rigid_vars: Vec<Variable> = Vec::new();
+    let mut imported_flex_vars: Vec<Variable> = Vec::new();
     let mut def_types: Vec<(Symbol, Loc<TypeOrVar>)> = Vec::new();
 
     let mut subs = Subs::new_from_varstore(var_store);
@@ -4815,11 +4742,17 @@ fn run_solve_solve(
         pending_abilities,
         &exposed_for_module,
         &mut def_types,
-        &mut rigid_vars,
+        &mut imported_rigid_vars,
+        &mut imported_flex_vars,
     );
 
-    let actual_constraint =
-        constraints.let_import_constraint(rigid_vars, def_types, constraint, &import_variables);
+    let actual_constraint = constraints.let_import_constraint(
+        imported_rigid_vars,
+        imported_flex_vars,
+        def_types,
+        constraint,
+        &import_variables,
+    );
 
     let mut solve_aliases = roc_solve::solve::Aliases::with_capacity(aliases.len());
     for (name, (_, alias)) in aliases.iter() {
@@ -4884,7 +4817,6 @@ fn run_solve_solve(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_solve<'a>(
     module: Module,
     ident_ids: IdentIds,
@@ -4998,38 +4930,55 @@ fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [L
     .into_bump_slice()
 }
 
-#[allow(clippy::too_many_arguments)]
-fn fabricate_platform_module<'a>(
+fn build_platform_header<'a>(
     arena: &'a Bump,
     opt_shorthand: Option<&'a str>,
     opt_app_module_id: Option<ModuleId>,
     filename: PathBuf,
     parse_state: roc_parse::state::State<'a>,
-    module_ids: &Arc<Mutex<PackageModuleIds<'a>>>,
-    ident_ids_by_module: &SharedIdentIdsByModule,
+    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
-) -> (ModuleId, Msg<'a>) {
+) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
     // If we have an app module, then it's the root module;
     // otherwise, we must be the root.
     let is_root_module = opt_app_module_id.is_none();
 
-    let info = PlatformHeaderInfo {
+    let requires = arena.alloc([Loc::at(
+        header.requires.item.signature.region,
+        header.requires.item.signature.extract_spaces().item,
+    )]);
+    let provides = bumpalo::collections::Vec::from_iter_in(
+        unspace(arena, header.provides.item.items)
+            .iter()
+            .copied()
+            .zip(requires.iter().copied()),
+        arena,
+    );
+    let requires_types = unspace(arena, header.requires.item.rigids.items);
+    let imports = unspace(arena, header.imports.item.items);
+
+    let header_type = HeaderType::Platform {
+        // A config_shorthand of "" should be fine
+        config_shorthand: opt_shorthand.unwrap_or_default(),
+        opt_app_module_id,
+        provides: provides.into_bump_slice(),
+        requires,
+        requires_types,
+    };
+
+    let info = HeaderInfo {
         filename,
         is_root_module,
         opt_shorthand,
-        opt_app_module_id,
         packages: &[],
-        provides: unspace(arena, header.provides.item.items),
-        requires: &*arena.alloc([Loc::at(
-            header.requires.item.signature.region,
-            header.requires.item.signature.extract_spaces().item,
-        )]),
-        requires_types: unspace(arena, header.requires.item.rigids.items),
-        imports: unspace(arena, header.imports.item.items),
+        exposes: &[], // These are exposed values. TODO move this into header_type!
+        imports,
+        header_type,
     };
 
-    send_platform_header(
+    build_header(
         info,
         parse_state,
         module_ids,
@@ -5038,7 +4987,6 @@ fn fabricate_platform_module<'a>(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::unnecessary_wraps)]
 fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
@@ -5054,8 +5002,7 @@ fn canonicalize_and_constrain<'a>(
 
     let ParsedModule {
         module_id,
-        module_name,
-        header_for,
+        header_type,
         exposed_ident_ids,
         parsed_defs,
         exposed_imports,
@@ -5075,7 +5022,7 @@ fn canonicalize_and_constrain<'a>(
     let module_output = canonicalize_module_defs(
         arena,
         parsed_defs,
-        &header_for,
+        &header_type,
         module_id,
         module_ids,
         exposed_ident_ids,
@@ -5106,10 +5053,11 @@ fn canonicalize_and_constrain<'a>(
 
     // Generate documentation information
     // TODO: store timing information?
-    let module_docs = match module_name {
-        ModuleNameEnum::Platform => None,
-        ModuleNameEnum::App(_) => None,
-        ModuleNameEnum::Interface(name) | ModuleNameEnum::Hosted(name) => {
+    let module_docs = match header_type {
+        HeaderType::Platform { .. } | HeaderType::App { .. } => None,
+        HeaderType::Interface { name, .. }
+        | HeaderType::Builtin { name, .. }
+        | HeaderType::Hosted { name, .. } => {
             let mut scope = module_output.scope.clone();
             scope.add_docs_imports();
             let docs = crate::docs::generate_module_docs(
@@ -5244,19 +5192,17 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
 
     let ModuleHeader {
         module_id,
-        module_name,
         deps_by_name,
         exposed_ident_ids,
         exposed_imports,
         module_path,
-        header_for,
+        header_type,
         symbols_from_requires,
         ..
     } = header;
 
     let parsed = ParsedModule {
         module_id,
-        module_name,
         module_path,
         src,
         module_timing,
@@ -5266,7 +5212,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         exposed_imports,
         parsed_defs,
         symbols_from_requires,
-        header_for,
+        header_type,
     };
 
     Ok(Msg::Parsed(parsed))
@@ -5312,7 +5258,6 @@ fn ident_from_exposed(entry: &Spaced<'_, ExposedName<'_>>) -> Ident {
     entry.extract_spaces().item.as_str().into()
 }
 
-#[allow(clippy::too_many_arguments)]
 fn make_specializations<'a>(
     arena: &'a Bump,
     home: ModuleId,
@@ -5389,7 +5334,6 @@ fn make_specializations<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_pending_specializations<'a>(
     arena: &'a Bump,
     solved_subs: Solved<Subs>,
@@ -5820,7 +5764,6 @@ fn build_pending_specializations<'a>(
 /// their specializations.
 // TODO: right now, this runs sequentially, and no other modules are mono'd in parallel to the
 // derived module.
-#[allow(clippy::too_many_arguments)]
 fn load_derived_partial_procs<'a>(
     home: ModuleId,
     arena: &'a Bump,

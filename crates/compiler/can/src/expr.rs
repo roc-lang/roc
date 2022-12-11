@@ -2778,7 +2778,7 @@ pub struct DestructureDef {
     pub pattern_vars: VecMap<Symbol, Variable>,
 }
 
-fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
+pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
     let mut stack: Vec<&Expr> = vec![expr];
     let mut lookups: Vec<ExpectLookup> = Vec::new();
 
@@ -2840,8 +2840,16 @@ fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
 
                 stack.push(&final_else.value);
             }
-            Expr::LetRec(_, _, _) => todo!(),
-            Expr::LetNonRec { .. } => todo!(),
+            Expr::LetRec(defs, expr, _illegal_cycle_mark) => {
+                for def in defs {
+                    stack.push(&def.loc_expr.value);
+                }
+                stack.push(&expr.value);
+            }
+            Expr::LetNonRec(def, expr) => {
+                stack.push(&def.loc_expr.value);
+                stack.push(&expr.value);
+            }
             Expr::Call(boxed_expr, args, _called_via) => {
                 stack.reserve(1 + args.len());
 
@@ -2995,7 +3003,7 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
 
     let mut loc_expr = Loc::at(expect_region, expect);
 
-    for stored in stack {
+    for stored in stack.into_iter().rev() {
         match stored {
             StoredDef::NonRecursive(region, boxed_def) => {
                 loc_expr = Loc::at(region, Expr::LetNonRec(boxed_def, Box::new(loc_expr)));

@@ -11119,7 +11119,7 @@ I recommend using camelCase. It's the standard style in Roc code!
         indoc!(
             r#"
             digits : List U8
-            digits = List.range '0' '9'
+            digits = List.range { start: At '0', end: At '9' }
 
             List.contains digits '☃'
             "#

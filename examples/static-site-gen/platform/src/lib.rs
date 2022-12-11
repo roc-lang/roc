@@ -62,12 +62,6 @@ pub unsafe extern "C" fn roc_shm_open(
     libc::shm_open(name, oflag, mode as libc::c_uint)
 }
 
-#[cfg(unix)]
-#[no_mangle]
-pub unsafe extern "C" fn roc_send_signal(pid: libc::pid_t, sig: libc::c_int) -> libc::c_int {
-    libc::kill(pid, sig)
-}
-
 #[no_mangle]
 pub extern "C" fn rust_main() -> i32 {
     let args: Vec<String> = env::args().collect();
@@ -113,14 +107,11 @@ pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut 
 }
 
 fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
-
-
-    let input_dir = 
-        strip_windows_prefix(
-            PathBuf::from(input_dirname)
+    let input_dir = strip_windows_prefix(
+        PathBuf::from(input_dirname)
             .canonicalize()
-            .map_err(|e| format!("{}: {}", input_dirname, e))?
-        );
+            .map_err(|e| format!("{}: {}", input_dirname, e))?,
+    );
 
     let output_dir = {
         let dir = PathBuf::from(output_dirname);
@@ -129,7 +120,7 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
         }
         strip_windows_prefix(
             dir.canonicalize()
-            .map_err(|e| format!("{}: {}", output_dirname, e))?
+                .map_err(|e| format!("{}: {}", output_dirname, e))?,
         )
     };
 
@@ -157,7 +148,10 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
                 num_successes += 1;
             }
             Err(e) => {
-                eprintln!("Failed to process file:\n\n  ({:?})with error:\n\n  {}", &input_file, e);
+                eprintln!(
+                    "Failed to process file:\n\n  ({:?})with error:\n\n  {}",
+                    &input_file, e
+                );
                 num_errors += 1;
             }
         }
@@ -176,7 +170,6 @@ fn run(input_dirname: &str, output_dirname: &str) -> Result<(), String> {
 }
 
 fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Result<(), String> {
-
     match input_file.extension() {
         Some(s) if s.eq("md".into()) => {}
         _ => return Err("Only .md files are supported".into()),

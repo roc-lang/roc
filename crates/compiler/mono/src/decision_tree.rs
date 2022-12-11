@@ -425,6 +425,7 @@ fn flatten<'a>(
 /// variables to "how to get their value". So a pattern like (Just (x,_)) will give
 /// us something like ("x" => value.0.0)
 
+#[derive(Debug)]
 enum Match {
     Exact(Label),
     GuardOnly,
@@ -795,7 +796,22 @@ fn to_relevant_branch_help<'a>(
             elements,
             element_layout: _,
         } => match test {
-            IsListLen { bound: _, len } if my_arity.covers_length(*len as _) => {
+            IsListLen {
+                bound: test_bound,
+                len,
+            } if my_arity.covers_length(*len as _)
+                    // Spread tests [_, ..] can only match spread tests, not exact-sized bounds [_].
+                    //
+                    // On the other hand, exact-sized tests [_] can match spread bounds [_, ..],
+                    // because each spread bound generates 0 or more exact-sized tests.
+                    //
+                    // See exhaustiveness checking of lists for more details on the tests generated
+                    // for spread bounds.
+                    && !matches!(
+                        (test_bound, my_arity),
+                        (ListLenBound::AtLeast, ListArity::Exact(..))
+                    ) =>
+            {
                 let sub_positions = elements.into_iter().enumerate().map(|(index, elem_pat)| {
                     let mut new_path = path.to_vec();
 

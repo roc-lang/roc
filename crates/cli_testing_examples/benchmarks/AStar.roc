@@ -10,9 +10,9 @@ Model position : {
     openSet : Set position,
     costs : Dict position F64,
     cameFrom : Dict position position,
-}
+} | position has Hash & Eq
 
-initialModel : position -> Model position
+initialModel : position -> Model position | position has Hash & Eq
 initialModel = \start -> {
     evaluated: Set.empty,
     openSet: Set.single start,
@@ -20,7 +20,7 @@ initialModel = \start -> {
     cameFrom: Dict.empty,
 }
 
-cheapestOpen : (position -> F64), Model position -> Result position {} | position has Eq
+cheapestOpen : (position -> F64), Model position -> Result position {} | position has Hash & Eq
 cheapestOpen = \costFn, model ->
     model.openSet
     |> Set.toList
@@ -35,13 +35,13 @@ cheapestOpen = \costFn, model ->
     |> Result.map .position
     |> Result.mapErr (\_ -> {})
 
-reconstructPath : Dict position position, position -> List position | position has Eq
+reconstructPath : Dict position position, position -> List position | position has Hash & Eq
 reconstructPath = \cameFrom, goal ->
     when Dict.get cameFrom goal is
         Err _ -> []
         Ok next -> List.append (reconstructPath cameFrom next) goal
 
-updateCost : position, position, Model position -> Model position | position has Eq
+updateCost : position, position, Model position -> Model position | position has Hash & Eq
 updateCost = \current, neighbor, model ->
     newCameFrom =
         Dict.insert model.cameFrom neighbor current
@@ -70,7 +70,7 @@ updateCost = \current, neighbor, model ->
             else
                 model
 
-astar : (position, position -> F64), (position -> Set position), position, Model position -> Result (List position) {} | position has Eq
+astar : (position, position -> F64), (position -> Set position), position, Model position -> Result (List position) {} | position has Hash & Eq
 astar = \costFn, moveFn, goal, model ->
     when cheapestOpen (\source -> costFn source goal) model is
         Err {} -> Err {}

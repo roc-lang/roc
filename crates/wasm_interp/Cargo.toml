@@ -2,6 +2,9 @@
 name = "roc_wasm_interp"
 version = "0.1.0"
 edition = "2021"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+description = "A WebAssembly interpreter for testing the compiler."
 
 [[bin]]
 name = "roc_wasm_interp"

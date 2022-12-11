@@ -8,7 +8,7 @@ use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
-use roc_mono::ir::{CrashTag, OptLevel};
+use roc_mono::ir::{CrashTag, OptLevel, SingleEntryPoint};
 use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
@@ -99,7 +99,6 @@ fn create_llvm_module<'a>(
     use roc_load::MonomorphizedModule;
     let MonomorphizedModule {
         procedures,
-        entry_point,
         interns,
         layout_interner,
         ..
@@ -238,9 +237,16 @@ fn create_llvm_module<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let entry_point = match entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
-            roc_mono::ir::EntryPoint { symbol, layout }
+    let entry_point = match loaded.entry_point {
+        EntryPoint::Executable {
+            exposed_to_host,
+            platform_path: _,
+        } => {
+            // TODO support multiple of these!
+            debug_assert_eq!(exposed_to_host.len(), 1);
+            let (symbol, layout) = exposed_to_host[0];
+
+            SingleEntryPoint { symbol, layout }
         }
         EntryPoint::Test => {
             unreachable!()
