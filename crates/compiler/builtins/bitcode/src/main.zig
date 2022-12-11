@@ -245,7 +245,7 @@ pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace) noreturn
 
 // Run all tests in imported modules
 // https://github.com/ziglang/zig/blob/master/lib/std/std.zig#L94
-test "" {
+test {
     const testing = std.testing;
 
     testing.refAllDecls(@This());
