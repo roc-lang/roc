@@ -2,6 +2,7 @@ use libloading::Library;
 use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
+use roc_mono::ir::SingleEntryPoint;
 use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
 use tempfile::tempdir;
@@ -105,8 +106,15 @@ pub fn helper(
 
     debug_assert_eq!(exposed_to_host.values.len(), 1);
     let entry_point = match loaded.entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
-            roc_mono::ir::SingleEntryPoint { symbol, layout }
+        EntryPoint::Executable {
+            exposed_to_host,
+            platform_path: _,
+        } => {
+            // TODO support multiple of these!
+            debug_assert_eq!(exposed_to_host.len(), 1);
+            let (symbol, layout) = exposed_to_host[0];
+
+            SingleEntryPoint { symbol, layout }
         }
         EntryPoint::Test => {
             unreachable!()
