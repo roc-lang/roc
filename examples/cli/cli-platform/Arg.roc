@@ -574,7 +574,7 @@ formatHelpHelp = \n, cmdHelp ->
                     "\n\n"
 
             """
-            
+
             \(indented)COMMANDS:
             \(fmtCmdHelp)
             """
@@ -606,7 +606,7 @@ formatHelpHelp = \n, cmdHelp ->
                         |> Str.joinWith "\n"
 
                     """
-                    
+
                     \(indented)OPTIONS:
                     \(helpStr)
                     """
@@ -621,7 +621,7 @@ formatHelpHelp = \n, cmdHelp ->
                         |> Str.joinWith "\n"
 
                     """
-                    
+
                     \(indented)ARGS:
                     \(helpStr)
                     """
@@ -909,7 +909,7 @@ expect
     ==
     """
     test
-    
+
     OPTIONS:
         --foo    the foo option  (string)
         --bar, -B  (string)
@@ -936,13 +936,13 @@ expect
     ==
     """
     test
-    
+
     COMMANDS:
         login
             OPTIONS:
                 --user  (string)
                 --pw  (string)
-    
+
         publish
             OPTIONS:
                 --file  (string)
@@ -960,7 +960,7 @@ expect
     """
     test
     a test cli app
-    
+
     COMMANDS:
         login
     """

@@ -6,7 +6,7 @@ Hello,\n\nWorld!
 c =
     """
     Hello,
-    
+
     World!
     """
 
