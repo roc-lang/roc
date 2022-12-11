@@ -1,5 +1,5 @@
+use crate::roc_type;
 use crate::types::{Env, Types};
-use crate::{roc_type, rust_glue};
 use bumpalo::Bump;
 use libloading::Library;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
@@ -29,7 +29,11 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
         IgnoreErrors::NONE,
     ) {
         Ok(types) => {
-            // TODO: compile the spec and load it as a dynamic library.
+            // TODO: correctly setup building the glue spec. Then use the dylib it generates here.
+            // For now, I am just passing in the dylib as the spec.
+            // Also, it would be best if we directly call the internal build function from here instead of launch roc from the cli.
+            // Lastly, we may need to modify the app file first before it can be loaded.
+            // Somehow it has to point to the correct platform file which may not exist on the target machine.
             let lib = unsafe { Library::new(spec_path) }.unwrap();
             type MakeGlue = unsafe extern "C" fn(
                 *mut roc_std::RocResult<roc_std::RocList<roc_type::File>, roc_std::RocStr>,
@@ -46,9 +50,14 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
                 types.iter().map(|x| x.into()).collect();
             let mut files = roc_std::RocResult::err(roc_std::RocStr::empty());
             unsafe { make_glue(&mut files, &roc_types) };
-            dbg!(files);
-            for crate::types::File { name, content } in rust_glue::emit(&types) {
-                let valid_name = PathBuf::from(&name)
+            let files: Result<roc_std::RocList<roc_type::File>, roc_std::RocStr> = files.into();
+            let files = files.unwrap_or_else(|err| {
+                eprintln!("Glue generation failed: {}", err);
+
+                process::exit(1);
+            });
+            for roc_type::File { name, content } in &files {
+                let valid_name = PathBuf::from(name.as_str())
                     .components()
                     .all(|comp| matches!(comp, Component::CurDir | Component::Normal(_)));
                 if !valid_name {
@@ -56,7 +65,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
 
                     process::exit(1);
                 }
-                let full_path = output_path.join(name);
+                let full_path = output_path.join(name.as_str());
                 if let Some(dir_path) = full_path.parent() {
                     std::fs::create_dir_all(&dir_path).unwrap_or_else(|err| {
                         eprintln!(
