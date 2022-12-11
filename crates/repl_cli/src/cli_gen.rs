@@ -234,7 +234,14 @@ fn mono_module_to_dylib<'a>(
     add_default_roc_externs(&env);
 
     let entry_point = match entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
+        EntryPoint::Executable {
+            exposed_to_host,
+            platform_path: _,
+        } => {
+            // TODO support multiple of these!
+            debug_assert_eq!(exposed_to_host.len(), 1);
+            let (symbol, layout) = exposed_to_host[0];
+
             roc_mono::ir::SingleEntryPoint { symbol, layout }
         }
         EntryPoint::Test => {

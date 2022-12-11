@@ -5,34 +5,40 @@ use crate::parser::{optional, then};
 use crate::parser::{specialize, word1, EPackageEntry, EPackageName, Parser};
 use crate::string_literal;
 use bumpalo::collections::Vec;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::Loc;
 use std::fmt::Debug;
 
 #[derive(Debug)]
-pub enum HeaderFor<'a> {
+pub enum HeaderType<'a> {
     App {
+        output_name: StrLiteral<'a>,
         to_platform: To<'a>,
     },
     Hosted {
+        name: ModuleName<'a>,
         generates: UppercaseIdent<'a>,
         generates_with: &'a [Loc<ExposedName<'a>>],
     },
     /// Only created during canonicalization, never actually parsed from source
     Builtin {
+        name: ModuleName<'a>,
         generates_with: &'a [Symbol],
     },
     Platform {
+        opt_app_module_id: Option<ModuleId>,
+        /// the name and type scheme of the main function (required by the platform)
+        /// (type scheme is currently unused)
+        provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
+        requires: &'a [Loc<TypedIdent<'a>>],
+        requires_types: &'a [Loc<UppercaseIdent<'a>>],
+
         /// usually `pf`
         config_shorthand: &'a str,
-        /// the type scheme of the main function (required by the platform)
-        /// (currently unused)
-        #[allow(dead_code)]
-        platform_main_type: TypedIdent<'a>,
-        /// provided symbol to host (commonly `mainForHost`)
-        main_for_host: roc_module::symbol::Symbol,
     },
-    Interface,
+    Interface {
+        name: ModuleName<'a>,
+    },
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -94,15 +100,6 @@ impl<'a> ModuleName<'a> {
     pub const fn as_str(&'a self) -> &'a str {
         self.0
     }
-}
-
-#[derive(Debug)]
-pub enum ModuleNameEnum<'a> {
-    /// A filename
-    App(StrLiteral<'a>),
-    Interface(ModuleName<'a>),
-    Hosted(ModuleName<'a>),
-    Platform,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]

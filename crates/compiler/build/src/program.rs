@@ -189,7 +189,14 @@ fn gen_from_mono_module_llvm<'a>(
     add_default_roc_externs(&env);
 
     let entry_point = match loaded.entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
+        EntryPoint::Executable {
+            exposed_to_host,
+            platform_path: _,
+        } => {
+            // TODO support multiple of these!
+            debug_assert_eq!(exposed_to_host.len(), 1);
+            let (symbol, layout) = exposed_to_host[0];
+
             roc_mono::ir::EntryPoint::Single(SingleEntryPoint { symbol, layout })
         }
         EntryPoint::Test => roc_mono::ir::EntryPoint::Expects { symbols: &[] },
