@@ -192,7 +192,8 @@ fn cp_unless_zig_cache(src_dir: &Path, target_dir: &Path) -> io::Result<()> {
 }
 
 fn run_command(mut command: Command, flaky_fail_counter: usize) {
-    let command_str = format!("{:?}", &command);
+    let command_str = roc_utils::pretty_command_string(&command);
+    let command_str = command_str.to_string_lossy();
 
     let output_result = command.output();
 
@@ -220,7 +221,10 @@ fn run_command(mut command: Command, flaky_fail_counter: usize) {
                 {
                     panic!("{} failed with:\n\n  {}\n\nWorkaround:\n\n  Re-run the cargo command that triggered this build.\n\n", command_str, error_str);
                 } else {
-                    panic!("{} failed with:\n\n  {}\n", command_str, error_str);
+                    panic!(
+                        "Command:\n    $ {}\n failed with:\n\n  {}\n",
+                        command_str, error_str
+                    );
                 }
             }
         },
