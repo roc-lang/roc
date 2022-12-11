@@ -198,6 +198,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         let fn_index = {
             let mut export_iter = module.export.exports.iter();
             export_iter
+                // First look up the name in exports
                 .find_map(|ex| {
                     if ex.ty == ExportType::Func && ex.name == fn_name {
                         Some(ex.index)
@@ -205,10 +206,27 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                         None
                     }
                 })
-                .ok_or(format!(
-                    "I couldn't find an exported function '{}' in this WebAssembly module",
-                    fn_name
-                ))?
+                .or_else(|| {
+                    // Then look it up in the debug info!
+                    // This is non-spec behaviour that Wasm3 seems to implement,
+                    // and that our wasm_linking tests accidentally rely on!
+                    let mut names = module.names.function_names.iter();
+                    names.find_map(
+                        |(index, name)| {
+                            if *name == fn_name {
+                                Some(*index)
+                            } else {
+                                None
+                            }
+                        },
+                    )
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "I couldn't find a function '{}' in this WebAssembly module",
+                        fn_name
+                    )
+                })?
         };
 
         self.program_counter = {
