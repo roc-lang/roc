@@ -194,13 +194,13 @@ enum GeneratedInfo {
 }
 
 impl GeneratedInfo {
-    fn from_header_for<'a>(
+    fn from_header_type<'a>(
         env: &mut Env,
         scope: &mut Scope,
         var_store: &mut VarStore,
-        header_for: &HeaderType<'a>,
+        header_type: &HeaderType<'a>,
     ) -> Self {
-        match header_for {
+        match header_type {
             HeaderType::Hosted {
                 generates,
                 generates_with,
@@ -270,7 +270,7 @@ fn has_no_implementation(expr: &Expr) -> bool {
 pub fn canonicalize_module_defs<'a>(
     arena: &'a Bump,
     loc_defs: &'a mut Defs<'a>,
-    header_for: &roc_parse::header::HeaderType,
+    header_type: &roc_parse::header::HeaderType,
     home: ModuleId,
     module_ids: &'a ModuleIds,
     exposed_ident_ids: IdentIds,
@@ -298,7 +298,7 @@ pub fn canonicalize_module_defs<'a>(
     }
 
     let generated_info =
-        GeneratedInfo::from_header_for(&mut env, &mut scope, var_store, header_for);
+        GeneratedInfo::from_header_type(&mut env, &mut scope, var_store, header_type);
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
