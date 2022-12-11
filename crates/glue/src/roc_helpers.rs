@@ -1,4 +1,4 @@
-use core::ffi::c_void;
+use libc::{c_char, c_int, c_uint, c_void, mode_t, off_t, pid_t, size_t};
 use roc_std::RocStr;
 
 // These are required to ensure rust adds these functions to the final binary even though they are never used.
@@ -16,14 +16,20 @@ pub static ROC_DEALLOC: unsafe extern "C" fn(*mut c_void, u32) = roc_dealloc;
 pub static ROC_PANIC: unsafe extern "C" fn(&RocStr, u32) = roc_panic;
 
 #[used]
-pub static ROC_GETPPID: unsafe extern "C" fn() -> libc::pid_t = roc_getppid;
+pub static ROC_GETPPID: unsafe extern "C" fn() -> pid_t = roc_getppid;
 
 #[used]
-pub static ROC_MMAP: unsafe extern "C" fn(*mut c_void, usize, i32, i32, i32, i64) -> *mut c_void =
-    roc_mmap;
+pub static ROC_MMAP: unsafe extern "C" fn(
+    *mut c_void,
+    size_t,
+    c_int,
+    c_int,
+    c_int,
+    off_t,
+) -> *mut c_void = roc_mmap;
 
 #[used]
-pub static ROC_SHM_OPEN: unsafe extern "C" fn(*const i8, i32, u16) -> i32 = roc_shm_open;
+pub static ROC_SHM_OPEN: unsafe extern "C" fn(*const c_char, c_int, mode_t) -> c_int = roc_shm_open;
 
 #[used]
 pub static ROC_MEMCPY: unsafe extern "C" fn(*mut c_void, *mut c_void, usize) -> *mut c_void =
@@ -73,31 +79,27 @@ pub unsafe extern "C" fn roc_panic(msg: &RocStr, tag_id: u32) {
 
 #[cfg(unix)]
 #[no_mangle]
-pub unsafe extern "C" fn roc_getppid() -> libc::pid_t {
+pub unsafe extern "C" fn roc_getppid() -> pid_t {
     libc::getppid()
 }
 
 #[cfg(unix)]
 #[no_mangle]
 pub unsafe extern "C" fn roc_mmap(
-    addr: *mut libc::c_void,
-    len: libc::size_t,
-    prot: libc::c_int,
-    flags: libc::c_int,
-    fd: libc::c_int,
-    offset: libc::off_t,
-) -> *mut libc::c_void {
+    addr: *mut c_void,
+    len: size_t,
+    prot: c_int,
+    flags: c_int,
+    fd: c_int,
+    offset: off_t,
+) -> *mut c_void {
     libc::mmap(addr, len, prot, flags, fd, offset)
 }
 
 #[cfg(unix)]
 #[no_mangle]
-pub unsafe extern "C" fn roc_shm_open(
-    name: *const libc::c_char,
-    oflag: libc::c_int,
-    mode: libc::mode_t,
-) -> libc::c_int {
-    libc::shm_open(name, oflag, mode as libc::c_uint)
+pub unsafe extern "C" fn roc_shm_open(name: *const c_char, oflag: c_int, mode: mode_t) -> c_int {
+    libc::shm_open(name, oflag, mode as c_uint)
 }
 
 fn print_backtrace() {
