@@ -4236,12 +4236,6 @@ fn build_header<'a>(
 
         let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
 
-        // Generate IdentIds entries for all values this module exposes.
-        // This way, when we encounter them in Defs later, they already
-        // have an IdentIds entry.
-        //
-        // We must *not* add them to scope yet, or else the Defs will
-        // incorrectly think they're shadowing them!
         for loc_exposed in exposes.iter() {
             // Use get_or_insert here because the ident_ids may already
             // created an IdentId for this, when it was imported exposed
