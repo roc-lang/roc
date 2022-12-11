@@ -4123,6 +4123,7 @@ fn build_header<'a>(
         HashMap::with_capacity_and_hasher(scope_size, default_hasher());
     let home: ModuleId;
     let name: PQModuleName;
+    let symbols_from_requires;
 
     let ident_ids = {
         // Lock just long enough to perform the minimal operations necessary.
@@ -4188,7 +4189,7 @@ fn build_header<'a>(
             }
         }
 
-        if let HeaderType::Platform {
+        symbols_from_requires = if let HeaderType::Platform {
             requires,
             requires_types,
             opt_app_module_id,
@@ -4209,7 +4210,7 @@ fn build_header<'a>(
             for Loc {
                 value: entry,
                 region: _,
-            } in requires.iter()
+            } in requires
             {
                 let ident: Ident = entry.ident.value.into();
                 let ident_id = ident_ids.get_or_insert(entry.ident.value);
@@ -4232,7 +4233,11 @@ fn build_header<'a>(
                 debug_assert!(!scope.contains_key(&ident));
                 scope.insert(ident, (symbol, entry.region));
             }
-        }
+
+            symbols_from_requires
+        } else {
+            Vec::new()
+        };
 
         let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
 
@@ -4335,7 +4340,7 @@ fn build_header<'a>(
             exposes: exposed,
             parse_state,
             exposed_imports: scope,
-            symbols_from_requires: Vec::new(),
+            symbols_from_requires,
             header_type,
             module_timing,
         },
