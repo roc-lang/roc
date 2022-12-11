@@ -234,6 +234,12 @@ fn execute_wasm_module<'a>(arena: &'a Bump, orig_module: WasmModule<'a>) -> Resu
     // But I want to use main so that I can test that _start is created for it!
     // So return void from main, and call another function to get the result.
     inst.call_export(&module, "_start", [])?;
+
+    // FIXME: read_host_result does not actually appear as an export!
+    // The interpreter has to look it up in debug info! (Apparently Wasm3 did this!)
+    // If we change gen_wasm to export it, then it does the same for js_unused,
+    // so we can't test import elimination and function reordering.
+    // We should to come back to this and fix it.
     inst.call_export(&module, "read_host_result", [])?
         .ok_or(String::from("expected a return value"))?
         .expect_i32()
@@ -344,17 +350,17 @@ fn test_linking_without_dce() {
 fn test_linking_with_dce() {
     let expected_final_import_names = &[
         "js_called_indirectly_from_roc",
-        "js_called_indirectly_from_main",
-        // js_unused removed from imports
+        // "js_unused", // eliminated
         "js_called_directly_from_roc",
         "js_called_directly_from_main",
+        "js_called_indirectly_from_main",
     ];
 
     let expected_name_section_start = &[
         (0, "js_called_indirectly_from_roc"),
-        (1, "js_called_indirectly_from_main"),
-        (2, "js_called_directly_from_roc"),  // index changed
-        (3, "js_called_directly_from_main"), // index changed
+        (1, "js_called_directly_from_roc"),    // index changed
+        (2, "js_called_directly_from_main"),   // index changed
+        (3, "js_called_indirectly_from_main"), // index changed
         (4, "js_unused"), // still exists, but now an internal dummy, with index changed
     ];
 
