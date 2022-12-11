@@ -1,6 +1,37 @@
 use core::ffi::c_void;
 use roc_std::RocStr;
 
+// These are required to ensure rust adds these functions to the final binary even though they are never used.
+#[used]
+pub static ROC_ALLOC: unsafe extern "C" fn(usize, u32) -> *mut c_void = roc_alloc;
+
+#[used]
+pub static ROC_REALLOC: unsafe extern "C" fn(*mut c_void, usize, usize, u32) -> *mut c_void =
+    roc_realloc;
+
+#[used]
+pub static ROC_DEALLOC: unsafe extern "C" fn(*mut c_void, u32) = roc_dealloc;
+
+#[used]
+pub static ROC_PANIC: unsafe extern "C" fn(&RocStr, u32) = roc_panic;
+
+#[used]
+pub static ROC_GETPPID: unsafe extern "C" fn() -> libc::pid_t = roc_getppid;
+
+#[used]
+pub static ROC_MMAP: unsafe extern "C" fn(*mut c_void, usize, i32, i32, i32, i64) -> *mut c_void =
+    roc_mmap;
+
+#[used]
+pub static ROC_SHM_OPEN: unsafe extern "C" fn(*const i8, i32, u16) -> i32 = roc_shm_open;
+
+#[used]
+pub static ROC_MEMCPY: unsafe extern "C" fn(*mut c_void, *mut c_void, usize) -> *mut c_void =
+    roc_memcpy;
+
+#[used]
+pub static ROC_MEMSET: unsafe extern "C" fn(*mut c_void, i32, usize) -> *mut c_void = roc_memset;
+
 #[no_mangle]
 pub unsafe extern "C" fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
     libc::malloc(size)
