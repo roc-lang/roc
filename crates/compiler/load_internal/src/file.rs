@@ -200,7 +200,22 @@ impl Default for ModuleCache<'_> {
 
         Self {
             module_names,
-            ..Default::default()
+            headers: Default::default(),
+            parsed: Default::default(),
+            aliases: Default::default(),
+            pending_abilities: Default::default(),
+            constrained: Default::default(),
+            typechecked: Default::default(),
+            found_specializations: Default::default(),
+            late_specializations: Default::default(),
+            external_specializations_requested: Default::default(),
+            imports: Default::default(),
+            top_level_thunks: Default::default(),
+            documentation: Default::default(),
+            can_problems: Default::default(),
+            type_problems: Default::default(),
+            sources: Default::default(),
+            expectations: Default::default(),
         }
     }
 }
