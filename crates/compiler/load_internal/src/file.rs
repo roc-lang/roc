@@ -43,7 +43,7 @@ use roc_packaging::cache::{self, RocCacheDir};
 use roc_packaging::https::PackageMetadata;
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
-use roc_parse::header::{HeaderType, PackageName};
+use roc_parse::header::{HeaderType, PackagePath};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
@@ -642,7 +642,7 @@ struct ModuleHeader<'a> {
     is_root_module: bool,
     exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
-    packages: MutMap<&'a str, PackageName<'a>>,
+    packages: MutMap<&'a str, PackagePath<'a>>,
     imported_modules: MutMap<ModuleId, Region>,
     package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
     exposes: Vec<Symbol>,
@@ -3901,7 +3901,7 @@ fn parse_header<'a>(
                         let Loc { value, .. } = loc_package_entry;
 
                         if value.shorthand == shorthand {
-                            Some(value.package_name.value)
+                            Some(value.package_path.value)
                         } else {
                             None
                         }
@@ -4318,7 +4318,7 @@ fn build_header<'a>(
 
     let package_entries = packages
         .iter()
-        .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_name.value))
+        .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_path.value))
         .collect::<MutMap<_, _>>();
 
     // Send the deps to the coordinator thread for processing,
