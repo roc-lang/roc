@@ -565,7 +565,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             use IntWidth::*;
 
             match int_width {
-                U8 => helper!(deref_u8, u8),
+                U8 => byte_to_ast(env, mem.deref_u8(addr), raw_content),
                 U16 => helper!(deref_u16, u16),
                 U32 => helper!(deref_u32, u32),
                 U64 => helper!(deref_u64, u64),
