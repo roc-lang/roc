@@ -239,7 +239,7 @@ where
     let dispatcher = TestDispatcher {
         wasi: wasi::WasiDispatcher { args: &[] },
     };
-    let is_debug_mode = false;
+    let is_debug_mode = roc_debug_flags::dbg_set!(roc_debug_flags::ROC_LOG_WASM_INTERP);
     let mut inst = Instance::for_module(&arena, &module, dispatcher, is_debug_mode)?;
     let opt_value = inst.call_export(module, test_wrapper_name, [])?;
     let addr_value = opt_value.ok_or("No return address from Wasm test")?;
@@ -268,7 +268,7 @@ where
     let dispatcher = TestDispatcher {
         wasi: wasi::WasiDispatcher { args: &[] },
     };
-    let is_debug_mode = false;
+    let is_debug_mode = roc_debug_flags::dbg_set!(roc_debug_flags::ROC_LOG_WASM_INTERP);
     let mut inst = Instance::for_module(&arena, &module, dispatcher, is_debug_mode)?;
 
     // Allocate a vector in the test host that refcounts will be copied into
