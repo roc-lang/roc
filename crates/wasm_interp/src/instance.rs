@@ -513,7 +513,8 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                     vstack: self.value_stack.depth(),
                 });
                 if condition == 0 {
-                    let mut depth = self.blocks.len();
+                    let target_depth = self.blocks.len();
+                    let mut depth = target_depth;
                     loop {
                         let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
                         OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
@@ -522,10 +523,16 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                                 depth += 1;
                             }
                             END => {
-                                depth -= 1;
+                                if depth == target_depth {
+                                    // `if` without `else`
+                                    self.blocks.pop();
+                                    break;
+                                } else {
+                                    depth -= 1;
+                                }
                             }
                             ELSE => {
-                                if depth == self.blocks.len() {
+                                if depth == target_depth {
                                     break;
                                 }
                             }
