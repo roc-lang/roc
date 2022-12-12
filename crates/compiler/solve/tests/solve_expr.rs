@@ -6720,9 +6720,9 @@ mod solve_expr {
                 "#
             ),
             @r#"
-            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8]]-> {})
             Id#id(3) : a -[[] + a:id(3):1]-> ({} -[[] + a:id(3):2]-> a) | a has Id
-            alias : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            alias : {} -[[id(5)]]-> ({} -[[8]]-> {})
             "#
             print_only_under_alias: true
         )
@@ -6751,8 +6751,8 @@ mod solve_expr {
                 "#
             ),
             @r#"
-            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
-            it : {} -[[8(8)]]-> {}
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8]]-> {})
+            it : {} -[[8]]-> {}
             "#
             print_only_under_alias: true
         )
@@ -6782,8 +6782,8 @@ mod solve_expr {
                 "#
             ),
             @r#"
-            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
-            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8]]-> {})
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8]]-> {})
             "#
             print_only_under_alias: true
         )
@@ -6903,7 +6903,7 @@ mod solve_expr {
                 #^^^^^^^^^^^^^^^^^^^^^^{-1}
                 "#
             ),
-            @r#"[\{} -> {}, \{} -> {}] : List ({}* -[[1(1), 2(2)]]-> {})"#
+            @r###"[\{} -> {}, \{} -> {}] : List ({}* -[[1, 2]]-> {})"###
         )
     }
 
@@ -7078,7 +7078,7 @@ mod solve_expr {
                 #^^^{-1}
                 "#
             ),
-            @r#"fun : {} -[[thunk(9) (({} -[[15(15)]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13(13) Str]]-> Str)), thunk(9) (({} -[[14(14)]]-> Str)) (Str -[[f(3)]]-> ({} -[[11(11)]]-> Str))]]-> Str"#
+            @r#"fun : {} -[[thunk(9) (({} -[[15]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13 Str]]-> Str)), thunk(9) (({} -[[14]]-> Str)) (Str -[[f(3)]]-> ({} -[[11]]-> Str))]]-> Str"#
             print_only_under_alias: true
         );
     }
@@ -7323,9 +7323,9 @@ mod solve_expr {
                 "#
             ),
             @r###"
-        Fo#f(7) : Fo, b -[[f(7)]]-> ({} -[[13(13) b]]-> ({} -[[] + b:g(4):2]-> {})) | b has G
-        Go#g(8) : Go -[[g(8)]]-> ({} -[[14(14)]]-> {})
-        Fo#f(7) : Fo, Go -[[f(7)]]-> ({} -[[13(13) Go]]-> ({} -[[14(14)]]-> {}))
+        Fo#f(7) : Fo, b -[[f(7)]]-> ({} -[[13 b]]-> ({} -[[] + b:g(4):2]-> {})) | b has G
+        Go#g(8) : Go -[[g(8)]]-> ({} -[[14]]-> {})
+        Fo#f(7) : Fo, Go -[[f(7)]]-> ({} -[[13 Go]]-> ({} -[[14]]-> {}))
         "###
         );
     }
@@ -7692,7 +7692,7 @@ mod solve_expr {
             @r###"
         const : Str -[[const(2)]]-> (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str)
         compose : (Str -a-> Str), (Str -[[]]-> Str) -[[compose(1)]]-> (Str -a-> Str)
-        \c1, c2 -> compose c1 c2 : (Str -a-> Str), (Str -[[]]-> Str) -[[11(11)]]-> (Str -a-> Str)
+        \c1, c2 -> compose c1 c2 : (Str -a-> Str), (Str -[[]]-> Str) -[[11]]-> (Str -a-> Str)
         res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
         res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
         "###
@@ -8077,7 +8077,7 @@ mod solve_expr {
                 #                           ^^^^^^^^^^^^^^
                 "#
             ),
-            @"N#Decode.decoder(3) : List U8, fmt -[[7(7)]]-> { rest : List U8, result : [Err [TooShort], Ok U8] } | fmt has DecoderFormatting"
+            @"N#Decode.decoder(3) : List U8, fmt -[[7]]-> { rest : List U8, result : [Err [TooShort], Ok U8] } | fmt has DecoderFormatting"
             print_only_under_alias: true
         );
     }
@@ -8360,7 +8360,7 @@ mod solve_expr {
             ),
         @r###"
         isEqQ : ({} -[[]]-> Str), ({} -[[]]-> Str) -[[isEqQ(2)]]-> [False, True]
-        isEqQ : ({} -[[6(6), 7(7)]]-> Str), ({} -[[6(6), 7(7)]]-> Str) -[[isEqQ(2)]]-> [False, True]
+        isEqQ : ({} -[[6, 7]]-> Str), ({} -[[6, 7]]-> Str) -[[isEqQ(2)]]-> [False, True]
         "###
         print_only_under_alias: true
         );
