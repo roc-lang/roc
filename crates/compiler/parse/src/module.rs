@@ -1,7 +1,7 @@
 use crate::ast::{Collection, Defs, Header, Module, Spaced, Spaces};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
-    package_entry, package_name, AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword,
+    package_entry, package_path, AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword,
     HostedHeader, ImportsEntry, ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName,
     PackageEntry, PackageHeader, PackagesKeyword, PlatformHeader, PlatformRequires,
     ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
@@ -194,7 +194,7 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
 fn package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
     record!(PackageHeader {
         before_name: space0_e(EHeader::IndentStart),
-        name: loc!(specialize(EHeader::PackageName, package_name())),
+        name: loc!(specialize(EHeader::PackageName, package_path())),
         exposes: specialize(EHeader::Exposes, exposes_modules()),
         packages: specialize(EHeader::Packages, packages()),
     })
@@ -205,7 +205,7 @@ fn package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
 fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
     record!(PlatformHeader {
         before_name: space0_e(EHeader::IndentStart),
-        name: loc!(specialize(EHeader::PlatformName, package_name())),
+        name: loc!(specialize(EHeader::PlatformName, package_path())),
         requires: specialize(EHeader::Requires, requires()),
         exposes: specialize(EHeader::Exposes, exposes_modules()),
         packages: specialize(EHeader::Packages, packages()),
@@ -221,7 +221,7 @@ fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, EProvides<'a>> {
             |_, pos| EProvides::Identifier(pos),
             map!(lowercase_ident(), To::ExistingPackage)
         ),
-        specialize(EProvides::Package, map!(package_name(), To::NewPackage))
+        specialize(EProvides::Package, map!(package_path(), To::NewPackage))
     ]
 }
 

@@ -43,7 +43,7 @@ use roc_packaging::cache::{self, RocCacheDir};
 use roc_packaging::https::PackageMetadata;
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
 use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
-use roc_parse::header::{HeaderType, PackageName};
+use roc_parse::header::{HeaderType, PackagePath};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
@@ -642,7 +642,7 @@ struct ModuleHeader<'a> {
     is_root_module: bool,
     exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
-    packages: MutMap<&'a str, PackageName<'a>>,
+    packages: MutMap<&'a str, PackagePath<'a>>,
     imported_modules: MutMap<ModuleId, Region>,
     package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
     exposes: Vec<Symbol>,
@@ -3938,21 +3938,6 @@ fn parse_header<'a>(
                 module_timing,
             );
 
-            // Look at the app module's `to` keyword to determine which package was the platform.
-            let platform_shorthand = match header.provides.to.value {
-                To::ExistingPackage(shorthand) => {
-                    if !packages
-                        .iter()
-                        .any(|Loc { value, .. }| value.shorthand == shorthand)
-                    {
-                        todo!("Gracefully handle platform shorthand after `to` that didn't map to a shorthand specified in `packages`");
-                    }
-
-                    shorthand
-                }
-                To::NewPackage(_package_name) => unreachable!("To::NewPackage is deprecated"),
-            };
-
             let mut messages = load_packages(
                 packages,
                 roc_cache_dir,
@@ -3965,11 +3950,28 @@ fn parse_header<'a>(
 
             messages.push(Msg::Header(resolved_header));
 
-            Ok(HeaderOutput {
-                module_id,
-                msg: Msg::Many(messages),
-                opt_platform_shorthand: Some(platform_shorthand),
-            })
+            // Look at the app module's `to` keyword to determine which package was the platform.
+            match header.provides.to.value {
+                To::ExistingPackage(shorthand) => {
+                    if !packages
+                        .iter()
+                        .any(|loc_package_entry| loc_package_entry.value.shorthand == shorthand)
+                    {
+                        todo!("Gracefully handle platform shorthand after `to` that didn't map to a shorthand specified in `packages`");
+                    }
+
+                    Ok(HeaderOutput {
+                        module_id,
+                        msg: Msg::Many(messages),
+                        opt_platform_shorthand: Some(shorthand),
+                    })
+                }
+                To::NewPackage(_package_name) => Ok(HeaderOutput {
+                    module_id,
+                    msg: Msg::Many(messages),
+                    opt_platform_shorthand: None,
+                }),
+            }
         }
         Ok((
             ast::Module {
@@ -4016,7 +4018,7 @@ fn parse_header<'a>(
 fn load_packages<'a>(
     packages: &[Loc<PackageEntry<'a>>],
     roc_cache_dir: RocCacheDir,
-    app_file_dir: PathBuf,
+    cwd: PathBuf,
     arena: &'a Bump,
     module_id: ModuleId,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
@@ -4029,7 +4031,7 @@ fn load_packages<'a>(
     for Loc { value: entry, .. } in packages.iter() {
         let PackageEntry {
             shorthand,
-            package_name:
+            package_path:
                 Loc {
                     value: package_path,
                     ..
@@ -4069,7 +4071,7 @@ fn load_packages<'a>(
                 panic!("Specifying packages via URLs is curently unsupported in wasm.");
             }
         } else {
-            app_file_dir.join(src)
+            cwd.join(src)
         };
 
         match load_package_from_disk(
@@ -4412,7 +4414,7 @@ fn build_header<'a>(
 
     let package_entries = packages
         .iter()
-        .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_name.value))
+        .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_path.value))
         .collect::<MutMap<_, _>>();
 
     // Send the deps to the coordinator thread for processing,
