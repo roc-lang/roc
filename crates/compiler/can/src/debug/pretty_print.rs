@@ -2,15 +2,47 @@
 
 use crate::def::Def;
 use crate::expr::Expr::{self, *};
-use crate::expr::{ClosureData, OpaqueWrapFunctionData, WhenBranch};
+use crate::expr::{
+    ClosureData, DeclarationTag, Declarations, FunctionDef, OpaqueWrapFunctionData, WhenBranch,
+};
 use crate::pattern::{Pattern, RecordDestruct};
 
-use roc_module::symbol::Interns;
+use roc_module::symbol::{Interns, Symbol};
 
 use ven_pretty::{Arena, DocAllocator, DocBuilder};
 
 pub struct Ctx<'a> {
     pub interns: &'a Interns,
+}
+
+pub fn pretty_print_declarations(c: &Ctx, declarations: &Declarations) -> String {
+    let f = Arena::new();
+    let mut defs = Vec::with_capacity(declarations.len());
+    for (index, tag) in declarations.iter_top_down() {
+        let symbol = declarations.symbols[index].value;
+        let body = &declarations.expressions[index];
+
+        let def = match tag {
+            DeclarationTag::Value => def_symbol_help(c, &f, symbol, &body.value),
+            DeclarationTag::Function(f_index)
+            | DeclarationTag::Recursive(f_index)
+            | DeclarationTag::TailRecursive(f_index) => {
+                let function_def = &declarations.function_bodies[f_index.index()].value;
+                toplevel_function(c, &f, symbol, function_def, &body.value)
+            }
+            DeclarationTag::Expectation => todo!(),
+            DeclarationTag::ExpectationFx => todo!(),
+            DeclarationTag::Destructure(_) => todo!(),
+            DeclarationTag::MutualRecursion { .. } => todo!(),
+        };
+
+        defs.push(def);
+    }
+
+    f.intersperse(defs, f.hardline().append(f.hardline()))
+        .1
+        .pretty(80)
+        .to_string()
 }
 
 pub fn pretty_print_def(c: &Ctx, d: &Def) -> String {
@@ -40,10 +72,58 @@ fn def<'a>(c: &Ctx, f: &'a Arena<'a>, d: &'a Def) -> DocBuilder<'a, Arena<'a>> {
         annotation: _,
     } = d;
 
-    pattern(c, PPrec::Free, f, &loc_pattern.value)
+    def_help(c, f, &loc_pattern.value, &loc_expr.value)
+}
+
+fn def_symbol_help<'a>(
+    c: &Ctx,
+    f: &'a Arena<'a>,
+    sym: Symbol,
+    body: &'a Expr,
+) -> DocBuilder<'a, Arena<'a>> {
+    f.text(sym.as_str(c.interns).to_owned())
         .append(f.text(" ="))
         .append(f.line())
-        .append(expr(c, EPrec::Free, f, &loc_expr.value))
+        .append(expr(c, EPrec::Free, f, body))
+        .nest(2)
+        .group()
+}
+
+fn def_help<'a>(
+    c: &Ctx,
+    f: &'a Arena<'a>,
+    pat: &'a Pattern,
+    body: &'a Expr,
+) -> DocBuilder<'a, Arena<'a>> {
+    pattern(c, PPrec::Free, f, pat)
+        .append(f.text(" ="))
+        .append(f.line())
+        .append(expr(c, EPrec::Free, f, body))
+        .nest(2)
+        .group()
+}
+
+fn toplevel_function<'a>(
+    c: &Ctx,
+    f: &'a Arena<'a>,
+    sym: Symbol,
+    function_def: &'a FunctionDef,
+    body: &'a Expr,
+) -> DocBuilder<'a, Arena<'a>> {
+    let FunctionDef { arguments, .. } = function_def;
+
+    let args = arguments
+        .iter()
+        .map(|arg| pattern(c, PPrec::Free, f, &arg.2.value));
+
+    f.text(sym.as_str(c.interns).to_owned())
+        .append(f.text(" ="))
+        .append(f.line())
+        .append(f.text("\\"))
+        .append(f.intersperse(args, f.text(", ")))
+        .append(f.text("->"))
+        .append(f.line())
+        .append(expr(c, EPrec::Free, f, body))
         .nest(2)
         .group()
 }
