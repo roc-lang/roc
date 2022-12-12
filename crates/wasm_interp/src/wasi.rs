@@ -165,13 +165,13 @@ impl<'a> WasiDispatcher<'a> {
     }
 }
 
-fn read_u32(memory: &mut [u8], addr: usize) -> u32 {
+fn read_u32(memory: &[u8], addr: usize) -> u32 {
     let mut bytes = [0; 4];
     bytes.copy_from_slice(&memory[addr..][..4]);
     u32::from_le_bytes(bytes)
 }
 
-fn read_i32(memory: &mut [u8], addr: usize) -> i32 {
+fn read_i32(memory: &[u8], addr: usize) -> i32 {
     let mut bytes = [0; 4];
     bytes.copy_from_slice(&memory[addr..][..4]);
     i32::from_le_bytes(bytes)
