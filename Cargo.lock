@@ -3659,6 +3659,7 @@ dependencies = [
  "roc_serialize",
  "roc_types",
  "static_assertions",
+ "ven_pretty",
 ]
 
 [[package]]
