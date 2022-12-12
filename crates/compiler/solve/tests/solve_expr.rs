@@ -262,6 +262,7 @@ mod solve_expr {
 
     #[derive(Default)]
     struct InferOptions {
+        print_can_decls: bool,
         print_only_under_alias: bool,
         allow_errors: bool,
     }
@@ -302,7 +303,20 @@ mod solve_expr {
         let queries = parse_queries(&src);
         assert!(!queries.is_empty(), "No queries provided!");
 
-        let mut solved_queries = Vec::with_capacity(queries.len());
+        let mut output_parts = Vec::with_capacity(queries.len() + 2);
+
+        if options.print_can_decls {
+            use roc_can::debug::{pretty_print_declarations, PPCtx};
+            let ctx = PPCtx {
+                home,
+                interns: &interns,
+                print_lambda_names: true,
+            };
+            let pretty_decls = pretty_print_declarations(&ctx, &decls);
+            output_parts.push(pretty_decls);
+            output_parts.push("\n".to_owned());
+        }
+
         for TypeQuery(region) in queries.into_iter() {
             let start = region.start().offset;
             let end = region.end().offset;
@@ -340,12 +354,12 @@ mod solve_expr {
                     }
                 };
 
-            solved_queries.push(elaborated);
+            output_parts.push(elaborated);
         }
 
-        let pretty_solved_queries = solved_queries.join("\n");
+        let pretty_output = output_parts.join("\n");
 
-        expected(&pretty_solved_queries);
+        expected(&pretty_output);
     }
 
     macro_rules! infer_queries {
