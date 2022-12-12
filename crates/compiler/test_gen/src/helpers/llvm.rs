@@ -613,9 +613,6 @@ macro_rules! assert_llvm_evals_to {
                 CrashTag::User => panic!(r#"User crash with message: "{}""#, msg),
             },
         }
-
-        // artificially extend the lifetime of `lib`
-        lib.close().unwrap();
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
