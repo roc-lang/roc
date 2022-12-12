@@ -4,7 +4,7 @@ app "rust-glue"
     provides [makeGlue] to pf
 
 makeGlue = \types ->
-    when List.first types is
+    when types |> List.map typesWithDict |> List.first is
         Ok arch ->
             lenStr = List.len arch.types |> Num.toStr
             Ok [
@@ -12,3 +12,15 @@ makeGlue = \types ->
             ]
         Err ListWasEmpty ->
             Err "No types provided"
+
+# This is a temporary helper until roc_std::roc_dict is update.
+# after that point, Dict will be passed in directly.
+typesWithDict = \{types, sizes, aligns, typesByName, deps, target} ->
+    {
+        types,
+        sizes,
+        aligns,
+        typesByName: Dict.fromList typesByName,
+        deps: Dict.fromList deps,
+        target,
+    }
