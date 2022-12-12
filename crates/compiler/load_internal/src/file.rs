@@ -915,6 +915,8 @@ struct State<'a> {
     pub root_id: ModuleId,
     pub root_subs: Option<Subs>,
     pub cache_dir: PathBuf,
+    /// If the root is an app module, the shorthand specified in its header's `to` field
+    pub opt_platform_shorthand: Option<&'a str>,
     pub platform_data: Option<PlatformData<'a>>,
     pub exposed_types: ExposedByModule,
     pub output_path: Option<&'a str>,
@@ -976,6 +978,7 @@ impl<'a> State<'a> {
 
     fn new(
         root_id: ModuleId,
+        opt_platform_shorthand: Option<&'a str>,
         target_info: TargetInfo,
         exposed_types: ExposedByModule,
         arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
@@ -993,6 +996,7 @@ impl<'a> State<'a> {
         Self {
             root_id,
             root_subs: None,
+            opt_platform_shorthand,
             cache_dir,
             target_info,
             platform_data: None,
@@ -1270,6 +1274,7 @@ pub struct LoadStart<'a> {
     arc_modules: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     root_id: ModuleId,
+    opt_platform_shorthand: Option<&'a str>,
     root_msg: Msg<'a>,
     src_dir: PathBuf,
 }
@@ -1288,7 +1293,7 @@ impl<'a> LoadStart<'a> {
         let mut src_dir = filename.parent().unwrap().to_path_buf();
 
         // Load the root module synchronously; we can't proceed until we have its id.
-        let (root_id, root_msg) = {
+        let header_output = {
             let root_start_time = Instant::now();
 
             let res_loaded = load_filename(
@@ -1304,15 +1309,15 @@ impl<'a> LoadStart<'a> {
             );
 
             match res_loaded {
-                Ok((module_id, msg)) => {
+                Ok(header_output) => {
                     if let Msg::Header(ModuleHeader {
                         module_id: header_id,
                         header_type,
                         is_root_module,
                         ..
-                    }) = &msg
+                    }) = &header_output.msg
                     {
-                        debug_assert_eq!(*header_id, module_id);
+                        debug_assert_eq!(*header_id, header_output.module_id);
                         debug_assert!(is_root_module);
 
                         if let HeaderType::Interface { name, .. } = header_type {
@@ -1328,7 +1333,7 @@ impl<'a> LoadStart<'a> {
                         }
                     }
 
-                    (module_id, msg)
+                    header_output
                 }
 
                 Err(LoadingProblem::ParsingFailed(problem)) => {
@@ -1402,8 +1407,9 @@ impl<'a> LoadStart<'a> {
             arc_modules,
             ident_ids_by_module,
             src_dir,
-            root_id,
-            root_msg,
+            root_id: header_output.module_id,
+            root_msg: header_output.msg,
+            opt_platform_shorthand: header_output.opt_platform_shorthand,
         })
     }
 
@@ -1419,7 +1425,11 @@ impl<'a> LoadStart<'a> {
         let ident_ids_by_module = Arc::new(Mutex::new(root_exposed_ident_ids));
 
         // Load the root module synchronously; we can't proceed until we have its id.
-        let (root_id, root_msg) = {
+        let HeaderOutput {
+            module_id: root_id,
+            msg: root_msg,
+            opt_platform_shorthand: opt_platform_id,
+        } = {
             let root_start_time = Instant::now();
 
             load_from_str(
@@ -1439,6 +1449,7 @@ impl<'a> LoadStart<'a> {
             ident_ids_by_module,
             root_id,
             root_msg,
+            opt_platform_shorthand: opt_platform_id,
         })
     }
 }
@@ -1582,6 +1593,7 @@ pub fn load_single_threaded<'a>(
         root_id,
         root_msg,
         src_dir,
+        opt_platform_shorthand,
         ..
     } = load_start;
 
@@ -1594,6 +1606,7 @@ pub fn load_single_threaded<'a>(
     let number_of_workers = 1;
     let mut state = State::new(
         root_id,
+        opt_platform_shorthand,
         target_info,
         exposed_types,
         arc_modules,
@@ -1852,6 +1865,7 @@ fn load_multi_threaded<'a>(
         root_id,
         root_msg,
         src_dir,
+        opt_platform_shorthand,
         ..
     } = load_start;
 
@@ -1879,6 +1893,7 @@ fn load_multi_threaded<'a>(
 
     let mut state = State::new(
         root_id,
+        opt_platform_shorthand,
         target_info,
         exposed_types,
         arc_modules,
@@ -2392,8 +2407,6 @@ fn update<'a>(
                         provides,
                         ..
                     } => {
-                        debug_assert!(matches!(state.platform_data, None));
-
                         work.extend(state.dependencies.notify_package(config_shorthand));
 
                         let is_prebuilt = if header.is_root_module {
@@ -2403,7 +2416,7 @@ fn update<'a>(
                             ));
                             state.platform_path = PlatformPath::RootIsPlatformModule;
 
-                            // If the root module is a platform, then the platform is the very
+                            // If the root module is this platform, then the platform is the very
                             // thing we're rebuilding!
                             false
                         } else {
@@ -2414,11 +2427,17 @@ fn update<'a>(
                             )
                         };
 
-                        state.platform_data = Some(PlatformData {
-                            module_id: header.module_id,
-                            provides,
-                            is_prebuilt,
-                        });
+                        // If we're building an app module, and this was the platform
+                        // specified in its header's `to` field, record it as our platform.
+                        if state.opt_platform_shorthand == Some(config_shorthand) {
+                            debug_assert!(matches!(state.platform_data, None));
+
+                            state.platform_data = Some(PlatformData {
+                                module_id: header.module_id,
+                                provides,
+                                is_prebuilt,
+                            });
+                        }
                     }
                     Builtin { .. } | Interface { .. } => {
                         if header.is_root_module {
@@ -3535,7 +3554,7 @@ fn load_module<'a>(
     arc_shorthands: Arc<Mutex<MutMap<&'a str, ShorthandPath>>>,
     roc_cache_dir: RocCacheDir<'_>,
     ident_ids_by_module: SharedIdentIdsByModule,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> Result<HeaderOutput<'a>, LoadingProblem<'a>> {
     let module_start_time = Instant::now();
 
     let parse_start = Instant::now();
@@ -3552,14 +3571,16 @@ fn load_module<'a>(
             match module_name.as_inner().as_str() {
             $(
                 $name => {
-                    return Ok(load_builtin_module(
+                    let (module_id, msg) = load_builtin_module(
                         arena,
                         module_ids,
                         ident_ids_by_module,
                         module_timing,
                         $module_id,
                         concat!($name, ".roc")
-                    ));
+                    );
+
+                    return Ok(HeaderOutput { module_id, msg, opt_platform_shorthand: None });
                 }
             )*
                 _ => { /* fall through */ }
@@ -3738,6 +3759,14 @@ fn verify_interface_matches_file_path<'a>(
     Err(problem)
 }
 
+#[derive(Debug)]
+struct HeaderOutput<'a> {
+    module_id: ModuleId,
+    msg: Msg<'a>,
+    /// Only comes up if we're parsing an app module
+    opt_platform_shorthand: Option<&'a str>,
+}
+
 fn parse_header<'a>(
     arena: &'a Bump,
     read_file_duration: Duration,
@@ -3750,7 +3779,7 @@ fn parse_header<'a>(
     src_bytes: &'a [u8],
     roc_cache_dir: RocCacheDir<'_>,
     start_time: Instant,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> Result<HeaderOutput<'a>, LoadingProblem<'a>> {
     let parse_start = Instant::now();
     let parse_state = roc_parse::state::State::new(src_bytes);
     let parsed = roc_parse::module::parse_header(arena, parse_state.clone());
@@ -3812,7 +3841,11 @@ fn parse_header<'a>(
                 }
             }
 
-            Ok((module_id, Msg::Header(header)))
+            Ok(HeaderOutput {
+                module_id,
+                msg: Msg::Header(header),
+                opt_platform_shorthand: None,
+            })
         }
         Ok((
             ast::Module {
@@ -3843,7 +3876,11 @@ fn parse_header<'a>(
                 module_timing,
             );
 
-            Ok((module_id, Msg::Header(header)))
+            Ok(HeaderOutput {
+                module_id,
+                msg: Msg::Header(header),
+                opt_platform_shorthand: None,
+            })
         }
         Ok((
             ast::Module {
@@ -3902,25 +3939,19 @@ fn parse_header<'a>(
             );
 
             // Look at the app module's `to` keyword to determine which package was the platform.
-            match header.provides.to.value {
-                To::ExistingPackage(existing_package) => {
-                    let platform_entry = packages.iter()
-                        .find_map(|Loc { value, .. }| {
-                            if value.shorthand == existing_package {
-                                Some(value)
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_else(|| todo!("Gracefully handle platform shorthand after `to` that didn't map to a shorthand specified in `packages`"));
+            let platform_shorthand = match header.provides.to.value {
+                To::ExistingPackage(shorthand) => {
+                    if !packages
+                        .iter()
+                        .any(|Loc { value, .. }| value.shorthand == shorthand)
+                    {
+                        todo!("Gracefully handle platform shorthand after `to` that didn't map to a shorthand specified in `packages`");
+                    }
 
-                    dbg!(
-                        "TODO Now that we know which platform was specified, record that in the State.",
-                        platform_entry
-                    );
+                    shorthand
                 }
                 To::NewPackage(_package_name) => unreachable!("To::NewPackage is deprecated"),
-            }
+            };
 
             let mut messages = load_packages(
                 packages,
@@ -3934,7 +3965,11 @@ fn parse_header<'a>(
 
             messages.push(Msg::Header(resolved_header));
 
-            Ok((module_id, Msg::Many(messages)))
+            Ok(HeaderOutput {
+                module_id,
+                msg: Msg::Many(messages),
+                opt_platform_shorthand: Some(platform_shorthand),
+            })
         }
         Ok((
             ast::Module {
@@ -3965,9 +4000,12 @@ fn parse_header<'a>(
                 module_timing,
             );
 
-            Ok((module_id, Msg::Header(header)))
+            Ok(HeaderOutput {
+                module_id,
+                msg: Msg::Header(header),
+                opt_platform_shorthand: None,
+            })
         }
-
         Err(fail) => Err(LoadingProblem::ParsingFailed(
             fail.map_problem(SyntaxError::Header)
                 .into_file_error(filename),
@@ -4070,7 +4108,7 @@ fn load_filename<'a>(
     ident_ids_by_module: SharedIdentIdsByModule,
     roc_cache_dir: RocCacheDir<'_>,
     module_start_time: Instant,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> Result<HeaderOutput<'a>, LoadingProblem<'a>> {
     let file_io_start = Instant::now();
     let file = fs::read(&filename);
     let file_io_duration = file_io_start.elapsed();
@@ -4106,7 +4144,7 @@ fn load_from_str<'a>(
     ident_ids_by_module: SharedIdentIdsByModule,
     roc_cache_dir: RocCacheDir<'_>,
     module_start_time: Instant,
-) -> Result<(ModuleId, Msg<'a>), LoadingProblem<'a>> {
+) -> Result<HeaderOutput<'a>, LoadingProblem<'a>> {
     let file_io_start = Instant::now();
     let file_io_duration = file_io_start.elapsed();
 
@@ -5907,7 +5945,7 @@ fn run_task<'a>(
             roc_cache_dir,
             ident_ids_by_module,
         )
-        .map(|(_, msg)| msg),
+        .map(|HeaderOutput { msg, .. }| msg),
         Parse { header } => parse(arena, header),
         CanonicalizeAndConstrain {
             parsed,
