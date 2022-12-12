@@ -25,6 +25,13 @@ enum Block {
 }
 
 #[derive(Debug)]
+struct BranchCacheEntry {
+    addr: u32,
+    argument: u32,
+    target: u32,
+}
+
+#[derive(Debug)]
 pub struct Instance<'a, I: ImportDispatcher> {
     /// Contents of the WebAssembly instance's memory
     pub memory: Vec<'a, u8>,
@@ -40,6 +47,8 @@ pub struct Instance<'a, I: ImportDispatcher> {
     blocks: Vec<'a, Block>,
     /// Outermost block depth for the currently-executing function.
     outermost_block: u32,
+    /// Cache for branching instructions
+    branch_cache: Vec<'a, BranchCacheEntry>,
     /// Import dispatcher from user code
     import_dispatcher: I,
     /// Temporary storage for import arguments
@@ -68,6 +77,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             program_counter,
             blocks: Vec::new_in(arena),
             outermost_block: 0,
+            branch_cache: Vec::new_in(arena),
             import_dispatcher,
             import_arguments: Vec::new_in(arena),
             debug_string: Some(String::new()),
@@ -116,6 +126,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             program_counter: usize::MAX,
             blocks: Vec::new_in(arena),
             outermost_block: 0,
+            branch_cache: Vec::new_in(arena),
             import_dispatcher,
             import_arguments: Vec::new_in(arena),
             debug_string,
@@ -373,23 +384,39 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
     fn break_forward(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>) {
         use OpCode::*;
 
+        let addr = self.program_counter as u32;
+        let cache_result = self
+            .branch_cache
+            .iter()
+            .find(|entry| entry.addr == addr && entry.argument == relative_blocks_outward);
+
         let mut depth = self.blocks.len();
         let target_block_depth = depth - (relative_blocks_outward + 1) as usize;
-        loop {
-            let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
-            OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
-            match skipped_op {
-                BLOCK | LOOP | IF => {
-                    depth += 1;
-                }
-                END => {
-                    depth -= 1;
-                    if depth == target_block_depth {
-                        break;
+
+        if let Some(entry) = cache_result {
+            self.program_counter = entry.target as usize;
+        } else {
+            loop {
+                let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
+                OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
+                match skipped_op {
+                    BLOCK | LOOP | IF => {
+                        depth += 1;
                     }
+                    END => {
+                        depth -= 1;
+                        if depth == target_block_depth {
+                            break;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
+            self.branch_cache.push(BranchCacheEntry {
+                addr,
+                argument: relative_blocks_outward,
+                target: self.program_counter as u32,
+            });
         }
         self.blocks.truncate(target_block_depth);
     }
@@ -513,31 +540,43 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                     vstack: self.value_stack.depth(),
                 });
                 if condition == 0 {
-                    let target_depth = self.blocks.len();
-                    let mut depth = target_depth;
-                    loop {
-                        let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
-                        OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
-                        match skipped_op {
-                            BLOCK | LOOP | IF => {
-                                depth += 1;
-                            }
-                            END => {
-                                if depth == target_depth {
-                                    // `if` without `else`
-                                    self.blocks.pop();
-                                    break;
-                                } else {
-                                    depth -= 1;
+                    let addr = self.program_counter as u32;
+                    let cache_result = self.branch_cache.iter().find(|entry| entry.addr == addr);
+                    if let Some(entry) = cache_result {
+                        self.program_counter = entry.target as usize;
+                    } else {
+                        let target_depth = self.blocks.len();
+                        let mut depth = target_depth;
+                        loop {
+                            let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
+                            OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter)
+                                .unwrap();
+                            match skipped_op {
+                                BLOCK | LOOP | IF => {
+                                    depth += 1;
                                 }
-                            }
-                            ELSE => {
-                                if depth == target_depth {
-                                    break;
+                                END => {
+                                    if depth == target_depth {
+                                        // `if` without `else`
+                                        self.blocks.pop();
+                                        break;
+                                    } else {
+                                        depth -= 1;
+                                    }
                                 }
+                                ELSE => {
+                                    if depth == target_depth {
+                                        break;
+                                    }
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
+                        self.branch_cache.push(BranchCacheEntry {
+                            addr,
+                            argument: 0,
+                            target: self.program_counter as u32,
+                        });
                     }
                 }
             }
