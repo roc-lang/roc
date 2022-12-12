@@ -1490,29 +1490,25 @@ fn separate_union_lambdas<M: MetaCollector>(
                             // v1 ~ v2
                             // => {} -[ foo ({} -[ bar Str ]-> {}),
                             //          foo ({} -[ bar U64 ]-> {}) ] -> {}
-                            let variables_are_unifiable =
-                                env.with_outcome_only_for_lambda_set(|env| {
-                                    unify_pool::<NoCollector>(env, pool, var1, var2, mode)
-                                        .mismatches
-                                        .is_empty()
-                                });
+                            let snapshot = env.subs.snapshot();
+                            let outcome = unify_pool(env, pool, var1, var2, mode);
 
-                            if !variables_are_unifiable {
+                            if !outcome.mismatches.is_empty() {
+                                env.subs.rollback_to(snapshot);
                                 if env.is_inside_lambda_set {
                                     // If the lambdas being compared are nested, mismatches mean that the
                                     // transitively-outer lambdas should be treated as disjoint in
                                     // their ultimate lambda set.
                                     // As such, do not unify, even disjointly, at this level;
                                     // force the transient parent to be treated disjointly.
-                                    whole_outcome.mismatches.push(Mismatch::DisjointLambdaSets);
-                                    return Err(whole_outcome);
+                                    return Err(outcome);
                                 } else {
                                     continue 'try_next_right;
                                 }
+                            } else {
+                                let outcome = unify_pool(env, pool, var1, var2, mode);
+                                whole_outcome.union(outcome);
                             }
-
-                            let outcome = unify_pool(env, pool, var1, var2, mode);
-                            whole_outcome.union(outcome);
                         }
 
                         // All the variables unified, so we can join the left + right.
