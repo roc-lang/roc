@@ -337,17 +337,6 @@ impl<'a> Env<'a> {
         }
     }
 
-    // Computes a closure in outcome-only mode for checking whether a lambda set should be unified with another or treated disjointly.
-    // Unifications run in outcome-only mode will check for unifiability, but will not modify type variables or merge them.
-    pub fn with_outcome_only_for_lambda_set<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        let self_is_outcome_only = std::mem::replace(&mut self.compute_outcome_only, true);
-        let self_is_inside_lambda_set = std::mem::replace(&mut self.is_inside_lambda_set, true);
-        let result = f(self);
-        self.compute_outcome_only = self_is_outcome_only;
-        self.is_inside_lambda_set = self_is_inside_lambda_set;
-        result
-    }
-
     fn add_recursion_pair(&mut self, var1: Variable, var2: Variable) {
         let pair = (
             self.subs.get_root_key_without_compacting(var1),
