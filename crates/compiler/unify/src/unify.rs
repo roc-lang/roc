@@ -323,6 +323,7 @@ pub struct Env<'a> {
     compute_outcome_only: bool,
     seen_recursion: VecSet<(Variable, Variable)>,
     fixed_variables: VecSet<Variable>,
+    is_inside_lambda_set: bool,
 }
 
 impl<'a> Env<'a> {
@@ -332,15 +333,18 @@ impl<'a> Env<'a> {
             compute_outcome_only: false,
             seen_recursion: Default::default(),
             fixed_variables: Default::default(),
+            is_inside_lambda_set: false,
         }
     }
 
-    // Computes a closure in outcome-only mode. Unifications run in outcome-only mode will check
-    // for unifiability, but will not modify type variables or merge them.
-    pub fn with_outcome_only<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        self.compute_outcome_only = true;
+    // Computes a closure in outcome-only mode for checking whether a lambda set should be unified with another or treated disjointly.
+    // Unifications run in outcome-only mode will check for unifiability, but will not modify type variables or merge them.
+    pub fn with_outcome_only_for_lambda_set<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let self_is_outcome_only = std::mem::replace(&mut self.compute_outcome_only, true);
+        let self_is_inside_lambda_set = std::mem::replace(&mut self.is_inside_lambda_set, true);
         let result = f(self);
-        self.compute_outcome_only = false;
+        self.compute_outcome_only = self_is_outcome_only;
+        self.is_inside_lambda_set = self_is_inside_lambda_set;
         result
     }
 
@@ -1331,7 +1335,7 @@ fn separate_union_lambdas<M: MetaCollector>(
     mode: Mode,
     fields1: UnionLambdas,
     fields2: UnionLambdas,
-) -> (Outcome<M>, SeparatedUnionLambdas) {
+) -> Result<(Outcome<M>, SeparatedUnionLambdas), Outcome<M>> {
     debug_assert!(
         fields1.is_sorted_allow_duplicates(env.subs),
         "not sorted: {:?}",
@@ -1451,15 +1455,60 @@ fn separate_union_lambdas<M: MetaCollector>(
                             //
                             // If they are not unifiable, that means the two lambdas must be
                             // different (since they have different capture sets), and so we don't
-                            // want to merge the variables.
-                            let variables_are_unifiable = env.with_outcome_only(|env| {
-                                unify_pool::<NoCollector>(env, pool, var1, var2, mode)
-                                    .mismatches
-                                    .is_empty()
-                            });
+                            // want to merge the variables. Instead, we'll treat the lambda sets
+                            // are disjoint, and keep them as independent lambda in the resulting
+                            // set.
+                            //
+                            // # Nested lambda sets
+                            //
+                            // XREF https://github.com/roc-lang/roc/issues/4712
+                            //
+                            // We must be careful to ensure that if unifying nested lambda sets
+                            // results in disjoint lambdas, that the parent lambda sets are
+                            // ultimately treated disjointly as well.
+                            // Consider
+                            //
+                            //   v1: {} -[ foo ({} -[ bar Str ]-> {}) ]-> {}
+                            // ~ v2: {} -[ foo ({} -[ bar U64 ]-> {}) ]-> {}
+                            //
+                            // When considering unification of the nested sets
+                            //
+                            //   [ bar Str ]
+                            // ~ [ bar U64 ]
+                            //
+                            // we should not unify these sets, even disjointly, because that would
+                            // ultimately lead us to unifying
+                            //
+                            // v1 ~ v2
+                            // => {} -[ foo ({} -[ bar Str, bar U64 ]-> {}) ] -> {}
+                            //
+                            // which is quite wrong - we do not have a lambda `foo` that captures
+                            // either `bar captures: Str` or `bar captures: U64`, we have two
+                            // different lambdas `foo` that capture different `bars`. The target
+                            // unification is
+                            //
+                            // v1 ~ v2
+                            // => {} -[ foo ({} -[ bar Str ]-> {}),
+                            //          foo ({} -[ bar U64 ]-> {}) ] -> {}
+                            let variables_are_unifiable =
+                                env.with_outcome_only_for_lambda_set(|env| {
+                                    unify_pool::<NoCollector>(env, pool, var1, var2, mode)
+                                        .mismatches
+                                        .is_empty()
+                                });
 
                             if !variables_are_unifiable {
-                                continue 'try_next_right;
+                                if env.is_inside_lambda_set {
+                                    // If the lambdas being compared are nested, mismatches mean that the
+                                    // transitively-outer lambdas should be treated as disjoint in
+                                    // their ultimate lambda set.
+                                    // As such, do not unify, even disjointly, at this level;
+                                    // force the transient parent to be treated disjointly.
+                                    whole_outcome.mismatches.push(Mismatch::DisjointLambdaSets);
+                                    return Err(whole_outcome);
+                                } else {
+                                    continue 'try_next_right;
+                                }
                             }
 
                             let outcome = unify_pool(env, pool, var1, var2, mode);
@@ -1487,14 +1536,14 @@ fn separate_union_lambdas<M: MetaCollector>(
         }
     }
 
-    (
+    Ok((
         whole_outcome,
         SeparatedUnionLambdas {
             only_in_left,
             only_in_right,
             joined,
         },
-    )
+    ))
 }
 
 /// ULS-SORT-ORDER:
@@ -1829,7 +1878,10 @@ fn unify_lambda_set_help<M: MetaCollector>(
             only_in_right,
             joined,
         },
-    ) = separate_union_lambdas(env, pool, ctx.mode, solved1, solved2);
+    ) = match separate_union_lambdas(env, pool, ctx.mode, solved1, solved2) {
+        Ok((outcome, separated)) => (outcome, separated),
+        Err(err_outcome) => return err_outcome,
+    };
 
     let all_lambdas = joined
         .into_iter()

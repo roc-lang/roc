@@ -3646,6 +3646,7 @@ impl Alias {
 pub enum Mismatch {
     TypeMismatch,
     TypeNotInRange,
+    DisjointLambdaSets,
     DoesNotImplementAbiity(Variable, Symbol),
 }
 
