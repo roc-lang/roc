@@ -7,18 +7,19 @@ use crate::expr::{
 };
 use crate::pattern::{Pattern, RecordDestruct};
 
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 
 use ven_pretty::{Arena, DocAllocator, DocBuilder};
 
 pub struct Ctx<'a> {
+    pub home: ModuleId,
     pub interns: &'a Interns,
 }
 
 pub fn pretty_print_declarations(c: &Ctx, declarations: &Declarations) -> String {
     let f = Arena::new();
     let mut defs = Vec::with_capacity(declarations.len());
-    for (index, tag) in declarations.iter_top_down() {
+    for (index, tag) in declarations.iter_bottom_up() {
         let symbol = declarations.symbols[index].value;
         let body = &declarations.expressions[index];
 
@@ -81,7 +82,7 @@ fn def_symbol_help<'a>(
     sym: Symbol,
     body: &'a Expr,
 ) -> DocBuilder<'a, Arena<'a>> {
-    f.text(sym.as_str(c.interns).to_owned())
+    pp_sym(c, f, sym)
         .append(f.text(" ="))
         .append(f.line())
         .append(expr(c, EPrec::Free, f, body))
@@ -116,7 +117,7 @@ fn toplevel_function<'a>(
         .iter()
         .map(|arg| pattern(c, PPrec::Free, f, &arg.2.value));
 
-    f.text(sym.as_str(c.interns).to_owned())
+    pp_sym(c, f, sym)
         .append(f.text(" ="))
         .append(f.line())
         .append(f.text("\\"))
@@ -167,11 +168,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
                     .append("]")
                     .group(),
             ),
-        Var(sym, _) | AbilityMember(sym, _, _) => f.text(format!(
-            "{}.{}",
-            sym.module_string(c.interns),
-            sym.as_str(c.interns),
-        )),
+        Var(sym, _) | AbilityMember(sym, _, _) => pp_sym(c, f, *sym),
         When {
             loc_cond, branches, ..
         } => maybe_paren!(
@@ -370,6 +367,18 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
     }
 }
 
+fn pp_sym<'a>(c: &Ctx, f: &'a Arena<'a>, sym: Symbol) -> DocBuilder<'a, Arena<'a>> {
+    if sym.module_id() == c.home {
+        f.text(sym.as_str(c.interns).to_owned())
+    } else {
+        f.text(format!(
+            "{}.{}",
+            sym.module_string(c.interns),
+            sym.as_str(c.interns),
+        ))
+    }
+}
+
 fn branch<'a>(c: &Ctx, f: &'a Arena<'a>, b: &'a WhenBranch) -> DocBuilder<'a, Arena<'a>> {
     let WhenBranch {
         patterns,
@@ -413,11 +422,7 @@ fn pattern<'a>(
         Identifier(sym)
         | AbilityMemberSpecialization {
             specializes: sym, ..
-        } => f.text(format!(
-            "{}.{}",
-            sym.module_string(c.interns),
-            sym.as_str(c.interns),
-        )),
+        } => pp_sym(c, f, *sym),
         AppliedTag {
             tag_name,
             arguments,
