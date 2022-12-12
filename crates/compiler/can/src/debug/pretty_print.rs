@@ -1,9 +1,9 @@
 //! Pretty-prints the canonical AST back to check our work - do things look reasonable?
 
-use roc_can::def::Def;
-use roc_can::expr::Expr::{self, *};
-use roc_can::expr::{ClosureData, OpaqueWrapFunctionData, WhenBranch};
-use roc_can::pattern::{Pattern, RecordDestruct};
+use crate::def::Def;
+use crate::expr::Expr::{self, *};
+use crate::expr::{ClosureData, OpaqueWrapFunctionData, WhenBranch};
+use crate::pattern::{Pattern, RecordDestruct};
 
 use roc_module::symbol::Interns;
 
@@ -373,12 +373,12 @@ fn pattern<'a>(
                 f.intersperse(
                     destructs.iter().map(|l| &l.value).map(
                         |RecordDestruct { label, typ, .. }| match typ {
-                            roc_can::pattern::DestructType::Required => f.text(label.as_str()),
-                            roc_can::pattern::DestructType::Optional(_, e) => f
+                            crate::pattern::DestructType::Required => f.text(label.as_str()),
+                            crate::pattern::DestructType::Optional(_, e) => f
                                 .text(label.as_str())
                                 .append(f.text(" ? "))
                                 .append(expr(c, EPrec::Free, f, &e.value)),
-                            roc_can::pattern::DestructType::Guard(_, p) => f
+                            crate::pattern::DestructType::Guard(_, p) => f
                                 .text(label.as_str())
                                 .append(f.text(": "))
                                 .append(pattern(c, Free, f, &p.value)),

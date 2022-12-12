@@ -5,10 +5,10 @@ use bumpalo::Bump;
 use roc_packaging::cache::RocCacheDir;
 use ven_pretty::DocAllocator;
 
-use crate::pretty_print::{pretty_print_def, Ctx};
 use roc_can::{
     abilities::{AbilitiesStore, SpecializationLambdaSets},
     constraint::Constraints,
+    debug::{pretty_print_def, PPCtx},
     def::Def,
     expr::Declarations,
     module::{
@@ -529,8 +529,8 @@ where
     interns.all_ident_ids.insert(DERIVED_MODULE, ident_ids);
     DERIVED_MODULE.register_debug_idents(interns.all_ident_ids.get(&DERIVED_MODULE).unwrap());
 
-    let ctx = Ctx { interns: &interns };
-    let derived_program = pretty_print_def(&ctx, &derived_def);
+    let pp_ctx = PPCtx { interns: &interns };
+    let derived_program = pretty_print_def(&pp_ctx, &derived_def);
 
     check_derived_typechecks_and_golden(
         derived_def,
