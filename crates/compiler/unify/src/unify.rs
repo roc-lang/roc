@@ -320,7 +320,6 @@ impl<M: MetaCollector> Outcome<M> {
 
 pub struct Env<'a> {
     pub subs: &'a mut Subs,
-    compute_outcome_only: bool,
     seen_recursion: VecSet<(Variable, Variable)>,
     fixed_variables: VecSet<Variable>,
     is_inside_lambda_set: bool,
@@ -330,7 +329,6 @@ impl<'a> Env<'a> {
     pub fn new(subs: &'a mut Subs) -> Self {
         Self {
             subs,
-            compute_outcome_only: false,
             seen_recursion: Default::default(),
             fixed_variables: Default::default(),
             is_inside_lambda_set: false,
@@ -3532,24 +3530,22 @@ fn unify_recursion<M: MetaCollector>(
 pub fn merge<M: MetaCollector>(env: &mut Env, ctx: &Context, content: Content) -> Outcome<M> {
     let mut outcome: Outcome<M> = Outcome::default();
 
-    if !env.compute_outcome_only {
-        let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
-        let desc = Descriptor {
-            content,
-            rank,
-            mark: Mark::NONE,
-            copy: OptVariable::NONE,
-        };
+    let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
+    let desc = Descriptor {
+        content,
+        rank,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
 
-        outcome
-            .extra_metadata
-            .record_changed_variable(env.subs, ctx.first);
-        outcome
-            .extra_metadata
-            .record_changed_variable(env.subs, ctx.second);
+    outcome
+        .extra_metadata
+        .record_changed_variable(env.subs, ctx.first);
+    outcome
+        .extra_metadata
+        .record_changed_variable(env.subs, ctx.second);
 
-        env.subs.union(ctx.first, ctx.second, desc);
-    }
+    env.subs.union(ctx.first, ctx.second, desc);
 
     outcome
 }
