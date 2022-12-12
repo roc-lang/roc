@@ -43,7 +43,7 @@ impl TypeError {
             TypeError::BadPattern(..) => RuntimeError,
             TypeError::CircularType(..) => RuntimeError,
             TypeError::CircularDef(_) => RuntimeError,
-            TypeError::UnexposedLookup(_) => RuntimeError,
+            TypeError::UnexposedLookup(..) => RuntimeError,
             TypeError::UnfulfilledAbility(_) => RuntimeError,
             TypeError::BadExprMissingAbility(_, _, _, _) => RuntimeError,
             TypeError::BadPatternMissingAbility(_, _, _, _) => RuntimeError,
