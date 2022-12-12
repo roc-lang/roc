@@ -529,7 +529,11 @@ where
     interns.all_ident_ids.insert(DERIVED_MODULE, ident_ids);
     DERIVED_MODULE.register_debug_idents(interns.all_ident_ids.get(&DERIVED_MODULE).unwrap());
 
-    let pp_ctx = PPCtx { interns: &interns };
+    let pp_ctx = PPCtx {
+        interns: &interns,
+        print_lambda_names: false,
+        home: builtin_module,
+    };
     let derived_program = pretty_print_def(&pp_ctx, &derived_def);
 
     check_derived_typechecks_and_golden(
