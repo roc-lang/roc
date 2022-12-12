@@ -3645,10 +3645,6 @@ impl Alias {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Mismatch {
     TypeMismatch,
-    IfConditionNotBool,
-    InconsistentIfElse,
-    InconsistentWhenBranches,
-    CanonicalizationProblem,
     TypeNotInRange,
     DoesNotImplementAbiity(Variable, Symbol),
 }
