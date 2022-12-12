@@ -250,72 +250,82 @@ where
 
 #[allow(dead_code)]
 pub fn assert_wasm_refcounts_help<T>(
-    _src: &str,
-    _phantom: PhantomData<T>,
-    _num_refcounts: usize,
+    src: &str,
+    phantom: PhantomData<T>,
+    num_refcounts: usize,
 ) -> Result<Vec<RefCount>, String>
 where
     T: FromWasm32Memory + Wasm32Result,
 {
-    Err("oops".into())
-    // let arena = bumpalo::Bump::new();
+    let arena = bumpalo::Bump::new();
 
-    // let wasm_bytes = crate::helpers::wasm::compile_to_wasm_bytes(&arena, src, phantom);
+    let wasm_bytes = crate::helpers::wasm::compile_to_wasm_bytes(&arena, src, phantom);
 
-    // let env = Environment::new().expect("Unable to create environment");
-    // let rt = env
-    //     .create_runtime(1024 * 60)
-    //     .expect("Unable to create runtime");
-    // let parsed = Module::parse(&env, wasm_bytes).expect("Unable to parse module");
-    // let mut module = rt.load_module(parsed).expect("Unable to load module");
+    let require_relocatable = false;
+    let module = WasmModule::preload(&arena, &wasm_bytes, require_relocatable)
+        .map_err(|e| format!("{:?}", e))?;
 
-    // let panic_msg: Rc<Mutex<Option<(i32, u32)>>> = Default::default();
-    // link_module(&mut module, panic_msg.clone());
+    let dispatcher = TestDispatcher {
+        wasi: wasi::WasiDispatcher { args: &[] },
+    };
+    let is_debug_mode = false;
+    let mut inst = Instance::for_module(&arena, &module, dispatcher, is_debug_mode)?;
 
-    // let expected_len = num_refcounts as i32;
-    // let init_refcount_test = module
-    //     .find_function::<i32, i32>(INIT_REFCOUNT_NAME)
-    //     .expect("Unable to find refcount test init function");
-    // let mut refcount_vector_offset = init_refcount_test.call(expected_len).unwrap() as usize;
+    // Allocate a vector in the test host that refcounts will be copied into
+    let mut refcount_vector_addr: i32 = inst
+        .call_export(
+            &module,
+            INIT_REFCOUNT_NAME,
+            [Value::I32(num_refcounts as i32)],
+        )?
+        .ok_or_else(|| format!("No return address from {}", INIT_REFCOUNT_NAME))?
+        .expect_i32()
+        .map_err(|type_err| format!("{:?}", type_err))?;
 
-    // // Run the test
-    // let test_wrapper = module
-    //     .find_function::<(), i32>(TEST_WRAPPER_NAME)
-    //     .expect("Unable to find test wrapper function");
-    // test_wrapper.call().map_err(|e| format!("{:?}", e))?;
+    // Run the test, ignoring the result
+    let _result_addr: i32 = inst
+        .call_export(&module, TEST_WRAPPER_NAME, [])?
+        .ok_or_else(|| format!("No return address from {}", TEST_WRAPPER_NAME))?
+        .expect_i32()
+        .map_err(|type_err| format!("{:?}", type_err))?;
 
-    // let memory: &[u8] = get_memory(&rt);
+    // Read the length of the vector in the C host
+    let actual_num_refcounts = read_i32(&inst.memory, refcount_vector_addr) as usize;
+    if actual_num_refcounts != num_refcounts {
+        return Err(format!(
+            "Expected {} refcounts but got {}",
+            num_refcounts, actual_num_refcounts
+        ));
+    }
 
-    // // Read the length of the vector in the C host
-    // let actual_len = read_i32(memory, refcount_vector_offset);
-    // if actual_len != expected_len {
-    //     return Err(format!(
-    //         "Expected {} refcounts but got {}",
-    //         expected_len, actual_len
-    //     ));
-    // }
+    // Read the refcounts
+    let mut refcounts = Vec::with_capacity(num_refcounts);
+    for _ in 0..num_refcounts {
+        // Get the next RC pointer from the host's vector
+        refcount_vector_addr += 4;
+        let rc_ptr = read_i32(&inst.memory, refcount_vector_addr);
+        let rc = if rc_ptr == 0 {
+            RefCount::Deallocated
+        } else {
+            // Dereference the RC pointer and decode its value from the negative number format
+            let rc_encoded = read_i32(&inst.memory, rc_ptr);
+            if rc_encoded == 0 {
+                RefCount::Constant
+            } else {
+                let rc = rc_encoded - i32::MIN + 1;
+                RefCount::Live(rc as u32)
+            }
+        };
+        refcounts.push(rc);
+    }
+    Ok(refcounts)
+}
 
-    // // Read the refcounts
-    // let mut refcounts = Vec::with_capacity(num_refcounts);
-    // for _ in 0..num_refcounts {
-    //     // Get the next RC pointer from the host's vector
-    //     refcount_vector_offset += 4;
-    //     let rc_ptr = read_i32(memory, refcount_vector_offset) as usize;
-    //     let rc = if rc_ptr == 0 {
-    //         RefCount::Deallocated
-    //     } else {
-    //         // Dereference the RC pointer and decode its value from the negative number format
-    //         let rc_encoded = read_i32(memory, rc_ptr);
-    //         if rc_encoded == 0 {
-    //             RefCount::Constant
-    //         } else {
-    //             let rc = rc_encoded - i32::MIN + 1;
-    //             RefCount::Live(rc as u32)
-    //         }
-    //     };
-    //     refcounts.push(rc);
-    // }
-    // Ok(refcounts)
+fn read_i32(memory: &[u8], addr: i32) -> i32 {
+    let index = addr as usize;
+    let mut bytes = [0; 4];
+    bytes.copy_from_slice(&memory[index..][..4]);
+    i32::from_le_bytes(bytes)
 }
 
 /// Print out hex bytes of the test result, and a few words on either side
