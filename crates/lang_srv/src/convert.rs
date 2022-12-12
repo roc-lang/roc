@@ -75,7 +75,8 @@ pub(crate) mod diag {
     use roc_region::all::{LineInfo, Region};
     use roc_solve_problem::TypeError;
 
-    use roc_reporting::report::{RocDocAllocator, Severity};
+    use roc_problem::Severity;
+    use roc_reporting::report::RocDocAllocator;
     use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
     use super::ToRange;
