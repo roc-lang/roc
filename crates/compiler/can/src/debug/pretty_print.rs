@@ -14,6 +14,7 @@ use ven_pretty::{Arena, DocAllocator, DocBuilder};
 pub struct Ctx<'a> {
     pub home: ModuleId,
     pub interns: &'a Interns,
+    pub print_lambda_names: bool,
 }
 
 pub fn pretty_print_declarations(c: &Ctx, declarations: &Declarations) -> String {
@@ -261,6 +262,7 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
         Closure(ClosureData {
             arguments,
             loc_body,
+            name,
             ..
         }) => f
             .text("\\")
@@ -272,7 +274,13 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
                     f.text(", "),
                 ),
             )
-            .append(f.text(" ->"))
+            .append(if c.print_lambda_names {
+                f.text(" -[")
+                    .append(pp_sym(c, f, *name))
+                    .append(f.text("]->"))
+            } else {
+                f.text(" ->")
+            })
             .append(f.line())
             .append(expr(c, Free, f, &loc_body.value))
             .nest(2)
