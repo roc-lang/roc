@@ -64,7 +64,7 @@ pub enum SyntaxError<'a> {
     Space(BadInputError),
     NotEndOfFile(Position),
 }
-pub trait SpaceProblem {
+pub trait SpaceProblem: std::fmt::Debug {
     fn space_problem(e: BadInputError, pos: Position) -> Self;
 }
 
@@ -265,20 +265,13 @@ pub enum EGeneratesWith {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BadInputError {
     HasTab,
+    HasMisplacedCarriageReturn,
+    HasAsciiControl,
     ///
     TooManyLines,
     ///
     ///
     BadUtf8,
-}
-
-pub fn bad_input_to_syntax_error<'a>(bad_input: BadInputError) -> SyntaxError<'a> {
-    use crate::parser::BadInputError::*;
-    match bad_input {
-        HasTab => SyntaxError::NotYetImplemented("call error on tabs".to_string()),
-        TooManyLines => SyntaxError::TooManyLines,
-        BadUtf8 => SyntaxError::BadUtf8,
-    }
 }
 
 impl<'a, T> SourceError<'a, T> {
@@ -323,6 +316,8 @@ impl<'a> SyntaxError<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EExpr<'a> {
+    TrailingOperator(Position),
+
     Start(Position),
     End(Position),
     BadExprEnd(Position),
@@ -560,6 +555,7 @@ pub enum EPattern<'a> {
     Record(PRecord<'a>, Position),
     List(PList<'a>, Position),
     Underscore(Position),
+    NotAPattern(Position),
 
     Start(Position),
     End(Position),
@@ -773,7 +769,7 @@ pub struct FileError<'a, T> {
 pub trait Parser<'a, Output, Error> {
     fn parse(
         &self,
-        alloc: &'a Bump,
+        arena: &'a Bump,
         state: State<'a>,
         min_indent: u32,
     ) -> ParseResult<'a, Output, Error>;
