@@ -38,7 +38,7 @@ jobs:
           --header 'content-type: application/json' \
           --output roc_releases.json
 
-      - run: ./ci/build_basic_cli.sh macos_11_x86_64
+      - run: ./ci/build_basic_cli.sh macos_x86_64
 
       - name: Save .o files
         uses: actions/upload-artifact@v3
@@ -64,3 +64,21 @@ jobs:
           name: macos-apple-silicon-files
           path: |
             basic-cli/src/macos-arm64.o
+
+  create-brotli-archive:
+    name: create brotli archive
+    runs-on: [ubuntu-20.04]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: fetch releases data and save to file
+        run: curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
+
+      - run: ./ci/get_latest_release_url.sh linux_x86_64
+
+      #- run: git clone https://github.com/roc-lang/basic-cli.git
+
+      - name: Download the previously uploaded files
+        uses: actions/download-artifact@v3
+
+      - run: ls
