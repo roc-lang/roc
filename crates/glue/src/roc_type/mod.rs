@@ -140,7 +140,7 @@ pub union RocType {
 #[repr(C)]
 pub struct R15 {
     pub discriminant: u32,
-    pub r#type: u32,
+    pub id: u32,
 }
 
 #[cfg(any(
@@ -165,8 +165,8 @@ pub struct R7 {
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R3 {
+    pub id: u32,
     pub name: roc_std::RocStr,
-    pub r#type: u32,
 }
 
 #[cfg(any(
@@ -580,7 +580,7 @@ pub union RocType {
 #[repr(C)]
 pub struct R15 {
     pub discriminant: u64,
-    pub r#type: u64,
+    pub id: u64,
 }
 
 #[cfg(any(
@@ -590,8 +590,8 @@ pub struct R15 {
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R3 {
+    pub id: u64,
     pub name: roc_std::RocStr,
-    pub r#type: u64,
 }
 
 #[cfg(any(

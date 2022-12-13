@@ -88,7 +88,7 @@ generateStruct = \buf, types, id, name, fields, visibility ->
     |> Str.concat "}\n\n"
 
 generateStructFields = \types ->
-    \accum, { name: fieldName, type: id } ->
+    \accum, { name: fieldName, id } ->
         typeStr = typeName types id
         escapedFieldName = escapeKW fieldName
 
@@ -97,10 +97,10 @@ generateStructFields = \types ->
 nameTagUnionPayloadFields = \fields ->
     # Tag union payloads have numbered fields, so we prefix them
     # with an "f" because Rust doesn't allow struct fields to be numbers.
-    List.map fields \{ discriminant, type } ->
+    List.map fields \{ discriminant, id } ->
         discStr = Num.toStr discriminant
 
-        { name: "f\(discStr)", type }
+        { name: "f\(discStr)", id }
 
 addDeriveStr = \buf, types, type, includeDebug ->
     # TODO: full derive impl porting.
@@ -140,9 +140,9 @@ cannotDeriveCopy = \types, type ->
             cannotDeriveCopy types (getType types okId)
             || cannotDeriveCopy types (getType types errId)
         Struct { fields} ->
-             List.any fields \{ type: id } -> cannotDeriveCopy types (getType types id)
+             List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
         TagUnionPayload { fields} ->
-             List.any fields \{ type: id } -> cannotDeriveCopy types (getType types id)
+             List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
         _ -> crash "ugh"
 
 cannotDeriveDefault = \types, type ->
@@ -155,9 +155,9 @@ cannotDeriveDefault = \types, type ->
             cannotDeriveCopy types (getType types keyId)
             || cannotDeriveCopy types (getType types valId)
         Struct { fields} ->
-             List.any fields \{ type: id } -> cannotDeriveDefault types (getType types id)
+             List.any fields \{ id } -> cannotDeriveDefault types (getType types id)
         TagUnionPayload { fields} ->
-             List.any fields \{ type: id } -> cannotDeriveDefault types (getType types id)
+             List.any fields \{ id } -> cannotDeriveDefault types (getType types id)
 
 typeName = \types, id ->
     when getType types id is

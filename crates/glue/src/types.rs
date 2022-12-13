@@ -544,7 +544,7 @@ impl From<&RocType> for roc_type::RocType {
                     .iter()
                     .map(|(name, id)| roc_type::R3 {
                         name: name.as_str().into(),
-                        r#type: id.0 as _,
+                        id: id.0 as _,
                     })
                     .collect(),
                 name: name.as_str().into(),
@@ -555,7 +555,7 @@ impl From<&RocType> for roc_type::RocType {
                         .iter()
                         .map(|(disc, id)| roc_type::R15 {
                             discriminant: *disc as _,
-                            r#type: id.0 as _,
+                            id: id.0 as _,
                         })
                         .collect(),
                     name: name.as_str().into(),
