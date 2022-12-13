@@ -8472,6 +8472,41 @@ mod solve_expr {
     }
 
     #[test]
+    fn issue_4733() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                fn = \{} ->
+                #^^{-1}
+                    instr : [ Op (U64, U64 -> U64) ]
+                    instr = if Bool.true then (Op Num.mul) else (Op Num.add)
+                #   ^^^^^
+
+                    Op op = instr
+                    #  ^^
+
+                    \a -> op a a
+                #         ^^
+
+                main = (fn {}) 3u64
+                #       ^^
+                #       ^^^^^
+                "#
+            ),
+        @r###"
+        fn : {}* -[[fn(1)]]-> (U64 -[[6(6) (U64, U64 -[[Num.add(19), Num.mul(21)]]-> U64)]]-> U64)
+        instr : [Op (U64, U64 -[[Num.add(19), Num.mul(21)]]-> U64)]*
+        op : U64, U64 -[[Num.add(19), Num.mul(21)]]-> U64
+        op : U64, U64 -[[Num.add(19), Num.mul(21)]]-> U64
+        fn : {} -[[fn(1)]]-> (U64 -[[6(6) (U64, U64 -[[Num.add(19), Num.mul(21)]]-> U64)]]-> U64)
+        fn {} : U64 -[[6(6) (U64, U64 -[[Num.add(19), Num.mul(21)]]-> U64)]]-> U64
+        "###
+        );
+    }
+
+    #[test]
     fn disjoint_nested_lambdas_result_in_disjoint_parents_issue_4712() {
         infer_queries!(
             indoc!(

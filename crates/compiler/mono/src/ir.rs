@@ -4307,7 +4307,7 @@ pub fn with_hole<'a>(
                 variant_var,
                 assigned,
                 hole,
-                tag_name,
+                tag_name.clone(),
                 procs,
                 layout_cache,
                 args,
@@ -8244,23 +8244,47 @@ fn specialize_symbol<'a>(
 
                         force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
                     } else {
-                        // Imported symbol, so it must have no captures niche (since
-                        // top-levels can't capture)
-                        let top_level = ProcLayout::from_raw(
+                        // Figure out the lambda set this top-level function is used in.
+                        let lambda_set = match raw {
+                            RawFunctionLayout::Function(_, lambda_set, _) => lambda_set,
+                            RawFunctionLayout::ZeroArgumentThunk(_) => internal_error!(
+                                "ZATs should have been covered in the previous branch"
+                            ),
+                        };
+
+                        let lambda_name =
+                            find_lambda_name(env, layout_cache, lambda_set, original, &[]);
+
+                        debug_assert!(
+                            lambda_name.no_captures(),
+                            "imported functions are top-level and should never capture"
+                        );
+
+                        let function_ptr_layout = ProcLayout::from_raw(
                             env.arena,
                             &layout_cache.interner,
                             raw,
-                            CapturesNiche::no_niche(),
+                            lambda_name.captures_niche(),
                         );
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
-                            LambdaName::no_niche(original),
-                            top_level,
+                            lambda_name,
+                            function_ptr_layout,
                             layout_cache,
                         );
 
-                        let_empty_struct(assign_to, env.arena.alloc(result))
+                        //let_empty_struct(assign_to, env.arena.alloc(result))
+                        construct_closure_data(
+                            env,
+                            procs,
+                            layout_cache,
+                            lambda_set,
+                            lambda_name,
+                            &[],
+                            assign_to,
+                            env.arena.alloc(result),
+                        )
                     }
                 }
 
