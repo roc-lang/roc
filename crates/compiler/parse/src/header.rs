@@ -8,25 +8,43 @@ use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::Loc;
 use std::fmt::Debug;
 
+impl<'a> HeaderType<'a> {
+    pub fn exposed_or_provided_values(&'a self) -> &'a [Loc<ExposedName<'a>>] {
+        match self {
+            HeaderType::App {
+                provides: exposes, ..
+            }
+            | HeaderType::Hosted { exposes, .. }
+            | HeaderType::Builtin { exposes, .. }
+            | HeaderType::Interface { exposes, .. } => exposes,
+            HeaderType::Platform { .. } | HeaderType::Package { .. } => &[],
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum HeaderType<'a> {
     App {
         output_name: StrLiteral<'a>,
+        provides: &'a [Loc<ExposedName<'a>>],
         to_platform: To<'a>,
     },
     Hosted {
         name: ModuleName<'a>,
+        exposes: &'a [Loc<ExposedName<'a>>],
         generates: UppercaseIdent<'a>,
         generates_with: &'a [Loc<ExposedName<'a>>],
     },
     /// Only created during canonicalization, never actually parsed from source
     Builtin {
         name: ModuleName<'a>,
+        exposes: &'a [Loc<ExposedName<'a>>],
         generates_with: &'a [Symbol],
     },
     Package {
         /// usually something other than `pf`
         config_shorthand: &'a str,
+        exposes: &'a [Loc<ModuleName<'a>>],
     },
     Platform {
         opt_app_module_id: Option<ModuleId>,
@@ -35,12 +53,14 @@ pub enum HeaderType<'a> {
         provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
         requires: &'a [Loc<TypedIdent<'a>>],
         requires_types: &'a [Loc<UppercaseIdent<'a>>],
+        exposes: &'a [Loc<ModuleName<'a>>],
 
         /// usually `pf`
         config_shorthand: &'a str,
     },
     Interface {
         name: ModuleName<'a>,
+        exposes: &'a [Loc<ExposedName<'a>>],
     },
 }
 

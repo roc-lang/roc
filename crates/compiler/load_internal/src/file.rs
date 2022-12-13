@@ -42,7 +42,9 @@ use roc_packaging::cache::{self, RocCacheDir};
 #[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::PackageMetadata;
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
-use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
+use roc_parse::header::{
+    ExposedName, ImportsEntry, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
+};
 use roc_parse::header::{HeaderType, PackagePath};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
@@ -2402,7 +2404,9 @@ fn update<'a>(
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::Valid(to_platform);
                     }
-                    Package { config_shorthand } => {
+                    Package {
+                        config_shorthand, ..
+                    } => {
                         work.extend(state.dependencies.notify_package(config_shorthand));
                     }
                     Platform {
@@ -3508,10 +3512,10 @@ fn load_builtin_module_help<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
-                exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
                 header_type: HeaderType::Builtin {
                     name: header.name.value,
+                    exposes: unspace(arena, header.exposes.item.items),
                     generates_with: &[],
                 },
             };
@@ -3811,10 +3815,10 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
-                exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
                 header_type: HeaderType::Interface {
                     name: header.name.value,
+                    exposes: unspace(arena, header.exposes.item.items),
                 },
             };
 
@@ -3862,10 +3866,10 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
-                exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
                 header_type: HeaderType::Hosted {
                     name: header.name.value,
+                    exposes: unspace(arena, header.exposes.item.items),
                     generates: header.generates.item,
                     generates_with: unspace(arena, header.generates_with.item.items),
                 },
@@ -3901,33 +3905,31 @@ fn parse_header<'a>(
                 &[]
             };
 
-            let mut exposes = bumpalo::collections::Vec::new_in(arena);
+            let mut provides = bumpalo::collections::Vec::new_in(arena);
 
-            exposes.extend(unspace(arena, header.provides.entries.items));
+            provides.extend(unspace(arena, header.provides.entries.items));
 
             if let Some(provided_types) = header.provides.types {
                 for provided_type in unspace(arena, provided_types.items) {
                     let string: &str = provided_type.value.into();
                     let exposed_name = ExposedName::new(string);
 
-                    exposes.push(Loc::at(provided_type.region, exposed_name));
+                    provides.push(Loc::at(provided_type.region, exposed_name));
                 }
             }
-
-            let exposes = exposes.into_bump_slice();
 
             let info = HeaderInfo {
                 filename,
                 is_root_module,
                 opt_shorthand,
                 packages,
-                exposes,
                 imports: if let Some(imports) = header.imports {
                     unspace(arena, imports.item.items)
                 } else {
                     &[]
                 },
                 header_type: HeaderType::App {
+                    provides: provides.into_bump_slice(),
                     output_name: header.name.value,
                     to_platform: header.provides.to.value,
                 },
@@ -4176,7 +4178,6 @@ struct HeaderInfo<'a> {
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     packages: &'a [Loc<PackageEntry<'a>>],
-    exposes: &'a [Loc<ExposedName<'a>>],
     imports: &'a [Loc<ImportsEntry<'a>>],
     header_type: HeaderType<'a>,
 }
@@ -4193,13 +4194,13 @@ fn build_header<'a>(
         is_root_module,
         opt_shorthand,
         packages,
-        exposes,
         imports,
         header_type,
     } = info;
 
     let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
-    let num_exposes = exposes.len();
+    let exposed_values = header_type.exposed_or_provided_values();
+    let num_exposes = exposed_values.len();
     let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
         HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
     let declared_name: ModuleName = match &header_type {
@@ -4375,7 +4376,7 @@ fn build_header<'a>(
 
         let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
 
-        for loc_exposed in exposes.iter() {
+        for loc_exposed in exposed_values.iter() {
             // Use get_or_insert here because the ident_ids may already
             // created an IdentId for this, when it was imported exposed
             // in a dependent module.
@@ -4451,8 +4452,9 @@ fn build_header<'a>(
     // and we just have a bunch of definitions with runtime errors in their bodies
     let header_type = {
         match header_type {
-            HeaderType::Interface { name } if home.is_builtin() => HeaderType::Builtin {
+            HeaderType::Interface { name, exposes } if home.is_builtin() => HeaderType::Builtin {
                 name,
+                exposes,
                 generates_with: &[],
             },
             _ => header_type,
@@ -4994,6 +4996,46 @@ fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [L
     .into_bump_slice()
 }
 
+fn build_package_header<'a>(
+    arena: &'a Bump,
+    opt_shorthand: Option<&'a str>,
+    is_root_module: bool,
+    filename: PathBuf,
+    parse_state: roc_parse::state::State<'a>,
+    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
+    header: &PackageHeader<'a>,
+    module_timing: ModuleTiming,
+) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
+    let exposes = bumpalo::collections::Vec::from_iter_in(
+        unspace(arena, header.exposes.item.items).iter().copied(),
+        arena,
+    );
+
+    let header_type = HeaderType::Package {
+        // A config_shorthand of "" should be fine
+        config_shorthand: opt_shorthand.unwrap_or_default(),
+        exposes: exposes.into_bump_slice(),
+    };
+
+    let info = HeaderInfo {
+        filename,
+        is_root_module,
+        opt_shorthand,
+        packages: &[],
+        imports: &[],
+        header_type,
+    };
+
+    build_header(
+        info,
+        parse_state,
+        module_ids,
+        ident_ids_by_module,
+        module_timing,
+    )
+}
+
 fn build_platform_header<'a>(
     arena: &'a Bump,
     opt_shorthand: Option<&'a str>,
@@ -5020,6 +5062,10 @@ fn build_platform_header<'a>(
             .zip(requires.iter().copied()),
         arena,
     );
+    let exposes = bumpalo::collections::Vec::from_iter_in(
+        unspace(arena, header.exposes.item.items).iter().copied(),
+        arena,
+    );
     let requires_types = unspace(arena, header.requires.item.rigids.items);
     let imports = unspace(arena, header.imports.item.items);
 
@@ -5028,6 +5074,7 @@ fn build_platform_header<'a>(
         config_shorthand: opt_shorthand.unwrap_or_default(),
         opt_app_module_id,
         provides: provides.into_bump_slice(),
+        exposes: exposes.into_bump_slice(),
         requires,
         requires_types,
     };
@@ -5037,7 +5084,6 @@ fn build_platform_header<'a>(
         is_root_module,
         opt_shorthand,
         packages: &[],
-        exposes: &[], // These are exposed values. TODO move this into header_type!
         imports,
         header_type,
     };
