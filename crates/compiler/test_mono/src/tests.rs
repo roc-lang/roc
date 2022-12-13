@@ -2175,7 +2175,7 @@ fn issue_4749() {
 }
 
 #[mono_test(mode = "test", no_check)]
-fn issue_4733() {
+fn lambda_set_with_imported_toplevels_issue_4733() {
     indoc!(
         r###"
         interface Test exposes [] imports []
