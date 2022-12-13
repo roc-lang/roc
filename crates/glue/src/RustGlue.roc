@@ -123,6 +123,11 @@ addDeriveStr = \buf, types, type, includeDebug ->
 
             ExcludeDebug ->
                 b
+    |> \b ->
+        if !(hasFloat types type) then
+            Str.concat b "Eq, Ord, Hash, "
+        else
+            b
     |> Str.concat "PartialEq, PartialOrd)]\n"
 
 cannotDeriveCopy = \types, type ->
@@ -148,8 +153,6 @@ cannotDeriveCopy = \types, type ->
         TagUnionPayload { fields } ->
             List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
 
-        _ -> crash "ugh"
-
 cannotDeriveDefault = \types, type ->
     when type is
         Unit | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
@@ -166,6 +169,78 @@ cannotDeriveDefault = \types, type ->
 
         TagUnionPayload { fields } ->
             List.any fields \{ id } -> cannotDeriveDefault types (getType types id)
+
+hasFloat = \types, type ->
+    hasFloatHelp types type Set.empty
+
+hasFloatHelp = \types, type, doNotRecurse ->
+    # TODO: is doNotRecurse problematic? Do we need an updated doNotRecurse for calls up the tree?
+    # I think there is a change it really only matters for RecursivePointer, so it may be fine.
+    # Otherwise we need to deal with threading through updates to doNotRecurse
+    when type is
+        Num kind ->
+            when kind is
+                F32 | F64 | F128 -> Bool.true
+                _ -> Bool.false
+
+        Unit | EmptyTagUnion | RocStr | Bool | TagUnion (Enumeration _) | Function _ -> Bool.false
+        RocList id | RocSet id | RocBox id ->
+            hasFloatHelp types (getType types id) doNotRecurse
+
+        RocDict id0 id1 | RocResult id0 id1 ->
+            hasFloatHelp types (getType types id0) doNotRecurse
+            || hasFloatHelp types (getType types id1) doNotRecurse
+
+        Struct { fields } ->
+            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
+
+        TagUnionPayload { fields } ->
+            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
+
+        TagUnion (SingleTagStruct { payloadFields }) ->
+            List.any payloadFields \id -> hasFloatHelp types (getType types id) doNotRecurse
+
+        TagUnion (Recursive { tags }) ->
+            List.any tags \{ payload } ->
+                when payload is
+                    Some id -> hasFloatHelp types (getType types id) doNotRecurse
+                    None -> Bool.false
+
+        TagUnion (NonRecursive { tags }) ->
+            List.any tags \{ payload } ->
+                when payload is
+                    Some id -> hasFloatHelp types (getType types id) doNotRecurse
+                    None -> Bool.false
+
+        TagUnion (NullableWrapped { tags }) ->
+            List.any tags \{ payload } ->
+                when payload is
+                    Some id -> hasFloatHelp types (getType types id) doNotRecurse
+                    None -> Bool.false
+
+        TagUnion (NonNullableUnwrapped { payload }) ->
+            if Set.contains doNotRecurse payload then
+                Bool.false
+            else
+                nextDoNotRecurse = Set.insert doNotRecurse payload
+
+                hasFloatHelp types (getType types payload) nextDoNotRecurse
+
+        TagUnion (NullableUnwrapped { nonNullPayload }) ->
+            if Set.contains doNotRecurse nonNullPayload then
+                Bool.false
+            else
+                nextDoNotRecurse = Set.insert doNotRecurse nonNullPayload
+
+                hasFloatHelp types (getType types nonNullPayload) nextDoNotRecurse
+
+        RecursivePointer payload ->
+            if Set.contains doNotRecurse payload then
+                Bool.false
+            else
+                nextDoNotRecurse = Set.insert doNotRecurse payload
+
+                hasFloatHelp types (getType types payload) nextDoNotRecurse
 
 typeName = \types, id ->
     when getType types id is
