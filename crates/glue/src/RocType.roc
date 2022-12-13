@@ -77,11 +77,11 @@ RocType : [
     EmptyTagUnion,
     Struct {
         name: Str,
-        fields: List { name: Str, id: TypeId }
+        fields: List { name: Str, type: TypeId }
     },
     TagUnionPayload {
         name: Str,
-        fields: List { discriminant: Nat, id: TypeId },
+        fields: List { discriminant: Nat, type: TypeId },
     },
     ## A recursive pointer, e.g. in StrConsList : [Nil, Cons Str StrConsList],
     ## this would be the field of Cons containing the (recursive) StrConsList type,
