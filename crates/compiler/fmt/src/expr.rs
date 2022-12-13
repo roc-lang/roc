@@ -556,8 +556,13 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
 
             for segments in lines.iter() {
                 for seg in segments.iter() {
-                    buf.indent(indent);
-                    format_str_segment(seg, buf, indent);
+                    // only add indent if the line isn't empty
+                    if *seg != StrSegment::Plaintext("\n") {
+                        buf.indent(indent);
+                        format_str_segment(seg, buf, indent);
+                    } else {
+                        buf.newline();
+                    }
                 }
 
                 buf.newline();

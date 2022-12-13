@@ -1114,7 +1114,15 @@ fn finish_parsing_alias_or_opaque<'a>(
                     Ok(good) => {
                         type_arguments.push(Loc::at(argument.region, good));
                     }
-                    Err(_) => panic!(),
+                    Err(()) => {
+                        return Err((
+                            MadeProgress,
+                            EExpr::Pattern(
+                                arena.alloc(EPattern::NotAPattern(state.pos())),
+                                state.pos(),
+                            ),
+                        ));
+                    }
                 }
             }
 
@@ -1577,8 +1585,8 @@ fn parse_expr_operator<'a>(
                     }
                 }
             }
-            Err((NoProgress, expr)) => {
-                todo!("{:?} {:?}", expr, state)
+            Err((NoProgress, _e)) => {
+                return Err((MadeProgress, EExpr::TrailingOperator(state.pos())));
             }
         },
     }
@@ -1722,10 +1730,17 @@ fn parse_expr_end<'a>(
                         expr_state.consume_spaces(arena);
                         let call = to_call(arena, expr_state.arguments, expr_state.expr);
 
-                        let loc_pattern = Loc::at(
-                            call.region,
-                            expr_to_pattern_help(arena, &call.value).unwrap(),
-                        );
+                        let pattern = expr_to_pattern_help(arena, &call.value).map_err(|()| {
+                            (
+                                MadeProgress,
+                                EExpr::Pattern(
+                                    arena.alloc(EPattern::NotAPattern(state.pos())),
+                                    state.pos(),
+                                ),
+                            )
+                        })?;
+
+                        let loc_pattern = Loc::at(call.region, pattern);
 
                         patterns.insert(0, loc_pattern);
 
