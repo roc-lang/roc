@@ -322,7 +322,6 @@ pub struct Env<'a> {
     pub subs: &'a mut Subs,
     seen_recursion: VecSet<(Variable, Variable)>,
     fixed_variables: VecSet<Variable>,
-    is_inside_lambda_set: bool,
 }
 
 impl<'a> Env<'a> {
@@ -331,7 +330,6 @@ impl<'a> Env<'a> {
             subs,
             seen_recursion: Default::default(),
             fixed_variables: Default::default(),
-            is_inside_lambda_set: false,
         }
     }
 
@@ -1479,21 +1477,14 @@ fn separate_union_lambdas<M: MetaCollector>(
                             //          foo ({} -[ bar U64 ]-> {}) ] -> {}
                             let subs_snapshot = env.subs.snapshot();
                             let pool_snapshot = pool.len();
-                            let outcome = unify_pool(env, pool, var1, var2, mode);
+                            let outcome: Outcome<M> = unify_pool(env, pool, var1, var2, mode);
 
                             if !outcome.mismatches.is_empty() {
+                                // Rolling back will also pull apart any nested lambdas that
+                                // were joined into the same set.
                                 env.subs.rollback_to(subs_snapshot);
                                 pool.truncate(pool_snapshot);
-                                if env.is_inside_lambda_set {
-                                    // If the lambdas being compared are nested, mismatches mean that the
-                                    // transitively-outer lambdas should be treated as disjoint in
-                                    // their ultimate lambda set.
-                                    // As such, do not unify, even disjointly, at this level;
-                                    // force the transient parent to be treated disjointly.
-                                    return Err(outcome);
-                                } else {
-                                    continue 'try_next_right;
-                                }
+                                continue 'try_next_right;
                             } else {
                                 let outcome = unify_pool(env, pool, var1, var2, mode);
                                 whole_outcome.union(outcome);
