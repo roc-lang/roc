@@ -4307,7 +4307,7 @@ pub fn with_hole<'a>(
                 variant_var,
                 assigned,
                 hole,
-                tag_name.clone(),
+                tag_name,
                 procs,
                 layout_cache,
                 args,
@@ -8218,73 +8218,62 @@ fn specialize_symbol<'a>(
                         Err(e) => return_on_layout_error_help!(env, e, "specialize_symbol"),
                     };
 
-                    if procs.is_imported_module_thunk(original) {
-                        let layout = match raw {
-                            RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
-                            RawFunctionLayout::Function(_, lambda_set, _) => {
-                                Layout::LambdaSet(lambda_set)
-                            }
-                        };
+                    match raw {
+                        RawFunctionLayout::ZeroArgumentThunk(layout) => {
+                            let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
+                            let top_level = ProcLayout::from_raw(
+                                env.arena,
+                                &layout_cache.interner,
+                                raw,
+                                CapturesNiche::no_niche(),
+                            );
 
-                        let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
-                        let top_level = ProcLayout::from_raw(
-                            env.arena,
-                            &layout_cache.interner,
-                            raw,
-                            CapturesNiche::no_niche(),
-                        );
+                            procs.insert_passed_by_name(
+                                env,
+                                arg_var,
+                                LambdaName::no_niche(original),
+                                top_level,
+                                layout_cache,
+                            );
 
-                        procs.insert_passed_by_name(
-                            env,
-                            arg_var,
-                            LambdaName::no_niche(original),
-                            top_level,
-                            layout_cache,
-                        );
+                            force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
+                        }
+                        RawFunctionLayout::Function(_, lambda_set, _) => {
+                            debug_assert!(!procs.is_imported_module_thunk(original));
 
-                        force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
-                    } else {
-                        // Figure out the lambda set this top-level function is used in.
-                        let lambda_set = match raw {
-                            RawFunctionLayout::Function(_, lambda_set, _) => lambda_set,
-                            RawFunctionLayout::ZeroArgumentThunk(_) => internal_error!(
-                                "ZATs should have been covered in the previous branch"
-                            ),
-                        };
+                            let lambda_name =
+                                find_lambda_name(env, layout_cache, lambda_set, original, &[]);
 
-                        let lambda_name =
-                            find_lambda_name(env, layout_cache, lambda_set, original, &[]);
+                            debug_assert!(
+                                lambda_name.no_captures(),
+                                "imported functions are top-level and should never capture"
+                            );
 
-                        debug_assert!(
-                            lambda_name.no_captures(),
-                            "imported functions are top-level and should never capture"
-                        );
+                            let function_ptr_layout = ProcLayout::from_raw(
+                                env.arena,
+                                &layout_cache.interner,
+                                raw,
+                                lambda_name.captures_niche(),
+                            );
+                            procs.insert_passed_by_name(
+                                env,
+                                arg_var,
+                                lambda_name,
+                                function_ptr_layout,
+                                layout_cache,
+                            );
 
-                        let function_ptr_layout = ProcLayout::from_raw(
-                            env.arena,
-                            &layout_cache.interner,
-                            raw,
-                            lambda_name.captures_niche(),
-                        );
-                        procs.insert_passed_by_name(
-                            env,
-                            arg_var,
-                            lambda_name,
-                            function_ptr_layout,
-                            layout_cache,
-                        );
-
-                        //let_empty_struct(assign_to, env.arena.alloc(result))
-                        construct_closure_data(
-                            env,
-                            procs,
-                            layout_cache,
-                            lambda_set,
-                            lambda_name,
-                            &[],
-                            assign_to,
-                            env.arena.alloc(result),
-                        )
+                            construct_closure_data(
+                                env,
+                                procs,
+                                layout_cache,
+                                lambda_set,
+                                lambda_name,
+                                &[],
+                                assign_to,
+                                env.arena.alloc(result),
+                            )
+                        }
                     }
                 }
 
