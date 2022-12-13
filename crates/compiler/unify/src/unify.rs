@@ -1477,11 +1477,13 @@ fn separate_union_lambdas<M: MetaCollector>(
                             // v1 ~ v2
                             // => {} -[ foo ({} -[ bar Str ]-> {}),
                             //          foo ({} -[ bar U64 ]-> {}) ] -> {}
-                            let snapshot = env.subs.snapshot();
+                            let subs_snapshot = env.subs.snapshot();
+                            let pool_snapshot = pool.len();
                             let outcome = unify_pool(env, pool, var1, var2, mode);
 
                             if !outcome.mismatches.is_empty() {
-                                env.subs.rollback_to(snapshot);
+                                env.subs.rollback_to(subs_snapshot);
+                                pool.truncate(pool_snapshot);
                                 if env.is_inside_lambda_set {
                                     // If the lambdas being compared are nested, mismatches mean that the
                                     // transitively-outer lambdas should be treated as disjoint in
