@@ -37,9 +37,29 @@ convertTypesToFile = \types ->
                 TagUnion (Enumeration { name, tags, size }) ->
                     generateEnumeration buf types type name tags size
 
-                TagUnion _ ->
-                    # TODO: tag union impl.
-                    buf
+                TagUnion (NonRecursive { name, tags, discriminantSize, discriminantOffset }) ->
+                    if !(List.isEmpty tags) then
+                        generateTagUnion buf types id name tags discriminantSize discriminantOffset NonRecursive None
+                    else
+                        buf
+
+                TagUnion (Recursive { name, tags, discriminantSize, discriminantOffset }) ->
+                    if !(List.isEmpty tags) then
+                        generateTagUnion buf types id name tags discriminantSize discriminantOffset Recursive None
+                    else
+                        buf
+
+                TagUnion (NullableWrapped { name, indexOfNullTag, tags, discriminantSize, discriminantOffset }) ->
+                    generateTagUnion buf types id name tags discriminantSize discriminantOffset Recursive (Some indexOfNullTag)
+
+                TagUnion (NullableUnwrapped { name, nullTag, nonNullTag, nonNullPayload, whichTagIsNull }) ->
+                    generateNullableUnwrapped buf types id name nullTag nonNullTag nonNullPayload whichTagIsNull
+
+                TagUnion (SingleTagStruct { name, tagName, payloadFields }) ->
+                    generateSingleTagStruct buf types name tagName payloadFields
+
+                TagUnion (NonNullableUnwrapped { name, tagName, payload }) ->
+                    generateTagUnion buf types id name [{ name: tagName, payload: Some payload }] 0 0 Recursive None
 
                 Function _ ->
                     # TODO: actually generate glue functions.
@@ -136,6 +156,15 @@ generateEnumTags = \accum, index, name ->
 generateEnumTagsDebug = \name ->
     \accum, tagName ->
         Str.concat accum "\(indent)\(indent)\(indent)Self::\(tagName) => f.write_str(\"\(name)::\(tagName)\"),\n"
+
+generateTagUnion = \buf, _types, _id, _name, _tags, _discriminantSize, _discriminantOffset, _recursiveness, _nullTagIndex ->
+    Str.concat buf "// TODO: TagUnion\n\n"
+
+generateNullableUnwrapped = \buf, _types, _id, _name, _nullTag, _nonNullTag, _nonNullPayload, _whichTagIsNull ->
+    Str.concat buf "// TODO: TagUnion NullableUnwrapped\n\n"
+
+generateSingleTagStruct = \buf, _types, _name, _tagName, _payloadFields ->
+    Str.concat buf "// TODO: TagUnion SingleTagStruct\n\n"
 
 addDeriveStr = \buf, types, type, includeDebug ->
     # TODO: full derive impl porting.
