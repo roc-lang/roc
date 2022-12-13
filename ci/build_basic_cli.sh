@@ -18,4 +18,4 @@ mkdir roc_nightly && cd roc_nightly && curl -OL $RELEASE_URL
 ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 
 # build the basic cli platform
-./roc build basic-cli/examples/file.roc
+./roc build ../basic-cli/examples/file.roc
