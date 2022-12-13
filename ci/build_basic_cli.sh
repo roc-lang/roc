@@ -19,3 +19,5 @@ ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 
 # build the basic cli platform
 ./roc build ../basic-cli/examples/file.roc
+
+cd ..
