@@ -2402,6 +2402,9 @@ fn update<'a>(
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::Valid(to_platform);
                     }
+                    Package { config_shorthand } => {
+                        work.extend(state.dependencies.notify_package(config_shorthand));
+                    }
                     Platform {
                         config_shorthand,
                         provides,
@@ -4215,9 +4218,13 @@ fn build_header<'a>(
                 );
             }
 
-            // Platforms do not have names. This is important because otherwise
+            // Platform modules do not have names. This is important because otherwise
             // those names end up in host-generated symbols, and they may contain
             // characters that hosts might not allow in their function names.
+            String::new().into()
+        }
+        HeaderType::Package { .. } => {
+            // Package modules do not have names.
             String::new().into()
         }
         HeaderType::Interface { name, .. }
@@ -5111,7 +5118,11 @@ fn canonicalize_and_constrain<'a>(
     // Generate documentation information
     // TODO: store timing information?
     let module_docs = match header_type {
-        HeaderType::Platform { .. } | HeaderType::App { .. } => None,
+        HeaderType::App { .. } => None,
+        HeaderType::Platform { .. } | HeaderType::Package { .. } => {
+            // TODO: actually generate docs for platform and package modules.
+            None
+        }
         HeaderType::Interface { name, .. }
         | HeaderType::Builtin { name, .. }
         | HeaderType::Hosted { name, .. } => {

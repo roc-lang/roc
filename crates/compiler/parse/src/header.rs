@@ -24,6 +24,10 @@ pub enum HeaderType<'a> {
         name: ModuleName<'a>,
         generates_with: &'a [Symbol],
     },
+    Package {
+        /// usually something other than `pf`
+        config_shorthand: &'a str,
+    },
     Platform {
         opt_app_module_id: Option<ModuleId>,
         /// the name and type scheme of the main function (required by the platform)
