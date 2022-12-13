@@ -584,7 +584,6 @@ impl From<&RocNum> for roc_type::RocNum {
             RocNum::U128 => roc_type::RocNum::U128,
             RocNum::F32 => roc_type::RocNum::F32,
             RocNum::F64 => roc_type::RocNum::F64,
-            RocNum::F128 => roc_type::RocNum::F128,
             RocNum::Dec => roc_type::RocNum::Dec,
         }
     }

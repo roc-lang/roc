@@ -491,26 +491,24 @@ struct RocType_RocDict {
 #[repr(u8)]
 pub enum RocNum {
     Dec = 0,
-    F128 = 1,
-    F32 = 2,
-    F64 = 3,
-    I128 = 4,
-    I16 = 5,
-    I32 = 6,
-    I64 = 7,
-    I8 = 8,
-    U128 = 9,
-    U16 = 10,
-    U32 = 11,
-    U64 = 12,
-    U8 = 13,
+    F32 = 1,
+    F64 = 2,
+    I128 = 3,
+    I16 = 4,
+    I32 = 5,
+    I64 = 6,
+    I8 = 7,
+    U128 = 8,
+    U16 = 9,
+    U32 = 10,
+    U64 = 11,
+    U8 = 12,
 }
 
 impl core::fmt::Debug for RocNum {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Dec => f.write_str("RocNum::Dec"),
-            Self::F128 => f.write_str("RocNum::F128"),
             Self::F32 => f.write_str("RocNum::F32"),
             Self::F64 => f.write_str("RocNum::F64"),
             Self::I128 => f.write_str("RocNum::I128"),
