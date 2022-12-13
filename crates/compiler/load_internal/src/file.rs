@@ -3938,8 +3938,14 @@ fn parse_header<'a>(
                 module_timing,
             );
 
-            let mut messages = load_packages(
+            let mut messages = Vec::with_capacity(packages.len() + 1);
+
+            // It's important that the app header is first in the list!
+            messages.push(Msg::Header(resolved_header));
+
+            load_packages(
                 packages,
+                &mut messages,
                 roc_cache_dir,
                 app_file_dir,
                 arena,
@@ -3947,8 +3953,6 @@ fn parse_header<'a>(
                 module_ids,
                 ident_ids_by_module,
             );
-
-            messages.push(Msg::Header(resolved_header));
 
             // Look at the app module's `to` keyword to determine which package was the platform.
             match header.provides.to.value {
@@ -4017,14 +4021,14 @@ fn parse_header<'a>(
 
 fn load_packages<'a>(
     packages: &[Loc<PackageEntry<'a>>],
+    load_messages: &mut Vec<Msg<'a>>,
     roc_cache_dir: RocCacheDir,
     cwd: PathBuf,
     arena: &'a Bump,
     module_id: ModuleId,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
-) -> Vec<Msg<'a>> {
-    let mut load_messages = Vec::with_capacity(packages.len() + 1);
+) {
     let mut problems = Vec::new();
 
     // Load all the packages
@@ -4095,8 +4099,6 @@ fn load_packages<'a>(
     for _problem in problems {
         // TODO see dbg! message above
     }
-
-    load_messages
 }
 
 /// Load a module by its filename
