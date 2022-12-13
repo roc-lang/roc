@@ -172,7 +172,7 @@ fn unroll_newtypes_and_aliases<'a, 'env>(
                 var = field.into_inner();
             }
             Content::Alias(name, _, real_var, kind) => {
-                if *name == Symbol::BOOL_BOOL {
+                if *name == Symbol::BOOL_BOOL || name.module_id() == ModuleId::NUM {
                     return (newtype_containers, alias_content, var);
                 }
                 // We need to pass through aliases too, because their underlying types may have
@@ -185,7 +185,7 @@ fn unroll_newtypes_and_aliases<'a, 'env>(
                 //
                 // At the end of the day what we should show to the user is the alias content, not
                 // what's inside, so keep that around too.
-                if *kind == AliasKind::Opaque && name.module_id() != ModuleId::NUM {
+                if *kind == AliasKind::Opaque {
                     newtype_containers.push(NewtypeKind::Opaque(*name));
                 }
                 alias_content = Some(content);
@@ -361,10 +361,11 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             use Content::*;
             use IntWidth::*;
 
-            match (alias_content, int_width) {
-                (Some(Alias(Symbol::NUM_UNSIGNED8, ..)), U8) => num_helper!(u8),
+            match (env.subs.get_content_without_compacting(raw_var), int_width) {
+                (Alias(Symbol::NUM_UNSIGNED8 | Symbol::NUM_U8, ..), U8) => num_helper!(u8),
                 (_, U8) => {
                     // This is not a number, it's a tag union or something else
+                    dbg!(&alias_content);
                     app.call_function(main_fn_name, |_mem: &A::Memory, num: u8| {
                         byte_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
                     })
@@ -565,7 +566,13 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             use IntWidth::*;
 
             match int_width {
-                U8 => byte_to_ast(env, mem.deref_u8(addr), raw_content),
+                U8 => {
+                    if matches!(raw_content, Content::Alias(name, ..) if name.module_id() == ModuleId::NUM) {
+                        helper!(deref_u8, u8)
+                    } else {
+                        byte_to_ast(env, mem.deref_u8(addr), raw_content)
+                    }
+                },
                 U16 => helper!(deref_u16, u16),
                 U32 => helper!(deref_u32, u32),
                 U64 => helper!(deref_u64, u64),
