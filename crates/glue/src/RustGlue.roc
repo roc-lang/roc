@@ -34,6 +34,9 @@ convertTypesToFile = \types ->
                 TagUnionPayload { name, fields } ->
                     generateStruct buf types id name (nameTagUnionPayloadFields fields) Private
 
+                TagUnion (Enumeration { name, tags, size }) ->
+                    generateEnumeration buf types type name tags size
+
                 TagUnion _ ->
                     # TODO: tag union impl.
                     buf
@@ -101,6 +104,38 @@ nameTagUnionPayloadFields = \fields ->
         discStr = Num.toStr discriminant
 
         { name: "f\(discStr)", id }
+
+generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
+    escapedName = escapeKW name
+
+    reprBits = tagBytes * 8 |> Num.toStr
+
+    buf
+    |> addDeriveStr types enumType ExcludeDebug
+    |> Str.concat "#[repr(u\(reprBits))]\npub enum \(escapedName) {\n"
+    |> \b -> walkWithIndex tags b generateEnumTags
+    |>
+    # Enums require a custom debug impl to ensure naming is identical on all platforms.
+    Str.concat
+        """
+        }
+        
+        impl core::fmt::Debug for \(escapedName) {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                match self {
+        
+        """
+    |> \b -> List.walk tags b (generateEnumTagsDebug name)
+    |> Str.concat "\(indent)\(indent)}\n\(indent)}\n}\n\n"
+
+generateEnumTags = \accum, index, name ->
+    indexStr = Num.toStr index
+
+    Str.concat accum "\(indent)\(name) = \(indexStr),\n"
+
+generateEnumTagsDebug = \name ->
+    \accum, tagName ->
+        Str.concat accum "\(indent)\(indent)\(indent)Self::\(tagName) => f.write_str(\"\(name)::\(tagName)\"),\n"
 
 addDeriveStr = \buf, types, type, includeDebug ->
     # TODO: full derive impl porting.
