@@ -21,7 +21,3 @@ ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 ./roc build ../basic-cli/examples/file.roc
 
 cd ..
-
-ls
-
-ls src

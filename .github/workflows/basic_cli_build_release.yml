@@ -19,4 +19,4 @@ jobs:
         with:
           name: macos-apple-silicon-files
           path: |
-            src/macos-arm64.o
+            basic-cli/src/macos-arm64.o
