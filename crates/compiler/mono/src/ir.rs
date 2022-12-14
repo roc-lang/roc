@@ -1625,6 +1625,7 @@ pub enum Stmt<'a> {
         condition: Symbol,
         region: Region,
         lookups: &'a [Symbol],
+        variables: &'a [Variable],
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
@@ -1632,6 +1633,7 @@ pub enum Stmt<'a> {
         condition: Symbol,
         region: Region,
         lookups: &'a [Symbol],
+        variables: &'a [Variable],
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
@@ -6571,6 +6573,7 @@ pub fn from_can<'a>(
             let cond_symbol = env.unique_symbol();
 
             let mut lookups = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
 
             for ExpectLookup {
                 symbol,
@@ -6587,16 +6590,27 @@ pub fn from_can<'a>(
                     ),
                     None => symbol,
                 };
+
+                let expectation_subs = env
+                    .expectation_subs
+                    .as_deref_mut()
+                    .expect("if expects are compiled, their subs should be available");
+                let variable = expectation_subs.fresh_unnamed_flex_var();
+
                 if !env.subs.is_function(var) {
                     // Exclude functions from lookups
                     lookups.push(symbol);
+                    variables.push(variable);
                 }
             }
+
+            let variables = variables.into_bump_slice();
 
             let mut stmt = Stmt::Expect {
                 condition: cond_symbol,
                 region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
+                variables,
                 remainder: env.arena.alloc(rest),
             };
 
@@ -6610,13 +6624,7 @@ pub fn from_can<'a>(
                 env.arena.alloc(stmt),
             );
 
-            let expectation_subs = env
-                .expectation_subs
-                .as_deref_mut()
-                .expect("if expects are compiled, their subs should be available");
-            for ExpectLookup { var, .. } in lookups_in_cond {
-                storage_copy_var_to(&mut Default::default(), env.subs, expectation_subs, var);
-            }
+            store_specialized_expectation_lookups(env, lookups_in_cond, variables);
 
             stmt
         }
@@ -6630,6 +6638,7 @@ pub fn from_can<'a>(
             let cond_symbol = env.unique_symbol();
 
             let mut lookups = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
 
             for ExpectLookup {
                 symbol,
@@ -6646,16 +6655,27 @@ pub fn from_can<'a>(
                     ),
                     None => symbol,
                 };
+
+                let expectation_subs = env
+                    .expectation_subs
+                    .as_deref_mut()
+                    .expect("if expects are compiled, their subs should be available");
+                let variable = expectation_subs.fresh_unnamed_flex_var();
+
                 if !env.subs.is_function(var) {
                     // Exclude functions from lookups
                     lookups.push(symbol);
+                    variables.push(variable);
                 }
             }
+
+            let variables = variables.into_bump_slice();
 
             let mut stmt = Stmt::ExpectFx {
                 condition: cond_symbol,
                 region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
+                variables,
                 remainder: env.arena.alloc(rest),
             };
 
@@ -6669,13 +6689,7 @@ pub fn from_can<'a>(
                 env.arena.alloc(stmt),
             );
 
-            let expectation_subs = env
-                .expectation_subs
-                .as_deref_mut()
-                .expect("if expects are compiled, their subs should be available");
-            for ExpectLookup { var, .. } in lookups_in_cond {
-                storage_copy_var_to(&mut Default::default(), env.subs, expectation_subs, var);
-            }
+            store_specialized_expectation_lookups(env, lookups_in_cond, variables);
 
             stmt
         }
@@ -6688,6 +6702,7 @@ pub fn from_can<'a>(
         } => {
             let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
 
+            // TODO: need to store the specialized variable of this dbg in the expectation_subs
             let call = crate::ir::Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::Dbg,
@@ -6756,6 +6771,21 @@ pub fn from_can<'a>(
             let hole = env.arena.alloc(Stmt::Ret(symbol));
             with_hole(env, can_expr, variable, procs, layout_cache, symbol, hole)
         }
+    }
+}
+
+fn store_specialized_expectation_lookups(
+    env: &mut Env,
+    lookups_in_cond: impl IntoIterator<Item = ExpectLookup>,
+    variables: &[Variable],
+) {
+    let subs = &env.subs;
+    let expectation_subs = env.expectation_subs.as_deref_mut().unwrap();
+    for (ExpectLookup { var, .. }, stored_var) in lookups_in_cond.into_iter().zip(variables) {
+        let stored_specialized_var =
+            storage_copy_var_to(&mut Default::default(), subs, expectation_subs, var);
+        let stored_specialized_desc = expectation_subs.get(stored_specialized_var);
+        expectation_subs.union(*stored_var, stored_specialized_var, stored_specialized_desc);
     }
 }
 
@@ -7089,6 +7119,7 @@ fn substitute_in_stmt_help<'a>(
             condition,
             region,
             lookups,
+            variables,
             remainder,
         } => {
             let new_remainder =
@@ -7103,6 +7134,7 @@ fn substitute_in_stmt_help<'a>(
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),
+                variables,
                 remainder: new_remainder,
             };
 
@@ -7113,6 +7145,7 @@ fn substitute_in_stmt_help<'a>(
             condition,
             region,
             lookups,
+            variables,
             remainder,
         } => {
             let new_remainder =
@@ -7127,6 +7160,7 @@ fn substitute_in_stmt_help<'a>(
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),
+                variables,
                 remainder: new_remainder,
             };
 

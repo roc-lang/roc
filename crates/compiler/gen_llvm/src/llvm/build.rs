@@ -2586,6 +2586,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             condition: cond_symbol,
             region,
             lookups,
+            variables: _, // TODO
             remainder,
         } => {
             let bd = env.builder;
@@ -2654,6 +2655,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             condition: cond_symbol,
             region,
             lookups,
+            variables: _, // TODO
             remainder,
         } => {
             let bd = env.builder;
