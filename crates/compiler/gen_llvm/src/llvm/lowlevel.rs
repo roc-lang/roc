@@ -244,7 +244,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                             );
 
                             let roc_return_type =
-                                basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
+                                basic_type_from_layout(env, layout).ptr_type(AddressSpace::Zero);
 
                             let roc_return_alloca = env.builder.build_pointer_cast(
                                 zig_return_alloca,
@@ -460,11 +460,12 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                     let return_type = basic_type_from_layout(env, layout);
                     let cast_result = env.builder.build_pointer_cast(
                         result,
-                        return_type.ptr_type(AddressSpace::Generic),
+                        return_type.ptr_type(AddressSpace::Zero),
                         "cast",
                     );
 
-                    env.builder.build_load(cast_result, "load_result")
+                    env.builder
+                        .build_load(return_type, cast_result, "load_result")
                 }
                 Unix => {
                     let result = call_str_bitcode_fn(
@@ -1598,7 +1599,7 @@ fn dec_alloca<'a, 'ctx, 'env>(
 
     let ptr = env.builder.build_pointer_cast(
         alloca,
-        value.get_type().ptr_type(AddressSpace::Generic),
+        value.get_type().ptr_type(AddressSpace::Zero),
         "cast_to_i128_ptr",
     );
 
@@ -1687,7 +1688,7 @@ fn dec_binop_with_overflow<'a, 'ctx, 'env>(
     }
 
     env.builder
-        .build_load(return_alloca, "load_dec")
+        .build_load(return_type, return_alloca, "load_dec")
         .into_struct_value()
 }
 
@@ -1953,7 +1954,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                 );
 
                                 let roc_return_type = basic_type_from_layout(env, return_layout)
-                                    .ptr_type(AddressSpace::Generic);
+                                    .ptr_type(AddressSpace::Zero);
 
                                 let roc_return_alloca = env.builder.build_pointer_cast(
                                     zig_return_alloca,
@@ -2076,15 +2077,19 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
 
     let xored_arg = bd.build_xor(
         arg,
-        bd.build_load(shifted_alloca, shifted_name).into_int_value(),
+        bd.build_load(int_type, shifted_alloca, shifted_name)
+            .into_int_value(),
         "xor_arg_shifted",
     );
 
-    BasicValueEnum::IntValue(bd.build_int_sub(
-        xored_arg,
-        bd.build_load(shifted_alloca, shifted_name).into_int_value(),
-        "sub_xored_shifted",
-    ))
+    BasicValueEnum::IntValue(
+        bd.build_int_sub(
+            xored_arg,
+            bd.build_load(int_type, shifted_alloca, shifted_name)
+                .into_int_value(),
+            "sub_xored_shifted",
+        ),
+    )
 }
 
 fn build_float_unary_op<'a, 'ctx, 'env>(

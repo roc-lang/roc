@@ -33,13 +33,17 @@ pub(crate) fn decode_from_utf8_result<'a, 'ctx, 'env>(
                 .builder
                 .build_bitcast(
                     pointer,
-                    record_type.ptr_type(AddressSpace::Generic),
+                    record_type.ptr_type(AddressSpace::Zero),
                     "to_unnamed",
                 )
                 .into_pointer_value();
 
             builder
-                .build_load(result_ptr_cast, "load_utf8_validate_bytes_result")
+                .build_load(
+                    record_type,
+                    result_ptr_cast,
+                    "load_utf8_validate_bytes_result",
+                )
                 .into_struct_value()
         }
     }

@@ -63,7 +63,9 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
         .get_function(fn_name)
         .unwrap_or_else(|| panic!("Unrecognized builtin function: {:?} - if you're working on the Roc compiler, do you need to rebuild the bitcode? See compiler/builtins/bitcode/README.md", fn_name));
 
-    let call = env.builder.build_call(fn_val, &arguments, "call_builtin");
+    let call = env
+        .builder
+        .build_call(fn_val.get_type(), fn_val, &arguments, "call_builtin");
 
     // Attributes that we propagate from the zig builtin parameters, to the arguments we give to the
     // call. It is undefined behavior in LLVM to have an attribute on a parameter, and then call
@@ -139,7 +141,9 @@ pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
                 .collect();
             call_void_bitcode_fn(env, &fixed_args, fn_name);
 
-            let cc_return_value = env.builder.build_load(cc_return_value_ptr, "read_result");
+            let cc_return_value =
+                env.builder
+                    .build_load(cc_return_type, cc_return_value_ptr, "read_result");
             if roc_return_type.size_of() == cc_return_type.size_of() {
                 cc_return_value
             } else {
@@ -208,7 +212,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    let arg_type = env.context.i8_type().ptr_type(AddressSpace::Zero);
 
     let function_value = crate::llvm::refcounting::build_header_help(
         env,
@@ -245,7 +249,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
 
     for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
-        let basic_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
+        let basic_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Zero);
 
         let cast_ptr = env.builder.build_pointer_cast(
             argument_ptr.into_pointer_value(),
@@ -268,7 +272,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
             // the function doesn't expect a closure argument, nothing to add
         }
         (true, layout) => {
-            let closure_type = basic_type_from_layout(env, &layout).ptr_type(AddressSpace::Generic);
+            let closure_type = basic_type_from_layout(env, &layout).ptr_type(AddressSpace::Zero);
 
             let closure_cast = env
                 .builder
@@ -358,7 +362,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
     let function_value = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Zero);
 
             let function_value = match rc_operation {
                 Mode::Inc | Mode::Dec => crate::llvm::refcounting::build_header_help(
@@ -393,20 +397,9 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
 
             value_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
 
-            let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
+            let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Zero);
 
-            let value = if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
-                env.builder
-                    .build_pointer_cast(value_ptr, value_type, "cast_ptr_to_tag_build_rc_wrapper")
-                    .into()
-            } else {
-                let value_cast = env
-                    .builder
-                    .build_bitcast(value_ptr, value_type, "load_opaque")
-                    .into_pointer_value();
-
-                env.builder.build_load(value_cast, "load_opaque")
-            };
+            let value = load_roc_value(env, *layout, value_ptr, "load_opaque");
 
             match rc_operation {
                 Mode::Inc => {
@@ -453,7 +446,7 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
     let function_value = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Zero);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -482,7 +475,7 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
             value_ptr1.set_name(Symbol::ARG_1.as_str(&env.interns));
             value_ptr2.set_name(Symbol::ARG_2.as_str(&env.interns));
 
-            let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
+            let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Zero);
 
             let value_cast1 = env
                 .builder
@@ -531,7 +524,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
     let function_value = match env.module.get_function(fn_name) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Zero);
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -566,7 +559,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             value_ptr2.set_name(Symbol::ARG_3.as_str(&env.interns));
 
             let value_type = basic_type_from_layout(env, layout);
-            let value_ptr_type = value_type.ptr_type(AddressSpace::Generic);
+            let value_ptr_type = value_type.ptr_type(AddressSpace::Zero);
 
             let value_cast1 = env
                 .builder
@@ -578,8 +571,12 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                 .build_bitcast(value_ptr2, value_ptr_type, "load_opaque")
                 .into_pointer_value();
 
-            let value1 = env.builder.build_load(value_cast1, "load_opaque");
-            let value2 = env.builder.build_load(value_cast2, "load_opaque");
+            let value1 = env
+                .builder
+                .build_load(value_type, value_cast1, "load_opaque");
+            let value2 = env
+                .builder
+                .build_load(value_type, value_cast2, "load_opaque");
 
             let default = [value1.into(), value2.into()];
 
@@ -592,15 +589,17 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                         &default
                     }
                     other => {
-                        let closure_type =
-                            basic_type_from_layout(env, &other).ptr_type(AddressSpace::Generic);
+                        let closure_type = basic_type_from_layout(env, &other);
+                        let closure_ptr_type = closure_type.ptr_type(AddressSpace::Zero);
 
                         let closure_cast = env
                             .builder
-                            .build_bitcast(closure_ptr, closure_type, "load_opaque")
+                            .build_bitcast(closure_ptr, closure_ptr_type, "load_opaque")
                             .into_pointer_value();
 
-                        let closure_data = env.builder.build_load(closure_cast, "load_opaque");
+                        let closure_data =
+                            env.builder
+                                .build_load(closure_type, closure_cast, "load_opaque");
 
                         env.arena
                             .alloc([value1.into(), value2.into(), closure_data.into()])
@@ -609,6 +608,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                 };
 
             let call = env.builder.build_call(
+                roc_function.get_type(),
                 roc_function,
                 arguments_cast,
                 "call_user_defined_compare_function",
@@ -648,7 +648,8 @@ impl<'ctx> BitcodeReturnValue<'ctx> {
         match self {
             BitcodeReturnValue::List(result) => {
                 call_void_bitcode_fn(env, arguments, fn_name);
-                env.builder.build_load(*result, "load_list")
+                // env.builder.build_load(*result, "load_list")
+                todo!()
             }
             BitcodeReturnValue::Str(result) => {
                 call_void_bitcode_fn(env, arguments, fn_name);
@@ -764,7 +765,7 @@ fn ptr_len_cap<'a, 'ctx, 'env>(
 
     let ptr = env.builder.build_int_to_ptr(
         lower_word,
-        env.context.i8_type().ptr_type(AddressSpace::Generic),
+        env.context.i8_type().ptr_type(AddressSpace::Zero),
         "list_ptr",
     );
 

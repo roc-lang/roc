@@ -434,9 +434,12 @@ fn build_list_eq<'a, 'ctx, 'env>(
     env.builder.position_at_end(block);
     env.builder
         .set_current_debug_location(env.context, di_location);
-    let call = env
-        .builder
-        .build_call(function, &[list1.into(), list2.into()], "list_eq");
+    let call = env.builder.build_call(
+        function.get_type(),
+        function,
+        &[list1.into(), list2.into()],
+        "list_eq",
+    );
 
     call.set_call_convention(FAST_CALL_CONV);
 
@@ -508,7 +511,7 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
 
         let builder = env.builder;
         let element_type = basic_type_from_layout(env, element_layout);
-        let ptr_type = element_type.ptr_type(AddressSpace::Generic);
+        let ptr_type = element_type.ptr_type(AddressSpace::Zero);
         let ptr1 = load_list_ptr(env.builder, list1, ptr_type);
         let ptr2 = load_list_ptr(env.builder, list2, ptr_type);
 
@@ -527,7 +530,9 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
         builder.build_unconditional_branch(loop_bb);
         builder.position_at_end(loop_bb);
 
-        let curr_index = builder.build_load(index_alloca, "index").into_int_value();
+        let curr_index = builder
+            .build_load(env.ptr_int(), index_alloca, "index")
+            .into_int_value();
 
         // #index < end
         let loop_end_cond =
@@ -542,14 +547,16 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
             builder.position_at_end(body_bb);
 
             let elem1 = {
-                let elem_ptr =
-                    unsafe { builder.build_in_bounds_gep(ptr1, &[curr_index], "load_index") };
+                let elem_ptr = unsafe {
+                    builder.build_in_bounds_gep(ptr2.get_type(), ptr1, &[curr_index], "load_index")
+                };
                 load_roc_value(env, *element_layout, elem_ptr, "get_elem")
             };
 
             let elem2 = {
-                let elem_ptr =
-                    unsafe { builder.build_in_bounds_gep(ptr2, &[curr_index], "load_index") };
+                let elem_ptr = unsafe {
+                    builder.build_in_bounds_gep(ptr2.get_type(), ptr2, &[curr_index], "load_index")
+                };
                 load_roc_value(env, *element_layout, elem_ptr, "get_elem")
             };
 
@@ -642,9 +649,12 @@ fn build_struct_eq<'a, 'ctx, 'env>(
     env.builder.position_at_end(block);
     env.builder
         .set_current_debug_location(env.context, di_location);
-    let call = env
-        .builder
-        .build_call(function, &[struct1.into(), struct2.into()], "struct_eq");
+    let call = env.builder.build_call(
+        function.get_type(),
+        function,
+        &[struct1.into(), struct2.into()],
+        "struct_eq",
+    );
 
     call.set_call_convention(FAST_CALL_CONV);
 
@@ -825,9 +835,12 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     env.builder.position_at_end(block);
     env.builder
         .set_current_debug_location(env.context, di_location);
-    let call = env
-        .builder
-        .build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
+    let call = env.builder.build_call(
+        function.get_type(),
+        function,
+        &[tag1.into(), tag2.into()],
+        "tag_eq",
+    );
 
     call.set_call_convention(FAST_CALL_CONV);
 
@@ -1233,15 +1246,15 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
 ) -> IntValue<'ctx> {
     let struct_layout = Layout::struct_no_name_order(field_layouts);
 
-    let wrapper_type = basic_type_from_layout(env, &struct_layout);
-    debug_assert!(wrapper_type.is_struct_type());
+    let struct_type = basic_type_from_layout(env, &struct_layout);
+    debug_assert!(struct_type.is_struct_type());
 
     // cast the opaque pointer to a pointer of the correct shape
     let struct1_ptr = env
         .builder
         .build_bitcast(
             tag1,
-            wrapper_type.ptr_type(AddressSpace::Generic),
+            struct_type.ptr_type(AddressSpace::Zero),
             "opaque_to_correct",
         )
         .into_pointer_value();
@@ -1250,19 +1263,19 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
         .builder
         .build_bitcast(
             tag2,
-            wrapper_type.ptr_type(AddressSpace::Generic),
+            struct_type.ptr_type(AddressSpace::Zero),
             "opaque_to_correct",
         )
         .into_pointer_value();
 
     let struct1 = env
         .builder
-        .build_load(struct1_ptr, "load_struct1")
+        .build_load(struct_type, struct1_ptr, "load_struct1")
         .into_struct_value();
 
     let struct2 = env
         .builder
-        .build_load(struct2_ptr, "load_struct2")
+        .build_load(struct_type, struct2_ptr, "load_struct2")
         .into_struct_value();
 
     build_struct_eq(
@@ -1322,9 +1335,12 @@ fn build_box_eq<'a, 'ctx, 'env>(
     env.builder.position_at_end(block);
     env.builder
         .set_current_debug_location(env.context, di_location);
-    let call = env
-        .builder
-        .build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
+    let call = env.builder.build_call(
+        function.get_type(),
+        function,
+        &[tag1.into(), tag2.into()],
+        "tag_eq",
+    );
 
     call.set_call_convention(FAST_CALL_CONV);
 

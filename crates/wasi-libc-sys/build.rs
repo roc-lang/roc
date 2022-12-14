@@ -10,6 +10,7 @@ fn main() {
 
     let out_dir = env::var("OUT_DIR").unwrap();
     let zig_cache_dir = PathBuf::from(&out_dir).join("zig-cache");
+    dbg!(&zig_cache_dir);
     let out_file = PathBuf::from(&out_dir).join("wasi-libc.a");
 
     // Compile a dummy C program with Zig, with our own private cache directory
@@ -33,7 +34,7 @@ fn main() {
         .unwrap()
         .unwrap();
 
-    let compiler_rt_path = find(&zig_cache_dir, &OsString::from("compiler_rt.o"))
+    let compiler_rt_path = find(&zig_cache_dir, &OsString::from("libcompiler_rt.a"))
         .unwrap()
         .unwrap();
 

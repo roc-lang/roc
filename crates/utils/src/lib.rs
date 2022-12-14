@@ -168,6 +168,18 @@ pub fn root_dir() -> PathBuf {
     path
 }
 
+pub fn pretty_command_string(command: &Command) -> std::ffi::OsString {
+    let mut command_string = std::ffi::OsString::new();
+    command_string.push(command.get_program());
+
+    for arg in command.get_args() {
+        command_string.push(" ");
+        command_string.push(arg);
+    }
+
+    command_string
+}
+
 /// Gives a friendly error if cargo is not installed.
 /// Also makes it easy to track where we use cargo in the codebase.
 pub fn cargo() -> Command {

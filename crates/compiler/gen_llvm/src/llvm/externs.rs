@@ -18,7 +18,7 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
     let builder = env.builder;
 
     let usize_type = env.ptr_int();
-    let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Generic);
+    let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::Zero);
 
     match env.mode {
         super::build::LlvmBackendMode::CliTest => {
@@ -114,6 +114,7 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
 
             // Call libc realloc()
             let call = builder.build_call(
+                libc_realloc_val.get_type(),
                 libc_realloc_val,
                 &[ptr_arg.into(), new_size_arg.into()],
                 "call_libc_realloc",
@@ -216,9 +217,11 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
             let loaded_roc_str = match env.target_info.ptr_width() {
                 roc_target::PtrWidth::Bytes4 => roc_str_arg,
                 // On 64-bit we pass RocStrs by reference internally
-                roc_target::PtrWidth::Bytes8 => {
-                    builder.build_load(roc_str_arg.into_pointer_value(), "load_roc_str")
-                }
+                roc_target::PtrWidth::Bytes8 => builder.build_load(
+                    crate::llvm::convert::zig_str_type(env),
+                    roc_str_arg.into_pointer_value(),
+                    "load_roc_str",
+                ),
             };
 
             env.builder
@@ -265,7 +268,7 @@ pub fn build_longjmp_call(env: &Env) {
         // Call the LLVM-intrinsic longjmp: `void @llvm.eh.sjlj.longjmp(i8* %setjmp_buf)`
         let jmp_buf_i8p = env.builder.build_bitcast(
             jmp_buf,
-            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            env.context.i8_type().ptr_type(AddressSpace::Zero),
             "jmp_buf i8*",
         );
         let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[jmp_buf_i8p]);

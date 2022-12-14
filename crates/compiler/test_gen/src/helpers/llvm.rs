@@ -292,7 +292,7 @@ fn create_llvm_module<'a>(
     }
 
     // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
+    env.module.print_to_stderr();
 
     let delayed_errors = if config.ignore_problems {
         String::new()
