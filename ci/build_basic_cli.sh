@@ -14,6 +14,9 @@ mkdir roc_nightly && cd roc_nightly && curl -OL $RELEASE_URL
 # decompress the tar
 ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 
+# for debugging
+./roc version
+
 # build the basic cli platform
 ./roc build ../basic-cli/examples/file.roc
 
