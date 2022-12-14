@@ -281,7 +281,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
             } => {
                 self.check_sym_layout(*cond_symbol, *cond_layout, UseKind::SwitchCond);
                 match self.resolve(*cond_layout) {
-                    Layout::Builtin(Builtin::Int(int_width)) if !int_width.is_signed() => {}
+                    Layout::Builtin(Builtin::Int(_)) => {}
                     Layout::Builtin(Builtin::Bool) => {}
                     _ => self.problem(ProblemKind::BadSwitchConditionLayout {
                         found_layout: *cond_layout,
