@@ -105,17 +105,22 @@ generateStruct = \buf, types, id, name, fields, visibility ->
     structType = getType types id
 
     buf
-    |> addDeriveStr types structType IncludeDebug
+    |> generateDeriveStr types structType IncludeDebug
     |> Str.concat "#[repr(\(repr))]\n\(pub) struct \(escapedName) {\n"
-    |> \b -> List.walk fields b (generateStructFields types)
+    |> \b -> List.walk fields b (generateStructFields types Public)
     |> Str.concat "}\n\n"
 
-generateStructFields = \types ->
+generateStructFields = \types, visibility ->
     \accum, { name: fieldName, id } ->
         typeStr = typeName types id
         escapedFieldName = escapeKW fieldName
 
-        Str.concat accum "\(indent)pub \(escapedFieldName): \(typeStr),\n"
+        pub =
+            when visibility is
+                Public -> "pub"
+                Private -> ""
+
+        Str.concat accum "\(indent)\(pub) \(escapedFieldName): \(typeStr),\n"
 
 nameTagUnionPayloadFields = \fields ->
     # Tag union payloads have numbered fields, so we prefix them
@@ -131,7 +136,7 @@ generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
     reprBits = tagBytes * 8 |> Num.toStr
 
     buf
-    |> addDeriveStr types enumType ExcludeDebug
+    |> generateDeriveStr types enumType ExcludeDebug
     |> Str.concat "#[repr(u\(reprBits))]\npub enum \(escapedName) {\n"
     |> \b -> walkWithIndex tags b generateEnumTags
     |>
@@ -163,11 +168,84 @@ generateTagUnion = \buf, _types, _id, _name, _tags, _discriminantSize, _discrimi
 generateNullableUnwrapped = \buf, _types, _id, _name, _nullTag, _nonNullTag, _nonNullPayload, _whichTagIsNull ->
     Str.concat buf "// TODO: TagUnion NullableUnwrapped\n\n"
 
-generateSingleTagStruct = \buf, _types, _name, _tagName, _payloadFields ->
-    Str.concat buf "// TODO: TagUnion SingleTagStruct\n\n"
+generateSingleTagStruct = \buf, types, name, tagName, payloadFields ->
+    # Store single-tag unions as structs rather than enums,
+    # because they have only one alternative. However, still
+    # offer the usual tag union APIs.
+    escapedName = escapeKW name
+    repr =
+        if List.len payloadFields <= 1 then
+            "transparent"
+        else
+            "C"
 
-addDeriveStr = \buf, types, type, includeDebug ->
-    # TODO: full derive impl porting.
+    asStructFields =
+        List.mapWithIndex payloadFields \id, index ->
+            indexStr = Num.toStr index
+
+            { name: "f\(indexStr)", id }
+    asStructType =
+        Struct {
+            name,
+            fields: asStructFields,
+        }
+
+    buf
+    |> generateDeriveStr types asStructType ExcludeDebug
+    |> Str.concat "#[repr(\(repr))]\npub struct \(escapedName) "
+    |> \b ->
+        if List.isEmpty payloadFields then
+            generateZeroElementSingleTagStruct b name tagName
+        else
+            generateMultiElementSingleTagStruct b types name tagName payloadFields asStructFields
+
+generateMultiElementSingleTagStruct = \buf, types, name, _tagName, _payloadFields, asStructFields ->
+    buf
+    |> Str.concat "{\n"
+    |> \b -> List.walk asStructFields b (generateStructFields types Private)
+    |> Str.concat "}\n\n"
+    |> Str.concat
+        """
+        impl \(name) {
+        }
+        
+        
+        """
+
+generateZeroElementSingleTagStruct = \buf, name, tagName ->
+    # A single tag with no payload is a zero-sized unit type, so
+    # represent it as a zero-sized struct (e.g. "struct Foo()").
+    buf
+    |> Str.concat "();\n\n"
+    |> Str.concat
+        """
+        impl \(name) {
+            /// A tag named \(tagName), which has no payload.
+            pub const \(tagName): Self = Self();
+        
+            /// Other `into_` methods return a payload, but since \(tagName) tag
+            /// has no payload, this does nothing and is only here for completeness.
+            pub fn into_\(tagName)(self) {
+                ()
+            }
+        
+            /// Other `as_` methods return a payload, but since \(tagName) tag
+            /// has no payload, this does nothing and is only here for completeness.
+            pub fn as_\(tagName)(&self) {
+                ()
+            }
+        }
+        
+        impl core::fmt::Dbg for \(name) {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.write_str("\(name)::\(tagName)")
+            }
+        }
+        
+        
+        """
+
+generateDeriveStr = \buf, types, type, includeDebug ->
     buf
     |> Str.concat "#[derive(Clone, "
     |> \b ->
