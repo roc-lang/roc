@@ -158,6 +158,7 @@ pub(crate) fn notify_parent_dbg(env: &Env, shared_memory: &SharedMemoryPointer) 
 //     ..
 //     lookup_val_n  (varsize)
 //
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,

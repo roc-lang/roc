@@ -25,7 +25,7 @@ use roc_mono::{ir::OptLevel, layout::Layout};
 use roc_region::all::Region;
 use roc_reporting::{error::expect::Renderer, report::RenderTarget};
 use roc_target::TargetInfo;
-use roc_types::subs::{Subs, Variable};
+use roc_types::subs::Subs;
 use target_lexicon::Triple;
 
 pub struct ExpectMemory<'a> {
@@ -471,7 +471,7 @@ pub fn render_dbgs_in_memory<'a>(
     )
 }
 
-fn split_expect_lookups(subs: &Subs, lookups: &[ExpectLookup]) -> (Vec<Symbol>, Vec<Variable>) {
+fn split_expect_lookups(subs: &Subs, lookups: &[ExpectLookup]) -> Vec<Symbol> {
     lookups
         .iter()
         .filter_map(
@@ -485,11 +485,11 @@ fn split_expect_lookups(subs: &Subs, lookups: &[ExpectLookup]) -> (Vec<Symbol>, 
                 if subs.is_function(*var) {
                     None
                 } else {
-                    Some((*symbol, *var))
+                    Some(*symbol)
                 }
             },
         )
-        .unzip()
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -523,15 +523,7 @@ fn render_dbg_failure<'a>(
 
     let subs = arena.alloc(&mut data.subs);
 
-    let current = ExpectLookup {
-        symbol: current.symbol,
-        var: current.var,
-        ability_info: current.ability_info,
-    };
-
-    let (_symbols, variables) = split_expect_lookups(subs, &[current]);
-
-    let (offset, expressions) = crate::get_values(
+    let (offset, expressions, _variables) = crate::get_values(
         target_info,
         arena,
         subs,
@@ -539,7 +531,7 @@ fn render_dbg_failure<'a>(
         layout_interner,
         start,
         frame.start_offset,
-        &variables,
+        1,
     );
 
     renderer.render_dbg(writer, &expressions, expect_region, failure_region)?;
@@ -575,9 +567,9 @@ fn render_expect_failure<'a>(
         Some(current) => current,
     };
 
-    let (symbols, variables) = split_expect_lookups(&data.subs, current);
+    let symbols = split_expect_lookups(&data.subs, current);
 
-    let (offset, expressions) = crate::get_values(
+    let (offset, expressions, variables) = crate::get_values(
         target_info,
         arena,
         &data.subs,
@@ -585,7 +577,7 @@ fn render_expect_failure<'a>(
         layout_interner,
         start,
         frame.start_offset,
-        &variables,
+        symbols.len(),
     );
 
     renderer.render_failure(
