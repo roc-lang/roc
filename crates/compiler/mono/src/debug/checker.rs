@@ -309,14 +309,12 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 condition,
                 region: _,
                 lookups,
-                layouts,
                 remainder,
             }
             | &Stmt::ExpectFx {
                 condition,
                 region: _,
                 lookups,
-                layouts,
                 remainder,
             } => {
                 self.check_sym_layout(
@@ -324,8 +322,8 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     Layout::Builtin(Builtin::Bool),
                     UseKind::ExpectCond,
                 );
-                for (sym, lay) in lookups.iter().zip(layouts) {
-                    self.check_sym_layout(*sym, *lay, UseKind::ExpectLookup);
+                for sym in lookups.iter() {
+                    self.check_sym_exists(*sym);
                 }
                 self.check_stmt(remainder);
             }

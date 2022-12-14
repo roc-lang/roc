@@ -2159,3 +2159,17 @@ fn issue_4705() {
         "###
     )
 }
+
+#[mono_test(mode = "test")]
+fn issue_4749() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports [Json]
+
+        expect
+            input = [82, 111, 99]
+            got = Decode.fromBytes input Json.fromUtf8 
+            got == Ok "Roc"
+        "###
+    )
+}

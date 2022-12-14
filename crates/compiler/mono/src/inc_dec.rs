@@ -1199,7 +1199,6 @@ impl<'a, 'i> Context<'a, 'i> {
                 condition,
                 region,
                 lookups,
-                layouts,
             } => {
                 let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
 
@@ -1207,7 +1206,6 @@ impl<'a, 'i> Context<'a, 'i> {
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
                     remainder: b,
                 });
 
@@ -1223,7 +1221,6 @@ impl<'a, 'i> Context<'a, 'i> {
                 condition,
                 region,
                 lookups,
-                layouts,
             } => {
                 let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
 
@@ -1231,7 +1228,6 @@ impl<'a, 'i> Context<'a, 'i> {
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
                     remainder: b,
                 });
 

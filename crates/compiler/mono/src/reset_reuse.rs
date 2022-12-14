@@ -195,7 +195,6 @@ fn function_s<'a, 'i>(
             condition,
             region,
             lookups,
-            layouts,
             remainder,
         } => {
             let continuation: &Stmt = remainder;
@@ -208,7 +207,6 @@ fn function_s<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
                     remainder: new_continuation,
                 };
 
@@ -220,7 +218,6 @@ fn function_s<'a, 'i>(
             condition,
             region,
             lookups,
-            layouts,
             remainder,
         } => {
             let continuation: &Stmt = remainder;
@@ -233,7 +230,6 @@ fn function_s<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
                     remainder: new_continuation,
                 };
 
@@ -442,7 +438,6 @@ fn function_d_main<'a, 'i>(
             condition,
             region,
             lookups,
-            layouts,
             remainder,
         } => {
             let (b, found) = function_d_main(env, x, c, remainder);
@@ -452,7 +447,6 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
                     remainder: b,
                 };
 
@@ -464,7 +458,6 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
                     remainder: b,
                 };
 
@@ -475,7 +468,6 @@ fn function_d_main<'a, 'i>(
             condition,
             region,
             lookups,
-            layouts,
             remainder,
         } => {
             let (b, found) = function_d_main(env, x, c, remainder);
@@ -485,7 +477,6 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
                     remainder: b,
                 };
 
@@ -497,7 +488,6 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
                     remainder: b,
                 };
 
@@ -660,7 +650,6 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             condition,
             region,
             lookups,
-            layouts,
             remainder,
         } => {
             let b = function_r(env, remainder);
@@ -669,7 +658,6 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
                 condition: *condition,
                 region: *region,
                 lookups,
-                layouts,
                 remainder: b,
             };
 
@@ -680,7 +668,6 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             condition,
             region,
             lookups,
-            layouts,
             remainder,
         } => {
             let b = function_r(env, remainder);
@@ -689,7 +676,6 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
                 condition: *condition,
                 region: *region,
                 lookups,
-                layouts,
                 remainder: b,
             };
 
