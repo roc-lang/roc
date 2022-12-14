@@ -2116,7 +2116,7 @@ fn non_unary_union_with_lambda_set_with_imported_toplevels_issue_4733() {
             app "test" provides [main] to "./platform"
 
             fn = \s ->
-                instr = 
+                instr =
                     if s == "*" then (Op Num.mul)
                     else if s == "+" then (Op Num.add)
                     else Noop
