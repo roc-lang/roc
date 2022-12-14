@@ -2171,7 +2171,7 @@ fn test_always_succeeds(test: &Test) -> bool {
     }
 }
 
-fn sort_edge_tests_by_priority(edges: &mut Vec<Edge<'_>>) {
+fn sort_edge_tests_by_priority(edges: &mut [Edge<'_>]) {
     use std::cmp::{Ordering, Ordering::*};
     use GuardedTest::*;
     edges.sort_by(|(t1, _), (t2, _)| match (t1, t2) {
