@@ -653,19 +653,11 @@ mapWithIndexHelp = \src, dest, func, index, length ->
 ##
 ## If `step` is specified, each integer increases by that much. (`step: 1` is the default.)
 ##
-##     List.range { start: After 1, end: Before 10, step: 3 } # returns [2, 5, 8]
+##     List.range { start: After 0, end: Before 9, step: 3 } # returns [3, 6]
 ##
 ## All of these options are compatible with the others. For example, you can use `At` or `After`
 ## with `start` regardless of what `end` and `step` are set to.
-# TODO: Make the type annotation work
-# range :
-#     {
-#         start : [At (Int a), After (Int a)],
-#         end : [At (Int a), Before (Int a), Length Nat],
-#          # TODO: We want this to be Int *, but that requires the ability to convert or add from Int * to Int a
-#         step ? Int a
-#     }
-#     -> List (Int a) | a has Bool.Eq
+range : _
 range = \{ start, end, step ? 0 } ->
     { incByStep, stepIsPositive } =
         if step == 0 then

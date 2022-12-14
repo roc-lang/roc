@@ -2,37 +2,43 @@ use crate::ast::{Collection, CommentOrNewline, Spaced, Spaces, StrLiteral, TypeA
 use crate::blankspace::space0_e;
 use crate::ident::{lowercase_ident, UppercaseIdent};
 use crate::parser::{optional, then};
-use crate::parser::{specialize, word1, EPackageEntry, EPackageName, Parser};
+use crate::parser::{specialize, word1, EPackageEntry, EPackagePath, Parser};
 use crate::string_literal;
 use bumpalo::collections::Vec;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::Loc;
 use std::fmt::Debug;
 
 #[derive(Debug)]
-pub enum HeaderFor<'a> {
+pub enum HeaderType<'a> {
     App {
+        output_name: StrLiteral<'a>,
         to_platform: To<'a>,
     },
     Hosted {
+        name: ModuleName<'a>,
         generates: UppercaseIdent<'a>,
         generates_with: &'a [Loc<ExposedName<'a>>],
     },
     /// Only created during canonicalization, never actually parsed from source
     Builtin {
+        name: ModuleName<'a>,
         generates_with: &'a [Symbol],
     },
     Platform {
+        opt_app_module_id: Option<ModuleId>,
+        /// the name and type scheme of the main function (required by the platform)
+        /// (type scheme is currently unused)
+        provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
+        requires: &'a [Loc<TypedIdent<'a>>],
+        requires_types: &'a [Loc<UppercaseIdent<'a>>],
+
         /// usually `pf`
         config_shorthand: &'a str,
-        /// the type scheme of the main function (required by the platform)
-        /// (currently unused)
-        #[allow(dead_code)]
-        platform_main_type: TypedIdent<'a>,
-        /// provided symbol to host (commonly `mainForHost`)
-        main_for_host: roc_module::symbol::Symbol,
     },
-    Interface,
+    Interface {
+        name: ModuleName<'a>,
+    },
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -53,9 +59,9 @@ pub enum VersionComparison {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub struct PackageName<'a>(&'a str);
+pub struct PackagePath<'a>(&'a str);
 
-impl<'a> PackageName<'a> {
+impl<'a> PackagePath<'a> {
     pub fn to_str(self) -> &'a str {
         self.0
     }
@@ -65,13 +71,13 @@ impl<'a> PackageName<'a> {
     }
 }
 
-impl<'a> From<PackageName<'a>> for &'a str {
-    fn from(name: PackageName<'a>) -> &'a str {
+impl<'a> From<PackagePath<'a>> for &'a str {
+    fn from(name: PackagePath<'a>) -> &'a str {
         name.0
     }
 }
 
-impl<'a> From<&'a str> for PackageName<'a> {
+impl<'a> From<&'a str> for PackagePath<'a> {
     fn from(string: &'a str) -> Self {
         Self(string)
     }
@@ -94,15 +100,6 @@ impl<'a> ModuleName<'a> {
     pub const fn as_str(&'a self) -> &'a str {
         self.0
     }
-}
-
-#[derive(Debug)]
-pub enum ModuleNameEnum<'a> {
-    /// A filename
-    App(StrLiteral<'a>),
-    Interface(ModuleName<'a>),
-    Hosted(ModuleName<'a>),
-    Platform,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -184,7 +181,7 @@ pub struct HostedHeader<'a> {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum To<'a> {
     ExistingPackage(&'a str),
-    NewPackage(PackageName<'a>),
+    NewPackage(PackagePath<'a>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -212,13 +209,13 @@ pub struct ProvidesTo<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PackageHeader<'a> {
     pub before_name: &'a [CommentOrNewline<'a>],
-    pub name: Loc<PackageName<'a>>,
+    pub name: Loc<PackagePath<'a>>,
 
     pub exposes_keyword: Spaces<'a, ExposesKeyword>,
     pub exposes: Vec<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
 
     pub packages_keyword: Spaces<'a, PackagesKeyword>,
-    pub packages: Vec<'a, (Loc<&'a str>, Loc<PackageName<'a>>)>,
+    pub packages: Vec<'a, (Loc<&'a str>, Loc<PackagePath<'a>>)>,
 
     pub imports_keyword: Spaces<'a, ImportsKeyword>,
     pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
@@ -233,7 +230,7 @@ pub struct PlatformRequires<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlatformHeader<'a> {
     pub before_name: &'a [CommentOrNewline<'a>],
-    pub name: Loc<PackageName<'a>>,
+    pub name: Loc<PackagePath<'a>>,
 
     pub requires: KeywordItem<'a, RequiresKeyword, PlatformRequires<'a>>,
     pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>>,
@@ -274,7 +271,7 @@ pub struct TypedIdent<'a> {
 pub struct PackageEntry<'a> {
     pub shorthand: &'a str,
     pub spaces_after_shorthand: &'a [CommentOrNewline<'a>],
-    pub package_name: Loc<PackageName<'a>>,
+    pub package_path: Loc<PackagePath<'a>>,
 }
 
 pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPackageEntry<'a>> {
@@ -291,19 +288,19 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
                 ),
                 space0_e(EPackageEntry::IndentPackage)
             )),
-            loc!(specialize(EPackageEntry::BadPackage, package_name()))
+            loc!(specialize(EPackageEntry::BadPackage, package_path()))
         ),
         move |(opt_shorthand, package_or_path)| {
             let entry = match opt_shorthand {
                 Some((shorthand, spaces_after_shorthand)) => PackageEntry {
                     shorthand,
                     spaces_after_shorthand,
-                    package_name: package_or_path,
+                    package_path: package_or_path,
                 },
                 None => PackageEntry {
                     shorthand: "",
                     spaces_after_shorthand: &[],
-                    package_name: package_or_path,
+                    package_path: package_or_path,
                 },
             };
 
@@ -312,13 +309,13 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
     )
 }
 
-pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> {
+pub fn package_path<'a>() -> impl Parser<'a, PackagePath<'a>, EPackagePath<'a>> {
     then(
-        loc!(specialize(EPackageName::BadPath, string_literal::parse())),
+        loc!(specialize(EPackagePath::BadPath, string_literal::parse())),
         move |_arena, state, progress, text| match text.value {
-            StrLiteral::PlainLine(text) => Ok((progress, PackageName(text), state)),
-            StrLiteral::Line(_) => Err((progress, EPackageName::Escapes(text.region.start()))),
-            StrLiteral::Block(_) => Err((progress, EPackageName::Multiline(text.region.start()))),
+            StrLiteral::PlainLine(text) => Ok((progress, PackagePath(text), state)),
+            StrLiteral::Line(_) => Err((progress, EPackagePath::Escapes(text.region.start()))),
+            StrLiteral::Block(_) => Err((progress, EPackagePath::Multiline(text.region.start()))),
         },
     )
 }

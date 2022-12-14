@@ -10,11 +10,12 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
 use roc_mono::ir::{
-    Call, CallType, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement, Literal,
-    ModifyRc, OptLevel, Proc, Stmt,
+    Call, CallType, EntryPoint, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement,
+    Literal, ModifyRc, OptLevel, Proc, ProcLayout, SingleEntryPoint, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, CapturesNiche, Layout, RawFunctionLayout, STLayoutInterner, UnionLayout,
+    Builtin, CapturesNiche, FieldOrderHash, Layout, RawFunctionLayout, STLayoutInterner,
+    UnionLayout,
 };
 
 // just using one module for now
@@ -136,7 +137,7 @@ pub fn spec_program<'a, I>(
     arena: &'a Bump,
     interner: &STLayoutInterner<'a>,
     opt_level: OptLevel,
-    opt_entry_point: Option<roc_mono::ir::EntryPoint<'a>>,
+    entry_point: roc_mono::ir::EntryPoint<'a>,
     procs: I,
 ) -> Result<morphic_lib::Solutions>
 where
@@ -226,30 +227,70 @@ where
             m.add_func(func_name, spec)?;
         }
 
-        if let Some(entry_point) = opt_entry_point {
-            // the entry point wrapper
-            let roc_main_bytes = func_name_bytes_help(
-                entry_point.symbol,
-                entry_point.layout.arguments.iter().copied(),
-                CapturesNiche::no_niche(),
-                &entry_point.layout.result,
-            );
-            let roc_main = FuncName(&roc_main_bytes);
+        match entry_point {
+            EntryPoint::Single(SingleEntryPoint {
+                symbol: entry_point_symbol,
+                layout: entry_point_layout,
+            }) => {
+                // the entry point wrapper
+                let roc_main_bytes = func_name_bytes_help(
+                    entry_point_symbol,
+                    entry_point_layout.arguments.iter().copied(),
+                    CapturesNiche::no_niche(),
+                    &entry_point_layout.result,
+                );
+                let roc_main = FuncName(&roc_main_bytes);
 
-            let mut env = Env::new(arena);
+                let mut env = Env::new(arena);
 
-            let entry_point_function = build_entry_point(
-                &mut env,
-                interner,
-                entry_point.layout,
-                roc_main,
-                &host_exposed_functions,
-            )?;
+                let entry_point_function = build_entry_point(
+                    &mut env,
+                    interner,
+                    entry_point_layout,
+                    Some(roc_main),
+                    &host_exposed_functions,
+                )?;
 
-            type_definitions.extend(env.type_names);
+                type_definitions.extend(env.type_names);
 
-            let entry_point_name = FuncName(ENTRY_POINT_NAME);
-            m.add_func(entry_point_name, entry_point_function)?;
+                let entry_point_name = FuncName(ENTRY_POINT_NAME);
+                m.add_func(entry_point_name, entry_point_function)?;
+            }
+            EntryPoint::Expects { symbols } => {
+                // construct a big pattern match picking one of the expects at random
+                let layout: ProcLayout<'a> = ProcLayout {
+                    arguments: &[],
+                    result: Layout::Struct {
+                        field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
+                        field_layouts: &[],
+                    },
+                    captures_niche: CapturesNiche::no_niche(),
+                };
+
+                let host_exposed: Vec<_> = symbols
+                    .iter()
+                    .map(|symbol| {
+                        (
+                            func_name_bytes_help(
+                                *symbol,
+                                [],
+                                CapturesNiche::no_niche(),
+                                &layout.result,
+                            ),
+                            [].as_slice(),
+                        )
+                    })
+                    .collect();
+
+                let mut env = Env::new(arena);
+                let entry_point_function =
+                    build_entry_point(&mut env, interner, layout, None, &host_exposed)?;
+
+                type_definitions.extend(env.type_names);
+
+                let entry_point_name = FuncName(ENTRY_POINT_NAME);
+                m.add_func(entry_point_name, entry_point_function)?;
+            }
         }
 
         for union_layout in type_definitions {
@@ -286,10 +327,11 @@ where
         let mut p = ProgramBuilder::new();
         p.add_mod(MOD_APP, main_module)?;
 
-        if opt_entry_point.is_some() {
-            let entry_point_name = FuncName(ENTRY_POINT_NAME);
-            p.add_entry_point(EntryPointName(ENTRY_POINT_NAME), MOD_APP, entry_point_name)?;
-        }
+        p.add_entry_point(
+            EntryPointName(ENTRY_POINT_NAME),
+            MOD_APP,
+            FuncName(ENTRY_POINT_NAME),
+        )?;
 
         p.build()?
     };
@@ -324,7 +366,7 @@ fn build_entry_point<'a>(
     env: &mut Env<'a>,
     interner: &STLayoutInterner<'a>,
     layout: roc_mono::ir::ProcLayout<'a>,
-    func_name: FuncName,
+    entry_point_function: Option<FuncName>,
     host_exposed_functions: &[([u8; SIZE], &'a [Layout<'a>])],
 ) -> Result<FuncDef> {
     let mut builder = FuncDefBuilder::new();
@@ -332,7 +374,7 @@ fn build_entry_point<'a>(
 
     let mut cases = Vec::new();
 
-    {
+    if let Some(entry_point_function) = entry_point_function {
         let block = builder.add_block();
 
         // to the modelling language, the arguments appear out of thin air
@@ -352,7 +394,7 @@ fn build_entry_point<'a>(
 
         let name_bytes = [0; 16];
         let spec_var = CalleeSpecVar(&name_bytes);
-        let result = builder.add_call(block, spec_var, MOD_APP, func_name, argument)?;
+        let result = builder.add_call(block, spec_var, MOD_APP, entry_point_function, argument)?;
 
         // to the modelling language, the result disappears into the void
         let unit_type = builder.add_tuple_type(&[])?;
@@ -365,7 +407,7 @@ fn build_entry_point<'a>(
     for (name_bytes, layouts) in host_exposed_functions {
         let host_exposed_func_name = FuncName(name_bytes);
 
-        if host_exposed_func_name == func_name {
+        if Some(host_exposed_func_name) == entry_point_function {
             continue;
         }
 
@@ -392,7 +434,11 @@ fn build_entry_point<'a>(
     }
 
     let unit_type = builder.add_tuple_type(&[])?;
-    let unit_value = builder.add_choice(outer_block, &cases)?;
+    let unit_value = if cases.is_empty() {
+        builder.add_make_tuple(outer_block, &[])?
+    } else {
+        builder.add_choice(outer_block, &cases)?
+    };
 
     let root = BlockExpr(outer_block, unit_value);
     let spec = builder.build(unit_type, unit_type, root)?;

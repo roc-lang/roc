@@ -18,6 +18,32 @@ use super::build::{
     Scope,
 };
 
+pub(crate) struct SharedMemoryPointer<'ctx>(PointerValue<'ctx>);
+
+impl<'ctx> SharedMemoryPointer<'ctx> {
+    pub(crate) fn get<'a, 'env>(env: &Env<'a, 'ctx, 'env>) -> Self {
+        let start_function = if let LlvmBackendMode::BinaryDev = env.mode {
+            bitcode::UTILS_EXPECT_FAILED_START_SHARED_FILE
+        } else {
+            bitcode::UTILS_EXPECT_FAILED_START_SHARED_BUFFER
+        };
+
+        let func = env.module.get_function(start_function).unwrap();
+
+        let call_result = env
+            .builder
+            .build_call(func, &[], "call_expect_start_failed");
+
+        let ptr = call_result
+            .try_as_basic_value()
+            .left()
+            .unwrap()
+            .into_pointer_value();
+
+        Self(ptr)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Cursors<'ctx> {
     offset: IntValue<'ctx>,
@@ -94,48 +120,39 @@ fn write_state<'a, 'ctx, 'env>(
     env.builder.build_store(offset_ptr, offset);
 }
 
-pub(crate) fn finalize(env: &Env) {
+pub(crate) fn notify_parent_expect(env: &Env, shared_memory: &SharedMemoryPointer) {
     let func = env
         .module
-        .get_function(bitcode::UTILS_EXPECT_FAILED_FINALIZE)
+        .get_function(bitcode::NOTIFY_PARENT_EXPECT)
         .unwrap();
 
-    env.builder
-        .build_call(func, &[], "call_expect_failed_finalize");
+    env.builder.build_call(
+        func,
+        &[shared_memory.0.into()],
+        "call_expect_failed_finalize",
+    );
 }
 
-pub(crate) fn send_dbg(env: &Env) {
-    let func = env.module.get_function(bitcode::UTILS_SEND_DBG).unwrap();
+pub(crate) fn notify_parent_dbg(env: &Env, shared_memory: &SharedMemoryPointer) {
+    let func = env.module.get_function(bitcode::NOTIFY_PARENT_DBG).unwrap();
 
-    env.builder
-        .build_call(func, &[], "call_expect_failed_finalize");
+    env.builder.build_call(
+        func,
+        &[shared_memory.0.into()],
+        "call_expect_failed_finalize",
+    );
 }
 
 pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
     layout_ids: &mut LayoutIds<'a>,
+    shared_memory: &SharedMemoryPointer<'ctx>,
     condition: Symbol,
     region: Region,
     lookups: &[Symbol],
 ) {
-    let start_function = if let LlvmBackendMode::BinaryDev = env.mode {
-        bitcode::UTILS_EXPECT_FAILED_START_SHARED_FILE
-    } else {
-        bitcode::UTILS_EXPECT_FAILED_START_SHARED_BUFFER
-    };
-
-    let func = env.module.get_function(start_function).unwrap();
-
-    let call_result = env
-        .builder
-        .build_call(func, &[], "call_expect_start_failed");
-
-    let original_ptr = call_result
-        .try_as_basic_value()
-        .left()
-        .unwrap()
-        .into_pointer_value();
+    let original_ptr = shared_memory.0;
 
     let (count, mut offset) = read_state(env, original_ptr);
 
