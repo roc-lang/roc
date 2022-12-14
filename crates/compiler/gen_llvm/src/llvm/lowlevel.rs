@@ -11,7 +11,7 @@ use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::{low_level::LowLevel, symbol::Symbol};
 use roc_mono::{
-    ir::HigherOrderLowLevel,
+    ir::{HigherOrderLowLevel, LookupType},
     layout::{Builtin, LambdaSet, Layout, LayoutIds},
 };
 use roc_target::PtrWidth;
@@ -1120,13 +1120,18 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             }
         },
         Dbg => {
-            // now what
-            arguments!(condition);
+            assert_eq!(args.len(), 2);
+            let condition = load_symbol(scope, &args[0]);
+            let dbg_spec_var_symbol = args[1];
 
             if env.mode.runs_expects() {
                 let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(args[0]) };
 
                 let shared_memory = crate::llvm::expect::SharedMemoryPointer::get(env);
+
+                // HACK(dbg-spec-var): the specialized type variable is passed along as a fake symbol
+                let specialized_var =
+                    unsafe { LookupType::from_index(dbg_spec_var_symbol.ident_id().index() as _) };
 
                 crate::llvm::expect::clone_to_shared_memory(
                     env,
@@ -1136,7 +1141,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                     args[0],
                     region,
                     &[args[0]],
-                    &[roc_mono::ir::LookupType::NULL], // TODO
+                    &[specialized_var],
                 );
 
                 crate::llvm::expect::notify_parent_dbg(env, &shared_memory);

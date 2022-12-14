@@ -27,7 +27,7 @@ use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapsh
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
@@ -6711,13 +6711,23 @@ pub fn from_can<'a>(
         } => {
             let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
 
+            let spec_var = env
+                .expectation_subs
+                .as_mut()
+                .unwrap()
+                .fresh_unnamed_flex_var();
+            // HACK(dbg-spec-var): pass the specialized type variable along injected into a fake symbol
+            let dbg_spec_var_symbol = Symbol::new(ModuleId::ATTR, unsafe {
+                IdentId::from_index(spec_var.index())
+            });
+
             // TODO: need to store the specialized variable of this dbg in the expectation_subs
             let call = crate::ir::Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::Dbg,
                     update_mode: env.next_update_mode_id(),
                 },
-                arguments: env.arena.alloc([dbg_symbol]),
+                arguments: env.arena.alloc([dbg_symbol, dbg_spec_var_symbol]),
             };
 
             let dbg_layout = layout_cache
@@ -6744,6 +6754,10 @@ pub fn from_can<'a>(
                     env.arena.alloc(stmt),
                 );
             }
+
+            // Now that the dbg value has been specialized, export its specialized type into the
+            // expectations subs.
+            store_specialized_expectation_lookups(env, [variable], &[spec_var]);
 
             stmt
         }
