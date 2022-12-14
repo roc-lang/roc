@@ -7,6 +7,23 @@ concurrency:
 
 jobs:
 
+  build-linux-x86_64-files:
+    runs-on: [ubuntu-20.04]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: fetch releases data and save to file
+        run: curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
+
+      - run: ./ci/build_basic_cli.sh linux_x86_64
+
+      - name: Save .rh1 and .rm1 files 
+        uses: actions/upload-artifact@v3
+        with:
+          name: linux-x86_64-files
+          path: |
+            basic-cli/src/linux-x86_64.rh1
+            basic-cli/src/metadata_linux-x86_64.rm1
 
   build-macos-x86_64-files:
     runs-on: [macos-11] # I expect the generated files to work on macOS 12
@@ -30,3 +47,39 @@ jobs:
           name: macos-x86_64-files
           path: |
             basic-cli/src/macos-x64.o
+
+  build-macos-apple-silicon-files:
+    name: build apple silicon .o file
+    runs-on: [self-hosted, macOS, ARM64]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: fetch releases data and save to file
+        run: curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
+
+      - run: ./ci/build_basic_cli.sh silicon
+
+      - name: Save macos-arm64.o file
+        uses: actions/upload-artifact@v3
+        with:
+          name: macos-apple-silicon-files
+          path: |
+            basic-cli/src/macos-arm64.o
+
+  create-brotli-archive:
+    name: create brotli archive
+    runs-on: [ubuntu-20.04]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: fetch releases data and save to file
+        run: curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
+
+      - run: ./ci/get_latest_release_url.sh linux_x86_64
+
+      #- run: git clone https://github.com/roc-lang/basic-cli.git
+
+      - name: Download the previously uploaded files
+        uses: actions/download-artifact@v3
+
+      - run: ls
