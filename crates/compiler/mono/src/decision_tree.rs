@@ -51,12 +51,14 @@ impl<'a> Guard<'a> {
     }
 }
 
+type Edge<'a> = (GuardedTest<'a>, DecisionTree<'a>);
+
 #[derive(Clone, Debug, PartialEq)]
 enum DecisionTree<'a> {
     Match(Label),
     Decision {
         path: Vec<PathInstruction>,
-        edges: Vec<(GuardedTest<'a>, DecisionTree<'a>)>,
+        edges: Vec<Edge<'a>>,
         default: Option<Box<DecisionTree<'a>>>,
     },
 }
@@ -1596,6 +1598,7 @@ fn test_to_comparison<'a>(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 enum Comparator {
     Eq,
     Geq,
@@ -2168,6 +2171,69 @@ fn test_always_succeeds(test: &Test) -> bool {
     }
 }
 
+fn sort_edge_tests_by_priority(edges: &mut Vec<Edge<'_>>) {
+    use std::cmp::{Ordering, Ordering::*};
+    use GuardedTest::*;
+    edges.sort_by(|(t1, _), (t2, _)| match (t1, t2) {
+        // Guarded takes priority
+        (GuardedNoTest { .. }, GuardedNoTest { .. }) => Equal,
+        (GuardedNoTest { .. }, TestNotGuarded { .. }) | (GuardedNoTest { .. }, Placeholder) => Less,
+        // Interesting case: what test do we pick?
+        (TestNotGuarded { test: t1 }, TestNotGuarded { test: t2 }) => order_tests(t1, t2),
+        // Otherwise we are between guarded and fall-backs
+        (TestNotGuarded { .. }, GuardedNoTest { .. }) => Greater,
+        (TestNotGuarded { .. }, Placeholder) => Less,
+        // Placeholder is always last
+        (Placeholder, Placeholder) => Equal,
+        (Placeholder, GuardedNoTest { .. }) | (Placeholder, TestNotGuarded { .. }) => Greater,
+    });
+
+    fn order_tests(t1: &Test, t2: &Test) -> Ordering {
+        match (t1, t2) {
+            (
+                Test::IsListLen {
+                    bound: bound_l,
+                    len: l,
+                },
+                Test::IsListLen {
+                    bound: bound_m,
+                    len: m,
+                },
+            ) => {
+                // List tests can either check for
+                //   - exact length (= l)
+                //   - a size greater or equal to a given length (>= l)
+                // (>= l) tests can be superset of other tests
+                //   - (>= m) where m > l
+                //   - (= m)
+                // So, if m > l, we enforce the following order for list tests
+                //   (>= m) then (= l) then (>= l)
+                match m.cmp(l) {
+                    Less => Less, // (>= m) then (>= l)
+                    Greater => Greater,
+
+                    Equal => {
+                        use ListLenBound::*;
+                        match (bound_l, bound_m) {
+                            (Exact, AtLeast) => Less, // (= l) then (>= l)
+                            (AtLeast, Exact) => Greater,
+
+                            (AtLeast, AtLeast) | (Exact, Exact) => Equal,
+                        }
+                    }
+                }
+            }
+
+            (Test::IsListLen { .. }, t) | (t, Test::IsListLen { .. }) => internal_error!(
+                "list-length tests should never pair with another test {t:?} at the same level"
+            ),
+            // We don't care about anything other than list-length tests, since all other tests
+            // should be disjoint.
+            _ => Equal,
+        }
+    }
+}
+
 fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
     use Decider::*;
     use DecisionTree::*;
@@ -2179,44 +2245,67 @@ fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
             path,
             mut edges,
             default,
-        } => match default {
-            None => match edges.len() {
-                0 => panic!("compiler bug, somehow created an empty decision tree"),
-                1 => {
-                    let (_, sub_tree) = edges.remove(0);
+        } => {
+            // Some of the head-constructor tests we generate can be supersets of other tests.
+            // Edges must be ordered so that more general tests always happen after their
+            // specialized variants.
+            //
+            // For example, patterns
+            //
+            //   [1, ..] -> ...
+            //   [2, 1, ..] -> ...
+            //
+            // may generate the edges
+            //
+            //   ListLen(>=1) -> <rest>
+            //   ListLen(>=2) -> <rest>
+            //
+            // but evaluated in exactly this order, the second edge is never reachable.
+            // The necessary ordering is
+            //
+            //   ListLen(>=2) -> <rest>
+            //   ListLen(>=1) -> <rest>
+            sort_edge_tests_by_priority(&mut edges);
 
-                    tree_to_decider(sub_tree)
-                }
-                2 => {
-                    let (_, failure_tree) = edges.remove(1);
-                    let (guarded_test, success_tree) = edges.remove(0);
+            match default {
+                None => match edges.len() {
+                    0 => panic!("compiler bug, somehow created an empty decision tree"),
+                    1 => {
+                        let (_, sub_tree) = edges.remove(0);
 
-                    chain_decider(path, guarded_test, failure_tree, success_tree)
-                }
+                        tree_to_decider(sub_tree)
+                    }
+                    2 => {
+                        let (_, failure_tree) = edges.remove(1);
+                        let (guarded_test, success_tree) = edges.remove(0);
 
-                _ => {
-                    let fallback = edges.remove(edges.len() - 1).1;
+                        chain_decider(path, guarded_test, failure_tree, success_tree)
+                    }
 
-                    fanout_decider(path, fallback, edges)
-                }
-            },
+                    _ => {
+                        let fallback = edges.remove(edges.len() - 1).1;
 
-            Some(last) => match edges.len() {
-                0 => tree_to_decider(*last),
-                1 => {
-                    let failure_tree = *last;
-                    let (guarded_test, success_tree) = edges.remove(0);
+                        fanout_decider(path, fallback, edges)
+                    }
+                },
 
-                    chain_decider(path, guarded_test, failure_tree, success_tree)
-                }
+                Some(last) => match edges.len() {
+                    0 => tree_to_decider(*last),
+                    1 => {
+                        let failure_tree = *last;
+                        let (guarded_test, success_tree) = edges.remove(0);
 
-                _ => {
-                    let fallback = *last;
+                        chain_decider(path, guarded_test, failure_tree, success_tree)
+                    }
 
-                    fanout_decider(path, fallback, edges)
-                }
-            },
-        },
+                    _ => {
+                        let fallback = *last;
+
+                        fanout_decider(path, fallback, edges)
+                    }
+                },
+            }
+        }
     }
 }
 
