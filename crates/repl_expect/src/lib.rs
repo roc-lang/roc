@@ -46,12 +46,19 @@ pub fn get_values<'a>(
     let app = arena.alloc(app);
 
     for (i, variable) in variables.iter().enumerate() {
-        let start = app.memory.deref_usize(start_offset + i * 8);
+        let size_of_lookup_header = 8 /* pointer to value */ + 4 /* type variable */;
+
+        let start = app
+            .memory
+            .deref_usize(start_offset + i * size_of_lookup_header);
+        let variable = app.memory.deref_u32(
+            start_offset + i * size_of_lookup_header + 8, /* skip the pointer */
+        );
+        let variable = unsafe { Variable::from_index(variable) };
+
         app.offset = start;
 
         let expr = {
-            let variable = *variable;
-
             // TODO: pass layout_cache to jit_to_ast directly
             let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
             let layout = layout_cache.from_var(arena, variable, subs).unwrap();

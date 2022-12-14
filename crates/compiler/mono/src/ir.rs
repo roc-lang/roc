@@ -1604,6 +1604,9 @@ pub fn cond<'a>(
 
 pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
 
+/// The specialized type of a lookup. Represented as a type-variable.
+pub type LookupType = Variable;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
     Let(Symbol, Expr<'a>, Layout<'a>, &'a Stmt<'a>),
@@ -1625,7 +1628,7 @@ pub enum Stmt<'a> {
         condition: Symbol,
         region: Region,
         lookups: &'a [Symbol],
-        variables: &'a [Variable],
+        variables: &'a [LookupType],
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
@@ -1633,7 +1636,7 @@ pub enum Stmt<'a> {
         condition: Symbol,
         region: Region,
         lookups: &'a [Symbol],
-        variables: &'a [Variable],
+        variables: &'a [LookupType],
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
@@ -6573,7 +6576,8 @@ pub fn from_can<'a>(
             let cond_symbol = env.unique_symbol();
 
             let mut lookups = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
-            let mut variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut lookup_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut specialized_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
 
             for ExpectLookup {
                 symbol,
@@ -6595,22 +6599,23 @@ pub fn from_can<'a>(
                     .expectation_subs
                     .as_deref_mut()
                     .expect("if expects are compiled, their subs should be available");
-                let variable = expectation_subs.fresh_unnamed_flex_var();
+                let spec_var = expectation_subs.fresh_unnamed_flex_var();
 
                 if !env.subs.is_function(var) {
                     // Exclude functions from lookups
                     lookups.push(symbol);
-                    variables.push(variable);
+                    lookup_variables.push(var);
+                    specialized_variables.push(spec_var);
                 }
             }
 
-            let variables = variables.into_bump_slice();
+            let specialized_variables = specialized_variables.into_bump_slice();
 
             let mut stmt = Stmt::Expect {
                 condition: cond_symbol,
                 region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
-                variables,
+                variables: specialized_variables,
                 remainder: env.arena.alloc(rest),
             };
 
@@ -6624,7 +6629,9 @@ pub fn from_can<'a>(
                 env.arena.alloc(stmt),
             );
 
-            store_specialized_expectation_lookups(env, lookups_in_cond, variables);
+            // Now that the condition has been specialized, export the specialized types of our
+            // lookups into the expectation subs.
+            store_specialized_expectation_lookups(env, lookup_variables, specialized_variables);
 
             stmt
         }
@@ -6638,7 +6645,8 @@ pub fn from_can<'a>(
             let cond_symbol = env.unique_symbol();
 
             let mut lookups = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
-            let mut variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut lookup_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut specialized_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
 
             for ExpectLookup {
                 symbol,
@@ -6660,22 +6668,23 @@ pub fn from_can<'a>(
                     .expectation_subs
                     .as_deref_mut()
                     .expect("if expects are compiled, their subs should be available");
-                let variable = expectation_subs.fresh_unnamed_flex_var();
+                let spec_var = expectation_subs.fresh_unnamed_flex_var();
 
                 if !env.subs.is_function(var) {
                     // Exclude functions from lookups
                     lookups.push(symbol);
-                    variables.push(variable);
+                    lookup_variables.push(var);
+                    specialized_variables.push(spec_var);
                 }
             }
 
-            let variables = variables.into_bump_slice();
+            let specialized_variables = specialized_variables.into_bump_slice();
 
             let mut stmt = Stmt::ExpectFx {
                 condition: cond_symbol,
                 region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
-                variables,
+                variables: specialized_variables,
                 remainder: env.arena.alloc(rest),
             };
 
@@ -6689,7 +6698,7 @@ pub fn from_can<'a>(
                 env.arena.alloc(stmt),
             );
 
-            store_specialized_expectation_lookups(env, lookups_in_cond, variables);
+            store_specialized_expectation_lookups(env, lookup_variables, specialized_variables);
 
             stmt
         }
@@ -6776,14 +6785,14 @@ pub fn from_can<'a>(
 
 fn store_specialized_expectation_lookups(
     env: &mut Env,
-    lookups_in_cond: impl IntoIterator<Item = ExpectLookup>,
-    variables: &[Variable],
+    lookup_variables: impl IntoIterator<Item = Variable>,
+    specialized_variables: &[Variable],
 ) {
     let subs = &env.subs;
     let expectation_subs = env.expectation_subs.as_deref_mut().unwrap();
-    for (ExpectLookup { var, .. }, stored_var) in lookups_in_cond.into_iter().zip(variables) {
+    for (lookup_var, stored_var) in lookup_variables.into_iter().zip(specialized_variables) {
         let stored_specialized_var =
-            storage_copy_var_to(&mut Default::default(), subs, expectation_subs, var);
+            storage_copy_var_to(&mut Default::default(), subs, expectation_subs, lookup_var);
         let stored_specialized_desc = expectation_subs.get(stored_specialized_var);
         expectation_subs.union(*stored_var, stored_specialized_var, stored_specialized_desc);
     }

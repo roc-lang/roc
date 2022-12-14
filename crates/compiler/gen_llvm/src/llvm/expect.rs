@@ -10,6 +10,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
+use roc_mono::ir::LookupType;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use roc_region::all::Region;
 
@@ -143,6 +144,20 @@ pub(crate) fn notify_parent_dbg(env: &Env, shared_memory: &SharedMemoryPointer) 
     );
 }
 
+// Shape of expect frame:
+//
+//     ===
+//     Fixed-size header
+//     ===
+// /-- ptr_lookup_1  (ptr_size)
+// |   var_lookup_1  (u32)
+// |   ..
+// |   ptr_lookup_n  (ptr_size)
+// |   var_lookup_n  (u32)
+// \-> lookup_val_1  (varsize)
+//     ..
+//     lookup_val_n  (varsize)
+//
 pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
@@ -151,6 +166,7 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     condition: Symbol,
     region: Region,
     lookups: &[Symbol],
+    lookup_variables: &[LookupType],
 ) {
     let original_ptr = shared_memory.0;
 
@@ -160,9 +176,11 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
 
     let after_header = offset;
 
-    let space_for_offsets = env
-        .ptr_int()
-        .const_int((lookups.len() * env.target_info.ptr_size()) as _, false);
+    let space_for_offsets = env.ptr_int().const_int(
+        (lookups.len() * env.target_info.ptr_size() + lookups.len() * std::mem::size_of::<u32>())
+            as _,
+        false,
+    );
 
     let mut lookup_starts = bumpalo::collections::Vec::with_capacity_in(lookups.len(), env.arena);
 
@@ -203,14 +221,43 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     {
         let mut offset = after_header;
 
-        for lookup_start in lookup_starts {
-            build_copy(env, original_ptr, offset, lookup_start.into());
+        for (lookup_start, lookup_var) in lookup_starts.into_iter().zip(lookup_variables) {
+            // Store the pointer to the value
+            {
+                build_copy(env, original_ptr, offset, lookup_start.into());
 
-            let ptr_width = env
-                .ptr_int()
-                .const_int(env.target_info.ptr_size() as _, false);
+                let ptr_width = env
+                    .ptr_int()
+                    .const_int(env.target_info.ptr_size() as _, false);
 
-            offset = env.builder.build_int_add(offset, ptr_width, "offset")
+                offset = env.builder.build_int_add(offset, ptr_width, "offset");
+            }
+
+            // Store the specialized variable of the value
+            {
+                let ptr = unsafe {
+                    env.builder
+                        .build_in_bounds_gep(original_ptr, &[offset], "at_current_offset")
+                };
+
+                let u32_ptr = env.context.i32_type().ptr_type(AddressSpace::Generic);
+                let ptr = env
+                    .builder
+                    .build_pointer_cast(ptr, u32_ptr, "cast_ptr_type");
+
+                let var_value = env
+                    .context
+                    .i32_type()
+                    .const_int(lookup_var.index() as _, false);
+
+                env.builder.build_store(ptr, var_value);
+
+                let var_size = env
+                    .ptr_int()
+                    .const_int(std::mem::size_of::<u32>() as _, false);
+
+                offset = env.builder.build_int_add(offset, var_size, "offset");
+            }
         }
     }
 

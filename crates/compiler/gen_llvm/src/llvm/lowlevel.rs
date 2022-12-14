@@ -1136,6 +1136,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                     args[0],
                     region,
                     &[args[0]],
+                    &[roc_mono::ir::LookupType::NULL], // TODO
                 );
 
                 crate::llvm::expect::notify_parent_dbg(env, &shared_memory);

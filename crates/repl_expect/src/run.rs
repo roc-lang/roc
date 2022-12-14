@@ -574,14 +574,13 @@ fn render_expect_failure<'a>(
         None => panic!("region {failure_region:?} not in list of expects"),
         Some(current) => current,
     };
-    let subs = arena.alloc(&mut data.subs);
 
-    let (symbols, variables) = split_expect_lookups(subs, current);
+    let (symbols, variables) = split_expect_lookups(&data.subs, current);
 
     let (offset, expressions) = crate::get_values(
         target_info,
         arena,
-        subs,
+        &data.subs,
         interns,
         layout_interner,
         start,
@@ -591,7 +590,7 @@ fn render_expect_failure<'a>(
 
     renderer.render_failure(
         writer,
-        subs,
+        &mut data.subs,
         &symbols,
         &variables,
         &expressions,
