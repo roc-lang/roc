@@ -18,7 +18,7 @@ jobs:
         
       # build has to be done before tests #2572
       - name: build release
-        run: RUSTFLAGS="-C target-cpu=x86-64  link-args=-mmacosx-version-min=11.0" cargo build --features with_sound --release --locked
+        run: RUSTFLAGS="-C target-cpu=x86-64 -Clink-args=-mmacosx-version-min=11.0" cargo build --features with_sound --release --locked
         # target-cpu=x86-64 -> For maximal compatibility for all CPU's. Note that this setting will likely make the compiler slower.
           
       - name: execute rust tests
