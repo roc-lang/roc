@@ -15,15 +15,18 @@ const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 use bumpalo::Bump;
 use roc_collections::all::MutMap;
+use roc_collections::VecMap;
 use roc_load::ExecutionMode;
 use roc_load::LoadConfig;
 use roc_load::LoadMonomorphizedError;
 use roc_load::Threading;
 use roc_module::symbol::Interns;
+use roc_module::symbol::ModuleId;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::STLayoutInterner;
+use roc_mono::LayoutBuffer;
 use test_mono_macros::*;
 
 const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
@@ -137,6 +140,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
         exposed_to_host,
         layout_interner,
         interns,
+        layout_buffers,
         ..
     } = loaded;
 
@@ -152,7 +156,13 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
     let main_fn_symbol = exposed_to_host.values.keys().copied().next();
 
     if !no_check {
-        check_procedures(arena, &interns, &layout_interner, &procedures);
+        check_procedures(
+            arena,
+            &interns,
+            &layout_interner,
+            &layout_buffers,
+            &procedures,
+        );
     }
 
     verify_procedures(test_name, layout_interner, procedures, main_fn_symbol);
@@ -162,10 +172,11 @@ fn check_procedures<'a>(
     arena: &'a Bump,
     interns: &Interns,
     interner: &STLayoutInterner<'a>,
+    layout_buffers: &VecMap<ModuleId, LayoutBuffer<'a>>,
     procedures: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
     use roc_mono::debug::{check_procs, format_problems};
-    let problems = check_procs(arena, interner, procedures);
+    let problems = check_procs(arena, interner, layout_buffers, procedures);
     if problems.is_empty() {
         return;
     }

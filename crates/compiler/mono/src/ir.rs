@@ -13,6 +13,7 @@ use roc_can::abilities::SpecializationId;
 use roc_can::expr::{AnnotatedMark, ClosureData, ExpectLookup, IntValue};
 use roc_can::module::ExposedByModule;
 use roc_collections::all::{default_hasher, BumpMap, BumpMapDefault, MutMap};
+use roc_collections::soa::Slice;
 use roc_collections::VecMap;
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
@@ -1624,7 +1625,7 @@ pub enum Stmt<'a> {
         condition: Symbol,
         region: Region,
         lookups: &'a [Symbol],
-        layouts: &'a [Layout<'a>],
+        layouts: Slice<Layout<'a>>,
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
@@ -1632,7 +1633,7 @@ pub enum Stmt<'a> {
         condition: Symbol,
         region: Region,
         lookups: &'a [Symbol],
-        layouts: &'a [Layout<'a>],
+        layouts: Slice<Layout<'a>>,
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
@@ -6598,11 +6599,14 @@ pub fn from_can<'a>(
                 }
             }
 
+            let layouts_slice = env.layout_buffer.reserve(layouts.len());
+            env.layout_buffer.set_reserved(layouts_slice, layouts);
+
             let mut stmt = Stmt::Expect {
                 condition: cond_symbol,
                 region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
-                layouts: layouts.into_bump_slice(),
+                layouts: layouts_slice,
                 remainder: env.arena.alloc(rest),
             };
 
@@ -6654,11 +6658,14 @@ pub fn from_can<'a>(
                 }
             }
 
+            let layouts_slice = env.layout_buffer.reserve(layouts.len());
+            env.layout_buffer.set_reserved(layouts_slice, layouts);
+
             let mut stmt = Stmt::ExpectFx {
                 condition: cond_symbol,
                 region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
-                layouts: layouts.into_bump_slice(),
+                layouts: layouts_slice,
                 remainder: env.arena.alloc(rest),
             };
 
@@ -7099,7 +7106,7 @@ fn substitute_in_stmt_help<'a>(
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),
-                layouts,
+                layouts: *layouts,
                 remainder: new_remainder,
             };
 
@@ -7125,7 +7132,7 @@ fn substitute_in_stmt_help<'a>(
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),
-                layouts,
+                layouts: *layouts,
                 remainder: new_remainder,
             };
 

@@ -11,14 +11,19 @@ impl<'a> LayoutBuffer<'a> {
         Slice::extend_new(&mut self.0, std::iter::repeat(Layout::VOID).take(size))
     }
 
-    pub fn set_reserved(
-        &mut self,
-        slice: Slice<Layout<'a>>,
-        layouts: impl ExactSizeIterator<Item = Layout<'a>>,
-    ) {
+    pub fn set_reserved<I>(&mut self, slice: Slice<Layout<'a>>, layouts: I)
+    where
+        I: IntoIterator<Item = Layout<'a>>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        let layouts = layouts.into_iter();
         debug_assert_eq!(layouts.len(), slice.len());
         for (index, layout) in slice.indices().zip(layouts) {
             self.0[index] = layout;
         }
+    }
+
+    pub fn iter_slice(&self, slice: Slice<Layout<'a>>) -> impl Iterator<Item = Layout<'a>> + '_ {
+        self.0[slice.indices()].iter().copied()
     }
 }

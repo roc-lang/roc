@@ -208,7 +208,7 @@ fn function_s<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    layouts: *layouts,
                     remainder: new_continuation,
                 };
 
@@ -233,7 +233,7 @@ fn function_s<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    layouts: *layouts,
                     remainder: new_continuation,
                 };
 
@@ -452,7 +452,7 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    layouts: *layouts,
                     remainder: b,
                 };
 
@@ -464,7 +464,7 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    layouts: *layouts,
                     remainder: b,
                 };
 
@@ -485,7 +485,7 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    layouts: *layouts,
                     remainder: b,
                 };
 
@@ -497,7 +497,7 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    layouts: *layouts,
                     remainder: b,
                 };
 
@@ -669,7 +669,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
                 condition: *condition,
                 region: *region,
                 lookups,
-                layouts,
+                layouts: *layouts,
                 remainder: b,
             };
 
@@ -689,7 +689,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
                 condition: *condition,
                 region: *region,
                 lookups,
-                layouts,
+                layouts: *layouts,
                 remainder: b,
             };
 

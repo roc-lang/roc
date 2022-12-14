@@ -1207,7 +1207,7 @@ impl<'a, 'i> Context<'a, 'i> {
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    layouts: *layouts,
                     remainder: b,
                 });
 
@@ -1231,7 +1231,7 @@ impl<'a, 'i> Context<'a, 'i> {
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    layouts: *layouts,
                     remainder: b,
                 });
 
