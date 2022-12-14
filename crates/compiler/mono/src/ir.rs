@@ -1465,6 +1465,9 @@ impl<'a> Specializations<'a> {
 pub struct Env<'a, 'i> {
     pub arena: &'a Bump,
     pub subs: &'i mut Subs,
+    /// [Subs] to write specialized variables of lookups in expects.
+    /// [None] if this module doesn't produce any expects.
+    pub expectation_subs: Option<&'i mut Subs>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub target_info: TargetInfo,
