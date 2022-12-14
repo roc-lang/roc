@@ -94,26 +94,23 @@ fn main() -> io::Result<()> {
         });
 
     // Run
-    // let end= 10000;
-    let end = 1;
-    for _ in 0..end {
-        let result = inst.call_export_from_cli(&module, start_fn_name, &wasi_argv);
 
-        // Print out return value, if any
+    let result = inst.call_export_from_cli(&module, start_fn_name, &wasi_argv);
 
-        match result {
-            Ok(Some(val)) => {
-                if is_hex_format {
-                    println!("{:#x?}", val)
-                } else {
-                    println!("{:?}", val)
-                }
+    // Print out return value, if any
+
+    match result {
+        Ok(Some(val)) => {
+            if is_hex_format {
+                println!("{:#x?}", val)
+            } else {
+                println!("{:?}", val)
             }
-            Ok(None) => {}
-            Err(e) => {
-                eprintln!("{}", e);
-                process::exit(3);
-            }
+        }
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("{}", e);
+            process::exit(3);
         }
     }
 
