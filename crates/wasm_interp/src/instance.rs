@@ -50,7 +50,7 @@ pub struct Instance<'a, I: ImportDispatcher> {
     /// Cache for branching instructions
     branch_cache: Vec<'a, BranchCacheEntry>,
     /// Import dispatcher from user code
-    import_dispatcher: I,
+    pub import_dispatcher: I,
     /// Temporary storage for import arguments
     import_arguments: Vec<'a, Value>,
     /// temporary storage for output using the --debug option

@@ -8,7 +8,7 @@ use crate::cli::{expect_failure, expect_success, repl_eval};
 
 #[cfg(feature = "wasm")]
 #[allow(unused_imports)]
-use crate::wasm::{expect_failure, expect_success};
+use crate::wasm_interp::{expect_failure, expect_success};
 
 #[test]
 fn literal_0() {

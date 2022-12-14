@@ -3494,12 +3494,15 @@ checksum = "f1382d1f0a252c4bf97dc20d979a2fdd05b024acd7c2ed0f7595d7817666a157"
 name = "repl_test"
 version = "0.0.1"
 dependencies = [
+ "bumpalo",
  "indoc",
  "lazy_static",
  "roc_build",
  "roc_cli",
  "roc_repl_cli",
  "roc_test_utils",
+ "roc_wasm_interp",
+ "roc_wasm_module",
  "strip-ansi-escapes",
  "wasmer",
  "wasmer-wasi",

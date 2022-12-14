@@ -14,3 +14,6 @@ mod cli;
 
 #[cfg(all(test, feature = "wasm"))]
 mod wasm;
+
+#[cfg(all(test, feature = "wasm"))]
+mod wasm_interp;
