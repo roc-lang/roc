@@ -2222,7 +2222,7 @@ macro_rules! debug_print_ir {
 }
 
 macro_rules! debug_check_ir {
-    ($state:expr, $arena:expr, $interner:expr, $layout_buffers:expr, $flag:path) => {
+    ($state:expr, $arena:expr, $interner:expr, $flag:path) => {
         dbg_do!($flag, {
             use roc_mono::debug::{check_procs, format_problems};
 
@@ -2233,7 +2233,7 @@ macro_rules! debug_check_ir {
 
             let procedures = &$state.procedures;
 
-            let problems = check_procs($arena, $interner, $layout_buffers, procedures);
+            let problems = check_procs($arena, $interner, procedures);
             if !problems.is_empty() {
                 let formatted = format_problems(&interns, $interner, problems);
                 eprintln!("IR PROBLEMS FOUND:\n{formatted}");
@@ -2958,18 +2958,10 @@ fn update<'a>(
                         .unwrap()
                         .expect("outstanding references to global layout interener, but we just drained all layout caches");
 
-                    let layout_buffers = &state.module_cache.layout_buffers;
-
                     log!("specializations complete from {:?}", module_id);
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_SPECIALIZATION);
-                    debug_check_ir!(
-                        state,
-                        arena,
-                        &layout_interner,
-                        layout_buffers,
-                        ROC_CHECK_MONO_IR
-                    );
+                    debug_check_ir!(state, arena, &layout_interner, ROC_CHECK_MONO_IR);
 
                     let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
 

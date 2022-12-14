@@ -2,7 +2,7 @@
 
 use bumpalo::Bump;
 use roc_collections::{MutMap, VecMap, VecSet};
-use roc_module::symbol::{ModuleId, Symbol};
+use roc_module::symbol::Symbol;
 
 use crate::{
     ir::{
@@ -10,7 +10,6 @@ use crate::{
         ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
     layout::{Builtin, Layout, STLayoutInterner, TagIdIntType, UnionLayout},
-    LayoutBuffer,
 };
 
 pub enum UseKind {
@@ -133,7 +132,6 @@ impl<'a> Problems<'a> {
 pub fn check_procs<'a>(
     arena: &'a Bump,
     interner: &'a STLayoutInterner<'a>,
-    layout_buffers: &VecMap<ModuleId, LayoutBuffer<'a>>,
     procs: &'a Procs<'a>,
 ) -> Problems<'a> {
     let mut problems = Default::default();
@@ -151,7 +149,6 @@ pub fn check_procs<'a>(
             venv: Default::default(),
             joinpoints: Default::default(),
             line: 0,
-            layout_buffers,
         };
         ctx.check_proc(proc);
     }
@@ -169,7 +166,6 @@ struct Ctx<'a, 'r> {
     proc: &'a Proc<'a>,
     proc_layout: ProcLayout<'a>,
     procs: &'r Procs<'a>,
-    layout_buffers: &'r VecMap<ModuleId, LayoutBuffer<'a>>,
     call_spec_ids: CallSpecIds,
     ret_layout: Layout<'a>,
     venv: VEnv<'a>,
@@ -328,10 +324,8 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     Layout::Builtin(Builtin::Bool),
                     UseKind::ExpectCond,
                 );
-                let layout_buffer = self.layout_buffers.get(&condition.module_id()).unwrap();
-                let layouts = layout_buffer.iter_slice(layouts);
                 for (sym, lay) in lookups.iter().zip(layouts) {
-                    self.check_sym_layout(*sym, lay, UseKind::ExpectLookup);
+                    self.check_sym_layout(*sym, *lay, UseKind::ExpectLookup);
                 }
                 self.check_stmt(remainder);
             }
