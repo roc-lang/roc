@@ -38,7 +38,6 @@ use roc_mono::ir::{
 use roc_mono::layout::{
     CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, STLayoutInterner,
 };
-use roc_mono::LayoutBuffer;
 use roc_packaging::cache::{self, RocCacheDir};
 #[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::PackageMetadata;
@@ -136,11 +135,9 @@ struct ModuleCache<'a> {
     pending_abilities: MutMap<ModuleId, PendingAbilitiesStore>,
     constrained: MutMap<ModuleId, ConstrainedModule>,
     typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
-
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations<'a>>>,
-    layout_buffers: VecMap<ModuleId, LayoutBuffer<'a>>,
     expectations: VecMap<ModuleId, Expectations>,
 
     /// Various information
@@ -212,7 +209,6 @@ impl Default for ModuleCache<'_> {
             found_specializations: Default::default(),
             late_specializations: Default::default(),
             external_specializations_requested: Default::default(),
-            layout_buffers: Default::default(),
             imports: Default::default(),
             top_level_thunks: Default::default(),
             documentation: Default::default(),
@@ -458,11 +454,8 @@ fn start_phase<'a>(
                 let build_expects = matches!(state.exec_mode, ExecutionMode::Test)
                     && state.module_cache.expectations.contains_key(&module_id);
 
-                let layout_buffer = LayoutBuffer::default();
-
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
-                    layout_buffer,
                     module_id,
                     module_timing,
                     solved_subs,
@@ -502,10 +495,6 @@ fn start_phase<'a>(
                         // This is the first time the derived module is introduced into the load
                         // graph. It has no abilities of its own or anything, just generate fresh
                         // information for it.
-                        state
-                            .module_cache
-                            .layout_buffers
-                            .insert(ModuleId::DERIVED_GEN, Default::default());
                         (
                             IdentIds::default(),
                             Subs::default(),
@@ -561,13 +550,6 @@ fn start_phase<'a>(
                         (ident_ids, subs, procs_base, layout_cache, module_timing)
                     };
 
-                let mut layout_buffer = state
-                    .module_cache
-                    .layout_buffers
-                    .remove(&module_id)
-                    .unwrap()
-                    .1;
-
                 if module_id == ModuleId::DERIVED_GEN {
                     load_derived_partial_procs(
                         module_id,
@@ -580,7 +562,6 @@ fn start_phase<'a>(
                         &state.exposed_types,
                         &mut procs_base,
                         &mut state.world_abilities,
-                        &mut layout_buffer,
                     );
                 }
 
@@ -592,7 +573,6 @@ fn start_phase<'a>(
                     subs,
                     procs_base,
                     layout_cache,
-                    layout_buffer,
                     specializations_we_must_make,
                     module_timing,
                     world_abilities: state.world_abilities.clone_ref(),
@@ -732,7 +712,6 @@ pub struct MonomorphizedModule<'a> {
     pub interns: Interns,
     pub subs: Subs,
     pub layout_interner: SingleThreadedInterner<'a, Layout<'a>>,
-    pub layout_buffers: VecMap<ModuleId, LayoutBuffer<'a>>,
     pub output_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
@@ -1159,7 +1138,6 @@ enum BuildTask<'a> {
     BuildPendingSpecializations {
         module_timing: ModuleTiming,
         layout_cache: LayoutCache<'a>,
-        layout_buffer: LayoutBuffer<'a>,
         solved_subs: Solved<Subs>,
         imported_module_thunks: &'a [Symbol],
         module_id: ModuleId,
@@ -1177,7 +1155,6 @@ enum BuildTask<'a> {
         subs: Subs,
         procs_base: ProcsBase<'a>,
         layout_cache: LayoutCache<'a>,
-        layout_buffer: LayoutBuffer<'a>,
         specializations_we_must_make: Vec<ExternalSpecializations<'a>>,
         module_timing: ModuleTiming,
         exposed_by_module: ExposedByModule,
@@ -3181,7 +3158,6 @@ fn finish_specialization<'a>(
         type_problems,
         can_problems,
         sources,
-        layout_buffers,
         ..
     } = module_cache;
 
@@ -3281,7 +3257,6 @@ fn finish_specialization<'a>(
         timings: state.timings,
         toplevel_expects,
         uses_prebuilt_platform,
-        layout_buffers,
     })
 }
 
@@ -5249,7 +5224,6 @@ fn make_specializations<'a>(
     mut subs: Subs,
     procs_base: ProcsBase<'a>,
     mut layout_cache: LayoutCache<'a>,
-    mut layout_buffer: LayoutBuffer<'a>,
     specializations_we_must_make: Vec<ExternalSpecializations<'a>>,
     mut module_timing: ModuleTiming,
     target_info: TargetInfo,
@@ -5272,7 +5246,6 @@ fn make_specializations<'a>(
         abilities: AbilitiesView::World(&world_abilities),
         exposed_by_module,
         derived_module: &derived_module,
-        layout_buffer: &mut layout_buffer,
     };
 
     let mut procs = Procs::new_in(arena);
@@ -5329,7 +5302,6 @@ fn build_pending_specializations<'a>(
     declarations: Declarations,
     mut module_timing: ModuleTiming,
     mut layout_cache: LayoutCache<'a>,
-    mut layout_buffer: LayoutBuffer<'a>,
     target_info: TargetInfo,
     exposed_to_host: ExposedToHost,
     exposed_by_module: &ExposedByModule,
@@ -5367,7 +5339,6 @@ fn build_pending_specializations<'a>(
         abilities: AbilitiesView::Module(&abilities_store),
         exposed_by_module,
         derived_module: &derived_module,
-        layout_buffer: &mut layout_buffer,
     };
 
     // Add modules' decls to Procs
@@ -5763,7 +5734,6 @@ fn load_derived_partial_procs<'a>(
     exposed_by_module: &ExposedByModule,
     procs_base: &mut ProcsBase<'a>,
     world_abilities: &mut WorldAbilities,
-    layout_buffer: &mut LayoutBuffer<'a>,
 ) {
     debug_assert_eq!(home, ModuleId::DERIVED_GEN);
 
@@ -5799,7 +5769,6 @@ fn load_derived_partial_procs<'a>(
             abilities: AbilitiesView::World(world_abilities),
             exposed_by_module,
             derived_module,
-            layout_buffer,
         };
 
         let partial_proc = match derived_expr {
@@ -5941,7 +5910,6 @@ fn run_task<'a>(
             decls,
             module_timing,
             layout_cache,
-            layout_buffer,
             solved_subs,
             imported_module_thunks,
             exposed_to_host,
@@ -5958,7 +5926,6 @@ fn run_task<'a>(
             decls,
             module_timing,
             layout_cache,
-            layout_buffer,
             target_info,
             exposed_to_host,
             &exposed_by_module,
@@ -5972,7 +5939,6 @@ fn run_task<'a>(
             subs,
             procs_base,
             layout_cache,
-            layout_buffer,
             specializations_we_must_make,
             module_timing,
             world_abilities,
@@ -5985,7 +5951,6 @@ fn run_task<'a>(
             subs,
             procs_base,
             layout_cache,
-            layout_buffer,
             specializations_we_must_make,
             module_timing,
             target_info,

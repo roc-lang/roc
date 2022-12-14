@@ -5,7 +5,6 @@ use crate::layout::{
     LambdaName, LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, RawFunctionLayout,
     STLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
 };
-use crate::LayoutBuffer;
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -1475,7 +1474,6 @@ pub struct Env<'a, 'i> {
     pub abilities: AbilitiesView<'i>,
     pub exposed_by_module: &'i ExposedByModule,
     pub derived_module: &'i SharedDerivedModule,
-    pub layout_buffer: &'i mut LayoutBuffer<'a>,
 }
 
 impl<'a, 'i> Env<'a, 'i> {
