@@ -33,8 +33,8 @@ use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
-    instantiate_rigids, Content, ExhaustiveMark, FlatType, RedundantMark, StorageSubs, Subs,
-    Variable, VariableSubsSlice,
+    instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
+    StorageSubs, Subs, Variable, VariableSubsSlice,
 };
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -6576,7 +6576,7 @@ pub fn from_can<'a>(
                 symbol,
                 var,
                 ability_info,
-            } in lookups_in_cond
+            } in lookups_in_cond.iter().copied()
             {
                 let symbol = match ability_info {
                     Some(specialization_id) => late_resolve_ability_specialization(
@@ -6610,6 +6610,14 @@ pub fn from_can<'a>(
                 env.arena.alloc(stmt),
             );
 
+            let expectation_subs = env
+                .expectation_subs
+                .as_deref_mut()
+                .expect("if expects are compiled, their subs should be available");
+            for ExpectLookup { var, .. } in lookups_in_cond {
+                storage_copy_var_to(&mut Default::default(), env.subs, expectation_subs, var);
+            }
+
             stmt
         }
 
@@ -6627,7 +6635,7 @@ pub fn from_can<'a>(
                 symbol,
                 var,
                 ability_info,
-            } in lookups_in_cond
+            } in lookups_in_cond.iter().copied()
             {
                 let symbol = match ability_info {
                     Some(specialization_id) => late_resolve_ability_specialization(
@@ -6660,6 +6668,14 @@ pub fn from_can<'a>(
                 cond_symbol,
                 env.arena.alloc(stmt),
             );
+
+            let expectation_subs = env
+                .expectation_subs
+                .as_deref_mut()
+                .expect("if expects are compiled, their subs should be available");
+            for ExpectLookup { var, .. } in lookups_in_cond {
+                storage_copy_var_to(&mut Default::default(), env.subs, expectation_subs, var);
+            }
 
             stmt
         }
