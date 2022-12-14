@@ -113,7 +113,6 @@ target-lexicon = "0.12.3"
 tempfile = "3.2.0"
 unicode-segmentation = "1.10.0"
 walkdir = "2.3.2"
-wasm3 = { git = "https://github.com/roc-lang/wasm3-rs", rev = "ba0cdab7404f7f2995a8c18e614ce020dabd6da0" }
 wyhash = "0.5.0"
 
 # TODO: Deal with the update of object to 0.27.
