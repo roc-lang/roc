@@ -1622,7 +1622,6 @@ pub enum Stmt<'a> {
         condition: Symbol,
         region: Region,
         lookups: &'a [Symbol],
-        layouts: &'a [Layout<'a>],
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
@@ -1630,7 +1629,6 @@ pub enum Stmt<'a> {
         condition: Symbol,
         region: Region,
         lookups: &'a [Symbol],
-        layouts: &'a [Layout<'a>],
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
@@ -6600,7 +6598,6 @@ pub fn from_can<'a>(
                 condition: cond_symbol,
                 region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
-                layouts: layouts.into_bump_slice(),
                 remainder: env.arena.alloc(rest),
             };
 
@@ -6656,7 +6653,6 @@ pub fn from_can<'a>(
                 condition: cond_symbol,
                 region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
-                layouts: layouts.into_bump_slice(),
                 remainder: env.arena.alloc(rest),
             };
 
@@ -7082,7 +7078,6 @@ fn substitute_in_stmt_help<'a>(
             condition,
             region,
             lookups,
-            layouts,
             remainder,
         } => {
             let new_remainder =
@@ -7097,7 +7092,6 @@ fn substitute_in_stmt_help<'a>(
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),
-                layouts,
                 remainder: new_remainder,
             };
 
@@ -7108,7 +7102,6 @@ fn substitute_in_stmt_help<'a>(
             condition,
             region,
             lookups,
-            layouts,
             remainder,
         } => {
             let new_remainder =
@@ -7123,7 +7116,6 @@ fn substitute_in_stmt_help<'a>(
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),
-                layouts,
                 remainder: new_remainder,
             };
 
