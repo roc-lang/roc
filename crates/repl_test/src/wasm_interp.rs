@@ -1,7 +1,5 @@
 use bumpalo::Bump;
-use roc_wasm_interp::{
-    wasi, DefaultImportDispatcher, ImportDispatcher, Instance, WasiDispatcher, DEFAULT_IMPORTS,
-};
+use roc_wasm_interp::{wasi, DefaultImportDispatcher, ImportDispatcher, Instance, WasiDispatcher};
 use roc_wasm_module::{Value, WasmModule};
 
 const COMPILER_BYTES: &[u8] =
@@ -24,6 +22,8 @@ impl<'a> ImportDispatcher for CompilerDispatcher<'a> {
         arguments: &[Value],
         compiler_memory: &mut [u8],
     ) -> Option<Value> {
+        dbg!(module_name, function_name);
+
         let unknown = || {
             panic!(
                 "TestDispatcher does not implement {}.{}",
@@ -48,9 +48,13 @@ impl<'a> ImportDispatcher for CompilerDispatcher<'a> {
                     let module = WasmModule::preload(self.arena, app_bytes, require_reloc).unwrap();
 
                     let is_debug_mode = false;
-                    let instance =
-                        Instance::for_module(self.arena, &module, DEFAULT_IMPORTS, is_debug_mode)
-                            .unwrap();
+                    let instance = Instance::for_module(
+                        self.arena,
+                        &module,
+                        DefaultImportDispatcher::default(),
+                        is_debug_mode,
+                    )
+                    .unwrap();
 
                     self.app = Some((module, instance));
                     let ok = Value::I32(true as i32);
@@ -133,17 +137,18 @@ fn run(src: &'static str) -> Result<String, String> {
             arena: &arena,
             src,
             answer: String::new(),
-            wasi: WasiDispatcher { args: &[] },
+            wasi: WasiDispatcher::default(),
             app: None,
             result_addr: None,
         };
 
-        let is_debug_mode = false;
+        let is_debug_mode = false; // logs every instruction!
         Instance::for_module(&arena, &module, dispatcher, is_debug_mode).unwrap()
     };
 
+    let len = Value::I32(src.len() as i32);
     let wasm_ok: i32 = instance
-        .call_export(&module, "entrypoint_from_test", [])
+        .call_export(&module, "entrypoint_from_test", [len])
         .unwrap()
         .unwrap()
         .expect_i32()

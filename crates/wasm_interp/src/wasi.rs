@@ -1,3 +1,4 @@
+use rand::prelude::*;
 use roc_wasm_module::Value;
 use std::io::{self, Write};
 use std::process::exit;
@@ -6,6 +7,13 @@ pub const MODULE_NAME: &str = "wasi_snapshot_preview1";
 
 pub struct WasiDispatcher<'a> {
     pub args: &'a [&'a String],
+    pub rng: ThreadRng,
+}
+
+impl Default for WasiDispatcher<'_> {
+    fn default() -> Self {
+        WasiDispatcher::new(&[])
+    }
 }
 
 /// Implementation of WASI syscalls
@@ -14,7 +22,10 @@ pub struct WasiDispatcher<'a> {
 /// https://github.com/wasm3/wasm3/blob/045040a97345e636b8be4f3086e6db59cdcc785f/source/extra/wasi_core.h
 impl<'a> WasiDispatcher<'a> {
     pub fn new(args: &'a [&'a String]) -> Self {
-        WasiDispatcher { args }
+        WasiDispatcher {
+            args,
+            rng: thread_rng(),
+        }
     }
 
     pub fn dispatch(
@@ -61,8 +72,8 @@ impl<'a> WasiDispatcher<'a> {
             }
             "environ_get" => todo!("WASI {}({:?})", function_name, arguments),
             "environ_sizes_get" => todo!("WASI {}({:?})", function_name, arguments),
-            "clock_res_get" => success_code, // this dummy implementation seems to be good enough
-            "clock_time_get" => success_code, // this dummy implementation seems to be good enough
+            "clock_res_get" => success_code, // this dummy implementation seems to be good enough for some functions
+            "clock_time_get" => success_code,
             "fd_advise" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_allocate" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_close" => todo!("WASI {}({:?})", function_name, arguments),
@@ -74,8 +85,20 @@ impl<'a> WasiDispatcher<'a> {
             "fd_filestat_set_size" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_filestat_set_times" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_pread" => todo!("WASI {}({:?})", function_name, arguments),
-            "fd_prestat_get" => todo!("WASI {}({:?})", function_name, arguments),
-            "fd_prestat_dir_name" => todo!("WASI {}({:?})", function_name, arguments),
+            "fd_prestat_get" => {
+                // The preopened file descriptor to query
+                let fd = arguments[0].expect_i32().unwrap();
+                // Where the metadata will be written
+                let _ptr_buf = arguments[1].expect_i32().unwrap() as usize;
+                match fd {
+                    0 | 1 | 2 => success_code,
+                    _ => {
+                        println!("WASI warning: file descriptor {} does not exist", fd);
+                        Some(Value::I32(Errno::Badf as i32))
+                    }
+                }
+            }
+            "fd_prestat_dir_name" => success_code,
             "fd_pwrite" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_read" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_readdir" => todo!("WASI {}({:?})", function_name, arguments),
@@ -156,7 +179,16 @@ impl<'a> WasiDispatcher<'a> {
             }
             "proc_raise" => todo!("WASI {}({:?})", function_name, arguments),
             "sched_yield" => todo!("WASI {}({:?})", function_name, arguments),
-            "random_get" => todo!("WASI {}({:?})", function_name, arguments),
+            "random_get" => {
+                // A pointer to a buffer where the random bytes will be written
+                let ptr_buf = arguments[1].expect_i32().unwrap() as usize;
+                // The number of bytes that will be written
+                let buf_len = arguments[1].expect_i32().unwrap() as usize;
+                for i in 0..buf_len {
+                    memory[ptr_buf + i] = self.rng.gen();
+                }
+                success_code
+            }
             "sock_recv" => todo!("WASI {}({:?})", function_name, arguments),
             "sock_send" => todo!("WASI {}({:?})", function_name, arguments),
             "sock_shutdown" => todo!("WASI {}({:?})", function_name, arguments),
