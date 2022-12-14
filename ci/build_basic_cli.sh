@@ -19,5 +19,4 @@ lldb  --batch -o 'run' -o 'disas' -- ./roc version
 
 # build the basic cli platform
 ./roc build ../basic-cli/examples/file.roc
-
 cd ..
