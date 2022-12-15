@@ -144,7 +144,7 @@ generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
     Str.concat
         """
         }
-        
+
         impl core::fmt::Debug for \(escapedName) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 match self {
@@ -199,7 +199,7 @@ generateSingleTagStruct = \buf, types, name, tagName, payloadFields ->
         else
             generateMultiElementSingleTagStruct b types name tagName payloadFields asStructFields
 
-generateMultiElementSingleTagStruct = \buf, types, name, _tagName, _payloadFields, asStructFields ->
+generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields, asStructFields ->
     buf
     |> Str.concat "{\n"
     |> \b -> List.walk asStructFields b (generateStructFields types Private)
@@ -207,10 +207,132 @@ generateMultiElementSingleTagStruct = \buf, types, name, _tagName, _payloadField
     |> Str.concat
         """
         impl \(name) {
-        }
-        
         
         """
+    |> \b ->
+        fieldTypes =
+            payloadFields
+            |> List.map \id ->
+                typeName types id
+        args =
+            fieldTypes
+            |> List.mapWithIndex \fieldTypeName, index ->
+                indexStr = Num.toStr index
+
+                "f\(indexStr): \(fieldTypeName)"
+        fields =
+            payloadFields
+            |> List.mapWithIndex \_, index ->
+                indexStr = Num.toStr index
+
+                "f\(indexStr),"
+
+        fieldAccesses =
+            fields
+            |> List.map \field ->
+                "self.\(field)"
+
+        {
+            b,
+            args,
+            fields,
+            fieldTypes,
+            fieldAccesses,
+        }
+    |> \{ b, args, fields, fieldTypes, fieldAccesses } ->
+        argsStr = Str.joinWith args ", "
+        fieldsStr = Str.joinWith fields "\n\(indent)\(indent)\(indent)"
+
+        {
+            b: Str.concat
+                b
+                """
+                \(indent)/// A tag named ``\(tagName)``, with the given payload.
+                \(indent)pub fn \(tagName)(\(argsStr)) -> Self {
+                \(indent)    Self {
+                \(indent)        \(fieldsStr)
+                \(indent)    }
+                \(indent)}
+
+                
+                """,
+            fieldTypes,
+            fieldAccesses,
+        }
+    |> \{ b, fieldTypes, fieldAccesses } ->
+        retType = asRustTuple fieldTypes
+        retExpr = asRustTuple fieldAccesses
+
+        {
+            b: Str.concat
+                b
+                """
+                \(indent)/// Since `\(name)` only has one tag (namely, `\(tagName)`),
+                \(indent)/// convert it to `\(tagName)`'s payload.
+                \(indent)pub fn into_\(tagName)(self) -> \(retType) {
+                \(indent)    \(retExpr)
+                \(indent)}
+
+                 
+                """,
+            fieldTypes,
+            fieldAccesses,
+        }
+    |> \{ b, fieldTypes, fieldAccesses } ->
+        retType =
+            fieldTypes
+            |> List.map \ft -> "&\(ft)"
+            |> asRustTuple
+        retExpr =
+            fieldAccesses
+            |> List.map \fa -> "&\(fa)"
+            |> asRustTuple
+
+        Str.concat
+            b
+            """
+            \(indent)/// Since `\(name)` only has one tag (namely, `\(tagName)`),
+            \(indent)/// convert it to `\(tagName)`'s payload.
+            \(indent)pub fn as_\(tagName)(self) -> \(retType) {
+            \(indent)    \(retExpr)
+            \(indent)}
+            
+            """
+    |> Str.concat
+        """
+        }
+
+
+        impl core::fmt::Dbg for \(name) {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                f.debug_tuple("\(name)::\(tagName)")
+        
+        """
+    |> \b ->
+        payloadFields
+        |> List.mapWithIndex \_, index ->
+            indexStr = Num.toStr index
+
+            "\(indent)\(indent)\(indent)\(indent).field(&self.f\(indexStr))\n"
+        |> List.walk b Str.concat
+    |> Str.concat
+        """
+                        .finish()
+            }
+        }
+
+        
+        """
+
+asRustTuple = \list ->
+    # If there is 1 element in the list we just return it
+    # Otherwise, we make a proper tuple string.
+    joined = Str.joinWith list ", "
+
+    if List.len list == 1 then
+        joined
+    else
+        "(\(joined))"
 
 generateZeroElementSingleTagStruct = \buf, name, tagName ->
     # A single tag with no payload is a zero-sized unit type, so
@@ -222,26 +344,26 @@ generateZeroElementSingleTagStruct = \buf, name, tagName ->
         impl \(name) {
             /// A tag named \(tagName), which has no payload.
             pub const \(tagName): Self = Self();
-        
+
             /// Other `into_` methods return a payload, but since \(tagName) tag
             /// has no payload, this does nothing and is only here for completeness.
             pub fn into_\(tagName)(self) {
                 ()
             }
-        
+
             /// Other `as_` methods return a payload, but since \(tagName) tag
             /// has no payload, this does nothing and is only here for completeness.
             pub fn as_\(tagName)(&self) {
                 ()
             }
         }
-        
+
         impl core::fmt::Dbg for \(name) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.write_str("\(name)::\(tagName)")
             }
         }
-        
+
         
         """
 
@@ -478,7 +600,7 @@ archName = \arch ->
 fileHeader =
     """
     // ⚠️ GENERATED CODE ⚠️ - this entire file was generated by the `roc glue` CLI command
-    
+
     #![allow(unused_unsafe)]
     #![allow(dead_code)]
     #![allow(unused_mut)]
@@ -494,8 +616,8 @@ fileHeader =
     #![allow(clippy::redundant_static_lifetimes)]
     #![allow(clippy::needless_borrow)]
     #![allow(clippy::clone_on_copy)]
-    
-    
+
+
     
     """
 
