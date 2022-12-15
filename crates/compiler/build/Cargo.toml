@@ -47,3 +47,5 @@ target-aarch64 = ["roc_gen_dev/target-aarch64"]
 target-x86 = []
 target-x86_64 = ["roc_gen_dev/target-x86_64"]
 target-wasm32 = []
+
+sanitizers = []
