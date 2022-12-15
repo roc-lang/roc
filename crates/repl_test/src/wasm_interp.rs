@@ -22,8 +22,6 @@ impl<'a> ImportDispatcher for CompilerDispatcher<'a> {
         arguments: &[Value],
         compiler_memory: &mut [u8],
     ) -> Option<Value> {
-        println!("{}.{}{:?}", module_name, function_name, arguments);
-
         let unknown = || {
             panic!(
                 "I could not find an implementation for import {}.{}",
