@@ -3444,11 +3444,19 @@ fn load_package_from_disk<'a>(
                     },
                     parser_state,
                 )) => {
-                    todo!(
-                        "Make a Msg for a `package` module using {:?} and {:?}",
-                        header,
-                        parser_state
-                    )
+                    let (_, _, package_module_msg) = build_package_header(
+                        arena,
+                        Some(shorthand),
+                        false, // since we have an app module ID, the app module must be the root
+                        filename.to_path_buf(),
+                        parser_state,
+                        module_ids,
+                        ident_ids_by_module,
+                        &header,
+                        pkg_module_timing,
+                    );
+
+                    Ok(Msg::Header(package_module_msg))
                 }
                 Ok((
                     ast::Module {
@@ -3989,7 +3997,23 @@ fn parse_header<'a>(
             },
             parse_state,
         )) => {
-            todo!("Parse header for {:?} --> {:?}", header, parse_state);
+            let (module_id, _, header) = build_package_header(
+                arena,
+                None,
+                is_root_module,
+                filename,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                &header,
+                module_timing,
+            );
+
+            Ok(HeaderOutput {
+                module_id,
+                msg: Msg::Header(header),
+                opt_platform_shorthand: None,
+            })
         }
 
         Ok((
@@ -5011,7 +5035,7 @@ fn build_package_header<'a>(
         unspace(arena, header.exposes.item.items).iter().copied(),
         arena,
     );
-
+    let packages = unspace(arena, header.packages.item.items);
     let header_type = HeaderType::Package {
         // A config_shorthand of "" should be fine
         config_shorthand: opt_shorthand.unwrap_or_default(),
@@ -5022,7 +5046,7 @@ fn build_package_header<'a>(
         filename,
         is_root_module,
         opt_shorthand,
-        packages: &[],
+        packages,
         imports: &[],
         header_type,
     };
