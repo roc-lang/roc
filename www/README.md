@@ -1,10 +1,9 @@
 # www.roc-lang.org
 
-## How to update site
-
-- create a new branch, for example `update-www` based on `www`
-- pull `main` into `update-www`
-- update for example the file `www/public/index.html`
-- do a PR against `www`
-- check deploy preview
-- review and merge
+To view the website after you've made a change, execute:
+```bash
+./www/build.sh
+cd www/build
+simple-http-server # If you're using the nix flake simple-http-server will already be installed. Withouth nix you can install it with `cargo install simple-http-server`.
+```
+Open http://0.0.0.0:8000 in your browser.
