@@ -3496,7 +3496,6 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "indoc",
- "lazy_static",
  "roc_build",
  "roc_cli",
  "roc_repl_cli",
@@ -3504,8 +3503,6 @@ dependencies = [
  "roc_wasm_interp",
  "roc_wasm_module",
  "strip-ansi-escapes",
- "wasmer",
- "wasmer-wasi",
 ]
 
 [[package]]
