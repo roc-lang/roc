@@ -8218,49 +8218,71 @@ fn specialize_symbol<'a>(
                         Err(e) => return_on_layout_error_help!(env, e, "specialize_symbol"),
                     };
 
-                    if procs.is_imported_module_thunk(original) {
-                        let layout = match raw {
-                            RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
-                            RawFunctionLayout::Function(_, lambda_set, _) => {
-                                Layout::LambdaSet(lambda_set)
-                            }
-                        };
+                    match raw {
+                        RawFunctionLayout::Function(_, lambda_set, _)
+                            if !procs.is_imported_module_thunk(original) =>
+                        {
+                            let lambda_name =
+                                find_lambda_name(env, layout_cache, lambda_set, original, &[]);
 
-                        let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
-                        let top_level = ProcLayout::from_raw(
-                            env.arena,
-                            &layout_cache.interner,
-                            raw,
-                            CapturesNiche::no_niche(),
-                        );
+                            debug_assert!(
+                                lambda_name.no_captures(),
+                                "imported functions are top-level and should never capture"
+                            );
 
-                        procs.insert_passed_by_name(
-                            env,
-                            arg_var,
-                            LambdaName::no_niche(original),
-                            top_level,
-                            layout_cache,
-                        );
+                            let function_ptr_layout = ProcLayout::from_raw(
+                                env.arena,
+                                &layout_cache.interner,
+                                raw,
+                                lambda_name.captures_niche(),
+                            );
+                            procs.insert_passed_by_name(
+                                env,
+                                arg_var,
+                                lambda_name,
+                                function_ptr_layout,
+                                layout_cache,
+                            );
 
-                        force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
-                    } else {
-                        // Imported symbol, so it must have no captures niche (since
-                        // top-levels can't capture)
-                        let top_level = ProcLayout::from_raw(
-                            env.arena,
-                            &layout_cache.interner,
-                            raw,
-                            CapturesNiche::no_niche(),
-                        );
-                        procs.insert_passed_by_name(
-                            env,
-                            arg_var,
-                            LambdaName::no_niche(original),
-                            top_level,
-                            layout_cache,
-                        );
+                            construct_closure_data(
+                                env,
+                                procs,
+                                layout_cache,
+                                lambda_set,
+                                lambda_name,
+                                &[],
+                                assign_to,
+                                env.arena.alloc(result),
+                            )
+                        }
+                        _ => {
+                            // This is an imported ZAT that returns either a value, or the closure
+                            // data for a lambda set.
+                            let layout = match raw {
+                                RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
+                                RawFunctionLayout::Function(_, lambda_set, _) => {
+                                    Layout::LambdaSet(lambda_set)
+                                }
+                            };
 
-                        let_empty_struct(assign_to, env.arena.alloc(result))
+                            let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
+                            let top_level = ProcLayout::from_raw(
+                                env.arena,
+                                &layout_cache.interner,
+                                raw,
+                                CapturesNiche::no_niche(),
+                            );
+
+                            procs.insert_passed_by_name(
+                                env,
+                                arg_var,
+                                LambdaName::no_niche(original),
+                                top_level,
+                                layout_cache,
+                            );
+
+                            force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
+                        }
                     }
                 }
 
