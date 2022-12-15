@@ -1005,7 +1005,7 @@ mod cli_run {
             let mut path = file.with_file_name(executable_filename);
             path.set_extension("wasm");
 
-            let stdout = crate::run_with_wasmer(&path, stdin);
+            let stdout = crate::run_wasm(&path, stdin);
 
             if !stdout.ends_with(expected_ending) {
                 panic!(
@@ -1355,7 +1355,7 @@ mod cli_run {
 }
 
 #[allow(dead_code)]
-fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
+fn run_wasm(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
     use std::io::Write;
     use wasmer::{Instance, Module, Store};
 

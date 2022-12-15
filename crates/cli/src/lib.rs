@@ -853,7 +853,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
             {
                 use std::os::unix::ffi::OsStrExt;
 
-                run_with_wasmer(
+                run_wasm(
                     generated_filename,
                     args.into_iter().map(|os_str| os_str.as_bytes()),
                 );
@@ -861,7 +861,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             #[cfg(not(target_family = "unix"))]
             {
-                run_with_wasmer(
+                run_wasm(
                     generated_filename,
                     args.into_iter().map(|os_str| {
                         os_str.to_str().expect(
@@ -1239,7 +1239,7 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 }
 
 #[cfg(feature = "run-wasm32")]
-fn run_with_wasmer<I: Iterator<Item = S>, S: AsRef<[u8]>>(wasm_path: &std::path::Path, args: I) {
+fn run_wasm<I: Iterator<Item = S>, S: AsRef<[u8]>>(wasm_path: &std::path::Path, args: I) {
     use wasmer::{Instance, Module, Store};
 
     let store = Store::default();
@@ -1270,7 +1270,7 @@ fn run_with_wasmer<I: Iterator<Item = S>, S: AsRef<[u8]>>(wasm_path: &std::path:
 }
 
 #[cfg(not(feature = "run-wasm32"))]
-fn run_with_wasmer<I: Iterator<Item = S>, S: AsRef<[u8]>>(_wasm_path: &std::path::Path, _args: I) {
+fn run_wasm<I: Iterator<Item = S>, S: AsRef<[u8]>>(_wasm_path: &std::path::Path, _args: I) {
     println!("Running wasm files is not supported on this target.");
 }
 
