@@ -22,11 +22,11 @@ impl<'a> ImportDispatcher for CompilerDispatcher<'a> {
         arguments: &[Value],
         compiler_memory: &mut [u8],
     ) -> Option<Value> {
-        dbg!(module_name, function_name);
+        println!("{}.{}{:?}", module_name, function_name, arguments);
 
         let unknown = || {
             panic!(
-                "TestDispatcher does not implement {}.{}",
+                "I could not find an implementation for import {}.{}",
                 module_name, function_name
             )
         };
@@ -87,7 +87,7 @@ impl<'a> ImportDispatcher for CompilerDispatcher<'a> {
                     match &self.app {
                         Some((_, instance)) => {
                             let len = instance.memory.len();
-                            compiler_memory[buffer_alloc_addr..len]
+                            compiler_memory[buffer_alloc_addr..][..len]
                                 .copy_from_slice(&instance.memory);
                             self.result_addr.map(Value::I32)
                         }
