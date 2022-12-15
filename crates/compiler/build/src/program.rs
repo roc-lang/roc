@@ -350,31 +350,21 @@ fn gen_from_mono_module_llvm<'a>(
             | Architecture::X86_32(_)
             | Architecture::Aarch64(_)
             | Architecture::Wasm32 => {
-                let ll_to_bc = Command::new("llvm-as")
-                    .args([
-                        app_ll_dbg_file.to_str().unwrap(),
-                        "-o",
-                        app_bc_file.to_str().unwrap(),
-                    ])
-                    .output()
-                    .unwrap();
-
-                assert!(ll_to_bc.stderr.is_empty(), "{:#?}", ll_to_bc);
-
-                let llc_args = &[
-                    "-relocation-model=pic",
-                    "-filetype=obj",
-                    app_bc_file.to_str().unwrap(),
-                    "-o",
-                    app_o_file.to_str().unwrap(),
-                ];
-
                 // write the .o file. Note that this builds the .o for the local machine,
                 // and ignores the `target_machine` entirely.
                 //
                 // different systems name this executable differently, so we shotgun for
                 // the most common ones and then give up.
-                let bc_to_object = Command::new("llc").args(llc_args).output().unwrap();
+                let bc_to_object = Command::new("llc")
+                    .args(&[
+                        "-relocation-model=pic",
+                        "-filetype=obj",
+                        app_ll_dbg_file.to_str().unwrap(),
+                        "-o",
+                        app_o_file.to_str().unwrap(),
+                    ])
+                    .output()
+                    .unwrap();
 
                 assert!(bc_to_object.stderr.is_empty(), "{:#?}", bc_to_object);
             }
