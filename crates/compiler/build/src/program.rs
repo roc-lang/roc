@@ -255,7 +255,7 @@ fn gen_from_mono_module_llvm<'a>(
         let mut extra_args = vec![];
         for sanitizer in std::env::var("ROC_SANITIZERS")
             .unwrap()
-            .split(",")
+            .split(',')
             .map(|x| x.trim())
         {
             match sanitizer {
