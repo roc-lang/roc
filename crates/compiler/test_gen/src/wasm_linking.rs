@@ -225,7 +225,7 @@ fn execute_wasm_module<'a>(arena: &'a Bump, orig_module: WasmModule<'a>) -> Resu
     };
 
     let dispatcher = TestDispatcher {
-        wasi: wasi::WasiDispatcher { args: &[] },
+        wasi: wasi::WasiDispatcher::default(),
     };
     let is_debug_mode = true;
     let mut inst = Instance::for_module(&arena, &module, dispatcher, is_debug_mode)?;

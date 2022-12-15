@@ -237,7 +237,7 @@ where
     T: FromWasm32Memory + Wasm32Result,
 {
     let dispatcher = TestDispatcher {
-        wasi: wasi::WasiDispatcher { args: &[] },
+        wasi: wasi::WasiDispatcher::default(),
     };
     let is_debug_mode = roc_debug_flags::dbg_set!(roc_debug_flags::ROC_LOG_WASM_INTERP);
     let mut inst = Instance::for_module(&arena, &module, dispatcher, is_debug_mode)?;
@@ -266,7 +266,7 @@ where
         .map_err(|e| format!("{:?}", e))?;
 
     let dispatcher = TestDispatcher {
-        wasi: wasi::WasiDispatcher { args: &[] },
+        wasi: wasi::WasiDispatcher::default(),
     };
     let is_debug_mode = roc_debug_flags::dbg_set!(roc_debug_flags::ROC_LOG_WASM_INTERP);
     let mut inst = Instance::for_module(&arena, &module, dispatcher, is_debug_mode)?;
