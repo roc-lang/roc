@@ -1228,6 +1228,40 @@ mod cli_run {
     }
 
     #[test]
+    #[serial(multi_dep_thunk)]
+    #[cfg_attr(windows, ignore)]
+    fn run_package_unoptimized() {
+        check_output_with_stdin(
+            &fixture_file("packages", "app.roc"),
+            &[],
+            "packages-test",
+            &[],
+            &[],
+            &[],
+            "I am Dep2.value2\n",
+            UseValgrind::Yes,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_thunk)]
+    #[cfg_attr(windows, ignore)]
+    fn run_package_optimized() {
+        check_output_with_stdin(
+            &fixture_file("packages", "app.roc"),
+            &[],
+            "packages-test",
+            &[OPTIMIZE_FLAG],
+            &[],
+            &[],
+            "I am Dep2.value2\n",
+            UseValgrind::Yes,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
     fn known_type_error() {
         check_compile_error(
             &known_bad_file("TypeError.roc"),
