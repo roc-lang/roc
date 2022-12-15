@@ -307,7 +307,7 @@ fn gen_from_mono_module_llvm<'a>(
             .output()
             .unwrap();
 
-        assert!(bc_to_object.stderr.is_empty(), "{:#?}", bc_to_object);
+        assert!(bc_to_object.status.success(), "{:#?}", bc_to_object);
 
         MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
     } else if emit_debug_info {
