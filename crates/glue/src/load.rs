@@ -50,6 +50,10 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
                 types.iter().map(|x| x.into()).collect();
             let mut files = roc_std::RocResult::err(roc_std::RocStr::empty());
             unsafe { make_glue(&mut files, &roc_types) };
+
+            // Roc will free data passed into it. So forget that data.
+            std::mem::forget(roc_types);
+
             let files: Result<roc_std::RocList<roc_type::File>, roc_std::RocStr> = files.into();
             let files = files.unwrap_or_else(|err| {
                 eprintln!("Glue generation failed: {}", err);
