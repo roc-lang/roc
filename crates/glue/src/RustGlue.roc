@@ -195,9 +195,9 @@ generateSingleTagStruct = \buf, types, name, tagName, payloadFields ->
     |> Str.concat "#[repr(\(repr))]\npub struct \(escapedName) "
     |> \b ->
         if List.isEmpty payloadFields then
-            generateZeroElementSingleTagStruct b name tagName
+            generateZeroElementSingleTagStruct b escapedName tagName
         else
-            generateMultiElementSingleTagStruct b types name tagName payloadFields asStructFields
+            generateMultiElementSingleTagStruct b types escapedName tagName payloadFields asStructFields
 
 generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields, asStructFields ->
     buf
