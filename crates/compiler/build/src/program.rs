@@ -253,6 +253,7 @@ fn gen_from_mono_module_llvm<'a>(
         // It most likely will not work with other fuzzer setups without modification.
         let mut passes = vec![];
         let mut extra_args = vec![];
+        let mut unrecognized = vec![];
         for sanitizer in std::env::var("ROC_SANITIZERS")
             .unwrap()
             .split(',')
@@ -272,8 +273,16 @@ fn gen_from_mono_module_llvm<'a>(
                         // "-sanitizer-coverage-inline-8bit-counters",
                     ]);
                 }
-                _ => {}
+                x => unrecognized.push(x.to_owned()),
             }
+        }
+        if !unrecognized.is_empty() {
+            let out = unrecognized
+                .iter()
+                .map(|x| format!("{:?}", x))
+                .collect::<Vec<String>>()
+                .join(", ");
+            eprintln!("Unrecognized sanitizer: {}\nSupported options are \"address\", \"memory\", \"thread\", and \"fuzzer\"", out);
         }
 
         use std::process::Command;
