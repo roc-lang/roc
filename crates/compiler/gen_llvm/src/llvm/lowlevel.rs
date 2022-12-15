@@ -2124,13 +2124,6 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
                     "f64_to_f32",
                 ),
                 (FloatWidth::F64, FloatWidth::F64) => arg.into(),
-                (FloatWidth::F128, FloatWidth::F128) => arg.into(),
-                (FloatWidth::F128, _) => {
-                    unimplemented!("I cannot handle F128 with Num.toFrac yet")
-                }
-                (_, FloatWidth::F128) => {
-                    unimplemented!("I cannot handle F128 with Num.toFrac yet")
-                }
             }
         }
         NumCeiling => {

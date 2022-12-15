@@ -544,7 +544,6 @@ pub enum RocNum {
     U128,
     F32,
     F64,
-    F128,
     Dec,
 }
 
@@ -566,7 +565,6 @@ impl RocNum {
             RocNum::U128 => size_of::<roc_std::U128>(),
             RocNum::F32 => size_of::<f32>(),
             RocNum::F64 => size_of::<f64>(),
-            RocNum::F128 => todo!(),
             RocNum::Dec => size_of::<roc_std::RocDec>(),
         };
 
@@ -1081,11 +1079,6 @@ fn add_builtin_type<'a>(
             F64 => types.add_anonymous(
                 &env.layout_cache.interner,
                 RocType::Num(RocNum::F64),
-                layout,
-            ),
-            F128 => types.add_anonymous(
-                &env.layout_cache.interner,
-                RocType::Num(RocNum::F128),
                 layout,
             ),
         },
