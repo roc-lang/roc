@@ -8,4 +8,4 @@ mod state;
 mod cli;
 
 #[cfg(all(test, feature = "wasm"))]
-mod wasm_interp;
+mod wasm;
