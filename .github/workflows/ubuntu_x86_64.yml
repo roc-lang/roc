@@ -54,9 +54,8 @@ jobs:
       - name: run `roc test` on Dict builtins
         run: cargo run --locked --release -- test crates/compiler/builtins/roc/Dict.roc && sccache --show-stats
 
-      #TODO pass --locked into the script here as well, this avoids rebuilding dependencies unnecessarily
       - name: wasm repl test
-        run: crates/repl_test/test_wasm.sh && sccache --show-stats
+        run: cargo test --locked --release -p repl_test --features wasm && sccache --show-stats
 
       #TODO i386 (32-bit linux) cli tests
 
