@@ -227,7 +227,7 @@ fn execute_wasm_module<'a>(arena: &'a Bump, orig_module: WasmModule<'a>) -> Resu
     let dispatcher = TestDispatcher {
         wasi: wasi::WasiDispatcher::default(),
     };
-    let is_debug_mode = true;
+    let is_debug_mode = false;
     let mut inst = Instance::for_module(&arena, &module, dispatcher, is_debug_mode)?;
 
     // In Zig, main can only return u8 or void, but our result is too wide for that.
