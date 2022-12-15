@@ -1255,7 +1255,10 @@ fn link_macos(
 
             output_path.set_extension("dylib");
 
-            (vec!["-dylib", "-undefined", "dynamic_lookup"], output_path)
+            (
+                vec!["-dylib", "-undefined", "dynamic_lookup", "-no_fixup_chains"],
+                output_path,
+            )
         }
         LinkType::None => internal_error!("link_macos should not be called with link type of none"),
     };
