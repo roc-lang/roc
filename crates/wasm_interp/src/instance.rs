@@ -24,7 +24,7 @@ enum Block {
     Normal { vstack: usize },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct BranchCacheEntry {
     addr: u32,
     argument: u32,
@@ -47,8 +47,12 @@ pub struct Instance<'a, I: ImportDispatcher> {
     blocks: Vec<'a, Block>,
     /// Outermost block depth for the currently-executing function.
     outermost_block: u32,
-    /// Cache for branching instructions
-    branch_cache: Vec<'a, BranchCacheEntry>,
+    /// Current function index
+    current_function: usize,
+    /// Cache for branching instructions, split into buckets for each function.
+    branch_cache: Vec<'a, Vec<'a, BranchCacheEntry>>,
+    /// Number of imports in the module
+    import_count: usize,
     /// Import dispatcher from user code
     pub import_dispatcher: I,
     /// Temporary storage for import arguments
@@ -58,7 +62,8 @@ pub struct Instance<'a, I: ImportDispatcher> {
 }
 
 impl<'a, I: ImportDispatcher> Instance<'a, I> {
-    pub fn new<G>(
+    #[cfg(test)]
+    pub(crate) fn new<G>(
         arena: &'a Bump,
         memory_pages: u32,
         program_counter: usize,
@@ -77,7 +82,9 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             program_counter,
             blocks: Vec::new_in(arena),
             outermost_block: 0,
-            branch_cache: Vec::new_in(arena),
+            branch_cache: bumpalo::vec![in arena; bumpalo::vec![in arena]],
+            current_function: 0,
+            import_count: 0,
             import_dispatcher,
             import_arguments: Vec::new_in(arena),
             debug_string: Some(String::new()),
@@ -118,6 +125,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             None
         };
 
+        let import_count = module.import.imports.len();
+        let branch_cache = {
+            let num_functions = import_count + module.code.function_count as usize;
+            let empty_caches_iter = iter::repeat(Vec::new_in(arena)).take(num_functions);
+            Vec::from_iter_in(empty_caches_iter, arena)
+        };
+
         Ok(Instance {
             memory,
             call_stack,
@@ -126,7 +140,9 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             program_counter: usize::MAX,
             blocks: Vec::new_in(arena),
             outermost_block: 0,
-            branch_cache: Vec::new_in(arena),
+            current_function: usize::MAX,
+            branch_cache,
+            import_count,
             import_dispatcher,
             import_arguments: Vec::new_in(arena),
             debug_string,
@@ -206,7 +222,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         module: &'m WasmModule<'a>,
         fn_name: &str,
     ) -> Result<&'m [u8], String> {
-        let fn_index = {
+        self.current_function = {
             let mut export_iter = module.export.exports.iter();
             export_iter
                 // First look up the name in exports
@@ -237,18 +253,18 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                         "I couldn't find a function '{}' in this WebAssembly module",
                         fn_name
                     )
-                })?
+                })? as usize
         };
 
+        let internal_fn_index = self.current_function - self.import_count;
+
         self.program_counter = {
-            let internal_fn_index = fn_index as usize - module.import.function_count();
             let mut cursor = module.code.function_offsets[internal_fn_index] as usize;
             let _start_fn_byte_length = u32::parse((), &module.code.bytes, &mut cursor);
             cursor
         };
 
         let arg_type_bytes = {
-            let internal_fn_index = fn_index as usize - module.import.imports.len();
             let signature_index = module.function.signatures[internal_fn_index];
             module.types.look_up_arg_type_bytes(signature_index)
         };
@@ -256,7 +272,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         if self.debug_string.is_some() {
             println!(
                 "Calling export func[{}] '{}' at address {:#x}",
-                fn_index,
+                self.current_function,
                 fn_name,
                 self.program_counter + module.code.section_offset as usize
             );
@@ -385,8 +401,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         use OpCode::*;
 
         let addr = self.program_counter as u32;
-        let cache_result = self
-            .branch_cache
+        let cache_result = self.branch_cache[self.current_function]
             .iter()
             .find(|entry| entry.addr == addr && entry.argument == relative_blocks_outward);
 
@@ -412,7 +427,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                     _ => {}
                 }
             }
-            self.branch_cache.push(BranchCacheEntry {
+            self.branch_cache[self.current_function].push(BranchCacheEntry {
                 addr,
                 argument: relative_blocks_outward,
                 target: self.program_counter as u32,
@@ -427,9 +442,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         fn_index: usize,
         module: &WasmModule<'a>,
     ) -> Result<(), Error> {
-        let n_import_fns = module.import.imports.len();
-
-        let (signature_index, opt_import) = if fn_index < n_import_fns {
+        let (signature_index, opt_import) = if fn_index < self.import_count {
             // Imported non-Wasm function
             let import = &module.import.imports[fn_index];
             let sig = match import.description {
@@ -439,7 +452,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             (sig, Some(import))
         } else {
             // Wasm function
-            let sig = module.function.signatures[fn_index - n_import_fns];
+            let sig = module.function.signatures[fn_index - self.import_count];
             (sig, None)
         };
 
@@ -477,7 +490,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             }
         } else {
             let return_addr = self.program_counter as u32;
-            let internal_fn_index = fn_index - n_import_fns;
+            let internal_fn_index = fn_index - self.import_count;
             self.program_counter = module.code.function_offsets[internal_fn_index] as usize;
 
             let return_block_depth = self.outermost_block;
@@ -494,6 +507,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 &mut self.program_counter,
             )?;
         }
+        self.current_function = fn_index;
         Ok(())
     }
 
@@ -541,7 +555,9 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 });
                 if condition == 0 {
                     let addr = self.program_counter as u32;
-                    let cache_result = self.branch_cache.iter().find(|entry| entry.addr == addr);
+                    let cache_result = self.branch_cache[self.current_function]
+                        .iter()
+                        .find(|entry| entry.addr == addr);
                     if let Some(entry) = cache_result {
                         self.program_counter = entry.target as usize;
                     } else {
@@ -572,7 +588,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                                 _ => {}
                             }
                         }
-                        self.branch_cache.push(BranchCacheEntry {
+                        self.branch_cache[self.current_function].push(BranchCacheEntry {
                             addr,
                             argument: 0,
                             target: self.program_counter as u32,
