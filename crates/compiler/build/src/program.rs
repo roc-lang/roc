@@ -316,9 +316,6 @@ fn gen_from_mono_module_llvm<'a>(
         let mut app_ll_dbg_file = PathBuf::from(roc_file_path);
         app_ll_dbg_file.set_extension("dbg.ll");
 
-        let mut app_bc_file = PathBuf::from(roc_file_path);
-        app_bc_file.set_extension("bc");
-
         let mut app_o_file = PathBuf::from(roc_file_path);
         app_o_file.set_extension("o");
 
@@ -355,7 +352,7 @@ fn gen_from_mono_module_llvm<'a>(
                 //
                 // different systems name this executable differently, so we shotgun for
                 // the most common ones and then give up.
-                let bc_to_object = Command::new("llc")
+                let ll_to_object = Command::new("llc")
                     .args(&[
                         "-relocation-model=pic",
                         "-filetype=obj",
@@ -366,7 +363,7 @@ fn gen_from_mono_module_llvm<'a>(
                     .output()
                     .unwrap();
 
-                assert!(bc_to_object.stderr.is_empty(), "{:#?}", bc_to_object);
+                assert!(ll_to_object.stderr.is_empty(), "{:#?}", ll_to_object);
             }
             _ => unreachable!(),
         }
