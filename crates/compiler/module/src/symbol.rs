@@ -594,6 +594,13 @@ impl IdentId {
     pub const fn index(self) -> usize {
         self.0 as usize
     }
+
+    /// # Safety
+    ///
+    /// The index is not guaranteed to know to exist.
+    pub unsafe fn from_index(index: u32) -> Self {
+        Self(index)
+    }
 }
 
 /// Stores a mapping between Ident and IdentId.

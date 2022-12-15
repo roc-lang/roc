@@ -32,9 +32,10 @@ pub fn get_values<'a>(
     layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     start: *const u8,
     start_offset: usize,
-    variables: &[Variable],
-) -> (usize, Vec<Expr<'a>>) {
-    let mut result = Vec::with_capacity(variables.len());
+    number_of_lookups: usize,
+) -> (usize, Vec<Expr<'a>>, Vec<Variable>) {
+    let mut result = Vec::with_capacity(number_of_lookups);
+    let mut result_vars = Vec::with_capacity(number_of_lookups);
 
     let memory = ExpectMemory { start };
 
@@ -45,13 +46,20 @@ pub fn get_values<'a>(
 
     let app = arena.alloc(app);
 
-    for (i, variable) in variables.iter().enumerate() {
-        let start = app.memory.deref_usize(start_offset + i * 8);
+    for i in 0..number_of_lookups {
+        let size_of_lookup_header = 8 /* pointer to value */ + 4 /* type variable */;
+
+        let start = app
+            .memory
+            .deref_usize(start_offset + i * size_of_lookup_header);
+        let variable = app.memory.deref_u32(
+            start_offset + i * size_of_lookup_header + 8, /* skip the pointer */
+        );
+        let variable = unsafe { Variable::from_index(variable) };
+
         app.offset = start;
 
         let expr = {
-            let variable = *variable;
-
             // TODO: pass layout_cache to jit_to_ast directly
             let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
             let layout = layout_cache.from_var(arena, variable, subs).unwrap();
@@ -76,9 +84,10 @@ pub fn get_values<'a>(
         };
 
         result.push(expr);
+        result_vars.push(variable);
     }
 
-    (app.offset, result)
+    (app.offset, result, result_vars)
 }
 
 #[cfg(not(windows))]

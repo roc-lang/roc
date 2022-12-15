@@ -8529,4 +8529,23 @@ mod solve_expr {
         print_can_decls: true
         );
     }
+
+    #[test]
+    fn constrain_dbg_flex_var() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                polyDbg = \x ->
+                #^^^^^^^{-1}
+                    dbg x
+                    x
+
+                main = polyDbg ""
+                "#
+            ),
+        @"polyDbg : a -[[polyDbg(1)]]-> a"
+        );
+    }
 }

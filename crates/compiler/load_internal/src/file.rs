@@ -138,7 +138,6 @@ struct ModuleCache<'a> {
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations<'a>>>,
-    expectations: VecMap<ModuleId, Expectations>,
 
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
@@ -215,7 +214,6 @@ impl Default for ModuleCache<'_> {
             can_problems: Default::default(),
             type_problems: Default::default(),
             sources: Default::default(),
-            expectations: Default::default(),
         }
     }
 }
@@ -435,6 +433,7 @@ fn start_phase<'a>(
                     decls,
                     ident_ids,
                     abilities_store,
+                    expectations,
                 } = typechecked;
 
                 let mut imported_module_thunks = bumpalo::collections::Vec::new_in(arena);
@@ -451,8 +450,8 @@ fn start_phase<'a>(
 
                 let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
-                let build_expects = matches!(state.exec_mode, ExecutionMode::Test)
-                    && state.module_cache.expectations.contains_key(&module_id);
+                let build_expects =
+                    matches!(state.exec_mode, ExecutionMode::Test) && expectations.is_some();
 
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
@@ -467,6 +466,7 @@ fn start_phase<'a>(
                     // TODO: awful, how can we get rid of the clone?
                     exposed_by_module: state.exposed_types.clone(),
                     derived_module,
+                    expectations,
                     build_expects,
                 }
             }
@@ -488,67 +488,90 @@ fn start_phase<'a>(
                     specializations_we_must_make.extend(derived_synth_specializations)
                 }
 
-                let (mut ident_ids, mut subs, mut procs_base, layout_cache, mut module_timing) =
-                    if state.make_specializations_pass.current_pass() == 1
-                        && module_id == ModuleId::DERIVED_GEN
-                    {
-                        // This is the first time the derived module is introduced into the load
-                        // graph. It has no abilities of its own or anything, just generate fresh
-                        // information for it.
-                        (
-                            IdentIds::default(),
-                            Subs::default(),
-                            ProcsBase::default(),
-                            LayoutCache::new(state.layout_interner.fork(), state.target_info),
-                            ModuleTiming::new(Instant::now()),
-                        )
-                    } else if state.make_specializations_pass.current_pass() == 1 {
-                        let found_specializations = state
-                            .module_cache
-                            .found_specializations
-                            .remove(&module_id)
-                            .unwrap();
+                let (
+                    mut ident_ids,
+                    mut subs,
+                    expectations,
+                    mut procs_base,
+                    layout_cache,
+                    mut module_timing,
+                ) = if state.make_specializations_pass.current_pass() == 1
+                    && module_id == ModuleId::DERIVED_GEN
+                {
+                    // This is the first time the derived module is introduced into the load
+                    // graph. It has no abilities of its own or anything, just generate fresh
+                    // information for it.
+                    (
+                        IdentIds::default(),
+                        Subs::default(),
+                        None, // no expectations for derived module
+                        ProcsBase::default(),
+                        LayoutCache::new(state.layout_interner.fork(), state.target_info),
+                        ModuleTiming::new(Instant::now()),
+                    )
+                } else if state.make_specializations_pass.current_pass() == 1 {
+                    let found_specializations = state
+                        .module_cache
+                        .found_specializations
+                        .remove(&module_id)
+                        .unwrap();
 
-                        let FoundSpecializationsModule {
-                            ident_ids,
-                            subs,
-                            procs_base,
-                            layout_cache,
-                            module_timing,
-                            abilities_store,
-                        } = found_specializations;
+                    let FoundSpecializationsModule {
+                        ident_ids,
+                        subs,
+                        procs_base,
+                        layout_cache,
+                        module_timing,
+                        abilities_store,
+                        expectations,
+                    } = found_specializations;
 
-                        let our_exposed_types = state
-                            .exposed_types
-                            .get(&module_id)
-                            .unwrap_or_else(|| {
-                                internal_error!("Exposed types for {:?} missing", module_id)
-                            })
-                            .clone();
+                    let our_exposed_types = state
+                        .exposed_types
+                        .get(&module_id)
+                        .unwrap_or_else(|| {
+                            internal_error!("Exposed types for {:?} missing", module_id)
+                        })
+                        .clone();
 
-                        // Add our abilities to the world.
-                        state.world_abilities.insert(
-                            module_id,
-                            abilities_store,
-                            our_exposed_types.exposed_types_storage_subs,
-                        );
+                    // Add our abilities to the world.
+                    state.world_abilities.insert(
+                        module_id,
+                        abilities_store,
+                        our_exposed_types.exposed_types_storage_subs,
+                    );
 
-                        (ident_ids, subs, procs_base, layout_cache, module_timing)
-                    } else {
-                        let LateSpecializationsModule {
-                            ident_ids,
-                            subs,
-                            module_timing,
-                            layout_cache,
-                            procs_base,
-                        } = state
-                            .module_cache
-                            .late_specializations
-                            .remove(&module_id)
-                            .unwrap();
+                    (
+                        ident_ids,
+                        subs,
+                        expectations,
+                        procs_base,
+                        layout_cache,
+                        module_timing,
+                    )
+                } else {
+                    let LateSpecializationsModule {
+                        ident_ids,
+                        subs,
+                        expectations,
+                        module_timing,
+                        layout_cache,
+                        procs_base,
+                    } = state
+                        .module_cache
+                        .late_specializations
+                        .remove(&module_id)
+                        .unwrap();
 
-                        (ident_ids, subs, procs_base, layout_cache, module_timing)
-                    };
+                    (
+                        ident_ids,
+                        subs,
+                        expectations,
+                        procs_base,
+                        layout_cache,
+                        module_timing,
+                    )
+                };
 
                 if module_id == ModuleId::DERIVED_GEN {
                     load_derived_partial_procs(
@@ -579,6 +602,7 @@ fn start_phase<'a>(
                     // TODO: awful, how can we get rid of the clone?
                     exposed_by_module: state.exposed_types.clone(),
                     derived_module,
+                    expectations,
                 }
             }
         }
@@ -679,6 +703,7 @@ pub struct TypeCheckedModule<'a> {
     pub decls: Declarations,
     pub ident_ids: IdentIds,
     pub abilities_store: AbilitiesStore,
+    pub expectations: Option<Expectations>,
 }
 
 #[derive(Debug)]
@@ -689,6 +714,7 @@ struct FoundSpecializationsModule<'a> {
     subs: Subs,
     module_timing: ModuleTiming,
     abilities_store: AbilitiesStore,
+    expectations: Option<Expectations>,
 }
 
 #[derive(Debug)]
@@ -698,6 +724,7 @@ struct LateSpecializationsModule<'a> {
     module_timing: ModuleTiming,
     layout_cache: LayoutCache<'a>,
     procs_base: ProcsBase<'a>,
+    expectations: Option<Expectations>,
 }
 
 #[derive(Debug, Default)]
@@ -831,6 +858,7 @@ enum Msg<'a> {
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
         toplevel_expects: ToplevelExpects,
+        expectations: Option<Expectations>,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -842,6 +870,7 @@ enum Msg<'a> {
         update_mode_ids: UpdateModeIds,
         module_timing: ModuleTiming,
         subs: Subs,
+        expectations: Option<Expectations>,
     },
 
     /// The task is to only typecheck AND monomorphize modules
@@ -852,6 +881,7 @@ enum Msg<'a> {
         /// DO NOT use the one on state; that is left in an empty state after specialization is complete!
         layout_interner: STLayoutInterner<'a>,
         exposed_to_host: ExposedToHost,
+        module_expectations: VecMap<ModuleId, Expectations>,
     },
 
     FailedToParse(FileError<'a, SyntaxError<'a>>),
@@ -1147,6 +1177,7 @@ enum BuildTask<'a> {
         exposed_by_module: ExposedByModule,
         abilities_store: AbilitiesStore,
         derived_module: SharedDerivedModule,
+        expectations: Option<Expectations>,
         build_expects: bool,
     },
     MakeSpecializations {
@@ -1160,6 +1191,7 @@ enum BuildTask<'a> {
         exposed_by_module: ExposedByModule,
         world_abilities: WorldAbilities,
         derived_module: SharedDerivedModule,
+        expectations: Option<Expectations>,
     },
 }
 
@@ -1717,6 +1749,7 @@ fn state_thread_step<'a>(
                     subs,
                     layout_interner,
                     exposed_to_host,
+                    module_expectations,
                 } => {
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
@@ -1727,6 +1760,7 @@ fn state_thread_step<'a>(
                         subs,
                         layout_interner,
                         exposed_to_host,
+                        module_expectations,
                     )?;
 
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
@@ -2608,22 +2642,19 @@ fn update<'a>(
                     .expect("root or this module is not yet known - that's a bug!")
             };
 
-            if should_include_expects {
+            let opt_expectations = if should_include_expects {
                 let (path, _) = state.module_cache.sources.get(&module_id).unwrap();
 
-                let expectations = Expectations {
+                Some(Expectations {
                     expectations: loc_expects,
                     dbgs: loc_dbgs,
                     subs: solved_subs.clone().into_inner(),
                     path: path.to_owned(),
                     ident_ids: ident_ids.clone(),
-                };
-
-                state
-                    .module_cache
-                    .expectations
-                    .insert(module_id, expectations);
-            }
+                })
+            } else {
+                None
+            };
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
@@ -2736,6 +2767,7 @@ fn update<'a>(
                         decls,
                         ident_ids,
                         abilities_store,
+                        expectations: opt_expectations,
                     };
 
                     state
@@ -2775,6 +2807,7 @@ fn update<'a>(
             module_timing,
             abilities_store,
             toplevel_expects,
+            expectations,
         } => {
             log!("found specializations for {:?}", module_id);
 
@@ -2797,6 +2830,7 @@ fn update<'a>(
                 subs,
                 module_timing,
                 abilities_store,
+                expectations,
             };
 
             state
@@ -2822,6 +2856,7 @@ fn update<'a>(
             external_specializations_requested,
             module_timing,
             layout_cache,
+            expectations,
             ..
         } => {
             debug_assert!(
@@ -2843,6 +2878,7 @@ fn update<'a>(
                     subs,
                     layout_cache,
                     procs_base,
+                    expectations,
                 },
             );
 
@@ -2900,6 +2936,9 @@ fn update<'a>(
                         );
                     }
 
+                    let mut module_expectations =
+                        VecMap::with_capacity(state.module_cache.module_names.len());
+
                     // Flush late-specialization module information to the top-level of the state
                     // where it will be visible to others, since we don't need late specialization
                     // anymore.
@@ -2911,6 +2950,7 @@ fn update<'a>(
                             module_timing,
                             layout_cache: _layout_cache,
                             procs_base: _,
+                            expectations,
                         },
                     ) in state.module_cache.late_specializations.drain()
                     {
@@ -2919,6 +2959,9 @@ fn update<'a>(
                             state.root_subs = Some(subs);
                         }
                         state.timings.insert(module_id, module_timing);
+                        if let Some(expectations) = expectations {
+                            module_expectations.insert(module_id, expectations);
+                        }
 
                         #[cfg(debug_assertions)]
                         {
@@ -2981,6 +3024,7 @@ fn update<'a>(
                             subs,
                             layout_interner,
                             exposed_to_host: state.exposed_to_host.clone(),
+                            module_expectations,
                         })
                         .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
@@ -3114,6 +3158,7 @@ fn finish_specialization<'a>(
     subs: Subs,
     layout_interner: STLayoutInterner<'a>,
     exposed_to_host: ExposedToHost,
+    module_expectations: VecMap<ModuleId, Expectations>,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     if false {
         println!(
@@ -3154,7 +3199,6 @@ fn finish_specialization<'a>(
     } = state;
 
     let ModuleCache {
-        expectations,
         type_problems,
         can_problems,
         sources,
@@ -3245,7 +3289,7 @@ fn finish_specialization<'a>(
         can_problems,
         type_problems,
         output_path,
-        expectations,
+        expectations: module_expectations,
         exposed_to_host,
         module_id: state.root_id,
         subs,
@@ -5230,6 +5274,7 @@ fn make_specializations<'a>(
     world_abilities: WorldAbilities,
     exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
+    mut expectations: Option<Expectations>,
 ) -> Msg<'a> {
     let make_specializations_start = Instant::now();
     let mut update_mode_ids = UpdateModeIds::new();
@@ -5237,6 +5282,7 @@ fn make_specializations<'a>(
     let mut mono_env = roc_mono::ir::Env {
         arena,
         subs: &mut subs,
+        expectation_subs: expectations.as_mut().map(|e| &mut e.subs),
         home,
         ident_ids: &mut ident_ids,
         target_info,
@@ -5288,6 +5334,7 @@ fn make_specializations<'a>(
         procedures,
         update_mode_ids,
         subs,
+        expectations,
         external_specializations_requested,
         module_timing,
     }
@@ -5307,6 +5354,7 @@ fn build_pending_specializations<'a>(
     exposed_by_module: &ExposedByModule,
     abilities_store: AbilitiesStore,
     derived_module: SharedDerivedModule,
+    mut expectations: Option<Expectations>,
     build_expects: bool,
 ) -> Msg<'a> {
     let find_specializations_start = Instant::now();
@@ -5327,6 +5375,7 @@ fn build_pending_specializations<'a>(
     let mut mono_env = roc_mono::ir::Env {
         arena,
         subs: &mut subs,
+        expectation_subs: expectations.as_mut().map(|e| &mut e.subs),
         home,
         ident_ids: &mut ident_ids,
         target_info,
@@ -5716,6 +5765,7 @@ fn build_pending_specializations<'a>(
         module_timing,
         abilities_store,
         toplevel_expects,
+        expectations,
     }
 }
 
@@ -5757,6 +5807,8 @@ fn load_derived_partial_procs<'a>(
         let mut mono_env = roc_mono::ir::Env {
             arena,
             subs,
+            // There are no derived expectations.
+            expectation_subs: None,
             home,
             ident_ids,
             target_info,
@@ -5916,6 +5968,7 @@ fn run_task<'a>(
             abilities_store,
             exposed_by_module,
             derived_module,
+            expectations,
             build_expects,
         } => Ok(build_pending_specializations(
             arena,
@@ -5931,6 +5984,7 @@ fn run_task<'a>(
             &exposed_by_module,
             abilities_store,
             derived_module,
+            expectations,
             build_expects,
         )),
         MakeSpecializations {
@@ -5944,6 +5998,7 @@ fn run_task<'a>(
             world_abilities,
             exposed_by_module,
             derived_module,
+            expectations,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -5957,6 +6012,7 @@ fn run_task<'a>(
             world_abilities,
             &exposed_by_module,
             derived_module,
+            expectations,
         )),
     }?;
 

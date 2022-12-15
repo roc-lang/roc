@@ -2585,6 +2585,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             condition: cond_symbol,
             region,
             lookups,
+            variables,
             remainder,
         } => {
             let bd = env.builder;
@@ -2619,6 +2620,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             *cond_symbol,
                             *region,
                             lookups,
+                            variables,
                         );
 
                         if let LlvmBackendMode::BinaryDev = env.mode {
@@ -2653,6 +2655,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             condition: cond_symbol,
             region,
             lookups,
+            variables,
             remainder,
         } => {
             let bd = env.builder;
@@ -2687,6 +2690,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             *cond_symbol,
                             *region,
                             lookups,
+                            variables,
                         );
 
                         bd.build_unconditional_branch(then_block);

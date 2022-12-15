@@ -9,9 +9,17 @@ expect
 
     a == b
 
+polyDbg = \x ->
+    dbg x
+    x
+
 main =
     x = 42
     expect x != x
     dbg x
     dbg "Fjoer en ferdjer frieten oan dyn geve lea"
-    "Program finished!\n"
+
+    r = {x : polyDbg "abc", y: polyDbg 10u8, z : polyDbg (A (B C))}
+
+    when r is
+        _ -> "Program finished!\n"

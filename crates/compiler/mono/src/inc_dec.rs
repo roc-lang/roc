@@ -555,7 +555,13 @@ impl<'a, 'i> Context<'a, 'i> {
         match &call_type {
             LowLevel { op, .. } => {
                 let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
-                let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
+                let b = match op {
+                    roc_module::low_level::LowLevel::Dbg => {
+                        // NB(dbg-spec-var) second var is the Variable
+                        self.add_dec_after_lowlevel(&arguments[..1], ps, b, b_live_vars)
+                    }
+                    _ => self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars),
+                };
 
                 let v = Expr::Call(crate::ir::Call {
                     call_type,
@@ -1199,6 +1205,7 @@ impl<'a, 'i> Context<'a, 'i> {
                 condition,
                 region,
                 lookups,
+                variables,
             } => {
                 let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
 
@@ -1206,6 +1213,7 @@ impl<'a, 'i> Context<'a, 'i> {
                     condition: *condition,
                     region: *region,
                     lookups,
+                    variables,
                     remainder: b,
                 });
 
@@ -1221,6 +1229,7 @@ impl<'a, 'i> Context<'a, 'i> {
                 condition,
                 region,
                 lookups,
+                variables,
             } => {
                 let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
 
@@ -1228,6 +1237,7 @@ impl<'a, 'i> Context<'a, 'i> {
                     condition: *condition,
                     region: *region,
                     lookups,
+                    variables,
                     remainder: b,
                 });
 
