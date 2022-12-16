@@ -3199,7 +3199,6 @@ dependencies = [
  "roc_repl_cli",
  "roc_test_utils",
  "roc_wasm_interp",
- "roc_wasm_module",
  "strip-ansi-escapes",
 ]
 

@@ -1,6 +1,7 @@
 use bumpalo::Bump;
-use roc_wasm_interp::{wasi, DefaultImportDispatcher, ImportDispatcher, Instance, WasiDispatcher};
-use roc_wasm_module::{Value, WasmModule};
+use roc_wasm_interp::{
+    wasi, DefaultImportDispatcher, ImportDispatcher, Instance, Value, WasiDispatcher,
+};
 
 const COMPILER_BYTES: &[u8] =
     include_bytes!("../../../.ignore/repl_test_target/wasm32-wasi/release/roc_repl_wasm.wasm");
@@ -42,13 +43,10 @@ impl<'a> ImportDispatcher for CompilerDispatcher<'a> {
                     let app_bytes_len = arguments[1].expect_i32().unwrap() as usize;
                     let app_bytes = &compiler_memory[app_bytes_ptr..][..app_bytes_len];
 
-                    let require_reloc = false;
-                    let module = WasmModule::preload(self.arena, app_bytes, require_reloc).unwrap();
-
                     let is_debug_mode = false;
-                    let instance = Instance::for_module(
+                    let instance = Instance::from_bytes(
                         self.arena,
-                        self.arena.alloc(module),
+                        app_bytes,
                         DefaultImportDispatcher::default(),
                         is_debug_mode,
                     )
@@ -127,9 +125,6 @@ impl<'a> ImportDispatcher for CompilerDispatcher<'a> {
 fn run(src: &'static str) -> Result<String, String> {
     let arena = Bump::new();
 
-    let require_reloc = false;
-    let module = WasmModule::preload(&arena, COMPILER_BYTES, require_reloc).unwrap();
-
     let mut instance = {
         let dispatcher = CompilerDispatcher {
             arena: &arena,
@@ -141,7 +136,7 @@ fn run(src: &'static str) -> Result<String, String> {
         };
 
         let is_debug_mode = false; // logs every instruction!
-        Instance::for_module(&arena, &module, dispatcher, is_debug_mode).unwrap()
+        Instance::from_bytes(&arena, COMPILER_BYTES, dispatcher, is_debug_mode).unwrap()
     };
 
     let len = Value::I32(src.len() as i32);

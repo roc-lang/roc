@@ -18,7 +18,6 @@ roc_build = { path = "../compiler/build" }
 roc_repl_cli = {path = "../repl_cli"}
 roc_test_utils = {path = "../test_utils"}
 roc_wasm_interp = {path = "../wasm_interp"}
-roc_wasm_module = {path = "../wasm_module"} # todo: would be nicer not to need this
 
 [features]
 default = ["target-aarch64", "target-x86_64", "target-wasm32"]
