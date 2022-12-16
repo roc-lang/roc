@@ -9,7 +9,7 @@ pub use instance::Instance;
 pub use wasi::{WasiDispatcher, WasiFile};
 
 pub use roc_wasm_module::Value;
-use roc_wasm_module::{ValueType, WasmModule};
+use roc_wasm_module::ValueType;
 
 pub trait ImportDispatcher {
     /// Dispatch a call from WebAssembly to your own code, based on module and function name.
@@ -98,24 +98,5 @@ impl Error {
 impl From<(ValueType, ValueType)> for Error {
     fn from((expected, actual): (ValueType, ValueType)) -> Self {
         Error::ValueStackType(expected, actual)
-    }
-}
-
-// Determine which function the program counter is in
-pub(crate) fn pc_to_fn_index(program_counter: usize, module: &WasmModule<'_>) -> usize {
-    if module.code.function_offsets.is_empty() {
-        0
-    } else {
-        // Find the first function that starts *after* the given program counter
-        let next_internal_fn_index = module
-            .code
-            .function_offsets
-            .iter()
-            .position(|o| *o as usize > program_counter)
-            .unwrap_or(module.code.function_offsets.len());
-        // Go back 1
-        let internal_fn_index = next_internal_fn_index - 1;
-        // Adjust for imports, whose indices come before the code section
-        module.import.imports.len() + internal_fn_index
     }
 }

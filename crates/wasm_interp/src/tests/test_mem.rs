@@ -249,7 +249,6 @@ fn test_store<'a>(
     offset: u32,
     value: Value,
 ) -> Vec<'a, u8> {
-    let is_debug_mode = false;
     let start_fn_name = "test";
 
     module.memory = MemorySection::new(arena, MemorySection::PAGE_SIZE);
@@ -286,6 +285,7 @@ fn test_store<'a>(
         buf.append_u8(OpCode::END as u8);
     });
 
+    let is_debug_mode = false;
     let mut inst = Instance::for_module(
         arena,
         module,

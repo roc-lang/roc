@@ -8,9 +8,9 @@ use roc_wasm_module::sections::{ImportDesc, MemorySection};
 use roc_wasm_module::{ExportType, WasmModule};
 use roc_wasm_module::{Value, ValueType};
 
-use crate::frame::{write_stack_trace, Frame};
+use crate::frame::Frame;
 use crate::value_stack::ValueStack;
-use crate::{pc_to_fn_index, Error, ImportDispatcher};
+use crate::{Error, ImportDispatcher};
 
 #[derive(Debug)]
 pub enum Action {
@@ -295,10 +295,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
     ) -> Result<Option<Value>, String> {
         self.previous_frames.clear();
         self.blocks.clear();
+        self.blocks.push(Block::Normal {
+            vstack: self.value_stack.depth(),
+        });
         self.current_frame = Frame::enter(
             fn_index,
             0, // return_addr
-            0, // return_block_depth
+            self.blocks.len(),
             arg_type_bytes,
             &module.code.bytes,
             &mut self.value_stack,
@@ -313,16 +316,16 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 }
                 Err(e) => {
                     let file_offset = self.program_counter + module.code.section_offset as usize;
-                    let mut message = e.to_string_at(file_offset);
-                    write_stack_trace(
-                        &self.current_frame,
-                        &self.previous_frames,
-                        self.module,
-                        &self.value_stack,
-                        self.program_counter,
-                        &mut message,
-                    )
-                    .unwrap();
+                    let message = e.to_string_at(file_offset);
+                    // write_stack_trace(
+                    //     &self.current_frame,
+                    //     &self.previous_frames,
+                    //     self.module,
+                    //     &self.value_stack,
+                    //     self.program_counter,
+                    //     &mut message,
+                    // )
+                    // .unwrap();
                     return Err(message);
                 }
             };
@@ -348,7 +351,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
     fn do_return(&mut self) -> Action {
         let Frame {
             return_addr,
-            return_block_depth,
+            function_block_depth,
             locals_start,
             ..
         } = self.current_frame;
@@ -371,7 +374,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             self.value_stack.push(val);
         }
 
-        self.blocks.truncate(return_block_depth);
+        self.blocks.truncate(function_block_depth - 1);
         self.program_counter = return_addr;
 
         if let Some(caller_frame) = self.previous_frames.pop() {
@@ -502,7 +505,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 .extend(std::iter::repeat(Value::I64(0)).take(arg_type_bytes.len()));
             for (i, type_byte) in arg_type_bytes.iter().copied().enumerate().rev() {
                 let arg = self.value_stack.pop();
-                assert_eq!(ValueType::from(arg), ValueType::from(type_byte));
+
+                let expected = ValueType::from(type_byte);
+                let actual = ValueType::from(arg);
+                if actual != expected {
+                    return Err(Error::ValueStackType(expected, actual));
+                }
+
                 self.import_arguments[i] = arg;
             }
 
@@ -520,24 +529,26 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             }
         } else {
             let return_addr = self.program_counter;
-            let return_block_depth = self.blocks.len();
-
             // set PC to start of function bytes
             let internal_fn_index = fn_index - self.import_count;
             self.program_counter = module.code.function_offsets[internal_fn_index] as usize;
             // advance PC to the start of the local variable declarations
             u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
 
+            self.blocks.push(Block::Normal {
+                vstack: self.value_stack.depth(),
+            });
+            let function_block_depth = self.blocks.len();
+
             let mut swap_frame = Frame::enter(
                 fn_index,
                 return_addr,
-                return_block_depth,
+                function_block_depth,
                 arg_type_bytes,
                 &module.code.bytes,
                 &mut self.value_stack,
                 &mut self.program_counter,
             );
-
             std::mem::swap(&mut swap_frame, &mut self.current_frame);
             self.previous_frames.push(swap_frame);
         }
@@ -636,7 +647,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.do_break(0, module);
             }
             END => {
-                if self.blocks.len() == self.current_frame.return_block_depth {
+                if self.blocks.len() == self.current_frame.function_block_depth {
                     // implicit RETURN at end of function
                     action = self.do_return();
                     implicit_return = true;
@@ -1646,11 +1657,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             let base = self.current_frame.locals_start + self.current_frame.locals_count;
             let slice = self.value_stack.get_slice(base as usize);
             eprintln!("{:06x} {:17} {:?}", file_offset, debug_string, slice);
-            if op_code == RETURN || (op_code == END && implicit_return) {
-                let fn_index = pc_to_fn_index(self.program_counter, module);
+            let is_return = op_code == RETURN || (op_code == END && implicit_return);
+            let is_program_end = self.program_counter == 0;
+            if is_return && !is_program_end {
                 eprintln!(
-                    "returning to function {} at pc={:06x}\n",
-                    fn_index, self.program_counter
+                    "returning to function {} at {:06x}\n",
+                    self.current_frame.fn_index,
+                    self.program_counter + self.module.code.section_offset as usize
                 );
             } else if op_code == CALL || op_code == CALLINDIRECT {
                 eprintln!();

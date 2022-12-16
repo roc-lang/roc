@@ -10,11 +10,11 @@ pub struct Frame {
     pub fn_index: usize,
     /// Address in the code section where this frame returns to
     pub return_addr: usize,
-    /// Number of block scopes when this frame returns
-    pub return_block_depth: usize,
-    /// Offset in the ValueStack where the locals begin
+    /// Depth of the "function block" for this frame
+    pub function_block_depth: usize,
+    /// Offset in the ValueStack where the args & locals begin
     pub locals_start: usize,
-    /// Number of locals in the frame
+    /// Number of args & locals in the frame
     pub locals_count: usize,
 }
 
@@ -23,7 +23,7 @@ impl Frame {
         Frame {
             fn_index: 0,
             return_addr: 0,
-            return_block_depth: 0,
+            function_block_depth: 0,
             locals_start: 0,
             locals_count: 0,
         }
@@ -32,7 +32,7 @@ impl Frame {
     pub fn enter(
         fn_index: usize,
         return_addr: usize,
-        return_block_depth: usize,
+        function_block_depth: usize,
         arg_type_bytes: &[u8],
         code_bytes: &[u8],
         value_stack: &mut ValueStack<'_>,
@@ -60,7 +60,7 @@ impl Frame {
         Frame {
             fn_index,
             return_addr,
-            return_block_depth,
+            function_block_depth,
             locals_start,
             locals_count,
         }
@@ -77,6 +77,7 @@ impl Frame {
     }
 }
 
+#[allow(dead_code)]
 pub fn write_stack_trace(
     _current_frame: &Frame,
     _previous_frames: &[Frame],
