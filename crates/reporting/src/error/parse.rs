@@ -177,6 +177,8 @@ enum Node {
     InsideParens,
     RecordConditionalDefault,
     StringFormat,
+    Dbg,
+    Expect,
 }
 
 fn to_expr_report<'a>(
@@ -397,6 +399,8 @@ fn to_expr_report<'a>(
                         ]),
                     ),
                     Node::ListElement => (pos, alloc.text("a list")),
+                    Node::Dbg => (pos, alloc.text("a dbg statement")),
+                    Node::Expect => (pos, alloc.text("an expect statement")),
                     Node::RecordConditionalDefault => (pos, alloc.text("record field default")),
                     Node::StringFormat => (pos, alloc.text("a string format")),
                     Node::InsideParens => (pos, alloc.text("some parentheses")),
@@ -557,14 +561,52 @@ fn to_expr_report<'a>(
         EExpr::IndentEnd(pos) => {
             let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
-            let doc = alloc.stack(vec![
-                alloc.reflow(r"I am partway through parsing an expression, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                alloc.concat(vec![
-                    alloc.reflow("Looks like the indentation ends prematurely here. "),
-                    alloc.reflow("Did you mean to have another expression after this line?"),
+
+            let snippet = alloc.region_with_subregion(lines.convert_region(surroundings), region);
+
+            let doc = match context {
+                Context::InNode(Node::Dbg, _, _) => alloc.stack([
+                    alloc.reflow(
+                        r"I am partway through parsing a dbg statement, but I got stuck here:",
+                    ),
+                    snippet,
+                    alloc.stack([
+                        alloc.reflow(r"I was expecting a final expression, like so"),
+                        alloc.vcat([
+                            alloc.parser_suggestion("dbg 42").indent(4),
+                            alloc.parser_suggestion("\"done\"").indent(4),
+                        ]),
+                    ]),
                 ]),
-            ]);
+                Context::InNode(Node::Expect, _, _) => alloc.stack([
+                    alloc.reflow(
+                        r"I am partway through parsing an expect statement, but I got stuck here:",
+                    ),
+                    snippet,
+                    alloc.stack([
+                        alloc.reflow(r"I was expecting a final expression, like so"),
+                        alloc.vcat([
+                            alloc.parser_suggestion("expect 1 + 1 == 2").indent(4),
+                            alloc.parser_suggestion("\"done\"").indent(4),
+                        ]),
+                    ]),
+                ]),
+                _ => {
+                    // generic
+                    alloc.stack([
+                        alloc.reflow(
+                            r"I am partway through parsing an expression, but I got stuck here:",
+                        ),
+                        snippet,
+                        alloc.concat([
+                            alloc.reflow(r"Looks like the indentation ends prematurely here. "),
+                            alloc.reflow(
+                                r"Did you mean to have another expression after this line?",
+                            ),
+                        ]),
+                    ])
+                }
+            };
 
             Report {
                 filename,
@@ -572,6 +614,13 @@ fn to_expr_report<'a>(
                 title: "INDENT ENDS AFTER EXPRESSION".to_string(),
                 severity: Severity::RuntimeError,
             }
+        }
+        EExpr::Expect(e_expect, _position) => {
+            let node = Node::Expect;
+            to_dbg_or_expect_report(alloc, lines, filename, context, node, e_expect, start)
+        }
+        EExpr::Dbg(e_expect, _position) => {
+            to_dbg_or_expect_report(alloc, lines, filename, context, Node::Dbg, e_expect, start)
         }
         _ => todo!("unhandled parse error: {:?}", parse_problem),
     }
@@ -1188,6 +1237,36 @@ fn to_list_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
+    }
+}
+
+fn to_dbg_or_expect_report<'a>(
+    alloc: &'a RocDocAllocator<'a>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    context: Context,
+    node: Node,
+    parse_problem: &roc_parse::parser::EExpect<'a>,
+    start: Position,
+) -> Report<'a> {
+    match parse_problem {
+        roc_parse::parser::EExpect::Space(err, pos) => {
+            to_space_report(alloc, lines, filename, err, *pos)
+        }
+
+        roc_parse::parser::EExpect::Dbg(_) => unreachable!("another branch would be taken"),
+        roc_parse::parser::EExpect::Expect(_) => unreachable!("another branch would be taken"),
+
+        roc_parse::parser::EExpect::Condition(e_expr, condition_start) => {
+            // is adding context helpful here?
+            to_expr_report(alloc, lines, filename, context, e_expr, *condition_start)
+        }
+        roc_parse::parser::EExpect::Continuation(e_expr, continuation_start) => {
+            let context = Context::InNode(node, start, Box::new(context));
+            to_expr_report(alloc, lines, filename, context, e_expr, *continuation_start)
+        }
+
+        roc_parse::parser::EExpect::IndentCondition(_) => todo!(),
     }
 }
 
