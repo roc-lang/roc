@@ -2055,33 +2055,41 @@ fn unify_shared_fields<M: MetaCollector>(
                     // this is an error, but we continue to give better error messages
                     continue;
                 }
-                (Demanded(val), Required(_))
-                | (Required(val), Demanded(_))
-                | (Demanded(val), Demanded(_)) => Demanded(val),
-                (Required(val), Required(_)) => Required(val),
-                (Required(val), Optional(_)) => Required(val),
-                (Optional(val), Required(_)) => Required(val),
-                (Optional(val), Optional(_)) => Optional(val),
+
+                (Demanded(a), Required(b))
+                | (Required(a), Demanded(b))
+                | (Demanded(a), Demanded(b)) => Demanded(choose_merged_var(env.subs, a, b)),
+                (Required(a), Required(b))
+                | (Required(a), Optional(b))
+                | (Optional(a), Required(b)) => Required(choose_merged_var(env.subs, a, b)),
+
+                (Optional(a), Optional(b)) => Optional(choose_merged_var(env.subs, a, b)),
 
                 // rigid optional
-                (RigidOptional(val), Optional(_)) | (Optional(_), RigidOptional(val)) => {
-                    RigidOptional(val)
+                (RigidOptional(a), Optional(b)) | (Optional(b), RigidOptional(a)) => {
+                    RigidOptional(choose_merged_var(env.subs, a, b))
+                }
+                (RigidOptional(a), RigidOptional(b)) => {
+                    RigidOptional(choose_merged_var(env.subs, a, b))
                 }
                 (RigidOptional(_), Demanded(_) | Required(_) | RigidRequired(_))
                 | (Demanded(_) | Required(_) | RigidRequired(_), RigidOptional(_)) => {
                     // this is an error, but we continue to give better error messages
                     continue;
                 }
-                (RigidOptional(val), RigidOptional(_)) => RigidOptional(val),
 
                 // rigid required
                 (RigidRequired(_), Optional(_)) | (Optional(_), RigidRequired(_)) => {
                     // this is an error, but we continue to give better error messages
                     continue;
                 }
-                (RigidRequired(val), Demanded(_) | Required(_))
-                | (Demanded(_) | Required(_), RigidRequired(val)) => RigidRequired(val),
-                (RigidRequired(val), RigidRequired(_)) => RigidRequired(val),
+                (RigidRequired(a), Demanded(b) | Required(b))
+                | (Demanded(b) | Required(b), RigidRequired(a)) => {
+                    RigidRequired(choose_merged_var(env.subs, a, b))
+                }
+                (RigidRequired(a), RigidRequired(b)) => {
+                    RigidRequired(choose_merged_var(env.subs, a, b))
+                }
             };
 
             matching_fields.push((name, actual));
