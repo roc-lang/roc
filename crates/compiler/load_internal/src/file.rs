@@ -3388,7 +3388,7 @@ fn load_package_from_disk<'a>(
     ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = Instant::now();
-    let file_io_start = Instant::now();
+    let file_io_start = module_start_time;
     let read_result = fs::read(filename);
     let file_io_duration = file_io_start.elapsed();
 
