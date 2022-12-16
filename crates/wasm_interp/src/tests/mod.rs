@@ -94,7 +94,7 @@ where
     let mut inst =
         Instance::for_module(&arena, &module, DefaultImportDispatcher::default(), false).unwrap();
 
-    let return_val = inst.call_export(&module, "test", []).unwrap().unwrap();
+    let return_val = inst.call_export("test", []).unwrap().unwrap();
 
     assert_eq!(return_val, expected);
 }

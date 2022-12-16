@@ -10,7 +10,7 @@ struct CompilerDispatcher<'a> {
     src: &'a str,
     answer: String,
     wasi: WasiDispatcher<'a>,
-    app: Option<(WasmModule<'a>, Instance<'a, DefaultImportDispatcher<'a>>)>,
+    app: Option<Instance<'a, DefaultImportDispatcher<'a>>>,
     result_addr: Option<i32>,
 }
 
@@ -48,13 +48,13 @@ impl<'a> ImportDispatcher for CompilerDispatcher<'a> {
                     let is_debug_mode = false;
                     let instance = Instance::for_module(
                         self.arena,
-                        &module,
+                        self.arena.alloc(module),
                         DefaultImportDispatcher::default(),
                         is_debug_mode,
                     )
                     .unwrap();
 
-                    self.app = Some((module, instance));
+                    self.app = Some(instance);
                     let ok = Value::I32(true as i32);
                     Some(ok)
                 }
@@ -62,9 +62,9 @@ impl<'a> ImportDispatcher for CompilerDispatcher<'a> {
                     // fn test_run_app() -> usize;
                     assert_eq!(arguments.len(), 0);
                     match &mut self.app {
-                        Some((module, instance)) => {
+                        Some(instance) => {
                             let result_addr = instance
-                                .call_export(module, "wrapper", [])
+                                .call_export("wrapper", [])
                                 .unwrap()
                                 .expect("No return address from wrapper")
                                 .expect_i32()
@@ -83,7 +83,7 @@ impl<'a> ImportDispatcher for CompilerDispatcher<'a> {
                     assert_eq!(arguments.len(), 1);
                     let buffer_alloc_addr = arguments[0].expect_i32().unwrap() as usize;
                     match &self.app {
-                        Some((_, instance)) => {
+                        Some(instance) => {
                             let len = instance.memory.len();
                             compiler_memory[buffer_alloc_addr..][..len]
                                 .copy_from_slice(&instance.memory);
@@ -146,7 +146,7 @@ fn run(src: &'static str) -> Result<String, String> {
 
     let len = Value::I32(src.len() as i32);
     let wasm_ok: i32 = instance
-        .call_export(&module, "entrypoint_from_test", [len])
+        .call_export("entrypoint_from_test", [len])
         .unwrap()
         .unwrap()
         .expect_i32()

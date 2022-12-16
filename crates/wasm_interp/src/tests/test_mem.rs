@@ -92,9 +92,7 @@ fn test_load(load_op: OpCode, ty: ValueType, data: &[u8], addr: u32, offset: u32
         is_debug_mode,
     )
     .unwrap();
-    inst.call_export(&module, start_fn_name, [])
-        .unwrap()
-        .unwrap()
+    inst.call_export(start_fn_name, []).unwrap().unwrap()
 }
 
 #[test]
@@ -245,7 +243,7 @@ fn test_i64load32u() {
 
 fn test_store<'a>(
     arena: &'a Bump,
-    module: &mut WasmModule<'a>,
+    module: &'a mut WasmModule<'a>,
     addr: u32,
     store_op: OpCode,
     offset: u32,
@@ -295,7 +293,7 @@ fn test_store<'a>(
         is_debug_mode,
     )
     .unwrap();
-    inst.call_export(module, start_fn_name, []).unwrap();
+    inst.call_export(start_fn_name, []).unwrap();
 
     inst.memory
 }
@@ -303,13 +301,13 @@ fn test_store<'a>(
 #[test]
 fn test_i32store() {
     let arena = Bump::new();
-    let mut module = WasmModule::new(&arena);
+    let module = arena.alloc(WasmModule::new(&arena));
 
     let addr: u32 = 0x11;
     let store_op = OpCode::I32STORE;
     let offset = 1;
     let value = Value::I32(0x12345678);
-    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+    let memory = test_store(&arena, module, addr, store_op, offset, value);
 
     let index = (addr + offset) as usize;
     assert_eq!(&memory[index..][..4], &[0x78, 0x56, 0x34, 0x12]);
@@ -318,13 +316,13 @@ fn test_i32store() {
 #[test]
 fn test_i64store() {
     let arena = Bump::new();
-    let mut module = WasmModule::new(&arena);
+    let module = arena.alloc(WasmModule::new(&arena));
 
     let addr: u32 = 0x11;
     let store_op = OpCode::I64STORE;
     let offset = 1;
     let value = Value::I64(0x123456789abcdef0);
-    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+    let memory = test_store(&arena, module, addr, store_op, offset, value);
 
     let index = (addr + offset) as usize;
     assert_eq!(
@@ -336,14 +334,14 @@ fn test_i64store() {
 #[test]
 fn test_f32store() {
     let arena = Bump::new();
-    let mut module = WasmModule::new(&arena);
+    let module = arena.alloc(WasmModule::new(&arena));
 
     let addr: u32 = 0x11;
     let store_op = OpCode::F32STORE;
     let offset = 1;
     let inner: f32 = 1.23456;
     let value = Value::F32(inner);
-    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+    let memory = test_store(&arena, module, addr, store_op, offset, value);
 
     let index = (addr + offset) as usize;
     assert_eq!(&memory[index..][..4], &inner.to_le_bytes());
@@ -352,14 +350,14 @@ fn test_f32store() {
 #[test]
 fn test_f64store() {
     let arena = Bump::new();
-    let mut module = WasmModule::new(&arena);
+    let module = arena.alloc(WasmModule::new(&arena));
 
     let addr: u32 = 0x11;
     let store_op = OpCode::F64STORE;
     let offset = 1;
     let inner: f64 = 1.23456;
     let value = Value::F64(inner);
-    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+    let memory = test_store(&arena, module, addr, store_op, offset, value);
 
     let index = (addr + offset) as usize;
     assert_eq!(&memory[index..][..8], &inner.to_le_bytes());
@@ -368,13 +366,13 @@ fn test_f64store() {
 #[test]
 fn test_i32store8() {
     let arena = Bump::new();
-    let mut module = WasmModule::new(&arena);
+    let module = arena.alloc(WasmModule::new(&arena));
 
     let addr: u32 = 0x11;
     let store_op = OpCode::I32STORE8;
     let offset = 1;
     let value = Value::I32(0x12345678);
-    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+    let memory = test_store(&arena, module, addr, store_op, offset, value);
 
     let index = (addr + offset) as usize;
     assert_eq!(&memory[index..][..4], &[0x78, 0x00, 0x00, 0x00]);
@@ -383,13 +381,13 @@ fn test_i32store8() {
 #[test]
 fn test_i32store16() {
     let arena = Bump::new();
-    let mut module = WasmModule::new(&arena);
+    let module = arena.alloc(WasmModule::new(&arena));
 
     let addr: u32 = 0x11;
     let store_op = OpCode::I32STORE16;
     let offset = 1;
     let value = Value::I32(0x12345678);
-    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+    let memory = test_store(&arena, module, addr, store_op, offset, value);
 
     let index = (addr + offset) as usize;
     assert_eq!(&memory[index..][..4], &[0x78, 0x56, 0x00, 0x00]);
@@ -398,13 +396,13 @@ fn test_i32store16() {
 #[test]
 fn test_i64store8() {
     let arena = Bump::new();
-    let mut module = WasmModule::new(&arena);
+    let module = arena.alloc(WasmModule::new(&arena));
 
     let addr: u32 = 0x11;
     let store_op = OpCode::I64STORE8;
     let offset = 1;
     let value = Value::I64(0x123456789abcdef0);
-    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+    let memory = test_store(&arena, module, addr, store_op, offset, value);
 
     let index = (addr + offset) as usize;
     assert_eq!(
@@ -416,13 +414,13 @@ fn test_i64store8() {
 #[test]
 fn test_i64store16() {
     let arena = Bump::new();
-    let mut module = WasmModule::new(&arena);
+    let module = arena.alloc(WasmModule::new(&arena));
 
     let addr: u32 = 0x11;
     let store_op = OpCode::I64STORE16;
     let offset = 1;
     let value = Value::I64(0x123456789abcdef0);
-    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+    let memory = test_store(&arena, module, addr, store_op, offset, value);
 
     let index = (addr + offset) as usize;
     assert_eq!(
@@ -434,13 +432,13 @@ fn test_i64store16() {
 #[test]
 fn test_i64store32() {
     let arena = Bump::new();
-    let mut module = WasmModule::new(&arena);
+    let module = arena.alloc(WasmModule::new(&arena));
 
     let addr: u32 = 0x11;
     let store_op = OpCode::I64STORE32;
     let offset = 1;
     let value = Value::I64(0x123456789abcdef0);
-    let memory = test_store(&arena, &mut module, addr, store_op, offset, value);
+    let memory = test_store(&arena, module, addr, store_op, offset, value);
 
     let index = (addr + offset) as usize;
     assert_eq!(

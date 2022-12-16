@@ -241,7 +241,7 @@ where
     };
     let is_debug_mode = roc_debug_flags::dbg_set!(roc_debug_flags::ROC_LOG_WASM_INTERP);
     let mut inst = Instance::for_module(&arena, &module, dispatcher, is_debug_mode)?;
-    let opt_value = inst.call_export(module, test_wrapper_name, [])?;
+    let opt_value = inst.call_export(test_wrapper_name, [])?;
     let addr_value = opt_value.ok_or("No return address from Wasm test")?;
     let addr = addr_value.expect_i32().map_err(|e| format!("{:?}", e))?;
     let output = <T as FromWasm32Memory>::decode(&inst.memory, addr as u32);
@@ -273,18 +273,14 @@ where
 
     // Allocate a vector in the test host that refcounts will be copied into
     let mut refcount_vector_addr: i32 = inst
-        .call_export(
-            &module,
-            INIT_REFCOUNT_NAME,
-            [Value::I32(num_refcounts as i32)],
-        )?
+        .call_export(INIT_REFCOUNT_NAME, [Value::I32(num_refcounts as i32)])?
         .ok_or_else(|| format!("No return address from {}", INIT_REFCOUNT_NAME))?
         .expect_i32()
         .map_err(|type_err| format!("{:?}", type_err))?;
 
     // Run the test, ignoring the result
     let _result_addr: i32 = inst
-        .call_export(&module, TEST_WRAPPER_NAME, [])?
+        .call_export(TEST_WRAPPER_NAME, [])?
         .ok_or_else(|| format!("No return address from {}", TEST_WRAPPER_NAME))?
         .expect_i32()
         .map_err(|type_err| format!("{:?}", type_err))?;

@@ -33,6 +33,7 @@ struct BranchCacheEntry {
 
 #[derive(Debug)]
 pub struct Instance<'a, I: ImportDispatcher> {
+    module: &'a WasmModule<'a>,
     /// Contents of the WebAssembly instance's memory
     pub memory: Vec<'a, u8>,
     /// Metadata for every currently-active function call
@@ -75,6 +76,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
     {
         let mem_bytes = memory_pages * MemorySection::PAGE_SIZE;
         Instance {
+            module: arena.alloc(WasmModule::new(arena)),
             memory: Vec::from_iter_in(iter::repeat(0).take(mem_bytes as usize), arena),
             call_stack: CallStack::new(arena),
             value_stack: ValueStack::new(arena),
@@ -93,7 +95,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
 
     pub fn for_module(
         arena: &'a Bump,
-        module: &WasmModule<'a>,
+        module: &'a WasmModule<'a>,
         import_dispatcher: I,
         is_debug_mode: bool,
     ) -> Result<Self, std::string::String> {
@@ -133,6 +135,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         };
 
         Ok(Instance {
+            module,
             memory,
             call_stack,
             value_stack,
@@ -149,16 +152,11 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         })
     }
 
-    pub fn call_export<A>(
-        &mut self,
-        module: &WasmModule<'a>,
-        fn_name: &str,
-        arg_values: A,
-    ) -> Result<Option<Value>, String>
+    pub fn call_export<A>(&mut self, fn_name: &str, arg_values: A) -> Result<Option<Value>, String>
     where
         A: IntoIterator<Item = Value>,
     {
-        let arg_type_bytes = self.prepare_to_call_export(module, fn_name)?;
+        let arg_type_bytes = self.prepare_to_call_export(self.module, fn_name)?;
 
         for (i, (value, type_byte)) in arg_values
             .into_iter()
@@ -176,7 +174,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             self.value_stack.push(value);
         }
 
-        self.call_export_help(module, arg_type_bytes)
+        self.call_export_help(self.module, arg_type_bytes)
     }
 
     pub fn call_export_from_cli(

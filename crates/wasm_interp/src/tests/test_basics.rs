@@ -554,10 +554,7 @@ fn test_call_import() {
 
     let mut inst = Instance::for_module(&arena, &module, import_dispatcher, true).unwrap();
 
-    let return_val = inst
-        .call_export(&module, start_fn_name, [])
-        .unwrap()
-        .unwrap();
+    let return_val = inst.call_export(start_fn_name, []).unwrap().unwrap();
 
     assert_eq!(return_val, Value::I32(234));
 }
@@ -626,10 +623,7 @@ fn test_call_return_no_args() {
     let mut inst =
         Instance::for_module(&arena, &module, DefaultImportDispatcher::default(), true).unwrap();
 
-    let return_val = inst
-        .call_export(&module, start_fn_name, [])
-        .unwrap()
-        .unwrap();
+    let return_val = inst.call_export(start_fn_name, []).unwrap().unwrap();
 
     assert_eq!(return_val, Value::I32(42));
 }
@@ -770,9 +764,7 @@ fn test_call_indirect_help(table_index: u32, elem_index: u32) -> Value {
         is_debug_mode,
     )
     .unwrap();
-    inst.call_export(&module, start_fn_name, [])
-        .unwrap()
-        .unwrap()
+    inst.call_export(start_fn_name, []).unwrap().unwrap()
 }
 
 // #[test]
