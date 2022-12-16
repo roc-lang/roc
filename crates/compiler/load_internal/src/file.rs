@@ -4123,11 +4123,6 @@ fn load_packages<'a>(
             }
         }
     }
-
-    dbg!("TODO Push extra msgs for any loading problems we encountered!");
-    for _problem in problems {
-        // TODO see dbg! message above
-    }
 }
 
 /// Load a module by its filename
