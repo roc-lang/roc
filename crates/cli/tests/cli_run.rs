@@ -560,7 +560,7 @@ mod cli_run {
         test_roc_app(
             "crates/cli_testing_examples/expects",
             "expects.roc",
-            "expects",
+            "expects-test",
             &[],
             &[],
             &[],
@@ -588,7 +588,7 @@ mod cli_run {
         test_roc_app(
             "crates/cli_testing_examples/expects",
             "expects.roc",
-            "expects",
+            "expects-test",
             &[],
             &[],
             &[],
