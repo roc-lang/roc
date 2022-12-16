@@ -192,7 +192,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         &mut self,
         module: &WasmModule<'a>,
         fn_name: &str,
-        arg_strings: &'a [&'a String],
+        arg_strings: &'a [&'a [u8]],
     ) -> Result<Option<Value>, String> {
         // We have two different mechanisms for handling CLI arguments!
         // 1. Basic numbers:
@@ -208,12 +208,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         // Implement the "basic numbers" CLI
         // Check if the called Wasm function takes numeric arguments, and if so, try to parse them from the CLI.
         let arg_type_bytes = self.prepare_to_call_export(module, fn_name)?;
-        for (value_str, type_byte) in arg_strings
+        for (value_bytes, type_byte) in arg_strings
             .iter()
             .skip(1) // first string is the .wasm filename
             .zip(arg_type_bytes.iter().copied())
         {
             use ValueType::*;
+            let value_str = String::from_utf8_lossy(value_bytes);
             let value = match ValueType::from(type_byte) {
                 I32 => Value::I32(value_str.parse::<i32>().map_err(|e| e.to_string())?),
                 I64 => Value::I64(value_str.parse::<i64>().map_err(|e| e.to_string())?),

@@ -39,7 +39,7 @@ pub struct DefaultImportDispatcher<'a> {
 }
 
 impl<'a> DefaultImportDispatcher<'a> {
-    pub fn new(args: &'a [&'a String]) -> Self {
+    pub fn new(args: &'a [&'a [u8]]) -> Self {
         DefaultImportDispatcher {
             wasi: WasiDispatcher {
                 args,

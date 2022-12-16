@@ -6,7 +6,7 @@ use std::process::exit;
 pub const MODULE_NAME: &str = "wasi_snapshot_preview1";
 
 pub struct WasiDispatcher<'a> {
-    pub args: &'a [&'a String],
+    pub args: &'a [&'a [u8]],
     pub rng: ThreadRng,
 }
 
@@ -21,7 +21,7 @@ impl Default for WasiDispatcher<'_> {
 /// https://github.com/wasmerio/wasmer/blob/ef8d2f651ed29b4b06fdc2070eb8189922c54d82/lib/wasi/src/syscalls/mod.rs
 /// https://github.com/wasm3/wasm3/blob/045040a97345e636b8be4f3086e6db59cdcc785f/source/extra/wasi_core.h
 impl<'a> WasiDispatcher<'a> {
-    pub fn new(args: &'a [&'a String]) -> Self {
+    pub fn new(args: &'a [&'a [u8]]) -> Self {
         WasiDispatcher {
             args,
             rng: thread_rng(),
@@ -46,7 +46,7 @@ impl<'a> WasiDispatcher<'a> {
                 for arg in self.args {
                     write_u32(memory, ptr_ptr_argv, ptr_argv_buf as u32);
                     let bytes_target = &mut memory[ptr_argv_buf..][..arg.len()];
-                    bytes_target.copy_from_slice(arg.as_bytes());
+                    bytes_target.copy_from_slice(arg);
                     memory[ptr_argv_buf + arg.len()] = 0; // C string zero termination
                     ptr_argv_buf += arg.len() + 1;
                     ptr_ptr_argv += 4;

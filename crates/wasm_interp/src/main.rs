@@ -1,9 +1,11 @@
 use bumpalo::{collections::Vec, Bump};
 use clap::ArgAction;
 use clap::{Arg, Command};
+use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::iter::once;
+use std::os::unix::prelude::OsStrExt;
 use std::process;
 
 use roc_wasm_interp::{DefaultImportDispatcher, Instance};
@@ -62,10 +64,15 @@ fn main() -> io::Result<()> {
     let start_fn_name = matches.get_one::<String>(FLAG_FUNCTION).unwrap();
     let is_debug_mode = matches.get_flag(FLAG_DEBUG);
     let is_hex_format = matches.get_flag(FLAG_HEX);
-    let start_arg_strings = matches.get_many::<String>(ARGS_FOR_APP).unwrap_or_default();
-    let wasm_path = matches.get_one::<String>(WASM_FILE).unwrap();
+    let start_arg_strings = matches
+        .get_many::<OsString>(ARGS_FOR_APP)
+        .unwrap_or_default();
+    let wasm_path = matches.get_one::<OsString>(WASM_FILE).unwrap();
     // WASI expects the .wasm file to be argv[0]
-    let wasi_argv = Vec::from_iter_in(once(wasm_path).chain(start_arg_strings), &arena);
+    let wasi_argv_iter = once(wasm_path)
+        .chain(start_arg_strings)
+        .map(|s| s.as_bytes());
+    let wasi_argv = Vec::from_iter_in(wasi_argv_iter, &arena);
 
     // Load the WebAssembly binary file
 
