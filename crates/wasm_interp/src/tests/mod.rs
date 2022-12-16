@@ -92,7 +92,7 @@ where
     }
 
     let mut inst =
-        Instance::for_module(&arena, &module, DefaultImportDispatcher::default(), false).unwrap();
+        Instance::for_module(&arena, &module, DefaultImportDispatcher::default(), true).unwrap();
 
     let return_val = inst.call_export("test", []).unwrap().unwrap();
 

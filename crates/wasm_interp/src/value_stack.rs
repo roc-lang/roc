@@ -38,6 +38,18 @@ impl<'a> ValueStack<'a> {
         *self.values.last().unwrap()
     }
 
+    pub(crate) fn get(&self, index: usize) -> Option<&Value> {
+        self.values.get(index)
+    }
+
+    pub(crate) fn set(&mut self, index: usize, value: Value) {
+        self.values[index] = value;
+    }
+
+    pub(crate) fn extend<I: Iterator<Item = Value>>(&mut self, values: I) {
+        self.values.extend(values)
+    }
+
     /// Memory addresses etc
     pub(crate) fn pop_u32(&mut self) -> Result<u32, Error> {
         match self.values.pop() {

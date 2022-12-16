@@ -1,4 +1,4 @@
-mod call_stack;
+mod frame;
 mod instance;
 mod tests;
 mod value_stack;
@@ -10,7 +10,6 @@ pub use wasi::{WasiDispatcher, WasiFile};
 
 pub use roc_wasm_module::Value;
 use roc_wasm_module::{ValueType, WasmModule};
-use value_stack::ValueStack;
 
 pub trait ImportDispatcher {
     /// Dispatch a call from WebAssembly to your own code, based on module and function name.
