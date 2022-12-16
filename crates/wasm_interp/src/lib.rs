@@ -6,9 +6,10 @@ pub mod wasi;
 
 // Main external interface
 pub use instance::Instance;
-pub use wasi::WasiDispatcher;
+pub use wasi::{WasiDispatcher, WasiFile};
 
-use roc_wasm_module::{Value, ValueType, WasmModule};
+pub use roc_wasm_module::Value;
+use roc_wasm_module::{ValueType, WasmModule};
 use value_stack::ValueStack;
 
 pub trait ImportDispatcher {
@@ -31,7 +32,7 @@ impl Default for DefaultImportDispatcher<'_> {
 }
 
 pub struct DefaultImportDispatcher<'a> {
-    wasi: WasiDispatcher<'a>,
+    pub wasi: WasiDispatcher<'a>,
 }
 
 impl<'a> DefaultImportDispatcher<'a> {
