@@ -93,6 +93,17 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         }
     }
 
+    pub fn from_bytes(
+        arena: &'a Bump,
+        module_bytes: &[u8],
+        import_dispatcher: I,
+        is_debug_mode: bool,
+    ) -> Result<Self, std::string::String> {
+        let module =
+            WasmModule::preload(arena, module_bytes, false).map_err(|e| format!("{:?}", e))?;
+        Self::for_module(arena, arena.alloc(module), import_dispatcher, is_debug_mode)
+    }
+
     pub fn for_module(
         arena: &'a Bump,
         module: &'a WasmModule<'a>,
