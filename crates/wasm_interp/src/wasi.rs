@@ -1,6 +1,6 @@
 use rand::prelude::*;
 use roc_wasm_module::Value;
-use std::io::{self, Write};
+use std::io::{self, StderrLock, StdoutLock, Write};
 use std::process::exit;
 
 pub const MODULE_NAME: &str = "wasi_snapshot_preview1";
@@ -8,12 +8,26 @@ pub const MODULE_NAME: &str = "wasi_snapshot_preview1";
 pub struct WasiDispatcher<'a> {
     pub args: &'a [&'a [u8]],
     pub rng: ThreadRng,
+    pub files: Vec<WasiFile>,
 }
 
 impl Default for WasiDispatcher<'_> {
     fn default() -> Self {
         WasiDispatcher::new(&[])
     }
+}
+
+pub enum WasiFile {
+    ReadOnly(Vec<u8>),
+    WriteOnly(Vec<u8>),
+    ReadWrite(Vec<u8>),
+    HostSystemFile,
+}
+
+enum FileWriteLock<'a> {
+    StdOutLock(StdoutLock<'a>),
+    StderrLock(StderrLock<'a>),
+    RegularFileLock(&'a mut Vec<u8>),
 }
 
 /// Implementation of WASI syscalls
@@ -25,6 +39,11 @@ impl<'a> WasiDispatcher<'a> {
         WasiDispatcher {
             args,
             rng: thread_rng(),
+            files: vec![
+                WasiFile::HostSystemFile,
+                WasiFile::HostSystemFile,
+                WasiFile::HostSystemFile,
+            ],
         }
     }
 
@@ -87,18 +106,23 @@ impl<'a> WasiDispatcher<'a> {
             "fd_pread" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_prestat_get" => {
                 // The preopened file descriptor to query
-                let fd = arguments[0].expect_i32().unwrap();
-                // Where the metadata will be written
-                let _ptr_buf = arguments[1].expect_i32().unwrap() as usize;
-                match fd {
-                    0 | 1 | 2 => success_code,
-                    _ => {
-                        println!("WASI warning: file descriptor {} does not exist", fd);
-                        Some(Value::I32(Errno::Badf as i32))
-                    }
+                let fd = arguments[0].expect_i32().unwrap() as usize;
+                // ptr_buf: Where the metadata will be written
+                //  preopen type: 4 bytes, where 0=dir is the only one supported, it seems
+                //  preopen name length: 4 bytes
+                let ptr_buf = arguments[1].expect_i32().unwrap() as usize;
+                memory[ptr_buf..][..8].copy_from_slice(&0u64.to_le_bytes());
+                if fd < self.files.len() {
+                    success_code
+                } else {
+                    println!("WASI warning: file descriptor {} does not exist", fd);
+                    Some(Value::I32(Errno::Badf as i32))
                 }
             }
-            "fd_prestat_dir_name" => success_code,
+            "fd_prestat_dir_name" => {
+                // We're not giving names to any of our files so just return success
+                success_code
+            }
             "fd_pwrite" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_read" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_readdir" => todo!("WASI {}({:?})", function_name, arguments),
@@ -107,8 +131,10 @@ impl<'a> WasiDispatcher<'a> {
             "fd_sync" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_tell" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_write" => {
+                use FileWriteLock::*;
+
                 // file descriptor
-                let fd = arguments[0].expect_i32().unwrap();
+                let fd = arguments[0].expect_i32().unwrap() as usize;
                 // Array of IO vectors
                 let ptr_iovs = arguments[1].expect_i32().unwrap() as usize;
                 // Length of array
@@ -116,10 +142,17 @@ impl<'a> WasiDispatcher<'a> {
                 // Out param: number of bytes written
                 let ptr_nwritten = arguments[3].expect_i32().unwrap() as usize;
 
-                let mut write_lock = match fd {
-                    1 => Ok(io::stdout().lock()),
-                    2 => Err(io::stderr().lock()),
-                    _ => return Some(Value::I32(Errno::Inval as i32)),
+                // Grab a lock for stdout/stderr before the loop rather than re-acquiring over and over.
+                // Not really necessary for other files, but it's easier to use the same structure.
+                let mut write_lock = match self.files.get_mut(fd) {
+                    Some(WasiFile::HostSystemFile) => match fd {
+                        1 => StdOutLock(io::stdout().lock()),
+                        2 => StderrLock(io::stderr().lock()),
+                        _ => return Some(Value::I32(Errno::Inval as i32)),
+                    },
+                    Some(WasiFile::WriteOnly(content)) => RegularFileLock(content),
+                    Some(WasiFile::ReadWrite(content)) => RegularFileLock(content),
+                    _ => return Some(Value::I32(Errno::Badf as i32)),
                 };
 
                 let mut n_written: i32 = 0;
@@ -142,11 +175,15 @@ impl<'a> WasiDispatcher<'a> {
                     let bytes = &memory[iov_base..][..iov_len as usize];
 
                     match &mut write_lock {
-                        Ok(stdout) => {
+                        StdOutLock(stdout) => {
                             n_written += stdout.write(bytes).unwrap() as i32;
                         }
-                        Err(stderr) => {
+                        StderrLock(stderr) => {
                             n_written += stderr.write(bytes).unwrap() as i32;
+                        }
+                        RegularFileLock(content) => {
+                            content.extend_from_slice(bytes);
+                            n_written += bytes.len() as i32;
                         }
                     }
                 }

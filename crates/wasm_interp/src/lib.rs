@@ -8,7 +8,6 @@ pub mod wasi;
 pub use instance::Instance;
 pub use wasi::WasiDispatcher;
 
-use rand::prelude::*;
 use roc_wasm_module::{Value, ValueType, WasmModule};
 use value_stack::ValueStack;
 
@@ -26,10 +25,7 @@ pub trait ImportDispatcher {
 impl Default for DefaultImportDispatcher<'_> {
     fn default() -> Self {
         DefaultImportDispatcher {
-            wasi: WasiDispatcher {
-                args: &[],
-                rng: thread_rng(),
-            },
+            wasi: WasiDispatcher::new(&[]),
         }
     }
 }
@@ -41,10 +37,7 @@ pub struct DefaultImportDispatcher<'a> {
 impl<'a> DefaultImportDispatcher<'a> {
     pub fn new(args: &'a [&'a [u8]]) -> Self {
         DefaultImportDispatcher {
-            wasi: WasiDispatcher {
-                args,
-                rng: thread_rng(),
-            },
+            wasi: WasiDispatcher::new(args),
         }
     }
 }
