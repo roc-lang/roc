@@ -24,10 +24,10 @@ pub enum WasiFile {
     HostSystemFile,
 }
 
-enum FileWriteLock<'a> {
-    StdOutLock(StdoutLock<'a>),
-    StderrLock(StderrLock<'a>),
-    RegularFileLock(&'a mut Vec<u8>),
+enum WriteLock<'a> {
+    StdOut(StdoutLock<'a>),
+    Stderr(StderrLock<'a>),
+    RegularFile(&'a mut Vec<u8>),
 }
 
 /// Implementation of WASI syscalls
@@ -184,7 +184,6 @@ impl<'a> WasiDispatcher<'a> {
             "fd_sync" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_tell" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_write" => {
-                use FileWriteLock::*;
                 use WasiFile::*;
 
                 // file descriptor
@@ -200,11 +199,13 @@ impl<'a> WasiDispatcher<'a> {
                 // Not really necessary for other files, but it's easier to use the same structure.
                 let mut write_lock = match self.files.get_mut(fd) {
                     Some(HostSystemFile) => match fd {
-                        1 => StdOutLock(io::stdout().lock()),
-                        2 => StderrLock(io::stderr().lock()),
+                        1 => WriteLock::StdOut(io::stdout().lock()),
+                        2 => WriteLock::Stderr(io::stderr().lock()),
                         _ => return Some(Value::I32(Errno::Inval as i32)),
                     },
-                    Some(WriteOnly(content) | ReadWrite(content)) => RegularFileLock(content),
+                    Some(WriteOnly(content) | ReadWrite(content)) => {
+                        WriteLock::RegularFile(content)
+                    }
                     _ => return Some(Value::I32(Errno::Badf as i32)),
                 };
 
@@ -228,13 +229,13 @@ impl<'a> WasiDispatcher<'a> {
                     let bytes = &memory[iov_base..][..iov_len as usize];
 
                     match &mut write_lock {
-                        StdOutLock(stdout) => {
+                        WriteLock::StdOut(stdout) => {
                             n_written += stdout.write(bytes).unwrap() as i32;
                         }
-                        StderrLock(stderr) => {
+                        WriteLock::Stderr(stderr) => {
                             n_written += stderr.write(bytes).unwrap() as i32;
                         }
-                        RegularFileLock(content) => {
+                        WriteLock::RegularFile(content) => {
                             content.extend_from_slice(bytes);
                             n_written += bytes.len() as i32;
                         }

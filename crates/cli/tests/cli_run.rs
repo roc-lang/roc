@@ -1354,7 +1354,7 @@ mod cli_run {
     }
 }
 
-#[allow(dead_code)]
+#[cfg(feature = "wasm32-cli-run")]
 fn run_wasm(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
     use bumpalo::Bump;
     use roc_wasm_interp::{DefaultImportDispatcher, Instance, Value, WasiFile};
@@ -1385,7 +1385,7 @@ fn run_wasm(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
     match result {
         Ok(Some(Value::I32(0))) => match &instance.import_dispatcher.wasi.files[1] {
             WasiFile::WriteOnly(fake_stdout) => String::from_utf8(fake_stdout.clone())
-                .unwrap_or("Wasm test printed invalid UTF-8".into()),
+                .unwrap_or_else(|_| "Wasm test printed invalid UTF-8".into()),
             _ => unreachable!(),
         },
         Ok(Some(Value::I32(exit_code))) => {
@@ -1394,9 +1394,7 @@ fn run_wasm(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
         Ok(Some(val)) => {
             format!("WASI _start returned an unexpected number type {:?}", val)
         }
-        Ok(None) => {
-            format!("WASI _start returned no value")
-        }
+        Ok(None) => "WASI _start returned no value".into(),
         Err(e) => {
             format!("WASI error {}", e)
         }
