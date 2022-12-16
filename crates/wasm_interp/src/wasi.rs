@@ -1,6 +1,6 @@
 use rand::prelude::*;
 use roc_wasm_module::Value;
-use std::io::{self, StderrLock, StdoutLock, Write};
+use std::io::{self, Read, StderrLock, StdoutLock, Write};
 use std::process::exit;
 
 pub const MODULE_NAME: &str = "wasi_snapshot_preview1";
@@ -124,7 +124,60 @@ impl<'a> WasiDispatcher<'a> {
                 success_code
             }
             "fd_pwrite" => todo!("WASI {}({:?})", function_name, arguments),
-            "fd_read" => todo!("WASI {}({:?})", function_name, arguments),
+            "fd_read" => {
+                use WasiFile::*;
+
+                // file descriptor
+                let fd = arguments[0].expect_i32().unwrap() as usize;
+                // Array of IO vectors
+                let ptr_iovs = arguments[1].expect_i32().unwrap() as usize;
+                // Length of array
+                let iovs_len = arguments[2].expect_i32().unwrap();
+                // Out param: number of bytes read
+                let ptr_nread = arguments[3].expect_i32().unwrap() as usize;
+
+                // https://man7.org/linux/man-pages/man2/readv.2.html
+                // struct iovec {
+                //     void  *iov_base;    /* Starting address */
+                //     size_t iov_len;     /* Number of bytes to transfer */
+                // };
+
+                let mut n_read: usize = 0;
+                match self.files.get(fd) {
+                    Some(ReadOnly(content) | ReadWrite(content)) => {
+                        for _ in 0..iovs_len {
+                            let iov_base = read_u32(memory, ptr_iovs) as usize;
+                            let iov_len = read_i32(memory, ptr_iovs + 4) as usize;
+                            let remaining = content.len() - n_read;
+                            let len = remaining.min(iov_len);
+                            if len == 0 {
+                                break;
+                            }
+                            memory[iov_base..][..len].copy_from_slice(&content[n_read..][..len]);
+                            n_read += len;
+                        }
+                    }
+                    Some(HostSystemFile) if fd == 0 => {
+                        let mut stdin = io::stdin();
+                        for _ in 0..iovs_len {
+                            let iov_base = read_u32(memory, ptr_iovs) as usize;
+                            let iov_len = read_i32(memory, ptr_iovs + 4) as usize;
+                            match stdin.read(&mut memory[iov_base..][..iov_len]) {
+                                Ok(n) => {
+                                    n_read += n;
+                                }
+                                Err(_) => {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    _ => return Some(Value::I32(Errno::Badf as i32)),
+                };
+
+                memory[ptr_nread..][..4].copy_from_slice(&(n_read as u32).to_le_bytes());
+                success_code
+            }
             "fd_readdir" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_renumber" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_seek" => todo!("WASI {}({:?})", function_name, arguments),
@@ -132,6 +185,7 @@ impl<'a> WasiDispatcher<'a> {
             "fd_tell" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_write" => {
                 use FileWriteLock::*;
+                use WasiFile::*;
 
                 // file descriptor
                 let fd = arguments[0].expect_i32().unwrap() as usize;
@@ -145,13 +199,12 @@ impl<'a> WasiDispatcher<'a> {
                 // Grab a lock for stdout/stderr before the loop rather than re-acquiring over and over.
                 // Not really necessary for other files, but it's easier to use the same structure.
                 let mut write_lock = match self.files.get_mut(fd) {
-                    Some(WasiFile::HostSystemFile) => match fd {
+                    Some(HostSystemFile) => match fd {
                         1 => StdOutLock(io::stdout().lock()),
                         2 => StderrLock(io::stderr().lock()),
                         _ => return Some(Value::I32(Errno::Inval as i32)),
                     },
-                    Some(WasiFile::WriteOnly(content)) => RegularFileLock(content),
-                    Some(WasiFile::ReadWrite(content)) => RegularFileLock(content),
+                    Some(WriteOnly(content) | ReadWrite(content)) => RegularFileLock(content),
                     _ => return Some(Value::I32(Errno::Badf as i32)),
                 };
 
