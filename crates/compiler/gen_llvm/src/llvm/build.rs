@@ -709,7 +709,6 @@ fn float_with_precision<'a, 'ctx, 'env>(
     match float_width {
         FloatWidth::F64 => env.context.f64_type().const_float(value).into(),
         FloatWidth::F32 => env.context.f32_type().const_float(value).into(),
-        FloatWidth::F128 => todo!("F128 is not implemented"),
     }
 }
 
@@ -2586,7 +2585,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             condition: cond_symbol,
             region,
             lookups,
-            layouts: _,
+            variables,
             remainder,
         } => {
             let bd = env.builder;
@@ -2621,6 +2620,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             *cond_symbol,
                             *region,
                             lookups,
+                            variables,
                         );
 
                         if let LlvmBackendMode::BinaryDev = env.mode {
@@ -2655,7 +2655,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             condition: cond_symbol,
             region,
             lookups,
-            layouts: _,
+            variables,
             remainder,
         } => {
             let bd = env.builder;
@@ -2690,6 +2690,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             *cond_symbol,
                             *region,
                             lookups,
+                            variables,
                         );
 
                         bd.build_unconditional_branch(then_block);
@@ -3036,7 +3037,6 @@ fn build_switch_ir<'a, 'ctx, 'env>(
             let int_type = match float_width {
                 FloatWidth::F32 => env.context.i32_type(),
                 FloatWidth::F64 => env.context.i64_type(),
-                FloatWidth::F128 => env.context.i128_type(),
             };
 
             builder

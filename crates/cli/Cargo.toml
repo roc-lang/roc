@@ -39,6 +39,8 @@ target-all = [
     "target-wasm32"
 ]
 
+sanitizers = ["roc_build/sanitizers"]
+
 
 [dependencies]
 roc_collections = { path = "../compiler/collections" }

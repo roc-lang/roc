@@ -2159,3 +2159,36 @@ fn issue_4705() {
         "###
     )
 }
+
+#[mono_test(mode = "test")]
+fn issue_4749() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports [Json]
+
+        expect
+            input = [82, 111, 99]
+            got = Decode.fromBytes input Json.fromUtf8 
+            got == Ok "Roc"
+        "###
+    )
+}
+
+#[mono_test(mode = "test", no_check)]
+fn lambda_set_with_imported_toplevels_issue_4733() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports []
+
+        fn = \{} ->
+            instr : [ Op (U64, U64 -> U64) ]
+            instr = if Bool.true then (Op Num.mul) else (Op Num.add)
+
+            Op op = instr
+
+            \a -> op a a
+
+        expect ((fn {}) 3) == 9
+        "###
+    )
+}
