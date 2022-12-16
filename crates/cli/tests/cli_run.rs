@@ -609,7 +609,7 @@ mod cli_run {
 
                 b : Num *
                 b = 2
-                
+
 
 
                 1 failed and 0 passed in <ignored for test> ms."#
@@ -1230,7 +1230,7 @@ mod cli_run {
     #[test]
     #[serial(multi_dep_thunk)]
     #[cfg_attr(windows, ignore)]
-    fn run_package_unoptimized() {
+    fn run_packages_unoptimized() {
         check_output_with_stdin(
             &fixture_file("packages", "app.roc"),
             &[],
@@ -1238,7 +1238,7 @@ mod cli_run {
             &[],
             &[],
             &[],
-            "I am Dep2.value2\n",
+            "Hello, World! This text came from a package! This text came from a CSV package!\n",
             UseValgrind::Yes,
             TestCliCommands::Run,
         );
@@ -1247,7 +1247,7 @@ mod cli_run {
     #[test]
     #[serial(multi_dep_thunk)]
     #[cfg_attr(windows, ignore)]
-    fn run_package_optimized() {
+    fn run_packages_optimized() {
         check_output_with_stdin(
             &fixture_file("packages", "app.roc"),
             &[],
@@ -1255,7 +1255,7 @@ mod cli_run {
             &[OPTIMIZE_FLAG],
             &[],
             &[],
-            "I am Dep2.value2\n",
+            "Hello, World! This text came from a package! This text came from a CSV package!\n",
             UseValgrind::Yes,
             TestCliCommands::Run,
         );

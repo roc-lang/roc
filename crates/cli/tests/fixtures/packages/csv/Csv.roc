@@ -1,6 +1,6 @@
 interface Csv
     exposes [example]
-    imports [dep.CsvDep]
+    imports []
 
 example : Str
-example = "This text came from a CSV package: \(CsvDep.stuff)!"
+example = "This text came from a CSV package!"
