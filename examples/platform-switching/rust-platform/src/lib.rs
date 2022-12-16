@@ -1,10 +1,8 @@
 #![allow(non_snake_case)]
 
-use core::ffi::c_void;
 use roc_std::RocStr;
-use std::ffi::CStr;
+use std::ffi::{c_char, c_int, c_ulong, c_void, CStr};
 use std::io::Write;
-use std::os::raw::c_char;
 
 extern "C" {
     #[link_name = "roc__mainForHost_1_exposed_generic"]

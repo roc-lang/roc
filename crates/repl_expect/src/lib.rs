@@ -1,5 +1,4 @@
 //! Supports evaluating `expect` and printing contextual information when they fail.
-#[cfg(not(windows))]
 use {
     roc_intern::GlobalInterner,
     roc_module::symbol::Interns,
@@ -14,15 +13,11 @@ use {
     std::sync::Arc,
 };
 
-#[cfg(not(windows))]
 mod app;
-#[cfg(not(windows))]
 pub mod run;
 
-#[cfg(not(windows))]
 use app::{ExpectMemory, ExpectReplApp};
 
-#[cfg(not(windows))]
 #[allow(clippy::too_many_arguments)]
 pub fn get_values<'a>(
     target_info: TargetInfo,

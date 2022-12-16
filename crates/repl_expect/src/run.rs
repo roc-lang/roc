@@ -1,9 +1,6 @@
-use std::{
-    os::unix::process::parent_id,
-    sync::{
-        atomic::{AtomicBool, AtomicU32},
-        Arc,
-    },
+use std::sync::{
+    atomic::{AtomicBool, AtomicU32},
+    Arc,
 };
 
 use bumpalo::collections::Vec as BumpVec;
@@ -35,6 +32,104 @@ pub struct ExpectMemory<'a> {
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
+#[cfg(unix)]
+unsafe fn allocate_shared_memory(
+    file_name: &std::ffi::CStr,
+    shm_size: usize,
+    shm_flags: std::ffi::c_int,
+) -> *mut libc::c_void {
+    let shared_fd = libc::shm_open(file_name.as_ptr().cast(), shm_flags, 0o666);
+    if shared_fd == -1 {
+        internal_error!("failed to shm_open fd");
+    }
+
+    let mut stat: libc::stat = std::mem::zeroed();
+    if libc::fstat(shared_fd, &mut stat) == -1 {
+        internal_error!("failed to stat shared file, does it exist?");
+    }
+    if stat.st_size < shm_size as _ && libc::ftruncate(shared_fd, shm_size as _) == -1 {
+        internal_error!("failed to truncate shared file, are the permissions wrong?");
+    }
+
+    let ptr = libc::mmap(
+        std::ptr::null_mut(),
+        shm_size,
+        libc::PROT_WRITE | libc::PROT_READ,
+        libc::MAP_SHARED,
+        shared_fd,
+        0,
+    );
+
+    if ptr as usize == usize::MAX {
+        // ptr = -1
+        roc_error_macros::internal_error!("failed to mmap shared pointer")
+    }
+
+    // fill the buffer with a fill pattern
+    libc::memset(ptr, 0xAA, shm_size);
+
+    ptr
+}
+
+#[cfg(windows)]
+unsafe fn allocate_shared_memory(
+    file_name: &std::ffi::CStr,
+    shm_size: usize,
+    shm_flags: std::ffi::c_int,
+) -> *mut libc::c_void {
+    use std::ffi::{c_char, c_int, c_ulong, c_void};
+
+    type HANDLE = std::os::windows::raw::HANDLE;
+    type LPCSTR = *const std::ffi::c_char;
+    type DWORD = c_ulong;
+
+    #[repr(C)]
+    struct SECURITY_ATTRIBUTES {
+        pub nLength: DWORD,
+        pub lpSecurityDescriptor: *mut c_void,
+        pub bInheritHandle: c_int,
+    }
+
+    const INVALID_HANDLE_VALUE: HANDLE = -1isize as HANDLE;
+
+    // notes:
+    //
+    // docs at https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createfilemappinga
+    //
+    // - hFile: use https://doc.rust-lang.org/std/os/windows/io/trait.IntoRawHandle.html#tymethod.into_raw_handle
+    // - lpFileMappingAttributes: configures inheritance of this memory. Not sure if relevant
+    //      https://learn.microsoft.com/en-us/windows/win32/memory/file-mapping-security-and-access-rights
+    extern "system" {
+        fn CreateFileMappingA(
+            hFile: HANDLE,
+            lpFileMappingAttributes: *mut SECURITY_ATTRIBUTES,
+            flProtect: DWORD,
+            dwMaximumSizeHigh: DWORD,
+            dwMaximumSizeLow: DWORD,
+            lpName: LPCSTR,
+        ) -> HANDLE;
+    }
+
+    // the flProtect value
+    const PAGE_READWRITE: DWORD = 0x04;
+
+    // low and high bits of the maximum size
+    let dwMaximumSizeHigh = ((shm_size as u64) >> 32) as DWORD;
+    let dwMaximumSizeLow = ((shm_size as u64) & 0xFFFFFFFF) as DWORD;
+
+    // a name so we can find this mapping on the other side
+    let lpName = file_name.as_ptr().cast();
+
+    CreateFileMappingA(
+        INVALID_HANDLE_VALUE,
+        std::ptr::null_mut(),
+        PAGE_READWRITE,
+        dwMaximumSizeHigh,
+        dwMaximumSizeLow,
+        lpName,
+    )
+}
+
 impl<'a> ExpectMemory<'a> {
     const SHM_SIZE: usize = 1024;
 
@@ -53,47 +148,15 @@ impl<'a> ExpectMemory<'a> {
         Self::mmap_help(cstring, libc::O_RDWR | libc::O_CREAT)
     }
 
+    // this will be used by expect-fx
+    #[allow(unused)]
     fn reuse_mmap(&mut self) -> Option<Self> {
         let shm_name = self.shm_name.as_ref()?.clone();
         Some(Self::mmap_help(shm_name, libc::O_RDWR))
     }
 
     fn mmap_help(cstring: std::ffi::CString, shm_flags: i32) -> Self {
-        let ptr = unsafe {
-            let shared_fd = libc::shm_open(cstring.as_ptr().cast(), shm_flags, 0o666);
-            if shared_fd == -1 {
-                internal_error!("failed to shm_open fd");
-            }
-
-            let mut stat: libc::stat = std::mem::zeroed();
-            if libc::fstat(shared_fd, &mut stat) == -1 {
-                internal_error!("failed to stat shared file, does it exist?");
-            }
-            if stat.st_size < Self::SHM_SIZE as _
-                && libc::ftruncate(shared_fd, Self::SHM_SIZE as _) == -1
-            {
-                internal_error!("failed to truncate shared file, are the permissions wrong?");
-            }
-
-            let ptr = libc::mmap(
-                std::ptr::null_mut(),
-                Self::SHM_SIZE,
-                libc::PROT_WRITE | libc::PROT_READ,
-                libc::MAP_SHARED,
-                shared_fd,
-                0,
-            );
-
-            if ptr as usize == usize::MAX {
-                // ptr = -1
-                roc_error_macros::internal_error!("failed to mmap shared pointer")
-            }
-
-            // fill the buffer with a fill pattern
-            libc::memset(ptr, 0xAA, Self::SHM_SIZE);
-
-            ptr
-        };
+        let ptr = unsafe { allocate_shared_memory(&cstring, Self::SHM_SIZE, shm_flags) };
 
         // puts in the initial header
         let _ = ExpectSequence::new(ptr as *mut u8);
@@ -295,103 +358,17 @@ fn run_expect_pure<'a, W: std::io::Write>(
 
 #[allow(clippy::too_many_arguments)]
 fn run_expect_fx<'a, W: std::io::Write>(
-    writer: &mut W,
-    render_target: RenderTarget,
-    arena: &'a Bump,
-    interns: &'a Interns,
-    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
-    lib: &libloading::Library,
-    expectations: &mut VecMap<ModuleId, Expectations>,
-    parent_memory: &mut ExpectMemory,
-    expect: ToplevelExpect<'_>,
+    _writer: &mut W,
+    _render_target: RenderTarget,
+    _arena: &'a Bump,
+    _interns: &'a Interns,
+    _layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    _lib: &libloading::Library,
+    _expectations: &mut VecMap<ModuleId, Expectations>,
+    _parent_memory: &mut ExpectMemory,
+    _expect: ToplevelExpect<'_>,
 ) -> std::io::Result<bool> {
-    use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
-
-    let mut signals = Signals::new([SIGCHLD, SIGUSR1]).unwrap();
-
-    match unsafe { libc::fork() } {
-        0 => unsafe {
-            // we are the child
-
-            use roc_gen_llvm::try_run_jit_function;
-
-            let mut child_memory = parent_memory.reuse_mmap().unwrap();
-
-            let sequence = ExpectSequence::new(child_memory.ptr);
-
-            child_memory.set_shared_buffer(lib);
-
-            let result: Result<(), (String, _)> =
-                try_run_jit_function!(lib, expect.name, (), |v: ()| v);
-
-            if let Err((msg, _)) = result {
-                panic!("roc panic {}", msg);
-            }
-
-            if sequence.count_failures() > 0 {
-                libc::kill(parent_id() as _, SIGUSR1);
-            }
-
-            std::process::exit(0)
-        },
-        -1 => {
-            // something failed
-
-            // Display a human-friendly error message
-            println!("Error {:?}", std::io::Error::last_os_error());
-
-            std::process::exit(1)
-        }
-        1.. => {
-            let mut has_succeeded = true;
-
-            for sig in &mut signals {
-                match sig {
-                    SIGCHLD => {
-                        // done!
-                        return Ok(has_succeeded);
-                    }
-                    SIGUSR1 => {
-                        // this is the signal we use for an expect failure. Let's see what the child told us
-                        has_succeeded = false;
-
-                        let frame =
-                            ExpectFrame::at_offset(parent_memory.ptr, ExpectSequence::START_OFFSET);
-                        let module_id = frame.module_id;
-
-                        let data = expectations.get_mut(&module_id).unwrap();
-                        let filename = data.path.to_owned();
-                        let source = std::fs::read_to_string(&data.path).unwrap();
-
-                        let renderer = Renderer::new(
-                            arena,
-                            interns,
-                            render_target,
-                            module_id,
-                            filename,
-                            &source,
-                        );
-
-                        render_expect_failure(
-                            writer,
-                            &renderer,
-                            arena,
-                            None,
-                            expectations,
-                            interns,
-                            layout_interner,
-                            parent_memory.ptr,
-                            ExpectSequence::START_OFFSET,
-                        )?;
-                    }
-                    _ => println!("received signal {}", sig),
-                }
-            }
-
-            Ok(true)
-        }
-        _ => unreachable!(),
-    }
+    todo!("expect fx is not yet implemented")
 }
 
 pub fn render_expects_in_memory<'a>(
