@@ -4,7 +4,7 @@ use std::fmt::Debug;
 
 use crate::Error;
 
-/// Simple and storage for the Wasm stack machine and local variables.
+/// Combined storage for the Wasm stack machine and local variables.
 ///
 /// All values are mixed together so that on function calls, "moving"
 /// arguments from the stack machine to local variables is a no-op
@@ -59,48 +59,48 @@ impl<'a> ValueStore<'a> {
     pub(crate) fn pop_u32(&mut self) -> Result<u32, Error> {
         match self.values.pop() {
             Some(Value::I32(x)) => Ok(u32::from_ne_bytes(x.to_ne_bytes())),
-            Some(bad) => Err(Error::ValueStackType(ValueType::I32, ValueType::from(bad))),
-            None => Err(Error::ValueStackEmpty),
+            Some(bad) => Err(Error::Type(ValueType::I32, ValueType::from(bad))),
+            None => Err(Error::StackEmpty),
         }
     }
 
     pub(crate) fn pop_i32(&mut self) -> Result<i32, Error> {
         match self.values.pop() {
             Some(Value::I32(x)) => Ok(x),
-            Some(bad) => Err(Error::ValueStackType(ValueType::I32, ValueType::from(bad))),
-            None => Err(Error::ValueStackEmpty),
+            Some(bad) => Err(Error::Type(ValueType::I32, ValueType::from(bad))),
+            None => Err(Error::StackEmpty),
         }
     }
 
     pub(crate) fn pop_u64(&mut self) -> Result<u64, Error> {
         match self.values.pop() {
             Some(Value::I64(x)) => Ok(u64::from_ne_bytes(x.to_ne_bytes())),
-            Some(bad) => Err(Error::ValueStackType(ValueType::I64, ValueType::from(bad))),
-            None => Err(Error::ValueStackEmpty),
+            Some(bad) => Err(Error::Type(ValueType::I64, ValueType::from(bad))),
+            None => Err(Error::StackEmpty),
         }
     }
 
     pub(crate) fn pop_i64(&mut self) -> Result<i64, Error> {
         match self.values.pop() {
             Some(Value::I64(x)) => Ok(x),
-            Some(bad) => Err(Error::ValueStackType(ValueType::I64, ValueType::from(bad))),
-            None => Err(Error::ValueStackEmpty),
+            Some(bad) => Err(Error::Type(ValueType::I64, ValueType::from(bad))),
+            None => Err(Error::StackEmpty),
         }
     }
 
     pub(crate) fn pop_f32(&mut self) -> Result<f32, Error> {
         match self.values.pop() {
             Some(Value::F32(x)) => Ok(x),
-            Some(bad) => Err(Error::ValueStackType(ValueType::F32, ValueType::from(bad))),
-            None => Err(Error::ValueStackEmpty),
+            Some(bad) => Err(Error::Type(ValueType::F32, ValueType::from(bad))),
+            None => Err(Error::StackEmpty),
         }
     }
 
     pub(crate) fn pop_f64(&mut self) -> Result<f64, Error> {
         match self.values.pop() {
             Some(Value::F64(x)) => Ok(x),
-            Some(bad) => Err(Error::ValueStackType(ValueType::F64, ValueType::from(bad))),
-            None => Err(Error::ValueStackEmpty),
+            Some(bad) => Err(Error::Type(ValueType::F64, ValueType::from(bad))),
+            None => Err(Error::StackEmpty),
         }
     }
 

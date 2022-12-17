@@ -65,23 +65,23 @@ impl<'a> ImportDispatcher for DefaultImportDispatcher<'a> {
 /// All of these cause a WebAssembly stack trace to be dumped
 #[derive(Debug, PartialEq)]
 pub(crate) enum Error {
-    ValueStackType(ValueType, ValueType),
-    ValueStackEmpty,
+    Type(ValueType, ValueType),
+    StackEmpty,
     UnreachableOp,
 }
 
 impl Error {
     pub fn to_string_at(&self, file_offset: usize) -> String {
         match self {
-            Error::ValueStackType(expected, actual) => {
+            Error::Type(expected, actual) => {
                 format!(
-                    "ERROR: I found a type mismatch in the Value Stack at file offset {:#x}. Expected {:?}, but found {:?}.\n", 
+                    "ERROR: I found a type mismatch at file offset {:#x}. Expected {:?}, but found {:?}.\n", 
                     file_offset, expected, actual
                 )
             }
-            Error::ValueStackEmpty => {
+            Error::StackEmpty => {
                 format!(
-                    "ERROR: I tried to pop a value from the Value Stack at file offset {:#x}, but it was empty.\n",
+                    "ERROR: I tried to pop a value from the stack at file offset {:#x}, but it was empty.\n",
                     file_offset
                 )
             }
@@ -97,6 +97,6 @@ impl Error {
 
 impl From<(ValueType, ValueType)> for Error {
     fn from((expected, actual): (ValueType, ValueType)) -> Self {
-        Error::ValueStackType(expected, actual)
+        Error::Type(expected, actual)
     }
 }

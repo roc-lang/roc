@@ -134,7 +134,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             "This Wasm interpreter doesn't support non-function imports"
         );
 
-        let value_stack = ValueStore::new(arena);
+        let value_store = ValueStore::new(arena);
 
         let debug_string = if is_debug_mode {
             Some(String::new())
@@ -154,7 +154,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             memory,
             current_frame: Frame::new(),
             previous_frames: Vec::new_in(arena),
-            value_store: value_stack,
+            value_store,
             globals,
             program_counter: usize::MAX,
             blocks: Vec::new_in(arena),
@@ -520,7 +520,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 let arg = self.value_store.pop();
                 let actual = ValueType::from(arg);
                 if actual != expected {
-                    return Err(Error::ValueStackType(expected, actual));
+                    return Err(Error::Type(expected, actual));
                 }
                 self.import_arguments[i] = arg;
             }
@@ -760,7 +760,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 let actual = ValueType::from(val2);
                 let expected = ValueType::from(val1);
                 if actual != expected {
-                    return Err(Error::ValueStackType(expected, actual));
+                    return Err(Error::Type(expected, actual));
                 }
                 let result = if c != 0 { val1 } else { val2 };
                 self.value_store.push(result);
@@ -1750,7 +1750,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
 
     /// Dump a stack trace when an error occurs
     /// --------------
-    /// function 123
+    /// func[123]
     ///   address  0x12345
     ///   args     0: I64(234), 1: F64(7.15)
     ///   locals   2: I32(412), 3: F64(3.14)
@@ -1797,13 +1797,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.module.types.look_up(signature_index).0.len()
             };
 
-            // Try to match formatting to wasm-objdump where possible, for easy copy & find
+            // Function and address match wasm-objdump formatting, for easy copy & find
             writeln!(buffer, "func[{}]", fn_index)?;
             writeln!(buffer, "  address  {:06x}", execution_addrs.next().unwrap())?;
 
             write!(buffer, "  args     ")?;
             for local_index in 0..*locals_count {
-                let value = self.value_stack.get(locals_start + local_index).unwrap();
+                let value = self.value_store.get(locals_start + local_index).unwrap();
                 if local_index == arg_count {
                     write!(buffer, "\n  locals   ")?;
                 } else if local_index != 0 {
@@ -1815,10 +1815,10 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             write!(buffer, "\n  stack    [")?;
             let frame_end = frame_ends
                 .next()
-                .unwrap_or_else(|| self.value_stack.depth());
+                .unwrap_or_else(|| self.value_store.depth());
             let stack_start = locals_start + locals_count;
             for i in stack_start..frame_end {
-                let value = self.value_stack.get(i).unwrap();
+                let value = self.value_store.get(i).unwrap();
                 if i != stack_start {
                     write!(buffer, ", ")?;
                 }

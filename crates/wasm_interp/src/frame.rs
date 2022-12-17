@@ -11,7 +11,7 @@ pub struct Frame {
     pub return_addr: usize,
     /// Depth of the "function body block" for this frame
     pub body_block_index: usize,
-    /// Offset in the ValueStack where the args & locals begin
+    /// Offset in the ValueStore where the args & locals begin
     pub locals_start: usize,
     /// Number of args & locals in the frame
     pub locals_count: usize,
@@ -39,10 +39,10 @@ impl Frame {
         n_args: usize,
         return_type: Option<ValueType>,
         code_bytes: &[u8],
-        value_stack: &mut ValueStore<'_>,
+        value_store: &mut ValueStore<'_>,
         pc: &mut usize,
     ) -> Self {
-        let locals_start = value_stack.depth() - n_args;
+        let locals_start = value_store.depth() - n_args;
 
         // Parse local variable declarations in the function header. They're grouped by type.
         let local_group_count = u32::parse((), code_bytes, pc).unwrap();
@@ -55,10 +55,10 @@ impl Frame {
                 ValueType::F32 => Value::F32(0.0),
                 ValueType::F64 => Value::F64(0.0),
             };
-            value_stack.extend(repeat(zero).take(n));
+            value_store.extend(repeat(zero).take(n));
         }
 
-        let locals_count = value_stack.depth() - locals_start;
+        let locals_count = value_store.depth() - locals_start;
 
         Frame {
             fn_index,
