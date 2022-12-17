@@ -362,25 +362,23 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         x
     }
 
-    fn do_return(&mut self) -> Action {
+    fn do_return(&mut self) -> Result<Action, Error> {
+        // self.debug_values_and_blocks("start do_return");
+
         let Frame {
             return_addr,
             body_block_index,
+            return_type,
             ..
         } = self.current_frame;
 
-        // Check where in the value stack the current block started
-        let current_block_base = match self.blocks.last() {
-            Some(Block { ty, vstack }) => {
-                debug_assert!(!matches!(ty, BlockType::Locals(_)));
-                *vstack
+        let return_value = if let Some(expected_type) = return_type {
+            let val = self.value_stack.pop();
+            let actual_type = ValueType::from(val);
+            if actual_type != expected_type {
+                return Err(Error::ValueStackType(expected_type, actual_type));
             }
-            _ => 0,
-        };
-
-        // If there's a value on the stack in this block, we should return it
-        let return_value = if self.value_stack.depth() > current_block_base {
-            Some(self.value_stack.pop())
+            Some(val)
         } else {
             None
         };
@@ -389,6 +387,8 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         let locals_block_index = body_block_index - 1;
         let locals_block = &self.blocks[locals_block_index];
         self.value_stack.truncate(locals_block.vstack);
+
+        // Push the return value back on the stack
         if let Some(val) = return_value {
             self.value_stack.push(val);
         }
@@ -397,13 +397,18 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         let new_block_len = locals_block_index; // don't need a -1 because one is a length and the other is an index!
         self.blocks.truncate(new_block_len);
         self.program_counter = return_addr;
-        if let Some(caller_frame) = self.previous_frames.pop() {
+
+        let action = if let Some(caller_frame) = self.previous_frames.pop() {
             self.current_frame = caller_frame;
             Action::Continue
         } else {
             // We just popped the stack frame for the entry function. Terminate the program.
             Action::Break
-        }
+        };
+
+        // self.debug_values_and_blocks("end do_return");
+
+        Ok(action)
     }
 
     fn get_load_address(&mut self, module: &WasmModule<'a>) -> Result<u32, Error> {
@@ -497,6 +502,8 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         fn_index: usize,
         module: &WasmModule<'a>,
     ) -> Result<(), Error> {
+        // self.debug_values_and_blocks(&format!("start do_call {}", fn_index));
+
         let (signature_index, opt_import) = if fn_index < self.import_count {
             // Imported non-Wasm function
             let import = &module.import.imports[fn_index];
@@ -520,18 +527,21 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         }
 
         let (arg_type_iter, ret_type) = module.types.look_up(signature_index);
+        let n_args = arg_type_iter.len();
+        if self.debug_string.is_some() {
+            self.debug_call(n_args, ret_type);
+        }
 
         if let Some(import) = opt_import {
             self.import_arguments.clear();
             self.import_arguments
-                .extend(std::iter::repeat(Value::I64(0)).take(arg_type_iter.len()));
+                .extend(std::iter::repeat(Value::I64(0)).take(n_args));
             for (i, expected) in arg_type_iter.enumerate().rev() {
                 let arg = self.value_stack.pop();
                 let actual = ValueType::from(arg);
                 if actual != expected {
                     return Err(Error::ValueStackType(expected, actual));
                 }
-
                 self.import_arguments[i] = arg;
             }
 
@@ -565,7 +575,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 fn_index,
                 return_addr,
                 body_block_index,
-                arg_type_iter.len(),
+                n_args,
                 ret_type,
                 &module.code.bytes,
                 &mut self.value_stack,
@@ -579,8 +589,29 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 vstack: self.value_stack.depth(),
             });
         }
+        // self.debug_values_and_blocks("end do_call");
 
         Ok(())
+    }
+
+    fn debug_call(&mut self, n_args: usize, return_type: Option<ValueType>) {
+        if let Some(debug_string) = self.debug_string.as_mut() {
+            write!(debug_string, "         args=[").unwrap();
+            let arg_iter = self
+                .value_stack
+                .iter()
+                .skip(self.value_stack.depth() - n_args);
+            let mut first = true;
+            for arg in arg_iter {
+                if first {
+                    first = false;
+                } else {
+                    write!(debug_string, ", ").unwrap();
+                }
+                write!(debug_string, "{:x?}", arg).unwrap();
+            }
+            write!(debug_string, "] return_type={:?}\n", return_type).unwrap();
+        }
     }
 
     pub(crate) fn execute_next_instruction(
@@ -679,7 +710,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             END => {
                 if self.blocks.len() == (self.current_frame.body_block_index + 1) {
                     // implicit RETURN at end of function
-                    action = self.do_return();
+                    action = self.do_return()?;
                     implicit_return = true;
                 } else {
                     self.blocks.pop().unwrap();
@@ -711,7 +742,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.do_break(relative_blocks_outward, module);
             }
             RETURN => {
-                action = self.do_return();
+                action = self.do_return()?;
             }
             CALL => {
                 let fn_index = self.fetch_immediate_u32(module) as usize;
@@ -1684,24 +1715,56 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         }
 
         if let Some(debug_string) = &self.debug_string {
-            let base = self.current_frame.locals_start + self.current_frame.locals_count;
-            let slice = self.value_stack.get_slice(base as usize);
-            eprintln!("{:06x} {:17} {:?}", file_offset, debug_string, slice);
+            if matches!(op_code, CALL | CALLINDIRECT) {
+                eprintln!("\n{:06x} {}", file_offset, debug_string);
+            } else {
+                // For calls, we print special debug stuff in do_call
+                let base = self.current_frame.locals_start + self.current_frame.locals_count;
+                let slice = self.value_stack.get_slice(base as usize);
+                eprintln!("{:06x} {:17} {:x?}", file_offset, debug_string, slice);
+            }
             let is_return = op_code == RETURN || (op_code == END && implicit_return);
             let is_program_end = self.program_counter == 0;
             if is_return && !is_program_end {
                 eprintln!(
-                    "returning to function {} at {:06x}\nwith stack+locals {:?}\nand block indices {:?}\n",
+                    "returning to function {} at {:06x}",
                     self.current_frame.fn_index,
                     self.program_counter + self.module.code.section_offset as usize,
-                    &self.value_stack,
-                    &self.blocks
                 );
-            } else if op_code == CALL || op_code == CALLINDIRECT {
-                eprintln!();
             }
         }
 
         Ok(action)
+    }
+
+    #[allow(dead_code)]
+    fn debug_values_and_blocks(&self, label: &str) {
+        eprintln!("\n========== {} ==========", label);
+
+        let mut block_str = String::new();
+        let mut block_iter = self.blocks.iter().enumerate();
+        let mut block = block_iter.next();
+
+        let mut print_blocks = |i| {
+            block_str.clear();
+            while let Some((b, Block { vstack, ty })) = block {
+                if *vstack > i {
+                    break;
+                }
+                write!(block_str, "{}:{:?} ", b, ty).unwrap();
+                block = block_iter.next();
+            }
+            if !block_str.is_empty() {
+                eprintln!("--------------- {}", block_str);
+            }
+        };
+
+        for (i, v) in self.value_stack.iter().enumerate() {
+            print_blocks(i);
+            eprintln!("{:3} {:x?}", i, v);
+        }
+        print_blocks(self.value_stack.depth());
+
+        eprintln!("");
     }
 }
