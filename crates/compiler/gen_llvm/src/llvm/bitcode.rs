@@ -270,10 +270,9 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         (true, layout) => {
             let closure_type = basic_type_from_layout(env, &layout).ptr_type(AddressSpace::Generic);
 
-            let closure_cast = env
-                .builder
-                .build_bitcast(closure_ptr, closure_type, "cast_opaque_closure")
-                .into_pointer_value();
+            let closure_cast =
+                env.builder
+                    .build_pointer_cast(closure_ptr, closure_type, "cast_opaque_closure");
 
             let closure_data = load_roc_value(env, layout, closure_cast, "load_closure");
 
@@ -486,13 +485,11 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
 
             let value_cast1 = env
                 .builder
-                .build_bitcast(value_ptr1, value_type, "load_opaque")
-                .into_pointer_value();
+                .build_pointer_cast(value_ptr1, value_type, "load_opaque");
 
             let value_cast2 = env
                 .builder
-                .build_bitcast(value_ptr2, value_type, "load_opaque")
-                .into_pointer_value();
+                .build_pointer_cast(value_ptr2, value_type, "load_opaque");
 
             // load_roc_value(env, *element_layout, elem_ptr, "get_elem")
             let value1 = load_roc_value(env, *layout, value_cast1, "load_opaque");
@@ -568,15 +565,13 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             let value_type = basic_type_from_layout(env, layout);
             let value_ptr_type = value_type.ptr_type(AddressSpace::Generic);
 
-            let value_cast1 = env
-                .builder
-                .build_bitcast(value_ptr1, value_ptr_type, "load_opaque")
-                .into_pointer_value();
+            let value_cast1 =
+                env.builder
+                    .build_pointer_cast(value_ptr1, value_ptr_type, "load_opaque");
 
-            let value_cast2 = env
-                .builder
-                .build_bitcast(value_ptr2, value_ptr_type, "load_opaque")
-                .into_pointer_value();
+            let value_cast2 =
+                env.builder
+                    .build_pointer_cast(value_ptr2, value_ptr_type, "load_opaque");
 
             let value1 = env.builder.build_load(value_cast1, "load_opaque");
             let value2 = env.builder.build_load(value_cast2, "load_opaque");
@@ -595,10 +590,11 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                         let closure_type = basic_type_from_layout(env, &other);
                         let closure_ptr_type = closure_type.ptr_type(AddressSpace::Generic);
 
-                        let closure_cast = env
-                            .builder
-                            .build_bitcast(closure_ptr, closure_ptr_type, "load_opaque")
-                            .into_pointer_value();
+                        let closure_cast = env.builder.build_pointer_cast(
+                            closure_ptr,
+                            closure_ptr_type,
+                            "load_opaque",
+                        );
 
                         let closure_data = env.builder.build_load(closure_cast, "load_opaque");
 

@@ -198,15 +198,17 @@ fn build_eq<'a, 'ctx, 'env>(
                 let bt = basic_type_from_layout(env, &layout);
 
                 // cast the i64 pointer to a pointer to block of memory
-                let field1_cast = env
-                    .builder
-                    .build_bitcast(lhs_val, bt, "i64_to_opaque")
-                    .into_pointer_value();
+                let field1_cast = env.builder.build_pointer_cast(
+                    lhs_val.into_pointer_value(),
+                    bt.into_pointer_type(),
+                    "i64_to_opaque",
+                );
 
-                let field2_cast = env
-                    .builder
-                    .build_bitcast(rhs_val, bt, "i64_to_opaque")
-                    .into_pointer_value();
+                let field2_cast = env.builder.build_pointer_cast(
+                    rhs_val.into_pointer_value(),
+                    bt.into_pointer_type(),
+                    "i64_to_opaque",
+                );
 
                 build_tag_eq(
                     env,
@@ -722,15 +724,17 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
                     let bt = basic_type_from_layout(env, &field_layout);
 
                     // cast the i64 pointer to a pointer to block of memory
-                    let field1_cast = env
-                        .builder
-                        .build_bitcast(field1, bt, "i64_to_opaque")
-                        .into_pointer_value();
+                    let field1_cast = env.builder.build_pointer_cast(
+                        field1.into_pointer_value(),
+                        bt.into_pointer_type(),
+                        "i64_to_opaque",
+                    );
 
-                    let field2_cast = env
-                        .builder
-                        .build_bitcast(field2, bt, "i64_to_opaque")
-                        .into_pointer_value();
+                    let field2_cast = env.builder.build_pointer_cast(
+                        field2.into_pointer_value(),
+                        bt.into_pointer_type(),
+                        "i64_to_opaque",
+                    );
 
                     build_eq(
                         env,
@@ -1235,23 +1239,17 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
     debug_assert!(wrapper_type.is_struct_type());
 
     // cast the opaque pointer to a pointer of the correct shape
-    let struct1_ptr = env
-        .builder
-        .build_bitcast(
-            tag1,
-            wrapper_type.ptr_type(AddressSpace::Generic),
-            "opaque_to_correct",
-        )
-        .into_pointer_value();
+    let struct1_ptr = env.builder.build_pointer_cast(
+        tag1,
+        wrapper_type.ptr_type(AddressSpace::Generic),
+        "opaque_to_correct",
+    );
 
-    let struct2_ptr = env
-        .builder
-        .build_bitcast(
-            tag2,
-            wrapper_type.ptr_type(AddressSpace::Generic),
-            "opaque_to_correct",
-        )
-        .into_pointer_value();
+    let struct2_ptr = env.builder.build_pointer_cast(
+        tag2,
+        wrapper_type.ptr_type(AddressSpace::Generic),
+        "opaque_to_correct",
+    );
 
     let struct1 = env
         .builder

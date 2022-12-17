@@ -380,14 +380,18 @@ fn build_clone<'a, 'ctx, 'env>(
                 let bt = basic_type_from_layout(env, &layout);
 
                 // cast the i64 pointer to a pointer to block of memory
-                let field1_cast = env.builder.build_bitcast(value, bt, "i64_to_opaque");
+                let field1_cast = env.builder.build_pointer_cast(
+                    value.into_pointer_value(),
+                    bt.into_pointer_type(),
+                    "i64_to_opaque",
+                );
 
                 build_clone_tag(
                     env,
                     layout_ids,
                     ptr,
                     cursors,
-                    field1_cast,
+                    field1_cast.into(),
                     union_layout,
                     WhenRecursive::Loop(union_layout),
                 )
