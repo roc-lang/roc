@@ -362,7 +362,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         x
     }
 
-    fn do_return(&mut self) -> Result<Action, Error> {
+    fn do_return(&mut self) -> Action {
         // self.debug_values_and_blocks("start do_return");
 
         let Frame {
@@ -372,43 +372,32 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             ..
         } = self.current_frame;
 
-        let return_value = if let Some(expected_type) = return_type {
-            let val = self.value_stack.pop();
-            let actual_type = ValueType::from(val);
-            if actual_type != expected_type {
-                return Err(Error::ValueStackType(expected_type, actual_type));
-            }
-            Some(val)
-        } else {
-            None
-        };
-
-        // Throw away all values from arg[0] upward
+        // Throw away all locals and values except the return value
         let locals_block_index = body_block_index - 1;
         let locals_block = &self.blocks[locals_block_index];
-        self.value_stack.truncate(locals_block.vstack);
-
-        // Push the return value back on the stack
-        if let Some(val) = return_value {
-            self.value_stack.push(val);
-        }
+        let new_stack_depth = if return_type.is_some() {
+            self.value_stack
+                .set(locals_block.vstack, self.value_stack.peek());
+            locals_block.vstack + 1
+        } else {
+            locals_block.vstack
+        };
+        self.value_stack.truncate(new_stack_depth);
 
         // Resume executing at the next instruction in the caller function
         let new_block_len = locals_block_index; // don't need a -1 because one is a length and the other is an index!
         self.blocks.truncate(new_block_len);
         self.program_counter = return_addr;
 
-        let action = if let Some(caller_frame) = self.previous_frames.pop() {
+        // self.debug_values_and_blocks("end do_return");
+
+        if let Some(caller_frame) = self.previous_frames.pop() {
             self.current_frame = caller_frame;
             Action::Continue
         } else {
             // We just popped the stack frame for the entry function. Terminate the program.
             Action::Break
-        };
-
-        // self.debug_values_and_blocks("end do_return");
-
-        Ok(action)
+        }
     }
 
     fn get_load_address(&mut self, module: &WasmModule<'a>) -> Result<u32, Error> {
@@ -710,7 +699,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             END => {
                 if self.blocks.len() == (self.current_frame.body_block_index + 1) {
                     // implicit RETURN at end of function
-                    action = self.do_return()?;
+                    action = self.do_return();
                     implicit_return = true;
                 } else {
                     self.blocks.pop().unwrap();
@@ -742,7 +731,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.do_break(relative_blocks_outward, module);
             }
             RETURN => {
-                action = self.do_return()?;
+                action = self.do_return();
             }
             CALL => {
                 let fn_index = self.fetch_immediate_u32(module) as usize;
