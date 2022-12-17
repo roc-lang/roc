@@ -1,7 +1,7 @@
 use roc_wasm_module::{parse::Parse, Value, ValueType};
 use std::iter::repeat;
 
-use crate::value_stack::ValueStack;
+use crate::value_store::ValueStack;
 
 #[derive(Debug)]
 pub struct Frame {

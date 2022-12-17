@@ -9,7 +9,7 @@ use roc_wasm_module::{ExportType, WasmModule};
 use roc_wasm_module::{Value, ValueType};
 
 use crate::frame::Frame;
-use crate::value_stack::ValueStack;
+use crate::value_store::ValueStack;
 use crate::{Error, ImportDispatcher};
 
 #[derive(Debug)]

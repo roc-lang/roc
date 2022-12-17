@@ -1,7 +1,7 @@
 mod frame;
 mod instance;
 mod tests;
-mod value_stack;
+mod value_store;
 pub mod wasi;
 
 // Main external interface
