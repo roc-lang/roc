@@ -568,7 +568,7 @@ mod cli_run {
                 r#"
                 This expectation failed:
 
-                14│      expect x != x
+                18│      expect x != x
                                 ^^^^^^
 
                 When it failed, these variables had these values:
@@ -576,8 +576,11 @@ mod cli_run {
                 x : Num *
                 x = 42
 
-                [<ignored for tests> 15:9] 42
-                [<ignored for tests> 16:9] "Fjoer en ferdjer frieten oan dyn geve lea"
+                [<ignored for tests> 19:9] 42
+                [<ignored for tests> 20:9] "Fjoer en ferdjer frieten oan dyn geve lea"
+                [<ignored for tests> 13:9] "abc"
+                [<ignored for tests> 13:9] 10
+                [<ignored for tests> 13:9] A (B C)
                 Program finished!
                 "#
             ),

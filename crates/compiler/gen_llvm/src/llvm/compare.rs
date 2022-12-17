@@ -111,7 +111,6 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
             use FloatWidth::*;
 
             let name = match float_width {
-                F128 => "eq_f128",
                 F64 => "eq_f64",
                 F32 => "eq_f32",
             };
@@ -276,7 +275,6 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
             use FloatWidth::*;
 
             let name = match float_width {
-                F128 => "neq_f128",
                 F64 => "neq_f64",
                 F32 => "neq_f32",
             };
