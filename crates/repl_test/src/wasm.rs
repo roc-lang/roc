@@ -4,7 +4,7 @@ use roc_wasm_interp::{
 };
 
 const COMPILER_BYTES: &[u8] =
-    include_bytes!("../../../.ignore/repl_test_target/wasm32-wasi/release/roc_repl_wasm.wasm");
+    include_bytes!("../../../target/wasm32-wasi/release/roc_repl_wasm.wasm");
 
 struct CompilerDispatcher<'a> {
     arena: &'a Bump,
