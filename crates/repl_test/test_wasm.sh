@@ -10,4 +10,4 @@ set -euxo pipefail
 RUSTFLAGS="" cargo build --target wasm32-wasi -p roc_repl_wasm --no-default-features --features wasmer --release
 
 # Build & run the test code on *native* target, not WebAssembly
-cargo test -p repl_test --features wasm -- --test-threads=1
+cargo test -p repl_test --features wasm --release -- --test-threads=1
