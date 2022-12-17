@@ -49,7 +49,7 @@ pub struct Instance<'a, I: ImportDispatcher> {
     /// Previous call frames
     previous_frames: Vec<'a, Frame>,
     /// The WebAssembly stack machine's stack of values
-    pub(crate) value_stack: ValueStore<'a>,
+    pub(crate) value_store: ValueStore<'a>,
     /// Values of any global variables
     pub(crate) globals: Vec<'a, Value>,
     /// Index in the code section of the current instruction
@@ -86,7 +86,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             memory: Vec::from_iter_in(iter::repeat(0).take(mem_bytes as usize), arena),
             current_frame: Frame::new(),
             previous_frames: Vec::new_in(arena),
-            value_stack: ValueStore::new(arena),
+            value_store: ValueStore::new(arena),
             globals: Vec::from_iter_in(globals, arena),
             program_counter,
             blocks: Vec::new_in(arena),
@@ -154,7 +154,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             memory,
             current_frame: Frame::new(),
             previous_frames: Vec::new_in(arena),
-            value_stack,
+            value_store: value_stack,
             globals,
             program_counter: usize::MAX,
             blocks: Vec::new_in(arena),
@@ -182,7 +182,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                     i, fn_name, expected_type, value
                 ));
             }
-            self.value_stack.push(value);
+            self.value_store.push(value);
         }
 
         self.call_export_help_after_arg_load(self.module, fn_index, n_args, ret_type)
@@ -223,7 +223,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 F32 => Value::F32(value_str.parse::<f32>().map_err(|e| e.to_string())?),
                 F64 => Value::F64(value_str.parse::<f64>().map_err(|e| e.to_string())?),
             };
-            self.value_stack.push(value);
+            self.value_store.push(value);
         }
 
         self.call_export_help_after_arg_load(module, fn_index, n_args, ret_type)
@@ -304,7 +304,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         self.blocks.clear();
         self.blocks.push(Block {
             ty: BlockType::Locals(fn_index),
-            vstack: self.value_stack.depth(),
+            vstack: self.value_store.depth(),
         });
         self.current_frame = Frame::enter(
             fn_index,
@@ -313,12 +313,12 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             n_args,
             return_type,
             &module.code.bytes,
-            &mut self.value_stack,
+            &mut self.value_store,
             &mut self.program_counter,
         );
         self.blocks.push(Block {
             ty: BlockType::FunctionBody(fn_index),
-            vstack: self.value_stack.depth(),
+            vstack: self.value_store.depth(),
         });
 
         loop {
@@ -336,8 +336,8 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             };
         }
 
-        let return_value = if !self.value_stack.is_empty() {
-            Some(self.value_stack.pop())
+        let return_value = if !self.value_store.is_empty() {
+            Some(self.value_store.pop())
         } else {
             None
         };
@@ -367,13 +367,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         let locals_block_index = body_block_index - 1;
         let locals_block = &self.blocks[locals_block_index];
         let new_stack_depth = if return_type.is_some() {
-            self.value_stack
-                .set(locals_block.vstack, self.value_stack.peek());
+            self.value_store
+                .set(locals_block.vstack, self.value_store.peek());
             locals_block.vstack + 1
         } else {
             locals_block.vstack
         };
-        self.value_stack.truncate(new_stack_depth);
+        self.value_store.truncate(new_stack_depth);
 
         // Resume executing at the next instruction in the caller function
         let new_block_len = locals_block_index; // don't need a -1 because one is a length and the other is an index!
@@ -397,7 +397,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         // Also note: in the text format we can specify the useless `align=` but not the useful `offset=`!
         let _alignment = self.fetch_immediate_u32(module);
         let offset = self.fetch_immediate_u32(module);
-        let base_addr = self.value_stack.pop_u32()?;
+        let base_addr = self.value_store.pop_u32()?;
         Ok(base_addr + offset)
     }
 
@@ -407,8 +407,8 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         // Also note: in the text format we can specify the useless `align=` but not the useful `offset=`!
         let _alignment = self.fetch_immediate_u32(module);
         let offset = self.fetch_immediate_u32(module);
-        let value = self.value_stack.pop();
-        let base_addr = self.value_stack.pop_u32()?;
+        let value = self.value_store.pop();
+        let base_addr = self.value_store.pop_u32()?;
         let addr = (base_addr + offset) as usize;
         Ok((addr, value))
     }
@@ -425,12 +425,12 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         match ty {
             BlockType::Loop(start_addr) => {
                 self.blocks.truncate(block_index + 1);
-                self.value_stack.truncate(vstack);
+                self.value_store.truncate(vstack);
                 self.program_counter = start_addr;
             }
             BlockType::FunctionBody(_) | BlockType::Normal => {
                 self.break_forward(relative_blocks_outward, module);
-                self.value_stack.truncate(vstack);
+                self.value_store.truncate(vstack);
             }
             BlockType::Locals(_) => unreachable!(),
         }
@@ -517,7 +517,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             self.import_arguments
                 .extend(std::iter::repeat(Value::I64(0)).take(n_args));
             for (i, expected) in arg_type_iter.enumerate().rev() {
-                let arg = self.value_stack.pop();
+                let arg = self.value_store.pop();
                 let actual = ValueType::from(arg);
                 if actual != expected {
                     return Err(Error::ValueStackType(expected, actual));
@@ -532,7 +532,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 &mut self.memory,
             );
             if let Some(return_val) = optional_return_val {
-                self.value_stack.push(return_val);
+                self.value_store.push(return_val);
             }
             if let Some(debug_string) = self.debug_string.as_mut() {
                 write!(debug_string, " {}.{}", import.module, import.name).unwrap();
@@ -547,7 +547,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
 
             self.blocks.push(Block {
                 ty: BlockType::Locals(fn_index),
-                vstack: self.value_stack.depth() - n_args,
+                vstack: self.value_store.depth() - n_args,
             });
             let body_block_index = self.blocks.len();
 
@@ -558,7 +558,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 n_args,
                 ret_type,
                 &module.code.bytes,
-                &mut self.value_stack,
+                &mut self.value_store,
                 &mut self.program_counter,
             );
             std::mem::swap(&mut swap_frame, &mut self.current_frame);
@@ -566,7 +566,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
 
             self.blocks.push(Block {
                 ty: BlockType::FunctionBody(fn_index),
-                vstack: self.value_stack.depth(),
+                vstack: self.value_store.depth(),
             });
         }
         // self.debug_values_and_blocks("end do_call");
@@ -578,9 +578,9 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         if let Some(debug_string) = self.debug_string.as_mut() {
             write!(debug_string, "         args=[").unwrap();
             let arg_iter = self
-                .value_stack
+                .value_store
                 .iter()
-                .skip(self.value_stack.depth() - n_args);
+                .skip(self.value_store.depth() - n_args);
             let mut first = true;
             for arg in arg_iter {
                 if first {
@@ -621,22 +621,22 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
                 self.blocks.push(Block {
                     ty: BlockType::Normal,
-                    vstack: self.value_stack.depth(),
+                    vstack: self.value_store.depth(),
                 });
             }
             LOOP => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
                 self.blocks.push(Block {
                     ty: BlockType::Loop(self.program_counter),
-                    vstack: self.value_stack.depth(),
+                    vstack: self.value_store.depth(),
                 });
             }
             IF => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
-                let condition = self.value_stack.pop_i32()?;
+                let condition = self.value_store.pop_i32()?;
                 self.blocks.push(Block {
                     ty: BlockType::Normal,
-                    vstack: self.value_stack.depth(),
+                    vstack: self.value_store.depth(),
                 });
                 if condition == 0 {
                     let addr = self.program_counter as u32;
@@ -702,13 +702,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             }
             BRIF => {
                 let relative_blocks_outward = self.fetch_immediate_u32(module);
-                let condition = self.value_stack.pop_i32()?;
+                let condition = self.value_store.pop_i32()?;
                 if condition != 0 {
                     self.do_break(relative_blocks_outward, module);
                 }
             }
             BRTABLE => {
-                let selector = self.value_stack.pop_u32()?;
+                let selector = self.value_store.pop_u32()?;
                 let nondefault_condition_count = self.fetch_immediate_u32(module);
                 let mut selected = None;
                 for i in 0..nondefault_condition_count {
@@ -731,7 +731,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             CALLINDIRECT => {
                 let expected_signature = self.fetch_immediate_u32(module);
                 let table_index = self.fetch_immediate_u32(module);
-                let element_index = self.value_stack.pop_u32()?;
+                let element_index = self.value_store.pop_u32()?;
 
                 // So far, all compilers seem to be emitting MVP-compatible code. (Rust, Zig, Roc...)
                 assert_eq!(
@@ -751,138 +751,138 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.do_call(Some(expected_signature), fn_index as usize, module)?;
             }
             DROP => {
-                self.value_stack.pop();
+                self.value_store.pop();
             }
             SELECT => {
-                let c = self.value_stack.pop_i32()?;
-                let val2 = self.value_stack.pop();
-                let val1 = self.value_stack.pop();
+                let c = self.value_store.pop_i32()?;
+                let val2 = self.value_store.pop();
+                let val1 = self.value_store.pop();
                 let actual = ValueType::from(val2);
                 let expected = ValueType::from(val1);
                 if actual != expected {
                     return Err(Error::ValueStackType(expected, actual));
                 }
                 let result = if c != 0 { val1 } else { val2 };
-                self.value_stack.push(result);
+                self.value_store.push(result);
             }
             GETLOCAL => {
                 let index = self.fetch_immediate_u32(module);
-                let value = self.current_frame.get_local(&self.value_stack, index);
-                self.value_stack.push(value);
+                let value = self.current_frame.get_local(&self.value_store, index);
+                self.value_store.push(value);
             }
             SETLOCAL => {
                 let index = self.fetch_immediate_u32(module);
-                let value = self.value_stack.pop();
+                let value = self.value_store.pop();
                 self.current_frame
-                    .set_local(&mut self.value_stack, index, value);
+                    .set_local(&mut self.value_store, index, value);
             }
             TEELOCAL => {
                 let index = self.fetch_immediate_u32(module);
-                let value = self.value_stack.peek();
+                let value = self.value_store.peek();
                 self.current_frame
-                    .set_local(&mut self.value_stack, index, value);
+                    .set_local(&mut self.value_store, index, value);
             }
             GETGLOBAL => {
                 let index = self.fetch_immediate_u32(module);
-                self.value_stack.push(self.globals[index as usize]);
+                self.value_store.push(self.globals[index as usize]);
             }
             SETGLOBAL => {
                 let index = self.fetch_immediate_u32(module);
-                self.globals[index as usize] = self.value_stack.pop();
+                self.globals[index as usize] = self.value_store.pop();
             }
             I32LOAD => {
                 let addr = self.get_load_address(module)? as usize;
                 let mut bytes = [0; 4];
                 bytes.copy_from_slice(&self.memory[addr..][..4]);
                 let value = i32::from_le_bytes(bytes);
-                self.value_stack.push(Value::I32(value));
+                self.value_store.push(Value::I32(value));
             }
             I64LOAD => {
                 let addr = self.get_load_address(module)? as usize;
                 let mut bytes = [0; 8];
                 bytes.copy_from_slice(&self.memory[addr..][..8]);
                 let value = i64::from_le_bytes(bytes);
-                self.value_stack.push(Value::I64(value));
+                self.value_store.push(Value::I64(value));
             }
             F32LOAD => {
                 let addr = self.get_load_address(module)? as usize;
                 let mut bytes = [0; 4];
                 bytes.copy_from_slice(&self.memory[addr..][..4]);
                 let value = f32::from_le_bytes(bytes);
-                self.value_stack.push(Value::F32(value));
+                self.value_store.push(Value::F32(value));
             }
             F64LOAD => {
                 let addr = self.get_load_address(module)? as usize;
                 let mut bytes = [0; 8];
                 bytes.copy_from_slice(&self.memory[addr..][..8]);
                 let value = f64::from_le_bytes(bytes);
-                self.value_stack.push(Value::F64(value));
+                self.value_store.push(Value::F64(value));
             }
             I32LOAD8S => {
                 let addr = self.get_load_address(module)? as usize;
                 let mut bytes = [0; 1];
                 bytes.copy_from_slice(&self.memory[addr..][..1]);
                 let value = i8::from_le_bytes(bytes);
-                self.value_stack.push(Value::I32(value as i32));
+                self.value_store.push(Value::I32(value as i32));
             }
             I32LOAD8U => {
                 let addr = self.get_load_address(module)? as usize;
                 let value = self.memory[addr];
-                self.value_stack.push(Value::I32(value as i32));
+                self.value_store.push(Value::I32(value as i32));
             }
             I32LOAD16S => {
                 let addr = self.get_load_address(module)? as usize;
                 let mut bytes = [0; 2];
                 bytes.copy_from_slice(&self.memory[addr..][..2]);
                 let value = i16::from_le_bytes(bytes);
-                self.value_stack.push(Value::I32(value as i32));
+                self.value_store.push(Value::I32(value as i32));
             }
             I32LOAD16U => {
                 let addr = self.get_load_address(module)? as usize;
                 let mut bytes = [0; 2];
                 bytes.copy_from_slice(&self.memory[addr..][..2]);
                 let value = u16::from_le_bytes(bytes);
-                self.value_stack.push(Value::I32(value as i32));
+                self.value_store.push(Value::I32(value as i32));
             }
             I64LOAD8S => {
                 let addr = self.get_load_address(module)? as usize;
                 let mut bytes = [0; 1];
                 bytes.copy_from_slice(&self.memory[addr..][..1]);
                 let value = i8::from_le_bytes(bytes);
-                self.value_stack.push(Value::I64(value as i64));
+                self.value_store.push(Value::I64(value as i64));
             }
             I64LOAD8U => {
                 let addr = self.get_load_address(module)? as usize;
                 let value = self.memory[addr];
-                self.value_stack.push(Value::I64(value as i64));
+                self.value_store.push(Value::I64(value as i64));
             }
             I64LOAD16S => {
                 let addr = self.get_load_address(module)? as usize;
                 let mut bytes = [0; 2];
                 bytes.copy_from_slice(&self.memory[addr..][..2]);
                 let value = i16::from_le_bytes(bytes);
-                self.value_stack.push(Value::I64(value as i64));
+                self.value_store.push(Value::I64(value as i64));
             }
             I64LOAD16U => {
                 let addr = self.get_load_address(module)? as usize;
                 let mut bytes = [0; 2];
                 bytes.copy_from_slice(&self.memory[addr..][..2]);
                 let value = u16::from_le_bytes(bytes);
-                self.value_stack.push(Value::I64(value as i64));
+                self.value_store.push(Value::I64(value as i64));
             }
             I64LOAD32S => {
                 let addr = self.get_load_address(module)? as usize;
                 let mut bytes = [0; 4];
                 bytes.copy_from_slice(&self.memory[addr..][..4]);
                 let value = i32::from_le_bytes(bytes);
-                self.value_stack.push(Value::I64(value as i64));
+                self.value_store.push(Value::I64(value as i64));
             }
             I64LOAD32U => {
                 let addr = self.get_load_address(module)? as usize;
                 let mut bytes = [0; 4];
                 bytes.copy_from_slice(&self.memory[addr..][..4]);
                 let value = u32::from_le_bytes(bytes);
-                self.value_stack.push(Value::I64(value as i64));
+                self.value_store.push(Value::I64(value as i64));
             }
             I32STORE => {
                 let (addr, value) = self.get_store_addr_value(module)?;
@@ -942,14 +942,14 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 let memory_index = self.fetch_immediate_u32(module);
                 assert_eq!(memory_index, 0);
                 let size = self.memory.len() as i32 / MemorySection::PAGE_SIZE as i32;
-                self.value_stack.push(Value::I32(size));
+                self.value_store.push(Value::I32(size));
             }
             GROWMEMORY => {
                 let memory_index = self.fetch_immediate_u32(module);
                 assert_eq!(memory_index, 0);
                 let old_bytes = self.memory.len() as u32;
                 let old_pages = old_bytes / MemorySection::PAGE_SIZE as u32;
-                let grow_pages = self.value_stack.pop_u32()?;
+                let grow_pages = self.value_store.pop_u32()?;
                 let grow_bytes = grow_pages * MemorySection::PAGE_SIZE;
                 let new_bytes = old_bytes + grow_bytes;
 
@@ -960,27 +960,27 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 if success {
                     self.memory
                         .extend(iter::repeat(0).take(grow_bytes as usize));
-                    self.value_stack.push(Value::I32(old_pages as i32));
+                    self.value_store.push(Value::I32(old_pages as i32));
                 } else {
-                    self.value_stack.push(Value::I32(-1));
+                    self.value_store.push(Value::I32(-1));
                 }
             }
             I32CONST => {
                 let value = i32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
                 self.write_debug(value);
-                self.value_stack.push(Value::I32(value));
+                self.value_store.push(Value::I32(value));
             }
             I64CONST => {
                 let value = i64::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
                 self.write_debug(value);
-                self.value_stack.push(Value::I64(value));
+                self.value_store.push(Value::I64(value));
             }
             F32CONST => {
                 let mut bytes = [0; 4];
                 bytes.copy_from_slice(&module.code.bytes[self.program_counter..][..4]);
                 let value = f32::from_le_bytes(bytes);
                 self.write_debug(value);
-                self.value_stack.push(Value::F32(value));
+                self.value_store.push(Value::F32(value));
                 self.program_counter += 4;
             }
             F64CONST => {
@@ -988,429 +988,429 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 bytes.copy_from_slice(&module.code.bytes[self.program_counter..][..8]);
                 let value = f64::from_le_bytes(bytes);
                 self.write_debug(value);
-                self.value_stack.push(Value::F64(value));
+                self.value_store.push(Value::F64(value));
                 self.program_counter += 8;
             }
 
             I32EQZ => {
-                let arg = self.value_stack.pop_i32()?;
+                let arg = self.value_store.pop_i32()?;
                 let result: bool = arg == 0;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I32EQ => {
-                let arg2 = self.value_stack.pop_i32()?;
-                let arg1 = self.value_stack.pop_i32()?;
+                let arg2 = self.value_store.pop_i32()?;
+                let arg1 = self.value_store.pop_i32()?;
                 let result: bool = arg1 == arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I32NE => {
-                let arg2 = self.value_stack.pop_i32()?;
-                let arg1 = self.value_stack.pop_i32()?;
+                let arg2 = self.value_store.pop_i32()?;
+                let arg1 = self.value_store.pop_i32()?;
                 let result: bool = arg1 != arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I32LTS => {
-                let arg2 = self.value_stack.pop_i32()?;
-                let arg1 = self.value_stack.pop_i32()?;
+                let arg2 = self.value_store.pop_i32()?;
+                let arg1 = self.value_store.pop_i32()?;
                 let result: bool = arg1 < arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I32LTU => {
-                let arg2 = self.value_stack.pop_u32()?;
-                let arg1 = self.value_stack.pop_u32()?;
+                let arg2 = self.value_store.pop_u32()?;
+                let arg1 = self.value_store.pop_u32()?;
                 let result: bool = arg1 < arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I32GTS => {
-                let arg2 = self.value_stack.pop_i32()?;
-                let arg1 = self.value_stack.pop_i32()?;
+                let arg2 = self.value_store.pop_i32()?;
+                let arg1 = self.value_store.pop_i32()?;
                 let result: bool = arg1 > arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I32GTU => {
-                let arg2 = self.value_stack.pop_u32()?;
-                let arg1 = self.value_stack.pop_u32()?;
+                let arg2 = self.value_store.pop_u32()?;
+                let arg1 = self.value_store.pop_u32()?;
                 let result: bool = arg1 > arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I32LES => {
-                let arg2 = self.value_stack.pop_i32()?;
-                let arg1 = self.value_stack.pop_i32()?;
+                let arg2 = self.value_store.pop_i32()?;
+                let arg1 = self.value_store.pop_i32()?;
                 let result: bool = arg1 <= arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I32LEU => {
-                let arg2 = self.value_stack.pop_u32()?;
-                let arg1 = self.value_stack.pop_u32()?;
+                let arg2 = self.value_store.pop_u32()?;
+                let arg1 = self.value_store.pop_u32()?;
                 let result: bool = arg1 <= arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I32GES => {
-                let arg2 = self.value_stack.pop_i32()?;
-                let arg1 = self.value_stack.pop_i32()?;
+                let arg2 = self.value_store.pop_i32()?;
+                let arg1 = self.value_store.pop_i32()?;
                 let result: bool = arg1 >= arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I32GEU => {
-                let arg2 = self.value_stack.pop_u32()?;
-                let arg1 = self.value_stack.pop_u32()?;
+                let arg2 = self.value_store.pop_u32()?;
+                let arg1 = self.value_store.pop_u32()?;
                 let result: bool = arg1 >= arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
 
             I64EQZ => {
-                let arg = self.value_stack.pop_i64()?;
+                let arg = self.value_store.pop_i64()?;
                 let result: bool = arg == 0;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I64EQ => {
-                let arg2 = self.value_stack.pop_i64()?;
-                let arg1 = self.value_stack.pop_i64()?;
+                let arg2 = self.value_store.pop_i64()?;
+                let arg1 = self.value_store.pop_i64()?;
                 let result: bool = arg1 == arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I64NE => {
-                let arg2 = self.value_stack.pop_i64()?;
-                let arg1 = self.value_stack.pop_i64()?;
+                let arg2 = self.value_store.pop_i64()?;
+                let arg1 = self.value_store.pop_i64()?;
                 let result: bool = arg1 != arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I64LTS => {
-                let arg2 = self.value_stack.pop_i64()?;
-                let arg1 = self.value_stack.pop_i64()?;
+                let arg2 = self.value_store.pop_i64()?;
+                let arg1 = self.value_store.pop_i64()?;
                 let result: bool = arg1 < arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I64LTU => {
-                let arg2 = self.value_stack.pop_u64()?;
-                let arg1 = self.value_stack.pop_u64()?;
+                let arg2 = self.value_store.pop_u64()?;
+                let arg1 = self.value_store.pop_u64()?;
                 let result: bool = arg1 < arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I64GTS => {
-                let arg2 = self.value_stack.pop_i64()?;
-                let arg1 = self.value_stack.pop_i64()?;
+                let arg2 = self.value_store.pop_i64()?;
+                let arg1 = self.value_store.pop_i64()?;
                 let result: bool = arg1 > arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I64GTU => {
-                let arg2 = self.value_stack.pop_u64()?;
-                let arg1 = self.value_stack.pop_u64()?;
+                let arg2 = self.value_store.pop_u64()?;
+                let arg1 = self.value_store.pop_u64()?;
                 let result: bool = arg1 > arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I64LES => {
-                let arg2 = self.value_stack.pop_i64()?;
-                let arg1 = self.value_stack.pop_i64()?;
+                let arg2 = self.value_store.pop_i64()?;
+                let arg1 = self.value_store.pop_i64()?;
                 let result: bool = arg1 <= arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I64LEU => {
-                let arg2 = self.value_stack.pop_u64()?;
-                let arg1 = self.value_stack.pop_u64()?;
+                let arg2 = self.value_store.pop_u64()?;
+                let arg1 = self.value_store.pop_u64()?;
                 let result: bool = arg1 <= arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I64GES => {
-                let arg2 = self.value_stack.pop_i64()?;
-                let arg1 = self.value_stack.pop_i64()?;
+                let arg2 = self.value_store.pop_i64()?;
+                let arg1 = self.value_store.pop_i64()?;
                 let result: bool = arg1 >= arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             I64GEU => {
-                let arg2 = self.value_stack.pop_u64()?;
-                let arg1 = self.value_stack.pop_u64()?;
+                let arg2 = self.value_store.pop_u64()?;
+                let arg1 = self.value_store.pop_u64()?;
                 let result: bool = arg1 >= arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
 
             F32EQ => {
-                let arg2 = self.value_stack.pop_f32()?;
-                let arg1 = self.value_stack.pop_f32()?;
+                let arg2 = self.value_store.pop_f32()?;
+                let arg1 = self.value_store.pop_f32()?;
                 let result: bool = arg1 == arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             F32NE => {
-                let arg2 = self.value_stack.pop_f32()?;
-                let arg1 = self.value_stack.pop_f32()?;
+                let arg2 = self.value_store.pop_f32()?;
+                let arg1 = self.value_store.pop_f32()?;
                 let result: bool = arg1 != arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             F32LT => {
-                let arg2 = self.value_stack.pop_f32()?;
-                let arg1 = self.value_stack.pop_f32()?;
+                let arg2 = self.value_store.pop_f32()?;
+                let arg1 = self.value_store.pop_f32()?;
                 let result: bool = arg1 < arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             F32GT => {
-                let arg2 = self.value_stack.pop_f32()?;
-                let arg1 = self.value_stack.pop_f32()?;
+                let arg2 = self.value_store.pop_f32()?;
+                let arg1 = self.value_store.pop_f32()?;
                 let result: bool = arg1 > arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             F32LE => {
-                let arg2 = self.value_stack.pop_f32()?;
-                let arg1 = self.value_stack.pop_f32()?;
+                let arg2 = self.value_store.pop_f32()?;
+                let arg1 = self.value_store.pop_f32()?;
                 let result: bool = arg1 <= arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             F32GE => {
-                let arg2 = self.value_stack.pop_f32()?;
-                let arg1 = self.value_stack.pop_f32()?;
+                let arg2 = self.value_store.pop_f32()?;
+                let arg1 = self.value_store.pop_f32()?;
                 let result: bool = arg1 >= arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
 
             F64EQ => {
-                let arg2 = self.value_stack.pop_f64()?;
-                let arg1 = self.value_stack.pop_f64()?;
+                let arg2 = self.value_store.pop_f64()?;
+                let arg1 = self.value_store.pop_f64()?;
                 let result: bool = arg1 == arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             F64NE => {
-                let arg2 = self.value_stack.pop_f64()?;
-                let arg1 = self.value_stack.pop_f64()?;
+                let arg2 = self.value_store.pop_f64()?;
+                let arg1 = self.value_store.pop_f64()?;
                 let result: bool = arg1 != arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             F64LT => {
-                let arg2 = self.value_stack.pop_f64()?;
-                let arg1 = self.value_stack.pop_f64()?;
+                let arg2 = self.value_store.pop_f64()?;
+                let arg1 = self.value_store.pop_f64()?;
                 let result: bool = arg1 < arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             F64GT => {
-                let arg2 = self.value_stack.pop_f64()?;
-                let arg1 = self.value_stack.pop_f64()?;
+                let arg2 = self.value_store.pop_f64()?;
+                let arg1 = self.value_store.pop_f64()?;
                 let result: bool = arg1 > arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             F64LE => {
-                let arg2 = self.value_stack.pop_f64()?;
-                let arg1 = self.value_stack.pop_f64()?;
+                let arg2 = self.value_store.pop_f64()?;
+                let arg1 = self.value_store.pop_f64()?;
                 let result: bool = arg1 <= arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
             F64GE => {
-                let arg2 = self.value_stack.pop_f64()?;
-                let arg1 = self.value_stack.pop_f64()?;
+                let arg2 = self.value_store.pop_f64()?;
+                let arg1 = self.value_store.pop_f64()?;
                 let result: bool = arg1 >= arg2;
-                self.value_stack.push(Value::I32(result as i32));
+                self.value_store.push(Value::I32(result as i32));
             }
 
             I32CLZ => {
-                let arg = self.value_stack.pop_u32()?;
-                self.value_stack.push(Value::from(arg.leading_zeros()));
+                let arg = self.value_store.pop_u32()?;
+                self.value_store.push(Value::from(arg.leading_zeros()));
             }
             I32CTZ => {
-                let arg = self.value_stack.pop_u32()?;
-                self.value_stack.push(Value::from(arg.trailing_zeros()));
+                let arg = self.value_store.pop_u32()?;
+                self.value_store.push(Value::from(arg.trailing_zeros()));
             }
             I32POPCNT => {
-                let arg = self.value_stack.pop_u32()?;
-                self.value_stack.push(Value::from(arg.count_ones()));
+                let arg = self.value_store.pop_u32()?;
+                self.value_store.push(Value::from(arg.count_ones()));
             }
             I32ADD => {
-                let arg2 = self.value_stack.pop_i32()?;
-                let arg1 = self.value_stack.pop_i32()?;
-                self.value_stack.push(Value::from(arg1.wrapping_add(arg2)));
+                let arg2 = self.value_store.pop_i32()?;
+                let arg1 = self.value_store.pop_i32()?;
+                self.value_store.push(Value::from(arg1.wrapping_add(arg2)));
             }
             I32SUB => {
-                let arg2 = self.value_stack.pop_i32()?;
-                let arg1 = self.value_stack.pop_i32()?;
-                self.value_stack.push(Value::from(arg1.wrapping_sub(arg2)));
+                let arg2 = self.value_store.pop_i32()?;
+                let arg1 = self.value_store.pop_i32()?;
+                self.value_store.push(Value::from(arg1.wrapping_sub(arg2)));
             }
             I32MUL => {
-                let arg2 = self.value_stack.pop_i32()?;
-                let arg1 = self.value_stack.pop_i32()?;
-                self.value_stack.push(Value::from(arg1.wrapping_mul(arg2)));
+                let arg2 = self.value_store.pop_i32()?;
+                let arg1 = self.value_store.pop_i32()?;
+                self.value_store.push(Value::from(arg1.wrapping_mul(arg2)));
             }
             I32DIVS => {
-                let arg2 = self.value_stack.pop_i32()?;
-                let arg1 = self.value_stack.pop_i32()?;
-                self.value_stack.push(Value::from(arg1.wrapping_div(arg2)));
+                let arg2 = self.value_store.pop_i32()?;
+                let arg1 = self.value_store.pop_i32()?;
+                self.value_store.push(Value::from(arg1.wrapping_div(arg2)));
             }
             I32DIVU => {
-                let arg2 = self.value_stack.pop_u32()?;
-                let arg1 = self.value_stack.pop_u32()?;
-                self.value_stack.push(Value::from(arg1.wrapping_div(arg2)));
+                let arg2 = self.value_store.pop_u32()?;
+                let arg1 = self.value_store.pop_u32()?;
+                self.value_store.push(Value::from(arg1.wrapping_div(arg2)));
             }
             I32REMS => {
-                let arg2 = self.value_stack.pop_i32()?;
-                let arg1 = self.value_stack.pop_i32()?;
-                self.value_stack.push(Value::from(arg1.wrapping_rem(arg2)));
+                let arg2 = self.value_store.pop_i32()?;
+                let arg1 = self.value_store.pop_i32()?;
+                self.value_store.push(Value::from(arg1.wrapping_rem(arg2)));
             }
             I32REMU => {
-                let arg2 = self.value_stack.pop_u32()?;
-                let arg1 = self.value_stack.pop_u32()?;
-                self.value_stack.push(Value::from(arg1.wrapping_rem(arg2)));
+                let arg2 = self.value_store.pop_u32()?;
+                let arg1 = self.value_store.pop_u32()?;
+                self.value_store.push(Value::from(arg1.wrapping_rem(arg2)));
             }
             I32AND => {
-                let arg2 = self.value_stack.pop_u32()?;
-                let arg1 = self.value_stack.pop_u32()?;
-                self.value_stack.push(Value::from(arg1 & arg2));
+                let arg2 = self.value_store.pop_u32()?;
+                let arg1 = self.value_store.pop_u32()?;
+                self.value_store.push(Value::from(arg1 & arg2));
             }
             I32OR => {
-                let arg2 = self.value_stack.pop_u32()?;
-                let arg1 = self.value_stack.pop_u32()?;
-                self.value_stack.push(Value::from(arg1 | arg2));
+                let arg2 = self.value_store.pop_u32()?;
+                let arg1 = self.value_store.pop_u32()?;
+                self.value_store.push(Value::from(arg1 | arg2));
             }
             I32XOR => {
-                let arg2 = self.value_stack.pop_u32()?;
-                let arg1 = self.value_stack.pop_u32()?;
-                self.value_stack.push(Value::from(arg1 ^ arg2));
+                let arg2 = self.value_store.pop_u32()?;
+                let arg1 = self.value_store.pop_u32()?;
+                self.value_store.push(Value::from(arg1 ^ arg2));
             }
             I32SHL => {
-                let arg2 = self.value_stack.pop_u32()?;
-                let arg1 = self.value_stack.pop_u32()?;
+                let arg2 = self.value_store.pop_u32()?;
+                let arg1 = self.value_store.pop_u32()?;
                 // Take modulo N as per the spec https://webassembly.github.io/spec/core/exec/numerics.html#op-ishl
                 let k = arg2 % 32;
-                self.value_stack.push(Value::from(arg1 << k));
+                self.value_store.push(Value::from(arg1 << k));
             }
             I32SHRS => {
-                let arg2 = self.value_stack.pop_i32()?;
-                let arg1 = self.value_stack.pop_i32()?;
+                let arg2 = self.value_store.pop_i32()?;
+                let arg1 = self.value_store.pop_i32()?;
                 let k = arg2 % 32;
-                self.value_stack.push(Value::from(arg1 >> k));
+                self.value_store.push(Value::from(arg1 >> k));
             }
             I32SHRU => {
-                let arg2 = self.value_stack.pop_u32()?;
-                let arg1 = self.value_stack.pop_u32()?;
+                let arg2 = self.value_store.pop_u32()?;
+                let arg1 = self.value_store.pop_u32()?;
                 let k = arg2 % 32;
-                self.value_stack.push(Value::from(arg1 >> k));
+                self.value_store.push(Value::from(arg1 >> k));
             }
             I32ROTL => {
-                let arg2 = self.value_stack.pop_u32()?;
-                let arg1 = self.value_stack.pop_u32()?;
+                let arg2 = self.value_store.pop_u32()?;
+                let arg1 = self.value_store.pop_u32()?;
                 let k = arg2 % 32;
-                self.value_stack.push(Value::from(arg1.rotate_left(k)));
+                self.value_store.push(Value::from(arg1.rotate_left(k)));
             }
             I32ROTR => {
-                let arg2 = self.value_stack.pop_u32()?;
-                let arg1 = self.value_stack.pop_u32()?;
+                let arg2 = self.value_store.pop_u32()?;
+                let arg1 = self.value_store.pop_u32()?;
                 let k = arg2 % 32;
-                self.value_stack.push(Value::from(arg1.rotate_right(k)));
+                self.value_store.push(Value::from(arg1.rotate_right(k)));
             }
 
             I64CLZ => {
-                let arg = self.value_stack.pop_u64()?;
-                self.value_stack
+                let arg = self.value_store.pop_u64()?;
+                self.value_store
                     .push(Value::from(arg.leading_zeros() as u64));
             }
             I64CTZ => {
-                let arg = self.value_stack.pop_u64()?;
-                self.value_stack
+                let arg = self.value_store.pop_u64()?;
+                self.value_store
                     .push(Value::from(arg.trailing_zeros() as u64));
             }
             I64POPCNT => {
-                let arg = self.value_stack.pop_u64()?;
-                self.value_stack.push(Value::from(arg.count_ones() as u64));
+                let arg = self.value_store.pop_u64()?;
+                self.value_store.push(Value::from(arg.count_ones() as u64));
             }
             I64ADD => {
-                let arg2 = self.value_stack.pop_i64()?;
-                let arg1 = self.value_stack.pop_i64()?;
-                self.value_stack.push(Value::from(arg1.wrapping_add(arg2)));
+                let arg2 = self.value_store.pop_i64()?;
+                let arg1 = self.value_store.pop_i64()?;
+                self.value_store.push(Value::from(arg1.wrapping_add(arg2)));
             }
             I64SUB => {
-                let arg2 = self.value_stack.pop_i64()?;
-                let arg1 = self.value_stack.pop_i64()?;
-                self.value_stack.push(Value::from(arg1.wrapping_sub(arg2)));
+                let arg2 = self.value_store.pop_i64()?;
+                let arg1 = self.value_store.pop_i64()?;
+                self.value_store.push(Value::from(arg1.wrapping_sub(arg2)));
             }
             I64MUL => {
-                let arg2 = self.value_stack.pop_i64()?;
-                let arg1 = self.value_stack.pop_i64()?;
-                self.value_stack.push(Value::from(arg1.wrapping_mul(arg2)));
+                let arg2 = self.value_store.pop_i64()?;
+                let arg1 = self.value_store.pop_i64()?;
+                self.value_store.push(Value::from(arg1.wrapping_mul(arg2)));
             }
             I64DIVS => {
-                let arg2 = self.value_stack.pop_i64()?;
-                let arg1 = self.value_stack.pop_i64()?;
-                self.value_stack.push(Value::from(arg1.wrapping_div(arg2)));
+                let arg2 = self.value_store.pop_i64()?;
+                let arg1 = self.value_store.pop_i64()?;
+                self.value_store.push(Value::from(arg1.wrapping_div(arg2)));
             }
             I64DIVU => {
-                let arg2 = self.value_stack.pop_u64()?;
-                let arg1 = self.value_stack.pop_u64()?;
-                self.value_stack.push(Value::from(arg1.wrapping_div(arg2)));
+                let arg2 = self.value_store.pop_u64()?;
+                let arg1 = self.value_store.pop_u64()?;
+                self.value_store.push(Value::from(arg1.wrapping_div(arg2)));
             }
             I64REMS => {
-                let arg2 = self.value_stack.pop_i64()?;
-                let arg1 = self.value_stack.pop_i64()?;
-                self.value_stack.push(Value::from(arg1.wrapping_rem(arg2)));
+                let arg2 = self.value_store.pop_i64()?;
+                let arg1 = self.value_store.pop_i64()?;
+                self.value_store.push(Value::from(arg1.wrapping_rem(arg2)));
             }
             I64REMU => {
-                let arg2 = self.value_stack.pop_u64()?;
-                let arg1 = self.value_stack.pop_u64()?;
-                self.value_stack.push(Value::from(arg1.wrapping_rem(arg2)));
+                let arg2 = self.value_store.pop_u64()?;
+                let arg1 = self.value_store.pop_u64()?;
+                self.value_store.push(Value::from(arg1.wrapping_rem(arg2)));
             }
             I64AND => {
-                let arg2 = self.value_stack.pop_u64()?;
-                let arg1 = self.value_stack.pop_u64()?;
-                self.value_stack.push(Value::from(arg1 & arg2));
+                let arg2 = self.value_store.pop_u64()?;
+                let arg1 = self.value_store.pop_u64()?;
+                self.value_store.push(Value::from(arg1 & arg2));
             }
             I64OR => {
-                let arg2 = self.value_stack.pop_u64()?;
-                let arg1 = self.value_stack.pop_u64()?;
-                self.value_stack.push(Value::from(arg1 | arg2));
+                let arg2 = self.value_store.pop_u64()?;
+                let arg1 = self.value_store.pop_u64()?;
+                self.value_store.push(Value::from(arg1 | arg2));
             }
             I64XOR => {
-                let arg2 = self.value_stack.pop_u64()?;
-                let arg1 = self.value_stack.pop_u64()?;
-                self.value_stack.push(Value::from(arg1 ^ arg2));
+                let arg2 = self.value_store.pop_u64()?;
+                let arg1 = self.value_store.pop_u64()?;
+                self.value_store.push(Value::from(arg1 ^ arg2));
             }
             I64SHL => {
-                let arg2 = self.value_stack.pop_u64()?;
-                let arg1 = self.value_stack.pop_u64()?;
+                let arg2 = self.value_store.pop_u64()?;
+                let arg1 = self.value_store.pop_u64()?;
                 // Take modulo N as per the spec https://webassembly.github.io/spec/core/exec/numerics.html#op-ishl
                 let k = arg2 % 64;
-                self.value_stack.push(Value::from(arg1 << k));
+                self.value_store.push(Value::from(arg1 << k));
             }
             I64SHRS => {
-                let arg2 = self.value_stack.pop_i64()?;
-                let arg1 = self.value_stack.pop_i64()?;
+                let arg2 = self.value_store.pop_i64()?;
+                let arg1 = self.value_store.pop_i64()?;
                 let k = arg2 % 64;
-                self.value_stack.push(Value::from(arg1 >> k));
+                self.value_store.push(Value::from(arg1 >> k));
             }
             I64SHRU => {
-                let arg2 = self.value_stack.pop_u64()?;
-                let arg1 = self.value_stack.pop_u64()?;
+                let arg2 = self.value_store.pop_u64()?;
+                let arg1 = self.value_store.pop_u64()?;
                 let k = arg2 % 64;
-                self.value_stack.push(Value::from(arg1 >> k));
+                self.value_store.push(Value::from(arg1 >> k));
             }
             I64ROTL => {
-                let arg2 = self.value_stack.pop_u64()?;
-                let arg1 = self.value_stack.pop_u64()?;
+                let arg2 = self.value_store.pop_u64()?;
+                let arg1 = self.value_store.pop_u64()?;
                 let k = (arg2 % 64) as u32;
-                self.value_stack.push(Value::from(arg1.rotate_left(k)));
+                self.value_store.push(Value::from(arg1.rotate_left(k)));
             }
             I64ROTR => {
-                let arg2 = self.value_stack.pop_u64()?;
-                let arg1 = self.value_stack.pop_u64()?;
+                let arg2 = self.value_store.pop_u64()?;
+                let arg1 = self.value_store.pop_u64()?;
                 let k = (arg2 % 64) as u32;
-                self.value_stack.push(Value::from(arg1.rotate_right(k)));
+                self.value_store.push(Value::from(arg1.rotate_right(k)));
             }
 
             F32ABS => {
-                let arg = self.value_stack.pop_f32()?;
-                self.value_stack.push(Value::F32(arg.abs()));
+                let arg = self.value_store.pop_f32()?;
+                self.value_store.push(Value::F32(arg.abs()));
             }
             F32NEG => {
-                let arg = self.value_stack.pop_f32()?;
-                self.value_stack.push(Value::F32(-arg));
+                let arg = self.value_store.pop_f32()?;
+                self.value_store.push(Value::F32(-arg));
             }
             F32CEIL => {
-                let arg = self.value_stack.pop_f32()?;
-                self.value_stack.push(Value::F32(arg.ceil()));
+                let arg = self.value_store.pop_f32()?;
+                self.value_store.push(Value::F32(arg.ceil()));
             }
             F32FLOOR => {
-                let arg = self.value_stack.pop_f32()?;
-                self.value_stack.push(Value::F32(arg.floor()));
+                let arg = self.value_store.pop_f32()?;
+                self.value_store.push(Value::F32(arg.floor()));
             }
             F32TRUNC => {
-                let arg = self.value_stack.pop_f32()?;
-                self.value_stack.push(Value::F32(arg.trunc()));
+                let arg = self.value_store.pop_f32()?;
+                self.value_store.push(Value::F32(arg.trunc()));
             }
             F32NEAREST => {
                 // https://webassembly.github.io/spec/core/exec/numerics.html#op-fnearest
-                let arg = self.value_stack.pop_f32()?;
+                let arg = self.value_store.pop_f32()?;
                 let rounded = arg.round(); // "Rounds half-way cases away from 0.0"
                 let frac = arg - rounded;
                 let result = if frac == 0.5 || frac == -0.5 {
@@ -1426,78 +1426,78 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 } else {
                     rounded
                 };
-                self.value_stack.push(Value::F32(result));
+                self.value_store.push(Value::F32(result));
             }
             F32SQRT => {
-                let arg = self.value_stack.pop_f32()?;
-                self.value_stack.push(Value::F32(arg.sqrt()));
+                let arg = self.value_store.pop_f32()?;
+                self.value_store.push(Value::F32(arg.sqrt()));
             }
             F32ADD => {
-                let arg2 = self.value_stack.pop_f32()?;
-                let arg1 = self.value_stack.pop_f32()?;
-                self.value_stack.push(Value::F32(arg1 + arg2));
+                let arg2 = self.value_store.pop_f32()?;
+                let arg1 = self.value_store.pop_f32()?;
+                self.value_store.push(Value::F32(arg1 + arg2));
             }
             F32SUB => {
-                let arg2 = self.value_stack.pop_f32()?;
-                let arg1 = self.value_stack.pop_f32()?;
-                self.value_stack.push(Value::F32(arg1 - arg2));
+                let arg2 = self.value_store.pop_f32()?;
+                let arg1 = self.value_store.pop_f32()?;
+                self.value_store.push(Value::F32(arg1 - arg2));
             }
             F32MUL => {
-                let arg2 = self.value_stack.pop_f32()?;
-                let arg1 = self.value_stack.pop_f32()?;
-                self.value_stack.push(Value::F32(arg1 * arg2));
+                let arg2 = self.value_store.pop_f32()?;
+                let arg1 = self.value_store.pop_f32()?;
+                self.value_store.push(Value::F32(arg1 * arg2));
             }
             F32DIV => {
-                let arg2 = self.value_stack.pop_f32()?;
-                let arg1 = self.value_stack.pop_f32()?;
-                self.value_stack.push(Value::F32(arg1 / arg2));
+                let arg2 = self.value_store.pop_f32()?;
+                let arg1 = self.value_store.pop_f32()?;
+                self.value_store.push(Value::F32(arg1 / arg2));
             }
             F32MIN => {
-                let arg2 = self.value_stack.pop_f32()?;
-                let arg1 = self.value_stack.pop_f32()?;
+                let arg2 = self.value_store.pop_f32()?;
+                let arg1 = self.value_store.pop_f32()?;
                 let result = if arg1 < arg2 { arg1 } else { arg2 };
-                self.value_stack.push(Value::F32(result));
+                self.value_store.push(Value::F32(result));
             }
             F32MAX => {
-                let arg2 = self.value_stack.pop_f32()?;
-                let arg1 = self.value_stack.pop_f32()?;
+                let arg2 = self.value_store.pop_f32()?;
+                let arg1 = self.value_store.pop_f32()?;
                 let result = if arg1 > arg2 { arg1 } else { arg2 };
-                self.value_stack.push(Value::F32(result));
+                self.value_store.push(Value::F32(result));
             }
             F32COPYSIGN => {
-                let arg2 = self.value_stack.pop_f32()?;
-                let arg1 = self.value_stack.pop_f32()?;
+                let arg2 = self.value_store.pop_f32()?;
+                let arg1 = self.value_store.pop_f32()?;
                 let result = if arg1.is_sign_negative() == arg2.is_sign_negative() {
                     arg1
                 } else {
                     arg2
                 };
-                self.value_stack.push(Value::F32(result));
+                self.value_store.push(Value::F32(result));
             }
 
             F64ABS => {
-                let arg = self.value_stack.pop_f64()?;
-                self.value_stack.push(Value::F64(arg.abs()));
+                let arg = self.value_store.pop_f64()?;
+                self.value_store.push(Value::F64(arg.abs()));
             }
             F64NEG => {
-                let arg = self.value_stack.pop_f64()?;
-                self.value_stack.push(Value::F64(-arg));
+                let arg = self.value_store.pop_f64()?;
+                self.value_store.push(Value::F64(-arg));
             }
             F64CEIL => {
-                let arg = self.value_stack.pop_f64()?;
-                self.value_stack.push(Value::F64(arg.ceil()));
+                let arg = self.value_store.pop_f64()?;
+                self.value_store.push(Value::F64(arg.ceil()));
             }
             F64FLOOR => {
-                let arg = self.value_stack.pop_f64()?;
-                self.value_stack.push(Value::F64(arg.floor()));
+                let arg = self.value_store.pop_f64()?;
+                self.value_store.push(Value::F64(arg.floor()));
             }
             F64TRUNC => {
-                let arg = self.value_stack.pop_f64()?;
-                self.value_stack.push(Value::F64(arg.trunc()));
+                let arg = self.value_store.pop_f64()?;
+                self.value_store.push(Value::F64(arg.trunc()));
             }
             F64NEAREST => {
                 // https://webassembly.github.io/spec/core/exec/numerics.html#op-fnearest
-                let arg = self.value_stack.pop_f64()?;
+                let arg = self.value_store.pop_f64()?;
                 let rounded = arg.round(); // "Rounds half-way cases away from 0.0"
                 let frac = arg - rounded;
                 let result = if frac == 0.5 || frac == -0.5 {
@@ -1513,183 +1513,183 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 } else {
                     rounded
                 };
-                self.value_stack.push(Value::F64(result));
+                self.value_store.push(Value::F64(result));
             }
             F64SQRT => {
-                let arg = self.value_stack.pop_f64()?;
-                self.value_stack.push(Value::F64(arg.sqrt()));
+                let arg = self.value_store.pop_f64()?;
+                self.value_store.push(Value::F64(arg.sqrt()));
             }
             F64ADD => {
-                let arg2 = self.value_stack.pop_f64()?;
-                let arg1 = self.value_stack.pop_f64()?;
-                self.value_stack.push(Value::F64(arg1 + arg2));
+                let arg2 = self.value_store.pop_f64()?;
+                let arg1 = self.value_store.pop_f64()?;
+                self.value_store.push(Value::F64(arg1 + arg2));
             }
             F64SUB => {
-                let arg2 = self.value_stack.pop_f64()?;
-                let arg1 = self.value_stack.pop_f64()?;
-                self.value_stack.push(Value::F64(arg1 - arg2));
+                let arg2 = self.value_store.pop_f64()?;
+                let arg1 = self.value_store.pop_f64()?;
+                self.value_store.push(Value::F64(arg1 - arg2));
             }
             F64MUL => {
-                let arg2 = self.value_stack.pop_f64()?;
-                let arg1 = self.value_stack.pop_f64()?;
-                self.value_stack.push(Value::F64(arg1 * arg2));
+                let arg2 = self.value_store.pop_f64()?;
+                let arg1 = self.value_store.pop_f64()?;
+                self.value_store.push(Value::F64(arg1 * arg2));
             }
             F64DIV => {
-                let arg2 = self.value_stack.pop_f64()?;
-                let arg1 = self.value_stack.pop_f64()?;
-                self.value_stack.push(Value::F64(arg1 / arg2));
+                let arg2 = self.value_store.pop_f64()?;
+                let arg1 = self.value_store.pop_f64()?;
+                self.value_store.push(Value::F64(arg1 / arg2));
             }
             F64MIN => {
-                let arg2 = self.value_stack.pop_f64()?;
-                let arg1 = self.value_stack.pop_f64()?;
+                let arg2 = self.value_store.pop_f64()?;
+                let arg1 = self.value_store.pop_f64()?;
                 let result = if arg1 < arg2 { arg1 } else { arg2 };
-                self.value_stack.push(Value::F64(result));
+                self.value_store.push(Value::F64(result));
             }
             F64MAX => {
-                let arg2 = self.value_stack.pop_f64()?;
-                let arg1 = self.value_stack.pop_f64()?;
+                let arg2 = self.value_store.pop_f64()?;
+                let arg1 = self.value_store.pop_f64()?;
                 let result = if arg1 > arg2 { arg1 } else { arg2 };
-                self.value_stack.push(Value::F64(result));
+                self.value_store.push(Value::F64(result));
             }
             F64COPYSIGN => {
-                let arg2 = self.value_stack.pop_f64()?;
-                let arg1 = self.value_stack.pop_f64()?;
+                let arg2 = self.value_store.pop_f64()?;
+                let arg1 = self.value_store.pop_f64()?;
                 let result = if arg1.is_sign_negative() == arg2.is_sign_negative() {
                     arg1
                 } else {
                     arg2
                 };
-                self.value_stack.push(Value::F64(result));
+                self.value_store.push(Value::F64(result));
             }
 
             I32WRAPI64 => {
-                let arg = self.value_stack.pop_u64()?;
+                let arg = self.value_store.pop_u64()?;
                 let wrapped: u32 = (arg & 0xffff_ffff) as u32;
-                self.value_stack.push(Value::from(wrapped));
+                self.value_store.push(Value::from(wrapped));
             }
             I32TRUNCSF32 => {
-                let arg = self.value_stack.pop_f32()?;
+                let arg = self.value_store.pop_f32()?;
                 if arg < i32::MIN as f32 || arg > i32::MAX as f32 {
                     panic!("Cannot truncate {} from F32 to I32", arg);
                 }
-                self.value_stack.push(Value::I32(arg as i32));
+                self.value_store.push(Value::I32(arg as i32));
             }
             I32TRUNCUF32 => {
-                let arg = self.value_stack.pop_f32()?;
+                let arg = self.value_store.pop_f32()?;
                 if arg < u32::MIN as f32 || arg > u32::MAX as f32 {
                     panic!("Cannot truncate {} from F32 to unsigned I32", arg);
                 }
-                self.value_stack.push(Value::from(arg as u32));
+                self.value_store.push(Value::from(arg as u32));
             }
             I32TRUNCSF64 => {
-                let arg = self.value_stack.pop_f64()?;
+                let arg = self.value_store.pop_f64()?;
                 if arg < i32::MIN as f64 || arg > i32::MAX as f64 {
                     panic!("Cannot truncate {} from F64 to I32", arg);
                 }
-                self.value_stack.push(Value::I32(arg as i32));
+                self.value_store.push(Value::I32(arg as i32));
             }
             I32TRUNCUF64 => {
-                let arg = self.value_stack.pop_f64()?;
+                let arg = self.value_store.pop_f64()?;
                 if arg < u32::MIN as f64 || arg > u32::MAX as f64 {
                     panic!("Cannot truncate {} from F64 to unsigned I32", arg);
                 }
-                self.value_stack.push(Value::from(arg as u32));
+                self.value_store.push(Value::from(arg as u32));
             }
             I64EXTENDSI32 => {
-                let arg = self.value_stack.pop_i32()?;
-                self.value_stack.push(Value::I64(arg as i64));
+                let arg = self.value_store.pop_i32()?;
+                self.value_store.push(Value::I64(arg as i64));
             }
             I64EXTENDUI32 => {
-                let arg = self.value_stack.pop_u32()?;
-                self.value_stack.push(Value::from(arg as u64));
+                let arg = self.value_store.pop_u32()?;
+                self.value_store.push(Value::from(arg as u64));
             }
             I64TRUNCSF32 => {
-                let arg = self.value_stack.pop_f32()?;
+                let arg = self.value_store.pop_f32()?;
                 if arg < i64::MIN as f32 || arg > i64::MAX as f32 {
                     panic!("Cannot truncate {} from F32 to I64", arg);
                 }
-                self.value_stack.push(Value::I64(arg as i64));
+                self.value_store.push(Value::I64(arg as i64));
             }
             I64TRUNCUF32 => {
-                let arg = self.value_stack.pop_f32()?;
+                let arg = self.value_store.pop_f32()?;
                 if arg < u64::MIN as f32 || arg > u64::MAX as f32 {
                     panic!("Cannot truncate {} from F32 to unsigned I64", arg);
                 }
-                self.value_stack.push(Value::from(arg as u64));
+                self.value_store.push(Value::from(arg as u64));
             }
             I64TRUNCSF64 => {
-                let arg = self.value_stack.pop_f64()?;
+                let arg = self.value_store.pop_f64()?;
                 if arg < i64::MIN as f64 || arg > i64::MAX as f64 {
                     panic!("Cannot truncate {} from F64 to I64", arg);
                 }
-                self.value_stack.push(Value::I64(arg as i64));
+                self.value_store.push(Value::I64(arg as i64));
             }
             I64TRUNCUF64 => {
-                let arg = self.value_stack.pop_f64()?;
+                let arg = self.value_store.pop_f64()?;
                 if arg < u64::MIN as f64 || arg > u64::MAX as f64 {
                     panic!("Cannot truncate {} from F64 to unsigned I64", arg);
                 }
-                self.value_stack.push(Value::from(arg as u64));
+                self.value_store.push(Value::from(arg as u64));
             }
             F32CONVERTSI32 => {
-                let arg = self.value_stack.pop_i32()?;
-                self.value_stack.push(Value::F32(arg as f32));
+                let arg = self.value_store.pop_i32()?;
+                self.value_store.push(Value::F32(arg as f32));
             }
             F32CONVERTUI32 => {
-                let arg = self.value_stack.pop_u32()?;
-                self.value_stack.push(Value::F32(arg as f32));
+                let arg = self.value_store.pop_u32()?;
+                self.value_store.push(Value::F32(arg as f32));
             }
             F32CONVERTSI64 => {
-                let arg = self.value_stack.pop_i64()?;
-                self.value_stack.push(Value::F32(arg as f32));
+                let arg = self.value_store.pop_i64()?;
+                self.value_store.push(Value::F32(arg as f32));
             }
             F32CONVERTUI64 => {
-                let arg = self.value_stack.pop_u64()?;
-                self.value_stack.push(Value::F32(arg as f32));
+                let arg = self.value_store.pop_u64()?;
+                self.value_store.push(Value::F32(arg as f32));
             }
             F32DEMOTEF64 => {
-                let arg = self.value_stack.pop_f64()?;
-                self.value_stack.push(Value::F32(arg as f32));
+                let arg = self.value_store.pop_f64()?;
+                self.value_store.push(Value::F32(arg as f32));
             }
             F64CONVERTSI32 => {
-                let arg = self.value_stack.pop_i32()?;
-                self.value_stack.push(Value::F64(arg as f64));
+                let arg = self.value_store.pop_i32()?;
+                self.value_store.push(Value::F64(arg as f64));
             }
             F64CONVERTUI32 => {
-                let arg = self.value_stack.pop_u32()?;
-                self.value_stack.push(Value::F64(arg as f64));
+                let arg = self.value_store.pop_u32()?;
+                self.value_store.push(Value::F64(arg as f64));
             }
             F64CONVERTSI64 => {
-                let arg = self.value_stack.pop_i64()?;
-                self.value_stack.push(Value::F64(arg as f64));
+                let arg = self.value_store.pop_i64()?;
+                self.value_store.push(Value::F64(arg as f64));
             }
             F64CONVERTUI64 => {
-                let arg = self.value_stack.pop_u64()?;
-                self.value_stack.push(Value::F64(arg as f64));
+                let arg = self.value_store.pop_u64()?;
+                self.value_store.push(Value::F64(arg as f64));
             }
             F64PROMOTEF32 => {
-                let arg = self.value_stack.pop_f32()?;
-                self.value_stack.push(Value::F64(arg as f64));
+                let arg = self.value_store.pop_f32()?;
+                self.value_store.push(Value::F64(arg as f64));
             }
 
             I32REINTERPRETF32 => {
-                let x = self.value_stack.pop_f32()?;
-                self.value_stack
+                let x = self.value_store.pop_f32()?;
+                self.value_store
                     .push(Value::I32(i32::from_ne_bytes(x.to_ne_bytes())));
             }
             I64REINTERPRETF64 => {
-                let x = self.value_stack.pop_f64()?;
-                self.value_stack
+                let x = self.value_store.pop_f64()?;
+                self.value_store
                     .push(Value::I64(i64::from_ne_bytes(x.to_ne_bytes())));
             }
             F32REINTERPRETI32 => {
-                let x = self.value_stack.pop_i32()?;
-                self.value_stack
+                let x = self.value_store.pop_i32()?;
+                self.value_store
                     .push(Value::F32(f32::from_ne_bytes(x.to_ne_bytes())));
             }
             F64REINTERPRETI64 => {
-                let x = self.value_stack.pop_i64()?;
-                self.value_stack
+                let x = self.value_store.pop_i64()?;
+                self.value_store
                     .push(Value::F64(f64::from_ne_bytes(x.to_ne_bytes())));
             }
         }
@@ -1700,7 +1700,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             } else {
                 // For calls, we print special debug stuff in do_call
                 let base = self.current_frame.locals_start + self.current_frame.locals_count;
-                let slice = self.value_stack.get_slice(base as usize);
+                let slice = self.value_store.get_slice(base as usize);
                 eprintln!("{:06x} {:17} {:x?}", file_offset, debug_string, slice);
             }
             let is_return = op_code == RETURN || (op_code == END && implicit_return);
@@ -1739,11 +1739,11 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             }
         };
 
-        for (i, v) in self.value_stack.iter().enumerate() {
+        for (i, v) in self.value_store.iter().enumerate() {
             print_blocks(i);
             eprintln!("{:3} {:x?}", i, v);
         }
-        print_blocks(self.value_stack.depth());
+        print_blocks(self.value_store.depth());
 
         eprintln!();
     }

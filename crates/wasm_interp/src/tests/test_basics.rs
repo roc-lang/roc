@@ -847,7 +847,7 @@ fn test_set_get_local() {
         n_args,
         ret_type,
         &buffer,
-        &mut inst.value_stack,
+        &mut inst.value_store,
         &mut cursor,
     );
 
@@ -862,8 +862,8 @@ fn test_set_get_local() {
     inst.execute_next_instruction(&module).unwrap();
     inst.execute_next_instruction(&module).unwrap();
     inst.execute_next_instruction(&module).unwrap();
-    assert_eq!(inst.value_stack.depth(), 5);
-    assert_eq!(inst.value_stack.pop(), Value::I32(12345));
+    assert_eq!(inst.value_store.depth(), 5);
+    assert_eq!(inst.value_store.pop(), Value::I32(12345));
 }
 
 #[test]
@@ -894,7 +894,7 @@ fn test_tee_get_local() {
         n_args,
         ret_type,
         &buffer,
-        &mut inst.value_stack,
+        &mut inst.value_store,
         &mut cursor,
     );
 
@@ -909,9 +909,9 @@ fn test_tee_get_local() {
     inst.execute_next_instruction(&module).unwrap();
     inst.execute_next_instruction(&module).unwrap();
     inst.execute_next_instruction(&module).unwrap();
-    assert_eq!(inst.value_stack.depth(), 6);
-    assert_eq!(inst.value_stack.pop(), Value::I32(12345));
-    assert_eq!(inst.value_stack.pop(), Value::I32(12345));
+    assert_eq!(inst.value_store.depth(), 6);
+    assert_eq!(inst.value_store.pop(), Value::I32(12345));
+    assert_eq!(inst.value_store.pop(), Value::I32(12345));
 }
 
 #[test]
@@ -936,9 +936,9 @@ fn test_global() {
     state.execute_next_instruction(&module).unwrap();
     state.execute_next_instruction(&module).unwrap();
     state.execute_next_instruction(&module).unwrap();
-    assert_eq!(state.value_stack.depth(), 2);
-    assert_eq!(state.value_stack.pop(), Value::I32(555));
-    assert_eq!(state.value_stack.pop(), Value::I32(222));
+    assert_eq!(state.value_store.depth(), 2);
+    assert_eq!(state.value_store.pop(), Value::I32(555));
+    assert_eq!(state.value_store.pop(), Value::I32(222));
 }
 
 #[test]
@@ -951,7 +951,7 @@ fn test_i32const() {
     module.code.bytes.encode_i32(12345);
 
     state.execute_next_instruction(&module).unwrap();
-    assert_eq!(state.value_stack.pop(), Value::I32(12345))
+    assert_eq!(state.value_store.pop(), Value::I32(12345))
 }
 
 #[test]
@@ -964,7 +964,7 @@ fn test_i64const() {
     module.code.bytes.encode_i64(1234567890);
 
     state.execute_next_instruction(&module).unwrap();
-    assert_eq!(state.value_stack.pop(), Value::I64(1234567890))
+    assert_eq!(state.value_store.pop(), Value::I64(1234567890))
 }
 
 #[test]
@@ -977,7 +977,7 @@ fn test_f32const() {
     module.code.bytes.encode_f32(123.45);
 
     state.execute_next_instruction(&module).unwrap();
-    assert_eq!(state.value_stack.pop(), Value::F32(123.45))
+    assert_eq!(state.value_store.pop(), Value::F32(123.45))
 }
 
 #[test]
@@ -990,5 +990,5 @@ fn test_f64const() {
     module.code.bytes.encode_f64(12345.67890);
 
     state.execute_next_instruction(&module).unwrap();
-    assert_eq!(state.value_stack.pop(), Value::F64(12345.67890))
+    assert_eq!(state.value_store.pop(), Value::F64(12345.67890))
 }
