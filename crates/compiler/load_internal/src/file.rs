@@ -1868,6 +1868,7 @@ fn report_loading_problem(
             )
         }
         LoadingProblem::FormattedReport(report) => report,
+        LoadingProblem::FileProblem { filename, error } => to_file_problem_report(&filename, error),
         err => todo!("Loading error: {:?}", err),
     }
 }
