@@ -68,6 +68,7 @@ jobs:
             basic-cli/src/macos-arm64.o
 
   create-brotli-archive:
+    needs: [build-linux-x86_64-files, build-macos-x86_64-files, build-macos-apple-silicon-files]
     name: create brotli archive
     runs-on: [ubuntu-20.04]
     steps:
