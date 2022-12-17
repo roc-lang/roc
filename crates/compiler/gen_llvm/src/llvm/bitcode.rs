@@ -578,12 +578,12 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                         &default
                     }
                     other => {
-                        let closure_type =
-                            basic_type_from_layout(env, &other).ptr_type(AddressSpace::Generic);
+                        let closure_type = basic_type_from_layout(env, &other);
+                        let closure_ptr_type = closure_type.ptr_type(AddressSpace::Generic);
 
                         let closure_cast = env
                             .builder
-                            .build_bitcast(closure_ptr, closure_type, "load_opaque")
+                            .build_bitcast(closure_ptr, closure_ptr_type, "load_opaque")
                             .into_pointer_value();
 
                         let closure_data = env.builder.build_load(closure_cast, "load_opaque");
