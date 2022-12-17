@@ -838,12 +838,14 @@ fn test_set_get_local() {
     let fn_index = 0;
     let return_addr = 0x1234;
     let return_block_depth = 0;
-    let arg_type_bytes = &[];
+    let n_args = 0;
+    let ret_type = Some(ValueType::I32);
     inst.current_frame = Frame::enter(
         fn_index,
         return_addr,
         return_block_depth,
-        arg_type_bytes,
+        n_args,
+        ret_type,
         &buffer,
         &mut inst.value_stack,
         &mut cursor,
@@ -883,12 +885,14 @@ fn test_tee_get_local() {
     let fn_index = 0;
     let return_addr = 0x1234;
     let return_block_depth = 0;
-    let arg_type_bytes = &[];
+    let n_args = 0;
+    let ret_type = Some(ValueType::I32);
     inst.current_frame = Frame::enter(
         fn_index,
         return_addr,
         return_block_depth,
-        arg_type_bytes,
+        n_args,
+        ret_type,
         &buffer,
         &mut inst.value_stack,
         &mut cursor,

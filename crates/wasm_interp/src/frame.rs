@@ -10,12 +10,14 @@ pub struct Frame {
     pub fn_index: usize,
     /// Address in the code section where this frame returns to
     pub return_addr: usize,
-    /// Depth of the "function block" for this frame
-    pub function_block_depth: usize,
+    /// Depth of the "function body block" for this frame
+    pub body_block_index: usize,
     /// Offset in the ValueStack where the args & locals begin
     pub locals_start: usize,
     /// Number of args & locals in the frame
     pub locals_count: usize,
+    /// Expected return type, if any
+    pub return_type: Option<ValueType>,
 }
 
 impl Frame {
@@ -23,22 +25,23 @@ impl Frame {
         Frame {
             fn_index: 0,
             return_addr: 0,
-            function_block_depth: 0,
+            body_block_index: 0,
             locals_start: 0,
             locals_count: 0,
+            return_type: None,
         }
     }
 
     pub fn enter(
         fn_index: usize,
         return_addr: usize,
-        function_block_depth: usize,
-        arg_type_bytes: &[u8],
+        body_block_index: usize,
+        n_args: usize,
+        return_type: Option<ValueType>,
         code_bytes: &[u8],
         value_stack: &mut ValueStack<'_>,
         pc: &mut usize,
     ) -> Self {
-        let n_args = arg_type_bytes.len();
         let locals_start = value_stack.depth() - n_args;
 
         // Parse local variable declarations in the function header. They're grouped by type.
@@ -60,9 +63,10 @@ impl Frame {
         Frame {
             fn_index,
             return_addr,
-            function_block_depth,
+            body_block_index,
             locals_start,
             locals_count,
+            return_type,
         }
     }
 

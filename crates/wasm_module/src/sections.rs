@@ -213,6 +213,46 @@ impl<'a> Serialize for Signature<'a> {
 }
 
 #[derive(Debug)]
+pub struct SignatureParamsIter<'a> {
+    bytes: &'a [u8],
+    index: usize,
+    end: usize,
+}
+
+impl<'a> Iterator for SignatureParamsIter<'a> {
+    type Item = ValueType;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.end {
+            None
+        } else {
+            self.bytes.get(self.index).map(|b| {
+                self.index += 1;
+                ValueType::from(*b)
+            })
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let size = self.end - self.index;
+        (size, Some(size))
+    }
+}
+
+impl<'a> ExactSizeIterator for SignatureParamsIter<'a> {}
+
+impl<'a> DoubleEndedIterator for SignatureParamsIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.end == 0 {
+            None
+        } else {
+            self.end -= 1;
+            self.bytes.get(self.end).map(|b| ValueType::from(*b))
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct TypeSection<'a> {
     /// Private. See WasmModule::add_function_signature
     arena: &'a Bump,
@@ -258,11 +298,23 @@ impl<'a> TypeSection<'a> {
         self.bytes.is_empty()
     }
 
-    pub fn look_up_arg_type_bytes(&self, sig_index: u32) -> &[u8] {
+    pub fn look_up(&'a self, sig_index: u32) -> (SignatureParamsIter<'a>, Option<ValueType>) {
         let mut offset = self.offsets[sig_index as usize];
         offset += 1; // separator
-        let count = u32::parse((), &self.bytes, &mut offset).unwrap() as usize;
-        &self.bytes[offset..][..count]
+        let param_count = u32::parse((), &self.bytes, &mut offset).unwrap() as usize;
+        let params_iter = SignatureParamsIter {
+            bytes: &self.bytes[offset..][..param_count],
+            index: 0,
+            end: param_count,
+        };
+        offset += param_count;
+
+        let return_type = if self.bytes[offset] == 0 {
+            None
+        } else {
+            Some(ValueType::from(self.bytes[offset + 1]))
+        };
+        (params_iter, return_type)
     }
 }
 
