@@ -4,9 +4,14 @@ use std::fmt::Debug;
 
 use crate::Error;
 
-// Very simple and easy-to-debug storage for the Wasm stack machine
-// It wastes a lot of memory but we tried more complex schemes with packed bytes
-// and it made no measurable difference to performance.
+/// Simple and storage for the Wasm stack machine and local variables.
+///
+/// All values are mixed together so that on function calls, "moving"
+/// arguments from the stack machine to local variables is a no-op
+/// (or rather, just a matter of recording block metadata in the Instance).
+///
+/// We use a simple Vec. When we tried more densely-packed SoA structures,
+/// they were slower due to more logic, and harder to debug.
 pub struct ValueStore<'a> {
     values: Vec<'a, Value>,
 }
