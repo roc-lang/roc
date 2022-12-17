@@ -389,10 +389,24 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
             debug_info_init!(env, function_value);
 
             let mut it = function_value.get_param_iter();
-            let value_ptr = it.next().unwrap().into_pointer_value();
+            let generic_value_ptr = it.next().unwrap().into_pointer_value();
 
-            value_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
-            let value = load_roc_value(env, *layout, value_ptr, "load_opaque");
+            generic_value_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
+
+            let value_ptr_type =
+                basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
+            let value_ptr =
+                env.builder
+                    .build_pointer_cast(generic_value_ptr, value_ptr_type, "load_opaque");
+
+            // even though this looks like a `load_roc_value`, that gives segfaults in practice.
+            // I suspect it has something to do with the lifetime of the alloca that is created by
+            // `load_roc_value`
+            let value = if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
+                value_ptr.into()
+            } else {
+                env.builder.build_load(value_ptr, "load_opaque")
+            };
 
             match rc_operation {
                 Mode::Inc => {
