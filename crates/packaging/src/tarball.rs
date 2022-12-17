@@ -223,31 +223,31 @@ fn add_dot_roc_files<W: Write>(
     root_dir: &Path,
     builder: &mut tar::Builder<W>,
 ) -> Result<(), io::Error> {
-    Ok(
-        for entry in WalkDir::new(root_dir).into_iter().filter_entry(|entry| {
-            let path = entry.path();
+    for entry in WalkDir::new(root_dir).into_iter().filter_entry(|entry| {
+        let path = entry.path();
 
-            // Ignore everything except directories and .roc files
-            path.is_dir() || path.extension().and_then(OsStr::to_str) == Some("roc")
-        }) {
-            let entry = entry?;
-            let path = entry.path();
+        // Ignore everything except directories and .roc files
+        path.is_dir() || path.extension().and_then(OsStr::to_str) == Some("roc")
+    }) {
+        let entry = entry?;
+        let path = entry.path();
 
-            // Only include files, not directories or symlinks.
-            // Symlinks may not work on Windows, and directories will get automatically
-            // added based on the paths of the files inside anyway. (In fact, if we don't
-            // filter out directories in this step, then empty ones can sometimes be added!)
-            if path.is_file() {
-                builder.append_path_with_name(
-                    path,
-                    // Store it without the root path, so that (for example) we don't store
-                    // `examples/cli/main.roc` and therefore end up with the root of the tarball
-                    // being an `examples/cli/` dir instead of having `main.roc` in the root.
-                    path.strip_prefix(root_dir).unwrap(),
-                )?;
-            }
-        },
-    )
+        // Only include files, not directories or symlinks.
+        // Symlinks may not work on Windows, and directories will get automatically
+        // added based on the paths of the files inside anyway. (In fact, if we don't
+        // filter out directories in this step, then empty ones can sometimes be added!)
+        if path.is_file() {
+            builder.append_path_with_name(
+                path,
+                // Store it without the root path, so that (for example) we don't store
+                // `examples/cli/main.roc` and therefore end up with the root of the tarball
+                // being an `examples/cli/` dir instead of having `main.roc` in the root.
+                path.strip_prefix(root_dir).unwrap(),
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 fn read_header<'a>(

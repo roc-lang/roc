@@ -1834,8 +1834,8 @@ fn state_thread_step<'a>(
     }
 }
 
-fn report_loading_problem<'a>(
-    problem: LoadingProblem<'a>,
+fn report_loading_problem(
+    problem: LoadingProblem<'_>,
     module_ids: ModuleIds,
     render: RenderTarget,
     palette: Palette,
