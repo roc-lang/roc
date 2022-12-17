@@ -862,6 +862,7 @@ enum Msg<'a> {
         error: io::ErrorKind,
     },
 
+    FailedToLoad(LoadingProblem<'a>),
     IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
 }
 
@@ -1338,7 +1339,7 @@ impl<'a> LoadStart<'a> {
                     header_output
                 }
 
-                Err(LoadingProblem::ParsingFailed(problem)) => {
+                Err(problem) => {
                     let module_ids = Arc::try_unwrap(arc_modules)
                         .unwrap_or_else(|_| {
                             panic!("There were still outstanding Arc references to module_ids")
@@ -1346,62 +1347,12 @@ impl<'a> LoadStart<'a> {
                         .into_inner()
                         .into_module_ids();
 
-                    // if parsing failed, this module did not add any identifiers
-                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                    let buf = to_parse_problem_report(
-                        problem,
-                        module_ids,
-                        root_exposed_ident_ids,
-                        render,
-                        palette,
-                    );
-                    return Err(LoadingProblem::FormattedReport(buf));
-                }
-                Err(LoadingProblem::FileProblem { filename, error }) => {
-                    let buf = to_file_problem_report(&filename, error);
-                    return Err(LoadingProblem::FormattedReport(buf));
-                }
-                Err(LoadingProblem::ImportCycle(filename, cycle)) => {
-                    let module_ids = Arc::try_unwrap(arc_modules)
-                        .unwrap_or_else(|_| {
-                            panic!("There were still outstanding Arc references to module_ids")
-                        })
-                        .into_inner()
-                        .into_module_ids();
+                    let report = report_loading_problem(problem, module_ids, render, palette);
 
-                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                    let buf = to_import_cycle_report(
-                        module_ids,
-                        root_exposed_ident_ids,
-                        cycle,
-                        filename,
-                        render,
-                    );
-                    return Err(LoadingProblem::FormattedReport(buf));
+                    // TODO try to gracefully recover and continue
+                    // instead of changing the control flow to exit.
+                    return Err(LoadingProblem::FormattedReport(report));
                 }
-                Err(LoadingProblem::IncorrectModuleName(FileError {
-                    problem: SourceError { problem, bytes },
-                    filename,
-                })) => {
-                    let module_ids = Arc::try_unwrap(arc_modules)
-                        .unwrap_or_else(|_| {
-                            panic!("There were still outstanding Arc references to module_ids")
-                        })
-                        .into_inner()
-                        .into_module_ids();
-
-                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                    let buf = to_incorrect_module_name_report(
-                        module_ids,
-                        root_exposed_ident_ids,
-                        problem,
-                        filename,
-                        bytes,
-                        render,
-                    );
-                    return Err(LoadingProblem::FormattedReport(buf));
-                }
-                Err(e) => return Err(e),
             }
         };
 
@@ -1846,6 +1797,44 @@ fn state_thread_step<'a>(
             crossbeam::channel::TryRecvError::Empty => Ok(ControlFlow::Continue(state)),
             crossbeam::channel::TryRecvError::Disconnected => Err(LoadingProblem::MsgChannelDied),
         },
+    }
+}
+
+fn report_loading_problem<'a>(
+    problem: LoadingProblem<'a>,
+    module_ids: ModuleIds,
+    render: RenderTarget,
+    palette: Palette,
+) -> String {
+    match problem {
+        LoadingProblem::ParsingFailed(problem) => {
+            // if parsing failed, this module did not add anything to IdentIds
+            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+
+            to_parse_problem_report(problem, module_ids, root_exposed_ident_ids, render, palette)
+        }
+        LoadingProblem::ImportCycle(filename, cycle) => {
+            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+
+            to_import_cycle_report(module_ids, root_exposed_ident_ids, cycle, filename, render)
+        }
+        LoadingProblem::IncorrectModuleName(FileError {
+            problem: SourceError { problem, bytes },
+            filename,
+        }) => {
+            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+
+            to_incorrect_module_name_report(
+                module_ids,
+                root_exposed_ident_ids,
+                problem,
+                filename,
+                bytes,
+                render,
+            )
+        }
+        LoadingProblem::FormattedReport(report) => report,
+        err => todo!("Loading error: {:?}", err),
     }
 }
 
@@ -3106,6 +3095,10 @@ fn update<'a>(
                 }
             }
         }
+        Msg::FailedToLoad(problem) => {
+            // TODO report the error and continue instead of erroring out
+            Err(problem)
+        }
         Msg::FinishedAllTypeChecking { .. } => {
             unreachable!();
         }
@@ -4058,8 +4051,6 @@ fn load_packages<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
 ) {
-    let mut problems = Vec::new();
-
     // Load all the packages
     for Loc { value: entry, .. } in packages.iter() {
         let PackageEntry {
@@ -4119,7 +4110,7 @@ fn load_packages<'a>(
                 load_messages.push(msg);
             }
             Err(problem) => {
-                problems.push(problem);
+                load_messages.push(Msg::FailedToLoad(problem));
             }
         }
     }
