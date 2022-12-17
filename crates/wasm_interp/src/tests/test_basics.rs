@@ -840,7 +840,7 @@ fn test_set_get_local() {
     state.execute_next_instruction(&module).unwrap();
     state.execute_next_instruction(&module).unwrap();
     state.execute_next_instruction(&module).unwrap();
-    assert_eq!(state.value_stack.len(), 1);
+    assert_eq!(state.value_stack.depth(), 1);
     assert_eq!(state.value_stack.pop(), Value::I32(12345));
 }
 
@@ -876,7 +876,7 @@ fn test_tee_get_local() {
     state.execute_next_instruction(&module).unwrap();
     state.execute_next_instruction(&module).unwrap();
     state.execute_next_instruction(&module).unwrap();
-    assert_eq!(state.value_stack.len(), 2);
+    assert_eq!(state.value_stack.depth(), 2);
     assert_eq!(state.value_stack.pop(), Value::I32(12345));
     assert_eq!(state.value_stack.pop(), Value::I32(12345));
 }
@@ -903,7 +903,7 @@ fn test_global() {
     state.execute_next_instruction(&module).unwrap();
     state.execute_next_instruction(&module).unwrap();
     state.execute_next_instruction(&module).unwrap();
-    assert_eq!(state.value_stack.len(), 2);
+    assert_eq!(state.value_stack.depth(), 2);
     assert_eq!(state.value_stack.pop(), Value::I32(555));
     assert_eq!(state.value_stack.pop(), Value::I32(222));
 }

@@ -1,251 +1,108 @@
-use bitvec::vec::BitVec;
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::{Value, ValueType};
-use std::{fmt::Debug, mem::size_of};
+use std::fmt::Debug;
 
 use crate::Error;
 
-/// Memory-efficient Struct-of-Arrays storage for the value stack.
-/// Pack the values and their types as densely as possible,
-/// to get better cache usage, at the expense of some extra logic.
+// Very simple and easy-to-debug storage for the Wasm stack machine
+// It wastes a lot of memory but we tried more complex schemes with packed bytes
+// and it made no measurable difference to performance.
 pub struct ValueStack<'a> {
-    bytes: Vec<'a, u8>,
-    is_float: BitVec,
-    is_64: BitVec,
-}
-
-macro_rules! pop_bytes {
-    ($ty: ty, $bytes: expr) => {{
-        const SIZE: usize = size_of::<$ty>();
-        if $bytes.len() < SIZE {
-            Err(Error::ValueStackEmpty)
-        } else {
-            let bytes_idx = $bytes.len() - SIZE;
-            let mut b = [0; SIZE];
-            b.copy_from_slice(&$bytes[bytes_idx..][..SIZE]);
-            $bytes.truncate(bytes_idx);
-            Ok(<$ty>::from_ne_bytes(b))
-        }
-    }};
+    values: Vec<'a, Value>,
 }
 
 impl<'a> ValueStack<'a> {
     pub(crate) fn new(arena: &'a Bump) -> Self {
         ValueStack {
-            bytes: Vec::with_capacity_in(1024, arena),
-            is_float: BitVec::with_capacity(1024),
-            is_64: BitVec::with_capacity(1024),
+            values: Vec::with_capacity_in(1024, arena),
         }
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.is_64.len()
+    pub(crate) fn depth(&self) -> usize {
+        self.values.len()
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.is_64.is_empty()
+        self.values.is_empty()
     }
 
     pub(crate) fn push(&mut self, value: Value) {
-        match value {
-            Value::I32(x) => {
-                self.bytes.extend_from_slice(&x.to_ne_bytes());
-                self.is_float.push(false);
-                self.is_64.push(false);
-            }
-            Value::I64(x) => {
-                self.bytes.extend_from_slice(&x.to_ne_bytes());
-                self.is_float.push(false);
-                self.is_64.push(true);
-            }
-            Value::F32(x) => {
-                self.bytes.extend_from_slice(&x.to_ne_bytes());
-                self.is_float.push(true);
-                self.is_64.push(false);
-            }
-            Value::F64(x) => {
-                self.bytes.extend_from_slice(&x.to_ne_bytes());
-                self.is_float.push(true);
-                self.is_64.push(true);
-            }
-        }
+        self.values.push(value);
     }
 
     pub(crate) fn pop(&mut self) -> Value {
-        let is_64 = self.is_64.pop().unwrap();
-        let is_float = self.is_float.pop().unwrap();
-        let size = if is_64 { 8 } else { 4 };
-        let bytes_idx = self.bytes.len() - size;
-        let value = self.get(is_64, is_float, bytes_idx);
-        self.bytes.truncate(bytes_idx);
-        value
+        self.values.pop().unwrap()
     }
 
     pub(crate) fn peek(&self) -> Value {
-        let is_64 = *self.is_64.last().unwrap();
-        let is_float = *self.is_float.last().unwrap();
-        let size = if is_64 { 8 } else { 4 };
-        let bytes_idx = self.bytes.len() - size;
-        self.get(is_64, is_float, bytes_idx)
-    }
-
-    fn get(&self, is_64: bool, is_float: bool, bytes_idx: usize) -> Value {
-        if is_64 {
-            let mut b = [0; 8];
-            b.copy_from_slice(&self.bytes[bytes_idx..][..8]);
-            if is_float {
-                Value::F64(f64::from_ne_bytes(b))
-            } else {
-                Value::I64(i64::from_ne_bytes(b))
-            }
-        } else {
-            let mut b = [0; 4];
-            b.copy_from_slice(&self.bytes[bytes_idx..][..4]);
-            if is_float {
-                Value::F32(f32::from_ne_bytes(b))
-            } else {
-                Value::I32(i32::from_ne_bytes(b))
-            }
-        }
+        *self.values.last().unwrap()
     }
 
     /// Memory addresses etc
     pub(crate) fn pop_u32(&mut self) -> Result<u32, Error> {
-        match (self.is_float.pop(), self.is_64.pop()) {
-            (Some(false), Some(false)) => pop_bytes!(u32, self.bytes),
-            (Some(is_float), Some(is_64)) => {
-                Err(Error::value_stack_type(ValueType::I32, is_float, is_64))
-            }
-            _ => Err(Error::ValueStackEmpty),
+        match self.values.pop() {
+            Some(Value::I32(x)) => Ok(u32::from_ne_bytes(x.to_ne_bytes())),
+            Some(bad) => Err(Error::ValueStackType(ValueType::I32, ValueType::from(bad))),
+            None => Err(Error::ValueStackEmpty),
         }
     }
 
     pub(crate) fn pop_i32(&mut self) -> Result<i32, Error> {
-        match (self.is_float.pop(), self.is_64.pop()) {
-            (Some(false), Some(false)) => pop_bytes!(i32, self.bytes),
-            (Some(is_float), Some(is_64)) => {
-                Err(Error::value_stack_type(ValueType::I32, is_float, is_64))
-            }
-            _ => Err(Error::ValueStackEmpty),
+        match self.values.pop() {
+            Some(Value::I32(x)) => Ok(x),
+            Some(bad) => Err(Error::ValueStackType(ValueType::I32, ValueType::from(bad))),
+            None => Err(Error::ValueStackEmpty),
         }
     }
 
     pub(crate) fn pop_u64(&mut self) -> Result<u64, Error> {
-        match (self.is_float.pop(), self.is_64.pop()) {
-            (Some(false), Some(true)) => pop_bytes!(u64, self.bytes),
-            (Some(is_float), Some(is_64)) => {
-                Err(Error::value_stack_type(ValueType::I64, is_float, is_64))
-            }
-            _ => Err(Error::ValueStackEmpty),
+        match self.values.pop() {
+            Some(Value::I64(x)) => Ok(u64::from_ne_bytes(x.to_ne_bytes())),
+            Some(bad) => Err(Error::ValueStackType(ValueType::I64, ValueType::from(bad))),
+            None => Err(Error::ValueStackEmpty),
         }
     }
 
     pub(crate) fn pop_i64(&mut self) -> Result<i64, Error> {
-        match (self.is_float.pop(), self.is_64.pop()) {
-            (Some(false), Some(true)) => pop_bytes!(i64, self.bytes),
-            (Some(is_float), Some(is_64)) => {
-                Err(Error::value_stack_type(ValueType::I64, is_float, is_64))
-            }
-            _ => Err(Error::ValueStackEmpty),
+        match self.values.pop() {
+            Some(Value::I64(x)) => Ok(x),
+            Some(bad) => Err(Error::ValueStackType(ValueType::I64, ValueType::from(bad))),
+            None => Err(Error::ValueStackEmpty),
         }
     }
 
     pub(crate) fn pop_f32(&mut self) -> Result<f32, Error> {
-        match (self.is_float.pop(), self.is_64.pop()) {
-            (Some(true), Some(false)) => pop_bytes!(f32, self.bytes),
-            (Some(is_float), Some(is_64)) => {
-                Err(Error::value_stack_type(ValueType::F32, is_float, is_64))
-            }
-            _ => Err(Error::ValueStackEmpty),
+        match self.values.pop() {
+            Some(Value::F32(x)) => Ok(x),
+            Some(bad) => Err(Error::ValueStackType(ValueType::F32, ValueType::from(bad))),
+            None => Err(Error::ValueStackEmpty),
         }
     }
 
     pub(crate) fn pop_f64(&mut self) -> Result<f64, Error> {
-        match (self.is_float.pop(), self.is_64.pop()) {
-            (Some(true), Some(true)) => pop_bytes!(f64, self.bytes),
-            (Some(is_float), Some(is_64)) => {
-                Err(Error::value_stack_type(ValueType::F64, is_float, is_64))
-            }
-            _ => Err(Error::ValueStackEmpty),
+        match self.values.pop() {
+            Some(Value::F64(x)) => Ok(x),
+            Some(bad) => Err(Error::ValueStackType(ValueType::F64, ValueType::from(bad))),
+            None => Err(Error::ValueStackEmpty),
         }
     }
 
-    fn fmt_from_index(
-        &self,
-        f: &mut std::fmt::Formatter<'_>,
-        from_index: usize,
-    ) -> std::fmt::Result {
-        write!(f, "[")?;
-        let mut bytes_index = 0;
-        assert_eq!(self.is_64.len(), self.is_float.len());
-        if from_index < self.is_64.len() {
-            let iter_64 = self.is_64.iter().by_vals();
-            let iter_float = self.is_float.iter().by_vals();
-            for (i, (is_64, is_float)) in iter_64.zip(iter_float).enumerate() {
-                if i < from_index {
-                    continue;
-                }
-                let value = self.get(is_64, is_float, bytes_index);
-                bytes_index += if is_64 { 8 } else { 4 };
-                value.fmt(f)?;
-                if i < self.is_64.len() - 1 {
-                    write!(f, ", ")?;
-                }
-            }
-        }
-        write!(f, "]")
+    pub(crate) fn iter(&self) -> std::slice::Iter<Value> {
+        self.values.iter()
     }
 
-    pub(crate) fn get_slice<'b>(&'b self, index: usize) -> ValueStackSlice<'a, 'b> {
-        ValueStackSlice { stack: self, index }
+    pub(crate) fn truncate(&mut self, depth: usize) {
+        self.values.truncate(depth)
     }
 
-    pub(crate) fn iter<'b>(&'b self) -> ValueStackIter<'a, 'b> {
-        ValueStackIter {
-            stack: self,
-            index: 0,
-            bytes_index: 0,
-        }
+    pub(crate) fn get_slice(&mut self, from: usize) -> &[Value] {
+        &self.values[from..]
     }
 }
 
 impl Debug for ValueStack<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.fmt_from_index(f, 0)
-    }
-}
-
-pub struct ValueStackSlice<'a, 'b> {
-    stack: &'b ValueStack<'a>,
-    index: usize,
-}
-
-impl Debug for ValueStackSlice<'_, '_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.stack.fmt_from_index(f, self.index)
-    }
-}
-
-pub struct ValueStackIter<'a, 'b> {
-    stack: &'b ValueStack<'a>,
-    index: usize,
-    bytes_index: usize,
-}
-
-impl Iterator for ValueStackIter<'_, '_> {
-    type Item = Value;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.index >= self.stack.is_64.len() {
-            None
-        } else {
-            let is_64 = self.stack.is_64[self.index];
-            let is_float = self.stack.is_float[self.index];
-            let value = self.stack.get(is_64, is_float, self.bytes_index);
-            self.index += 1;
-            self.bytes_index += if is_64 { 8 } else { 4 };
-            Some(value)
-        }
+        write!(f, "{:?}", &self.values)
     }
 }
 

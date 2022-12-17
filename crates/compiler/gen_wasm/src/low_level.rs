@@ -1613,7 +1613,10 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[num, bits]);
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => backend.code_builder.i32_shl(),
-                    I64 => backend.code_builder.i64_shl(),
+                    I64 => {
+                        backend.code_builder.i64_extend_u_i32();
+                        backend.code_builder.i64_shl();
+                    }
                     I128 => todo!("{:?} for I128", self.lowlevel),
                     _ => panic_ret_type(),
                 }
@@ -1660,6 +1663,7 @@ impl<'a> LowLevelCall<'a> {
                         backend
                             .storage
                             .load_symbols(&mut backend.code_builder, &[num, bits]);
+                        backend.code_builder.i64_extend_u_i32();
                         backend.code_builder.i64_shr_s();
                     }
                     I128 => todo!("{:?} for I128", self.lowlevel),
@@ -1702,6 +1706,7 @@ impl<'a> LowLevelCall<'a> {
                         backend
                             .storage
                             .load_symbols(&mut backend.code_builder, &[num, bits]);
+                        backend.code_builder.i64_extend_u_i32();
                         backend.code_builder.i64_shr_u();
                     }
                     I128 => todo!("{:?} for I128", self.lowlevel),
