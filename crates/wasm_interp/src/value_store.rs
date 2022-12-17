@@ -7,13 +7,13 @@ use crate::Error;
 // Very simple and easy-to-debug storage for the Wasm stack machine
 // It wastes a lot of memory but we tried more complex schemes with packed bytes
 // and it made no measurable difference to performance.
-pub struct ValueStack<'a> {
+pub struct ValueStore<'a> {
     values: Vec<'a, Value>,
 }
 
-impl<'a> ValueStack<'a> {
+impl<'a> ValueStore<'a> {
     pub(crate) fn new(arena: &'a Bump) -> Self {
-        ValueStack {
+        ValueStore {
             values: Vec::with_capacity_in(1024, arena),
         }
     }
@@ -112,7 +112,7 @@ impl<'a> ValueStack<'a> {
     }
 }
 
-impl Debug for ValueStack<'_> {
+impl Debug for ValueStore<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", &self.values)
     }
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn test_push_pop() {
         let arena = Bump::new();
-        let mut stack = ValueStack::new(&arena);
+        let mut stack = ValueStore::new(&arena);
 
         for val in VALUES {
             stack.push(val);
@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn test_debug_fmt() {
         let arena = Bump::new();
-        let mut stack = ValueStack::new(&arena);
+        let mut stack = ValueStore::new(&arena);
 
         for val in VALUES {
             stack.push(val);

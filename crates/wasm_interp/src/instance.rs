@@ -9,7 +9,7 @@ use roc_wasm_module::{ExportType, WasmModule};
 use roc_wasm_module::{Value, ValueType};
 
 use crate::frame::Frame;
-use crate::value_store::ValueStack;
+use crate::value_store::ValueStore;
 use crate::{Error, ImportDispatcher};
 
 #[derive(Debug)]
@@ -49,7 +49,7 @@ pub struct Instance<'a, I: ImportDispatcher> {
     /// Previous call frames
     previous_frames: Vec<'a, Frame>,
     /// The WebAssembly stack machine's stack of values
-    pub(crate) value_stack: ValueStack<'a>,
+    pub(crate) value_stack: ValueStore<'a>,
     /// Values of any global variables
     pub(crate) globals: Vec<'a, Value>,
     /// Index in the code section of the current instruction
@@ -86,7 +86,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             memory: Vec::from_iter_in(iter::repeat(0).take(mem_bytes as usize), arena),
             current_frame: Frame::new(),
             previous_frames: Vec::new_in(arena),
-            value_stack: ValueStack::new(arena),
+            value_stack: ValueStore::new(arena),
             globals: Vec::from_iter_in(globals, arena),
             program_counter,
             blocks: Vec::new_in(arena),
@@ -134,7 +134,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             "This Wasm interpreter doesn't support non-function imports"
         );
 
-        let value_stack = ValueStack::new(arena);
+        let value_stack = ValueStore::new(arena);
 
         let debug_string = if is_debug_mode {
             Some(String::new())

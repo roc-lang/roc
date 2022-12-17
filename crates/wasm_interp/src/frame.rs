@@ -1,7 +1,7 @@
 use roc_wasm_module::{parse::Parse, Value, ValueType};
 use std::iter::repeat;
 
-use crate::value_store::ValueStack;
+use crate::value_store::ValueStore;
 
 #[derive(Debug)]
 pub struct Frame {
@@ -39,7 +39,7 @@ impl Frame {
         n_args: usize,
         return_type: Option<ValueType>,
         code_bytes: &[u8],
-        value_stack: &mut ValueStack<'_>,
+        value_stack: &mut ValueStore<'_>,
         pc: &mut usize,
     ) -> Self {
         let locals_start = value_stack.depth() - n_args;
@@ -70,12 +70,12 @@ impl Frame {
         }
     }
 
-    pub fn get_local(&self, values: &ValueStack<'_>, index: u32) -> Value {
+    pub fn get_local(&self, values: &ValueStore<'_>, index: u32) -> Value {
         debug_assert!((index as usize) < self.locals_count);
         *values.get(self.locals_start + index as usize).unwrap()
     }
 
-    pub fn set_local(&self, values: &mut ValueStack<'_>, index: u32, value: Value) {
+    pub fn set_local(&self, values: &mut ValueStore<'_>, index: u32, value: Value) {
         debug_assert!((index as usize) < self.locals_count);
         values.set(self.locals_start + index as usize, value)
     }
