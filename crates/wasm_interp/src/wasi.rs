@@ -272,7 +272,7 @@ impl<'a> WasiDispatcher<'a> {
             "sched_yield" => todo!("WASI {}({:?})", function_name, arguments),
             "random_get" => {
                 // A pointer to a buffer where the random bytes will be written
-                let ptr_buf = arguments[1].expect_i32().unwrap() as usize;
+                let ptr_buf = arguments[0].expect_i32().unwrap() as usize;
                 // The number of bytes that will be written
                 let buf_len = arguments[1].expect_i32().unwrap() as usize;
                 for i in 0..buf_len {
