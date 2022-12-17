@@ -567,7 +567,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
 
             self.blocks.push(Block {
                 ty: BlockType::Locals(fn_index),
-                vstack: self.value_stack.depth(),
+                vstack: self.value_stack.depth() - n_args,
             });
             let body_block_index = self.blocks.len();
 
