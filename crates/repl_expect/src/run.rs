@@ -314,7 +314,26 @@ fn run_expect_pure<'a, W: std::io::Write>(
 
     let sequence = ExpectSequence::new(shared_memory.ptr.cast());
 
-    let result: Result<(), (String, _)> = try_run_jit_function!(lib, expect.name, (), |v: ()| v);
+    // try_run_jit_function!(lib, expect.name, (), |v: ()| v);
+    let result: Result<(), (String, _)> = {
+        use inkwell::context::Context;
+        use roc_builtins::bitcode;
+        use roc_gen_llvm::run_roc::RocCallResult;
+        use std::mem::MaybeUninit;
+
+        unsafe {
+            let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<()>)> = lib
+                .get(expect.name.as_bytes())
+                .ok()
+                .ok_or(format!("Unable to JIT compile `{}`", expect.name))
+                .expect("errored");
+
+            let mut main_result = MaybeUninit::uninit();
+            main(main_result.as_mut_ptr());
+
+            main_result.assume_init().into()
+        }
+    };
 
     let shared_memory_ptr: *const u8 = shared_memory.ptr.cast();
 

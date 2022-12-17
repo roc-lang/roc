@@ -85,7 +85,6 @@ pub fn get_values<'a>(
     (app.offset, result, result_vars)
 }
 
-#[cfg(not(windows))]
 #[cfg(test)]
 mod test {
     use indoc::indoc;
@@ -963,5 +962,44 @@ mod test {
                 "#
             ),
         );
+    }
+}
+
+// These functions don't end up in the final Roc binary but Windows linker needs a definition inside the crate.
+// On Windows, there seems to be less dead-code-elimination than on Linux or MacOS, or maybe it's done later.
+#[cfg(test)]
+#[cfg(windows)]
+#[allow(unused_imports)]
+use windows_roc_platform_functions::*;
+
+#[cfg(test)]
+#[cfg(windows)]
+mod windows_roc_platform_functions {
+    use core::ffi::c_void;
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_alloc(size: usize, _alignment: u32) -> *mut c_void {
+        libc::malloc(size)
+    }
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_realloc(
+        c_ptr: *mut c_void,
+        new_size: usize,
+        _old_size: usize,
+        _alignment: u32,
+    ) -> *mut c_void {
+        libc::realloc(c_ptr, new_size)
+    }
+
+    /// # Safety
+    /// The Roc application needs this.
+    #[no_mangle]
+    pub unsafe fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
+        libc::free(c_ptr)
     }
 }
