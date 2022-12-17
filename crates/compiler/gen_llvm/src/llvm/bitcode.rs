@@ -392,21 +392,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
             let value_ptr = it.next().unwrap().into_pointer_value();
 
             value_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
-
-            let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
-
-            let value = if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
-                env.builder
-                    .build_pointer_cast(value_ptr, value_type, "cast_ptr_to_tag_build_rc_wrapper")
-                    .into()
-            } else {
-                let value_cast = env
-                    .builder
-                    .build_bitcast(value_ptr, value_type, "load_opaque")
-                    .into_pointer_value();
-
-                env.builder.build_load(value_cast, "load_opaque")
-            };
+            let value = load_roc_value(env, *layout, value_ptr, "load_opaque");
 
             match rc_operation {
                 Mode::Inc => {
