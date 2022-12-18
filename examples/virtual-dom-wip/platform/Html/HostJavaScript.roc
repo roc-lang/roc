@@ -124,7 +124,7 @@ hostJavaScript =
           removeProperty: (nodeId, propNameAddr) => {
             const node = nodes[nodeId];
             const propName = decodeRocStr(propNameAddr);
-            node[propName] = null;
+            node[propName] = typeof node[propName] === "string" ? "" : null;
           },
 
           /**
