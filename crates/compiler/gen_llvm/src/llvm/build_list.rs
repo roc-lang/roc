@@ -70,11 +70,13 @@ fn pass_element_as_opaque<'a, 'ctx, 'env>(
         .build_alloca(element_type, "element_to_pass_as_opaque");
     store_roc_value(env, layout, element_ptr, element);
 
-    env.builder.build_bitcast(
-        element_ptr,
-        env.context.i8_type().ptr_type(AddressSpace::Generic),
-        "pass_element_as_opaque",
-    )
+    env.builder
+        .build_pointer_cast(
+            element_ptr,
+            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            "pass_element_as_opaque",
+        )
+        .into()
 }
 
 pub(crate) fn layout_width<'a, 'ctx, 'env>(
@@ -93,11 +95,13 @@ pub(crate) fn pass_as_opaque<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     ptr: PointerValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    env.builder.build_bitcast(
-        ptr,
-        env.context.i8_type().ptr_type(AddressSpace::Generic),
-        "pass_as_opaque",
-    )
+    env.builder
+        .build_pointer_cast(
+            ptr,
+            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            "pass_as_opaque",
+        )
+        .into()
 }
 
 pub(crate) fn list_with_capacity<'a, 'ctx, 'env>(

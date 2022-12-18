@@ -5,7 +5,7 @@ use crate::llvm::build_list::{self, incrementing_elem_loop};
 use crate::llvm::convert::{basic_type_from_layout, RocUnion};
 use inkwell::builder::Builder;
 use inkwell::module::Linkage;
-use inkwell::types::{BasicMetadataTypeEnum, BasicType};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
@@ -380,14 +380,18 @@ fn build_clone<'a, 'ctx, 'env>(
                 let bt = basic_type_from_layout(env, &layout);
 
                 // cast the i64 pointer to a pointer to block of memory
-                let field1_cast = env.builder.build_bitcast(value, bt, "i64_to_opaque");
+                let field1_cast = env.builder.build_pointer_cast(
+                    value.into_pointer_value(),
+                    bt.into_pointer_type(),
+                    "i64_to_opaque",
+                );
 
                 build_clone_tag(
                     env,
                     layout_ids,
                     ptr,
                     cursors,
-                    field1_cast,
+                    field1_cast.into(),
                     union_layout,
                     WhenRecursive::Loop(union_layout),
                 )
@@ -525,6 +529,25 @@ fn build_clone_tag<'a, 'ctx, 'env>(
     result.into_int_value()
 }
 
+fn load_tag_data<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    tag_value: PointerValue<'ctx>,
+    tag_type: BasicTypeEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let raw_data_ptr = env
+        .builder
+        .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
+        .unwrap();
+
+    let data_ptr = env.builder.build_pointer_cast(
+        raw_data_ptr,
+        tag_type.ptr_type(AddressSpace::Generic),
+        "data_ptr",
+    );
+
+    env.builder.build_load(data_ptr, "load_data")
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_clone_tag_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -584,28 +607,13 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let raw_data_ptr = env
-                    .builder
-                    .build_struct_gep(
-                        tag_value.into_pointer_value(),
-                        RocUnion::TAG_DATA_INDEX,
-                        "tag_data",
-                    )
-                    .unwrap();
-
                 let layout = Layout::struct_no_name_order(field_layouts);
                 let layout = Layout::struct_no_name_order(
                     env.arena.alloc([layout, union_layout.tag_id_layout()]),
                 );
+
                 let basic_type = basic_type_from_layout(env, &layout);
-
-                let data_ptr = env.builder.build_pointer_cast(
-                    raw_data_ptr,
-                    basic_type.ptr_type(AddressSpace::Generic),
-                    "data_ptr",
-                );
-
-                let data = env.builder.build_load(data_ptr, "load_data");
+                let data = load_tag_data(env, tag_value.into_pointer_value(), basic_type);
 
                 let answer =
                     build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
@@ -644,11 +652,6 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
 
                 let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
 
-                let raw_data_ptr = env
-                    .builder
-                    .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
-                    .unwrap();
-
                 let layout = Layout::struct_no_name_order(field_layouts);
                 let layout = if union_layout.stores_tag_id_in_pointer(env.target_info) {
                     layout
@@ -657,15 +660,9 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                         env.arena.alloc([layout, union_layout.tag_id_layout()]),
                     )
                 };
+
                 let basic_type = basic_type_from_layout(env, &layout);
-
-                let data_ptr = env.builder.build_pointer_cast(
-                    raw_data_ptr,
-                    basic_type.ptr_type(AddressSpace::Generic),
-                    "data_ptr",
-                );
-
-                let data = env.builder.build_load(data_ptr, "load_data");
+                let data = load_tag_data(env, tag_value, basic_type);
 
                 let (width, _) =
                     union_layout.data_size_and_alignment(env.layout_interner, env.target_info);
@@ -701,8 +698,6 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
             }
         }
         NonNullableUnwrapped(fields) => {
-            //
-
             let tag_value = tag_value.into_pointer_value();
 
             build_copy(env, ptr, offset, extra_offset.into());
@@ -722,18 +717,7 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                 ),
             };
 
-            let raw_data_ptr = env
-                .builder
-                .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
-                .unwrap();
-
-            let data_ptr = env.builder.build_pointer_cast(
-                raw_data_ptr,
-                basic_type.ptr_type(AddressSpace::Generic),
-                "data_ptr",
-            );
-
-            let data = env.builder.build_load(data_ptr, "load_data");
+            let data = load_tag_data(env, tag_value, basic_type);
 
             let when_recursive = WhenRecursive::Loop(union_layout);
             let answer = build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
@@ -792,19 +776,7 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                     };
 
                     let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
-
-                    let raw_data_ptr = env
-                        .builder
-                        .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
-                        .unwrap();
-
-                    let data_ptr = env.builder.build_pointer_cast(
-                        raw_data_ptr,
-                        basic_type.ptr_type(AddressSpace::Generic),
-                        "data_ptr",
-                    );
-
-                    let data = env.builder.build_load(data_ptr, "load_data");
+                    let data = load_tag_data(env, tag_value, basic_type);
 
                     let when_recursive = WhenRecursive::Loop(union_layout);
                     let answer =
@@ -878,22 +850,7 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                     ),
                 };
 
-                let raw_data_ptr = env
-                    .builder
-                    .build_struct_gep(
-                        tag_value.into_pointer_value(),
-                        RocUnion::TAG_DATA_INDEX,
-                        "tag_data",
-                    )
-                    .unwrap();
-
-                let data_ptr = env.builder.build_pointer_cast(
-                    raw_data_ptr,
-                    basic_type.ptr_type(AddressSpace::Generic),
-                    "data_ptr",
-                );
-
-                let data = env.builder.build_load(data_ptr, "load_data");
+                let data = load_tag_data(env, tag_value.into_pointer_value(), basic_type);
 
                 let when_recursive = WhenRecursive::Loop(union_layout);
                 let answer =

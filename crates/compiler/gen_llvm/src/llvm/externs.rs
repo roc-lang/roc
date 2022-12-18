@@ -263,11 +263,11 @@ pub fn build_longjmp_call(env: &Env) {
             call_void_bitcode_fn(env, &[jmp_buf.into(), tag.into()], bitcode::UTILS_LONGJMP);
     } else {
         // Call the LLVM-intrinsic longjmp: `void @llvm.eh.sjlj.longjmp(i8* %setjmp_buf)`
-        let jmp_buf_i8p = env.builder.build_bitcast(
+        let jmp_buf_i8p = env.builder.build_pointer_cast(
             jmp_buf,
             env.context.i8_type().ptr_type(AddressSpace::Generic),
             "jmp_buf i8*",
         );
-        let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[jmp_buf_i8p]);
+        let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[jmp_buf_i8p.into()]);
     }
 }
