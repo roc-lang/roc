@@ -1014,7 +1014,7 @@ mod cli_run {
             let mut path = file.with_file_name(executable_filename);
             path.set_extension("wasm");
 
-            let stdout = crate::run_with_wasmer(&path, stdin);
+            let stdout = crate::run_wasm(&path, stdin);
 
             if !stdout.ends_with(expected_ending) {
                 panic!(
@@ -1363,75 +1363,49 @@ mod cli_run {
     }
 }
 
-#[allow(dead_code)]
-fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
-    use std::io::Write;
-    use wasmer::{Instance, Module, Store};
+#[cfg(feature = "wasm32-cli-run")]
+fn run_wasm(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
+    use bumpalo::Bump;
+    use roc_wasm_interp::{DefaultImportDispatcher, Instance, Value, WasiFile};
 
-    //    std::process::Command::new("cp")
-    //        .args(&[
-    //            wasm_path.to_str().unwrap(),
-    //            "/home/folkertdev/roc/wasm/nqueens.wasm",
-    //        ])
-    //        .output()
-    //        .unwrap();
+    let wasm_bytes = std::fs::read(wasm_path).unwrap();
+    let arena = Bump::new();
 
-    let store = Store::default();
-    let module = Module::from_file(&store, wasm_path).unwrap();
+    let mut instance = {
+        let mut fake_stdin = vec![];
+        let fake_stdout = vec![];
+        let fake_stderr = vec![];
+        for s in stdin {
+            fake_stdin.extend_from_slice(s.as_bytes())
+        }
 
-    let mut fake_stdin = wasmer_wasi::Pipe::new();
-    let fake_stdout = wasmer_wasi::Pipe::new();
-    let fake_stderr = wasmer_wasi::Pipe::new();
+        let mut dispatcher = DefaultImportDispatcher::default();
+        dispatcher.wasi.files = vec![
+            WasiFile::ReadOnly(fake_stdin),
+            WasiFile::WriteOnly(fake_stdout),
+            WasiFile::WriteOnly(fake_stderr),
+        ];
 
-    for line in stdin {
-        write!(fake_stdin, "{}", line).unwrap();
-    }
+        Instance::from_bytes(&arena, &wasm_bytes, dispatcher, false).unwrap()
+    };
 
-    // First, we create the `WasiEnv`
-    use wasmer_wasi::WasiState;
-    let mut wasi_env = WasiState::new("hello")
-        .stdin(Box::new(fake_stdin))
-        .stdout(Box::new(fake_stdout))
-        .stderr(Box::new(fake_stderr))
-        .finalize()
-        .unwrap();
+    let result = instance.call_export("_start", []);
 
-    // Then, we get the import object related to our WASI
-    // and attach it to the Wasm instance.
-    let import_object = wasi_env
-        .import_object(&module)
-        .unwrap_or_else(|_| wasmer::imports!());
-
-    let instance = Instance::new(&module, &import_object).unwrap();
-
-    let start = instance.exports.get_function("_start").unwrap();
-
-    match start.call(&[]) {
-        Ok(_) => read_wasi_stdout(wasi_env),
+    match result {
+        Ok(Some(Value::I32(0))) => match &instance.import_dispatcher.wasi.files[1] {
+            WasiFile::WriteOnly(fake_stdout) => String::from_utf8(fake_stdout.clone())
+                .unwrap_or_else(|_| "Wasm test printed invalid UTF-8".into()),
+            _ => unreachable!(),
+        },
+        Ok(Some(Value::I32(exit_code))) => {
+            format!("WASI app exit code {}", exit_code)
+        }
+        Ok(Some(val)) => {
+            format!("WASI _start returned an unexpected number type {:?}", val)
+        }
+        Ok(None) => "WASI _start returned no value".into(),
         Err(e) => {
-            use wasmer_wasi::WasiError;
-            match e.downcast::<WasiError>() {
-                Ok(WasiError::Exit(0)) => {
-                    // we run the `_start` function, so exit(0) is expected
-                    read_wasi_stdout(wasi_env)
-                }
-                other => format!("Something went wrong running a wasm test: {:?}", other),
-            }
+            format!("WASI error {}", e)
         }
-    }
-}
-
-#[allow(dead_code)]
-fn read_wasi_stdout(wasi_env: wasmer_wasi::WasiEnv) -> String {
-    let mut state = wasi_env.state.lock().unwrap();
-
-    match state.fs.stdout_mut() {
-        Ok(Some(stdout)) => {
-            let mut buf = String::new();
-            stdout.read_to_string(&mut buf).unwrap();
-
-            buf
-        }
-        _ => todo!(),
     }
 }

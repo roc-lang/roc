@@ -7,7 +7,7 @@ set -euxo pipefail
 
 # We need to clear RUSTFLAGS for this command, as CI sets normally some flags that are specific to CPU targets.
 # Tests target wasm32-wasi instead of wasm32-unknown-unknown, so that we can debug with println! and dbg!
-RUSTFLAGS="" cargo build --target wasm32-wasi -p roc_repl_wasm --no-default-features --features wasmer --release
+RUSTFLAGS="" cargo build --locked --release --target wasm32-wasi -p roc_repl_wasm --no-default-features --features wasi_test
 
 # Build & run the test code on *native* target, not WebAssembly
-cargo test -p repl_test --features wasm -- --test-threads=1
+cargo test --locked --release -p repl_test --features wasm

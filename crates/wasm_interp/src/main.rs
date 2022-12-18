@@ -65,7 +65,10 @@ fn main() -> io::Result<()> {
     let start_arg_strings = matches.get_many::<String>(ARGS_FOR_APP).unwrap_or_default();
     let wasm_path = matches.get_one::<String>(WASM_FILE).unwrap();
     // WASI expects the .wasm file to be argv[0]
-    let wasi_argv = Vec::from_iter_in(once(wasm_path).chain(start_arg_strings), &arena);
+    let wasi_argv_iter = once(wasm_path)
+        .chain(start_arg_strings)
+        .map(|s| s.as_bytes());
+    let wasi_argv = Vec::from_iter_in(wasi_argv_iter, &arena);
 
     // Load the WebAssembly binary file
 

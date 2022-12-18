@@ -31,7 +31,7 @@ jobs:
         run: cargo run --locked --release format --check crates/compiler/builtins/roc
 
       - name: zig wasm tests
-        run: cargo build --release -p roc_wasm_interp && cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
+        run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
 
       - name: regular rust tests
         run: cargo test --locked --release && sccache --show-stats
@@ -54,7 +54,6 @@ jobs:
       - name: run `roc test` on Dict builtins
         run: cargo run --locked --release -- test crates/compiler/builtins/roc/Dict.roc && sccache --show-stats
 
-      #TODO pass --locked into the script here as well, this avoids rebuilding dependencies unnecessarily
       - name: wasm repl test
         run: crates/repl_test/test_wasm.sh && sccache --show-stats
 

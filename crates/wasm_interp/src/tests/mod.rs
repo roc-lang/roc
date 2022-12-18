@@ -8,7 +8,7 @@ mod test_i32;
 mod test_i64;
 mod test_mem;
 
-use crate::{DefaultImportDispatcher, Instance, DEFAULT_IMPORTS};
+use crate::{DefaultImportDispatcher, Instance};
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::{
     opcodes::OpCode, Export, ExportType, SerialBuffer, Signature, Value, ValueType, WasmModule,
@@ -18,7 +18,13 @@ pub fn default_state(arena: &Bump) -> Instance<DefaultImportDispatcher> {
     let pages = 1;
     let program_counter = 0;
     let globals = [];
-    Instance::new(arena, pages, program_counter, globals, DEFAULT_IMPORTS)
+    Instance::new(
+        arena,
+        pages,
+        program_counter,
+        globals,
+        DefaultImportDispatcher::default(),
+    )
 }
 
 pub fn const_value(buf: &mut Vec<'_, u8>, value: Value) {
@@ -85,9 +91,10 @@ where
         std::fs::write(&filename, outfile_buf).unwrap();
     }
 
-    let mut inst = Instance::for_module(&arena, &module, DEFAULT_IMPORTS, true).unwrap();
+    let mut inst =
+        Instance::for_module(&arena, &module, DefaultImportDispatcher::default(), false).unwrap();
 
-    let return_val = inst.call_export(&module, "test", []).unwrap().unwrap();
+    let return_val = inst.call_export("test", []).unwrap().unwrap();
 
     assert_eq!(return_val, expected);
 }
