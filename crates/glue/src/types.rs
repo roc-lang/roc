@@ -544,7 +544,6 @@ pub enum RocNum {
     U128,
     F32,
     F64,
-    F128,
     Dec,
 }
 
@@ -566,7 +565,6 @@ impl RocNum {
             RocNum::U128 => size_of::<roc_std::U128>(),
             RocNum::F32 => size_of::<f32>(),
             RocNum::F64 => size_of::<f64>(),
-            RocNum::F128 => todo!(),
             RocNum::Dec => size_of::<roc_std::RocDec>(),
         };
 
@@ -933,6 +931,50 @@ fn add_type_help<'a>(
                             }
                         }
                     }
+                    Layout::Struct { .. } if *name == Symbol::DICT_DICT => {
+                        let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
+
+                        let key_var = type_vars[0];
+                        let key_layout =
+                            env.layout_cache.from_var(env.arena, key_var, subs).unwrap();
+                        let key_id = add_type_help(env, key_layout, key_var, None, types);
+
+                        let value_var = type_vars[1];
+                        let value_layout = env
+                            .layout_cache
+                            .from_var(env.arena, value_var, subs)
+                            .unwrap();
+                        let value_id = add_type_help(env, value_layout, value_var, None, types);
+
+                        let type_id = types.add_anonymous(
+                            &env.layout_cache.interner,
+                            RocType::RocDict(key_id, value_id),
+                            layout,
+                        );
+
+                        types.depends(type_id, key_id);
+                        types.depends(type_id, value_id);
+
+                        type_id
+                    }
+                    Layout::Struct { .. } if *name == Symbol::SET_SET => {
+                        let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
+
+                        let key_var = type_vars[0];
+                        let key_layout =
+                            env.layout_cache.from_var(env.arena, key_var, subs).unwrap();
+                        let key_id = add_type_help(env, key_layout, key_var, None, types);
+
+                        let type_id = types.add_anonymous(
+                            &env.layout_cache.interner,
+                            RocType::RocSet(key_id),
+                            layout,
+                        );
+
+                        types.depends(type_id, key_id);
+
+                        type_id
+                    }
                     _ => {
                         unreachable!()
                     }
@@ -1037,11 +1079,6 @@ fn add_builtin_type<'a>(
             F64 => types.add_anonymous(
                 &env.layout_cache.interner,
                 RocType::Num(RocNum::F64),
-                layout,
-            ),
-            F128 => types.add_anonymous(
-                &env.layout_cache.interner,
-                RocType::Num(RocNum::F128),
                 layout,
             ),
         },

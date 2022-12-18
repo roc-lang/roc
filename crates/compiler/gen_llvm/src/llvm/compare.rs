@@ -1,4 +1,6 @@
-use crate::llvm::build::{get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV};
+use crate::llvm::build::{
+    get_tag_id, tag_pointer_clear_tag_id, Env, WhenRecursive, FAST_CALL_CONV,
+};
 use crate::llvm::build_list::{list_len, load_list_ptr};
 use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::basic_type_from_layout;
@@ -16,12 +18,6 @@ use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use super::build::{load_roc_value, use_roc_value};
 use super::convert::argument_type_from_union_layout;
 use super::lowlevel::dec_binop_with_unchecked;
-
-#[derive(Clone, Debug)]
-enum WhenRecursive<'a> {
-    Unreachable,
-    Loop(UnionLayout<'a>),
-}
 
 pub fn generic_eq<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -115,7 +111,6 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
             use FloatWidth::*;
 
             let name = match float_width {
-                F128 => "eq_f128",
                 F64 => "eq_f64",
                 F32 => "eq_f32",
             };
@@ -203,15 +198,17 @@ fn build_eq<'a, 'ctx, 'env>(
                 let bt = basic_type_from_layout(env, &layout);
 
                 // cast the i64 pointer to a pointer to block of memory
-                let field1_cast = env
-                    .builder
-                    .build_bitcast(lhs_val, bt, "i64_to_opaque")
-                    .into_pointer_value();
+                let field1_cast = env.builder.build_pointer_cast(
+                    lhs_val.into_pointer_value(),
+                    bt.into_pointer_type(),
+                    "i64_to_opaque",
+                );
 
-                let field2_cast = env
-                    .builder
-                    .build_bitcast(rhs_val, bt, "i64_to_opaque")
-                    .into_pointer_value();
+                let field2_cast = env.builder.build_pointer_cast(
+                    rhs_val.into_pointer_value(),
+                    bt.into_pointer_type(),
+                    "i64_to_opaque",
+                );
 
                 build_tag_eq(
                     env,
@@ -280,7 +277,6 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
             use FloatWidth::*;
 
             let name = match float_width {
-                F128 => "neq_f128",
                 F64 => "neq_f64",
                 F32 => "neq_f32",
             };
@@ -406,8 +402,9 @@ fn build_list_eq<'a, 'ctx, 'env>(
     let di_location = env.builder.get_current_debug_location().unwrap();
 
     let symbol = Symbol::LIST_EQ;
+    let element_layout = when_recursive.unwrap_recursive_pointer(*element_layout);
     let fn_name = layout_ids
-        .get(symbol, element_layout)
+        .get(symbol, &element_layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function = match env.module.get_function(fn_name.as_str()) {
@@ -427,7 +424,7 @@ fn build_list_eq<'a, 'ctx, 'env>(
                 layout_ids,
                 when_recursive,
                 function_value,
-                element_layout,
+                &element_layout,
             );
 
             function_value
@@ -727,15 +724,17 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
                     let bt = basic_type_from_layout(env, &field_layout);
 
                     // cast the i64 pointer to a pointer to block of memory
-                    let field1_cast = env
-                        .builder
-                        .build_bitcast(field1, bt, "i64_to_opaque")
-                        .into_pointer_value();
+                    let field1_cast = env.builder.build_pointer_cast(
+                        field1.into_pointer_value(),
+                        bt.into_pointer_type(),
+                        "i64_to_opaque",
+                    );
 
-                    let field2_cast = env
-                        .builder
-                        .build_bitcast(field2, bt, "i64_to_opaque")
-                        .into_pointer_value();
+                    let field2_cast = env.builder.build_pointer_cast(
+                        field2.into_pointer_value(),
+                        bt.into_pointer_type(),
+                        "i64_to_opaque",
+                    );
 
                     build_eq(
                         env,
@@ -1240,23 +1239,17 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
     debug_assert!(wrapper_type.is_struct_type());
 
     // cast the opaque pointer to a pointer of the correct shape
-    let struct1_ptr = env
-        .builder
-        .build_bitcast(
-            tag1,
-            wrapper_type.ptr_type(AddressSpace::Generic),
-            "opaque_to_correct",
-        )
-        .into_pointer_value();
+    let struct1_ptr = env.builder.build_pointer_cast(
+        tag1,
+        wrapper_type.ptr_type(AddressSpace::Generic),
+        "opaque_to_correct",
+    );
 
-    let struct2_ptr = env
-        .builder
-        .build_bitcast(
-            tag2,
-            wrapper_type.ptr_type(AddressSpace::Generic),
-            "opaque_to_correct",
-        )
-        .into_pointer_value();
+    let struct2_ptr = env.builder.build_pointer_cast(
+        tag2,
+        wrapper_type.ptr_type(AddressSpace::Generic),
+        "opaque_to_correct",
+    );
 
     let struct1 = env
         .builder

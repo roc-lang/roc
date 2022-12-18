@@ -2,7 +2,7 @@ use crate::debug_info_init;
 use crate::llvm::bitcode::call_void_bitcode_fn;
 use crate::llvm::build::{
     add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, use_roc_value, Env,
-    FAST_CALL_CONV,
+    WhenRecursive, FAST_CALL_CONV,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
 use crate::llvm::convert::{basic_type_from_layout, RocUnion};
@@ -35,14 +35,11 @@ impl<'ctx> PointerToRefcount<'ctx> {
         // must make sure it's a pointer to usize
         let refcount_type = env.ptr_int();
 
-        let value = env
-            .builder
-            .build_bitcast(
-                ptr,
-                refcount_type.ptr_type(AddressSpace::Generic),
-                "to_refcount_ptr",
-            )
-            .into_pointer_value();
+        let value = env.builder.build_pointer_cast(
+            ptr,
+            refcount_type.ptr_type(AddressSpace::Generic),
+            "to_refcount_ptr",
+        );
 
         Self { value }
     }
@@ -56,9 +53,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let refcount_type = env.ptr_int();
         let refcount_ptr_type = refcount_type.ptr_type(AddressSpace::Generic);
 
-        let ptr_as_usize_ptr = builder
-            .build_bitcast(data_ptr, refcount_ptr_type, "as_usize_ptr")
-            .into_pointer_value();
+        let ptr_as_usize_ptr =
+            builder.build_pointer_cast(data_ptr, refcount_ptr_type, "as_usize_ptr");
 
         // get a pointer to index -1
         let index_intvalue = refcount_type.const_int(-1_i64 as u64, false);
@@ -203,11 +199,13 @@ fn incref_pointer<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            env.builder.build_bitcast(
-                pointer,
-                env.ptr_int().ptr_type(AddressSpace::Generic),
-                "to_isize_ptr",
-            ),
+            env.builder
+                .build_pointer_cast(
+                    pointer,
+                    env.ptr_int().ptr_type(AddressSpace::Generic),
+                    "to_isize_ptr",
+                )
+                .into(),
             amount.into(),
         ],
         roc_builtins::bitcode::UTILS_INCREF,
@@ -223,11 +221,13 @@ fn decref_pointer<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            env.builder.build_bitcast(
-                pointer,
-                env.ptr_int().ptr_type(AddressSpace::Generic),
-                "to_isize_ptr",
-            ),
+            env.builder
+                .build_pointer_cast(
+                    pointer,
+                    env.ptr_int().ptr_type(AddressSpace::Generic),
+                    "to_isize_ptr",
+                )
+                .into(),
             alignment.into(),
         ],
         roc_builtins::bitcode::UTILS_DECREF,
@@ -244,11 +244,13 @@ pub fn decref_pointer_check_null<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            env.builder.build_bitcast(
-                pointer,
-                env.context.i8_type().ptr_type(AddressSpace::Generic),
-                "to_i8_ptr",
-            ),
+            env.builder
+                .build_pointer_cast(
+                    pointer,
+                    env.context.i8_type().ptr_type(AddressSpace::Generic),
+                    "to_i8_ptr",
+                )
+                .into(),
             alignment.into(),
         ],
         roc_builtins::bitcode::UTILS_DECREF_CHECK_NULL,
@@ -399,14 +401,8 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
 
     match builtin {
         List(element_layout) => {
-            let function = modify_refcount_list(
-                env,
-                layout_ids,
-                mode,
-                when_recursive,
-                layout,
-                element_layout,
-            );
+            let function =
+                modify_refcount_list(env, layout_ids, mode, when_recursive, element_layout);
 
             Some(function)
         }
@@ -435,12 +431,6 @@ fn modify_refcount_layout<'a, 'ctx, 'env>(
         value,
         layout,
     );
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum WhenRecursive<'a> {
-    Unreachable,
-    Loop(UnionLayout<'a>),
 }
 
 fn modify_refcount_layout_help<'a, 'ctx, 'env>(
@@ -478,10 +468,11 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
                 let bt = basic_type_from_layout(env, &layout);
 
                 // cast the i64 pointer to a pointer to block of memory
-                let field_cast = env
-                    .builder
-                    .build_bitcast(value, bt, "i64_to_opaque")
-                    .into_pointer_value();
+                let field_cast = env.builder.build_pointer_cast(
+                    value.into_pointer_value(),
+                    bt.into_pointer_type(),
+                    "i64_to_opaque",
+                );
 
                 call_help(env, function, call_mode, field_cast.into());
             }
@@ -609,25 +600,26 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
     when_recursive: &WhenRecursive<'a>,
-    layout: &Layout<'a>,
     element_layout: &Layout<'a>,
 ) -> FunctionValue<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
+    let element_layout = when_recursive.unwrap_recursive_pointer(*element_layout);
+    let list_layout = &Layout::Builtin(Builtin::List(env.arena.alloc(element_layout)));
     let (_, fn_name) = function_name_from_mode(
         layout_ids,
         &env.interns,
         "increment_list",
         "decrement_list",
-        layout,
+        list_layout,
         mode,
     );
 
     let function = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let basic_type = argument_type_from_layout(env, layout);
+            let basic_type = argument_type_from_layout(env, list_layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
             modify_refcount_list_help(
@@ -635,8 +627,8 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
                 layout_ids,
                 mode,
                 when_recursive,
-                layout,
-                element_layout,
+                list_layout,
+                &element_layout,
                 function_value,
             );
 
@@ -1218,14 +1210,11 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
             basic_type_from_layout(env, &Layout::struct_no_name_order(field_layouts));
 
         // cast the opaque pointer to a pointer of the correct shape
-        let struct_ptr = env
-            .builder
-            .build_bitcast(
-                value_ptr,
-                wrapper_type.ptr_type(AddressSpace::Generic),
-                "opaque_to_correct_recursive_decrement",
-            )
-            .into_pointer_value();
+        let struct_ptr = env.builder.build_pointer_cast(
+            value_ptr,
+            wrapper_type.ptr_type(AddressSpace::Generic),
+            "opaque_to_correct_recursive_decrement",
+        );
 
         // defer actually performing the refcount modifications until after the current cell has
         // been decremented, see below

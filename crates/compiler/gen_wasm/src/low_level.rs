@@ -30,7 +30,6 @@ enum CodeGenNumType {
     F32,     // Supported in Wasm instruction set
     F64,     // Supported in Wasm instruction set
     I128,    // Bytes in memory, needs Zig builtins
-    F128,    // Bytes in memory, needs Zig builtins
     Decimal, // Bytes in memory, needs Zig builtins
 }
 
@@ -66,7 +65,6 @@ impl From<Layout<'_>> for CodeGenNumType {
                 Builtin::Float(float_width) => match float_width {
                     FloatWidth::F32 => F32,
                     FloatWidth::F64 => F64,
-                    FloatWidth::F128 => F128,
                 },
                 Builtin::Decimal => Decimal,
                 _ => not_num_error(),
@@ -91,7 +89,6 @@ impl From<StackMemoryFormat> for CodeGenNumType {
     fn from(format: StackMemoryFormat) -> CodeGenNumType {
         match format {
             StackMemoryFormat::Int128 => CodeGenNumType::I128,
-            StackMemoryFormat::Float128 => CodeGenNumType::F128,
             StackMemoryFormat::Decimal => CodeGenNumType::Decimal,
             StackMemoryFormat::DataStructure => {
                 internal_error!("Tried to perform a Num low-level operation on a data structure")
@@ -804,7 +801,6 @@ impl<'a> LowLevelCall<'a> {
                         self.load_args(backend);
                         backend.code_builder.f64_add()
                     }
-                    FloatWidth::F128 => todo!("Num.add for f128"),
                 },
                 Layout::Builtin(Builtin::Decimal) => {
                     self.load_args_and_call_zig(backend, bitcode::DEC_ADD_OR_PANIC)
@@ -841,7 +837,6 @@ impl<'a> LowLevelCall<'a> {
                         self.load_args(backend);
                         backend.code_builder.f64_add()
                     }
-                    FloatWidth::F128 => todo!("Num.add for f128"),
                 },
                 Layout::Builtin(Builtin::Decimal) => {
                     // TODO: don't panic
@@ -897,7 +892,6 @@ impl<'a> LowLevelCall<'a> {
                         self.load_args(backend);
                         backend.code_builder.f64_sub()
                     }
-                    FloatWidth::F128 => todo!("Num.sub for f128"),
                 },
                 Layout::Builtin(Builtin::Decimal) => {
                     self.load_args_and_call_zig(backend, bitcode::DEC_SUB_OR_PANIC)
@@ -934,7 +928,6 @@ impl<'a> LowLevelCall<'a> {
                         self.load_args(backend);
                         backend.code_builder.f64_sub()
                     }
-                    FloatWidth::F128 => todo!("Num.sub for f128"),
                 },
                 Layout::Builtin(Builtin::Decimal) => {
                     // TODO: don't panic
@@ -988,7 +981,6 @@ impl<'a> LowLevelCall<'a> {
                         self.load_args(backend);
                         backend.code_builder.f64_mul()
                     }
-                    FloatWidth::F128 => todo!("Num.mul for f128"),
                 },
                 Layout::Builtin(Builtin::Decimal) => {
                     self.load_args_and_call_zig(backend, bitcode::DEC_MUL_OR_PANIC)
@@ -1024,7 +1016,6 @@ impl<'a> LowLevelCall<'a> {
                         self.load_args(backend);
                         backend.code_builder.f64_mul()
                     }
-                    FloatWidth::F128 => todo!("Num.mul for f128"),
                 },
                 Layout::Builtin(Builtin::Decimal) => {
                     // TODO: don't panic
@@ -1362,7 +1353,7 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.i32_const(i32::MIN);
                         backend.code_builder.i32_eq();
                         backend.code_builder.if_();
-                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.stmt_internal_error(PANIC_MSG);
                         backend.code_builder.end();
 
                         // x
@@ -1388,7 +1379,7 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.i64_const(i64::MIN);
                         backend.code_builder.i64_eq();
                         backend.code_builder.if_();
-                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.stmt_internal_error(PANIC_MSG);
                         backend.code_builder.end();
 
                         // x
@@ -1422,7 +1413,7 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.i32_const(i32::MIN);
                         backend.code_builder.i32_eq();
                         backend.code_builder.if_();
-                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.stmt_internal_error(PANIC_MSG);
                         backend.code_builder.end();
 
                         backend.code_builder.i32_const(0);
@@ -1433,7 +1424,7 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.i64_const(i64::MIN);
                         backend.code_builder.i64_eq();
                         backend.code_builder.if_();
-                        backend.stmt_runtime_error(PANIC_MSG);
+                        backend.stmt_internal_error(PANIC_MSG);
                         backend.code_builder.end();
 
                         backend.code_builder.i64_const(0);
@@ -1465,9 +1456,6 @@ impl<'a> LowLevelCall<'a> {
                     }
                     Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
                         backend.code_builder.f64_sqrt()
-                    }
-                    Layout::Builtin(Builtin::Float(FloatWidth::F128)) => {
-                        todo!("sqrt for f128")
                     }
                     _ => panic_ret_type(),
                 }
@@ -1625,7 +1613,10 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[num, bits]);
                 match CodeGenNumType::from(self.ret_layout) {
                     I32 => backend.code_builder.i32_shl(),
-                    I64 => backend.code_builder.i64_shl(),
+                    I64 => {
+                        backend.code_builder.i64_extend_u_i32();
+                        backend.code_builder.i64_shl();
+                    }
                     I128 => todo!("{:?} for I128", self.lowlevel),
                     _ => panic_ret_type(),
                 }
@@ -1672,6 +1663,7 @@ impl<'a> LowLevelCall<'a> {
                         backend
                             .storage
                             .load_symbols(&mut backend.code_builder, &[num, bits]);
+                        backend.code_builder.i64_extend_u_i32();
                         backend.code_builder.i64_shr_s();
                     }
                     I128 => todo!("{:?} for I128", self.lowlevel),
@@ -1714,6 +1706,7 @@ impl<'a> LowLevelCall<'a> {
                         backend
                             .storage
                             .load_symbols(&mut backend.code_builder, &[num, bits]);
+                        backend.code_builder.i64_extend_u_i32();
                         backend.code_builder.i64_shr_u();
                     }
                     I128 => todo!("{:?} for I128", self.lowlevel),
@@ -1874,6 +1867,8 @@ impl<'a> LowLevelCall<'a> {
                 },
                 StoredValue::StackMemory { .. } => { /* do nothing */ }
             },
+
+            Dbg => todo!("{:?}", self.lowlevel),
         }
     }
 
@@ -2002,8 +1997,6 @@ impl<'a> LowLevelCall<'a> {
 
             StackMemoryFormat::Int128 => Self::eq_num128_bytes(backend, locations),
 
-            StackMemoryFormat::Float128 => todo!("equality for f128"),
-
             StackMemoryFormat::DataStructure => {
                 internal_error!("Data structure equality is handled elsewhere")
             }
@@ -2050,7 +2043,6 @@ impl<'a> LowLevelCall<'a> {
                 FloatWidth::F64 => {
                     self.load_args_and_call_zig(backend, &bitcode::STR_FROM_FLOAT[width]);
                 }
-                FloatWidth::F128 => todo!("F128 to Str"),
             },
             Layout::Builtin(Builtin::Decimal) => {
                 self.load_args_and_call_zig(backend, bitcode::DEC_TO_STR)
@@ -2088,25 +2080,11 @@ fn num_is_finite(backend: &mut WasmBackend<'_>, argument: Symbol) {
                 }
             }
         }
-        StackMemory {
-            format, location, ..
-        } => {
-            let (local_id, offset) = location.local_and_offset(backend.storage.stack_frame_pointer);
-
+        StackMemory { format, .. } => {
             match format {
                 // Integers and fixed-point numbers are always finite. Just return True.
                 StackMemoryFormat::Int128 | StackMemoryFormat::Decimal => {
                     backend.code_builder.i32_const(1)
-                }
-
-                // f128 is not supported anywhere else but it's easy to support it here, so why not...
-                StackMemoryFormat::Float128 => {
-                    backend.code_builder.get_local(local_id);
-                    backend.code_builder.i64_load(Align::Bytes4, offset + 8);
-                    backend.code_builder.i64_const(0x7fff_0000_0000_0000);
-                    backend.code_builder.i64_and();
-                    backend.code_builder.i64_const(0x7fff_0000_0000_0000);
-                    backend.code_builder.i64_ne();
                 }
 
                 StackMemoryFormat::DataStructure => {

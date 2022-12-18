@@ -885,7 +885,7 @@ mod decode_immediate {
     #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
     use indoc::indoc;
 
-    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    #[cfg(all(test, any(feature = "gen-llvm")))]
     use roc_std::RocStr;
 
     #[test]
@@ -1731,6 +1731,45 @@ mod eq {
             ),
             RocStr::from("okay"),
             RocStr
+        )
+    }
+
+    #[test]
+    fn custom_eq_impl_for_fn_opaque() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Q := ({} -> Str) has [Eq {isEq: isEqQ}]
+
+                isEqQ = \@Q _, @Q _ -> Bool.true
+
+                main = isEqQ (@Q \{} -> "a") (@Q \{} -> "a")
+                "#
+            ),
+            true,
+            bool
+        )
+    }
+
+    #[test]
+    #[ignore = "needs https://github.com/roc-lang/roc/issues/4557 first"]
+    fn custom_eq_impl_for_fn_opaque_material() {
+        assert_evals_to!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Q := ({} -> Str) has [Eq {isEq: isEqQ}]
+
+                isEqQ = \@Q f1, @Q f2 -> (f1 {} == f2 {})
+
+                main = isEqQ (@Q \{} -> "a") (@Q \{} -> "a")
+                "#
+            ),
+            true,
+            bool
         )
     }
 

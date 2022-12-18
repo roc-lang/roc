@@ -3,15 +3,12 @@ use roc_error_macros::internal_error;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_load::{EntryPoint, ExpectMetadata, LoadedModule, MonomorphizedModule};
-use roc_module::symbol::{Interns, ModuleId};
-use roc_mono::ir::OptLevel;
-use roc_region::all::LineInfo;
-use roc_solve_problem::TypeError;
+use roc_mono::ir::{OptLevel, SingleEntryPoint};
+use roc_reporting::cli::{report_problems, Problems};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use roc_collections::all::MutMap;
 #[cfg(feature = "target-wasm32")]
 use roc_collections::all::MutSet;
 
@@ -21,7 +18,7 @@ pub struct CodeGenTiming {
 }
 
 pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Problems {
-    report_problems_help(
+    report_problems(
         loaded.total_problems(),
         &loaded.sources,
         &loaded.interns,
@@ -31,130 +28,13 @@ pub fn report_problems_monomorphized(loaded: &mut MonomorphizedModule) -> Proble
 }
 
 pub fn report_problems_typechecked(loaded: &mut LoadedModule) -> Problems {
-    report_problems_help(
+    report_problems(
         loaded.total_problems(),
         &loaded.sources,
         &loaded.interns,
         &mut loaded.can_problems,
         &mut loaded.type_problems,
     )
-}
-
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub struct Problems {
-    pub errors: usize,
-    pub warnings: usize,
-}
-
-impl Problems {
-    pub fn exit_code(&self) -> i32 {
-        // 0 means no problems, 1 means errors, 2 means warnings
-        if self.errors > 0 {
-            1
-        } else {
-            self.warnings.min(1) as i32
-        }
-    }
-}
-
-fn report_problems_help(
-    total_problems: usize,
-    sources: &MutMap<ModuleId, (PathBuf, Box<str>)>,
-    interns: &Interns,
-    can_problems: &mut MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
-    type_problems: &mut MutMap<ModuleId, Vec<TypeError>>,
-) -> Problems {
-    use roc_reporting::report::{
-        can_problem, type_problem, Report, RocDocAllocator, Severity::*, DEFAULT_PALETTE,
-    };
-    let palette = DEFAULT_PALETTE;
-
-    // This will often over-allocate total memory, but it means we definitely
-    // never need to re-allocate either the warnings or the errors vec!
-    let mut warnings = Vec::with_capacity(total_problems);
-    let mut errors = Vec::with_capacity(total_problems);
-
-    for (home, (module_path, src)) in sources.iter() {
-        let mut src_lines: Vec<&str> = Vec::new();
-
-        src_lines.extend(src.split('\n'));
-
-        let lines = LineInfo::new(&src_lines.join("\n"));
-
-        // Report parsing and canonicalization problems
-        let alloc = RocDocAllocator::new(&src_lines, *home, interns);
-
-        let problems = can_problems.remove(home).unwrap_or_default();
-
-        for problem in problems.into_iter() {
-            let report = can_problem(&alloc, &lines, module_path.clone(), problem);
-            let severity = report.severity;
-            let mut buf = String::new();
-
-            report.render_color_terminal(&mut buf, &alloc, &palette);
-
-            match severity {
-                Warning => {
-                    warnings.push(buf);
-                }
-                RuntimeError => {
-                    errors.push(buf);
-                }
-            }
-        }
-
-        let problems = type_problems.remove(home).unwrap_or_default();
-
-        for problem in problems {
-            if let Some(report) = type_problem(&alloc, &lines, module_path.clone(), problem) {
-                let severity = report.severity;
-                let mut buf = String::new();
-
-                report.render_color_terminal(&mut buf, &alloc, &palette);
-
-                match severity {
-                    Warning => {
-                        warnings.push(buf);
-                    }
-                    RuntimeError => {
-                        errors.push(buf);
-                    }
-                }
-            }
-        }
-    }
-
-    let problems_reported;
-
-    // Only print warnings if there are no errors
-    if errors.is_empty() {
-        problems_reported = warnings.len();
-
-        for warning in warnings.iter() {
-            println!("\n{}\n", warning);
-        }
-    } else {
-        problems_reported = errors.len();
-
-        for error in errors.iter() {
-            println!("\n{}\n", error);
-        }
-    }
-
-    // If we printed any problems, print a horizontal rule at the end,
-    // and then clear any ANSI escape codes (e.g. colors) we've used.
-    //
-    // The horizontal rule is nice when running the program right after
-    // compiling it, as it lets you clearly see where the compiler
-    // errors/warnings end and the program output begins.
-    if problems_reported > 0 {
-        println!("{}\u{001B}[0m\n", Report::horizontal_rule(&palette));
-    }
-
-    Problems {
-        errors: errors.len(),
-        warnings: warnings.len(),
-    }
 }
 
 pub enum CodeObject {
@@ -308,18 +188,25 @@ fn gen_from_mono_module_llvm<'a>(
     // expects that would confuse the surgical linker
     add_default_roc_externs(&env);
 
-    let opt_entry_point = match loaded.entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
-            Some(roc_mono::ir::EntryPoint { symbol, layout })
+    let entry_point = match loaded.entry_point {
+        EntryPoint::Executable {
+            exposed_to_host,
+            platform_path: _,
+        } => {
+            // TODO support multiple of these!
+            debug_assert_eq!(exposed_to_host.len(), 1);
+            let (symbol, layout) = exposed_to_host[0];
+
+            roc_mono::ir::EntryPoint::Single(SingleEntryPoint { symbol, layout })
         }
-        EntryPoint::Test => None,
+        EntryPoint::Test => roc_mono::ir::EntryPoint::Expects { symbols: &[] },
     };
 
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
         opt_level,
         loaded.procedures,
-        opt_entry_point,
+        entry_point,
         Some(&app_ll_file),
     );
 
@@ -350,14 +237,93 @@ fn gen_from_mono_module_llvm<'a>(
 
     // annotate the LLVM IR output with debug info
     // so errors are reported with the line number of the LLVM source
-    let memory_buffer = if emit_debug_info {
+    let memory_buffer = if cfg!(feature = "sanitizers") && std::env::var("ROC_SANITIZERS").is_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.into_path();
+
+        let app_ll_file = dir.join("app.ll");
+        let app_bc_file = dir.join("app.bc");
+        let app_o_file = dir.join("app.o");
+
+        // write the ll code to a file, so we can modify it
+        module.print_to_file(&app_ll_file).unwrap();
+
+        // Apply coverage passes.
+        // Note, this is specifically tailored for `cargo afl` and afl++.
+        // It most likely will not work with other fuzzer setups without modification.
+        let mut passes = vec![];
+        let mut extra_args = vec![];
+        let mut unrecognized = vec![];
+        for sanitizer in std::env::var("ROC_SANITIZERS")
+            .unwrap()
+            .split(',')
+            .map(|x| x.trim())
+        {
+            match sanitizer {
+                "address" => passes.push("asan-module"),
+                "memory" => passes.push("msan-module"),
+                "thread" => passes.push("tsan-module"),
+                "fuzzer" => {
+                    passes.push("sancov-module");
+                    extra_args.extend_from_slice(&[
+                        "-sanitizer-coverage-level=3",
+                        "-sanitizer-coverage-prune-blocks=0",
+                        "-sanitizer-coverage-trace-pc-guard",
+                        // This can be used instead of the line above to enable working with `cargo fuzz` and libFuzzer.
+                        // "-sanitizer-coverage-inline-8bit-counters",
+                    ]);
+                }
+                x => unrecognized.push(x.to_owned()),
+            }
+        }
+        if !unrecognized.is_empty() {
+            let out = unrecognized
+                .iter()
+                .map(|x| format!("{:?}", x))
+                .collect::<Vec<String>>()
+                .join(", ");
+            eprintln!("Unrecognized sanitizer: {}\nSupported options are \"address\", \"memory\", \"thread\", and \"fuzzer\"", out);
+        }
+
+        use std::process::Command;
+        let mut opt = Command::new("opt");
+        opt.args([
+            app_ll_file.to_str().unwrap(),
+            "-o",
+            app_bc_file.to_str().unwrap(),
+        ])
+        .args(extra_args);
+        if !passes.is_empty() {
+            opt.arg(format!("-passes={}", passes.join(",")));
+        }
+        let opt = opt.output().unwrap();
+
+        assert!(opt.stderr.is_empty(), "{:#?}", opt);
+
+        // write the .o file. Note that this builds the .o for the local machine,
+        // and ignores the `target_machine` entirely.
+        //
+        // different systems name this executable differently, so we shotgun for
+        // the most common ones and then give up.
+        let bc_to_object = Command::new("llc")
+            .args(&[
+                "-relocation-model=pic",
+                "-filetype=obj",
+                app_bc_file.to_str().unwrap(),
+                "-o",
+                app_o_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        assert!(bc_to_object.status.success(), "{:#?}", bc_to_object);
+
+        MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
+    } else if emit_debug_info {
         module.strip_debug_info();
 
         let mut app_ll_dbg_file = PathBuf::from(roc_file_path);
         app_ll_dbg_file.set_extension("dbg.ll");
-
-        let mut app_bc_file = PathBuf::from(roc_file_path);
-        app_bc_file.set_extension("bc");
 
         let mut app_o_file = PathBuf::from(roc_file_path);
         app_o_file.set_extension("o");
@@ -390,33 +356,23 @@ fn gen_from_mono_module_llvm<'a>(
             | Architecture::X86_32(_)
             | Architecture::Aarch64(_)
             | Architecture::Wasm32 => {
-                let ll_to_bc = Command::new("llvm-as")
-                    .args([
-                        app_ll_dbg_file.to_str().unwrap(),
-                        "-o",
-                        app_bc_file.to_str().unwrap(),
-                    ])
-                    .output()
-                    .unwrap();
-
-                assert!(ll_to_bc.stderr.is_empty(), "{:#?}", ll_to_bc);
-
-                let llc_args = &[
-                    "-relocation-model=pic",
-                    "-filetype=obj",
-                    app_bc_file.to_str().unwrap(),
-                    "-o",
-                    app_o_file.to_str().unwrap(),
-                ];
-
                 // write the .o file. Note that this builds the .o for the local machine,
                 // and ignores the `target_machine` entirely.
                 //
                 // different systems name this executable differently, so we shotgun for
                 // the most common ones and then give up.
-                let bc_to_object = Command::new("llc").args(llc_args).output().unwrap();
+                let ll_to_object = Command::new("llc")
+                    .args(&[
+                        "-relocation-model=pic",
+                        "-filetype=obj",
+                        app_ll_dbg_file.to_str().unwrap(),
+                        "-o",
+                        app_o_file.to_str().unwrap(),
+                    ])
+                    .output()
+                    .unwrap();
 
-                assert!(bc_to_object.stderr.is_empty(), "{:#?}", bc_to_object);
+                assert!(ll_to_object.stderr.is_empty(), "{:#?}", ll_to_object);
             }
             _ => unreachable!(),
         }

@@ -2,7 +2,7 @@
 libhost.a
 libapp.so
 dynhost
-preprocessedhost
-metadata
+*.rm1
+*.rh1
 
 helloWorld

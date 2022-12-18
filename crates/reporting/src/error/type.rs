@@ -1,5 +1,7 @@
+#![allow(clippy::too_many_arguments)]
+
 use crate::error::canonicalize::{to_circular_def_doc, CIRCULAR_DEF};
-use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder, Severity};
+use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
 use roc_can::expected::{Expected, PExpected};
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
 use roc_collections::VecMap;
@@ -8,6 +10,7 @@ use roc_exhaustive::{CtorName, ListArity};
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::{IdentStr, Lowercase, TagName};
 use roc_module::symbol::Symbol;
+use roc_problem::Severity;
 use roc_region::all::{LineInfo, Region};
 use roc_solve_problem::{
     NotDerivableContext, NotDerivableDecode, NotDerivableEq, TypeError, UnderivableReason,
@@ -38,26 +41,30 @@ pub fn type_problem<'b>(
 ) -> Option<Report<'b>> {
     use TypeError::*;
 
-    fn report(title: String, doc: RocDocBuilder<'_>, filename: PathBuf) -> Option<Report<'_>> {
-        Some(Report {
-            title,
-            filename,
-            doc,
-            severity: Severity::RuntimeError,
-        })
-    }
+    let severity = problem.severity();
+
+    let report =
+        move |title: String, doc: RocDocBuilder<'b>, filename: PathBuf| -> Option<Report<'b>> {
+            Some(Report {
+                title,
+                filename,
+                doc,
+                severity,
+            })
+        };
 
     match problem {
         BadExpr(region, category, found, expected) => Some(to_expr_report(
-            alloc, lines, filename, region, category, found, expected,
+            alloc, lines, filename, severity, region, category, found, expected,
         )),
         BadPattern(region, category, found, expected) => Some(to_pattern_report(
-            alloc, lines, filename, region, category, found, expected,
+            alloc, lines, filename, severity, region, category, found, expected,
         )),
         CircularType(region, symbol, overall_type) => Some(to_circular_report(
             alloc,
             lines,
             filename,
+            severity,
             region,
             symbol,
             overall_type,
@@ -103,7 +110,7 @@ pub fn type_problem<'b>(
                 title: "TYPE MISMATCH".to_string(),
                 filename,
                 doc: alloc.stack(stack),
-                severity: Severity::RuntimeError,
+                severity,
             };
             Some(report)
         }
@@ -125,7 +132,7 @@ pub fn type_problem<'b>(
                 title: "TYPE MISMATCH".to_string(),
                 filename,
                 doc: alloc.stack(stack),
-                severity: Severity::RuntimeError,
+                severity,
             };
             Some(report)
         }
@@ -133,7 +140,6 @@ pub fn type_problem<'b>(
         CircularDef(entries) => {
             let doc = to_circular_def_doc(alloc, lines, &entries);
             let title = CIRCULAR_DEF.to_string();
-            let severity = Severity::RuntimeError;
 
             Some(Report {
                 title,
@@ -169,7 +175,7 @@ pub fn type_problem<'b>(
                 title: "ILLEGAL SPECIALIZATION".to_string(),
                 filename,
                 doc: alloc.stack(stack),
-                severity: Severity::RuntimeError,
+                severity,
             })
         }
         WrongSpecialization {
@@ -198,7 +204,7 @@ pub fn type_problem<'b>(
                 title: "WRONG SPECIALIZATION TYPE".to_string(),
                 filename,
                 doc: alloc.stack(stack),
-                severity: Severity::RuntimeError,
+                severity,
             })
         }
     }
@@ -451,11 +457,11 @@ pub fn cyclic_alias<'b>(
     (doc, "CYCLIC ALIAS".to_string())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn report_mismatch<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
     filename: PathBuf,
+    severity: Severity,
     category: &Category,
     found: ErrorType,
     expected_type: ErrorType,
@@ -492,15 +498,15 @@ fn report_mismatch<'b>(
         title: "TYPE MISMATCH".to_string(),
         filename,
         doc: alloc.stack(lines),
-        severity: Severity::RuntimeError,
+        severity,
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn report_bad_type<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
     filename: PathBuf,
+    severity: Severity,
     category: &Category,
     found: ErrorType,
     expected_type: ErrorType,
@@ -535,7 +541,7 @@ fn report_bad_type<'b>(
         title: "TYPE MISMATCH".to_string(),
         filename,
         doc: alloc.stack(lines),
-        severity: Severity::RuntimeError,
+        severity,
     }
 }
 
@@ -563,6 +569,7 @@ fn to_expr_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
     filename: PathBuf,
+    severity: Severity,
     expr_region: roc_region::all::Region,
     category: Category,
     found: ErrorType,
@@ -590,6 +597,7 @@ fn to_expr_report<'b>(
                             alloc,
                             lines,
                             filename,
+                            severity,
                             opt_sym,
                             ".",
                             field,
@@ -620,7 +628,7 @@ fn to_expr_report<'b>(
                     alloc.region(lines.convert_region(expr_region)),
                     comparison,
                 ]),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         Expected::FromAnnotation(name, _arity, annotation_source, expected_type) => {
@@ -743,7 +751,7 @@ fn to_expr_report<'b>(
                     },
                     comparison,
                 ]),
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
         Expected::ForReason(reason, expected_type, region) => match reason {
@@ -760,6 +768,7 @@ fn to_expr_report<'b>(
                     alloc,
                     lines,
                     filename,
+                    severity,
                     &category,
                     found,
                     expected_type,
@@ -799,6 +808,7 @@ fn to_expr_report<'b>(
                     alloc,
                     lines,
                     filename,
+                    severity,
                     &category,
                     found,
                     expected_type,
@@ -837,6 +847,7 @@ fn to_expr_report<'b>(
                     alloc,
                     lines,
                     filename,
+                    severity,
                     &category,
                     found,
                     expected_type,
@@ -865,6 +876,7 @@ fn to_expr_report<'b>(
                     alloc,
                     lines,
                     filename,
+                    severity,
                     &category,
                     found,
                     expected_type,
@@ -899,6 +911,7 @@ fn to_expr_report<'b>(
                     alloc,
                     lines,
                     filename,
+                    severity,
                     &category,
                     found,
                     expected_type,
@@ -924,6 +937,7 @@ fn to_expr_report<'b>(
                 alloc,
                 lines,
                 filename,
+                severity,
                 &category,
                 found,
                 expected_type,
@@ -963,6 +977,7 @@ fn to_expr_report<'b>(
                     alloc,
                     lines,
                     filename,
+                    severity,
                     &category,
                     found,
                     expected_type,
@@ -978,6 +993,7 @@ fn to_expr_report<'b>(
                 alloc,
                 lines,
                 filename,
+                severity,
                 &category,
                 found,
                 expected_type,
@@ -1013,6 +1029,7 @@ fn to_expr_report<'b>(
                                 alloc,
                                 lines,
                                 filename,
+                                severity,
                                 &category,
                                 found,
                                 expected_type,
@@ -1031,6 +1048,7 @@ fn to_expr_report<'b>(
                                 alloc,
                                 lines,
                                 filename,
+                                severity,
                                 Some(symbol),
                                 "",
                                 field,
@@ -1045,6 +1063,7 @@ fn to_expr_report<'b>(
                         alloc,
                         lines,
                         filename,
+                        severity,
                         &category,
                         found,
                         expected_type,
@@ -1087,7 +1106,7 @@ fn to_expr_report<'b>(
                         filename,
                         title: "TOO MANY ARGS".to_string(),
                         doc: alloc.stack(lines),
-                        severity: Severity::RuntimeError,
+                        severity,
                     }
                 }
                 n => {
@@ -1122,7 +1141,7 @@ fn to_expr_report<'b>(
                             filename,
                             title: "TOO MANY ARGS".to_string(),
                             doc: alloc.stack(lines),
-                            severity: Severity::RuntimeError,
+                            severity,
                         }
                     } else {
                         let lines = vec![
@@ -1149,7 +1168,7 @@ fn to_expr_report<'b>(
                             filename,
                             title: "TOO FEW ARGS".to_string(),
                             doc: alloc.stack(lines),
-                            severity: Severity::RuntimeError,
+                            severity,
                         }
                     }
                 }
@@ -1166,6 +1185,7 @@ fn to_expr_report<'b>(
                     alloc,
                     lines,
                     filename,
+                    severity,
                     &category,
                     found,
                     expected_type,
@@ -1190,6 +1210,7 @@ fn to_expr_report<'b>(
                 alloc,
                 lines,
                 filename,
+                severity,
                 &category,
                 found,
                 expected_type,
@@ -1241,6 +1262,7 @@ fn to_expr_report<'b>(
                     alloc,
                     lines,
                     filename,
+                    severity,
                     &category,
                     found,
                     expected_type,
@@ -1281,6 +1303,7 @@ fn to_expr_report<'b>(
                     alloc,
                     lines,
                     filename,
+                    severity,
                     &category,
                     found,
                     expected_type,
@@ -1334,7 +1357,7 @@ fn to_expr_report<'b>(
                     title: "TYPE MISMATCH".to_string(),
                     filename,
                     doc: alloc.stack(lines),
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
 
@@ -1371,7 +1394,43 @@ fn to_expr_report<'b>(
                     filename,
                     title: "TYPE MISMATCH".to_string(),
                     doc,
-                    severity: Severity::RuntimeError,
+                    severity,
+                }
+            }
+
+            Reason::CrashArg => {
+                let this_is = alloc.reflow("The value is");
+
+                let wanted = alloc.concat([
+                    alloc.reflow("But I can only "),
+                    alloc.keyword("crash"),
+                    alloc.reflow(" with messages of type"),
+                ]);
+
+                let details = None;
+
+                let lines = [
+                    alloc
+                        .reflow("This value passed to ")
+                        .append(alloc.keyword("crash"))
+                        .append(alloc.reflow(" is not a string:")),
+                    alloc.region(lines.convert_region(region)),
+                    type_comparison(
+                        alloc,
+                        found,
+                        expected_type,
+                        ExpectationContext::WhenCondition,
+                        add_category(alloc, this_is, &category),
+                        wanted,
+                        details,
+                    ),
+                ];
+
+                Report {
+                    filename,
+                    title: "TYPE MISMATCH".to_string(),
+                    doc: alloc.stack(lines),
+                    severity,
                 }
             }
 
@@ -1680,6 +1739,10 @@ fn format_category<'b>(
             alloc.concat([this_is, alloc.text(" an uniqueness attribute")]),
             alloc.text(" of type:"),
         ),
+        Crash => {
+            internal_error!("calls to crash should be unconditionally admitted in any context, unexpected reachability!");
+        }
+
         Storage(..) | Unknown => (
             alloc.concat([this_is, alloc.text(" a value")]),
             alloc.text(" of type:"),
@@ -1694,6 +1757,10 @@ fn format_category<'b>(
         ),
         Expect => (
             alloc.concat([this_is, alloc.text(" an expectation")]),
+            alloc.text(" of type:"),
+        ),
+        Dbg => (
+            alloc.concat([this_is, alloc.text(" a dbg statement")]),
             alloc.text(" of type:"),
         ),
     }
@@ -1712,6 +1779,7 @@ fn to_pattern_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
     filename: PathBuf,
+    severity: Severity,
     expr_region: roc_region::all::Region,
     category: PatternCategory,
     found: ErrorType,
@@ -1738,7 +1806,7 @@ fn to_pattern_report<'b>(
                 filename,
                 title: "TYPE MISMATCH".to_string(),
                 doc,
-                severity: Severity::RuntimeError,
+                severity,
             }
         }
 
@@ -1781,7 +1849,7 @@ fn to_pattern_report<'b>(
                     filename,
                     title: "TYPE MISMATCH".to_string(),
                     doc,
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             PReason::WhenMatch { index, sub_pattern } => {
@@ -1861,7 +1929,7 @@ fn to_pattern_report<'b>(
                     filename,
                     title: "TYPE MISMATCH".to_string(),
                     doc,
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             PReason::ListElem => {
@@ -1888,7 +1956,7 @@ fn to_pattern_report<'b>(
                     filename,
                     title: "TYPE MISMATCH".to_string(),
                     doc,
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             PReason::TagArg { .. } | PReason::PatternGuard => {
@@ -1963,6 +2031,7 @@ fn to_circular_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
     filename: PathBuf,
+    severity: Severity,
     region: roc_region::all::Region,
     symbol: Symbol,
     overall_type: ErrorType,
@@ -1987,7 +2056,7 @@ fn to_circular_report<'b>(
                 ]),
             ])
         },
-        severity: Severity::RuntimeError,
+        severity,
     }
 }
 
@@ -4033,11 +4102,11 @@ fn type_problem_to_pretty<'b>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn report_record_field_typo<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
     filename: PathBuf,
+    severity: Severity,
     opt_sym: Option<Symbol>,
     field_prefix: &str,
     field: &Lowercase,
@@ -4119,7 +4188,7 @@ fn report_record_field_typo<'b>(
         filename,
         title: "TYPE MISMATCH".to_string(),
         doc,
-        severity: Severity::RuntimeError,
+        severity,
     }
 }
 
@@ -4131,6 +4200,8 @@ fn exhaustive_problem<'a>(
 ) -> Report<'a> {
     use roc_exhaustive::Context::*;
     use roc_exhaustive::Error::*;
+
+    let severity = problem.severity();
 
     match problem {
         Incomplete(region, context, missing) => match context {
@@ -4154,7 +4225,7 @@ fn exhaustive_problem<'a>(
                     filename,
                     title: "UNSAFE PATTERN".to_string(),
                     doc,
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             BadDestruct => {
@@ -4178,7 +4249,7 @@ fn exhaustive_problem<'a>(
                     filename,
                     title: "UNSAFE PATTERN".to_string(),
                     doc,
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
             BadCase => {
@@ -4202,7 +4273,7 @@ fn exhaustive_problem<'a>(
                     filename,
                     title: "UNSAFE PATTERN".to_string(),
                     doc,
-                    severity: Severity::RuntimeError,
+                    severity,
                 }
             }
         },
@@ -4231,7 +4302,7 @@ fn exhaustive_problem<'a>(
                 filename,
                 title: "REDUNDANT PATTERN".to_string(),
                 doc,
-                severity: Severity::Warning,
+                severity,
             }
         }
         Unmatchable {
@@ -4259,7 +4330,7 @@ fn exhaustive_problem<'a>(
                 filename,
                 title: "UNMATCHABLE PATTERN".to_string(),
                 doc,
-                severity: Severity::Warning,
+                severity,
             }
         }
     }

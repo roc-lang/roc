@@ -32,9 +32,10 @@ pub fn get_values<'a>(
     layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
     start: *const u8,
     start_offset: usize,
-    variables: &[Variable],
-) -> (usize, Vec<Expr<'a>>) {
-    let mut result = Vec::with_capacity(variables.len());
+    number_of_lookups: usize,
+) -> (usize, Vec<Expr<'a>>, Vec<Variable>) {
+    let mut result = Vec::with_capacity(number_of_lookups);
+    let mut result_vars = Vec::with_capacity(number_of_lookups);
 
     let memory = ExpectMemory { start };
 
@@ -45,13 +46,20 @@ pub fn get_values<'a>(
 
     let app = arena.alloc(app);
 
-    for (i, variable) in variables.iter().enumerate() {
-        let start = app.memory.deref_usize(start_offset + i * 8);
+    for i in 0..number_of_lookups {
+        let size_of_lookup_header = 8 /* pointer to value */ + 4 /* type variable */;
+
+        let start = app
+            .memory
+            .deref_usize(start_offset + i * size_of_lookup_header);
+        let variable = app.memory.deref_u32(
+            start_offset + i * size_of_lookup_header + 8, /* skip the pointer */
+        );
+        let variable = unsafe { Variable::from_index(variable) };
+
         app.offset = start;
 
         let expr = {
-            let variable = *variable;
-
             // TODO: pass layout_cache to jit_to_ast directly
             let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
             let layout = layout_cache.from_var(arena, variable, subs).unwrap();
@@ -76,9 +84,10 @@ pub fn get_values<'a>(
         };
 
         result.push(expr);
+        result_vars.push(variable);
     }
 
-    (app.offset, result)
+    (app.offset, result, result_vars)
 }
 
 #[cfg(not(windows))]
@@ -87,7 +96,8 @@ mod test {
     use indoc::indoc;
     use pretty_assertions::assert_eq;
     use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult, run_roc_dylib};
-    use roc_load::{ExecutionMode, LoadConfig, Threading};
+    use roc_load::{ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
+    use roc_packaging::cache::RocCacheDir;
     use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
     use target_lexicon::Triple;
 
@@ -118,15 +128,21 @@ mod test {
             threading: Threading::Single,
             exec_mode: ExecutionMode::Test,
         };
-        let loaded = roc_load::load_and_monomorphize_from_str(
+        let loaded = match roc_load::load_and_monomorphize_from_str(
             arena,
             filename,
             source,
             src_dir.path().to_path_buf(),
             Default::default(),
+            RocCacheDir::Disallowed,
             load_config,
-        )
-        .unwrap();
+        ) {
+            Ok(m) => m,
+            Err(LoadMonomorphizedError::ErrorModule(m)) => {
+                panic!("{:?}", (m.can_problems, m.type_problems))
+            }
+            Err(e) => panic!("{e:?}"),
+        };
 
         let mut loaded = loaded;
         let mut expectations = std::mem::take(&mut loaded.expectations);
@@ -440,8 +456,8 @@ mod test {
                 main = 0
 
                 expect
-                    vec1 = { x: 1.0, y: 2.0 }
-                    vec2 = { x: 4.0, y: 8.0 }
+                    vec1 = { x: 1u8, y: 2u8 }
+                    vec2 = { x: 4u8, y: 8u8 }
 
                     vec1 == vec2
                 "#
@@ -451,17 +467,17 @@ mod test {
                 This expectation failed:
 
                 5│>  expect
-                6│>      vec1 = { x: 1.0, y: 2.0 }
-                7│>      vec2 = { x: 4.0, y: 8.0 }
+                6│>      vec1 = { x: 1u8, y: 2u8 }
+                7│>      vec2 = { x: 4u8, y: 8u8 }
                 8│>
                 9│>      vec1 == vec2
 
                 When it failed, these variables had these values:
 
-                vec1 : { x : Frac *, y : Frac * }
+                vec1 : { x : U8, y : U8 }
                 vec1 = { x: 1, y: 2 }
 
-                vec2 : { x : Frac *, y : Frac * }
+                vec2 : { x : U8, y : U8 }
                 vec2 = { x: 4, y: 8 }
                 "#
             ),

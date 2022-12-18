@@ -18,6 +18,7 @@ mod solve_expr {
     };
     use roc_load::LoadedModule;
     use roc_module::symbol::{Interns, ModuleId};
+    use roc_packaging::cache::RocCacheDir;
     use roc_problem::can::Problem;
     use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Region};
     use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
@@ -108,6 +109,7 @@ mod solve_expr {
                 exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
                 roc_reporting::report::RenderTarget::Generic,
+                RocCacheDir::Disallowed,
                 roc_reporting::report::DEFAULT_PALETTE,
             );
 
@@ -260,6 +262,7 @@ mod solve_expr {
 
     #[derive(Default)]
     struct InferOptions {
+        print_can_decls: bool,
         print_only_under_alias: bool,
         allow_errors: bool,
     }
@@ -300,7 +303,20 @@ mod solve_expr {
         let queries = parse_queries(&src);
         assert!(!queries.is_empty(), "No queries provided!");
 
-        let mut solved_queries = Vec::with_capacity(queries.len());
+        let mut output_parts = Vec::with_capacity(queries.len() + 2);
+
+        if options.print_can_decls {
+            use roc_can::debug::{pretty_print_declarations, PPCtx};
+            let ctx = PPCtx {
+                home,
+                interns: &interns,
+                print_lambda_names: true,
+            };
+            let pretty_decls = pretty_print_declarations(&ctx, &decls);
+            output_parts.push(pretty_decls);
+            output_parts.push("\n".to_owned());
+        }
+
         for TypeQuery(region) in queries.into_iter() {
             let start = region.start().offset;
             let end = region.end().offset;
@@ -338,12 +354,12 @@ mod solve_expr {
                     }
                 };
 
-            solved_queries.push(elaborated);
+            output_parts.push(elaborated);
         }
 
-        let pretty_solved_queries = solved_queries.join("\n");
+        let pretty_output = output_parts.join("\n");
 
-        expected(&pretty_solved_queries);
+        expected(&pretty_output);
     }
 
     macro_rules! infer_queries {
@@ -380,7 +396,6 @@ mod solve_expr {
         let known_specializations = abilities_store.iter_declared_implementations().filter_map(
             |(impl_key, member_impl)| match member_impl {
                 MemberImpl::Impl(impl_symbol) => {
-                    dbg!(impl_symbol);
                     let specialization = abilities_store.specialization_info(*impl_symbol).expect(
                         "declared implementations should be resolved conclusively after solving",
                     );
@@ -504,6 +519,41 @@ mod solve_expr {
                 "#
             ),
             "List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]",
+        );
+    }
+
+    #[test]
+    fn choose_correct_recursion_var_under_record() {
+        infer_queries!(
+            indoc!(
+                r#"
+                Parser : [
+                    Specialize Parser,
+                    Record (List {parser: Parser}),
+                ]
+
+                printCombinatorParser : Parser -> Str
+                printCombinatorParser = \parser ->
+                    when parser is
+                #        ^^^^^^
+                        Specialize p ->
+                            printed = printCombinatorParser p
+                            if Bool.false then printed else "foo"
+                        Record fields ->
+                            fields
+                                |> List.map \f ->
+                                    printed = printCombinatorParser f.parser
+                                    if Bool.false then printed else "foo"
+                                |> List.first
+                                |> Result.withDefault ("foo")
+
+                printCombinatorParser (Record [])
+                "#
+            ),
+            @r###"
+            parser : [Record (List { parser : a }), Specialize a] as a
+            "###
+            print_only_under_alias: true
         );
     }
 
@@ -3472,7 +3522,7 @@ mod solve_expr {
                 Dict.insert
                 "#
             ),
-            "Dict k v, k, v -> Dict k v | k has Eq",
+            "Dict k v, k, v -> Dict k v | k has Hash & Eq",
         );
     }
 
@@ -3733,7 +3783,7 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                reconstructPath : Dict position position, position -> List position | position has Eq
+                reconstructPath : Dict position position, position -> List position | position has Hash & Eq
                 reconstructPath = \cameFrom, goal ->
                     when Dict.get cameFrom goal is
                         Err KeyNotFound ->
@@ -3745,7 +3795,7 @@ mod solve_expr {
                 reconstructPath
                 "#
             ),
-            "Dict position position, position -> List position | position has Eq",
+            "Dict position position, position -> List position | position has Hash & Eq",
         );
     }
 
@@ -3780,7 +3830,7 @@ mod solve_expr {
 
                 Model position : { openSet : Set position }
 
-                cheapestOpen : Model position -> Result position [KeyNotFound] | position has Eq
+                cheapestOpen : Model position -> Result position [KeyNotFound] | position has Hash & Eq
                 cheapestOpen = \model ->
 
                     folder = \resSmallestSoFar, position ->
@@ -3795,14 +3845,14 @@ mod solve_expr {
                     Set.walk model.openSet (Ok { position: boom {}, cost: 0.0 }) folder
                         |> Result.map (\x -> x.position)
 
-                astar : Model position -> Result position [KeyNotFound] | position has Eq
+                astar : Model position -> Result position [KeyNotFound] | position has Hash & Eq
                 astar = \model -> cheapestOpen model
 
                 main =
                     astar
                 "#
             ),
-            "Model position -> Result position [KeyNotFound] | position has Eq",
+            "Model position -> Result position [KeyNotFound] | position has Hash & Eq",
         );
     }
 
@@ -4444,7 +4494,7 @@ mod solve_expr {
 
                 Key k : Num k
 
-                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Eq
+                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Hash & Eq
                 removeHelpEQGT = \targetKey, dict ->
                   when dict is
                     Node color key value left right ->
@@ -4558,7 +4608,7 @@ mod solve_expr {
                     _ ->
                       Empty
 
-                removeHelp : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Eq
+                removeHelp : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Hash & Eq
                 removeHelp = \targetKey, dict ->
                   when dict is
                     Empty ->
@@ -4646,7 +4696,7 @@ mod solve_expr {
 
                 RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
-                removeHelp : Num k, RBTree (Num k) v -> RBTree (Num k) v | k has Eq
+                removeHelp : Num k, RBTree (Num k) v -> RBTree (Num k) v | k has Hash & Eq
                 removeHelp = \targetKey, dict ->
                   when dict is
                     Empty ->
@@ -4681,7 +4731,7 @@ mod solve_expr {
 
                 removeHelpPrepEQGT : Key k, RBTree (Key k) v, NodeColor, (Key k), v, RBTree (Key k) v, RBTree (Key k) v -> RBTree (Key k) v
 
-                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Eq
+                removeHelpEQGT : Key k, RBTree (Key k) v -> RBTree (Key k) v | k has Hash & Eq
                 removeHelpEQGT = \targetKey, dict ->
                   when dict is
                     Node color key value left right ->
@@ -6719,9 +6769,9 @@ mod solve_expr {
                 "#
             ),
             @r#"
-            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8]]-> {})
             Id#id(3) : a -[[] + a:id(3):1]-> ({} -[[] + a:id(3):2]-> a) | a has Id
-            alias : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            alias : {} -[[id(5)]]-> ({} -[[8]]-> {})
             "#
             print_only_under_alias: true
         )
@@ -6750,8 +6800,8 @@ mod solve_expr {
                 "#
             ),
             @r#"
-            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
-            it : {} -[[8(8)]]-> {}
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8]]-> {})
+            it : {} -[[8]]-> {}
             "#
             print_only_under_alias: true
         )
@@ -6781,8 +6831,8 @@ mod solve_expr {
                 "#
             ),
             @r#"
-            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
-            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8]]-> {})
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8]]-> {})
             "#
             print_only_under_alias: true
         )
@@ -6902,7 +6952,7 @@ mod solve_expr {
                 #^^^^^^^^^^^^^^^^^^^^^^{-1}
                 "#
             ),
-            @r#"[\{} -> {}, \{} -> {}] : List ({}* -[[1(1), 2(2)]]-> {})"#
+            @r###"[\{} -> {}, \{} -> {}] : List ({}* -[[1, 2]]-> {})"###
         )
     }
 
@@ -7077,7 +7127,7 @@ mod solve_expr {
                 #^^^{-1}
                 "#
             ),
-            @r#"fun : {} -[[thunk(9) (({} -[[15(15)]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13(13) Str]]-> Str)), thunk(9) (({} -[[14(14)]]-> Str)) (Str -[[f(3)]]-> ({} -[[11(11)]]-> Str))]]-> Str"#
+            @r#"fun : {} -[[thunk(9) (({} -[[15]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13 Str]]-> Str)), thunk(9) (({} -[[14]]-> Str)) (Str -[[f(3)]]-> ({} -[[11]]-> Str))]]-> Str"#
             print_only_under_alias: true
         );
     }
@@ -7322,9 +7372,9 @@ mod solve_expr {
                 "#
             ),
             @r###"
-        Fo#f(7) : Fo, b -[[f(7)]]-> ({} -[[13(13) b]]-> ({} -[[] + b:g(4):2]-> {})) | b has G
-        Go#g(8) : Go -[[g(8)]]-> ({} -[[14(14)]]-> {})
-        Fo#f(7) : Fo, Go -[[f(7)]]-> ({} -[[13(13) Go]]-> ({} -[[14(14)]]-> {}))
+        Fo#f(7) : Fo, b -[[f(7)]]-> ({} -[[13 b]]-> ({} -[[] + b:g(4):2]-> {})) | b has G
+        Go#g(8) : Go -[[g(8)]]-> ({} -[[14]]-> {})
+        Fo#f(7) : Fo, Go -[[f(7)]]-> ({} -[[13 Go]]-> ({} -[[14]]-> {}))
         "###
         );
     }
@@ -7691,7 +7741,7 @@ mod solve_expr {
             @r###"
         const : Str -[[const(2)]]-> (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str)
         compose : (Str -a-> Str), (Str -[[]]-> Str) -[[compose(1)]]-> (Str -a-> Str)
-        \c1, c2 -> compose c1 c2 : (Str -a-> Str), (Str -[[]]-> Str) -[[11(11)]]-> (Str -a-> Str)
+        \c1, c2 -> compose c1 c2 : (Str -a-> Str), (Str -[[]]-> Str) -[[11]]-> (Str -a-> Str)
         res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
         res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
         "###
@@ -7768,7 +7818,7 @@ mod solve_expr {
             indoc!(
                 r#"
                 f : { x ? Str, y ? Str } -> {}
-                
+
                 f {x : ""}
                 "#
             ),
@@ -8076,7 +8126,7 @@ mod solve_expr {
                 #                           ^^^^^^^^^^^^^^
                 "#
             ),
-            @"N#Decode.decoder(3) : List U8, fmt -[[7(7)]]-> { rest : List U8, result : [Err [TooShort], Ok U8] } | fmt has DecoderFormatting"
+            @"N#Decode.decoder(3) : List U8, fmt -[[7]]-> { rest : List U8, result : [Err [TooShort], Ok U8] } | fmt has DecoderFormatting"
             print_only_under_alias: true
         );
     }
@@ -8269,7 +8319,7 @@ mod solve_expr {
                 r#"
                 app "test" provides [top] to "./platform"
 
-                MDict u := (List u) | u has Eq
+                MDict u := (List u) | u has Hash & Eq
 
                 bot : MDict k -> MDict k
                 bot = \@MDict data ->
@@ -8280,7 +8330,7 @@ mod solve_expr {
                 top = \x -> bot x
                 "#
             ),
-            "MDict v -> MDict v | v has Eq",
+            "MDict v -> MDict v | v has Hash & Eq",
         );
     }
 
@@ -8319,5 +8369,218 @@ mod solve_expr {
         "###
         print_only_under_alias: true
         )
+    }
+
+    #[test]
+    fn impl_ability_for_opaque_with_lambda_sets() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [isEqQ] to "./platform"
+
+                Q := [ F (Str -> Str), G ] has [Eq { isEq: isEqQ }]
+
+                isEqQ = \@Q q1, @Q q2 -> when T q1 q2 is
+                #^^^^^{-1}
+                    T (F _) (F _) -> Bool.true
+                    T G G -> Bool.true
+                    _ -> Bool.false
+                "#
+            ),
+        @"isEqQ : Q, Q -[[isEqQ(0)]]-> Bool"
+        );
+    }
+
+    #[test]
+    fn impl_ability_for_opaque_with_lambda_sets_material() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Q := ({} -> Str) has [Eq {isEq: isEqQ}]
+
+                isEqQ = \@Q f1, @Q f2 -> (f1 {} == f2 {})
+                #^^^^^{-1}
+
+                main = isEqQ (@Q \{} -> "a") (@Q \{} -> "a")
+                #      ^^^^^
+                "#
+            ),
+        @r###"
+        isEqQ : ({} -[[]]-> Str), ({} -[[]]-> Str) -[[isEqQ(2)]]-> [False, True]
+        isEqQ : ({} -[[6, 7]]-> Str), ({} -[[6, 7]]-> Str) -[[isEqQ(2)]]-> [False, True]
+        "###
+        print_only_under_alias: true
+        );
+    }
+
+    #[test]
+    fn infer_concrete_type_with_inference_var() {
+        infer_queries!(indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+
+            f : _ -> {}
+            f = \_ -> f {}
+            #^{-1}
+            "#
+        ),
+        @r###"
+        f : {} -[[f(0)]]-> {}
+        "###
+        )
+    }
+
+    #[test]
+    fn solve_inference_var_in_annotation_requiring_recursion_fix() {
+        infer_queries!(indoc!(
+            r#"
+            app "test" provides [translateStatic] to "./platform"
+
+            translateStatic : _ -> _
+            translateStatic = \Element c ->
+            #^^^^^^^^^^^^^^^{-1}
+                Element (List.map c translateStatic)
+            "#
+        ),
+        @"translateStatic : [Element (List a)] as a -[[translateStatic(0)]]-> [Element (List b)]* as b"
+        )
+    }
+
+    #[test]
+    fn infer_contextual_crash() {
+        infer_eq_without_problem(
+            indoc!(
+                r#"
+                app "test" provides [getInfallible] to "./platform"
+
+                getInfallible = \result -> when result is
+                    Ok x -> x
+                    _ -> crash "turns out this was fallible"
+                "#
+            ),
+            "[Ok a]* -> a",
+        );
+    }
+
+    #[test]
+    fn resolve_eq_for_float_forces_dec() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                n : Num *
+
+                main = n == 1.
+                #      ^
+                "#
+            ),
+        @"n : Dec"
+        );
+    }
+
+    #[test]
+    fn resolve_set_eq_issue_4671() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main =
+                    s1 : Set U8
+                    s1 = Set.empty
+
+                    s2 : Set Str
+                    s2 = Set.empty
+
+                    Bool.isEq s1 s1 && Bool.isEq s2 s2
+                #   ^^^^^^^^^          ^^^^^^^^^
+                "#
+            ),
+        @r###"
+        Set#Bool.isEq(17) : Set U8, Set U8 -[[Set.isEq(17)]]-> Bool
+        Set#Bool.isEq(17) : Set Str, Set Str -[[Set.isEq(17)]]-> Bool
+        "###
+        );
+    }
+
+    #[test]
+    fn disjoint_nested_lambdas_result_in_disjoint_parents_issue_4712() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Parser a : {} -> a
+
+                v1 : {}
+                v1 = {}
+
+                v2 : Str
+                v2 = ""
+
+                apply : Parser (a -> Str), a -> Parser Str
+                apply = \fnParser, valParser ->
+                    \{} ->
+                        (fnParser {}) (valParser)
+
+                map : a, (a -> Str) -> Parser Str
+                map = \simpleParser, transform ->
+                    apply (\{} -> transform) simpleParser
+
+                parseInput = \{} ->
+                    when [ map v1 (\{} -> ""), map v2 (\s -> s) ] is
+                    #    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        _ -> ""
+
+                main = parseInput {} == ""
+                "#
+            ),
+        @r###"
+        v1 = {}
+
+        v2 = ""
+
+        apply = \fnParser, valParser-> \{} -[9]-> (fnParser {}) valParser
+
+        map = \simpleParser, transform-> apply \{} -[12]-> transform simpleParser
+
+        parseInput =
+          \{}->
+          when [
+              map v1 \{} -[13]-> "",
+              map v2 \s -[14]-> s,
+            ] is
+            _ -> ""
+
+        main = Bool.isEq (parseInput {}) ""
+
+
+        [ map v1 (\{} -> ""), map v2 (\s -> s) ] : List (({} -[[9 (({} -[[12 (Str -[[14]]-> Str)]]-> (Str -[[14]]-> Str))) Str, 9 (({} -[[12 ({} -[[13]]-> Str)]]-> ({} -[[13]]-> Str))) {}]]-> Str))
+        "###
+        print_only_under_alias: true
+        print_can_decls: true
+        );
+    }
+
+    #[test]
+    fn constrain_dbg_flex_var() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                polyDbg = \x ->
+                #^^^^^^^{-1}
+                    dbg x
+                    x
+
+                main = polyDbg ""
+                "#
+            ),
+        @"polyDbg : a -[[polyDbg(1)]]-> a"
+        );
     }
 }

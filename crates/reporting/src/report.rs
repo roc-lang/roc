@@ -1,6 +1,7 @@
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, PQModuleName, PackageQualified, Symbol};
+use roc_problem::Severity;
 use roc_region::all::LineColumnRegion;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -97,18 +98,6 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
     );
 
     header
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum Severity {
-    /// This will cause a runtime error if some code get srun
-    /// (e.g. type mismatch, naming error)
-    RuntimeError,
-
-    /// This will never cause the code to misbehave,
-    /// but should be cleaned up
-    /// (e.g. unused def, unused import)
-    Warning,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -549,8 +538,8 @@ impl<'a> RocDocAllocator<'a> {
             let this_line_number_length = line_number.len();
 
             let line = self.src_lines[i as usize];
-
-            let rest_of_line = if !line.trim().is_empty() {
+            let is_line_empty = line.trim().is_empty();
+            let rest_of_line = if !is_line_empty {
                 self.text(line).indent(indent)
             } else {
                 self.nil()
@@ -572,11 +561,17 @@ impl<'a> RocDocAllocator<'a> {
                     .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
                     .append(rest_of_line)
             } else {
-                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                let up_to_gutter = self
+                    .text(" ".repeat(max_line_number_length - this_line_number_length))
                     .append(self.text(line_number).annotate(Annotation::LineNumber))
-                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
-                    .append(self.text(" "))
-                    .append(rest_of_line)
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar));
+
+                if is_line_empty {
+                    // Don't put an trailing space after the gutter
+                    up_to_gutter
+                } else {
+                    up_to_gutter.append(self.text(" ")).append(rest_of_line)
+                }
             };
 
             result = result.append(source_line);
@@ -667,8 +662,8 @@ impl<'a> RocDocAllocator<'a> {
             let this_line_number_length = line_number.len();
 
             let line: &str = self.src_lines.get(i as usize).unwrap_or(&"");
-
-            let rest_of_line = if !line.trim().is_empty() {
+            let is_line_empty = line.trim().is_empty();
+            let rest_of_line = if !is_line_empty {
                 self.text(line)
                     .annotate(Annotation::CodeBlock)
                     .indent(indent)
@@ -691,11 +686,17 @@ impl<'a> RocDocAllocator<'a> {
                     .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
                     .append(rest_of_line)
             } else {
-                self.text(" ".repeat(max_line_number_length - this_line_number_length))
+                let up_to_gutter = self
+                    .text(" ".repeat(max_line_number_length - this_line_number_length))
                     .append(self.text(line_number).annotate(Annotation::LineNumber))
-                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
-                    .append(self.text(" "))
-                    .append(rest_of_line)
+                    .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar));
+
+                if is_line_empty {
+                    // Don't put an trailing space after the gutter
+                    up_to_gutter
+                } else {
+                    up_to_gutter.append(self.text(" ")).append(rest_of_line)
+                }
             };
 
             result = result.append(source_line);

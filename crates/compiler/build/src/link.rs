@@ -1,4 +1,5 @@
 use crate::target::{arch_str, target_zig_str};
+use const_format::concatcp;
 use libloading::{Error, Library};
 use roc_builtins::bitcode;
 use roc_error_macros::internal_error;
@@ -59,6 +60,161 @@ pub fn link(
     }
 }
 
+const fn legacy_host_filename_ext(
+    os: roc_target::OperatingSystem,
+    opt_level: OptLevel,
+) -> &'static str {
+    use roc_target::OperatingSystem::*;
+
+    match os {
+        Wasi => {
+            // TODO wasm host extension should be something else ideally
+            // .bc does not seem to work because
+            //
+            // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
+            //
+            // and zig does not currently emit `.a` webassembly static libraries
+            if matches!(opt_level, OptLevel::Development) {
+                "wasm"
+            } else {
+                "zig"
+            }
+        }
+        Unix => "o",
+        Windows => "obj",
+    }
+}
+
+const PRECOMPILED_HOST_EXT: &str = "rh1"; // Short for "roc host version 1" (so we can change format in the future)
+
+const WASM_TARGET_STR: &str = "wasm32";
+const LINUX_X86_64_TARGET_STR: &str = "linux-x86_64";
+const LINUX_ARM64_TARGET_STR: &str = "linux-arm64";
+const MACOS_ARM64_TARGET_STR: &str = "macos-arm64";
+const MACOS_X86_64_TARGET_STR: &str = "macos-x86_64";
+const WINDOWS_X86_64_TARGET_STR: &str = "windows-x86_64";
+const WINDOWS_X86_32_TARGET_STR: &str = "windows-x86_32";
+const WIDNOWS_ARM64_TARGET_STR: &str = "windows-arm64";
+
+pub const fn preprocessed_host_filename(target: &Triple) -> Option<&'static str> {
+    // Don't try to split this match off in a different function, it will not work with concatcp
+    match target {
+        Triple {
+            architecture: Architecture::Wasm32,
+            ..
+        } => Some(concatcp!(WASM_TARGET_STR, '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Linux,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(concatcp!(
+            LINUX_X86_64_TARGET_STR,
+            '.',
+            PRECOMPILED_HOST_EXT
+        )),
+        Triple {
+            operating_system: OperatingSystem::Linux,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(concatcp!(LINUX_ARM64_TARGET_STR, '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(concatcp!(MACOS_ARM64_TARGET_STR, '.', PRECOMPILED_HOST_EXT)),
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(concatcp!(
+            MACOS_X86_64_TARGET_STR,
+            '.',
+            PRECOMPILED_HOST_EXT
+        )),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(concatcp!(
+            WINDOWS_X86_64_TARGET_STR,
+            '.',
+            PRECOMPILED_HOST_EXT
+        )),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::X86_32(_),
+            ..
+        } => Some(concatcp!(
+            WINDOWS_X86_32_TARGET_STR,
+            '.',
+            PRECOMPILED_HOST_EXT
+        )),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(concatcp!(
+            WIDNOWS_ARM64_TARGET_STR,
+            '.',
+            PRECOMPILED_HOST_EXT
+        )),
+        _ => None,
+    }
+}
+
+pub fn get_target_triple_str(target: &Triple) -> Option<&'static str> {
+    match target {
+        Triple {
+            architecture: Architecture::Wasm32,
+            ..
+        } => Some(WASM_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Linux,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(LINUX_X86_64_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Linux,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(LINUX_ARM64_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(MACOS_ARM64_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Darwin,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(MACOS_X86_64_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::X86_64,
+            ..
+        } => Some(WINDOWS_X86_64_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::X86_32(_),
+            ..
+        } => Some(WINDOWS_X86_32_TARGET_STR),
+        Triple {
+            operating_system: OperatingSystem::Windows,
+            architecture: Architecture::Aarch64(_),
+            ..
+        } => Some(WIDNOWS_ARM64_TARGET_STR),
+        _ => None,
+    }
+}
+
+/// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
+pub fn legacy_host_filename(target: &Triple, opt_level: OptLevel) -> Option<String> {
+    let os = roc_target::OperatingSystem::from(target.operating_system);
+    let ext = legacy_host_filename_ext(os, opt_level);
+
+    Some(preprocessed_host_filename(target)?.replace(PRECOMPILED_HOST_EXT, ext))
+}
+
 fn find_zig_str_path() -> PathBuf {
     // First try using the lib path relative to the executable location.
     let lib_path_opt = get_lib_path();
@@ -107,6 +263,7 @@ pub fn build_zig_host_native(
     target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
+    builtins_host_path: &Path,
 ) -> Command {
     let mut zig_cmd = zig();
     zig_cmd
@@ -118,18 +275,12 @@ pub fn build_zig_host_native(
         // with LLVM, the builtins are already part of the roc app,
         // but with the dev backend, they are missing. To minimize work,
         // we link them as part of the host executable
-        let builtins_obj = if target.contains("windows") {
-            bitcode::get_builtins_windows_obj_path()
-        } else {
-            bitcode::get_builtins_host_obj_path()
-        };
-
         zig_cmd.args([
             "build-exe",
             "-fPIE",
             "-rdynamic", // make sure roc_alloc and friends are exposed
             shared_lib_path.to_str().unwrap(),
-            &builtins_obj,
+            builtins_host_path.to_str().unwrap(),
         ]);
     } else {
         zig_cmd.args(["build-obj", "-fPIC"]);
@@ -185,6 +336,7 @@ pub fn build_zig_host_native(
     target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
+    builtins_host_path: &Path,
 ) -> Command {
     // to prevent `clang failed with stderr: zig: error: unable to make temporary file: No such file or directory`
     let env_userprofile = env::var("USERPROFILE").unwrap_or_else(|_| "".to_string());
@@ -201,7 +353,7 @@ pub fn build_zig_host_native(
             "build-exe",
             // "-fPIE", PIE seems to fail on windows
             shared_lib_path.to_str().unwrap(),
-            &bitcode::get_builtins_windows_obj_path(),
+            builtins_host_path.to_str().unwrap(),
         ]);
     } else {
         zig_cmd.args(&["build-obj"]);
@@ -244,6 +396,7 @@ pub fn build_zig_host_native(
     _target: &str,
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
+    builtins_host_path: &Path,
     // For compatibility with the non-macOS def above. Keep these in sync.
 ) -> Command {
     use serde_json::Value;
@@ -296,7 +449,7 @@ pub fn build_zig_host_native(
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
-            &bitcode::get_builtins_host_obj_path(),
+            builtins_host_path.to_str().unwrap(),
         ]);
     } else {
         zig_cmd.args(&["build-obj"]);
@@ -400,6 +553,7 @@ pub fn build_c_host_native(
     sources: &[&str],
     opt_level: OptLevel,
     shared_lib_path: Option<&Path>,
+    builtins_host_path: &Path,
 ) -> Command {
     let mut clang_cmd = clang();
     clang_cmd
@@ -426,6 +580,7 @@ pub fn build_c_host_native(
                     get_target_str(target),
                     opt_level,
                     Some(shared_lib_path),
+                    builtins_host_path,
                 );
             }
             _ => {
@@ -436,7 +591,7 @@ pub fn build_c_host_native(
                     // linking the built-ins led to a surgical linker bug for
                     // optimized builds. Disabling until it is needed for dev
                     // builds.
-                    // &bitcode::get_builtins_host_obj_path(),
+                    // builtins_host_path,
                     "-fPIE",
                     "-pie",
                     "-lm",
@@ -490,6 +645,10 @@ pub fn build_swift_host_native(
         .arg("swiftc")
         .args(sources)
         .arg("-emit-object")
+        // `-module-name host` renames the .o file to "host" - otherwise you get an error like:
+        //   error: module name "legacy_macos-arm64" is not a valid identifier; use -module-name flag to specify an alternate name
+        .arg("-module-name")
+        .arg("host")
         .arg("-parse-as-library")
         .args(["-o", dest]);
 
@@ -528,31 +687,36 @@ pub fn rebuild_host(
         roc_target::OperatingSystem::Wasi => "",
     };
 
-    let object_extension = match os {
-        roc_target::OperatingSystem::Windows => "obj",
-        roc_target::OperatingSystem::Unix => "o",
-        roc_target::OperatingSystem::Wasi => "o",
-    };
-
     let host_dest = if matches!(target.architecture, Architecture::Wasm32) {
         if matches!(opt_level, OptLevel::Development) {
-            host_input_path.with_file_name("host.o")
+            host_input_path.with_extension("o")
         } else {
-            host_input_path.with_file_name("host.bc")
+            host_input_path.with_extension("bc")
         }
     } else if shared_lib_path.is_some() {
         host_input_path
             .with_file_name("dynhost")
             .with_extension(executable_extension)
     } else {
-        host_input_path
-            .with_file_name("host")
-            .with_extension(object_extension)
+        host_input_path.with_file_name(legacy_host_filename(target, opt_level).unwrap())
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
     let env_home = env::var("HOME").unwrap_or_else(|_| "".to_string());
     let env_cpath = env::var("CPATH").unwrap_or_else(|_| "".to_string());
+
+    let builtins_host_tempfile = {
+        #[cfg(windows)]
+        {
+            bitcode::host_windows_tempfile()
+        }
+
+        #[cfg(unix)]
+        {
+            bitcode::host_unix_tempfile()
+        }
+    }
+    .expect("failed to write host builtins object to tempfile");
 
     if zig_host_src.exists() {
         // Compile host.zig
@@ -591,6 +755,7 @@ pub fn rebuild_host(
                 get_target_str(target),
                 opt_level,
                 shared_lib_path,
+                builtins_host_tempfile.path(),
             ),
             Architecture::X86_32(_) => build_zig_host_native(
                 &env_path,
@@ -601,8 +766,8 @@ pub fn rebuild_host(
                 "i386-linux-musl",
                 opt_level,
                 shared_lib_path,
+                builtins_host_tempfile.path(),
             ),
-
             Architecture::Aarch64(_) => build_zig_host_native(
                 &env_path,
                 &env_home,
@@ -612,11 +777,12 @@ pub fn rebuild_host(
                 target_zig_str(target),
                 opt_level,
                 shared_lib_path,
+                builtins_host_tempfile.path(),
             ),
             _ => internal_error!("Unsupported architecture {:?}", target.architecture),
         };
 
-        run_build_command(zig_cmd, "host.zig", 0)
+        run_build_command(zig_cmd, "host.zig", 0);
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = host_input_path.parent().unwrap();
@@ -679,6 +845,7 @@ pub fn rebuild_host(
                 &[c_host_src.to_str().unwrap()],
                 opt_level,
                 shared_lib_path,
+                builtins_host_tempfile.path(),
             );
 
             run_build_command(clang_cmd, "host.c", 0);
@@ -733,6 +900,7 @@ pub fn rebuild_host(
                 ],
                 opt_level,
                 shared_lib_path,
+                builtins_host_tempfile.path(),
             );
             run_build_command(clang_cmd, "host.c", 0);
         } else {
@@ -745,6 +913,7 @@ pub fn rebuild_host(
                 &[c_host_src.to_str().unwrap()],
                 opt_level,
                 shared_lib_path,
+                builtins_host_tempfile.path(),
             );
 
             run_build_command(clang_cmd, "host.c", 0);
@@ -780,6 +949,7 @@ pub fn rebuild_host(
             &[c_host_src.to_str().unwrap()],
             opt_level,
             shared_lib_path,
+            builtins_host_tempfile.path(),
         );
 
         run_build_command(clang_cmd, "host.c", 0);
@@ -800,6 +970,10 @@ pub fn rebuild_host(
 
         run_build_command(swiftc_cmd, "host.swift", 0);
     }
+
+    // Extend the lifetime of the tempfile so it doesn't get dropped
+    // (and thus deleted) before the build process is done using it!
+    let _ = builtins_host_tempfile;
 
     host_dest
 }
@@ -1074,14 +1248,17 @@ fn link_macos(
     input_paths: &[&str],
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let (link_type_arg, output_path) = match link_type {
-        LinkType::Executable => ("-execute", output_path),
+    let (link_type_args, output_path) = match link_type {
+        LinkType::Executable => (vec!["-execute"], output_path),
         LinkType::Dylib => {
             let mut output_path = output_path;
 
             output_path.set_extension("dylib");
 
-            ("-dylib", output_path)
+            (
+                vec!["-dylib", "-undefined", "dynamic_lookup", "-no_fixup_chains"],
+                output_path,
+            )
         }
         LinkType::None => internal_error!("link_macos should not be called with link type of none"),
     };
@@ -1098,13 +1275,13 @@ fn link_macos(
         // The `-l` flags should go after the `.o` arguments
         // Don't allow LD_ env vars to affect this
         .env_clear()
+        .args(&link_type_args)
         .args([
             // NOTE: we don't do --gc-sections on macOS because the default
             // macOS linker doesn't support it, but it's a performance
             // optimization, so if we ever switch to a different linker,
             // we'd like to re-enable it on macOS!
             // "--gc-sections",
-            link_type_arg,
             "-arch",
             &arch,
             "-macos_version_min",
@@ -1317,7 +1494,14 @@ pub fn llvm_module_to_dylib(
     )
     .unwrap();
 
-    child.wait().unwrap();
+    let exit_status = child.wait().unwrap();
+
+    assert!(
+        exit_status.success(),
+        "\n___________\nLinking command failed with status {:?}:\n\n  {:?}\n___________\n",
+        exit_status,
+        child
+    );
 
     // Load the dylib
     let path = dylib_path.as_path().to_str().unwrap();
@@ -1353,10 +1537,13 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
             (but seems to be an unofficial API)
     */
 
+    let builtins_host_tempfile =
+        bitcode::host_wasm_tempfile().expect("failed to write host builtins object to tempfile");
+
     let mut zig_cmd = zig();
     let args = &[
         "wasm-ld",
-        &bitcode::get_builtins_wasm32_obj_path(),
+        builtins_host_tempfile.path().to_str().unwrap(),
         host_input,
         WASI_LIBC_PATH,
         WASI_COMPILER_RT_PATH, // builtins need __multi3, __udivti3, __fixdfti
@@ -1373,7 +1560,11 @@ pub fn preprocess_host_wasm32(host_input_path: &Path, preprocessed_host_path: &P
     // println!("\npreprocess_host_wasm32");
     // println!("zig {}\n", args.join(" "));
 
-    run_build_command(zig_cmd, output_file, 0)
+    run_build_command(zig_cmd, output_file, 0);
+
+    // Extend the lifetime of the tempfile so it doesn't get dropped
+    // (and thus deleted) before the Zig process is done using it!
+    let _ = builtins_host_tempfile;
 }
 
 fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_counter: usize) {

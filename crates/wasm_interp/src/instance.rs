@@ -1,0 +1,1608 @@
+use bumpalo::{collections::Vec, Bump};
+use std::fmt::{self, Write};
+use std::iter;
+
+use roc_wasm_module::opcodes::OpCode;
+use roc_wasm_module::parse::{Parse, SkipBytes};
+use roc_wasm_module::sections::{ImportDesc, MemorySection};
+use roc_wasm_module::{ExportType, WasmModule};
+use roc_wasm_module::{Value, ValueType};
+
+use crate::call_stack::CallStack;
+use crate::value_stack::ValueStack;
+use crate::{pc_to_fn_index, Error, ImportDispatcher};
+
+#[derive(Debug)]
+pub enum Action {
+    Continue,
+    Break,
+}
+
+#[derive(Debug)]
+enum Block {
+    Loop { vstack: usize, start_addr: usize },
+    Normal { vstack: usize },
+}
+
+#[derive(Debug)]
+struct BranchCacheEntry {
+    addr: u32,
+    argument: u32,
+    target: u32,
+}
+
+#[derive(Debug)]
+pub struct Instance<'a, I: ImportDispatcher> {
+    /// Contents of the WebAssembly instance's memory
+    pub memory: Vec<'a, u8>,
+    /// Metadata for every currently-active function call
+    pub call_stack: CallStack<'a>,
+    /// The WebAssembly stack machine's stack of values
+    pub value_stack: ValueStack<'a>,
+    /// Values of any global variables
+    pub globals: Vec<'a, Value>,
+    /// Index in the code section of the current instruction
+    pub program_counter: usize,
+    /// One entry per nested block. For loops, stores the address of the first instruction.
+    blocks: Vec<'a, Block>,
+    /// Outermost block depth for the currently-executing function.
+    outermost_block: u32,
+    /// Cache for branching instructions
+    branch_cache: Vec<'a, BranchCacheEntry>,
+    /// Import dispatcher from user code
+    import_dispatcher: I,
+    /// Temporary storage for import arguments
+    import_arguments: Vec<'a, Value>,
+    /// temporary storage for output using the --debug option
+    debug_string: Option<String>,
+}
+
+impl<'a, I: ImportDispatcher> Instance<'a, I> {
+    pub fn new<G>(
+        arena: &'a Bump,
+        memory_pages: u32,
+        program_counter: usize,
+        globals: G,
+        import_dispatcher: I,
+    ) -> Self
+    where
+        G: IntoIterator<Item = Value>,
+    {
+        let mem_bytes = memory_pages * MemorySection::PAGE_SIZE;
+        Instance {
+            memory: Vec::from_iter_in(iter::repeat(0).take(mem_bytes as usize), arena),
+            call_stack: CallStack::new(arena),
+            value_stack: ValueStack::new(arena),
+            globals: Vec::from_iter_in(globals, arena),
+            program_counter,
+            blocks: Vec::new_in(arena),
+            outermost_block: 0,
+            branch_cache: Vec::new_in(arena),
+            import_dispatcher,
+            import_arguments: Vec::new_in(arena),
+            debug_string: Some(String::new()),
+        }
+    }
+
+    pub fn for_module(
+        arena: &'a Bump,
+        module: &WasmModule<'a>,
+        import_dispatcher: I,
+        is_debug_mode: bool,
+    ) -> Result<Self, std::string::String> {
+        let mem_bytes = module.memory.min_bytes().map_err(|e| {
+            format!(
+                "Error parsing Memory section at offset {:#x}:\n{}",
+                e.offset, e.message
+            )
+        })?;
+        let mut memory = Vec::from_iter_in(iter::repeat(0).take(mem_bytes as usize), arena);
+        module.data.load_into(&mut memory)?;
+
+        let globals = module.global.initial_values(arena);
+
+        // We don't handle non-function import types (memories, tables, and globals),
+        // and it's nice for lookups to assume they're all functions, so let's assert that.
+        let all_imports_are_functions = module.import.imports.iter().all(|imp| imp.is_function());
+        assert!(
+            all_imports_are_functions,
+            "This Wasm interpreter doesn't support non-function imports"
+        );
+
+        let value_stack = ValueStack::new(arena);
+        let call_stack = CallStack::new(arena);
+
+        let debug_string = if is_debug_mode {
+            Some(String::new())
+        } else {
+            None
+        };
+
+        Ok(Instance {
+            memory,
+            call_stack,
+            value_stack,
+            globals,
+            program_counter: usize::MAX,
+            blocks: Vec::new_in(arena),
+            outermost_block: 0,
+            branch_cache: Vec::new_in(arena),
+            import_dispatcher,
+            import_arguments: Vec::new_in(arena),
+            debug_string,
+        })
+    }
+
+    pub fn call_export<A>(
+        &mut self,
+        module: &WasmModule<'a>,
+        fn_name: &str,
+        arg_values: A,
+    ) -> Result<Option<Value>, String>
+    where
+        A: IntoIterator<Item = Value>,
+    {
+        let arg_type_bytes = self.prepare_to_call_export(module, fn_name)?;
+
+        for (i, (value, type_byte)) in arg_values
+            .into_iter()
+            .zip(arg_type_bytes.iter().copied())
+            .enumerate()
+        {
+            let expected_type = ValueType::from(type_byte);
+            let actual_type = ValueType::from(value);
+            if actual_type != expected_type {
+                return Err(format!(
+                    "Type mismatch on argument {} of {}. Expected {:?} but got {:?}",
+                    i, fn_name, expected_type, value
+                ));
+            }
+            self.value_stack.push(value);
+        }
+
+        self.call_export_help(module, arg_type_bytes)
+    }
+
+    pub fn call_export_from_cli(
+        &mut self,
+        module: &WasmModule<'a>,
+        fn_name: &str,
+        arg_strings: &'a [&'a String],
+    ) -> Result<Option<Value>, String> {
+        // We have two different mechanisms for handling CLI arguments!
+        // 1. Basic numbers:
+        //      e.g. `roc_wasm_interp fibonacci 12`
+        //      Below, we check if the called Wasm function takes numeric arguments and, if so, parse them from the CLI.
+        //      This is good for low-level test cases, for example while developing this interpreter.
+        // 2. WASI:
+        //      POSIX-style array of strings. Much more high-level and complex than the "basic" version.
+        //      The WASI `_start` function itself takes no arguments (its Wasm type signature is `() -> nil`).
+        //      The program uses WASI syscalls to copy strings into Wasm memory and process them.
+        //      But that happens *elsewhere*! Here, `arg_strings` is ignored because `_start` takes no arguments.
+
+        // Implement the "basic numbers" CLI
+        // Check if the called Wasm function takes numeric arguments, and if so, try to parse them from the CLI.
+        let arg_type_bytes = self.prepare_to_call_export(module, fn_name)?;
+        for (value_str, type_byte) in arg_strings
+            .iter()
+            .skip(1) // first string is the .wasm filename
+            .zip(arg_type_bytes.iter().copied())
+        {
+            use ValueType::*;
+            let value = match ValueType::from(type_byte) {
+                I32 => Value::I32(value_str.parse::<i32>().map_err(|e| e.to_string())?),
+                I64 => Value::I64(value_str.parse::<i64>().map_err(|e| e.to_string())?),
+                F32 => Value::F32(value_str.parse::<f32>().map_err(|e| e.to_string())?),
+                F64 => Value::F64(value_str.parse::<f64>().map_err(|e| e.to_string())?),
+            };
+            self.value_stack.push(value);
+        }
+
+        self.call_export_help(module, arg_type_bytes)
+    }
+
+    fn prepare_to_call_export<'m>(
+        &mut self,
+        module: &'m WasmModule<'a>,
+        fn_name: &str,
+    ) -> Result<&'m [u8], String> {
+        let fn_index = {
+            let mut export_iter = module.export.exports.iter();
+            export_iter
+                // First look up the name in exports
+                .find_map(|ex| {
+                    if ex.ty == ExportType::Func && ex.name == fn_name {
+                        Some(ex.index)
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    // Then look it up in the debug info!
+                    // This is non-spec behaviour that Wasm3 seems to implement,
+                    // and that our wasm_linking tests accidentally rely on!
+                    let mut names = module.names.function_names.iter();
+                    names.find_map(
+                        |(index, name)| {
+                            if *name == fn_name {
+                                Some(*index)
+                            } else {
+                                None
+                            }
+                        },
+                    )
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "I couldn't find a function '{}' in this WebAssembly module",
+                        fn_name
+                    )
+                })?
+        };
+
+        self.program_counter = {
+            let internal_fn_index = fn_index as usize - module.import.function_count();
+            let mut cursor = module.code.function_offsets[internal_fn_index] as usize;
+            let _start_fn_byte_length = u32::parse((), &module.code.bytes, &mut cursor);
+            cursor
+        };
+
+        let arg_type_bytes = {
+            let internal_fn_index = fn_index as usize - module.import.imports.len();
+            let signature_index = module.function.signatures[internal_fn_index];
+            module.types.look_up_arg_type_bytes(signature_index)
+        };
+
+        if self.debug_string.is_some() {
+            println!(
+                "Calling export func[{}] '{}' at address {:#x}",
+                fn_index,
+                fn_name,
+                self.program_counter + module.code.section_offset as usize
+            );
+        }
+
+        Ok(arg_type_bytes)
+    }
+
+    fn call_export_help(
+        &mut self,
+        module: &WasmModule<'a>,
+        arg_type_bytes: &[u8],
+    ) -> Result<Option<Value>, String> {
+        self.call_stack
+            .push_frame(
+                0, // return_addr
+                0, // return_block_depth
+                arg_type_bytes,
+                &mut self.value_stack,
+                &module.code.bytes,
+                &mut self.program_counter,
+            )
+            .map_err(|e| e.to_string_at(self.program_counter))?;
+
+        loop {
+            match self.execute_next_instruction(module) {
+                Ok(Action::Continue) => {}
+                Ok(Action::Break) => {
+                    break;
+                }
+                Err(e) => {
+                    let file_offset = self.program_counter + module.code.section_offset as usize;
+                    let mut message = e.to_string_at(file_offset);
+                    self.call_stack
+                        .dump_trace(
+                            module,
+                            &self.value_stack,
+                            self.program_counter,
+                            &mut message,
+                        )
+                        .unwrap();
+                    return Err(message);
+                }
+            };
+        }
+
+        let return_value = if !self.value_stack.is_empty() {
+            Some(self.value_stack.pop())
+        } else {
+            None
+        };
+
+        Ok(return_value)
+    }
+
+    fn fetch_immediate_u32(&mut self, module: &WasmModule<'a>) -> u32 {
+        let x = u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
+        if let Some(debug_string) = self.debug_string.as_mut() {
+            write!(debug_string, "{} ", x).unwrap();
+        }
+        x
+    }
+
+    fn do_return(&mut self) -> Action {
+        self.blocks.truncate(self.outermost_block as usize);
+        if let Some((return_addr, block_depth)) = self.call_stack.pop_frame() {
+            if self.call_stack.is_empty() {
+                // We just popped the stack frame for the entry function. Terminate the program.
+                Action::Break
+            } else {
+                self.program_counter = return_addr as usize;
+                self.outermost_block = block_depth;
+                Action::Continue
+            }
+        } else {
+            // We should never get here with real programs, but maybe in tests. Terminate the program.
+            Action::Break
+        }
+    }
+
+    fn get_load_address(&mut self, module: &WasmModule<'a>) -> Result<u32, Error> {
+        // Alignment is not used in the execution steps from the spec! Maybe it's just an optimization hint?
+        // https://webassembly.github.io/spec/core/exec/instructions.html#memory-instructions
+        // Also note: in the text format we can specify the useless `align=` but not the useful `offset=`!
+        let _alignment = self.fetch_immediate_u32(module);
+        let offset = self.fetch_immediate_u32(module);
+        let base_addr = self.value_stack.pop_u32()?;
+        Ok(base_addr + offset)
+    }
+
+    fn get_store_addr_value(&mut self, module: &WasmModule<'a>) -> Result<(usize, Value), Error> {
+        // Alignment is not used in the execution steps from the spec! Maybe it's just an optimization hint?
+        // https://webassembly.github.io/spec/core/exec/instructions.html#memory-instructions
+        // Also note: in the text format we can specify the useless `align=` but not the useful `offset=`!
+        let _alignment = self.fetch_immediate_u32(module);
+        let offset = self.fetch_immediate_u32(module);
+        let value = self.value_stack.pop();
+        let base_addr = self.value_stack.pop_u32()?;
+        let addr = (base_addr + offset) as usize;
+        Ok((addr, value))
+    }
+
+    fn write_debug<T: fmt::Debug>(&mut self, value: T) {
+        if let Some(debug_string) = self.debug_string.as_mut() {
+            std::write!(debug_string, "{:?} ", value).unwrap();
+        }
+    }
+
+    fn do_break(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>) {
+        let block_index = self.blocks.len() - 1 - relative_blocks_outward as usize;
+        match self.blocks[block_index] {
+            Block::Loop { start_addr, vstack } => {
+                self.blocks.truncate(block_index + 1);
+                self.value_stack.truncate(vstack);
+                self.program_counter = start_addr;
+            }
+            Block::Normal { vstack } => {
+                self.break_forward(relative_blocks_outward, module);
+                self.value_stack.truncate(vstack);
+            }
+        }
+    }
+
+    // Break to an outer block, going forward in the program
+    fn break_forward(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>) {
+        use OpCode::*;
+
+        let addr = self.program_counter as u32;
+        let cache_result = self
+            .branch_cache
+            .iter()
+            .find(|entry| entry.addr == addr && entry.argument == relative_blocks_outward);
+
+        let mut depth = self.blocks.len();
+        let target_block_depth = depth - (relative_blocks_outward + 1) as usize;
+
+        if let Some(entry) = cache_result {
+            self.program_counter = entry.target as usize;
+        } else {
+            loop {
+                let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
+                OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter).unwrap();
+                match skipped_op {
+                    BLOCK | LOOP | IF => {
+                        depth += 1;
+                    }
+                    END => {
+                        depth -= 1;
+                        if depth == target_block_depth {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            self.branch_cache.push(BranchCacheEntry {
+                addr,
+                argument: relative_blocks_outward,
+                target: self.program_counter as u32,
+            });
+        }
+        self.blocks.truncate(target_block_depth);
+    }
+
+    fn do_call(
+        &mut self,
+        expected_signature: Option<u32>,
+        fn_index: usize,
+        module: &WasmModule<'a>,
+    ) -> Result<(), Error> {
+        let n_import_fns = module.import.imports.len();
+
+        let (signature_index, opt_import) = if fn_index < n_import_fns {
+            // Imported non-Wasm function
+            let import = &module.import.imports[fn_index];
+            let sig = match import.description {
+                ImportDesc::Func { signature_index } => signature_index,
+                _ => unreachable!(),
+            };
+            (sig, Some(import))
+        } else {
+            // Wasm function
+            let sig = module.function.signatures[fn_index - n_import_fns];
+            (sig, None)
+        };
+
+        if let Some(expected) = expected_signature {
+            assert_eq!(
+                expected, signature_index,
+                "Indirect function call failed. Expected signature {} but found {}",
+                expected, signature_index,
+            );
+        }
+
+        let arg_type_bytes = module.types.look_up_arg_type_bytes(signature_index);
+
+        if let Some(import) = opt_import {
+            self.import_arguments.clear();
+            self.import_arguments
+                .extend(std::iter::repeat(Value::I64(0)).take(arg_type_bytes.len()));
+            for (i, type_byte) in arg_type_bytes.iter().copied().enumerate().rev() {
+                let arg = self.value_stack.pop();
+                assert_eq!(ValueType::from(arg), ValueType::from(type_byte));
+                self.import_arguments[i] = arg;
+            }
+
+            let optional_return_val = self.import_dispatcher.dispatch(
+                import.module,
+                import.name,
+                &self.import_arguments,
+                &mut self.memory,
+            );
+            if let Some(return_val) = optional_return_val {
+                self.value_stack.push(return_val);
+            }
+            if let Some(debug_string) = self.debug_string.as_mut() {
+                write!(debug_string, " {}.{}", import.module, import.name).unwrap();
+            }
+        } else {
+            let return_addr = self.program_counter as u32;
+            let internal_fn_index = fn_index - n_import_fns;
+            self.program_counter = module.code.function_offsets[internal_fn_index] as usize;
+
+            let return_block_depth = self.outermost_block;
+            self.outermost_block = self.blocks.len() as u32;
+
+            let _function_byte_length =
+                u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
+            self.call_stack.push_frame(
+                return_addr,
+                return_block_depth,
+                arg_type_bytes,
+                &mut self.value_stack,
+                &module.code.bytes,
+                &mut self.program_counter,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn execute_next_instruction(
+        &mut self,
+        module: &WasmModule<'a>,
+    ) -> Result<Action, Error> {
+        use OpCode::*;
+
+        let file_offset = self.program_counter as u32 + module.code.section_offset;
+        let op_code = OpCode::from(module.code.bytes[self.program_counter]);
+        self.program_counter += 1;
+
+        if let Some(debug_string) = self.debug_string.as_mut() {
+            debug_string.clear();
+            self.write_debug(op_code);
+        }
+
+        let mut action = Action::Continue;
+        let mut implicit_return = false;
+
+        match op_code {
+            UNREACHABLE => {
+                return Err(Error::UnreachableOp);
+            }
+            NOP => {}
+            BLOCK => {
+                self.fetch_immediate_u32(module); // blocktype (ignored)
+                self.blocks.push(Block::Normal {
+                    vstack: self.value_stack.depth(),
+                });
+            }
+            LOOP => {
+                self.fetch_immediate_u32(module); // blocktype (ignored)
+                self.blocks.push(Block::Loop {
+                    vstack: self.value_stack.depth(),
+                    start_addr: self.program_counter,
+                });
+            }
+            IF => {
+                self.fetch_immediate_u32(module); // blocktype (ignored)
+                let condition = self.value_stack.pop_i32()?;
+                self.blocks.push(Block::Normal {
+                    vstack: self.value_stack.depth(),
+                });
+                if condition == 0 {
+                    let addr = self.program_counter as u32;
+                    let cache_result = self.branch_cache.iter().find(|entry| entry.addr == addr);
+                    if let Some(entry) = cache_result {
+                        self.program_counter = entry.target as usize;
+                    } else {
+                        let target_depth = self.blocks.len();
+                        let mut depth = target_depth;
+                        loop {
+                            let skipped_op = OpCode::from(module.code.bytes[self.program_counter]);
+                            OpCode::skip_bytes(&module.code.bytes, &mut self.program_counter)
+                                .unwrap();
+                            match skipped_op {
+                                BLOCK | LOOP | IF => {
+                                    depth += 1;
+                                }
+                                END => {
+                                    if depth == target_depth {
+                                        // `if` without `else`
+                                        self.blocks.pop();
+                                        break;
+                                    } else {
+                                        depth -= 1;
+                                    }
+                                }
+                                ELSE => {
+                                    if depth == target_depth {
+                                        break;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        self.branch_cache.push(BranchCacheEntry {
+                            addr,
+                            argument: 0,
+                            target: self.program_counter as u32,
+                        });
+                    }
+                }
+            }
+            ELSE => {
+                // We only reach this point when we finish executing the "then" block of an IF statement
+                // (For a false condition, we would have skipped past the ELSE when we saw the IF)
+                // We don't want to execute the ELSE block, so we skip it, just like `br 0` would.
+                self.do_break(0, module);
+            }
+            END => {
+                if self.blocks.len() == self.outermost_block as usize {
+                    // implicit RETURN at end of function
+                    action = self.do_return();
+                    implicit_return = true;
+                } else {
+                    self.blocks.pop().unwrap();
+                }
+            }
+            BR => {
+                let relative_blocks_outward = self.fetch_immediate_u32(module);
+                self.do_break(relative_blocks_outward, module);
+            }
+            BRIF => {
+                let relative_blocks_outward = self.fetch_immediate_u32(module);
+                let condition = self.value_stack.pop_i32()?;
+                if condition != 0 {
+                    self.do_break(relative_blocks_outward, module);
+                }
+            }
+            BRTABLE => {
+                let selector = self.value_stack.pop_u32()?;
+                let nondefault_condition_count = self.fetch_immediate_u32(module);
+                let mut selected = None;
+                for i in 0..nondefault_condition_count {
+                    let rel_blocks = self.fetch_immediate_u32(module);
+                    if i == selector {
+                        selected = Some(rel_blocks);
+                    }
+                }
+                let fallback = self.fetch_immediate_u32(module);
+                let relative_blocks_outward = selected.unwrap_or(fallback);
+                self.do_break(relative_blocks_outward, module);
+            }
+            RETURN => {
+                action = self.do_return();
+            }
+            CALL => {
+                let fn_index = self.fetch_immediate_u32(module) as usize;
+                self.do_call(None, fn_index, module)?;
+            }
+            CALLINDIRECT => {
+                let expected_signature = self.fetch_immediate_u32(module);
+                let table_index = self.fetch_immediate_u32(module);
+                let element_index = self.value_stack.pop_u32()?;
+
+                // So far, all compilers seem to be emitting MVP-compatible code. (Rust, Zig, Roc...)
+                assert_eq!(
+                    table_index, 0,
+                    "Table index {} not supported at file offset {:#x}. This interpreter only supports Wasm MVP.",
+                    table_index, file_offset
+                );
+
+                // Dereference the function pointer (look up the element index in the function table)
+                let fn_index = module.element.lookup(element_index).unwrap_or_else(|| {
+                    panic!(
+                        "Indirect function call failed. There is no function with element index {}",
+                        element_index
+                    )
+                });
+
+                self.do_call(Some(expected_signature), fn_index as usize, module)?;
+            }
+            DROP => {
+                self.value_stack.pop();
+            }
+            SELECT => {
+                let c = self.value_stack.pop_i32()?;
+                let val2 = self.value_stack.pop();
+                let val1 = self.value_stack.pop();
+                let actual = ValueType::from(val2);
+                let expected = ValueType::from(val1);
+                if actual != expected {
+                    return Err(Error::ValueStackType(expected, actual));
+                }
+                let result = if c != 0 { val1 } else { val2 };
+                self.value_stack.push(result);
+            }
+            GETLOCAL => {
+                let index = self.fetch_immediate_u32(module);
+                let value = self.call_stack.get_local(index);
+                self.value_stack.push(value);
+            }
+            SETLOCAL => {
+                let index = self.fetch_immediate_u32(module);
+                let value = self.value_stack.pop();
+                self.call_stack.set_local(index, value)?;
+            }
+            TEELOCAL => {
+                let index = self.fetch_immediate_u32(module);
+                let value = self.value_stack.peek();
+                self.call_stack.set_local(index, value)?;
+            }
+            GETGLOBAL => {
+                let index = self.fetch_immediate_u32(module);
+                self.value_stack.push(self.globals[index as usize]);
+            }
+            SETGLOBAL => {
+                let index = self.fetch_immediate_u32(module);
+                self.globals[index as usize] = self.value_stack.pop();
+            }
+            I32LOAD => {
+                let addr = self.get_load_address(module)? as usize;
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&self.memory[addr..][..4]);
+                let value = i32::from_le_bytes(bytes);
+                self.value_stack.push(Value::I32(value));
+            }
+            I64LOAD => {
+                let addr = self.get_load_address(module)? as usize;
+                let mut bytes = [0; 8];
+                bytes.copy_from_slice(&self.memory[addr..][..8]);
+                let value = i64::from_le_bytes(bytes);
+                self.value_stack.push(Value::I64(value));
+            }
+            F32LOAD => {
+                let addr = self.get_load_address(module)? as usize;
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&self.memory[addr..][..4]);
+                let value = f32::from_le_bytes(bytes);
+                self.value_stack.push(Value::F32(value));
+            }
+            F64LOAD => {
+                let addr = self.get_load_address(module)? as usize;
+                let mut bytes = [0; 8];
+                bytes.copy_from_slice(&self.memory[addr..][..8]);
+                let value = f64::from_le_bytes(bytes);
+                self.value_stack.push(Value::F64(value));
+            }
+            I32LOAD8S => {
+                let addr = self.get_load_address(module)? as usize;
+                let mut bytes = [0; 1];
+                bytes.copy_from_slice(&self.memory[addr..][..1]);
+                let value = i8::from_le_bytes(bytes);
+                self.value_stack.push(Value::I32(value as i32));
+            }
+            I32LOAD8U => {
+                let addr = self.get_load_address(module)? as usize;
+                let value = self.memory[addr];
+                self.value_stack.push(Value::I32(value as i32));
+            }
+            I32LOAD16S => {
+                let addr = self.get_load_address(module)? as usize;
+                let mut bytes = [0; 2];
+                bytes.copy_from_slice(&self.memory[addr..][..2]);
+                let value = i16::from_le_bytes(bytes);
+                self.value_stack.push(Value::I32(value as i32));
+            }
+            I32LOAD16U => {
+                let addr = self.get_load_address(module)? as usize;
+                let mut bytes = [0; 2];
+                bytes.copy_from_slice(&self.memory[addr..][..2]);
+                let value = u16::from_le_bytes(bytes);
+                self.value_stack.push(Value::I32(value as i32));
+            }
+            I64LOAD8S => {
+                let addr = self.get_load_address(module)? as usize;
+                let mut bytes = [0; 1];
+                bytes.copy_from_slice(&self.memory[addr..][..1]);
+                let value = i8::from_le_bytes(bytes);
+                self.value_stack.push(Value::I64(value as i64));
+            }
+            I64LOAD8U => {
+                let addr = self.get_load_address(module)? as usize;
+                let value = self.memory[addr];
+                self.value_stack.push(Value::I64(value as i64));
+            }
+            I64LOAD16S => {
+                let addr = self.get_load_address(module)? as usize;
+                let mut bytes = [0; 2];
+                bytes.copy_from_slice(&self.memory[addr..][..2]);
+                let value = i16::from_le_bytes(bytes);
+                self.value_stack.push(Value::I64(value as i64));
+            }
+            I64LOAD16U => {
+                let addr = self.get_load_address(module)? as usize;
+                let mut bytes = [0; 2];
+                bytes.copy_from_slice(&self.memory[addr..][..2]);
+                let value = u16::from_le_bytes(bytes);
+                self.value_stack.push(Value::I64(value as i64));
+            }
+            I64LOAD32S => {
+                let addr = self.get_load_address(module)? as usize;
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&self.memory[addr..][..4]);
+                let value = i32::from_le_bytes(bytes);
+                self.value_stack.push(Value::I64(value as i64));
+            }
+            I64LOAD32U => {
+                let addr = self.get_load_address(module)? as usize;
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&self.memory[addr..][..4]);
+                let value = u32::from_le_bytes(bytes);
+                self.value_stack.push(Value::I64(value as i64));
+            }
+            I32STORE => {
+                let (addr, value) = self.get_store_addr_value(module)?;
+                let unwrapped = value.expect_i32().map_err(Error::from)?;
+                let target = &mut self.memory[addr..][..4];
+                target.copy_from_slice(&unwrapped.to_le_bytes());
+            }
+            I64STORE => {
+                let (addr, value) = self.get_store_addr_value(module)?;
+                let unwrapped = value.expect_i64().map_err(Error::from)?;
+                let target = &mut self.memory[addr..][..8];
+                target.copy_from_slice(&unwrapped.to_le_bytes());
+            }
+            F32STORE => {
+                let (addr, value) = self.get_store_addr_value(module)?;
+                let unwrapped = value.expect_f32().map_err(Error::from)?;
+                let target = &mut self.memory[addr..][..4];
+                target.copy_from_slice(&unwrapped.to_le_bytes());
+            }
+            F64STORE => {
+                let (addr, value) = self.get_store_addr_value(module)?;
+                let unwrapped = value.expect_f64().map_err(Error::from)?;
+                let target = &mut self.memory[addr..][..8];
+                target.copy_from_slice(&unwrapped.to_le_bytes());
+            }
+            I32STORE8 => {
+                let (addr, value) = self.get_store_addr_value(module)?;
+                let unwrapped = value.expect_i32().map_err(Error::from)?;
+                let target = &mut self.memory[addr..][..1];
+                target.copy_from_slice(&unwrapped.to_le_bytes()[..1]);
+            }
+            I32STORE16 => {
+                let (addr, value) = self.get_store_addr_value(module)?;
+                let unwrapped = value.expect_i32().map_err(Error::from)?;
+                let target = &mut self.memory[addr..][..2];
+                target.copy_from_slice(&unwrapped.to_le_bytes()[..2]);
+            }
+            I64STORE8 => {
+                let (addr, value) = self.get_store_addr_value(module)?;
+                let unwrapped = value.expect_i64().map_err(Error::from)?;
+                let target = &mut self.memory[addr..][..1];
+                target.copy_from_slice(&unwrapped.to_le_bytes()[..1]);
+            }
+            I64STORE16 => {
+                let (addr, value) = self.get_store_addr_value(module)?;
+                let unwrapped = value.expect_i64().map_err(Error::from)?;
+                let target = &mut self.memory[addr..][..2];
+                target.copy_from_slice(&unwrapped.to_le_bytes()[..2]);
+            }
+            I64STORE32 => {
+                let (addr, value) = self.get_store_addr_value(module)?;
+                let unwrapped = value.expect_i64().map_err(Error::from)?;
+                let target = &mut self.memory[addr..][..4];
+                target.copy_from_slice(&unwrapped.to_le_bytes()[..4]);
+            }
+            CURRENTMEMORY => {
+                let memory_index = self.fetch_immediate_u32(module);
+                assert_eq!(memory_index, 0);
+                let size = self.memory.len() as i32 / MemorySection::PAGE_SIZE as i32;
+                self.value_stack.push(Value::I32(size));
+            }
+            GROWMEMORY => {
+                let memory_index = self.fetch_immediate_u32(module);
+                assert_eq!(memory_index, 0);
+                let old_bytes = self.memory.len() as u32;
+                let old_pages = old_bytes / MemorySection::PAGE_SIZE as u32;
+                let grow_pages = self.value_stack.pop_u32()?;
+                let grow_bytes = grow_pages * MemorySection::PAGE_SIZE;
+                let new_bytes = old_bytes + grow_bytes;
+
+                let success = match module.memory.max_bytes().unwrap() {
+                    Some(max_bytes) => new_bytes <= max_bytes,
+                    None => true,
+                };
+                if success {
+                    self.memory
+                        .extend(iter::repeat(0).take(grow_bytes as usize));
+                    self.value_stack.push(Value::I32(old_pages as i32));
+                } else {
+                    self.value_stack.push(Value::I32(-1));
+                }
+            }
+            I32CONST => {
+                let value = i32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
+                self.write_debug(value);
+                self.value_stack.push(Value::I32(value));
+            }
+            I64CONST => {
+                let value = i64::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
+                self.write_debug(value);
+                self.value_stack.push(Value::I64(value));
+            }
+            F32CONST => {
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&module.code.bytes[self.program_counter..][..4]);
+                let value = f32::from_le_bytes(bytes);
+                self.write_debug(value);
+                self.value_stack.push(Value::F32(value));
+                self.program_counter += 4;
+            }
+            F64CONST => {
+                let mut bytes = [0; 8];
+                bytes.copy_from_slice(&module.code.bytes[self.program_counter..][..8]);
+                let value = f64::from_le_bytes(bytes);
+                self.write_debug(value);
+                self.value_stack.push(Value::F64(value));
+                self.program_counter += 8;
+            }
+
+            I32EQZ => {
+                let arg = self.value_stack.pop_i32()?;
+                let result: bool = arg == 0;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32EQ => {
+                let arg2 = self.value_stack.pop_i32()?;
+                let arg1 = self.value_stack.pop_i32()?;
+                let result: bool = arg1 == arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32NE => {
+                let arg2 = self.value_stack.pop_i32()?;
+                let arg1 = self.value_stack.pop_i32()?;
+                let result: bool = arg1 != arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32LTS => {
+                let arg2 = self.value_stack.pop_i32()?;
+                let arg1 = self.value_stack.pop_i32()?;
+                let result: bool = arg1 < arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32LTU => {
+                let arg2 = self.value_stack.pop_u32()?;
+                let arg1 = self.value_stack.pop_u32()?;
+                let result: bool = arg1 < arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32GTS => {
+                let arg2 = self.value_stack.pop_i32()?;
+                let arg1 = self.value_stack.pop_i32()?;
+                let result: bool = arg1 > arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32GTU => {
+                let arg2 = self.value_stack.pop_u32()?;
+                let arg1 = self.value_stack.pop_u32()?;
+                let result: bool = arg1 > arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32LES => {
+                let arg2 = self.value_stack.pop_i32()?;
+                let arg1 = self.value_stack.pop_i32()?;
+                let result: bool = arg1 <= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32LEU => {
+                let arg2 = self.value_stack.pop_u32()?;
+                let arg1 = self.value_stack.pop_u32()?;
+                let result: bool = arg1 <= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32GES => {
+                let arg2 = self.value_stack.pop_i32()?;
+                let arg1 = self.value_stack.pop_i32()?;
+                let result: bool = arg1 >= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I32GEU => {
+                let arg2 = self.value_stack.pop_u32()?;
+                let arg1 = self.value_stack.pop_u32()?;
+                let result: bool = arg1 >= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+
+            I64EQZ => {
+                let arg = self.value_stack.pop_i64()?;
+                let result: bool = arg == 0;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I64EQ => {
+                let arg2 = self.value_stack.pop_i64()?;
+                let arg1 = self.value_stack.pop_i64()?;
+                let result: bool = arg1 == arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I64NE => {
+                let arg2 = self.value_stack.pop_i64()?;
+                let arg1 = self.value_stack.pop_i64()?;
+                let result: bool = arg1 != arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I64LTS => {
+                let arg2 = self.value_stack.pop_i64()?;
+                let arg1 = self.value_stack.pop_i64()?;
+                let result: bool = arg1 < arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I64LTU => {
+                let arg2 = self.value_stack.pop_u64()?;
+                let arg1 = self.value_stack.pop_u64()?;
+                let result: bool = arg1 < arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I64GTS => {
+                let arg2 = self.value_stack.pop_i64()?;
+                let arg1 = self.value_stack.pop_i64()?;
+                let result: bool = arg1 > arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I64GTU => {
+                let arg2 = self.value_stack.pop_u64()?;
+                let arg1 = self.value_stack.pop_u64()?;
+                let result: bool = arg1 > arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I64LES => {
+                let arg2 = self.value_stack.pop_i64()?;
+                let arg1 = self.value_stack.pop_i64()?;
+                let result: bool = arg1 <= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I64LEU => {
+                let arg2 = self.value_stack.pop_u64()?;
+                let arg1 = self.value_stack.pop_u64()?;
+                let result: bool = arg1 <= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I64GES => {
+                let arg2 = self.value_stack.pop_i64()?;
+                let arg1 = self.value_stack.pop_i64()?;
+                let result: bool = arg1 >= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            I64GEU => {
+                let arg2 = self.value_stack.pop_u64()?;
+                let arg1 = self.value_stack.pop_u64()?;
+                let result: bool = arg1 >= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+
+            F32EQ => {
+                let arg2 = self.value_stack.pop_f32()?;
+                let arg1 = self.value_stack.pop_f32()?;
+                let result: bool = arg1 == arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F32NE => {
+                let arg2 = self.value_stack.pop_f32()?;
+                let arg1 = self.value_stack.pop_f32()?;
+                let result: bool = arg1 != arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F32LT => {
+                let arg2 = self.value_stack.pop_f32()?;
+                let arg1 = self.value_stack.pop_f32()?;
+                let result: bool = arg1 < arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F32GT => {
+                let arg2 = self.value_stack.pop_f32()?;
+                let arg1 = self.value_stack.pop_f32()?;
+                let result: bool = arg1 > arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F32LE => {
+                let arg2 = self.value_stack.pop_f32()?;
+                let arg1 = self.value_stack.pop_f32()?;
+                let result: bool = arg1 <= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F32GE => {
+                let arg2 = self.value_stack.pop_f32()?;
+                let arg1 = self.value_stack.pop_f32()?;
+                let result: bool = arg1 >= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+
+            F64EQ => {
+                let arg2 = self.value_stack.pop_f64()?;
+                let arg1 = self.value_stack.pop_f64()?;
+                let result: bool = arg1 == arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F64NE => {
+                let arg2 = self.value_stack.pop_f64()?;
+                let arg1 = self.value_stack.pop_f64()?;
+                let result: bool = arg1 != arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F64LT => {
+                let arg2 = self.value_stack.pop_f64()?;
+                let arg1 = self.value_stack.pop_f64()?;
+                let result: bool = arg1 < arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F64GT => {
+                let arg2 = self.value_stack.pop_f64()?;
+                let arg1 = self.value_stack.pop_f64()?;
+                let result: bool = arg1 > arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F64LE => {
+                let arg2 = self.value_stack.pop_f64()?;
+                let arg1 = self.value_stack.pop_f64()?;
+                let result: bool = arg1 <= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+            F64GE => {
+                let arg2 = self.value_stack.pop_f64()?;
+                let arg1 = self.value_stack.pop_f64()?;
+                let result: bool = arg1 >= arg2;
+                self.value_stack.push(Value::I32(result as i32));
+            }
+
+            I32CLZ => {
+                let arg = self.value_stack.pop_u32()?;
+                self.value_stack.push(Value::from(arg.leading_zeros()));
+            }
+            I32CTZ => {
+                let arg = self.value_stack.pop_u32()?;
+                self.value_stack.push(Value::from(arg.trailing_zeros()));
+            }
+            I32POPCNT => {
+                let arg = self.value_stack.pop_u32()?;
+                self.value_stack.push(Value::from(arg.count_ones()));
+            }
+            I32ADD => {
+                let arg2 = self.value_stack.pop_i32()?;
+                let arg1 = self.value_stack.pop_i32()?;
+                self.value_stack.push(Value::from(arg1.wrapping_add(arg2)));
+            }
+            I32SUB => {
+                let arg2 = self.value_stack.pop_i32()?;
+                let arg1 = self.value_stack.pop_i32()?;
+                self.value_stack.push(Value::from(arg1.wrapping_sub(arg2)));
+            }
+            I32MUL => {
+                let arg2 = self.value_stack.pop_i32()?;
+                let arg1 = self.value_stack.pop_i32()?;
+                self.value_stack.push(Value::from(arg1.wrapping_mul(arg2)));
+            }
+            I32DIVS => {
+                let arg2 = self.value_stack.pop_i32()?;
+                let arg1 = self.value_stack.pop_i32()?;
+                self.value_stack.push(Value::from(arg1.wrapping_div(arg2)));
+            }
+            I32DIVU => {
+                let arg2 = self.value_stack.pop_u32()?;
+                let arg1 = self.value_stack.pop_u32()?;
+                self.value_stack.push(Value::from(arg1.wrapping_div(arg2)));
+            }
+            I32REMS => {
+                let arg2 = self.value_stack.pop_i32()?;
+                let arg1 = self.value_stack.pop_i32()?;
+                self.value_stack.push(Value::from(arg1.wrapping_rem(arg2)));
+            }
+            I32REMU => {
+                let arg2 = self.value_stack.pop_u32()?;
+                let arg1 = self.value_stack.pop_u32()?;
+                self.value_stack.push(Value::from(arg1.wrapping_rem(arg2)));
+            }
+            I32AND => {
+                let arg2 = self.value_stack.pop_u32()?;
+                let arg1 = self.value_stack.pop_u32()?;
+                self.value_stack.push(Value::from(arg1 & arg2));
+            }
+            I32OR => {
+                let arg2 = self.value_stack.pop_u32()?;
+                let arg1 = self.value_stack.pop_u32()?;
+                self.value_stack.push(Value::from(arg1 | arg2));
+            }
+            I32XOR => {
+                let arg2 = self.value_stack.pop_u32()?;
+                let arg1 = self.value_stack.pop_u32()?;
+                self.value_stack.push(Value::from(arg1 ^ arg2));
+            }
+            I32SHL => {
+                let arg2 = self.value_stack.pop_u32()?;
+                let arg1 = self.value_stack.pop_u32()?;
+                // Take modulo N as per the spec https://webassembly.github.io/spec/core/exec/numerics.html#op-ishl
+                let k = arg2 % 32;
+                self.value_stack.push(Value::from(arg1 << k));
+            }
+            I32SHRS => {
+                let arg2 = self.value_stack.pop_i32()?;
+                let arg1 = self.value_stack.pop_i32()?;
+                let k = arg2 % 32;
+                self.value_stack.push(Value::from(arg1 >> k));
+            }
+            I32SHRU => {
+                let arg2 = self.value_stack.pop_u32()?;
+                let arg1 = self.value_stack.pop_u32()?;
+                let k = arg2 % 32;
+                self.value_stack.push(Value::from(arg1 >> k));
+            }
+            I32ROTL => {
+                let arg2 = self.value_stack.pop_u32()?;
+                let arg1 = self.value_stack.pop_u32()?;
+                let k = arg2 % 32;
+                self.value_stack.push(Value::from(arg1.rotate_left(k)));
+            }
+            I32ROTR => {
+                let arg2 = self.value_stack.pop_u32()?;
+                let arg1 = self.value_stack.pop_u32()?;
+                let k = arg2 % 32;
+                self.value_stack.push(Value::from(arg1.rotate_right(k)));
+            }
+
+            I64CLZ => {
+                let arg = self.value_stack.pop_u64()?;
+                self.value_stack
+                    .push(Value::from(arg.leading_zeros() as u64));
+            }
+            I64CTZ => {
+                let arg = self.value_stack.pop_u64()?;
+                self.value_stack
+                    .push(Value::from(arg.trailing_zeros() as u64));
+            }
+            I64POPCNT => {
+                let arg = self.value_stack.pop_u64()?;
+                self.value_stack.push(Value::from(arg.count_ones() as u64));
+            }
+            I64ADD => {
+                let arg2 = self.value_stack.pop_i64()?;
+                let arg1 = self.value_stack.pop_i64()?;
+                self.value_stack.push(Value::from(arg1.wrapping_add(arg2)));
+            }
+            I64SUB => {
+                let arg2 = self.value_stack.pop_i64()?;
+                let arg1 = self.value_stack.pop_i64()?;
+                self.value_stack.push(Value::from(arg1.wrapping_sub(arg2)));
+            }
+            I64MUL => {
+                let arg2 = self.value_stack.pop_i64()?;
+                let arg1 = self.value_stack.pop_i64()?;
+                self.value_stack.push(Value::from(arg1.wrapping_mul(arg2)));
+            }
+            I64DIVS => {
+                let arg2 = self.value_stack.pop_i64()?;
+                let arg1 = self.value_stack.pop_i64()?;
+                self.value_stack.push(Value::from(arg1.wrapping_div(arg2)));
+            }
+            I64DIVU => {
+                let arg2 = self.value_stack.pop_u64()?;
+                let arg1 = self.value_stack.pop_u64()?;
+                self.value_stack.push(Value::from(arg1.wrapping_div(arg2)));
+            }
+            I64REMS => {
+                let arg2 = self.value_stack.pop_i64()?;
+                let arg1 = self.value_stack.pop_i64()?;
+                self.value_stack.push(Value::from(arg1.wrapping_rem(arg2)));
+            }
+            I64REMU => {
+                let arg2 = self.value_stack.pop_u64()?;
+                let arg1 = self.value_stack.pop_u64()?;
+                self.value_stack.push(Value::from(arg1.wrapping_rem(arg2)));
+            }
+            I64AND => {
+                let arg2 = self.value_stack.pop_u64()?;
+                let arg1 = self.value_stack.pop_u64()?;
+                self.value_stack.push(Value::from(arg1 & arg2));
+            }
+            I64OR => {
+                let arg2 = self.value_stack.pop_u64()?;
+                let arg1 = self.value_stack.pop_u64()?;
+                self.value_stack.push(Value::from(arg1 | arg2));
+            }
+            I64XOR => {
+                let arg2 = self.value_stack.pop_u64()?;
+                let arg1 = self.value_stack.pop_u64()?;
+                self.value_stack.push(Value::from(arg1 ^ arg2));
+            }
+            I64SHL => {
+                let arg2 = self.value_stack.pop_u64()?;
+                let arg1 = self.value_stack.pop_u64()?;
+                // Take modulo N as per the spec https://webassembly.github.io/spec/core/exec/numerics.html#op-ishl
+                let k = arg2 % 64;
+                self.value_stack.push(Value::from(arg1 << k));
+            }
+            I64SHRS => {
+                let arg2 = self.value_stack.pop_i64()?;
+                let arg1 = self.value_stack.pop_i64()?;
+                let k = arg2 % 64;
+                self.value_stack.push(Value::from(arg1 >> k));
+            }
+            I64SHRU => {
+                let arg2 = self.value_stack.pop_u64()?;
+                let arg1 = self.value_stack.pop_u64()?;
+                let k = arg2 % 64;
+                self.value_stack.push(Value::from(arg1 >> k));
+            }
+            I64ROTL => {
+                let arg2 = self.value_stack.pop_u64()?;
+                let arg1 = self.value_stack.pop_u64()?;
+                let k = (arg2 % 64) as u32;
+                self.value_stack.push(Value::from(arg1.rotate_left(k)));
+            }
+            I64ROTR => {
+                let arg2 = self.value_stack.pop_u64()?;
+                let arg1 = self.value_stack.pop_u64()?;
+                let k = (arg2 % 64) as u32;
+                self.value_stack.push(Value::from(arg1.rotate_right(k)));
+            }
+
+            F32ABS => {
+                let arg = self.value_stack.pop_f32()?;
+                self.value_stack.push(Value::F32(arg.abs()));
+            }
+            F32NEG => {
+                let arg = self.value_stack.pop_f32()?;
+                self.value_stack.push(Value::F32(-arg));
+            }
+            F32CEIL => {
+                let arg = self.value_stack.pop_f32()?;
+                self.value_stack.push(Value::F32(arg.ceil()));
+            }
+            F32FLOOR => {
+                let arg = self.value_stack.pop_f32()?;
+                self.value_stack.push(Value::F32(arg.floor()));
+            }
+            F32TRUNC => {
+                let arg = self.value_stack.pop_f32()?;
+                self.value_stack.push(Value::F32(arg.trunc()));
+            }
+            F32NEAREST => {
+                // https://webassembly.github.io/spec/core/exec/numerics.html#op-fnearest
+                let arg = self.value_stack.pop_f32()?;
+                let rounded = arg.round(); // "Rounds half-way cases away from 0.0"
+                let frac = arg - rounded;
+                let result = if frac == 0.5 || frac == -0.5 {
+                    let rounded_half = rounded / 2.0;
+                    let is_rounded_even = rounded_half.trunc() == rounded_half;
+                    if is_rounded_even {
+                        rounded
+                    } else if rounded < arg {
+                        rounded + 1.0
+                    } else {
+                        rounded - 1.0
+                    }
+                } else {
+                    rounded
+                };
+                self.value_stack.push(Value::F32(result));
+            }
+            F32SQRT => {
+                let arg = self.value_stack.pop_f32()?;
+                self.value_stack.push(Value::F32(arg.sqrt()));
+            }
+            F32ADD => {
+                let arg2 = self.value_stack.pop_f32()?;
+                let arg1 = self.value_stack.pop_f32()?;
+                self.value_stack.push(Value::F32(arg1 + arg2));
+            }
+            F32SUB => {
+                let arg2 = self.value_stack.pop_f32()?;
+                let arg1 = self.value_stack.pop_f32()?;
+                self.value_stack.push(Value::F32(arg1 - arg2));
+            }
+            F32MUL => {
+                let arg2 = self.value_stack.pop_f32()?;
+                let arg1 = self.value_stack.pop_f32()?;
+                self.value_stack.push(Value::F32(arg1 * arg2));
+            }
+            F32DIV => {
+                let arg2 = self.value_stack.pop_f32()?;
+                let arg1 = self.value_stack.pop_f32()?;
+                self.value_stack.push(Value::F32(arg1 / arg2));
+            }
+            F32MIN => {
+                let arg2 = self.value_stack.pop_f32()?;
+                let arg1 = self.value_stack.pop_f32()?;
+                let result = if arg1 < arg2 { arg1 } else { arg2 };
+                self.value_stack.push(Value::F32(result));
+            }
+            F32MAX => {
+                let arg2 = self.value_stack.pop_f32()?;
+                let arg1 = self.value_stack.pop_f32()?;
+                let result = if arg1 > arg2 { arg1 } else { arg2 };
+                self.value_stack.push(Value::F32(result));
+            }
+            F32COPYSIGN => {
+                let arg2 = self.value_stack.pop_f32()?;
+                let arg1 = self.value_stack.pop_f32()?;
+                let result = if arg1.is_sign_negative() == arg2.is_sign_negative() {
+                    arg1
+                } else {
+                    arg2
+                };
+                self.value_stack.push(Value::F32(result));
+            }
+
+            F64ABS => {
+                let arg = self.value_stack.pop_f64()?;
+                self.value_stack.push(Value::F64(arg.abs()));
+            }
+            F64NEG => {
+                let arg = self.value_stack.pop_f64()?;
+                self.value_stack.push(Value::F64(-arg));
+            }
+            F64CEIL => {
+                let arg = self.value_stack.pop_f64()?;
+                self.value_stack.push(Value::F64(arg.ceil()));
+            }
+            F64FLOOR => {
+                let arg = self.value_stack.pop_f64()?;
+                self.value_stack.push(Value::F64(arg.floor()));
+            }
+            F64TRUNC => {
+                let arg = self.value_stack.pop_f64()?;
+                self.value_stack.push(Value::F64(arg.trunc()));
+            }
+            F64NEAREST => {
+                // https://webassembly.github.io/spec/core/exec/numerics.html#op-fnearest
+                let arg = self.value_stack.pop_f64()?;
+                let rounded = arg.round(); // "Rounds half-way cases away from 0.0"
+                let frac = arg - rounded;
+                let result = if frac == 0.5 || frac == -0.5 {
+                    let rounded_half = rounded / 2.0;
+                    let is_rounded_even = rounded_half.trunc() == rounded_half;
+                    if is_rounded_even {
+                        rounded
+                    } else if rounded < arg {
+                        rounded + 1.0
+                    } else {
+                        rounded - 1.0
+                    }
+                } else {
+                    rounded
+                };
+                self.value_stack.push(Value::F64(result));
+            }
+            F64SQRT => {
+                let arg = self.value_stack.pop_f64()?;
+                self.value_stack.push(Value::F64(arg.sqrt()));
+            }
+            F64ADD => {
+                let arg2 = self.value_stack.pop_f64()?;
+                let arg1 = self.value_stack.pop_f64()?;
+                self.value_stack.push(Value::F64(arg1 + arg2));
+            }
+            F64SUB => {
+                let arg2 = self.value_stack.pop_f64()?;
+                let arg1 = self.value_stack.pop_f64()?;
+                self.value_stack.push(Value::F64(arg1 - arg2));
+            }
+            F64MUL => {
+                let arg2 = self.value_stack.pop_f64()?;
+                let arg1 = self.value_stack.pop_f64()?;
+                self.value_stack.push(Value::F64(arg1 * arg2));
+            }
+            F64DIV => {
+                let arg2 = self.value_stack.pop_f64()?;
+                let arg1 = self.value_stack.pop_f64()?;
+                self.value_stack.push(Value::F64(arg1 / arg2));
+            }
+            F64MIN => {
+                let arg2 = self.value_stack.pop_f64()?;
+                let arg1 = self.value_stack.pop_f64()?;
+                let result = if arg1 < arg2 { arg1 } else { arg2 };
+                self.value_stack.push(Value::F64(result));
+            }
+            F64MAX => {
+                let arg2 = self.value_stack.pop_f64()?;
+                let arg1 = self.value_stack.pop_f64()?;
+                let result = if arg1 > arg2 { arg1 } else { arg2 };
+                self.value_stack.push(Value::F64(result));
+            }
+            F64COPYSIGN => {
+                let arg2 = self.value_stack.pop_f64()?;
+                let arg1 = self.value_stack.pop_f64()?;
+                let result = if arg1.is_sign_negative() == arg2.is_sign_negative() {
+                    arg1
+                } else {
+                    arg2
+                };
+                self.value_stack.push(Value::F64(result));
+            }
+
+            I32WRAPI64 => {
+                let arg = self.value_stack.pop_u64()?;
+                let wrapped: u32 = (arg & 0xffff_ffff) as u32;
+                self.value_stack.push(Value::from(wrapped));
+            }
+            I32TRUNCSF32 => {
+                let arg = self.value_stack.pop_f32()?;
+                if arg < i32::MIN as f32 || arg > i32::MAX as f32 {
+                    panic!("Cannot truncate {} from F32 to I32", arg);
+                }
+                self.value_stack.push(Value::I32(arg as i32));
+            }
+            I32TRUNCUF32 => {
+                let arg = self.value_stack.pop_f32()?;
+                if arg < u32::MIN as f32 || arg > u32::MAX as f32 {
+                    panic!("Cannot truncate {} from F32 to unsigned I32", arg);
+                }
+                self.value_stack.push(Value::from(arg as u32));
+            }
+            I32TRUNCSF64 => {
+                let arg = self.value_stack.pop_f64()?;
+                if arg < i32::MIN as f64 || arg > i32::MAX as f64 {
+                    panic!("Cannot truncate {} from F64 to I32", arg);
+                }
+                self.value_stack.push(Value::I32(arg as i32));
+            }
+            I32TRUNCUF64 => {
+                let arg = self.value_stack.pop_f64()?;
+                if arg < u32::MIN as f64 || arg > u32::MAX as f64 {
+                    panic!("Cannot truncate {} from F64 to unsigned I32", arg);
+                }
+                self.value_stack.push(Value::from(arg as u32));
+            }
+            I64EXTENDSI32 => {
+                let arg = self.value_stack.pop_i32()?;
+                self.value_stack.push(Value::I64(arg as i64));
+            }
+            I64EXTENDUI32 => {
+                let arg = self.value_stack.pop_u32()?;
+                self.value_stack.push(Value::from(arg as u64));
+            }
+            I64TRUNCSF32 => {
+                let arg = self.value_stack.pop_f32()?;
+                if arg < i64::MIN as f32 || arg > i64::MAX as f32 {
+                    panic!("Cannot truncate {} from F32 to I64", arg);
+                }
+                self.value_stack.push(Value::I64(arg as i64));
+            }
+            I64TRUNCUF32 => {
+                let arg = self.value_stack.pop_f32()?;
+                if arg < u64::MIN as f32 || arg > u64::MAX as f32 {
+                    panic!("Cannot truncate {} from F32 to unsigned I64", arg);
+                }
+                self.value_stack.push(Value::from(arg as u64));
+            }
+            I64TRUNCSF64 => {
+                let arg = self.value_stack.pop_f64()?;
+                if arg < i64::MIN as f64 || arg > i64::MAX as f64 {
+                    panic!("Cannot truncate {} from F64 to I64", arg);
+                }
+                self.value_stack.push(Value::I64(arg as i64));
+            }
+            I64TRUNCUF64 => {
+                let arg = self.value_stack.pop_f64()?;
+                if arg < u64::MIN as f64 || arg > u64::MAX as f64 {
+                    panic!("Cannot truncate {} from F64 to unsigned I64", arg);
+                }
+                self.value_stack.push(Value::from(arg as u64));
+            }
+            F32CONVERTSI32 => {
+                let arg = self.value_stack.pop_i32()?;
+                self.value_stack.push(Value::F32(arg as f32));
+            }
+            F32CONVERTUI32 => {
+                let arg = self.value_stack.pop_u32()?;
+                self.value_stack.push(Value::F32(arg as f32));
+            }
+            F32CONVERTSI64 => {
+                let arg = self.value_stack.pop_i64()?;
+                self.value_stack.push(Value::F32(arg as f32));
+            }
+            F32CONVERTUI64 => {
+                let arg = self.value_stack.pop_u64()?;
+                self.value_stack.push(Value::F32(arg as f32));
+            }
+            F32DEMOTEF64 => {
+                let arg = self.value_stack.pop_f64()?;
+                self.value_stack.push(Value::F32(arg as f32));
+            }
+            F64CONVERTSI32 => {
+                let arg = self.value_stack.pop_i32()?;
+                self.value_stack.push(Value::F64(arg as f64));
+            }
+            F64CONVERTUI32 => {
+                let arg = self.value_stack.pop_u32()?;
+                self.value_stack.push(Value::F64(arg as f64));
+            }
+            F64CONVERTSI64 => {
+                let arg = self.value_stack.pop_i64()?;
+                self.value_stack.push(Value::F64(arg as f64));
+            }
+            F64CONVERTUI64 => {
+                let arg = self.value_stack.pop_u64()?;
+                self.value_stack.push(Value::F64(arg as f64));
+            }
+            F64PROMOTEF32 => {
+                let arg = self.value_stack.pop_f32()?;
+                self.value_stack.push(Value::F64(arg as f64));
+            }
+
+            I32REINTERPRETF32 => {
+                let x = self.value_stack.pop_f32()?;
+                self.value_stack
+                    .push(Value::I32(i32::from_ne_bytes(x.to_ne_bytes())));
+            }
+            I64REINTERPRETF64 => {
+                let x = self.value_stack.pop_f64()?;
+                self.value_stack
+                    .push(Value::I64(i64::from_ne_bytes(x.to_ne_bytes())));
+            }
+            F32REINTERPRETI32 => {
+                let x = self.value_stack.pop_i32()?;
+                self.value_stack
+                    .push(Value::F32(f32::from_ne_bytes(x.to_ne_bytes())));
+            }
+            F64REINTERPRETI64 => {
+                let x = self.value_stack.pop_i64()?;
+                self.value_stack
+                    .push(Value::F64(f64::from_ne_bytes(x.to_ne_bytes())));
+            }
+        }
+
+        if let Some(debug_string) = &self.debug_string {
+            let base = self.call_stack.value_stack_base();
+            let slice = self.value_stack.get_slice(base as usize);
+            eprintln!("{:06x} {:17} {:?}", file_offset, debug_string, slice);
+            if op_code == RETURN || (op_code == END && implicit_return) {
+                let fn_index = pc_to_fn_index(self.program_counter, module);
+                eprintln!("returning to function {}\n", fn_index);
+            } else if op_code == CALL || op_code == CALLINDIRECT {
+                eprintln!();
+            }
+        }
+
+        Ok(action)
+    }
+}

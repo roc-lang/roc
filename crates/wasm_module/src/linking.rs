@@ -158,7 +158,7 @@ pub struct RelocationSection<'a> {
 }
 
 impl<'a> RelocationSection<'a> {
-    fn new(arena: &'a Bump, name: &'a str) -> Self {
+    pub(crate) fn new(arena: &'a Bump, name: &'a str) -> Self {
         RelocationSection {
             name,
             target_section_index: 0,
@@ -212,10 +212,12 @@ type RelocCtx<'a> = (&'a Bump, &'static str);
 
 impl<'a> Parse<RelocCtx<'a>> for RelocationSection<'a> {
     fn parse(ctx: RelocCtx<'a>, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
+        let cursor_reset = *cursor;
         let (arena, name) = ctx;
 
-        if *cursor > bytes.len() || bytes[*cursor] != SectionId::Custom as u8 {
+        if *cursor >= bytes.len() || bytes[*cursor] != SectionId::Custom as u8 {
             // The section we're looking for is missing, which is the same as being empty.
+            *cursor = cursor_reset;
             return Ok(RelocationSection::new(arena, name));
         }
         *cursor += 1;
@@ -224,6 +226,7 @@ impl<'a> Parse<RelocCtx<'a>> for RelocationSection<'a> {
         let actual_name = <&'a str>::parse(arena, bytes, cursor)?;
         if actual_name != name {
             // The section we're looking for is missing, which is the same as being empty.
+            *cursor = cursor_reset;
             return Ok(RelocationSection::new(arena, name));
         }
 
@@ -626,7 +629,9 @@ impl<'a> LinkingSection<'a> {
 
 impl<'a> Parse<&'a Bump> for LinkingSection<'a> {
     fn parse(arena: &'a Bump, bytes: &[u8], cursor: &mut usize) -> Result<Self, ParseError> {
-        if *cursor > bytes.len() || bytes[*cursor] != SectionId::Custom as u8 {
+        let cursor_reset = *cursor;
+        if *cursor >= bytes.len() || bytes[*cursor] != SectionId::Custom as u8 {
+            *cursor = cursor_reset;
             return Ok(LinkingSection::new(arena));
         }
         *cursor += 1;
@@ -636,6 +641,7 @@ impl<'a> Parse<&'a Bump> for LinkingSection<'a> {
         // Don't fail if it's the wrong section. Let the WasmModule validate presence/absence of sections
         let actual_name = <&'a str>::parse(arena, bytes, cursor)?;
         if actual_name != Self::NAME {
+            *cursor = cursor_reset;
             return Ok(LinkingSection::new(arena));
         }
 

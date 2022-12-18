@@ -1,6 +1,7 @@
 [toolchain]
 # How to update version:
 #  - update `channel = "RUST_VERSION"`
+#  - update `channel = "RUST_VERSION"` in examples/platform-switching/rust-platform
 #  - to update the nightly version:
 #     - Find the latest nightly release that matches RUST_VERSION here: https://github.com/oxalica/rust-overlay/tree/master/manifests/nightly/2022
 #     - update `channel = "nightly-OLD_DATE"` below
@@ -15,3 +16,5 @@ components = [
     # for usages of rust-analyzer or similar tools inside `nix develop`
     "rust-src"
 ]
+# for test_wasm.sh
+targets = ["wasm32-wasi"]

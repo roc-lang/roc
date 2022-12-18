@@ -1,34 +1,61 @@
-Platform {
-    header: PlatformHeader {
-        name: @9-25 PackageName(
-            "rtfeldman/blah",
-        ),
-        requires: PlatformRequires {
-            rigids: [],
-            signature: @40-49 TypedIdent {
-                ident: @40-44 "main",
-                spaces_before_colon: [],
-                ann: @47-49 Record {
-                    fields: [],
-                    ext: None,
+Module {
+    comments: [],
+    header: Platform(
+        PlatformHeader {
+            before_name: [],
+            name: @9-25 PackagePath(
+                "rtfeldman/blah",
+            ),
+            requires: KeywordItem {
+                keyword: Spaces {
+                    before: [],
+                    item: RequiresKeyword,
+                    after: [],
+                },
+                item: PlatformRequires {
+                    rigids: [],
+                    signature: @40-49 TypedIdent {
+                        ident: @40-44 "main",
+                        spaces_before_colon: [],
+                        ann: @47-49 Record {
+                            fields: [],
+                            ext: None,
+                        },
+                    },
                 },
             },
+            exposes: KeywordItem {
+                keyword: Spaces {
+                    before: [],
+                    item: ExposesKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+            packages: KeywordItem {
+                keyword: Spaces {
+                    before: [],
+                    item: PackagesKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+            imports: KeywordItem {
+                keyword: Spaces {
+                    before: [],
+                    item: ImportsKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+            provides: KeywordItem {
+                keyword: Spaces {
+                    before: [],
+                    item: ProvidesKeyword,
+                    after: [],
+                },
+                item: [],
+            },
         },
-        exposes: [],
-        packages: [],
-        imports: [],
-        provides: [],
-        before_header: [],
-        after_platform_keyword: [],
-        before_requires: [],
-        after_requires: [],
-        before_exposes: [],
-        after_exposes: [],
-        before_packages: [],
-        after_packages: [],
-        before_imports: [],
-        after_imports: [],
-        before_provides: [],
-        after_provides: [],
-    },
+    ),
 }

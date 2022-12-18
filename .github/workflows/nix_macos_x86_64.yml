@@ -22,10 +22,16 @@ jobs:
       - uses: cachix/install-nix-action@v15
 
       # to cache nix packages
-      - uses: cachix/cachix-action@v10 
+      - uses: cachix/cachix-action@v10
         with:
           name: enigmaticsunrise
           authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
 
       - name: execute cli_run tests only, the full tests take too long but are run nightly
         run: nix develop -c cargo test --locked --release -p roc_cli
+
+      - name: make a libapp.so for the next step
+        run: nix develop -c cargo run -- gen-stub-lib examples/platform-switching/rocLovesRust.roc
+
+      - name: check that the platform`s produced dylib is loadable
+        run: cd examples/platform-switching/rust-platform && nix develop -c cargo test --release --locked

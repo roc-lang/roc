@@ -63,9 +63,7 @@ pub trait Formattable {
         _parens: Parens,
         _newlines: Newlines,
         indent: u16,
-    ) {
-        self.format(buf, indent);
-    }
+    );
 
     fn format<'buf>(&self, buf: &mut Buf<'buf>, indent: u16) {
         self.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
@@ -96,18 +94,13 @@ where
     }
 }
 
-impl<'a, T> Formattable for Collection<'a, T>
-where
-    T: Formattable,
-{
-    fn is_multiline(&self) -> bool {
-        // if there are any comments, they must go on their own line
-        // because otherwise they'd comment out the closing delimiter
-        !self.final_comments().is_empty() ||
-        // if any of the items in the collection are multiline,
-        // then the whole collection must be multiline
-        self.items.iter().any(Formattable::is_multiline)
-    }
+pub fn is_collection_multiline<T: Formattable>(collection: &Collection<'_, T>) -> bool {
+    // if there are any comments, they must go on their own line
+    // because otherwise they'd comment out the closing delimiter
+    !collection.final_comments().is_empty() ||
+    // if any of the items in the collection are multiline,
+    // then the whole collection must be multiline
+    collection.items.iter().any(Formattable::is_multiline)
 }
 
 /// A Located formattable value is also formattable
@@ -174,6 +167,15 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 
             Where(annot, has_clauses) => {
                 annot.is_multiline() || has_clauses.iter().any(|has| has.is_multiline())
+            }
+
+            Tuple { fields, ext } => {
+                match ext {
+                    Some(ann) if ann.value.is_multiline() => return true,
+                    _ => {}
+                }
+
+                fields.items.iter().any(|field| field.value.is_multiline())
             }
 
             Record { fields, ext } => {
@@ -291,6 +293,14 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 
             TagUnion { tags, ext } => {
                 fmt_collection(buf, indent, Braces::Square, *tags, newlines);
+
+                if let Some(loc_ext_ann) = *ext {
+                    loc_ext_ann.value.format(buf, indent);
+                }
+            }
+
+            Tuple { fields, ext } => {
+                fmt_collection(buf, indent, Braces::Round, *fields, newlines);
 
                 if let Some(loc_ext_ann) = *ext {
                     loc_ext_ann.value.format(buf, indent);
@@ -560,7 +570,7 @@ impl<'a> Formattable for HasImpls<'a> {
     fn is_multiline(&self) -> bool {
         match self {
             HasImpls::SpaceBefore(_, _) | HasImpls::SpaceAfter(_, _) => true,
-            HasImpls::HasImpls(impls) => impls.is_multiline(),
+            HasImpls::HasImpls(impls) => is_collection_multiline(impls),
         }
     }
 
@@ -640,7 +650,7 @@ impl<'a> Formattable for HasAbilities<'a> {
     fn is_multiline(&self) -> bool {
         match self {
             HasAbilities::SpaceAfter(..) | HasAbilities::SpaceBefore(..) => true,
-            HasAbilities::Has(has_abilities) => has_abilities.is_multiline(),
+            HasAbilities::Has(has_abilities) => is_collection_multiline(has_abilities),
         }
     }
 

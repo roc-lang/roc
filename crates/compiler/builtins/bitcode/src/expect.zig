@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const SIGUSR1: c_int = if (builtin.os.tag.isDarwin()) 30 else 10;
+const Atomic = std.atomic.Atomic;
 
 const O_RDWR: c_int = 2;
 const O_CREAT: c_int = 64;
@@ -50,7 +50,6 @@ pub fn expectFailedStartSharedFile() callconv(.C) [*]u8 {
     }
 }
 
-extern fn roc_send_signal(pid: c_int, sig: c_int) c_int;
 extern fn roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) c_int;
 extern fn roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) *anyopaque;
 extern fn roc_getppid() c_int;
@@ -80,10 +79,24 @@ pub fn readSharedBufferEnv() callconv(.C) void {
     }
 }
 
-pub fn expectFailedFinalize() callconv(.C) void {
+pub fn notifyParent(shared_buffer: [*]u8, tag: u32) callconv(.C) void {
     if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        const parent_pid = roc_getppid();
+        const usize_ptr = @ptrCast([*]u32, @alignCast(@alignOf(usize), shared_buffer));
+        const atomic_ptr = @ptrCast(*Atomic(u32), &usize_ptr[5]);
+        atomic_ptr.storeUnchecked(tag);
 
-        _ = roc_send_signal(parent_pid, SIGUSR1);
+        // wait till the parent is done before proceeding
+        const Ordering = std.atomic.Ordering;
+        while (atomic_ptr.load(Ordering.Acquire) != 0) {
+            std.atomic.spinLoopHint();
+        }
     }
+}
+
+pub fn notifyParentExpect(shared_buffer: [*]u8) callconv(.C) void {
+    notifyParent(shared_buffer, 1);
+}
+
+pub fn notifyParentDbg(shared_buffer: [*]u8) callconv(.C) void {
+    notifyParent(shared_buffer, 2);
 }

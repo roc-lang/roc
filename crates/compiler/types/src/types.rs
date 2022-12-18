@@ -3486,6 +3486,7 @@ pub enum Reason {
         member_name: Symbol,
         def_region: Region,
     },
+    CrashArg,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -3528,7 +3529,10 @@ pub enum Category {
 
     AbilityMemberSpecialization(Symbol),
 
+    Crash,
+
     Expect,
+    Dbg,
     Unknown,
 }
 
@@ -3641,11 +3645,8 @@ impl Alias {
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum Mismatch {
     TypeMismatch,
-    IfConditionNotBool,
-    InconsistentIfElse,
-    InconsistentWhenBranches,
-    CanonicalizationProblem,
     TypeNotInRange,
+    DisjointLambdaSets,
     DoesNotImplementAbiity(Variable, Symbol),
 }
 

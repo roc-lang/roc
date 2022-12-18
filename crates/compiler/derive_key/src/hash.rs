@@ -174,6 +174,9 @@ const fn num_symbol_to_hash_lambda(symbol: Symbol) -> Option<FlatHash> {
         Symbol::NUM_I128 | Symbol::NUM_SIGNED128 => {
             Some(SingleLambdaSetImmediate(Symbol::HASH_HASH_I128))
         }
+        Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
+            Some(SingleLambdaSetImmediate(Symbol::HASH_HASH_NAT))
+        }
         _ => None,
     }
 }

@@ -11,7 +11,7 @@ use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::{low_level::LowLevel, symbol::Symbol};
 use roc_mono::{
-    ir::HigherOrderLowLevel,
+    ir::{HigherOrderLowLevel, LookupType},
     layout::{Builtin, LambdaSet, Layout, LayoutIds},
 };
 use roc_target::PtrWidth;
@@ -41,9 +41,9 @@ use crate::llvm::{
     },
 };
 
-use super::convert::zig_with_overflow_roc_dec;
+use super::{build::throw_internal_exception, convert::zig_with_overflow_roc_dec};
 use super::{
-    build::{load_symbol, load_symbol_and_layout, throw_exception, Env, Scope},
+    build::{load_symbol, load_symbol_and_layout, Env, Scope},
     convert::zig_dec_type,
 };
 
@@ -1119,6 +1119,36 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 ptr.into()
             }
         },
+        Dbg => {
+            assert_eq!(args.len(), 2);
+            let condition = load_symbol(scope, &args[0]);
+            let dbg_spec_var_symbol = args[1];
+
+            if env.mode.runs_expects() {
+                let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(args[0]) };
+
+                let shared_memory = crate::llvm::expect::SharedMemoryPointer::get(env);
+
+                // HACK(dbg-spec-var): the specialized type variable is passed along as a fake symbol
+                let specialized_var =
+                    unsafe { LookupType::from_index(dbg_spec_var_symbol.ident_id().index() as _) };
+
+                crate::llvm::expect::clone_to_shared_memory(
+                    env,
+                    scope,
+                    layout_ids,
+                    &shared_memory,
+                    args[0],
+                    region,
+                    &[args[0]],
+                    &[specialized_var],
+                );
+
+                crate::llvm::expect::notify_parent_dbg(env, &shared_memory);
+            }
+
+            condition
+        }
     }
 }
 
@@ -1536,7 +1566,7 @@ fn throw_on_overflow<'a, 'ctx, 'env>(
 
     bd.position_at_end(throw_block);
 
-    throw_exception(env, message);
+    throw_internal_exception(env, parent, message);
 
     bd.position_at_end(then_block);
 
@@ -1982,8 +2012,9 @@ fn int_neg_raise_on_overflow<'a, 'ctx, 'env>(
 
     builder.position_at_end(then_block);
 
-    throw_exception(
+    throw_internal_exception(
         env,
+        parent,
         "integer negation overflowed because its argument is the minimum value",
     );
 
@@ -2012,8 +2043,9 @@ fn int_abs_raise_on_overflow<'a, 'ctx, 'env>(
 
     builder.position_at_end(then_block);
 
-    throw_exception(
+    throw_internal_exception(
         env,
+        parent,
         "integer absolute overflowed because its argument is the minimum value",
     );
 
@@ -2098,13 +2130,6 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
                     "f64_to_f32",
                 ),
                 (FloatWidth::F64, FloatWidth::F64) => arg.into(),
-                (FloatWidth::F128, FloatWidth::F128) => arg.into(),
-                (FloatWidth::F128, _) => {
-                    unimplemented!("I cannot handle F128 with Num.toFrac yet")
-                }
-                (_, FloatWidth::F128) => {
-                    unimplemented!("I cannot handle F128 with Num.toFrac yet")
-                }
             }
         }
         NumCeiling => {

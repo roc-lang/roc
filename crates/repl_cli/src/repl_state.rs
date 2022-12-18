@@ -196,6 +196,9 @@ impl ReplState {
                     | ValueDef::AnnotatedBody { .. } => {
                         todo!("handle pattern other than identifier (which repl doesn't support)")
                     }
+                    ValueDef::Dbg { .. } => {
+                        todo!("handle receiving a `dbg` - what should the repl do for that?")
+                    }
                     ValueDef::Expect { .. } => {
                         todo!("handle receiving an `expect` - what should the repl do for that?")
                     }

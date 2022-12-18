@@ -5674,6 +5674,18 @@ mod test_fmt {
     }
 
     #[test]
+    fn format_char_pattern() {
+        expr_formats_same(indoc!(
+            r#"
+            when x is
+                ' ' -> x
+                '\n' -> x
+                '\t' -> x
+            "#
+        ));
+    }
+
+    #[test]
     fn format_nested_pipeline() {
         expr_formats_same(indoc!(
             r#"
@@ -5824,6 +5836,42 @@ mod test_fmt {
                     [x, 4, 5] -> []
                     [.., 5] -> []
                     [x, ..] -> []
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn format_crash() {
+        expr_formats_same(indoc!(
+            r#"
+            _ = crash
+            _ = crash ""
+
+            crash "" ""
+            "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                _ = crash
+                _ = crash    ""
+                _ = crash   ""   ""
+                try
+                    foo
+                    (\_ ->   crash "")
+                "#
+            ),
+            indoc!(
+                r#"
+                _ = crash
+                _ = crash ""
+                _ = crash "" ""
+
+                try
+                    foo
+                    (\_ -> crash "")
                 "#
             ),
         );

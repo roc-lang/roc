@@ -26,15 +26,18 @@ jobs:
 
       - name: zig fmt check, zig tests
         run: cd crates/compiler/builtins/bitcode && ./run-tests.sh
-        
+
       - name: roc format check on builtins
         run: cargo run --locked --release format --check crates/compiler/builtins/roc
 
       - name: zig wasm tests
-        run: cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
+        run: cargo build --release -p roc_wasm_interp && cd crates/compiler/builtins/bitcode && ./run-wasm-tests.sh
 
       - name: regular rust tests
-        run: cargo test --locked --release --features with_sound serde --workspace && sccache --show-stats
+        run: cargo test --locked --release && sccache --show-stats
+
+      - name: check that the platform`s produced dylib is loadable
+        run: cd examples/platform-switching/rust-platform && LD_LIBRARY_PATH=. cargo test --release --locked
 
       - name: test launching the editor
         run: cargo test --release --locked editor_launch_test::launch -- --ignored # `--ignored` to run this test that is ignored for "normal" runs

@@ -1,3 +1,5 @@
+use crate::Serialize;
+
 use super::parse::{Parse, ParseError, SkipBytes};
 
 #[repr(u8)]
@@ -183,6 +185,12 @@ pub enum OpCode {
     F64REINTERPRETI64 = 0xbf,
 }
 
+impl From<u8> for OpCode {
+    fn from(x: u8) -> Self {
+        unsafe { std::mem::transmute(x) }
+    }
+}
+
 /// The format of the *immediate* operands of an operator
 /// Immediates appear directly in the byte stream after the opcode,
 /// rather than being popped off the value stack. These are the possible forms.
@@ -264,7 +272,7 @@ impl SkipBytes for OpCode {
 
         let opcode_byte: u8 = bytes[*cursor];
 
-        let opcode: OpCode = unsafe { std::mem::transmute(opcode_byte) };
+        let opcode: OpCode = OpCode::from(opcode_byte);
         // will return Err if transmute was invalid
         let immediates = immediates_for(opcode).map_err(|message| ParseError {
             message,
@@ -306,5 +314,11 @@ impl SkipBytes for OpCode {
             }
         }
         Ok(())
+    }
+}
+
+impl Serialize for OpCode {
+    fn serialize<T: crate::SerialBuffer>(&self, buffer: &mut T) {
+        (*self as u8).serialize(buffer)
     }
 }

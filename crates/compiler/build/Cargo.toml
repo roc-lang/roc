@@ -31,11 +31,12 @@ roc_utils = { path = "../../utils" }
 
 wasi_libc_sys = { path = "../../wasi-libc-sys" }
 
+const_format.workspace = true
 bumpalo.workspace = true
 libloading.workspace = true
 tempfile.workspace = true
 target-lexicon.workspace = true
-inkwell.workspace = true 
+inkwell.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 serde_json = "1.0.85"
@@ -46,3 +47,7 @@ target-aarch64 = ["roc_gen_dev/target-aarch64"]
 target-x86 = []
 target-x86_64 = ["roc_gen_dev/target-x86_64"]
 target-wasm32 = []
+
+# This is used to enable fuzzing and sanitizers.
+# Example use is describe here: https://github.com/bhansconnect/roc-fuzz
+sanitizers = []

@@ -1,6 +1,9 @@
 use roc_can::abilities::AbilitiesStore;
 use roc_can::expr::PendingDerives;
 use roc_collections::{VecMap, VecSet};
+use roc_debug_flags::dbg_do;
+#[cfg(debug_assertions)]
+use roc_debug_flags::ROC_PRINT_UNDERIVABLE;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
@@ -309,12 +312,18 @@ impl ObligationCache {
             Some(Err(NotDerivable {
                 var: failure_var,
                 context,
-            })) => Some(if failure_var == var {
-                UnderivableReason::SurfaceNotDerivable(context)
-            } else {
-                let error_type = subs.var_to_error_type(failure_var, Polarity::OF_VALUE);
-                UnderivableReason::NestedNotDerivable(error_type, context)
-            }),
+            })) => {
+                dbg_do!(ROC_PRINT_UNDERIVABLE, {
+                    eprintln!("❌ derived {:?} of {:?}", ability, subs.dbg(failure_var));
+                });
+
+                Some(if failure_var == var {
+                    UnderivableReason::SurfaceNotDerivable(context)
+                } else {
+                    let error_type = subs.var_to_error_type(failure_var, Polarity::OF_VALUE);
+                    UnderivableReason::NestedNotDerivable(error_type, context)
+                })
+            }
             None => Some(UnderivableReason::NotABuiltin),
         };
 
@@ -498,18 +507,6 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
-    fn visit_rigid_able(var: Variable, abilities: &[Symbol]) -> Result<(), NotDerivable> {
-        if abilities != [Self::ABILITY] {
-            Err(NotDerivable {
-                var,
-                context: NotDerivableContext::NoContext,
-            })
-        } else {
-            Ok(())
-        }
-    }
-
-    #[inline(always)]
     fn visit_recursion(var: Variable) -> Result<Descend, NotDerivable> {
         Err(NotDerivable {
             var,
@@ -594,6 +591,18 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
+    fn visit_floating_point_content(
+        var: Variable,
+        _subs: &mut Subs,
+        _content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
     fn visit_ranged_number(var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
         Err(NotDerivable {
             var,
@@ -634,7 +643,7 @@ trait DerivableVisitor {
                 RigidVar(_) => {
                     return Err(NotDerivable {
                         var,
-                        context: NotDerivableContext::NoContext,
+                        context: NotDerivableContext::UnboundVar,
                     })
                 }
                 FlexAbleVar(opt_name, abilities) => {
@@ -647,7 +656,12 @@ trait DerivableVisitor {
                     subs.set_content(var, Content::FlexAbleVar(opt_name, merged_abilites));
                 }
                 RigidAbleVar(_, abilities) => {
-                    Self::visit_rigid_able(var, subs.get_subs_slice(abilities))?
+                    if !subs.get_subs_slice(abilities).contains(&Self::ABILITY) {
+                        return Err(NotDerivable {
+                            var,
+                            context: NotDerivableContext::NoContext,
+                        });
+                    }
                 }
                 RecursionVar {
                     structure,
@@ -717,13 +731,21 @@ trait DerivableVisitor {
                     EmptyTagUnion => Self::visit_empty_tag_union(var)?,
                 },
                 Alias(
-                    Symbol::NUM_NUM | Symbol::NUM_INTEGER | Symbol::NUM_FLOATINGPOINT,
+                    Symbol::NUM_NUM | Symbol::NUM_INTEGER,
                     _alias_variables,
                     real_var,
                     AliasKind::Opaque,
                 ) => {
-                    // Numbers: always decay until a ground is hit.
+                    // Unbound numbers and integers: always decay until a ground is hit,
+                    // since all of our builtin abilities currently support integers.
                     stack.push(real_var);
+                }
+                Alias(Symbol::NUM_FLOATINGPOINT, _alias_variables, real_var, AliasKind::Opaque) => {
+                    let descend = Self::visit_floating_point_content(var, subs, real_var)?;
+                    if descend.0 {
+                        // Decay to a ground
+                        stack.push(real_var)
+                    }
                 }
                 Alias(opaque, _alias_variables, _real_var, AliasKind::Opaque) => {
                     if obligation_cache
@@ -841,6 +863,15 @@ impl DerivableVisitor for DeriveEncoding {
     fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
         Ok(())
     }
+
+    #[inline(always)]
+    fn visit_floating_point_content(
+        _var: Variable,
+        _subs: &mut Subs,
+        _content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(false))
+    }
 }
 
 struct DeriveDecoding;
@@ -931,6 +962,15 @@ impl DerivableVisitor for DeriveDecoding {
     fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
         Ok(())
     }
+
+    #[inline(always)]
+    fn visit_floating_point_content(
+        _var: Variable,
+        _subs: &mut Subs,
+        _content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(false))
+    }
 }
 
 struct DeriveHash;
@@ -1020,6 +1060,15 @@ impl DerivableVisitor for DeriveHash {
     #[inline(always)]
     fn visit_ranged_number(_var: Variable, _range: NumericRange) -> Result<(), NotDerivable> {
         Ok(())
+    }
+
+    #[inline(always)]
+    fn visit_floating_point_content(
+        _var: Variable,
+        _subs: &mut Subs,
+        _content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        Ok(Descend(false))
     }
 }
 
@@ -1113,6 +1162,32 @@ impl DerivableVisitor for DeriveEq {
             Ok(Descend(false))
         } else {
             Ok(Descend(true))
+        }
+    }
+
+    fn visit_floating_point_content(
+        var: Variable,
+        subs: &mut Subs,
+        content_var: Variable,
+    ) -> Result<Descend, NotDerivable> {
+        use roc_unify::unify::{unify, Mode};
+
+        // Of the floating-point types,
+        // only Dec implements Eq.
+        let mut env = Env::new(subs);
+        let unified = unify(
+            &mut env,
+            content_var,
+            Variable::DECIMAL,
+            Mode::EQ,
+            Polarity::Pos,
+        );
+        match unified {
+            roc_unify::unify::Unified::Success { .. } => Ok(Descend(false)),
+            roc_unify::unify::Unified::Failure(..) => Err(NotDerivable {
+                var,
+                context: NotDerivableContext::Eq(NotDerivableEq::FloatingPoint),
+            }),
         }
     }
 

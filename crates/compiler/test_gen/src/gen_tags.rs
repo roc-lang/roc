@@ -2083,3 +2083,53 @@ fn unify_types_with_fixed_fixpoints_outside_fixing_region() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn lambda_set_with_imported_toplevels_issue_4733() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            fn = \s ->
+                instr = if s == "*" then (Op Num.mul) else (Op Num.add)
+
+                Op op = instr
+
+                \a -> op a a
+
+            main = ((fn "*") 3) * ((fn "+") 5)
+            "#
+        ),
+        90,
+        i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn non_unary_union_with_lambda_set_with_imported_toplevels_issue_4733() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            fn = \s ->
+                instr =
+                    if s == "*" then (Op Num.mul)
+                    else if s == "+" then (Op Num.add)
+                    else Noop
+
+                when instr is
+                    Op op -> (\a -> op a a)
+                    _ -> (\a -> a)
+
+
+            main = ((fn "*") 3) * ((fn "+") 5)
+            "#
+        ),
+        90,
+        i64
+    );
+}

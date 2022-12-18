@@ -16,9 +16,6 @@ extern fn roc_realloc(c_ptr: *anyopaque, new_size: usize, old_size: usize, align
 // This should never be passed a null pointer.
 extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
 
-// Signals to the host that the program has panicked
-extern fn roc_panic(c_ptr: *const anyopaque, tag_id: u32) callconv(.C) void;
-
 // should work just like libc memcpy (we can't assume libc is present)
 extern fn roc_memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 
@@ -35,9 +32,6 @@ fn roc_getppid_windows_stub() callconv(.C) c_int {
     return 0;
 }
 
-fn testing_roc_send_signal(pid: c_int, sig: c_int) callconv(.C) c_int {
-    return kill(pid, sig);
-}
 fn testing_roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) callconv(.C) c_int {
     return shm_open(name, oflag, mode);
 }
@@ -58,7 +52,6 @@ comptime {
         if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
             @export(testing_roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
             @export(testing_roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
-            @export(testing_roc_send_signal, .{ .name = "roc_send_signal", .linkage = .Strong });
             @export(testing_roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
         }
     }
@@ -97,24 +90,19 @@ fn testing_roc_memcpy(dest: *anyopaque, src: *anyopaque, bytes: usize) callconv(
 }
 
 pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
-    return @ptrCast(?[*]u8, @call(.{ .modifier = always_inline }, roc_alloc, .{ size, alignment }));
+    return @ptrCast(?[*]u8, roc_alloc(size, alignment));
 }
 
 pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [*]u8 {
-    return @ptrCast([*]u8, @call(.{ .modifier = always_inline }, roc_realloc, .{ c_ptr, new_size, old_size, alignment }));
+    return @ptrCast([*]u8, roc_realloc(c_ptr, new_size, old_size, alignment));
 }
 
 pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
-    return @call(.{ .modifier = always_inline }, roc_dealloc, .{ c_ptr, alignment });
-}
-
-// must export this explicitly because right now it is not used from zig code
-pub fn panic(c_ptr: *const anyopaque, alignment: u32) callconv(.C) void {
-    return @call(.{ .modifier = always_inline }, roc_panic, .{ c_ptr, alignment });
+    return roc_dealloc(c_ptr, alignment);
 }
 
 pub fn memcpy(dst: [*]u8, src: [*]u8, size: usize) void {
-    @call(.{ .modifier = always_inline }, roc_memcpy, .{ dst, src, size });
+    roc_memcpy(dst, src, size);
 }
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code
@@ -287,7 +275,8 @@ pub inline fn calculateCapacity(
     } else {
         new_capacity = (old_capacity * 3 + 1) / 2;
     }
-    return @maximum(new_capacity, requested_length);
+
+    return std.math.max(new_capacity, requested_length);
 }
 
 pub fn allocateWithRefcountC(

@@ -1154,7 +1154,7 @@ struct SetElement<'a> {
 
 impl std::fmt::Debug for SetElement<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let symbol_string = crate::ir::symbol_to_doc_string(self.symbol);
+        let symbol_string = crate::ir::symbol_to_doc_string(self.symbol, false);
 
         write!(f, "( {}, {:?})", symbol_string, self.layout)
     }
@@ -1204,7 +1204,7 @@ impl std::fmt::Debug for LambdaSet<'_> {
 ///
 /// See also https://github.com/roc-lang/roc/issues/3336.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct CapturesNiche<'a>(&'a [Layout<'a>]);
+pub struct CapturesNiche<'a>(pub(crate) &'a [Layout<'a>]);
 
 impl CapturesNiche<'_> {
     pub fn no_niche() -> Self {
@@ -1387,7 +1387,12 @@ impl<'a> LambdaSet<'a> {
     where
         I: Interner<'a, Layout<'a>>,
     {
-        debug_assert!(self.contains(function_symbol), "function symbol not in set");
+        debug_assert!(
+            self.contains(function_symbol),
+            "function symbol {:?} not in set {:?}",
+            function_symbol,
+            self
+        );
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
             other_name == function_symbol
@@ -2885,7 +2890,6 @@ impl<'a> Builtin<'a> {
                 use FloatWidth::*;
 
                 match float_width {
-                    F128 => alloc.text("Float128"),
                     F64 => alloc.text("Float64"),
                     F32 => alloc.text("Float32"),
                 }

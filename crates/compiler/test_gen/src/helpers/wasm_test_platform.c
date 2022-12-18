@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -123,12 +124,11 @@ void roc_dealloc(void *ptr, unsigned int alignment)
 
 //--------------------------
 
-extern void send_panic_msg_to_rust(char* msg, int len);
+extern void send_panic_msg_to_rust(void* msg, uint32_t tag_id);
 
-void roc_panic(char *msg, unsigned int tag_id)
+void roc_panic(void* msg, unsigned int tag_id)
 {
-    int len = strlen(msg);
-    send_panic_msg_to_rust(msg, len);
+    send_panic_msg_to_rust(msg, tag_id);
     exit(101);
 }
 

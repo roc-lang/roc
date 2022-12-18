@@ -594,6 +594,13 @@ impl IdentId {
     pub const fn index(self) -> usize {
         self.0 as usize
     }
+
+    /// # Safety
+    ///
+    /// The index is not guaranteed to know to exist.
+    pub unsafe fn from_index(index: u32) -> Self {
+        Self(index)
+    }
 }
 
 /// Stores a mapping between Ident and IdentId.
@@ -1400,26 +1407,30 @@ define_builtins! {
         0 DICT_DICT: "Dict" exposed_type=true // the Dict.Dict type alias
         1 DICT_EMPTY: "empty"
         2 DICT_SINGLE: "single"
-        3 DICT_GET: "get"
-        4 DICT_GET_RESULT: "#get_result" // symbol used in the definition of Dict.get
-        5 DICT_WALK: "walk"
-        6 DICT_INSERT: "insert"
-        7 DICT_LEN: "len"
+        3 DICT_CLEAR: "clear"
+        4 DICT_LEN: "len"
+        5 DICT_GET: "get"
+        6 DICT_GET_RESULT: "#get_result" // symbol used in the definition of Dict.get
+        7 DICT_CONTAINS: "contains"
+        8 DICT_INSERT: "insert"
+        9 DICT_REMOVE: "remove"
 
-        8 DICT_REMOVE: "remove"
-        9 DICT_CONTAINS: "contains"
-        10 DICT_KEYS: "keys"
-        11 DICT_VALUES: "values"
+        10 DICT_WALK: "walk"
+        11 DICT_WALK_UNTIL: "walkUntil"
+        12 DICT_FROM_LIST: "fromList"
+        13 DICT_TO_LIST: "toList"
+        14 DICT_KEYS: "keys"
+        15 DICT_VALUES: "values"
 
-        12 DICT_INSERT_ALL: "insertAll" // union
-        13 DICT_KEEP_SHARED: "keepShared" // intersection
-        14 DICT_REMOVE_ALL: "removeAll" // difference
+        16 DICT_INSERT_ALL: "insertAll" // union
+        17 DICT_KEEP_SHARED: "keepShared" // intersection
+        18 DICT_REMOVE_ALL: "removeAll" // difference
 
-        15 DICT_WITH_CAPACITY: "withCapacity"
-        16 DICT_CAPACITY: "capacity"
-        17 DICT_UPDATE: "update"
+        19 DICT_WITH_CAPACITY: "withCapacity"
+        20 DICT_CAPACITY: "capacity"
+        21 DICT_UPDATE: "update"
 
-        18 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
+        22 DICT_LIST_GET_UNSAFE: "listGetUnsafe"
     }
     9 SET: "Set" => {
         0 SET_SET: "Set" exposed_type=true // the Set.Set type alias
@@ -1434,10 +1445,11 @@ define_builtins! {
         9 SET_TO_LIST: "toList"
         10 SET_FROM_LIST: "fromList"
         11 SET_WALK: "walk"
-        12 SET_WALK_USER_FUNCTION: "#walk_user_function"
-        13 SET_CONTAINS: "contains"
-        14 SET_TO_DICT: "toDict"
-        15 SET_CAPACITY: "capacity"
+        12 SET_WALK_UNTIL: "walkUntil"
+        13 SET_WALK_USER_FUNCTION: "#walk_user_function"
+        14 SET_CONTAINS: "contains"
+        15 SET_TO_DICT: "toDict"
+        16 SET_CAPACITY: "capacity"
     }
     10 BOX: "Box" => {
         0 BOX_BOX_TYPE: "Box" exposed_apply_type=true // the Box.Box opaque type
@@ -1517,10 +1529,11 @@ define_builtins! {
         11 HASH_HASH_I32: "hashI32"
         12 HASH_HASH_I64: "hashI64"
         13 HASH_HASH_I128: "hashI128"
-        14 HASH_COMPLETE: "complete"
-        15 HASH_HASH_STR_BYTES: "hashStrBytes"
-        16 HASH_HASH_LIST: "hashList"
-        17 HASH_HASH_UNORDERED: "hashUnordered"
+        14 HASH_HASH_NAT: "hashNat"
+        15 HASH_COMPLETE: "complete"
+        16 HASH_HASH_STR_BYTES: "hashStrBytes"
+        17 HASH_HASH_LIST: "hashList"
+        18 HASH_HASH_UNORDERED: "hashUnordered"
     }
     14 JSON: "Json" => {
         0 JSON_JSON: "Json"

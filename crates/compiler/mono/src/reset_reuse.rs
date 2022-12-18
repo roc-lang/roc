@@ -195,7 +195,7 @@ fn function_s<'a, 'i>(
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let continuation: &Stmt = remainder;
@@ -208,7 +208,7 @@ fn function_s<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: new_continuation,
                 };
 
@@ -220,7 +220,7 @@ fn function_s<'a, 'i>(
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let continuation: &Stmt = remainder;
@@ -233,7 +233,7 @@ fn function_s<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: new_continuation,
                 };
 
@@ -241,7 +241,7 @@ fn function_s<'a, 'i>(
             }
         }
 
-        Ret(_) | Jump(_, _) | RuntimeError(_) => stmt,
+        Ret(_) | Jump(_, _) | Crash(..) => stmt,
     }
 }
 
@@ -442,7 +442,7 @@ fn function_d_main<'a, 'i>(
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let (b, found) = function_d_main(env, x, c, remainder);
@@ -452,7 +452,7 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: b,
                 };
 
@@ -464,7 +464,7 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: b,
                 };
 
@@ -475,7 +475,7 @@ fn function_d_main<'a, 'i>(
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let (b, found) = function_d_main(env, x, c, remainder);
@@ -485,7 +485,7 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: b,
                 };
 
@@ -497,7 +497,7 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: b,
                 };
 
@@ -535,7 +535,7 @@ fn function_d_main<'a, 'i>(
 
             (arena.alloc(new_join), found)
         }
-        Ret(_) | Jump(_, _) | RuntimeError(_) => (stmt, has_live_var(&env.jp_live_vars, stmt, x)),
+        Ret(_) | Jump(_, _) | Crash(..) => (stmt, has_live_var(&env.jp_live_vars, stmt, x)),
     }
 }
 
@@ -660,7 +660,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let b = function_r(env, remainder);
@@ -669,7 +669,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
                 condition: *condition,
                 region: *region,
                 lookups,
-                layouts,
+                variables,
                 remainder: b,
             };
 
@@ -680,7 +680,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let b = function_r(env, remainder);
@@ -689,14 +689,14 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
                 condition: *condition,
                 region: *region,
                 lookups,
-                layouts,
+                variables,
                 remainder: b,
             };
 
             arena.alloc(expect)
         }
 
-        Ret(_) | Jump(_, _) | RuntimeError(_) => {
+        Ret(_) | Jump(_, _) | Crash(..) => {
             // terminals
             stmt
         }
@@ -761,7 +761,7 @@ fn has_live_var<'a>(jp_live_vars: &JPLiveVarMap, stmt: &'a Stmt<'a>, needle: Sym
         Jump(id, arguments) => {
             arguments.iter().any(|s| *s == needle) || jp_live_vars[id].contains(&needle)
         }
-        RuntimeError(_) => false,
+        Crash(m, _) => *m == needle,
     }
 }
 

@@ -21,6 +21,8 @@ bumpalo.workspace = true
 static_assertions.workspace = true
 bitvec.workspace = true
 
+ven_pretty = { path = "../../vendor/pretty" }
+
 [dev-dependencies]
 pretty_assertions.workspace = true
 indoc.workspace = true

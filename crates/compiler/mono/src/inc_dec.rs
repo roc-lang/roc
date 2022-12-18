@@ -158,7 +158,9 @@ pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) 
                 stack.push(default_branch.1);
             }
 
-            RuntimeError(_) => {}
+            Crash(sym, _) => {
+                result.insert(*sym);
+            }
         }
     }
 
@@ -553,7 +555,13 @@ impl<'a, 'i> Context<'a, 'i> {
         match &call_type {
             LowLevel { op, .. } => {
                 let ps = crate::borrow::lowlevel_borrow_signature(self.arena, *op);
-                let b = self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars);
+                let b = match op {
+                    roc_module::low_level::LowLevel::Dbg => {
+                        // NB(dbg-spec-var) second var is the Variable
+                        self.add_dec_after_lowlevel(&arguments[..1], ps, b, b_live_vars)
+                    }
+                    _ => self.add_dec_after_lowlevel(arguments, ps, b, b_live_vars),
+                };
 
                 let v = Expr::Call(crate::ir::Call {
                     call_type,
@@ -1197,7 +1205,7 @@ impl<'a, 'i> Context<'a, 'i> {
                 condition,
                 region,
                 lookups,
-                layouts,
+                variables,
             } => {
                 let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
 
@@ -1205,7 +1213,7 @@ impl<'a, 'i> Context<'a, 'i> {
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: b,
                 });
 
@@ -1221,7 +1229,7 @@ impl<'a, 'i> Context<'a, 'i> {
                 condition,
                 region,
                 lookups,
-                layouts,
+                variables,
             } => {
                 let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
 
@@ -1229,7 +1237,7 @@ impl<'a, 'i> Context<'a, 'i> {
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: b,
                 });
 
@@ -1240,7 +1248,20 @@ impl<'a, 'i> Context<'a, 'i> {
                 (expect, b_live_vars)
             }
 
-            RuntimeError(_) | Refcounting(_, _) => (stmt, MutSet::default()),
+            Crash(x, _) => {
+                let info = self.get_var_info(*x);
+
+                let mut live_vars = MutSet::default();
+                live_vars.insert(*x);
+
+                if info.reference && !info.consume {
+                    (self.add_inc(*x, 1, stmt), live_vars)
+                } else {
+                    (stmt, live_vars)
+                }
+            }
+
+            Refcounting(_, _) => (stmt, MutSet::default()),
         }
     }
 }
@@ -1411,7 +1432,10 @@ pub fn collect_stmt(
             vars
         }
 
-        RuntimeError(_) => vars,
+        Crash(m, _) => {
+            vars.insert(*m);
+            vars
+        }
     }
 }
 
