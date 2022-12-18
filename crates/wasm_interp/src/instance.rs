@@ -1,16 +1,16 @@
 use bumpalo::{collections::Vec, Bump};
 use std::fmt::{self, Write};
-use std::iter;
+use std::iter::{self, once, Iterator};
 
 use roc_wasm_module::opcodes::OpCode;
 use roc_wasm_module::parse::{Parse, SkipBytes};
-use roc_wasm_module::sections::{ImportDesc, MemorySection};
+use roc_wasm_module::sections::{ImportDesc, MemorySection, SignatureParamsIter};
 use roc_wasm_module::{ExportType, WasmModule};
 use roc_wasm_module::{Value, ValueType};
 
-use crate::call_stack::CallStack;
+use crate::frame::Frame;
 use crate::value_stack::ValueStack;
-use crate::{pc_to_fn_index, Error, ImportDispatcher};
+use crate::{Error, ImportDispatcher};
 
 #[derive(Debug)]
 pub enum Action {
@@ -18,10 +18,18 @@ pub enum Action {
     Break,
 }
 
-#[derive(Debug)]
-enum Block {
-    Loop { vstack: usize, start_addr: usize },
-    Normal { vstack: usize },
+#[derive(Debug, Clone, Copy)]
+enum BlockType {
+    Loop(usize),         // Loop block, with start address to loop back to
+    Normal,              // Block created by `block` instruction
+    Locals(usize),       // Special "block" for locals. Holds function index for debug
+    FunctionBody(usize), // Special block surrounding the function body. Holds function index for debug
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Block {
+    ty: BlockType,
+    vstack: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -33,23 +41,21 @@ struct BranchCacheEntry {
 
 #[derive(Debug)]
 pub struct Instance<'a, I: ImportDispatcher> {
-    module: &'a WasmModule<'a>,
+    pub(crate) module: &'a WasmModule<'a>,
     /// Contents of the WebAssembly instance's memory
     pub memory: Vec<'a, u8>,
-    /// Metadata for every currently-active function call
-    pub call_stack: CallStack<'a>,
+    /// The current call frame
+    pub(crate) current_frame: Frame,
+    /// Previous call frames
+    previous_frames: Vec<'a, Frame>,
     /// The WebAssembly stack machine's stack of values
-    pub value_stack: ValueStack<'a>,
+    pub(crate) value_stack: ValueStack<'a>,
     /// Values of any global variables
-    pub globals: Vec<'a, Value>,
+    pub(crate) globals: Vec<'a, Value>,
     /// Index in the code section of the current instruction
-    pub program_counter: usize,
+    pub(crate) program_counter: usize,
     /// One entry per nested block. For loops, stores the address of the first instruction.
     blocks: Vec<'a, Block>,
-    /// Outermost block depth for the currently-executing function.
-    outermost_block: u32,
-    /// Current function index
-    current_function: usize,
     /// Cache for branching instructions, split into buckets for each function.
     branch_cache: Vec<'a, Vec<'a, BranchCacheEntry>>,
     /// Number of imports in the module
@@ -78,14 +84,13 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         Instance {
             module: arena.alloc(WasmModule::new(arena)),
             memory: Vec::from_iter_in(iter::repeat(0).take(mem_bytes as usize), arena),
-            call_stack: CallStack::new(arena),
+            current_frame: Frame::new(),
+            previous_frames: Vec::new_in(arena),
             value_stack: ValueStack::new(arena),
             globals: Vec::from_iter_in(globals, arena),
             program_counter,
             blocks: Vec::new_in(arena),
-            outermost_block: 0,
             branch_cache: bumpalo::vec![in arena; bumpalo::vec![in arena]],
-            current_function: 0,
             import_count: 0,
             import_dispatcher,
             import_arguments: Vec::new_in(arena),
@@ -130,7 +135,6 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         );
 
         let value_stack = ValueStack::new(arena);
-        let call_stack = CallStack::new(arena);
 
         let debug_string = if is_debug_mode {
             Some(String::new())
@@ -148,13 +152,12 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         Ok(Instance {
             module,
             memory,
-            call_stack,
+            current_frame: Frame::new(),
+            previous_frames: Vec::new_in(arena),
             value_stack,
             globals,
             program_counter: usize::MAX,
             blocks: Vec::new_in(arena),
-            outermost_block: 0,
-            current_function: usize::MAX,
             branch_cache,
             import_count,
             import_dispatcher,
@@ -167,14 +170,11 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
     where
         A: IntoIterator<Item = Value>,
     {
-        let arg_type_bytes = self.prepare_to_call_export(self.module, fn_name)?;
+        let (fn_index, param_type_iter, ret_type) =
+            self.call_export_help_before_arg_load(self.module, fn_name)?;
+        let n_args = param_type_iter.len();
 
-        for (i, (value, type_byte)) in arg_values
-            .into_iter()
-            .zip(arg_type_bytes.iter().copied())
-            .enumerate()
-        {
-            let expected_type = ValueType::from(type_byte);
+        for (i, (value, expected_type)) in arg_values.into_iter().zip(param_type_iter).enumerate() {
             let actual_type = ValueType::from(value);
             if actual_type != expected_type {
                 return Err(format!(
@@ -185,7 +185,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             self.value_stack.push(value);
         }
 
-        self.call_export_help(self.module, arg_type_bytes)
+        self.call_export_help_after_arg_load(self.module, fn_index, n_args, ret_type)
     }
 
     pub fn call_export_from_cli(
@@ -207,15 +207,17 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
 
         // Implement the "basic numbers" CLI
         // Check if the called Wasm function takes numeric arguments, and if so, try to parse them from the CLI.
-        let arg_type_bytes = self.prepare_to_call_export(module, fn_name)?;
-        for (value_bytes, type_byte) in arg_strings
+        let (fn_index, param_type_iter, ret_type) =
+            self.call_export_help_before_arg_load(module, fn_name)?;
+        let n_args = param_type_iter.len();
+        for (value_bytes, value_type) in arg_strings
             .iter()
             .skip(1) // first string is the .wasm filename
-            .zip(arg_type_bytes.iter().copied())
+            .zip(param_type_iter)
         {
             use ValueType::*;
             let value_str = String::from_utf8_lossy(value_bytes);
-            let value = match ValueType::from(type_byte) {
+            let value = match value_type {
                 I32 => Value::I32(value_str.parse::<i32>().map_err(|e| e.to_string())?),
                 I64 => Value::I64(value_str.parse::<i64>().map_err(|e| e.to_string())?),
                 F32 => Value::F32(value_str.parse::<f32>().map_err(|e| e.to_string())?),
@@ -224,15 +226,15 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             self.value_stack.push(value);
         }
 
-        self.call_export_help(module, arg_type_bytes)
+        self.call_export_help_after_arg_load(module, fn_index, n_args, ret_type)
     }
 
-    fn prepare_to_call_export<'m>(
+    fn call_export_help_before_arg_load<'m>(
         &mut self,
         module: &'m WasmModule<'a>,
         fn_name: &str,
-    ) -> Result<&'m [u8], String> {
-        self.current_function = {
+    ) -> Result<(usize, SignatureParamsIter<'m>, Option<ValueType>), String> {
+        let fn_index = {
             let mut export_iter = module.export.exports.iter();
             export_iter
                 // First look up the name in exports
@@ -266,7 +268,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 })? as usize
         };
 
-        let internal_fn_index = self.current_function - self.import_count;
+        let internal_fn_index = fn_index - self.import_count;
 
         self.program_counter = {
             let mut cursor = module.code.function_offsets[internal_fn_index] as usize;
@@ -274,38 +276,50 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             cursor
         };
 
-        let arg_type_bytes = {
+        let (param_type_iter, return_type) = {
             let signature_index = module.function.signatures[internal_fn_index];
-            module.types.look_up_arg_type_bytes(signature_index)
+            module.types.look_up(signature_index)
         };
 
         if self.debug_string.is_some() {
             println!(
                 "Calling export func[{}] '{}' at address {:#x}",
-                self.current_function,
+                fn_index,
                 fn_name,
                 self.program_counter + module.code.section_offset as usize
             );
         }
 
-        Ok(arg_type_bytes)
+        Ok((fn_index, param_type_iter, return_type))
     }
 
-    fn call_export_help(
+    fn call_export_help_after_arg_load(
         &mut self,
         module: &WasmModule<'a>,
-        arg_type_bytes: &[u8],
+        fn_index: usize,
+        n_args: usize,
+        return_type: Option<ValueType>,
     ) -> Result<Option<Value>, String> {
-        self.call_stack
-            .push_frame(
-                0, // return_addr
-                0, // return_block_depth
-                arg_type_bytes,
-                &mut self.value_stack,
-                &module.code.bytes,
-                &mut self.program_counter,
-            )
-            .map_err(|e| e.to_string_at(self.program_counter))?;
+        self.previous_frames.clear();
+        self.blocks.clear();
+        self.blocks.push(Block {
+            ty: BlockType::Locals(fn_index),
+            vstack: self.value_stack.depth(),
+        });
+        self.current_frame = Frame::enter(
+            fn_index,
+            0, // return_addr
+            self.blocks.len(),
+            n_args,
+            return_type,
+            &module.code.bytes,
+            &mut self.value_stack,
+            &mut self.program_counter,
+        );
+        self.blocks.push(Block {
+            ty: BlockType::FunctionBody(fn_index),
+            vstack: self.value_stack.depth(),
+        });
 
         loop {
             match self.execute_next_instruction(module) {
@@ -316,14 +330,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 Err(e) => {
                     let file_offset = self.program_counter + module.code.section_offset as usize;
                     let mut message = e.to_string_at(file_offset);
-                    self.call_stack
-                        .dump_trace(
-                            module,
-                            &self.value_stack,
-                            self.program_counter,
-                            &mut message,
-                        )
-                        .unwrap();
+                    self.debug_stack_trace(&mut message).unwrap();
                     return Err(message);
                 }
             };
@@ -347,18 +354,39 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
     }
 
     fn do_return(&mut self) -> Action {
-        self.blocks.truncate(self.outermost_block as usize);
-        if let Some((return_addr, block_depth)) = self.call_stack.pop_frame() {
-            if self.call_stack.is_empty() {
-                // We just popped the stack frame for the entry function. Terminate the program.
-                Action::Break
-            } else {
-                self.program_counter = return_addr as usize;
-                self.outermost_block = block_depth;
-                Action::Continue
-            }
+        // self.debug_values_and_blocks("start do_return");
+
+        let Frame {
+            return_addr,
+            body_block_index,
+            return_type,
+            ..
+        } = self.current_frame;
+
+        // Throw away all locals and values except the return value
+        let locals_block_index = body_block_index - 1;
+        let locals_block = &self.blocks[locals_block_index];
+        let new_stack_depth = if return_type.is_some() {
+            self.value_stack
+                .set(locals_block.vstack, self.value_stack.peek());
+            locals_block.vstack + 1
         } else {
-            // We should never get here with real programs, but maybe in tests. Terminate the program.
+            locals_block.vstack
+        };
+        self.value_stack.truncate(new_stack_depth);
+
+        // Resume executing at the next instruction in the caller function
+        let new_block_len = locals_block_index; // don't need a -1 because one is a length and the other is an index!
+        self.blocks.truncate(new_block_len);
+        self.program_counter = return_addr;
+
+        // self.debug_values_and_blocks("end do_return");
+
+        if let Some(caller_frame) = self.previous_frames.pop() {
+            self.current_frame = caller_frame;
+            Action::Continue
+        } else {
+            // We just popped the stack frame for the entry function. Terminate the program.
             Action::Break
         }
     }
@@ -393,16 +421,18 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
 
     fn do_break(&mut self, relative_blocks_outward: u32, module: &WasmModule<'a>) {
         let block_index = self.blocks.len() - 1 - relative_blocks_outward as usize;
-        match self.blocks[block_index] {
-            Block::Loop { start_addr, vstack } => {
+        let Block { ty, vstack } = self.blocks[block_index];
+        match ty {
+            BlockType::Loop(start_addr) => {
                 self.blocks.truncate(block_index + 1);
                 self.value_stack.truncate(vstack);
                 self.program_counter = start_addr;
             }
-            Block::Normal { vstack } => {
+            BlockType::FunctionBody(_) | BlockType::Normal => {
                 self.break_forward(relative_blocks_outward, module);
                 self.value_stack.truncate(vstack);
             }
+            BlockType::Locals(_) => unreachable!(),
         }
     }
 
@@ -411,7 +441,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         use OpCode::*;
 
         let addr = self.program_counter as u32;
-        let cache_result = self.branch_cache[self.current_function]
+        let cache_result = self.branch_cache[self.current_frame.fn_index]
             .iter()
             .find(|entry| entry.addr == addr && entry.argument == relative_blocks_outward);
 
@@ -437,7 +467,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                     _ => {}
                 }
             }
-            self.branch_cache[self.current_function].push(BranchCacheEntry {
+            self.branch_cache[self.current_frame.fn_index].push(BranchCacheEntry {
                 addr,
                 argument: relative_blocks_outward,
                 target: self.program_counter as u32,
@@ -452,6 +482,8 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         fn_index: usize,
         module: &WasmModule<'a>,
     ) -> Result<(), Error> {
+        // self.debug_values_and_blocks(&format!("start do_call {}", fn_index));
+
         let (signature_index, opt_import) = if fn_index < self.import_count {
             // Imported non-Wasm function
             let import = &module.import.imports[fn_index];
@@ -474,15 +506,22 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             );
         }
 
-        let arg_type_bytes = module.types.look_up_arg_type_bytes(signature_index);
+        let (arg_type_iter, ret_type) = module.types.look_up(signature_index);
+        let n_args = arg_type_iter.len();
+        if self.debug_string.is_some() {
+            self.debug_call(n_args, ret_type);
+        }
 
         if let Some(import) = opt_import {
             self.import_arguments.clear();
             self.import_arguments
-                .extend(std::iter::repeat(Value::I64(0)).take(arg_type_bytes.len()));
-            for (i, type_byte) in arg_type_bytes.iter().copied().enumerate().rev() {
+                .extend(std::iter::repeat(Value::I64(0)).take(n_args));
+            for (i, expected) in arg_type_iter.enumerate().rev() {
                 let arg = self.value_stack.pop();
-                assert_eq!(ValueType::from(arg), ValueType::from(type_byte));
+                let actual = ValueType::from(arg);
+                if actual != expected {
+                    return Err(Error::ValueStackType(expected, actual));
+                }
                 self.import_arguments[i] = arg;
             }
 
@@ -499,26 +538,60 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 write!(debug_string, " {}.{}", import.module, import.name).unwrap();
             }
         } else {
-            let return_addr = self.program_counter as u32;
+            let return_addr = self.program_counter;
+            // set PC to start of function bytes
             let internal_fn_index = fn_index - self.import_count;
             self.program_counter = module.code.function_offsets[internal_fn_index] as usize;
+            // advance PC to the start of the local variable declarations
+            u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
 
-            let return_block_depth = self.outermost_block;
-            self.outermost_block = self.blocks.len() as u32;
+            self.blocks.push(Block {
+                ty: BlockType::Locals(fn_index),
+                vstack: self.value_stack.depth() - n_args,
+            });
+            let body_block_index = self.blocks.len();
 
-            let _function_byte_length =
-                u32::parse((), &module.code.bytes, &mut self.program_counter).unwrap();
-            self.call_stack.push_frame(
+            let mut swap_frame = Frame::enter(
+                fn_index,
                 return_addr,
-                return_block_depth,
-                arg_type_bytes,
-                &mut self.value_stack,
+                body_block_index,
+                n_args,
+                ret_type,
                 &module.code.bytes,
+                &mut self.value_stack,
                 &mut self.program_counter,
-            )?;
+            );
+            std::mem::swap(&mut swap_frame, &mut self.current_frame);
+            self.previous_frames.push(swap_frame);
+
+            self.blocks.push(Block {
+                ty: BlockType::FunctionBody(fn_index),
+                vstack: self.value_stack.depth(),
+            });
         }
-        self.current_function = fn_index;
+        // self.debug_values_and_blocks("end do_call");
+
         Ok(())
+    }
+
+    fn debug_call(&mut self, n_args: usize, return_type: Option<ValueType>) {
+        if let Some(debug_string) = self.debug_string.as_mut() {
+            write!(debug_string, "         args=[").unwrap();
+            let arg_iter = self
+                .value_stack
+                .iter()
+                .skip(self.value_stack.depth() - n_args);
+            let mut first = true;
+            for arg in arg_iter {
+                if first {
+                    first = false;
+                } else {
+                    write!(debug_string, ", ").unwrap();
+                }
+                write!(debug_string, "{:x?}", arg).unwrap();
+            }
+            writeln!(debug_string, "] return_type={:?}", return_type).unwrap();
+        }
     }
 
     pub(crate) fn execute_next_instruction(
@@ -546,26 +619,28 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             NOP => {}
             BLOCK => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
-                self.blocks.push(Block::Normal {
+                self.blocks.push(Block {
+                    ty: BlockType::Normal,
                     vstack: self.value_stack.depth(),
                 });
             }
             LOOP => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
-                self.blocks.push(Block::Loop {
+                self.blocks.push(Block {
+                    ty: BlockType::Loop(self.program_counter),
                     vstack: self.value_stack.depth(),
-                    start_addr: self.program_counter,
                 });
             }
             IF => {
                 self.fetch_immediate_u32(module); // blocktype (ignored)
                 let condition = self.value_stack.pop_i32()?;
-                self.blocks.push(Block::Normal {
+                self.blocks.push(Block {
+                    ty: BlockType::Normal,
                     vstack: self.value_stack.depth(),
                 });
                 if condition == 0 {
                     let addr = self.program_counter as u32;
-                    let cache_result = self.branch_cache[self.current_function]
+                    let cache_result = self.branch_cache[self.current_frame.fn_index]
                         .iter()
                         .find(|entry| entry.addr == addr);
                     if let Some(entry) = cache_result {
@@ -598,7 +673,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                                 _ => {}
                             }
                         }
-                        self.branch_cache[self.current_function].push(BranchCacheEntry {
+                        self.branch_cache[self.current_frame.fn_index].push(BranchCacheEntry {
                             addr,
                             argument: 0,
                             target: self.program_counter as u32,
@@ -613,7 +688,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 self.do_break(0, module);
             }
             END => {
-                if self.blocks.len() == self.outermost_block as usize {
+                if self.blocks.len() == (self.current_frame.body_block_index + 1) {
                     // implicit RETURN at end of function
                     action = self.do_return();
                     implicit_return = true;
@@ -692,18 +767,20 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             }
             GETLOCAL => {
                 let index = self.fetch_immediate_u32(module);
-                let value = self.call_stack.get_local(index);
+                let value = self.current_frame.get_local(&self.value_stack, index);
                 self.value_stack.push(value);
             }
             SETLOCAL => {
                 let index = self.fetch_immediate_u32(module);
                 let value = self.value_stack.pop();
-                self.call_stack.set_local(index, value)?;
+                self.current_frame
+                    .set_local(&mut self.value_stack, index, value);
             }
             TEELOCAL => {
                 let index = self.fetch_immediate_u32(module);
                 let value = self.value_stack.peek();
-                self.call_stack.set_local(index, value)?;
+                self.current_frame
+                    .set_local(&mut self.value_stack, index, value);
             }
             GETGLOBAL => {
                 let index = self.fetch_immediate_u32(module);
@@ -1618,17 +1695,156 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         }
 
         if let Some(debug_string) = &self.debug_string {
-            let base = self.call_stack.value_stack_base();
-            let slice = self.value_stack.get_slice(base as usize);
-            eprintln!("{:06x} {:17} {:?}", file_offset, debug_string, slice);
-            if op_code == RETURN || (op_code == END && implicit_return) {
-                let fn_index = pc_to_fn_index(self.program_counter, module);
-                eprintln!("returning to function {}\n", fn_index);
-            } else if op_code == CALL || op_code == CALLINDIRECT {
-                eprintln!();
+            if matches!(op_code, CALL | CALLINDIRECT) {
+                eprintln!("\n{:06x} {}", file_offset, debug_string);
+            } else {
+                // For calls, we print special debug stuff in do_call
+                let base = self.current_frame.locals_start + self.current_frame.locals_count;
+                let slice = self.value_stack.get_slice(base as usize);
+                eprintln!("{:06x} {:17} {:x?}", file_offset, debug_string, slice);
+            }
+            let is_return = op_code == RETURN || (op_code == END && implicit_return);
+            let is_program_end = self.program_counter == 0;
+            if is_return && !is_program_end {
+                eprintln!(
+                    "returning to function {} at {:06x}",
+                    self.current_frame.fn_index,
+                    self.program_counter + self.module.code.section_offset as usize,
+                );
             }
         }
 
         Ok(action)
+    }
+
+    #[allow(dead_code)]
+    fn debug_values_and_blocks(&self, label: &str) {
+        eprintln!("\n========== {} ==========", label);
+
+        let mut block_str = String::new();
+        let mut block_iter = self.blocks.iter().enumerate();
+        let mut block = block_iter.next();
+
+        let mut print_blocks = |i| {
+            block_str.clear();
+            while let Some((b, Block { vstack, ty })) = block {
+                if *vstack > i {
+                    break;
+                }
+                write!(block_str, "{}:{:?} ", b, ty).unwrap();
+                block = block_iter.next();
+            }
+            if !block_str.is_empty() {
+                eprintln!("--------------- {}", block_str);
+            }
+        };
+
+        for (i, v) in self.value_stack.iter().enumerate() {
+            print_blocks(i);
+            eprintln!("{:3} {:x?}", i, v);
+        }
+        print_blocks(self.value_stack.depth());
+
+        eprintln!();
+    }
+
+    /// Dump a stack trace when an error occurs
+    /// --------------
+    /// function 123
+    ///   address  0x12345
+    ///   args     0: I64(234), 1: F64(7.15)
+    ///   locals   2: I32(412), 3: F64(3.14)
+    ///   stack    [I64(111), F64(3.14)]
+    /// --------------
+    fn debug_stack_trace(&self, buffer: &mut String) -> fmt::Result {
+        let divider = "-------------------";
+        writeln!(buffer, "{}", divider)?;
+
+        let frames = self.previous_frames.iter().chain(once(&self.current_frame));
+        let next_frames = frames.clone().skip(1);
+
+        // Find the code address to display for each frame
+        // For previous frames, show the address of the CALL instruction
+        // For the current frame, show the program counter value
+        let mut execution_addrs = {
+            // for each previous_frame, find return address of the *next* frame
+            let return_addrs = next_frames.clone().map(|f| f.return_addr);
+            // roll back to the CALL instruction before that return address, it's more meaningful.
+            let call_addrs = return_addrs.map(|ra| self.debug_return_addr_to_call_addr(ra));
+            // For the current frame, show the program_counter
+            call_addrs.chain(once(self.program_counter))
+        };
+
+        let mut frame_ends = next_frames.map(|f| f.locals_start);
+
+        for frame in frames {
+            let Frame {
+                fn_index,
+                locals_count,
+                locals_start,
+                ..
+            } = frame;
+
+            let arg_count = {
+                let signature_index = if *fn_index < self.import_count {
+                    match self.module.import.imports[*fn_index].description {
+                        ImportDesc::Func { signature_index } => signature_index,
+                        _ => unreachable!(),
+                    }
+                } else {
+                    self.module.function.signatures[fn_index - self.import_count]
+                };
+                self.module.types.look_up(signature_index).0.len()
+            };
+
+            // Try to match formatting to wasm-objdump where possible, for easy copy & find
+            writeln!(buffer, "func[{}]", fn_index)?;
+            writeln!(buffer, "  address  {:06x}", execution_addrs.next().unwrap())?;
+
+            write!(buffer, "  args     ")?;
+            for local_index in 0..*locals_count {
+                let value = self.value_stack.get(locals_start + local_index).unwrap();
+                if local_index == arg_count {
+                    write!(buffer, "\n  locals   ")?;
+                } else if local_index != 0 {
+                    write!(buffer, ", ")?;
+                }
+                write!(buffer, "{}: {:?}", local_index, value)?;
+            }
+
+            write!(buffer, "\n  stack    [")?;
+            let frame_end = frame_ends
+                .next()
+                .unwrap_or_else(|| self.value_stack.depth());
+            let stack_start = locals_start + locals_count;
+            for i in stack_start..frame_end {
+                let value = self.value_stack.get(i).unwrap();
+                if i != stack_start {
+                    write!(buffer, ", ")?;
+                }
+                write!(buffer, "{:?}", value)?;
+            }
+            writeln!(buffer, "]")?;
+            writeln!(buffer, "{}", divider)?;
+        }
+
+        Ok(())
+    }
+
+    // Call address is more intuitive than the return address in the stack trace. Search backward for it.
+    fn debug_return_addr_to_call_addr(&self, return_addr: usize) -> usize {
+        // return_addr is pointing at the next instruction after the CALL/CALLINDIRECT.
+        // Just before that is the LEB-128 function index or type index.
+        // The last LEB-128 byte is <128, but the others are >=128 so we can't mistake them for CALL/CALLINDIRECT
+        let mut call_addr = return_addr - 2;
+        loop {
+            let byte = self.module.code.bytes[call_addr];
+            if byte == OpCode::CALL as u8 || byte == OpCode::CALLINDIRECT as u8 {
+                break;
+            } else {
+                call_addr -= 1;
+            }
+        }
+        call_addr
     }
 }
