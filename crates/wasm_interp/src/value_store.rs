@@ -4,16 +4,21 @@ use std::fmt::Debug;
 
 use crate::Error;
 
-// Very simple and easy-to-debug storage for the Wasm stack machine
-// It wastes a lot of memory but we tried more complex schemes with packed bytes
-// and it made no measurable difference to performance.
-pub struct ValueStack<'a> {
+/// Combined storage for the Wasm stack machine and local variables.
+///
+/// All values are mixed together so that on function calls, "moving"
+/// arguments from the stack machine to local variables is a no-op
+/// (or rather, just a matter of recording block metadata in the Instance).
+///
+/// We use a simple Vec. When we tried more densely-packed SoA structures,
+/// they were slower due to more logic, and harder to debug.
+pub struct ValueStore<'a> {
     values: Vec<'a, Value>,
 }
 
-impl<'a> ValueStack<'a> {
+impl<'a> ValueStore<'a> {
     pub(crate) fn new(arena: &'a Bump) -> Self {
-        ValueStack {
+        ValueStore {
             values: Vec::with_capacity_in(1024, arena),
         }
     }
@@ -54,48 +59,48 @@ impl<'a> ValueStack<'a> {
     pub(crate) fn pop_u32(&mut self) -> Result<u32, Error> {
         match self.values.pop() {
             Some(Value::I32(x)) => Ok(u32::from_ne_bytes(x.to_ne_bytes())),
-            Some(bad) => Err(Error::ValueStackType(ValueType::I32, ValueType::from(bad))),
-            None => Err(Error::ValueStackEmpty),
+            Some(bad) => Err(Error::Type(ValueType::I32, ValueType::from(bad))),
+            None => Err(Error::StackEmpty),
         }
     }
 
     pub(crate) fn pop_i32(&mut self) -> Result<i32, Error> {
         match self.values.pop() {
             Some(Value::I32(x)) => Ok(x),
-            Some(bad) => Err(Error::ValueStackType(ValueType::I32, ValueType::from(bad))),
-            None => Err(Error::ValueStackEmpty),
+            Some(bad) => Err(Error::Type(ValueType::I32, ValueType::from(bad))),
+            None => Err(Error::StackEmpty),
         }
     }
 
     pub(crate) fn pop_u64(&mut self) -> Result<u64, Error> {
         match self.values.pop() {
             Some(Value::I64(x)) => Ok(u64::from_ne_bytes(x.to_ne_bytes())),
-            Some(bad) => Err(Error::ValueStackType(ValueType::I64, ValueType::from(bad))),
-            None => Err(Error::ValueStackEmpty),
+            Some(bad) => Err(Error::Type(ValueType::I64, ValueType::from(bad))),
+            None => Err(Error::StackEmpty),
         }
     }
 
     pub(crate) fn pop_i64(&mut self) -> Result<i64, Error> {
         match self.values.pop() {
             Some(Value::I64(x)) => Ok(x),
-            Some(bad) => Err(Error::ValueStackType(ValueType::I64, ValueType::from(bad))),
-            None => Err(Error::ValueStackEmpty),
+            Some(bad) => Err(Error::Type(ValueType::I64, ValueType::from(bad))),
+            None => Err(Error::StackEmpty),
         }
     }
 
     pub(crate) fn pop_f32(&mut self) -> Result<f32, Error> {
         match self.values.pop() {
             Some(Value::F32(x)) => Ok(x),
-            Some(bad) => Err(Error::ValueStackType(ValueType::F32, ValueType::from(bad))),
-            None => Err(Error::ValueStackEmpty),
+            Some(bad) => Err(Error::Type(ValueType::F32, ValueType::from(bad))),
+            None => Err(Error::StackEmpty),
         }
     }
 
     pub(crate) fn pop_f64(&mut self) -> Result<f64, Error> {
         match self.values.pop() {
             Some(Value::F64(x)) => Ok(x),
-            Some(bad) => Err(Error::ValueStackType(ValueType::F64, ValueType::from(bad))),
-            None => Err(Error::ValueStackEmpty),
+            Some(bad) => Err(Error::Type(ValueType::F64, ValueType::from(bad))),
+            None => Err(Error::StackEmpty),
         }
     }
 
@@ -112,7 +117,7 @@ impl<'a> ValueStack<'a> {
     }
 }
 
-impl Debug for ValueStack<'_> {
+impl Debug for ValueStore<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", &self.values)
     }
@@ -132,7 +137,7 @@ mod tests {
     #[test]
     fn test_push_pop() {
         let arena = Bump::new();
-        let mut stack = ValueStack::new(&arena);
+        let mut stack = ValueStore::new(&arena);
 
         for val in VALUES {
             stack.push(val);
@@ -147,7 +152,7 @@ mod tests {
     #[test]
     fn test_debug_fmt() {
         let arena = Bump::new();
-        let mut stack = ValueStack::new(&arena);
+        let mut stack = ValueStore::new(&arena);
 
         for val in VALUES {
             stack.push(val);

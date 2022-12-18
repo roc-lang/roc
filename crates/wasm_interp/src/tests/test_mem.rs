@@ -20,7 +20,7 @@ fn test_currentmemory() {
 
     let mut state = Instance::new(&arena, pages, pc, [], DefaultImportDispatcher::default());
     state.execute_next_instruction(&module).unwrap();
-    assert_eq!(state.value_stack.pop(), Value::I32(3))
+    assert_eq!(state.value_store.pop(), Value::I32(3))
 }
 
 #[test]
