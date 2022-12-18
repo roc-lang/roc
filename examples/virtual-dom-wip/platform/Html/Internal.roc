@@ -23,7 +23,6 @@ interface Html.Internal
         Effect.{ Effect },
         Encode,
         Json,
-        Html.HostJavaScript.{ hostJavaScript },
     ]
 
 PlatformState state initData : {
@@ -336,16 +335,16 @@ replaceHandler = \{ handlers, freeList }, index, newHandler ->
 # -------------------------------
 #   SERVER SIDE INIT
 # -------------------------------
-initServerApp : initData, App state initData -> Result (Html []) [InvalidDocument] | initData has Encoding
-initServerApp = \initData, app ->
+initServerApp : App state initData, initData, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
+initServerApp = \app, initData, hostJavaScript ->
     initData
     |> app.init
     |> app.render
     |> translateStatic
-    |> insertRocScript initData app.wasmUrl
+    |> insertRocScript initData app.wasmUrl hostJavaScript
 
-insertRocScript : Html [], initData, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
-insertRocScript = \document, initData, wasmUrl ->
+insertRocScript : Html [], initData, Str, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
+insertRocScript = \document, initData, wasmUrl, hostJavaScript ->
     # Convert initData to JSON as a Roc Str, then convert the Roc Str to a JS string.
     # JSON won't have invalid UTF-8 in it, since it would be escaped as part of JSON encoding.
     jsInitData =
