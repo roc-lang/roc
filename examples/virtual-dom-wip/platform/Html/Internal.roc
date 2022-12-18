@@ -287,8 +287,7 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
 
                 Effect.always (Box.box { platformState: newBoxedPlatformState, stopPropagation, preventDefault })
 
-        # TODO: Roc compiler tells me I need a `_` pattern but I think I should just need `None`
-        _ ->
+        None ->
             Effect.always (Box.box { platformState: boxedPlatformState, stopPropagation, preventDefault })
 
 runInVdomArena : Bool, ({} -> Effect a) -> Effect a
