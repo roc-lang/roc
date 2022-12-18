@@ -35,8 +35,8 @@ PlatformState state initData : {
 }
 
 HandlerLookup state : {
-    handlers: List (Result (Handler state) [NoHandler]),
-    freeList: List Nat,
+    handlers : List (Result (Handler state) [NoHandler]),
+    freeList : List Nat,
 }
 
 App state initData : {
@@ -278,7 +278,7 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
                 numHandlers = List.len handlerLookup.handlers
                 emptyHandlerLookup = {
                     handlers: List.repeat (Err NoHandler) numHandlers,
-                    freeList: List.range { start: At (numHandlers - 1), end: At 0 }
+                    freeList: List.range { start: At (numHandlers - 1), end: At 0 },
                 }
 
                 { newHandlers, node: newViewRendered } <-
@@ -307,32 +307,31 @@ insertHandler : HandlerLookup state, Handler state -> { index : Nat, handlerLook
 insertHandler = \{ handlers, freeList }, newHandler ->
     when List.last freeList is
         Ok index ->
-            { index,
-              handlerLookup: {
-                handlers: List.set handlers index (Ok newHandler),
-                freeList: List.dropLast freeList
-              }
+            {
+                index,
+                handlerLookup: {
+                    handlers: List.set handlers index (Ok newHandler),
+                    freeList: List.dropLast freeList,
+                },
             }
 
         Err _ ->
-            { index: List.len handlers,
-              handlerLookup: {
-                handlers: List.append handlers (Ok newHandler),
-                freeList: freeList
-              }
+            {
+                index: List.len handlers,
+                handlerLookup: {
+                    handlers: List.append handlers (Ok newHandler),
+                    freeList: freeList,
+                },
             }
 
 replaceHandler : HandlerLookup state, Nat, Handler state -> HandlerLookup state
 replaceHandler = \{ handlers, freeList }, index, newHandler ->
     { list } = List.replace handlers index (Ok newHandler)
 
-    { handlers: list,
-      freeList
+    {
+        handlers: list,
+        freeList,
     }
-
-
-
-
 
 # -------------------------------
 #   SERVER SIDE INIT
