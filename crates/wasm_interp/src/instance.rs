@@ -1,6 +1,6 @@
 use bumpalo::{collections::Vec, Bump};
 use std::fmt::{self, Write};
-use std::iter;
+use std::iter::{self, once, Iterator};
 
 use roc_wasm_module::opcodes::OpCode;
 use roc_wasm_module::parse::{Parse, SkipBytes};
@@ -174,8 +174,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
             self.call_export_help_before_arg_load(self.module, fn_name)?;
         let n_args = param_type_iter.len();
 
-        for (i, (value, type_byte)) in arg_values.into_iter().zip(param_type_iter).enumerate() {
-            let expected_type = ValueType::from(type_byte);
+        for (i, (value, expected_type)) in arg_values.into_iter().zip(param_type_iter).enumerate() {
             let actual_type = ValueType::from(value);
             if actual_type != expected_type {
                 return Err(format!(
@@ -211,14 +210,14 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         let (fn_index, param_type_iter, ret_type) =
             self.call_export_help_before_arg_load(module, fn_name)?;
         let n_args = param_type_iter.len();
-        for (value_bytes, type_byte) in arg_strings
+        for (value_bytes, value_type) in arg_strings
             .iter()
             .skip(1) // first string is the .wasm filename
             .zip(param_type_iter)
         {
             use ValueType::*;
             let value_str = String::from_utf8_lossy(value_bytes);
-            let value = match ValueType::from(type_byte) {
+            let value = match value_type {
                 I32 => Value::I32(value_str.parse::<i32>().map_err(|e| e.to_string())?),
                 I64 => Value::I64(value_str.parse::<i64>().map_err(|e| e.to_string())?),
                 F32 => Value::F32(value_str.parse::<f32>().map_err(|e| e.to_string())?),
@@ -330,16 +329,8 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 }
                 Err(e) => {
                     let file_offset = self.program_counter + module.code.section_offset as usize;
-                    let message = e.to_string_at(file_offset);
-                    // write_stack_trace(
-                    //     &self.current_frame,
-                    //     &self.previous_frames,
-                    //     self.module,
-                    //     &self.value_stack,
-                    //     self.program_counter,
-                    //     &mut message,
-                    // )
-                    // .unwrap();
+                    let mut message = e.to_string_at(file_offset);
+                    self.debug_stack_trace(&mut message).unwrap();
                     return Err(message);
                 }
             };
@@ -599,7 +590,7 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
                 }
                 write!(debug_string, "{:x?}", arg).unwrap();
             }
-            write!(debug_string, "] return_type={:?}\n", return_type).unwrap();
+            writeln!(debug_string, "] return_type={:?}", return_type).unwrap();
         }
     }
 
@@ -1754,6 +1745,106 @@ impl<'a, I: ImportDispatcher> Instance<'a, I> {
         }
         print_blocks(self.value_stack.depth());
 
-        eprintln!("");
+        eprintln!();
+    }
+
+    /// Dump a stack trace when an error occurs
+    /// --------------
+    /// function 123
+    ///   address  0x12345
+    ///   args     0: I64(234), 1: F64(7.15)
+    ///   locals   2: I32(412), 3: F64(3.14)
+    ///   stack    [I64(111), F64(3.14)]
+    /// --------------
+    fn debug_stack_trace(&self, buffer: &mut String) -> fmt::Result {
+        let divider = "-------------------";
+        writeln!(buffer, "{}", divider)?;
+
+        let frames = self.previous_frames.iter().chain(once(&self.current_frame));
+        let next_frames = frames.clone().skip(1);
+
+        // Find the code address to display for each frame
+        // For previous frames, show the address of the CALL instruction
+        // For the current frame, show the program counter value
+        let mut execution_addrs = {
+            // for each previous_frame, find return address of the *next* frame
+            let return_addrs = next_frames.clone().map(|f| f.return_addr);
+            // roll back to the CALL instruction before that return address, it's more meaningful.
+            let call_addrs = return_addrs.map(|ra| self.debug_return_addr_to_call_addr(ra));
+            // For the current frame, show the program_counter
+            call_addrs.chain(once(self.program_counter))
+        };
+
+        let mut frame_ends = next_frames.map(|f| f.locals_start);
+
+        for frame in frames {
+            let Frame {
+                fn_index,
+                locals_count,
+                locals_start,
+                ..
+            } = frame;
+
+            let arg_count = {
+                let signature_index = if *fn_index < self.import_count {
+                    match self.module.import.imports[*fn_index].description {
+                        ImportDesc::Func { signature_index } => signature_index,
+                        _ => unreachable!(),
+                    }
+                } else {
+                    self.module.function.signatures[fn_index - self.import_count]
+                };
+                self.module.types.look_up(signature_index).0.len()
+            };
+
+            // Try to match formatting to wasm-objdump where possible, for easy copy & find
+            writeln!(buffer, "func[{}]", fn_index)?;
+            writeln!(buffer, "  address  {:06x}", execution_addrs.next().unwrap())?;
+
+            write!(buffer, "  args     ")?;
+            for local_index in 0..*locals_count {
+                let value = self.value_stack.get(locals_start + local_index).unwrap();
+                if local_index == arg_count {
+                    write!(buffer, "\n  locals   ")?;
+                } else if local_index != 0 {
+                    write!(buffer, ", ")?;
+                }
+                write!(buffer, "{}: {:?}", local_index, value)?;
+            }
+
+            write!(buffer, "\n  stack    [")?;
+            let frame_end = frame_ends
+                .next()
+                .unwrap_or_else(|| self.value_stack.depth());
+            let stack_start = locals_start + locals_count;
+            for i in stack_start..frame_end {
+                let value = self.value_stack.get(i).unwrap();
+                if i != stack_start {
+                    write!(buffer, ", ")?;
+                }
+                write!(buffer, "{:?}", value)?;
+            }
+            writeln!(buffer, "]")?;
+            writeln!(buffer, "{}", divider)?;
+        }
+
+        Ok(())
+    }
+
+    // Call address is more intuitive than the return address in the stack trace. Search backward for it.
+    fn debug_return_addr_to_call_addr(&self, return_addr: usize) -> usize {
+        // return_addr is pointing at the next instruction after the CALL/CALLINDIRECT.
+        // Just before that is the LEB-128 function index or type index.
+        // The last LEB-128 byte is <128, but the others are >=128 so we can't mistake them for CALL/CALLINDIRECT
+        let mut call_addr = return_addr - 2;
+        loop {
+            let byte = self.module.code.bytes[call_addr];
+            if byte == OpCode::CALL as u8 || byte == OpCode::CALLINDIRECT as u8 {
+                break;
+            } else {
+                call_addr -= 1;
+            }
+        }
+        call_addr
     }
 }
