@@ -1,6 +1,19 @@
-# Server-side rendering
+# Virtual DOM and server-side rendering
 
-**NOT READY YET! WORK IN PROGRESS!**
+**WORK IN PROGRESS! DOES NOT WORK YET!**
+
+## TODO
+
+- [x] JS to load and initialize WebAssembly
+- [x] Events in Roc, with CyclicStructureAccessor type, etc.
+- [x] Get prototype code to compile
+- [ ] Fix compiler stack overflow! (somewhere after type checking)
+- [ ] Get server-side rendering to work
+- [ ] Make the Wasm part of the host, for allocators and stuff (probably Zig?)
+- [ ] Get client-side rendering to work without diffing (always re-render from scratch)
+- [ ] Get client-side rendering to work with diffing
+
+## Outline
 
 The aim is to develop an example of a virtual DOM platform in Roc, with server-side rendering. The virtual DOM rendering is not working yet though!
 
@@ -42,7 +55,6 @@ WebAssembly does not have direct access to web APIs like the DOM. It needs to go
 - We use the same library for static and dynamic HTML.
 - Dynamic code produces `Html state` but the functions that render static HTML take `Html []`. The `[]` type is an empty tag union, and it's impossible to create a value of that type. If you want to pre-render a static version of a view, you can pass it to `translateStatic : Html state -> Html []`
 - A static `Html []` tree cannot contain any event handlers.
-- `lazy` nodes are fully expanded by `translateStatic`.
 - A static `Html []` tree can only contain HTML _attributes_, not DOM _properties_. The difference between the two is rather [pedantic and crazy](https://github.com/elm/html/blob/master/properties-vs-attributes.md). There's usually a 1:1 correspondance, but sometimes attributes and properties have different names like `class` and `className`. This library prefers attribute names to property names, since they work in HTML and we can use `node.setAttribute()` in JS. I'm not sure if there's any practical situation where we _must_ use a DOM property rather than an attribute. We'll see.
 - Event listeners and DOM properties will be inserted as part of the front-end initialization.
 
@@ -61,7 +73,7 @@ App state initData : {
   - Generate a static version of the view
     - Call `app.init` to convert `initData` to `state`
     - Call `app.render` to get the initial view
-    - Call `translateStatic` on the view to get the static version (no event handlers or lazy nodes)
+    - Call `translateStatic` on the view to get the static version (without event handlers)
   - Insert a `<script>` to load and initialize the Wasm app from a JSON representation of `initData`
 - Client side
   - JS
@@ -76,19 +88,10 @@ App state initData : {
     - Recreate the same static view that the server generated, by running the same steps
       - Call `app.init` to convert `initData` to `state`
       - Call `app.render` to get the initial view
-      - Call `translateStatic` on the view to get the static version (no event handlers or lazy nodes)
+      - Call `translateStatic` on the view to get the static version (without event handlers)
     - Call a Roc function called `indexNodes` (same name as the JS function mentioned above)
       - Crawl the _virtual_ tree in the same order as JS crawled the real DOM tree, assigning an index to each node
       - This index will match the index of the corresponding _real_ DOM node in the JS array
     - Run a diff between the dynamic and static versions of the virtual DOM
       - They will be almost identical, except for the event listeners (and perhaps some DOM properties)
       - The app is now fully initialised
-
-## Short term TODO
-
-- [x] JS to load and initialize WebAssembly
-- [ ] Make the Wasm part of the host, for allocators and stuff (probably Zig?)
-- [ ] Prototype without full diffing. Instead just always replace the whole view, for now.
-- [x] Events in Roc, with CyclicStructureAccessor type, etc.
-- [x] Rewrite TypeScript as JavaScript with JSDoc comments, since that still works 100% the same!
-- [ ] Implement Vdom diff in Roc (WIP, depends on planned type checker improvements)
