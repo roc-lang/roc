@@ -30,12 +30,14 @@ PlatformState state initData : {
     app : App state initData,
     state,
     view : RenderedHtml,
-    handlers : HandlerLookup state,
+    handlerLookup : HandlerLookup state,
     isOddArena : Bool,
 }
 
-# TODO: keep a list of free indices that we push and pop like a stack
-HandlerLookup state : List (Result (Handler state) [NoHandler])
+HandlerLookup state : {
+    handlers: List (Result (Handler state) [NoHandler]),
+    freeList: List Nat,
+}
 
 App state initData : {
     init : initData -> state,
@@ -43,7 +45,6 @@ App state initData : {
     wasmUrl : Str,
 }
 
-# App code would only ever deal with the unrendered type. Diff is between old rendered and new unrendered
 Html state : [
     None,
     Text Str,
@@ -249,12 +250,12 @@ JsEventResult state initData : {
 ## DANGER: this function does unusual stuff with memory allocation lifetimes. Be as careful as you would with Zig or C code!
 dispatchEvent : Box (PlatformState state initData), Box (List (List U8)), Nat -> Effect (Box (JsEventResult state initData))
 dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
-    { app, state, view, handlers, isOddArena: wasOddArena } =
+    { app, state, view, handlerLookup, isOddArena: wasOddArena } =
         Box.unbox boxedPlatformState
     eventData =
         Box.unbox boxedEventData
     maybeHandler =
-        List.get handlers handlerId
+        List.get handlerLookup.handlers handlerId
         |> Result.withDefault (Err NoHandler)
     { action, stopPropagation, preventDefault } =
         when maybeHandler is
@@ -274,14 +275,19 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
 
             runInVdomArena isOddArena \_ ->
                 newViewUnrendered = app.render newState
-                emptyHandlers = List.repeat (Err NoHandler) (List.len handlers)
+                numHandlers = List.len handlerLookup.handlers
+                emptyHandlerLookup = {
+                    handlers: List.repeat (Err NoHandler) numHandlers,
+                    freeList: List.range { start: At (numHandlers - 1), end: At 0 }
+                }
 
-                { newHandlers, node: newViewRendered } <- diffAndUpdateDom emptyHandlers view newViewUnrendered |> Effect.after
+                { newHandlers, node: newViewRendered } <-
+                    diffAndUpdateDom emptyHandlerLookup view newViewUnrendered |> Effect.after
                 newBoxedPlatformState = Box.box {
                     app,
                     state: newState,
                     view: newViewRendered,
-                    handlers: newHandlers,
+                    handlerLookup: newHandlers,
                     isOddArena,
                 }
 
@@ -297,27 +303,36 @@ runInVdomArena = \useOddArena, run ->
     _ <- Effect.disableVdomAllocator |> Effect.after
     Effect.always returnVal
 
-insertHandler : List (Result (Handler state) [NoHandler]), Handler state -> { index : Nat, handlers : List (Result (Handler state) [NoHandler]) }
-insertHandler = \handlers, newHandler ->
-    # TODO: speed this up using a free list
-    when List.findFirstIndex handlers Result.isErr is
+insertHandler : HandlerLookup state, Handler state -> { index : Nat, handlerLookup : HandlerLookup state }
+insertHandler = \{ handlers, freeList }, newHandler ->
+    when List.last freeList is
         Ok index ->
-            {
-                index,
+            { index,
+              handlerLookup: {
                 handlers: List.set handlers index (Ok newHandler),
+                freeList: List.dropLast freeList
+              }
             }
 
-        Err NotFound ->
-            {
-                index: List.len handlers,
+        Err _ ->
+            { index: List.len handlers,
+              handlerLookup: {
                 handlers: List.append handlers (Ok newHandler),
+                freeList: freeList
+              }
             }
 
-replaceHandler : List (Result (Handler state) [NoHandler]), Nat, Handler state -> List (Result (Handler state) [NoHandler])
-replaceHandler = \handlers, index, newHandler ->
+replaceHandler : HandlerLookup state, Nat, Handler state -> HandlerLookup state
+replaceHandler = \{ handlers, freeList }, index, newHandler ->
     { list } = List.replace handlers index (Ok newHandler)
 
-    list
+    { handlers: list,
+      freeList
+    }
+
+
+
+
 
 # -------------------------------
 #   SERVER SIDE INIT
@@ -452,6 +467,12 @@ indexNodes = \{ list, index }, unrendered ->
                 index,
             }
 
+# TODO:
+# Emit patches first, then interpret those into Effects.
+# It'll be way more debuggable and the code will probably be simpler.
+# I can write tests more easily, and run more of it outside the browser.
+# Fits with upcoming plans for how Effects will work anyway?
+# First step is to allocate a NodeId without calling out to JS. Wasm needs to drive it.
 diffAndUpdateDom : HandlerLookup state, RenderedHtml, Html state -> Effect { newHandlers : HandlerLookup state, node : RenderedHtml }
 diffAndUpdateDom = \newHandlers, oldNode, newNode ->
     when { oldNode, newNode } is
@@ -530,7 +551,7 @@ addAttribute : AddAttrWalk state, Attribute state -> AddAttrWalk state
 addAttribute = \{ nodeIndex, style, newHandlers, renderedAttrs, effects }, attr ->
     when attr is
         EventListener name accessors handler ->
-            { handlers: updatedHandlers, index: handlerIndex } =
+            { handlerLookup: updatedHandlers, index: handlerIndex } =
                 insertHandler newHandlers handler
 
             # Store the handlerIndex in the rendered virtual DOM tree, since we'll need it for the next diff
