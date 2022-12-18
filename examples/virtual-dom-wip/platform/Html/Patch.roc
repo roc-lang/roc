@@ -19,6 +19,7 @@ Patch : [
     UpdateTextNode NodeId Str,
     AppendChild NodeId NodeId,
     RemoveNode NodeId,
+    ReplaceNode NodeId NodeId,
     SetAttribute NodeId AttrType Str,
     RemoveAttribute NodeId AttrType,
     SetProperty NodeId Str (List U8),
@@ -35,6 +36,7 @@ apply = \patch ->
         UpdateTextNode content -> Effect.updateTextNode content
         AppendChild parentId childId -> Effect.appendChild parentId childId
         RemoveNode id -> Effect.removeNode id
+        ReplaceNode oldId newId -> Effect.replaceNode oldId newId
         SetAttribute nodeId attrName value -> Effect.setAttribute nodeId attrName value
         RemoveAttribute nodeId attrName -> Effect.removeAttribute nodeId attrName
         SetProperty nodeId propName json -> Effect.setProperty nodeId propName json

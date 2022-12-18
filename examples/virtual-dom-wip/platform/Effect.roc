@@ -15,6 +15,7 @@ hosted Effect
         updateTextNode,
         appendChild,
         removeNode,
+        replaceNode,
         setAttribute,
         removeAttribute,
         setProperty,
@@ -51,6 +52,9 @@ appendChild : NodeId, NodeId -> Effect {}
 
 ## removeNode id
 removeNode : NodeId -> Effect {}
+
+## replaceNode oldId newId
+replaceNode : NodeId, NodeId -> Effect {}
 
 ## setAttribute nodeId attrName value
 setAttribute : NodeId, AttrType, Str -> Effect {}
