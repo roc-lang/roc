@@ -5,9 +5,9 @@ app "app-server"
     ]
     provides [app] to pf
 
-# FIXME: compiler doesn't like record types here!
-# Caused by recursive types inside the platform that trigger a type checker bug
-State : U32
+State : {
+    answer : U32,
+}
 
 app : App State State
 app = {
@@ -22,14 +22,14 @@ app = {
 # and can only import from the platform!
 render : State -> Html State
 render = \state ->
-    num = Num.toStr state
+    num = Num.toStr state.answer
 
     html [] [
         head [] [],
         body [] [
             h1 [] [text "The app"],
-            div [] [text "Your number is \(num)"],
+            div [] [text "The answer is \(num)"],
         ],
     ]
 
-expect Html.renderStatic (Html.translateStatic (render 42)) == ""
+expect Html.renderStatic (Html.translateStatic (render { answer: 42 })) == ""
