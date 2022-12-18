@@ -15,10 +15,9 @@
 
 /**
  * @param {string} initData
- * @param {string[]} dynamicRootIds
  * @param {string} wasmUrl
  */
-const init = async (initData, dynamicRootIds, wasmUrl) => {
+const init = async (initData, wasmUrl) => {
   /** @type {Array<Node | null>} */
   const nodes = [];
 
@@ -134,30 +133,17 @@ const init = async (initData, dynamicRootIds, wasmUrl) => {
 
       // Dispatch a DOM event to the specified handler function in Roc
       const dispatchEvent = (ev) => {
-        const { roc_alloc, roc_dispatch_event } = app.exports;
         const outerListRcAddr = roc_alloc(4 + accessors.length * 12, 4);
         memory32[outerListRcAddr >> 2] = 1;
         const outerListBaseAddr = outerListRcAddr + 4;
         let outerListIndex32 = outerListBaseAddr >> 2;
         accessors.forEach((accessor) => {
           const json = accessCyclicStructure(accessor, ev);
-          const length16 = json.length;
-
-          // Due to UTF-8 encoding overhead, a few code points go from 2 bytes in UTF-16 to 3 bytes in UTF-8!
-          const capacity8 = length16 * 3; // Extremely "worst-case", but simple, and the allocation is short-lived.
-          const rcAddr = roc_alloc(4 + capacity8, 4);
-          memory32[rcAddr >> 2] = 1;
-          const baseAddr = rcAddr + 4;
-
-          // Write JSON to the heap allocation of the inner `List U8`
-          const allocation = memory8.subarray(baseAddr, baseAddr + capacity8);
-          const { written } = utf8Encoder.encodeInto(json, allocation);
-          const length = written || 0; // TypeScript claims that `written` can be undefined, though I don't see this in the spec.
-
+          const { pointer, length, capacity } = encodeJsString(json);
           // Write the fields of the inner `List U8` into the heap allocation of the outer List
-          memory32[outerListIndex32++] = baseAddr;
+          memory32[outerListIndex32++] = pointer;
           memory32[outerListIndex32++] = length;
-          memory32[outerListIndex32++] = capacity8;
+          memory32[outerListIndex32++] = capacity;
         });
 
         roc_dispatch_event(outerListBaseAddr, accessors.length, handlerId);
@@ -182,6 +168,29 @@ const init = async (initData, dynamicRootIds, wasmUrl) => {
       element.removeAttribute("data-roc-event-handler-id");
       element.removeEventListener(eventType, dispatchEvent);
     },
+  };
+
+  /**
+   * Write a JS string into the Roc app as a `List U8`
+   * @param {string} str
+   */
+  const encodeJsString = (str) => {
+    const length16 = str.length;
+    // Due to UTF-8 encoding overhead, a few code points go from 2 bytes in UTF-16 to 3 bytes in UTF-8!
+    const capacity = length16 * 3; // Extremely "worst-case", but simple, and the allocation is short-lived.
+    const rcAddr = roc_alloc(4 + capacity, 4);
+    memory32[rcAddr >> 2] = 1;
+    const pointer = rcAddr + 4;
+
+    // Write to the heap allocation of the inner `List U8`
+    const allocation = memory8.subarray(pointer, pointer + capacity);
+    const { written } = utf8Encoder.encodeInto(json, allocation);
+    const length = written || 0; // TypeScript claims that `written` can be undefined, though I don't see this in the spec.
+    return {
+      pointer,
+      length,
+      capacity,
+    };
   };
 
   /**
@@ -273,9 +282,7 @@ const init = async (initData, dynamicRootIds, wasmUrl) => {
   const memory8 = new Uint8Array(memory.buffer);
   const memory32 = new Uint32Array(memory.buffer);
 
-  const { main } = app.exports;
-  const exitCode = main();
-  if (exitCode) {
-    throw new Error(`Roc exited with error code ${exitCode}`);
-  }
+  const { roc_vdom_init, roc_alloc, roc_dispatch_event } = app.exports;
+  const initList = encodeJsString(initData);
+  roc_vdom_init(initList.pointer, initList.length, initList.capacity);
 };
