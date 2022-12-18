@@ -3,7 +3,7 @@ Module {
     header: Platform(
         PlatformHeader {
             before_name: [],
-            name: @9-21 PackagePath(
+            name: @9-21 PackageName(
                 "test/types",
             ),
             requires: KeywordItem {

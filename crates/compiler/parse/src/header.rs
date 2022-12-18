@@ -2,7 +2,7 @@ use crate::ast::{Collection, CommentOrNewline, Spaced, Spaces, StrLiteral, TypeA
 use crate::blankspace::space0_e;
 use crate::ident::{lowercase_ident, UppercaseIdent};
 use crate::parser::{optional, then};
-use crate::parser::{specialize, word1, EPackageEntry, EPackagePath, Parser};
+use crate::parser::{specialize, word1, EPackageEntry, EPackageName, Parser};
 use crate::string_literal;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::Loc;
@@ -82,9 +82,9 @@ pub enum VersionComparison {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub struct PackagePath<'a>(&'a str);
+pub struct PackageName<'a>(&'a str);
 
-impl<'a> PackagePath<'a> {
+impl<'a> PackageName<'a> {
     pub fn to_str(self) -> &'a str {
         self.0
     }
@@ -94,13 +94,13 @@ impl<'a> PackagePath<'a> {
     }
 }
 
-impl<'a> From<PackagePath<'a>> for &'a str {
-    fn from(name: PackagePath<'a>) -> &'a str {
+impl<'a> From<PackageName<'a>> for &'a str {
+    fn from(name: PackageName<'a>) -> &'a str {
         name.0
     }
 }
 
-impl<'a> From<&'a str> for PackagePath<'a> {
+impl<'a> From<&'a str> for PackageName<'a> {
     fn from(string: &'a str) -> Self {
         Self(string)
     }
@@ -204,7 +204,7 @@ pub struct HostedHeader<'a> {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum To<'a> {
     ExistingPackage(&'a str),
-    NewPackage(PackagePath<'a>),
+    NewPackage(PackageName<'a>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -232,7 +232,7 @@ pub struct ProvidesTo<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PackageHeader<'a> {
     pub before_name: &'a [CommentOrNewline<'a>],
-    pub name: Loc<PackagePath<'a>>,
+    pub name: Loc<PackageName<'a>>,
 
     pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>>,
     pub packages:
@@ -248,7 +248,7 @@ pub struct PlatformRequires<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlatformHeader<'a> {
     pub before_name: &'a [CommentOrNewline<'a>],
-    pub name: Loc<PackagePath<'a>>,
+    pub name: Loc<PackageName<'a>>,
 
     pub requires: KeywordItem<'a, RequiresKeyword, PlatformRequires<'a>>,
     pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>>,
@@ -289,7 +289,7 @@ pub struct TypedIdent<'a> {
 pub struct PackageEntry<'a> {
     pub shorthand: &'a str,
     pub spaces_after_shorthand: &'a [CommentOrNewline<'a>],
-    pub package_path: Loc<PackagePath<'a>>,
+    pub package_name: Loc<PackageName<'a>>,
 }
 
 pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPackageEntry<'a>> {
@@ -306,19 +306,19 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
                 ),
                 space0_e(EPackageEntry::IndentPackage)
             )),
-            loc!(specialize(EPackageEntry::BadPackage, package_path()))
+            loc!(specialize(EPackageEntry::BadPackage, package_name()))
         ),
         move |(opt_shorthand, package_or_path)| {
             let entry = match opt_shorthand {
                 Some((shorthand, spaces_after_shorthand)) => PackageEntry {
                     shorthand,
                     spaces_after_shorthand,
-                    package_path: package_or_path,
+                    package_name: package_or_path,
                 },
                 None => PackageEntry {
                     shorthand: "",
                     spaces_after_shorthand: &[],
-                    package_path: package_or_path,
+                    package_name: package_or_path,
                 },
             };
 
@@ -327,13 +327,13 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
     )
 }
 
-pub fn package_path<'a>() -> impl Parser<'a, PackagePath<'a>, EPackagePath<'a>> {
+pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> {
     then(
-        loc!(specialize(EPackagePath::BadPath, string_literal::parse())),
+        loc!(specialize(EPackageName::BadPath, string_literal::parse())),
         move |_arena, state, progress, text| match text.value {
-            StrLiteral::PlainLine(text) => Ok((progress, PackagePath(text), state)),
-            StrLiteral::Line(_) => Err((progress, EPackagePath::Escapes(text.region.start()))),
-            StrLiteral::Block(_) => Err((progress, EPackagePath::Multiline(text.region.start()))),
+            StrLiteral::PlainLine(text) => Ok((progress, PackageName(text), state)),
+            StrLiteral::Line(_) => Err((progress, EPackageName::Escapes(text.region.start()))),
+            StrLiteral::Block(_) => Err((progress, EPackageName::Multiline(text.region.start()))),
         },
     )
 }

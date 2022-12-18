@@ -45,7 +45,7 @@ use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotati
 use roc_parse::header::{
     ExposedName, ImportsEntry, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
 };
-use roc_parse::header::{HeaderType, PackagePath};
+use roc_parse::header::{HeaderType, PackageName};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
@@ -668,7 +668,7 @@ struct ModuleHeader<'a> {
     is_root_module: bool,
     exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
-    packages: MutMap<&'a str, PackagePath<'a>>,
+    packages: MutMap<&'a str, PackageName<'a>>,
     imported_modules: MutMap<ModuleId, Region>,
     package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
     exposes: Vec<Symbol>,
@@ -1834,7 +1834,7 @@ fn state_thread_step<'a>(
     }
 }
 
-fn report_loading_problem(
+pub fn report_loading_problem(
     problem: LoadingProblem<'_>,
     module_ids: ModuleIds,
     render: RenderTarget,
@@ -4100,15 +4100,15 @@ fn load_packages<'a>(
     for Loc { value: entry, .. } in packages.iter() {
         let PackageEntry {
             shorthand,
-            package_path:
+            package_name:
                 Loc {
-                    value: package_path,
+                    value: package_name,
                     ..
                 },
             ..
         } = entry;
 
-        let src = package_path.to_str();
+        let src = package_name.to_str();
 
         // find the `package` or `platform` module on disk,
         // downloading it into a cache dir first if necessary.
@@ -4479,7 +4479,7 @@ fn build_header<'a>(
 
     let package_entries = packages
         .iter()
-        .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_path.value))
+        .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_name.value))
         .collect::<MutMap<_, _>>();
 
     // Send the deps to the coordinator thread for processing,

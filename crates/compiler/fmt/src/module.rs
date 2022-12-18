@@ -9,7 +9,7 @@ use roc_parse::ast::{Collection, Header, Module, Spaced, Spaces};
 use roc_parse::header::{
     AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword, HostedHeader, ImportsEntry,
     ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName, PackageEntry, PackageHeader,
-    PackageKeyword, PackagePath, PackagesKeyword, PlatformHeader, PlatformRequires,
+    PackageKeyword, PackageName, PackagesKeyword, PlatformHeader, PlatformRequires,
     ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
 };
 use roc_parse::ident::UppercaseIdent;
@@ -293,7 +293,7 @@ impl<'a> Formattable for TypedIdent<'a> {
     }
 }
 
-fn fmt_package_name<'buf>(buf: &mut Buf<'buf>, name: PackagePath, _indent: u16) {
+fn fmt_package_name<'buf>(buf: &mut Buf<'buf>, name: PackageName, _indent: u16) {
     buf.push('"');
     buf.push_str_allow_spaces(name.to_str());
     buf.push('"');
@@ -470,7 +470,7 @@ fn fmt_packages_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &PackageEntry<'a>, i
     buf.push_str(entry.shorthand);
     buf.push(':');
     fmt_default_spaces(buf, entry.spaces_after_shorthand, indent);
-    fmt_package_name(buf, entry.package_path.value, indent);
+    fmt_package_name(buf, entry.package_name.value, indent);
 }
 
 fn fmt_imports_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &ImportsEntry<'a>, indent: u16) {

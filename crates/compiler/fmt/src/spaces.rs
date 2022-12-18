@@ -9,7 +9,7 @@ use roc_parse::{
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
-        ModuleName, PackageEntry, PackageHeader, PackagePath, PlatformHeader, PlatformRequires,
+        ModuleName, PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires,
         ProvidesTo, To, TypedIdent,
     },
     ident::UppercaseIdent,
@@ -355,7 +355,7 @@ impl<'a> RemoveSpaces<'a> for ModuleName<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for PackagePath<'a> {
+impl<'a> RemoveSpaces<'a> for PackageName<'a> {
     fn remove_spaces(&self, _arena: &'a Bump) -> Self {
         *self
     }
@@ -400,7 +400,7 @@ impl<'a> RemoveSpaces<'a> for PackageEntry<'a> {
         PackageEntry {
             shorthand: self.shorthand,
             spaces_after_shorthand: &[],
-            package_path: self.package_path.remove_spaces(arena),
+            package_name: self.package_name.remove_spaces(arena),
         }
     }
 }

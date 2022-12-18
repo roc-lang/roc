@@ -3,7 +3,7 @@ Module {
     header: Platform(
         PlatformHeader {
             before_name: [],
-            name: @9-25 PackagePath(
+            name: @9-25 PackageName(
                 "rtfeldman/blah",
             ),
             requires: KeywordItem {
