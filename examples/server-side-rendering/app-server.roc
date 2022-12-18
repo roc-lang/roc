@@ -1,7 +1,7 @@
 app "app-server"
     packages { pf: "platform/server-side.roc" }
     imports [
-        pf.Html.{ App, Html, html, head, body, div, text, h1, table, tr, td, th },
+        pf.Html.{ App, Html, html, head, body, div, text, h1 },
     ]
     provides [app] to pf
 
@@ -16,6 +16,10 @@ app = {
     wasmUrl: "assets/app.wasm",
 }
 
+# This function must be identical in both server and client.
+# Of course, it should be in a separate .roc file imported into both,
+# but that has not been implemented yet. Currently apps are single-file
+# and can only import from the platform!
 render : State -> Html State
 render = \state ->
     num = Num.toStr state
@@ -28,4 +32,4 @@ render = \state ->
         ],
     ]
 
-expect (Html.renderStatic (Html.translateStatic (render 42))) == ""
+expect Html.renderStatic (Html.translateStatic (render 42)) == ""

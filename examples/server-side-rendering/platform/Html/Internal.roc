@@ -453,13 +453,9 @@ indexNodes = \{ list, index }, node ->
                 index,
             }
 
-# -------------------------------
-#   VIRTUAL DOM DIFF
-#   Doesn't work yet!! (Nov 2022)
-# -------------------------------
 diffAndUpdateDom : HandlerLookup state, Html state, Html state -> Effect { newHandlers : HandlerLookup state, node : Html state }
 diffAndUpdateDom = \newHandlers, oldNode, newNode ->
-    todo = Effect.always { newHandlers, node: newNode }
+    doNothing = Effect.always { newHandlers, node: newNode }
 
     when { oldNode, newNode } is
         { oldNode: Text (Rendered index) oldContent, newNode: Text NotRendered newContent } ->
@@ -472,31 +468,37 @@ diffAndUpdateDom = \newHandlers, oldNode, newNode ->
                 |> Effect.map \_ -> retVal
 
         { oldNode: Text _ _, newNode: Text _ _ } ->
-            Effect.always { newHandlers, node: newNode }
+            # Impossible. oldNode is NotRendered or newNode is Rendered
+            # TODO: separate the types!
+            doNothing
 
-        { oldNode: Element oldName (Rendered index) oldSize oldAttrs oldChildren, newNode: Element newName NotRendered newSize newAttrs newChildren } ->
-            if newName == oldName then
-                # iterate over the children and attrs
-                todo
-            else
-                # create a new subtree from the bottom up
-                # swap it
-                todo
+        { oldNode: Element _oldName (Rendered _index) _oldSize _oldAttrs _oldChildren, newNode: Element _newName NotRendered _newSize _newAttrs _newChildren } ->
+            # TODO: actual diffing! LOL This is just to get something up and running
+            renderFromScratch newHandlers newNode
 
         { oldNode: Element _ _ _ _ _, newNode: Element _ _ _ _ _ } ->
-            todo #  TODO: debug message for framework dev
+            # Impossible. oldNode is NotRendered or newNode is Rendered
+            # TODO: separate the types!
+            doNothing
 
         { oldNode: None, newNode: None } ->
-            todo
+            doNothing
 
         _ ->
-            # Just replace
-            todo
+            # old node has been replaced with a totally different variant. There's no point in diffing, just replace.
+            renderFromScratch newHandlers newNode
 
-# TODO: This function is not called because it doesn't work yet!
-# It recurses over a recursive data type with a type variable, accumulating effects along the way.
-# The type checker is not quite ready to deal with that yet, so some code is commented out.
-#
+renderFromScratch : HandlerLookup state, Html state -> Effect { newHandlers : HandlerLookup state, node : Html state }
+renderFromScratch = \newHandlers, newNode ->
+    { newHandlers: subTreeHandlers, renderedNodes: renderedNewNodeSingleton } <-
+        createSubTree (Effect.always { newHandlers, renderedNodes: [] }) newNode |> Effect.after
+    renderedNewNode =
+        renderedNewNodeSingleton
+        |> List.first
+        |> Result.withDefault (Text NotRendered "ERROR createSubTree returned a non-singleton list")
+
+    Effect.always { newHandlers: subTreeHandlers, node: renderedNewNode }
+
 createSubTree :Effect { newHandlers : HandlerLookup state, renderedNodes : List (Html state) },
     Html state
     -> Effect { newHandlers : HandlerLookup state, renderedNodes : List (Html state) }
@@ -513,10 +515,10 @@ createSubTree = \previousEffects, node ->
             jsIndex : MaybeJsIndex
             jsIndex = Rendered nodeIndex
 
-            # TODO: this walk does not compile. Type checker is not ready for this yet!
-            # { newHandlers: newHandlersKids, renderedNodes: renderedNodesKids } <-
-            #     List.walk children { newHandlers: newHandlersAttrs, renderedNodes: [] } createSubTree |> Effect.after
-            { newHandlers: newHandlersKids, renderedNodes: renderedNodesKids } = { newHandlers: newHandlersAttrs, renderedNodes: [] } # TODO: remove
+            childWalkInit = Effect.always { newHandlers: newHandlersAttrs, renderedNodes: [] }
+
+            { newHandlers: newHandlersKids, renderedNodes: renderedNodesKids } <-
+                List.walk children childWalkInit createSubTree |> Effect.after
 
             Effect.always {
                 newHandlers: newHandlersKids,
@@ -545,8 +547,8 @@ addAttribute = \{ nodeIndex, style, newHandlers, renderedAttrs, effects }, attr 
     when attr is
         EventListener name accessors (NotRendered handler) ->
             { handlers: updatedHandlers, index: handlerIndex } =
-                # insertHandler newHandlers handler
-                { handlers: newHandlers, index: 0 } # TODO: type checker issues! For now, event listeners will not work. :-(
+                insertHandler newHandlers handler
+
             # Store the handlerIndex in the rendered virtual DOM tree, since we'll need it for the next diff
             renderedAttr =
                 EventListener name accessors (Rendered handlerIndex)
