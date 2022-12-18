@@ -694,9 +694,9 @@ range = \{ start, end, step ? 0 } ->
         At at ->
             isComplete =
                 if stepIsPositive then
-                    \i -> i > at
+                    \i -> i >= at
                 else
-                    \i -> i < at
+                    \i -> i <= at
 
             # TODO: switch to List.withCapacity
             rangeHelp [] inclusiveStart incByStep isComplete
@@ -704,9 +704,9 @@ range = \{ start, end, step ? 0 } ->
         Before before ->
             isComplete =
                 if stepIsPositive then
-                    \i -> i >= before
+                    \i -> i >= before + 1
                 else
-                    \i -> i <= before
+                    \i -> i <= before - 1
 
             # TODO: switch to List.withCapacity
             rangeHelp [] inclusiveStart incByStep isComplete
@@ -716,7 +716,7 @@ range = \{ start, end, step ? 0 } ->
 
 rangeHelp = \accum, i, incByStep, isComplete ->
     if isComplete i then
-        accum
+        List.append accum i
     else
         # TODO: change this to List.appendUnsafe once capacity is set correctly
         rangeHelp (List.append accum i) (incByStep i) incByStep isComplete
@@ -753,6 +753,9 @@ expect
 
 expect
     List.range { start: At 4, end: Length 5, step: -3 } == [4, 1, -2, -5, -8]
+
+expect
+    List.range { start: At 4, end: At 0 } == [4, 3, 2, 1, 0]
 
 ## Sort with a custom comparison function
 sortWith : List a, (a, a -> [LT, EQ, GT]) -> List a
