@@ -102,8 +102,10 @@ fn read_state<'a, 'ctx, 'env>(
     let one = env.ptr_int().const_int(1, false);
     let offset_ptr = pointer_at_offset(env.builder, env.ptr_int(), ptr, one);
 
-    let count = env.builder.build_load(ptr, "load_count");
-    let offset = env.builder.build_load(offset_ptr, "load_offset");
+    let count = env.builder.new_build_load(env.ptr_int(), ptr, "load_count");
+    let offset = env
+        .builder
+        .new_build_load(env.ptr_int(), offset_ptr, "load_offset");
 
     (count.into_int_value(), offset.into_int_value())
 }
@@ -1033,7 +1035,8 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                         bd.build_int_mul(element_stack_size, index, "current_offset");
                     let current_offset =
                         bd.build_int_add(elements_start_offset, current_offset, "current_offset");
-                    let current_extra_offset = bd.build_load(rest_offset, "element_offset");
+                    let current_extra_offset =
+                        bd.new_build_load(env.ptr_int(), rest_offset, "element_offset");
 
                     let offset = current_offset;
                     let extra_offset = current_extra_offset.into_int_value();
@@ -1064,7 +1067,7 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
 
                 incrementing_elem_loop(env, parent, *elem, elements, len, "index", body);
 
-                bd.build_load(rest_offset, "rest_start_offset")
+                bd.new_build_load(env.ptr_int(), rest_offset, "rest_start_offset")
                     .into_int_value()
             }
         }

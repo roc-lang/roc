@@ -19,7 +19,8 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds};
 
-use super::build::create_entry_block_alloca;
+use super::build::{create_entry_block_alloca, BuilderExt};
+use super::convert::zig_list_type;
 
 use std::convert::TryInto;
 
@@ -139,7 +140,9 @@ pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
                 .collect();
             call_void_bitcode_fn(env, &fixed_args, fn_name);
 
-            let cc_return_value = env.builder.build_load(cc_return_value_ptr, "read_result");
+            let cc_return_value =
+                env.builder
+                    .new_build_load(cc_return_type, cc_return_value_ptr, "read_result");
             if roc_return_type.size_of() == cc_return_type.size_of() {
                 cc_return_value
             } else {
@@ -392,8 +395,8 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
 
             generic_value_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
 
-            let value_ptr_type =
-                basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
+            let value_type = basic_type_from_layout(env, layout);
+            let value_ptr_type = value_type.ptr_type(AddressSpace::Generic);
             let value_ptr =
                 env.builder
                     .build_pointer_cast(generic_value_ptr, value_ptr_type, "load_opaque");
@@ -404,7 +407,8 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
             let value = if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
                 value_ptr.into()
             } else {
-                env.builder.build_load(value_ptr, "load_opaque")
+                env.builder
+                    .new_build_load(value_type, value_ptr, "load_opaque")
             };
 
             match rc_operation {
@@ -573,8 +577,12 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                 env.builder
                     .build_pointer_cast(value_ptr2, value_ptr_type, "load_opaque");
 
-            let value1 = env.builder.build_load(value_cast1, "load_opaque");
-            let value2 = env.builder.build_load(value_cast2, "load_opaque");
+            let value1 = env
+                .builder
+                .new_build_load(value_type, value_cast1, "load_opaque");
+            let value2 = env
+                .builder
+                .new_build_load(value_type, value_cast2, "load_opaque");
 
             let default = [value1.into(), value2.into()];
 
@@ -596,7 +604,9 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                             "load_opaque",
                         );
 
-                        let closure_data = env.builder.build_load(closure_cast, "load_opaque");
+                        let closure_data =
+                            env.builder
+                                .new_build_load(closure_type, closure_cast, "load_opaque");
 
                         env.arena
                             .alloc([value1.into(), value2.into(), closure_data.into()])
@@ -644,7 +654,8 @@ impl<'ctx> BitcodeReturnValue<'ctx> {
         match self {
             BitcodeReturnValue::List(result) => {
                 call_void_bitcode_fn(env, arguments, fn_name);
-                env.builder.build_load(*result, "load_list")
+                env.builder
+                    .new_build_load(zig_list_type(env), *result, "load_list")
             }
             BitcodeReturnValue::Str(result) => {
                 call_void_bitcode_fn(env, arguments, fn_name);

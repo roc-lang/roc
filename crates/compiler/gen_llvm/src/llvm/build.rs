@@ -93,7 +93,7 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         index: u32,
         name: &str,
     ) -> Result<PointerValue<'ctx>, ()> {
-        assert_eq!(
+        debug_assert_eq!(
             ptr.get_type().get_element_type().into_struct_type(),
             struct_type
         );
@@ -106,7 +106,7 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         ptr: PointerValue<'ctx>,
         name: &str,
     ) -> BasicValueEnum<'ctx> {
-        assert_eq!(
+        debug_assert_eq!(
             ptr.get_type().get_element_type(),
             element_type.as_any_type_enum()
         );
@@ -120,7 +120,7 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         ordered_indexes: &[IntValue<'ctx>],
         name: &str,
     ) -> PointerValue<'ctx> {
-        assert_eq!(
+        debug_assert_eq!(
             ptr.get_type().get_element_type(),
             element_type.as_any_type_enum()
         );
@@ -842,7 +842,10 @@ fn build_string_literal<'a, 'ctx, 'env>(
         let alloca = const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements);
 
         match env.target_info.ptr_width() {
-            PtrWidth::Bytes4 => env.builder.build_load(alloca, "load_const_str"),
+            PtrWidth::Bytes4 => {
+                env.builder
+                    .new_build_load(zig_str_type(env), alloca, "load_const_str")
+            }
             PtrWidth::Bytes8 => alloca.into(),
         }
     }
@@ -1226,31 +1229,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     let field_layout = field_layouts[*index as usize];
                     use_roc_value(env, field_layout, field_value, "struct_field_tag")
                 }
-                (
-                    PointerValue(argument),
-                    Layout::Union(UnionLayout::NonNullableUnwrapped(fields)),
-                ) => {
-                    let struct_layout = Layout::struct_no_name_order(fields);
-                    let struct_type = basic_type_from_layout(env, &struct_layout);
-
-                    let cast_argument = env.builder.build_pointer_cast(
-                        argument,
-                        struct_type.ptr_type(AddressSpace::Generic),
-                        "cast_rosetree_like",
-                    );
-
-                    let ptr = env
-                        .builder
-                        .new_build_struct_gep(
-                            struct_type.into_struct_type(),
-                            cast_argument,
-                            *index as u32,
-                            env.arena.alloc(format!("non_nullable_unwrapped_{}", index)),
-                        )
-                        .unwrap();
-
-                    env.builder.build_load(ptr, "load_rosetree_like")
-                }
                 (other, layout) => {
                     // potential cause: indexing into an unwrapped 1-element record/tag?
                     unreachable!(
@@ -1552,12 +1530,15 @@ fn build_struct<'a, 'ctx, 'env>(
         // The layout of the struct expects them to be dropped!
         let (field_expr, field_layout) = load_symbol_and_layout(scope, symbol);
         if !field_layout.is_dropped_because_empty() {
-            field_types.push(basic_type_from_layout(env, field_layout));
+            let field_type = basic_type_from_layout(env, field_layout);
+            field_types.push(field_type);
 
             if field_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
-                let field_value = env
-                    .builder
-                    .build_load(field_expr.into_pointer_value(), "load_tag_to_put_in_struct");
+                let field_value = env.builder.new_build_load(
+                    field_type,
+                    field_expr.into_pointer_value(),
+                    "load_tag_to_put_in_struct",
+                );
 
                 field_vals.push(field_value);
             } else {
@@ -1845,20 +1826,18 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
     let tag_id_layout = union_layout.tag_id_layout();
     let tag_id_int_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
 
-    let union_struct_type = struct_type_from_union_layout(env, union_layout);
-
     match union_layout {
         UnionLayout::NonRecursive(_) => {
             debug_assert!(argument.is_pointer_value(), "{:?}", argument);
 
             let argument_ptr = argument.into_pointer_value();
-            get_tag_id_wrapped(env, union_struct_type, argument_ptr)
+            get_tag_id_wrapped(env, *union_layout, argument_ptr)
         }
         UnionLayout::Recursive(_) => {
             let argument_ptr = argument.into_pointer_value();
 
             if union_layout.stores_tag_id_as_data(env.target_info) {
-                get_tag_id_wrapped(env, union_struct_type, argument_ptr)
+                get_tag_id_wrapped(env, *union_layout, argument_ptr)
             } else {
                 tag_pointer_read_tag_id(env, argument_ptr)
             }
@@ -1889,7 +1868,7 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
                 env.builder.position_at_end(else_block);
 
                 let tag_id = if union_layout.stores_tag_id_as_data(env.target_info) {
-                    get_tag_id_wrapped(env, union_struct_type, argument_ptr)
+                    get_tag_id_wrapped(env, *union_layout, argument_ptr)
                 } else {
                     tag_pointer_read_tag_id(env, argument_ptr)
                 };
@@ -1900,7 +1879,7 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
             env.builder.position_at_end(cont_block);
 
             env.builder
-                .build_load(result, "load_result")
+                .new_build_load(tag_id_int_type, result, "load_result")
                 .into_int_value()
         }
         UnionLayout::NullableUnwrapped { nullable_id, .. } => {
@@ -2256,14 +2235,16 @@ pub fn load_roc_value<'a, 'ctx, 'env>(
     source: PointerValue<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
+    let basic_type = basic_type_from_layout(env, &layout);
+
     if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
-        let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
+        let alloca = entry_block_alloca_zerofill(env, basic_type, name);
 
         store_roc_value(env, layout, alloca, source.into());
 
         alloca.into()
     } else {
-        env.builder.build_load(source, name)
+        env.builder.new_build_load(basic_type, source, name)
     }
 }
 
@@ -3010,7 +2991,7 @@ fn complex_bitcast_from_bigger_than_to<'ctx>(
         name,
     );
 
-    builder.build_load(to_type_pointer, "cast_value")
+    builder.new_build_load(to_type, to_type_pointer, "cast_value")
 }
 
 fn complex_bitcast_to_bigger_than_from<'ctx>(
@@ -3037,15 +3018,18 @@ fn complex_bitcast_to_bigger_than_from<'ctx>(
     builder.build_store(from_type_pointer, from_value);
 
     // then read it back as a different type
-    builder.build_load(storage, "cast_value")
+    builder.new_build_load(to_type, storage, "cast_value")
 }
 
 /// get the tag id out of a pointer to a wrapped (i.e. stores the tag id at runtime) layout
 fn get_tag_id_wrapped<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
-    union_struct_type: StructType<'ctx>,
+    union_layout: UnionLayout<'a>,
     from_value: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
+    let union_struct_type = struct_type_from_union_layout(env, &union_layout);
+    let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
+
     let tag_id_ptr = env
         .builder
         .new_build_struct_gep(
@@ -3057,7 +3041,7 @@ fn get_tag_id_wrapped<'a, 'ctx, 'env>(
         .unwrap();
 
     env.builder
-        .build_load(tag_id_ptr, "load_tag_id")
+        .new_build_load(tag_id_type, tag_id_ptr, "load_tag_id")
         .into_int_value()
 }
 
@@ -3434,7 +3418,9 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
                     "bitcast_arg",
                 );
 
-                let loaded = env.builder.build_load(fastcc_ptr, "load_arg");
+                let loaded = env
+                    .builder
+                    .new_build_load(fastcc_type, fastcc_ptr, "load_arg");
                 arguments_for_call.push(loaded);
             } else {
                 let as_cc_type = env.builder.build_pointer_cast(
@@ -3550,9 +3536,11 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
         } else {
             match layout {
                 Layout::Builtin(Builtin::List(_)) => {
-                    let loaded = env
-                        .builder
-                        .build_load(arg.into_pointer_value(), "load_list_pointer");
+                    let loaded = env.builder.new_build_load(
+                        arg_type,
+                        arg.into_pointer_value(),
+                        "load_list_pointer",
+                    );
                     let cast =
                         complex_bitcast_check_size(env, loaded, fastcc_type, "to_fastcc_type_1");
                     arguments_for_call.push(cast);
@@ -3760,7 +3748,8 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                         "bitcast_arg",
                     );
 
-                    env.builder.build_load(fastcc_ptr, "load_arg")
+                    env.builder
+                        .new_build_load(*fastcc_type, fastcc_ptr, "load_arg")
                 } else {
                     complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type_2")
                 }
@@ -3777,9 +3766,11 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                 env.builder.build_return(Some(&value));
             }
             RocReturn::ByPointer => {
-                let loaded = env
-                    .builder
-                    .build_load(value.into_pointer_value(), "load_result");
+                let loaded = env.builder.new_build_load(
+                    return_type,
+                    value.into_pointer_value(),
+                    "load_result",
+                );
                 env.builder.build_return(Some(&loaded));
             }
         },
@@ -3793,9 +3784,11 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                     // TODO: ideally, in this case, we should pass the C return pointer directly
                     // into the call_roc_function rather than forcing an extra alloca, load, and
                     // store!
-                    let value = env
-                        .builder
-                        .build_load(value.into_pointer_value(), "load_roc_result");
+                    let value = env.builder.new_build_load(
+                        return_type,
+                        value.into_pointer_value(),
+                        "load_roc_result",
+                    );
                     env.builder.build_store(out_ptr, value);
                 }
             }
@@ -4073,7 +4066,8 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
             let v1 = call_result_type.const_zero();
 
             // tag must be non-zero, indicating failure
-            let tag = builder.build_load(error_tag_ptr, "load_panic_tag");
+            let tag =
+                builder.new_build_load(env.context.i64_type(), error_tag_ptr, "load_panic_tag");
 
             let v2 = builder.build_insert_value(v1, tag, 0, "set_error").unwrap();
 
@@ -4090,7 +4084,11 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
 
     env.builder.position_at_end(cont_block);
 
-    builder.build_load(result_alloca, "set_jump_and_catch_long_jump_load_result")
+    builder.new_build_load(
+        call_result_type,
+        result_alloca,
+        "set_jump_and_catch_long_jump_load_result",
+    )
 }
 
 fn make_exception_catcher<'a, 'ctx, 'env>(
@@ -4140,6 +4138,8 @@ fn make_good_roc_result<'a, 'ctx, 'env>(
     let context = env.context;
     let builder = env.builder;
 
+    let return_type = basic_type_from_layout(env, &return_layout);
+
     let v1 = roc_call_result_type(env, basic_type_from_layout(env, &return_layout)).const_zero();
 
     let v2 = builder
@@ -4147,7 +4147,8 @@ fn make_good_roc_result<'a, 'ctx, 'env>(
         .unwrap();
 
     let v3 = if return_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
-        let loaded = env.builder.build_load(
+        let loaded = env.builder.new_build_load(
+            return_type,
             return_value.into_pointer_value(),
             "load_call_result_passed_by_ptr",
         );
@@ -4738,7 +4739,8 @@ fn build_closure_caller<'a, 'ctx, 'env>(
         if param.is_pointer_value()
             && !layout.is_passed_by_reference(env.layout_interner, env.target_info)
         {
-            *param = builder.build_load(param.into_pointer_value(), "load_param");
+            let basic_type = basic_type_from_layout(env, layout);
+            *param = builder.new_build_load(basic_type, param.into_pointer_value(), "load_param");
         }
     }
 
@@ -5038,7 +5040,8 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
             call.set_call_convention(FAST_CALL_CONV);
 
-            env.builder.build_load(result_alloca, "load_result")
+            env.builder
+                .new_build_load(result_type, result_alloca, "load_result")
         }
         RocReturn::ByPointer => {
             let it = arguments.iter().map(|x| (*x).into());
@@ -5062,8 +5065,11 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             if result_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
                 result_alloca.into()
             } else {
-                env.builder
-                    .build_load(result_alloca, "return_by_pointer_load_result")
+                env.builder.new_build_load(
+                    result_type,
+                    result_alloca,
+                    "return_by_pointer_load_result",
+                )
             }
         }
         RocReturn::Return => {
@@ -5540,9 +5546,11 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                         let return_value = match cc_return {
                             CCReturn::Return => call.try_as_basic_value().left().unwrap(),
 
-                            CCReturn::ByPointer => {
-                                env.builder.build_load(return_pointer, "read_result")
-                            }
+                            CCReturn::ByPointer => env.builder.new_build_load(
+                                return_type,
+                                return_pointer,
+                                "read_result",
+                            ),
                             CCReturn::Void => return_type.const_zero(),
                         };
 

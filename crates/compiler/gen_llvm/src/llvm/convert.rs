@@ -415,7 +415,7 @@ impl<'ctx> RocUnion<'ctx> {
         }
 
         env.builder
-            .build_load(tag_alloca, "load_tag")
+            .new_build_load(self.struct_type(), tag_alloca, "load_tag")
             .into_struct_value()
     }
 }

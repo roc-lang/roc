@@ -326,7 +326,9 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx, 'env>(
     };
 
     // Load the element and returned list into a struct.
-    let old_element = env.builder.build_load(element_ptr, "load_element");
+    let old_element = env
+        .builder
+        .new_build_load(element_type, element_ptr, "load_element");
 
     // the list has the same alignment as a usize / ptr. The element comes first in the struct if
     // its alignment is bigger than that of a list.
@@ -665,7 +667,9 @@ where
     {
         builder.position_at_end(loop_bb);
 
-        let current_index = builder.build_load(index_alloca, "index").into_int_value();
+        let current_index = builder
+            .new_build_load(env.ptr_int(), index_alloca, "index")
+            .into_int_value();
         let next_index = builder.build_int_add(current_index, one, "next_index");
         builder.build_store(index_alloca, next_index);
 

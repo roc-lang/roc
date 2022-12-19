@@ -6,7 +6,7 @@ use crate::llvm::build::{
     WhenRecursive, FAST_CALL_CONV,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{basic_type_from_layout, RocUnion};
+use crate::llvm::convert::{basic_type_from_layout, zig_str_type, RocUnion};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
@@ -100,7 +100,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
     fn get_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         env.builder
-            .build_load(self.value, "get_refcount")
+            .new_build_load(env.ptr_int(), self.value, "get_refcount")
             .into_int_value()
     }
 
@@ -804,8 +804,9 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     let arg_val = if Layout::Builtin(Builtin::Str)
         .is_passed_by_reference(env.layout_interner, env.target_info)
     {
+        let str_type = zig_str_type(env);
         env.builder
-            .build_load(arg_val.into_pointer_value(), "load_str_to_stack")
+            .new_build_load(str_type, arg_val.into_pointer_value(), "load_str_to_stack")
     } else {
         // it's already a struct, just do nothing
         debug_assert!(arg_val.is_struct_value());
@@ -1240,9 +1241,11 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                     )
                     .unwrap();
 
-                let ptr_as_i64_ptr = env
-                    .builder
-                    .build_load(elem_pointer, "load_recursive_pointer");
+                let ptr_as_i64_ptr = env.builder.new_build_load(
+                    env.context.i64_type().ptr_type(AddressSpace::Generic),
+                    elem_pointer,
+                    "load_recursive_pointer",
+                );
 
                 debug_assert!(ptr_as_i64_ptr.is_pointer_value());
 
@@ -1610,7 +1613,11 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx, 'env>(
 
     let tag_id = env
         .builder
-        .build_load(tag_id_ptr, "load_tag_id")
+        .new_build_load(
+            basic_type_from_layout(env, &union_layout.tag_id_layout()),
+            tag_id_ptr,
+            "load_tag_id",
+        )
         .into_int_value();
 
     let tag_id_u8 =
@@ -1678,7 +1685,11 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx, 'env>(
                     .unwrap();
 
                 // This is the actual pointer to the recursive data.
-                let field_value = env.builder.build_load(field_ptr, "load_recursive_pointer");
+                let field_value = env.builder.new_build_load(
+                    env.context.i64_type().ptr_type(AddressSpace::Generic),
+                    field_ptr,
+                    "load_recursive_pointer",
+                );
 
                 debug_assert!(field_value.is_pointer_value());
 
@@ -1711,7 +1722,11 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx, 'env>(
                     if field_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
                         field_ptr.into()
                     } else {
-                        env.builder.build_load(field_ptr, "field_value")
+                        env.builder.new_build_load(
+                            basic_type_from_layout(env, field_layout),
+                            field_ptr,
+                            "field_value",
+                        )
                     };
 
                 modify_refcount_layout_help(

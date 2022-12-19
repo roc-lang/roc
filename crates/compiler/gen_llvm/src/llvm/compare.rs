@@ -527,7 +527,9 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
         builder.build_unconditional_branch(loop_bb);
         builder.position_at_end(loop_bb);
 
-        let curr_index = builder.build_load(index_alloca, "index").into_int_value();
+        let curr_index = builder
+            .new_build_load(env.ptr_int(), index_alloca, "index")
+            .into_int_value();
 
         // #index < end
         let loop_end_cond =
@@ -1255,12 +1257,12 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
 
     let struct1 = env
         .builder
-        .build_load(struct1_ptr, "load_struct1")
+        .new_build_load(wrapper_type, struct1_ptr, "load_struct1")
         .into_struct_value();
 
     let struct2 = env
         .builder
-        .build_load(struct2_ptr, "load_struct2")
+        .new_build_load(wrapper_type, struct2_ptr, "load_struct2")
         .into_struct_value();
 
     build_struct_eq(
