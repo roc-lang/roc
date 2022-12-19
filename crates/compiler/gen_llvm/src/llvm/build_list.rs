@@ -17,6 +17,7 @@ use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use super::bitcode::{call_list_bitcode_fn, BitcodeReturns};
 use super::build::{
     create_entry_block_alloca, load_roc_value, load_symbol, store_roc_value, struct_from_fields,
+    BuilderExt,
 };
 use super::convert::zig_list_type;
 
@@ -138,8 +139,14 @@ pub(crate) fn list_get_unsafe<'a, 'ctx, 'env>(
 
     // Assume the bounds have already been checked earlier
     // (e.g. by List.get or List.first, which wrap List.#getUnsafe)
-    let elem_ptr =
-        unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "list_get_element") };
+    let elem_ptr = unsafe {
+        builder.new_build_in_bounds_gep(
+            elem_type,
+            array_data_ptr,
+            &[elem_index],
+            "list_get_element",
+        )
+    };
 
     let result = load_roc_value(env, *element_layout, elem_ptr, "list_get_load_element");
 
@@ -608,9 +615,12 @@ where
 {
     let builder = env.builder;
 
+    let element_type = basic_type_from_layout(env, &element_layout);
+
     incrementing_index_loop(env, parent, len, index_name, |index| {
         // The pointer to the element in the list
-        let element_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index], "load_index") };
+        let element_ptr =
+            unsafe { builder.new_build_in_bounds_gep(element_type, ptr, &[index], "load_index") };
 
         let elem = load_roc_value(
             env,

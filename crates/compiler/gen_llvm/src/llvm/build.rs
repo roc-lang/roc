@@ -75,6 +75,14 @@ pub(crate) trait BuilderExt<'ctx> {
         ptr: PointerValue<'ctx>,
         name: &str,
     ) -> BasicValueEnum<'ctx>;
+
+    unsafe fn new_build_in_bounds_gep(
+        &self,
+        element_type: impl BasicType<'ctx>,
+        ptr: PointerValue<'ctx>,
+        ordered_indexes: &[IntValue<'ctx>],
+        name: &str,
+    ) -> PointerValue<'ctx>;
 }
 
 impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
@@ -103,6 +111,21 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
             element_type.as_any_type_enum()
         );
         self.build_load(ptr, name)
+    }
+
+    unsafe fn new_build_in_bounds_gep(
+        &self,
+        element_type: impl BasicType<'ctx>,
+        ptr: PointerValue<'ctx>,
+        ordered_indexes: &[IntValue<'ctx>],
+        name: &str,
+    ) -> PointerValue<'ctx> {
+        assert_eq!(
+            ptr.get_type().get_element_type(),
+            element_type.as_any_type_enum()
+        );
+
+        self.build_in_bounds_gep(ptr, ordered_indexes, name)
     }
 }
 
@@ -2168,8 +2191,12 @@ fn list_literal<'a, 'ctx, 'env>(
             let offset = env.ptr_int().const_int(zero_elements as _, false);
 
             let ptr = unsafe {
-                env.builder
-                    .build_in_bounds_gep(global, &[zero, offset], "first_element_pointer")
+                env.builder.new_build_in_bounds_gep(
+                    element_type,
+                    global,
+                    &[zero, offset],
+                    "first_element_pointer",
+                )
             };
 
             super::build_list::store_list(env, ptr, list_length_intval).into()
@@ -2191,7 +2218,9 @@ fn list_literal<'a, 'ctx, 'env>(
             // then replace the `undef`s with the values that we evaluate at runtime
             for (index, val) in runtime_evaluated_elements {
                 let index_val = ctx.i64_type().const_int(index as u64, false);
-                let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+                let elem_ptr = unsafe {
+                    builder.new_build_in_bounds_gep(element_type, ptr, &[index_val], "index")
+                };
 
                 builder.build_store(elem_ptr, val);
             }
@@ -2210,7 +2239,9 @@ fn list_literal<'a, 'ctx, 'env>(
                 ListLiteralElement::Symbol(symbol) => load_symbol(scope, symbol),
             };
             let index_val = ctx.i64_type().const_int(index as u64, false);
-            let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+            let elem_ptr = unsafe {
+                builder.new_build_in_bounds_gep(element_type, ptr, &[index_val], "index")
+            };
 
             store_roc_value(env, *element_layout, elem_ptr, val);
         }
@@ -3901,13 +3932,15 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
         // Anywhere else, use the LLVM intrinsic.
         // https://llvm.org/docs/ExceptionHandling.html#llvm-eh-sjlj-setjmp
 
+        let buf_type = env
+            .context
+            .i8_type()
+            .ptr_type(AddressSpace::Generic)
+            .array_type(5);
+
         let jmp_buf_i8p_arr = env.builder.build_pointer_cast(
             jmp_buf,
-            env.context
-                .i8_type()
-                .ptr_type(AddressSpace::Generic)
-                .array_type(5)
-                .ptr_type(AddressSpace::Generic),
+            buf_type.ptr_type(AddressSpace::Generic),
             "jmp_buf [5 x i8*]",
         );
 
@@ -3920,7 +3953,8 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
         let zero = env.context.i32_type().const_zero();
         let fa_index = env.context.i32_type().const_zero();
         let fa = unsafe {
-            env.builder.build_in_bounds_gep(
+            env.builder.new_build_in_bounds_gep(
+                buf_type,
                 jmp_buf_i8p_arr,
                 &[zero, fa_index],
                 "frame address index",
@@ -3933,8 +3967,12 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
         // usage. But for whatever reason, on x86, it appears we need a stacksave in those words.
         let ss_index = env.context.i32_type().const_int(2, false);
         let ss = unsafe {
-            env.builder
-                .build_in_bounds_gep(jmp_buf_i8p_arr, &[zero, ss_index], "name")
+            env.builder.new_build_in_bounds_gep(
+                buf_type,
+                jmp_buf_i8p_arr,
+                &[zero, ss_index],
+                "name",
+            )
         };
         let stack_save = env.call_intrinsic(LLVM_STACK_SAVE, &[]);
         env.builder.build_store(ss, stack_save);
@@ -5550,7 +5588,8 @@ fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
 
     // a pointer to the first actual data (skipping over the refcount)
     let ptr = unsafe {
-        env.builder.build_in_bounds_gep(
+        env.builder.new_build_in_bounds_gep(
+            env.context.i8_type(),
             ptr,
             &[env
                 .ptr_int()

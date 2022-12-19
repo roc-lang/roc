@@ -15,7 +15,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
-use super::build::{load_roc_value, use_roc_value};
+use super::build::{load_roc_value, use_roc_value, BuilderExt};
 use super::convert::argument_type_from_union_layout;
 use super::lowlevel::dec_binop_with_unchecked;
 
@@ -542,14 +542,16 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
             builder.position_at_end(body_bb);
 
             let elem1 = {
-                let elem_ptr =
-                    unsafe { builder.build_in_bounds_gep(ptr1, &[curr_index], "load_index") };
+                let elem_ptr = unsafe {
+                    builder.new_build_in_bounds_gep(element_type, ptr1, &[curr_index], "load_index")
+                };
                 load_roc_value(env, *element_layout, elem_ptr, "get_elem")
             };
 
             let elem2 = {
-                let elem_ptr =
-                    unsafe { builder.build_in_bounds_gep(ptr2, &[curr_index], "load_index") };
+                let elem_ptr = unsafe {
+                    builder.new_build_in_bounds_gep(element_type, ptr2, &[curr_index], "load_index")
+                };
                 load_roc_value(env, *element_layout, elem_ptr, "get_elem")
             };
 
