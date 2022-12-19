@@ -760,7 +760,7 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
                 use_roc_value(env, *field_layout, field2, "field2"),
                 field_layout,
                 field_layout,
-                when_recursive.clone(),
+                when_recursive,
             )
             .into_int_value()
         };
@@ -952,7 +952,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                     env,
                     layout_ids,
                     union_layout,
-                    Some(when_recursive.clone()),
+                    Some(when_recursive),
                     field_layouts,
                     tag1,
                     tag2,
