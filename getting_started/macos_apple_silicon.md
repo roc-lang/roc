@@ -31,7 +31,7 @@ which includes the Roc compiler and various helpful utilities.
 
 1. To be able to run the `roc` command anywhere on your system; add the line below to your shell startup script (.profile, .zshrc, ...):
     ```sh
-    export PATH=$PATH:~/path/to/roc_nightly-linux_x86_64-<VERSION>
+    export PATH=$PATH:~/path/to/roc_nightly-macos_apple_silicon-<VERSION>
     ```
 
 1. Check everything worked by executing `roc version`
