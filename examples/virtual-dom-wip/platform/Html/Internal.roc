@@ -401,13 +401,7 @@ insertRocScript = \document, initData, wasmUrl, hostJavaScript ->
 # -------------------------------
 #   CLIENT SIDE INIT
 # -------------------------------
-ClientInit state : {
-    state,
-    staticView : RenderedHtml,
-    dynamicView : Html state,
-}
-
-initClientApp : List U8, App state initData -> PlatformState state initData | initData has Decoding
+initClientApp : List U8, App state initData -> Effect (PlatformState state initData) | initData has Decoding
 initClientApp = \json, app ->
     state =
         json
@@ -428,7 +422,7 @@ initClientApp = \json, app ->
 
     # Run the first diff. The only differences are event listeners, so they will be attached.
     { newHandlers: handlerLookup, node: view } <-
-        diffAndUpdateDom handlerLookup staticView dynamicView |> Effect.after
+        diffAndUpdateDom emptyHandlers staticView dynamicView |> Effect.after
 
     Effect.always {
         app,

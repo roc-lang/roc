@@ -18,7 +18,7 @@ exampleApp = {
 init = \result ->
     when result is
         Ok state -> state
-        Err _ -> { answer : 0 }
+        Err _ -> { answer: 0 }
 
 render : State -> Html State
 render = \state ->

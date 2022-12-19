@@ -4,6 +4,7 @@ platform "client-side"
     packages {}
     imports [
         Html.Internal.{ App, JsEventResult, PlatformState },
+        Effect.{ Effect },
     ]
     provides [main]
 
@@ -23,9 +24,10 @@ ToHost state initData : {
     eventStopPropagation : Bool,
 }
 
-main : FromHost state initData -> Effect (ToHost state initData)
+# Note: named type variables cause a type error here!
+main : FromHost _ _ -> Effect (ToHost _ _)
 main = \{ eventHandlerId, eventJsonList, eventPlatformState, initJson, isInitEvent } ->
-    if hostInput.isInitEvent then
+    if isInitEvent then
         Html.Internal.initClientApp initJson app
         |> Effect.map \platformState -> {
             platformState: Box.box platformState,
