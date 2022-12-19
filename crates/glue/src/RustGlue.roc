@@ -444,7 +444,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
     when type is
         Num kind ->
             when kind is
-                F32 | F64 | F128 -> Bool.true
+                F32 | F64 -> Bool.true
                 _ -> Bool.false
 
         Unit | EmptyTagUnion | RocStr | Bool | TagUnion (Enumeration _) | Function _ -> Bool.false
