@@ -104,7 +104,6 @@
           llvmPkgs.lld
           debugir
           rust
-          rust-bindgen
           cargo-criterion # for benchmarks
           simple-http-server # to view roc website when trying out edits
         ]);
