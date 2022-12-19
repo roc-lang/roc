@@ -14,6 +14,7 @@ use roc_mono::ir::LookupType;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use roc_region::all::Region;
 
+use super::build::BuilderExt;
 use super::build::{
     add_func, load_roc_value, load_symbol_and_layout, use_roc_value, FunctionSpec, LlvmBackendMode,
     Scope, WhenRecursive,
@@ -529,7 +530,12 @@ fn load_tag_data<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let raw_data_ptr = env
         .builder
-        .build_struct_gep(tag_value, RocUnion::TAG_DATA_INDEX, "tag_data")
+        .new_build_struct_gep(
+            tag_type.into_struct_type(),
+            tag_value,
+            RocUnion::TAG_DATA_INDEX,
+            "tag_data",
+        )
         .unwrap();
 
     let data_ptr = env.builder.build_pointer_cast(

@@ -53,12 +53,58 @@ use std::convert::TryInto;
 use std::path::Path;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
-use super::convert::RocUnion;
+use super::convert::{struct_type_from_union_layout, RocUnion};
 use super::intrinsics::{
     add_intrinsics, LLVM_FRAME_ADDRESS, LLVM_MEMSET_I32, LLVM_MEMSET_I64, LLVM_SETJMP,
     LLVM_STACK_SAVE,
 };
 use super::lowlevel::run_higher_order_low_level;
+
+pub(crate) trait BuilderExt<'ctx> {
+    fn new_build_struct_gep(
+        &self,
+        struct_type: StructType<'ctx>,
+        ptr: PointerValue<'ctx>,
+        index: u32,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, ()>;
+
+    fn new_build_load(
+        &self,
+        element_type: impl BasicType<'ctx>,
+        ptr: PointerValue<'ctx>,
+        name: &str,
+    ) -> BasicValueEnum<'ctx>;
+}
+
+impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
+    fn new_build_struct_gep(
+        &self,
+        struct_type: StructType<'ctx>,
+        ptr: PointerValue<'ctx>,
+        index: u32,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, ()> {
+        assert_eq!(
+            ptr.get_type().get_element_type().into_struct_type(),
+            struct_type
+        );
+        self.build_struct_gep(ptr, index, name)
+    }
+
+    fn new_build_load(
+        &self,
+        element_type: impl BasicType<'ctx>,
+        ptr: PointerValue<'ctx>,
+        name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        assert_eq!(
+            ptr.get_type().get_element_type(),
+            element_type.as_any_type_enum()
+        );
+        self.build_load(ptr, name)
+    }
+}
 
 #[inline(always)]
 fn print_fn_verification_output() -> bool {
@@ -977,7 +1023,7 @@ fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
     for (index, (field_layout, field_value)) in values {
         let field_ptr = env
             .builder
-            .build_struct_gep(struct_ptr, index as u32, "field_struct_gep")
+            .new_build_struct_gep(struct_type, struct_ptr, index as u32, "field_struct_gep")
             .unwrap();
 
         store_roc_value(env, field_layout, field_ptr, field_value);
@@ -1172,7 +1218,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let ptr = env
                         .builder
-                        .build_struct_gep(
+                        .new_build_struct_gep(
+                            struct_type.into_struct_type(),
                             cast_argument,
                             *index as u32,
                             env.arena.alloc(format!("non_nullable_unwrapped_{}", index)),
@@ -1202,7 +1249,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             union_layout,
         } => {
             // cast the argument bytes into the desired shape for this tag
-            let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
+            let (argument, structure_layout) = load_symbol_and_layout(scope, structure);
 
             match union_layout {
                 UnionLayout::NonRecursive(tag_layouts) => {
@@ -1215,7 +1262,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let opaque_data_ptr = env
                         .builder
-                        .build_struct_gep(
+                        .new_build_struct_gep(
+                            basic_type_from_layout(env, structure_layout).into_struct_type(),
                             argument.into_pointer_value(),
                             RocUnion::TAG_DATA_INDEX,
                             "get_opaque_data_ptr",
@@ -1230,7 +1278,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let element_ptr = env
                         .builder
-                        .build_struct_gep(data_ptr, *index as _, "get_opaque_data_ptr")
+                        .new_build_struct_gep(
+                            struct_type.into_struct_type(),
+                            data_ptr,
+                            *index as _,
+                            "get_opaque_data_ptr",
+                        )
                         .unwrap();
 
                     load_roc_value(
@@ -1336,13 +1389,20 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
 
     let (field_types, field_values) = build_tag_fields(env, scope, tag_field_layouts, arguments);
 
+    let union_struct_type = struct_type_from_union_layout(env, union_layout);
+
     // Create the struct_type
     let raw_data_ptr = allocate_tag(env, parent, reuse_allocation, union_layout, tags);
     let struct_type = env.context.struct_type(&field_types, false);
 
     if union_layout.stores_tag_id_as_data(env.target_info) {
         let tag_id_ptr = builder
-            .build_struct_gep(raw_data_ptr, RocUnion::TAG_ID_INDEX, "tag_id_index")
+            .new_build_struct_gep(
+                union_struct_type,
+                raw_data_ptr,
+                RocUnion::TAG_ID_INDEX,
+                "tag_id_index",
+            )
             .unwrap();
 
         let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
@@ -1351,7 +1411,12 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
             .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
 
         let opaque_struct_ptr = builder
-            .build_struct_gep(raw_data_ptr, RocUnion::TAG_DATA_INDEX, "tag_data_index")
+            .new_build_struct_gep(
+                union_struct_type,
+                raw_data_ptr,
+                RocUnion::TAG_DATA_INDEX,
+                "tag_data_index",
+            )
             .unwrap();
 
         struct_pointer_from_fields(
@@ -1757,18 +1822,20 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
     let tag_id_layout = union_layout.tag_id_layout();
     let tag_id_int_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
 
+    let union_struct_type = struct_type_from_union_layout(env, union_layout);
+
     match union_layout {
         UnionLayout::NonRecursive(_) => {
             debug_assert!(argument.is_pointer_value(), "{:?}", argument);
 
             let argument_ptr = argument.into_pointer_value();
-            get_tag_id_wrapped(env, argument_ptr)
+            get_tag_id_wrapped(env, union_struct_type, argument_ptr)
         }
         UnionLayout::Recursive(_) => {
             let argument_ptr = argument.into_pointer_value();
 
             if union_layout.stores_tag_id_as_data(env.target_info) {
-                get_tag_id_wrapped(env, argument_ptr)
+                get_tag_id_wrapped(env, union_struct_type, argument_ptr)
             } else {
                 tag_pointer_read_tag_id(env, argument_ptr)
             }
@@ -1799,7 +1866,7 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
                 env.builder.position_at_end(else_block);
 
                 let tag_id = if union_layout.stores_tag_id_as_data(env.target_info) {
-                    get_tag_id_wrapped(env, argument_ptr)
+                    get_tag_id_wrapped(env, union_struct_type, argument_ptr)
                 } else {
                     tag_pointer_read_tag_id(env, argument_ptr)
                 };
@@ -1844,7 +1911,7 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
     );
 
     let elem_ptr = builder
-        .build_struct_gep(ptr, index as u32, "at_index_struct_gep")
+        .new_build_struct_gep(struct_type, ptr, index as u32, "at_index_struct_gep")
         .unwrap();
 
     let field_layout = field_layouts[index];
@@ -1878,7 +1945,7 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let struct_layout = Layout::struct_no_name_order(field_layouts);
-    let struct_type = basic_type_from_layout(env, &struct_layout);
+    let struct_type = basic_type_from_layout(env, &struct_layout).into_struct_type();
 
     let data_ptr = env.builder.build_pointer_cast(
         value,
@@ -1887,7 +1954,12 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     );
 
     let elem_ptr = builder
-        .build_struct_gep(data_ptr, index as u32, "at_index_struct_gep_data")
+        .new_build_struct_gep(
+            struct_type,
+            data_ptr,
+            index as u32,
+            "at_index_struct_gep_data",
+        )
         .unwrap();
 
     let field_layout = field_layouts[index];
@@ -2940,11 +3012,17 @@ fn complex_bitcast_to_bigger_than_from<'ctx>(
 /// get the tag id out of a pointer to a wrapped (i.e. stores the tag id at runtime) layout
 fn get_tag_id_wrapped<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    union_struct_type: StructType<'ctx>,
     from_value: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
     let tag_id_ptr = env
         .builder
-        .build_struct_gep(from_value, RocUnion::TAG_ID_INDEX, "tag_id_ptr")
+        .new_build_struct_gep(
+            union_struct_type,
+            from_value,
+            RocUnion::TAG_ID_INDEX,
+            "tag_id_ptr",
+        )
         .unwrap();
 
     env.builder

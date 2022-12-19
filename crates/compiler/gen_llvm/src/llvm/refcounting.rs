@@ -1,5 +1,6 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::call_void_bitcode_fn;
+use crate::llvm::build::BuilderExt;
 use crate::llvm::build::{
     add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, use_roc_value, Env,
     WhenRecursive, FAST_CALL_CONV,
@@ -541,7 +542,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
 
                 NonRecursive(tags) => {
                     let function =
-                        modify_refcount_union(env, layout_ids, mode, when_recursive, tags);
+                        modify_refcount_nonrecursive(env, layout_ids, mode, when_recursive, tags);
 
                     Some(function)
                 }
@@ -1226,7 +1227,12 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                 // this field has type `*i64`, but is really a pointer to the data we want
                 let elem_pointer = env
                     .builder
-                    .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
+                    .new_build_struct_gep(
+                        wrapper_type.into_struct_type(),
+                        struct_ptr,
+                        i as u32,
+                        "gep_recursive_pointer",
+                    )
                     .unwrap();
 
                 let ptr_as_i64_ptr = env
@@ -1243,7 +1249,12 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
             } else if field_layout.contains_refcounted(env.layout_interner) {
                 let elem_pointer = env
                     .builder
-                    .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
+                    .new_build_struct_gep(
+                        wrapper_type.into_struct_type(),
+                        struct_ptr,
+                        i as u32,
+                        "gep_recursive_pointer",
+                    )
                     .unwrap();
 
                 let field =
@@ -1499,7 +1510,7 @@ fn function_name_from_mode<'a>(
     }
 }
 
-fn modify_refcount_union<'a, 'ctx, 'env>(
+fn modify_refcount_nonrecursive<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -1527,7 +1538,7 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
             let basic_type = argument_type_from_union_layout(env, &union_layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
-            modify_refcount_union_help(
+            modify_refcount_nonrecursive_help(
                 env,
                 layout_ids,
                 mode,
@@ -1547,7 +1558,7 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     function
 }
 
-fn modify_refcount_union_help<'a, 'ctx, 'env>(
+fn modify_refcount_nonrecursive_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -1577,10 +1588,19 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
 
     let before_block = env.builder.get_insert_block().expect("to be in a function");
 
+    let union_layout = UnionLayout::NonRecursive(tags);
+    let layout = Layout::Union(union_layout);
+    let union_struct_type = basic_type_from_layout(env, &layout).into_struct_type();
+
     // read the tag_id
     let tag_id_ptr = env
         .builder
-        .build_struct_gep(arg_ptr, RocUnion::TAG_ID_INDEX, "tag_id_ptr")
+        .new_build_struct_gep(
+            union_struct_type,
+            arg_ptr,
+            RocUnion::TAG_ID_INDEX,
+            "tag_id_ptr",
+        )
         .unwrap();
 
     let tag_id = env
@@ -1611,18 +1631,24 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         let block = env.context.append_basic_block(parent, "tag_id_modify");
         env.builder.position_at_end(block);
 
-        let wrapper_type =
+        let data_struct_type =
             basic_type_from_layout(env, &Layout::struct_no_name_order(field_layouts));
 
-        debug_assert!(wrapper_type.is_struct_type());
+        debug_assert!(data_struct_type.is_struct_type());
+        let data_struct_type = data_struct_type.into_struct_type();
         let opaque_tag_data_ptr = env
             .builder
-            .build_struct_gep(arg_ptr, RocUnion::TAG_DATA_INDEX, "field_ptr")
+            .new_build_struct_gep(
+                union_struct_type,
+                arg_ptr,
+                RocUnion::TAG_DATA_INDEX,
+                "field_ptr",
+            )
             .unwrap();
 
         let cast_tag_data_pointer = env.builder.build_pointer_cast(
             opaque_tag_data_ptr,
-            wrapper_type.ptr_type(AddressSpace::Generic),
+            data_struct_type.ptr_type(AddressSpace::Generic),
             "cast_to_concrete_tag",
         );
 
@@ -1638,7 +1664,12 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
                 // This field is a pointer to the recursive pointer.
                 let field_ptr = env
                     .builder
-                    .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
+                    .new_build_struct_gep(
+                        data_struct_type,
+                        cast_tag_data_pointer,
+                        i as u32,
+                        "modify_tag_field",
+                    )
                     .unwrap();
 
                 // This is the actual pointer to the recursive data.
@@ -1663,7 +1694,12 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
             } else if field_layout.contains_refcounted(env.layout_interner) {
                 let field_ptr = env
                     .builder
-                    .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
+                    .new_build_struct_gep(
+                        data_struct_type,
+                        cast_tag_data_pointer,
+                        i as u32,
+                        "modify_tag_field",
+                    )
                     .unwrap();
 
                 let field_value =
