@@ -704,9 +704,9 @@ range = \{ start, end, step ? 0 } ->
         Before before ->
             isComplete =
                 if stepIsPositive then
-                    \i -> i >= before + 1
+                    \i -> i >= before - 1
                 else
-                    \i -> i <= before - 1
+                    \i -> i <= before + 1
 
             # TODO: switch to List.withCapacity
             rangeHelp [] inclusiveStart incByStep isComplete
