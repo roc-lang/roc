@@ -5611,7 +5611,7 @@ pub fn add_func<'ctx>(
     fn_val
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum WhenRecursive<'a> {
     Unreachable,
     Loop(UnionLayout<'a>),

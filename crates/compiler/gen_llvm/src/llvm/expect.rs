@@ -16,7 +16,7 @@ use roc_region::all::Region;
 
 use super::build::{
     add_func, load_roc_value, load_symbol_and_layout, use_roc_value, FunctionSpec, LlvmBackendMode,
-    Scope,
+    Scope, WhenRecursive,
 };
 
 pub(crate) struct SharedMemoryPointer<'ctx>(PointerValue<'ctx>);
@@ -265,13 +265,6 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     let one = env.ptr_int().const_int(1, false);
     let new_count = env.builder.build_int_add(count, one, "inc");
     write_state(env, original_ptr, new_count, offset)
-}
-
-#[derive(Clone, Debug, Copy)]
-enum WhenRecursive<'a> {
-    Unreachable,
-    #[allow(dead_code)]
-    Loop(UnionLayout<'a>),
 }
 
 #[allow(clippy::too_many_arguments)]
