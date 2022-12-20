@@ -1,10 +1,10 @@
 use crate::ast::{Collection, Defs, Header, Module, Spaced, Spaces};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
-    package_entry, package_path, AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword,
+    package_entry, package_name, AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword,
     HostedHeader, ImportsEntry, ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName,
-    PackageEntry, PackagesKeyword, PlatformHeader, PlatformRequires, ProvidesKeyword, ProvidesTo,
-    RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
+    PackageEntry, PackageHeader, PackagesKeyword, PlatformHeader, PlatformRequires,
+    ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
 };
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
@@ -66,6 +66,13 @@ fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
                     increment_min_indent(app_header())
                 ),
                 Header::App
+            ),
+            map!(
+                skip_first!(
+                    keyword_e("package", EHeader::Start),
+                    increment_min_indent(package_header())
+                ),
+                Header::Package
             ),
             map!(
                 skip_first!(
@@ -184,10 +191,21 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
 }
 
 #[inline(always)]
+fn package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
+    record!(PackageHeader {
+        before_name: space0_e(EHeader::IndentStart),
+        name: loc!(specialize(EHeader::PackageName, package_name())),
+        exposes: specialize(EHeader::Exposes, exposes_modules()),
+        packages: specialize(EHeader::Packages, packages()),
+    })
+    .trace("package_header")
+}
+
+#[inline(always)]
 fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
     record!(PlatformHeader {
         before_name: space0_e(EHeader::IndentStart),
-        name: loc!(specialize(EHeader::PlatformName, package_path())),
+        name: loc!(specialize(EHeader::PlatformName, package_name())),
         requires: specialize(EHeader::Requires, requires()),
         exposes: specialize(EHeader::Exposes, exposes_modules()),
         packages: specialize(EHeader::Packages, packages()),
@@ -203,7 +221,7 @@ fn provides_to_package<'a>() -> impl Parser<'a, To<'a>, EProvides<'a>> {
             |_, pos| EProvides::Identifier(pos),
             map!(lowercase_ident(), To::ExistingPackage)
         ),
-        specialize(EProvides::Package, map!(package_path(), To::NewPackage))
+        specialize(EProvides::Package, map!(package_name(), To::NewPackage))
     ]
 }
 

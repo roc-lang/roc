@@ -24,7 +24,7 @@ use crate::llvm::{
     },
     build::{
         complex_bitcast_check_size, create_entry_block_alloca, function_value_by_func_spec,
-        load_roc_value, roc_function_call, RocReturn,
+        load_roc_value, roc_function_call, BuilderExt, RocReturn,
     },
     build_list::{
         list_append_unsafe, list_capacity, list_concat, list_drop_at, list_get_unsafe, list_len,
@@ -464,7 +464,8 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                         "cast",
                     );
 
-                    env.builder.build_load(cast_result, "load_result")
+                    env.builder
+                        .new_build_load(return_type, cast_result, "load_result")
                 }
                 Unix => {
                     let result = call_str_bitcode_fn(
@@ -1693,7 +1694,7 @@ fn dec_binop_with_overflow<'a, 'ctx, 'env>(
     }
 
     env.builder
-        .build_load(return_alloca, "load_dec")
+        .new_build_load(return_type, return_alloca, "load_dec")
         .into_struct_value()
 }
 
@@ -2082,15 +2083,19 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
 
     let xored_arg = bd.build_xor(
         arg,
-        bd.build_load(shifted_alloca, shifted_name).into_int_value(),
+        bd.new_build_load(int_type, shifted_alloca, shifted_name)
+            .into_int_value(),
         "xor_arg_shifted",
     );
 
-    BasicValueEnum::IntValue(bd.build_int_sub(
-        xored_arg,
-        bd.build_load(shifted_alloca, shifted_name).into_int_value(),
-        "sub_xored_shifted",
-    ))
+    BasicValueEnum::IntValue(
+        bd.build_int_sub(
+            xored_arg,
+            bd.new_build_load(int_type, shifted_alloca, shifted_name)
+                .into_int_value(),
+            "sub_xored_shifted",
+        ),
+    )
 }
 
 fn build_float_unary_op<'a, 'ctx, 'env>(

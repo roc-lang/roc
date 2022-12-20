@@ -5354,6 +5354,51 @@ Tab characters are not allowed."###,
     "###
     );
 
+    test_report!(
+        dbg_without_final_expression,
+        indoc!(
+            r#"
+            dbg 42
+            "#
+        ),
+        @r###"
+    ── INDENT ENDS AFTER EXPRESSION ──── tmp/dbg_without_final_expression/Test.roc ─
+
+    I am partway through parsing a dbg statement, but I got stuck here:
+
+    4│      dbg 42
+                  ^
+
+    I was expecting a final expression, like so
+
+        dbg 42
+        "done"
+    "###
+    );
+
+    test_report!(
+        expect_without_final_expression,
+        indoc!(
+            r#"
+            expect 1 + 1 == 2
+            "#
+        ),
+        @r###"
+    ── INDENT ENDS AFTER EXPRESSION ─ tmp/expect_without_final_expression/Test.roc ─
+
+    I am partway through parsing an expect statement, but I got stuck
+    here:
+
+    4│      expect 1 + 1 == 2
+                             ^
+
+    I was expecting a final expression, like so
+
+        expect 1 + 1 == 2
+        "done"
+    "###
+    );
+
     // https://github.com/roc-lang/roc/issues/1714
     test_report!(
     interpolate_concat_is_transparent_1714,

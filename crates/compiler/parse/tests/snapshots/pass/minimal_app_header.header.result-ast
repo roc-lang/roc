@@ -22,7 +22,7 @@ Module {
                     after: [],
                 },
                 to: @30-38 NewPackage(
-                    PackagePath(
+                    PackageName(
                         "./blah",
                     ),
                 ),

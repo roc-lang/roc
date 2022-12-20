@@ -52,7 +52,6 @@ rustPlatform.buildRustPackage {
     llvmPkgs.clang
     llvmPkgs.llvm.dev
     zig
-    rust-bindgen
   ]);
 
   buildInputs = (with pkgs;

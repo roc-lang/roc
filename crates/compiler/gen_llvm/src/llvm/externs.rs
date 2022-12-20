@@ -1,6 +1,7 @@
 use crate::llvm::bitcode::call_void_bitcode_fn;
-use crate::llvm::build::{add_func, get_panic_msg_ptr, get_panic_tag_ptr, C_CALL_CONV};
+use crate::llvm::build::{add_func, get_panic_msg_ptr, get_panic_tag_ptr, BuilderExt, C_CALL_CONV};
 use crate::llvm::build::{CCReturn, Env, FunctionSpec};
+use crate::llvm::convert::zig_str_type;
 use inkwell::module::Linkage;
 use inkwell::types::BasicType;
 use inkwell::values::BasicValue;
@@ -217,7 +218,12 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
                 roc_target::PtrWidth::Bytes4 => roc_str_arg,
                 // On 64-bit we pass RocStrs by reference internally
                 roc_target::PtrWidth::Bytes8 => {
-                    builder.build_load(roc_str_arg.into_pointer_value(), "load_roc_str")
+                    let str_typ = zig_str_type(env);
+                    builder.new_build_load(
+                        str_typ,
+                        roc_str_arg.into_pointer_value(),
+                        "load_roc_str",
+                    )
                 }
             };
 

@@ -3,7 +3,7 @@ Module {
     header: Platform(
         PlatformHeader {
             before_name: [],
-            name: @9-14 PackagePath(
+            name: @9-14 PackageName(
                 "cli",
             ),
             requires: KeywordItem {
