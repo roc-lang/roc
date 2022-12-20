@@ -473,17 +473,6 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             use roc_target::OperatingSystem::*;
             match env.target_info.operating_system {
                 Windows => {
-                    //                    // we have to go digging to find the return type
-                    //                    let function = env
-                    //                        .module
-                    //                        .get_function(bitcode::STR_GET_SCALAR_UNSAFE)
-                    //                        .unwrap();
-                    //
-                    //                    let old_return_type = function.get_type().get_param_types()[0]
-                    //                        .into_pointer_type()
-                    //                        .get_element_type()
-                    //                        .into_struct_type();
-
                     let return_type = env.context.struct_type(
                         &[env.ptr_int().into(), env.context.i32_type().into()],
                         false,
