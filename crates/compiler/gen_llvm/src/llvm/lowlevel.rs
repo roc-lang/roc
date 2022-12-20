@@ -473,16 +473,21 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             use roc_target::OperatingSystem::*;
             match env.target_info.operating_system {
                 Windows => {
-                    // we have to go digging to find the return type
-                    let function = env
-                        .module
-                        .get_function(bitcode::STR_GET_SCALAR_UNSAFE)
-                        .unwrap();
+                    //                    // we have to go digging to find the return type
+                    //                    let function = env
+                    //                        .module
+                    //                        .get_function(bitcode::STR_GET_SCALAR_UNSAFE)
+                    //                        .unwrap();
+                    //
+                    //                    let old_return_type = function.get_type().get_param_types()[0]
+                    //                        .into_pointer_type()
+                    //                        .get_element_type()
+                    //                        .into_struct_type();
 
-                    let return_type = function.get_type().get_param_types()[0]
-                        .into_pointer_type()
-                        .get_element_type()
-                        .into_struct_type();
+                    let return_type = env.context.struct_type(
+                        &[env.ptr_int().into(), env.context.i32_type().into()],
+                        false,
+                    );
 
                     let result = env.builder.build_alloca(return_type, "result");
 
@@ -1975,16 +1980,15 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                 intrinsic,
                             ),
                             None => {
-                                let return_type = zig_function_type.get_param_types()[0]
-                                    .into_pointer_type()
-                                    .get_element_type()
-                                    .into_struct_type()
-                                    .into();
+                                let return_type = zig_to_int_checked_result_type(
+                                    env,
+                                    target_int_width.type_name(),
+                                );
 
                                 let zig_return_alloca = create_entry_block_alloca(
                                     env,
                                     parent,
-                                    return_type,
+                                    return_type.into(),
                                     "num_to_int",
                                 );
 
