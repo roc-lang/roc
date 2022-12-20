@@ -157,7 +157,7 @@ macro_rules! debug_info_init {
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        $env.builder.set_current_debug_location(&$env.context, loc);
+        $env.builder.set_current_debug_location(loc);
     }};
 }
 

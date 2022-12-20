@@ -513,8 +513,7 @@ fn build_clone_tag<'a, 'ctx, 'env>(
             );
 
             env.builder.position_at_end(block);
-            env.builder
-                .set_current_debug_location(env.context, di_location);
+            env.builder.set_current_debug_location(di_location);
 
             function_value
         }

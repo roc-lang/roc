@@ -432,8 +432,7 @@ fn build_list_eq<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
         .build_call(function, &[list1.into(), list2.into()], "list_eq");
@@ -471,7 +470,7 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(ctx, loc);
+        builder.set_current_debug_location(loc);
     }
 
     // Add args to scope
@@ -644,8 +643,7 @@ fn build_struct_eq<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
         .build_call(function, &[struct1.into(), struct2.into()], "struct_eq");
@@ -683,7 +681,7 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(ctx, loc);
+        builder.set_current_debug_location(loc);
     }
 
     // Add args to scope
@@ -829,8 +827,7 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
         .build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
@@ -868,7 +865,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(ctx, loc);
+        builder.set_current_debug_location(loc);
     }
 
     // Add args to scope
@@ -1320,8 +1317,7 @@ fn build_box_eq<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
         .build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
@@ -1359,7 +1355,7 @@ fn build_box_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(ctx, loc);
+        builder.set_current_debug_location(loc);
     }
 
     // Add args to scope

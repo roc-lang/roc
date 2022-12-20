@@ -164,8 +164,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let refcount_ptr = self.value;
 
         env.builder.position_at_end(block);
-        env.builder
-            .set_current_debug_location(env.context, di_location);
+        env.builder.set_current_debug_location(di_location);
 
         let call = env
             .builder
@@ -304,8 +303,7 @@ fn modify_refcount_struct<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function
 }
@@ -643,8 +641,7 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function
 }
@@ -772,8 +769,7 @@ fn modify_refcount_str<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function
 }
@@ -881,8 +877,7 @@ fn modify_refcount_boxed<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function
 }
@@ -1046,8 +1041,7 @@ fn build_rec_union<'a, 'ctx, 'env>(
             );
 
             env.builder.position_at_end(block);
-            env.builder
-                .set_current_debug_location(env.context, di_location);
+            env.builder.set_current_debug_location(di_location);
 
             function_value
         }
@@ -1394,8 +1388,7 @@ pub fn build_reset<'a, 'ctx, 'env>(
             );
 
             env.builder.position_at_end(block);
-            env.builder
-                .set_current_debug_location(env.context, di_location);
+            env.builder.set_current_debug_location(di_location);
 
             function_value
         }
@@ -1561,8 +1554,7 @@ fn modify_refcount_nonrecursive<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function
 }

@@ -300,8 +300,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     env.builder.build_return(None);
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function_value
 }
@@ -435,8 +434,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function_value
 }
@@ -510,8 +508,7 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function_value
 }
@@ -633,8 +630,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function_value
 }
