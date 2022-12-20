@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PlatformHeader};
+use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader};
 use crate::ident::Ident;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
@@ -90,6 +90,7 @@ pub struct Module<'a> {
 pub enum Header<'a> {
     Interface(InterfaceHeader<'a>),
     App(AppHeader<'a>),
+    Package(PackageHeader<'a>),
     Platform(PlatformHeader<'a>),
     Hosted(HostedHeader<'a>),
 }

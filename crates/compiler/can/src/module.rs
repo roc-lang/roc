@@ -205,6 +205,7 @@ impl GeneratedInfo {
                 generates,
                 generates_with,
                 name: _,
+                exposes: _,
             } => {
                 let name: &str = generates.into();
                 let (generated_functions, unknown_generated) =
@@ -240,6 +241,7 @@ impl GeneratedInfo {
             HeaderType::Builtin {
                 generates_with,
                 name: _,
+                exposes: _,
             } => {
                 debug_assert!(generates_with.is_empty());
                 GeneratedInfo::Builtin

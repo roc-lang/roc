@@ -8,8 +8,8 @@ use bumpalo::Bump;
 use roc_parse::ast::{Collection, Header, Module, Spaced, Spaces};
 use roc_parse::header::{
     AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword, HostedHeader, ImportsEntry,
-    ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName, PackageEntry,
-    PackageKeyword, PackagePath, PackagesKeyword, PlatformHeader, PlatformRequires,
+    ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName, PackageEntry, PackageHeader,
+    PackageKeyword, PackageName, PackagesKeyword, PlatformHeader, PlatformRequires,
     ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
 };
 use roc_parse::ident::UppercaseIdent;
@@ -23,6 +23,9 @@ pub fn fmt_module<'a>(buf: &mut Buf<'_>, module: &'a Module<'a>) {
         }
         Header::App(header) => {
             fmt_app_header(buf, header);
+        }
+        Header::Package(header) => {
+            fmt_package_header(buf, header);
         }
         Header::Platform(header) => {
             fmt_platform_header(buf, header);
@@ -226,6 +229,20 @@ pub fn fmt_app_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a AppHeader<'a>) 
     header.provides.format(buf, indent);
 }
 
+pub fn fmt_package_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PackageHeader<'a>) {
+    buf.indent(0);
+    buf.push_str("package");
+    let indent = INDENT;
+    fmt_default_spaces(buf, header.before_name, indent);
+
+    fmt_package_name(buf, header.name.value, indent);
+
+    header.exposes.keyword.format(buf, indent);
+    fmt_exposes(buf, header.exposes.item, indent);
+    header.packages.keyword.format(buf, indent);
+    fmt_packages(buf, header.packages.item, indent);
+}
+
 pub fn fmt_platform_header<'a, 'buf>(buf: &mut Buf<'buf>, header: &'a PlatformHeader<'a>) {
     buf.indent(0);
     buf.push_str("platform");
@@ -276,7 +293,7 @@ impl<'a> Formattable for TypedIdent<'a> {
     }
 }
 
-fn fmt_package_name<'buf>(buf: &mut Buf<'buf>, name: PackagePath, _indent: u16) {
+fn fmt_package_name<'buf>(buf: &mut Buf<'buf>, name: PackageName, _indent: u16) {
     buf.push('"');
     buf.push_str_allow_spaces(name.to_str());
     buf.push('"');
@@ -453,7 +470,7 @@ fn fmt_packages_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &PackageEntry<'a>, i
     buf.push_str(entry.shorthand);
     buf.push(':');
     fmt_default_spaces(buf, entry.spaces_after_shorthand, indent);
-    fmt_package_name(buf, entry.package_path.value, indent);
+    fmt_package_name(buf, entry.package_name.value, indent);
 }
 
 fn fmt_imports_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &ImportsEntry<'a>, indent: u16) {

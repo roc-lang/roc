@@ -3299,6 +3299,8 @@ fn to_header_report<'a>(
                     alloc.keyword("interface"),
                     alloc.reflow(", "),
                     alloc.keyword("app"),
+                    alloc.reflow(", "),
+                    alloc.keyword("package"),
                     alloc.reflow(" or "),
                     alloc.keyword("platform"),
                     alloc.reflow("."),
@@ -3388,12 +3390,35 @@ fn to_header_report<'a>(
             }
         }
 
+        EHeader::PackageName(_, pos) => {
+            let surroundings = Region::new(start, *pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing a package header, but got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("I am expecting a package name next, like "),
+                    alloc.parser_suggestion("\"roc/core\""),
+                    alloc.reflow(". Package names must be quoted."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INVALID PACKAGE NAME".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+
         EHeader::PlatformName(_, pos) => {
             let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
 
             let doc = alloc.stack([
-                alloc.reflow(r"I am partway through parsing a header, but got stuck here:"),
+                alloc
+                    .reflow(r"I am partway through parsing a platform header, but got stuck here:"),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region),
                 alloc.concat([
                     alloc.reflow("I am expecting a platform name next, like "),
@@ -3405,7 +3430,7 @@ fn to_header_report<'a>(
             Report {
                 filename,
                 doc,
-                title: "WEIRD MODULE NAME".to_string(),
+                title: "INVALID PLATFORM NAME".to_string(),
                 severity: Severity::RuntimeError,
             }
         }

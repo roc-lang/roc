@@ -560,7 +560,7 @@ mod cli_run {
         test_roc_app(
             "crates/cli_testing_examples/expects",
             "expects.roc",
-            "expects",
+            "expects-test",
             &[],
             &[],
             &[],
@@ -591,7 +591,7 @@ mod cli_run {
         test_roc_app(
             "crates/cli_testing_examples/expects",
             "expects.roc",
-            "expects",
+            "expects-test",
             &[],
             &[],
             &[],
@@ -612,7 +612,7 @@ mod cli_run {
 
                 b : Num *
                 b = 2
-                
+
 
 
                 1 failed and 0 passed in <ignored for test> ms."#
@@ -1235,6 +1235,40 @@ mod cli_run {
             &[],
             &[],
             "I am Dep2.value2\n",
+            UseValgrind::Yes,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_thunk)]
+    #[cfg_attr(windows, ignore)]
+    fn run_packages_unoptimized() {
+        check_output_with_stdin(
+            &fixture_file("packages", "app.roc"),
+            &[],
+            "packages-test",
+            &[],
+            &[],
+            &[],
+            "Hello, World! This text came from a package! This text came from a CSV package!\n",
+            UseValgrind::Yes,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_thunk)]
+    #[cfg_attr(windows, ignore)]
+    fn run_packages_optimized() {
+        check_output_with_stdin(
+            &fixture_file("packages", "app.roc"),
+            &[],
+            "packages-test",
+            &[OPTIMIZE_FLAG],
+            &[],
+            &[],
+            "Hello, World! This text came from a package! This text came from a CSV package!\n",
             UseValgrind::Yes,
             TestCliCommands::Run,
         );
