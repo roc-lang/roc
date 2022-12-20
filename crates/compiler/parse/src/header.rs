@@ -54,6 +54,7 @@ pub enum HeaderType<'a> {
         requires: &'a [Loc<TypedIdent<'a>>],
         requires_types: &'a [Loc<UppercaseIdent<'a>>],
         exposes: &'a [Loc<ModuleName<'a>>],
+        exposes_ids: &'a [roc_module::symbol::ModuleId],
 
         /// usually `pf`
         config_shorthand: &'a str,
