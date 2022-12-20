@@ -22,8 +22,6 @@ use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds};
 use super::build::{create_entry_block_alloca, BuilderExt};
 use super::convert::zig_list_type;
 
-use std::convert::TryInto;
-
 pub fn call_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     args: &[BasicValueEnum<'ctx>],
@@ -113,13 +111,6 @@ pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
             // We need to pass the return value by pointer.
             let roc_return_type = basic_type_from_layout(env, return_layout);
 
-            let cc_ptr_return_type = env
-                .module
-                .get_function(fn_name)
-                .unwrap()
-                .get_type()
-                .get_param_types()[0]
-                .into_pointer_type();
             let cc_return_type: BasicTypeEnum<'ctx> = bitcode_return_type.into();
 
             // when we write an i128 into this (happens in NumToInt), zig expects this pointer to
