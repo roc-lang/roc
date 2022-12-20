@@ -9,7 +9,7 @@ use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
 };
 use inkwell::attributes::{Attribute, AttributeLoc};
-use inkwell::types::{BasicType, BasicTypeEnum};
+use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{
     BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue,
     PointerValue, StructValue,
@@ -21,8 +21,6 @@ use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds};
 
 use super::build::{create_entry_block_alloca, BuilderExt};
 use super::convert::zig_list_type;
-
-use std::convert::TryInto;
 
 pub fn call_bitcode_fn<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
@@ -97,6 +95,7 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
 
 pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    bitcode_return_type: StructType<'ctx>,
     args: &[BasicValueEnum<'ctx>],
     return_layout: &Layout<'_>,
     fn_name: &str,
@@ -112,17 +111,7 @@ pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
             // We need to pass the return value by pointer.
             let roc_return_type = basic_type_from_layout(env, return_layout);
 
-            let cc_ptr_return_type = env
-                .module
-                .get_function(fn_name)
-                .unwrap()
-                .get_type()
-                .get_param_types()[0]
-                .into_pointer_type();
-            let cc_return_type: BasicTypeEnum<'ctx> = cc_ptr_return_type
-                .get_element_type()
-                .try_into()
-                .expect("Zig bitcode return type is not a basic type!");
+            let cc_return_type: BasicTypeEnum<'ctx> = bitcode_return_type.into();
 
             // when we write an i128 into this (happens in NumToInt), zig expects this pointer to
             // be 16-byte aligned. Not doing so is UB and will immediately fail on CI

@@ -3638,6 +3638,15 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         Linkage::External,
     );
 
+    let c_abi_roc_str_type = env.context.struct_type(
+        &[
+            env.context.i8_type().ptr_type(AddressSpace::Generic).into(),
+            env.ptr_int().into(),
+            env.ptr_int().into(),
+        ],
+        false,
+    );
+
     // a temporary solution to be able to pass RocStr by-value from a host language.
     {
         let extra = match cc_return {
@@ -3656,7 +3665,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                 // if ret_typ is a pointer type. We need the base type here.
                 let ret_typ = c_function.get_type().get_param_types()[i + extra];
                 let ret_base_typ = if ret_typ.is_pointer_type() {
-                    ret_typ.into_pointer_type().get_element_type()
+                    c_abi_roc_str_type.as_any_type_enum()
                 } else {
                     ret_typ.as_any_type_enum()
                 };
@@ -3711,8 +3720,9 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
     let it = params
         .iter()
         .zip(param_types)
+        .zip(arguments)
         .enumerate()
-        .map(|(i, (arg, fastcc_type))| {
+        .map(|(i, ((arg, fastcc_type), layout))| {
             let arg_type = arg.get_type();
             if arg_type == *fastcc_type {
                 // the C and Fast calling conventions agree
@@ -3726,13 +3736,18 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                         env.target_info.architecture,
                         roc_target::Architecture::X86_32 | roc_target::Architecture::X86_64
                     ) {
+                        let c_abi_type = match layout {
+                            Layout::Builtin(Builtin::Str | Builtin::List(_)) => c_abi_roc_str_type,
+                            _ => todo!("figure out what the C type is"),
+                        };
+
                         let byval = context.create_type_attribute(
                             Attribute::get_named_enum_kind_id("byval"),
-                            arg_type.into_pointer_type().get_element_type(),
+                            c_abi_type.as_any_type_enum(),
                         );
                         let nonnull = context.create_type_attribute(
                             Attribute::get_named_enum_kind_id("nonnull"),
-                            arg_type.into_pointer_type().get_element_type(),
+                            c_abi_type.as_any_type_enum(),
                         );
                         // C return pointer goes at the beginning of params, and we must skip it if it exists.
                         let returns_pointer = matches!(cc_return, CCReturn::ByPointer);
@@ -5276,31 +5291,24 @@ pub struct FunctionSpec<'ctx> {
     pub typ: FunctionType<'ctx>,
     call_conv: u32,
 
-    /// Index (0-based) of return-by-pointer parameter, if it exists.
     /// We only care about this for C-call-conv functions, because this may take
     /// ownership of a register due to the convention. For example, on AArch64,
     /// values returned-by-pointer use the x8 register.
     /// But for internal functions we don't need to worry about that and we don't
     /// want the convention, since it might eat a register and cause a spill!
-    cconv_sret_parameter: Option<u32>,
+    cconv_stack_return_type: Option<BasicTypeEnum<'ctx>>,
 }
 
 impl<'ctx> FunctionSpec<'ctx> {
     fn attach_attributes(&self, ctx: &Context, fn_val: FunctionValue<'ctx>) {
         fn_val.set_call_conventions(self.call_conv);
 
-        if let Some(param_index) = self.cconv_sret_parameter {
+        if let Some(stack_return_type) = self.cconv_stack_return_type {
             // Indicate to LLVM that this argument holds the return value of the function.
             let sret_attribute_id = Attribute::get_named_enum_kind_id("sret");
             debug_assert!(sret_attribute_id > 0);
-            let ret_typ = self.typ.get_param_types()[param_index as usize];
-            // if ret_typ is a pointer type. We need the base type here.
-            let ret_base_typ = if ret_typ.is_pointer_type() {
-                ret_typ.into_pointer_type().get_element_type()
-            } else {
-                ret_typ.as_any_type_enum()
-            };
-            let sret_attribute = ctx.create_type_attribute(sret_attribute_id, ret_base_typ);
+            let sret_attribute =
+                ctx.create_type_attribute(sret_attribute_id, stack_return_type.as_any_type_enum());
             fn_val.add_attribute(AttributeLoc::Param(0), sret_attribute);
         }
     }
@@ -5322,7 +5330,11 @@ impl<'ctx> FunctionSpec<'ctx> {
                 arguments.extend(argument_types);
 
                 let arguments = function_arguments(env, &arguments);
-                (env.context.void_type().fn_type(&arguments, false), Some(0))
+
+                (
+                    env.context.void_type().fn_type(&arguments, false),
+                    Some(return_type.unwrap()),
+                )
             }
             CCReturn::Return => {
                 let arguments = function_arguments(env, argument_types);
@@ -5337,7 +5349,7 @@ impl<'ctx> FunctionSpec<'ctx> {
         Self {
             typ,
             call_conv: C_CALL_CONV,
-            cconv_sret_parameter: opt_sret_parameter,
+            cconv_stack_return_type: opt_sret_parameter,
         }
     }
 
@@ -5363,7 +5375,7 @@ impl<'ctx> FunctionSpec<'ctx> {
         Self {
             typ,
             call_conv: FAST_CALL_CONV,
-            cconv_sret_parameter: None,
+            cconv_stack_return_type: None,
         }
     }
 
@@ -5371,7 +5383,7 @@ impl<'ctx> FunctionSpec<'ctx> {
         Self {
             typ: fn_type,
             call_conv: FAST_CALL_CONV,
-            cconv_sret_parameter: None,
+            cconv_stack_return_type: None,
         }
     }
 
@@ -5381,7 +5393,7 @@ impl<'ctx> FunctionSpec<'ctx> {
         Self {
             typ: fn_type,
             call_conv: C_CALL_CONV,
-            cconv_sret_parameter: None,
+            cconv_stack_return_type: None,
         }
     }
 }
