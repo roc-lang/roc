@@ -924,6 +924,7 @@ struct PlatformData<'a> {
     module_id: ModuleId,
     provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
     is_prebuilt: bool,
+    exposed_modules: &'a [ModuleId],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2443,6 +2444,7 @@ fn update<'a>(
                     Platform {
                         config_shorthand,
                         provides,
+                        exposes_ids,
                         ..
                     } => {
                         work.extend(state.dependencies.notify_package(config_shorthand));
@@ -2474,6 +2476,7 @@ fn update<'a>(
                                 module_id: header.module_id,
                                 provides,
                                 is_prebuilt,
+                                exposed_modules: exposes_ids,
                             });
                         }
                     }
@@ -3510,6 +3513,9 @@ fn load_package_from_disk<'a>(
                     },
                     parser_state,
                 )) => {
+                    let exposes_ids =
+                        get_exposes_ids(&header, arena, &module_ids, &ident_ids_by_module);
+
                     // make a `platform` module that ultimately exposes `main` to the host
                     let (_, _, platform_module_msg) = build_platform_header(
                         arena,
@@ -3518,6 +3524,7 @@ fn load_package_from_disk<'a>(
                         filename.to_path_buf(),
                         parser_state,
                         module_ids,
+                        exposes_ids.into_bump_slice(),
                         ident_ids_by_module,
                         &header,
                         pkg_module_timing,
@@ -3537,6 +3544,34 @@ fn load_package_from_disk<'a>(
             error: err.kind(),
         }),
     }
+}
+
+fn get_exposes_ids<'a>(
+    header: &PlatformHeader<'a>,
+    arena: &'a Bump,
+    module_ids: &Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: &Arc<Mutex<IdentIdsByModule>>,
+) -> bumpalo::collections::Vec<'a, ModuleId> {
+    let mut exposes_ids =
+        bumpalo::collections::Vec::with_capacity_in(header.exposes.item.items.len(), arena);
+    {
+        // Lock just long enough to perform the minimal operations necessary.
+        let mut module_ids = (**module_ids).lock();
+        let mut ident_ids_by_module = (**ident_ids_by_module).lock();
+
+        // TODO can we "iterate unspaced" instead of calling unspace here?
+        for entry in unspace(arena, header.exposes.item.items) {
+            let module_id =
+                module_ids.get_or_insert(&PQModuleName::Unqualified(entry.value.as_str().into()));
+
+            // Ensure this module has an entry in the ident_ids_by_module map.
+            ident_ids_by_module.get_or_insert(module_id);
+
+            exposes_ids.push(module_id);
+        }
+    }
+
+    exposes_ids
 }
 
 fn load_builtin_module_help<'a>(
@@ -4068,6 +4103,8 @@ fn parse_header<'a>(
             },
             parse_state,
         )) => {
+            let exposes_ids = get_exposes_ids(&header, arena, &module_ids, &ident_ids_by_module);
+
             let (module_id, _, header) = build_platform_header(
                 arena,
                 None,
@@ -4075,6 +4112,7 @@ fn parse_header<'a>(
                 filename,
                 parse_state,
                 module_ids,
+                exposes_ids.into_bump_slice(),
                 ident_ids_by_module,
                 &header,
                 module_timing,
@@ -5105,6 +5143,7 @@ fn build_platform_header<'a>(
     filename: PathBuf,
     parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    exposes_ids: &'a [ModuleId],
     ident_ids_by_module: SharedIdentIdsByModule,
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
@@ -5134,6 +5173,7 @@ fn build_platform_header<'a>(
     let header_type = HeaderType::Platform {
         // A config_shorthand of "" should be fine
         config_shorthand: opt_shorthand.unwrap_or_default(),
+        exposes_ids,
         opt_app_module_id,
         provides: provides.into_bump_slice(),
         exposes: exposes.into_bump_slice(),
