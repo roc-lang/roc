@@ -1,289 +1,166 @@
-use std::{
-    cell::RefCell,
-    fs,
-    ops::{Deref, DerefMut},
-    path::Path,
-    sync::Mutex,
-    thread_local,
+use bumpalo::Bump;
+use roc_wasm_interp::{
+    wasi, DefaultImportDispatcher, ImportDispatcher, Instance, Value, WasiDispatcher,
 };
-use wasmer::{
-    imports, ChainableNamedResolver, Function, ImportObject, Instance, Module, Store, Value,
-};
-use wasmer_wasi::WasiState;
 
-const WASM_REPL_COMPILER_PATH: &str = "../../target/wasm32-wasi/release/roc_repl_wasm.wasm";
+const COMPILER_BYTES: &[u8] =
+    include_bytes!("../../../target/wasm32-wasi/release/roc_repl_wasm.wasm");
 
-thread_local! {
-    static REPL_STATE: RefCell<Option<ReplState>> = RefCell::new(None)
+struct CompilerDispatcher<'a> {
+    arena: &'a Bump,
+    src: &'a str,
+    answer: String,
+    wasi: WasiDispatcher<'a>,
+    app: Option<Instance<'a, DefaultImportDispatcher<'a>>>,
+    result_addr: Option<i32>,
 }
 
-// The compiler Wasm instance.
-// This takes several *seconds* to initialise, so we only want to do it once for all tests.
-// Every test mutates compiler memory in `unsafe` ways, so we run them sequentially using a Mutex.
-// Even if Cargo uses many threads, these tests won't go any faster. But that's fine, they're quick.
-lazy_static! {
-    static ref COMPILER: Instance = init_compiler();
-}
-
-static TEST_MUTEX: Mutex<()> = Mutex::new(());
-
-/// Load the compiler .wasm file and get it ready to execute
-/// THIS FUNCTION TAKES 4 SECONDS TO RUN
-fn init_compiler() -> Instance {
-    let path = Path::new(WASM_REPL_COMPILER_PATH);
-    let wasm_module_bytes = match fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(e) => panic!("{}", format_compiler_load_error(e)),
-    };
-    println!("loaded Roc compiler bytes");
-
-    let store = Store::default();
-
-    // This is the slow line. Skipping validation checks reduces module compilation time from 5s to 4s.
-    // Safety: We trust rustc to produce a valid module.
-    let wasmer_module =
-        unsafe { Module::from_binary_unchecked(&store, &wasm_module_bytes).unwrap() };
-
-    // Specify the external functions the Wasm module needs to link to
-    // We only use WASI so that we can debug test failures more easily with println!(), dbg!(), etc.
-    let mut wasi_env = WasiState::new("compiler").finalize().unwrap();
-    let wasi_import_obj = wasi_env
-        .import_object(&wasmer_module)
-        .unwrap_or_else(|_| ImportObject::new());
-    let repl_import_obj = imports! {
-        "env" => {
-            "wasmer_create_app" => Function::new_native(&store, wasmer_create_app),
-            "wasmer_run_app" => Function::new_native(&store, wasmer_run_app),
-            "wasmer_get_result_and_memory" => Function::new_native(&store, wasmer_get_result_and_memory),
-            "wasmer_copy_input_string" => Function::new_native(&store, wasmer_copy_input_string),
-            "wasmer_copy_output_string" => Function::new_native(&store, wasmer_copy_output_string),
-            "now" => Function::new_native(&store, dummy_system_time_now),
-        }
-    };
-    // "Chain" the import objects together. Wasmer will look up the REPL object first, then the WASI object
-    let import_object = wasi_import_obj.chain_front(repl_import_obj);
-
-    println!("Instantiating Roc compiler");
-
-    // Make a fully-linked instance with its own block of memory
-    let inst = Instance::new(&wasmer_module, &import_object).unwrap();
-
-    println!("Instantiated Roc compiler");
-
-    inst
-}
-
-struct ReplState {
-    src: &'static str,
-    app: Option<Instance>,
-    result_addr: Option<u32>,
-    output: Option<String>,
-}
-
-fn wasmer_create_app(app_bytes_ptr: u32, app_bytes_len: u32) -> u32 {
-    let app: Instance = {
-        let memory = COMPILER.exports.get_memory("memory").unwrap();
-        let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
-
-        // Find the slice of bytes for the compiled Roc app
-        let ptr = app_bytes_ptr as usize;
-        let len = app_bytes_len as usize;
-        let app_module_bytes: &[u8] = &memory_bytes[ptr..][..len];
-
-        // Parse the bytes into a Wasmer module
-        let store = Store::default();
-        let wasmer_module = match Module::new(&store, app_module_bytes) {
-            Ok(m) => m,
-            Err(e) => {
-                println!("Failed to create Wasm module\n{:?}", e);
-                if false {
-                    let path = std::env::temp_dir().join("roc_repl_test_invalid_app.wasm");
-                    fs::write(&path, app_module_bytes).unwrap();
-                    println!("Wrote invalid wasm to {:?}", path);
-                }
-                return false.into();
-            }
+impl<'a> ImportDispatcher for CompilerDispatcher<'a> {
+    fn dispatch(
+        &mut self,
+        module_name: &str,
+        function_name: &str,
+        arguments: &[Value],
+        compiler_memory: &mut [u8],
+    ) -> Option<Value> {
+        let unknown = || {
+            panic!(
+                "I could not find an implementation for import {}.{}",
+                module_name, function_name
+            )
         };
 
-        // Get the WASI imports for the app
-        let mut wasi_env = WasiState::new("app").finalize().unwrap();
-        let import_object = wasi_env
-            .import_object(&wasmer_module)
-            .unwrap_or_else(|_| imports!());
+        if module_name == wasi::MODULE_NAME {
+            self.wasi
+                .dispatch(function_name, arguments, compiler_memory)
+        } else if module_name == "env" {
+            match function_name {
+                "test_create_app" => {
+                    // Get some bytes from the compiler Wasm instance and create the app Wasm instance
+                    // fn test_create_app(app_bytes_ptr: *const u8, app_bytes_len: usize) -> u32;
+                    assert_eq!(arguments.len(), 2);
+                    let app_bytes_ptr = arguments[0].expect_i32().unwrap() as usize;
+                    let app_bytes_len = arguments[1].expect_i32().unwrap() as usize;
+                    let app_bytes = &compiler_memory[app_bytes_ptr..][..app_bytes_len];
 
-        // Create an executable instance
-        match Instance::new(&wasmer_module, &import_object) {
-            Ok(instance) => instance,
-            Err(e) => {
-                println!("Failed to create Wasm instance {:?}", e);
-                return false.into();
+                    let is_debug_mode = false;
+                    let instance = Instance::from_bytes(
+                        self.arena,
+                        app_bytes,
+                        DefaultImportDispatcher::default(),
+                        is_debug_mode,
+                    )
+                    .unwrap();
+
+                    self.app = Some(instance);
+                    let ok = Value::I32(true as i32);
+                    Some(ok)
+                }
+                "test_run_app" => {
+                    // fn test_run_app() -> usize;
+                    assert_eq!(arguments.len(), 0);
+                    match &mut self.app {
+                        Some(instance) => {
+                            let result_addr = instance
+                                .call_export("wrapper", [])
+                                .unwrap()
+                                .expect("No return address from wrapper")
+                                .expect_i32()
+                                .unwrap();
+                            self.result_addr = Some(result_addr);
+                            let memory_size = instance.memory.len();
+                            Some(Value::I32(memory_size as i32))
+                        }
+                        None => panic!("Trying to run the app but it hasn't been created"),
+                    }
+                }
+                "test_get_result_and_memory" => {
+                    // Copy the app's entire memory buffer into the compiler's memory,
+                    // and return the location in that buffer where we can find the app result.
+                    // fn test_get_result_and_memory(buffer_alloc_addr: *mut u8) -> usize;
+                    assert_eq!(arguments.len(), 1);
+                    let buffer_alloc_addr = arguments[0].expect_i32().unwrap() as usize;
+                    match &self.app {
+                        Some(instance) => {
+                            let len = instance.memory.len();
+                            compiler_memory[buffer_alloc_addr..][..len]
+                                .copy_from_slice(&instance.memory);
+                            self.result_addr.map(Value::I32)
+                        }
+                        None => panic!("Trying to get result and memory but there is no app"),
+                    }
+                }
+                "test_copy_input_string" => {
+                    // Copy the Roc source code from the test into the compiler Wasm instance
+                    // fn test_copy_input_string(src_buffer_addr: *mut u8);
+                    assert_eq!(arguments.len(), 1);
+                    let src_buffer_addr = arguments[0].expect_i32().unwrap() as usize;
+                    let len = self.src.len();
+                    compiler_memory[src_buffer_addr..][..len].copy_from_slice(self.src.as_bytes());
+                    None
+                }
+                "test_copy_output_string" => {
+                    // The REPL now has a string representing the answer. Make it available to the test code.
+                    // fn test_copy_output_string(output_ptr: *const u8, output_len: usize);
+                    assert_eq!(arguments.len(), 2);
+                    let output_ptr = arguments[0].expect_i32().unwrap() as usize;
+                    let output_len = arguments[1].expect_i32().unwrap() as usize;
+                    match std::str::from_utf8(&compiler_memory[output_ptr..][..output_len]) {
+                        Ok(answer) => {
+                            self.answer = answer.into();
+                        }
+                        Err(e) => panic!("{:?}", e),
+                    }
+                    None
+                }
+                "now" => Some(Value::F64(0.0)),
+                _ => unknown(),
             }
-        }
-    };
-
-    REPL_STATE.with(|f| {
-        if let Some(state) = f.borrow_mut().deref_mut() {
-            state.app = Some(app)
         } else {
-            unreachable!()
+            unknown()
         }
-    });
-
-    return true.into();
-}
-
-fn wasmer_run_app() -> u32 {
-    REPL_STATE.with(|f| {
-        if let Some(state) = f.borrow_mut().deref_mut() {
-            if let Some(app) = &state.app {
-                let wrapper = app.exports.get_function("wrapper").unwrap();
-
-                let result_addr: i32 = match wrapper.call(&[]) {
-                    Err(e) => panic!("{:?}", e),
-                    Ok(result) => result[0].unwrap_i32(),
-                };
-                state.result_addr = Some(result_addr as u32);
-
-                let memory = app.exports.get_memory("memory").unwrap();
-                memory.size().bytes().0 as u32
-            } else {
-                unreachable!()
-            }
-        } else {
-            unreachable!()
-        }
-    })
-}
-
-fn wasmer_get_result_and_memory(buffer_alloc_addr: u32) -> u32 {
-    REPL_STATE.with(|f| {
-        if let Some(state) = f.borrow().deref() {
-            if let Some(app) = &state.app {
-                let app_memory = app.exports.get_memory("memory").unwrap();
-                let result_addr = state.result_addr.unwrap();
-
-                let app_memory_bytes: &[u8] = unsafe { app_memory.data_unchecked() };
-
-                let buf_addr = buffer_alloc_addr as usize;
-                let len = app_memory_bytes.len();
-
-                let memory = COMPILER.exports.get_memory("memory").unwrap();
-                let compiler_memory_bytes: &mut [u8] = unsafe { memory.data_unchecked_mut() };
-                compiler_memory_bytes[buf_addr..][..len].copy_from_slice(app_memory_bytes);
-
-                result_addr
-            } else {
-                panic!("REPL app not found")
-            }
-        } else {
-            panic!("REPL state not found")
-        }
-    })
-}
-
-fn wasmer_copy_input_string(src_buffer_addr: u32) {
-    let src = REPL_STATE.with(|rs| {
-        if let Some(state) = rs.borrow_mut().deref_mut() {
-            std::mem::take(&mut state.src)
-        } else {
-            unreachable!()
-        }
-    });
-
-    let memory = COMPILER.exports.get_memory("memory").unwrap();
-    let memory_bytes: &mut [u8] = unsafe { memory.data_unchecked_mut() };
-
-    let buf_addr = src_buffer_addr as usize;
-    let len = src.len();
-    memory_bytes[buf_addr..][..len].copy_from_slice(src.as_bytes());
-}
-
-fn wasmer_copy_output_string(output_ptr: u32, output_len: u32) {
-    let output: String = {
-        let memory = COMPILER.exports.get_memory("memory").unwrap();
-        let memory_bytes: &[u8] = unsafe { memory.data_unchecked() };
-
-        // Find the slice of bytes for the output string
-        let ptr = output_ptr as usize;
-        let len = output_len as usize;
-        let output_bytes: &[u8] = &memory_bytes[ptr..][..len];
-
-        // Copy it out of the Wasm module
-        let copied_bytes = output_bytes.to_vec();
-        unsafe { String::from_utf8_unchecked(copied_bytes) }
-    };
-
-    REPL_STATE.with(|f| {
-        if let Some(state) = f.borrow_mut().deref_mut() {
-            state.output = Some(output)
-        }
-    })
-}
-
-fn format_compiler_load_error(e: std::io::Error) -> String {
-    if matches!(e.kind(), std::io::ErrorKind::NotFound) {
-        format!(
-            "\n\n    {}\n\n",
-            [
-                "ROC COMPILER WASM BINARY NOT FOUND",
-                "Please run these tests using repl_test/run_wasm.sh!",
-                "It will build a .wasm binary for the compiler, and a native binary for the tests themselves",
-            ]
-            .join("\n    ")
-        )
-    } else {
-        format!("{:?}", e)
     }
 }
 
-fn dummy_system_time_now() -> f64 {
-    0.0
-}
+fn run(src: &'static str) -> Result<String, String> {
+    let arena = Bump::new();
 
-fn run(src: &'static str) -> (bool, String) {
-    println!("run");
-    REPL_STATE.with(|rs| {
-        *rs.borrow_mut().deref_mut() = Some(ReplState {
+    let mut instance = {
+        let dispatcher = CompilerDispatcher {
+            arena: &arena,
             src,
+            answer: String::new(),
+            wasi: WasiDispatcher::default(),
             app: None,
             result_addr: None,
-            output: None,
-        });
-    });
+        };
 
-    let ok = if let Ok(_guard) = TEST_MUTEX.lock() {
-        let entrypoint = COMPILER
-            .exports
-            .get_function("entrypoint_from_test")
-            .unwrap();
-
-        let src_len = Value::I32(src.len() as i32);
-        let wasm_ok: i32 = entrypoint.call(&[src_len]).unwrap().deref()[0].unwrap_i32();
-        wasm_ok != 0
-    } else {
-        panic!(
-            "Failed to acquire test mutex! A previous test must have panicked while holding it, running Wasm"
-        )
+        let is_debug_mode = false; // logs every instruction!
+        Instance::from_bytes(&arena, COMPILER_BYTES, dispatcher, is_debug_mode).unwrap()
     };
 
-    let final_state: ReplState = REPL_STATE.with(|rs| rs.take()).unwrap();
-    let output: String = final_state.output.unwrap();
+    let len = Value::I32(src.len() as i32);
+    let wasm_ok: i32 = instance
+        .call_export("entrypoint_from_test", [len])
+        .unwrap()
+        .unwrap()
+        .expect_i32()
+        .unwrap();
+    let answer_str = instance.import_dispatcher.answer.to_owned();
 
-    (ok, output)
+    if wasm_ok == 0 {
+        Err(answer_str)
+    } else {
+        Ok(answer_str)
+    }
 }
 
 #[allow(dead_code)]
 pub fn expect_success(input: &'static str, expected: &str) {
-    let (ok, output) = run(input);
-    if !ok {
-        panic!("\n{}\n", output);
-    }
-    assert_eq!(output, expected);
+    assert_eq!(run(input), Ok(expected.into()));
 }
 
 #[allow(dead_code)]
 pub fn expect_failure(input: &'static str, expected: &str) {
-    let (ok, output) = run(input);
-    assert_eq!(ok, false);
-    assert_eq!(output, expected);
+    assert_eq!(run(input), Err(expected.into()));
 }

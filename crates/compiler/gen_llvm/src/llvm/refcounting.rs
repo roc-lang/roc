@@ -35,14 +35,11 @@ impl<'ctx> PointerToRefcount<'ctx> {
         // must make sure it's a pointer to usize
         let refcount_type = env.ptr_int();
 
-        let value = env
-            .builder
-            .build_bitcast(
-                ptr,
-                refcount_type.ptr_type(AddressSpace::Generic),
-                "to_refcount_ptr",
-            )
-            .into_pointer_value();
+        let value = env.builder.build_pointer_cast(
+            ptr,
+            refcount_type.ptr_type(AddressSpace::Generic),
+            "to_refcount_ptr",
+        );
 
         Self { value }
     }
@@ -56,9 +53,8 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let refcount_type = env.ptr_int();
         let refcount_ptr_type = refcount_type.ptr_type(AddressSpace::Generic);
 
-        let ptr_as_usize_ptr = builder
-            .build_bitcast(data_ptr, refcount_ptr_type, "as_usize_ptr")
-            .into_pointer_value();
+        let ptr_as_usize_ptr =
+            builder.build_pointer_cast(data_ptr, refcount_ptr_type, "as_usize_ptr");
 
         // get a pointer to index -1
         let index_intvalue = refcount_type.const_int(-1_i64 as u64, false);
@@ -203,11 +199,13 @@ fn incref_pointer<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            env.builder.build_bitcast(
-                pointer,
-                env.ptr_int().ptr_type(AddressSpace::Generic),
-                "to_isize_ptr",
-            ),
+            env.builder
+                .build_pointer_cast(
+                    pointer,
+                    env.ptr_int().ptr_type(AddressSpace::Generic),
+                    "to_isize_ptr",
+                )
+                .into(),
             amount.into(),
         ],
         roc_builtins::bitcode::UTILS_INCREF,
@@ -223,11 +221,13 @@ fn decref_pointer<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            env.builder.build_bitcast(
-                pointer,
-                env.ptr_int().ptr_type(AddressSpace::Generic),
-                "to_isize_ptr",
-            ),
+            env.builder
+                .build_pointer_cast(
+                    pointer,
+                    env.ptr_int().ptr_type(AddressSpace::Generic),
+                    "to_isize_ptr",
+                )
+                .into(),
             alignment.into(),
         ],
         roc_builtins::bitcode::UTILS_DECREF,
@@ -244,11 +244,13 @@ pub fn decref_pointer_check_null<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            env.builder.build_bitcast(
-                pointer,
-                env.context.i8_type().ptr_type(AddressSpace::Generic),
-                "to_i8_ptr",
-            ),
+            env.builder
+                .build_pointer_cast(
+                    pointer,
+                    env.context.i8_type().ptr_type(AddressSpace::Generic),
+                    "to_i8_ptr",
+                )
+                .into(),
             alignment.into(),
         ],
         roc_builtins::bitcode::UTILS_DECREF_CHECK_NULL,
@@ -466,10 +468,11 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
                 let bt = basic_type_from_layout(env, &layout);
 
                 // cast the i64 pointer to a pointer to block of memory
-                let field_cast = env
-                    .builder
-                    .build_bitcast(value, bt, "i64_to_opaque")
-                    .into_pointer_value();
+                let field_cast = env.builder.build_pointer_cast(
+                    value.into_pointer_value(),
+                    bt.into_pointer_type(),
+                    "i64_to_opaque",
+                );
 
                 call_help(env, function, call_mode, field_cast.into());
             }
@@ -1207,14 +1210,11 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
             basic_type_from_layout(env, &Layout::struct_no_name_order(field_layouts));
 
         // cast the opaque pointer to a pointer of the correct shape
-        let struct_ptr = env
-            .builder
-            .build_bitcast(
-                value_ptr,
-                wrapper_type.ptr_type(AddressSpace::Generic),
-                "opaque_to_correct_recursive_decrement",
-            )
-            .into_pointer_value();
+        let struct_ptr = env.builder.build_pointer_cast(
+            value_ptr,
+            wrapper_type.ptr_type(AddressSpace::Generic),
+            "opaque_to_correct_recursive_decrement",
+        );
 
         // defer actually performing the refcount modifications until after the current cell has
         // been decremented, see below

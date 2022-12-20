@@ -8,17 +8,24 @@ mod test_i32;
 mod test_i64;
 mod test_mem;
 
-use crate::{DefaultImportDispatcher, Instance, DEFAULT_IMPORTS};
+use crate::{DefaultImportDispatcher, Instance};
 use bumpalo::{collections::Vec, Bump};
 use roc_wasm_module::{
-    opcodes::OpCode, Export, ExportType, SerialBuffer, Signature, Value, ValueType, WasmModule,
+    opcodes::OpCode, Export, ExportType, SerialBuffer, Serialize, Signature, Value, ValueType,
+    WasmModule,
 };
 
 pub fn default_state(arena: &Bump) -> Instance<DefaultImportDispatcher> {
     let pages = 1;
     let program_counter = 0;
     let globals = [];
-    Instance::new(arena, pages, program_counter, globals, DEFAULT_IMPORTS)
+    Instance::new(
+        arena,
+        pages,
+        program_counter,
+        globals,
+        DefaultImportDispatcher::default(),
+    )
 }
 
 pub fn const_value(buf: &mut Vec<'_, u8>, value: Value) {
@@ -85,9 +92,10 @@ where
         std::fs::write(&filename, outfile_buf).unwrap();
     }
 
-    let mut inst = Instance::for_module(&arena, &module, DEFAULT_IMPORTS, true).unwrap();
+    let mut inst =
+        Instance::for_module(&arena, &module, DefaultImportDispatcher::default(), true).unwrap();
 
-    let return_val = inst.call_export(&module, "test", []).unwrap().unwrap();
+    let return_val = inst.call_export("test", []).unwrap().unwrap();
 
     assert_eq!(return_val, expected);
 }
@@ -112,6 +120,35 @@ pub fn create_exported_function_no_locals<'a, F>(
     let offset = module.code.bytes.encode_padded_u32(0);
     let start = module.code.bytes.len();
     module.code.bytes.push(0); // no locals
+    write_instructions(&mut module.code.bytes);
+    let len = module.code.bytes.len() - start;
+    module.code.bytes.overwrite_padded_u32(offset, len as u32);
+
+    module.code.function_count += 1;
+    module.code.function_offsets.push(offset as u32);
+}
+
+pub fn create_exported_function_with_locals<'a, F>(
+    module: &mut WasmModule<'a>,
+    name: &'a str,
+    signature: Signature<'a>,
+    local_types: &[(u32, ValueType)],
+    write_instructions: F,
+) where
+    F: FnOnce(&mut Vec<'a, u8>),
+{
+    let internal_fn_index = module.code.function_offsets.len();
+    let fn_index = module.import.function_count() + internal_fn_index;
+    module.export.exports.push(Export {
+        name,
+        ty: ExportType::Func,
+        index: fn_index as u32,
+    });
+    module.add_function_signature(signature);
+
+    let offset = module.code.bytes.encode_padded_u32(0);
+    let start = module.code.bytes.len();
+    local_types.serialize(&mut module.code.bytes);
     write_instructions(&mut module.code.bytes);
     let len = module.code.bytes.len() - start;
     module.code.bytes.overwrite_padded_u32(offset, len as u32);

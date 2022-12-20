@@ -103,9 +103,9 @@ fn list() {
         # Specialization lambda sets:
         #   @<1>: [[custom(3)]]
         #Derived.decoder_list =
-          Decode.custom
+          custom
             \#Derived.bytes, #Derived.fmt ->
-              Decode.decodeWith #Derived.bytes (Decode.list Decode.decoder) #Derived.fmt
+              decodeWith #Derived.bytes (list decoder) #Derived.fmt
         "###
         )
     })
@@ -121,21 +121,18 @@ fn record_2_fields() {
         # Specialization lambda sets:
         #   @<1>: [[custom(22)]]
         #Derived.decoder_{first,second} =
-          Decode.custom
+          custom
             \#Derived.bytes3, #Derived.fmt3 ->
-              Decode.decodeWith
+              decodeWith
                 #Derived.bytes3
-                (Decode.record
+                (record
                   { second: Err NoField, first: Err NoField }
                   \#Derived.stateRecord2, #Derived.field ->
                     when #Derived.field is
                       "first" ->
-                        Keep (Decode.custom
+                        Keep (custom
                           \#Derived.bytes, #Derived.fmt ->
-                            when Decode.decodeWith
-                                #Derived.bytes
-                                Decode.decoder
-                                #Derived.fmt is
+                            when decodeWith #Derived.bytes decoder #Derived.fmt is
                               #Derived.rec ->
                                 {
                                   result: when #Derived.rec.result is
@@ -145,12 +142,9 @@ fn record_2_fields() {
                                   rest: #Derived.rec.rest
                                 })
                       "second" ->
-                        Keep (Decode.custom
+                        Keep (custom
                           \#Derived.bytes2, #Derived.fmt2 ->
-                            when Decode.decodeWith
-                                #Derived.bytes2
-                                Decode.decoder
-                                #Derived.fmt2 is
+                            when decodeWith #Derived.bytes2 decoder #Derived.fmt2 is
                               #Derived.rec2 ->
                                 {
                                   result: when #Derived.rec2.result is

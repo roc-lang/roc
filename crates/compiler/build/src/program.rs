@@ -237,14 +237,93 @@ fn gen_from_mono_module_llvm<'a>(
 
     // annotate the LLVM IR output with debug info
     // so errors are reported with the line number of the LLVM source
-    let memory_buffer = if emit_debug_info {
+    let memory_buffer = if cfg!(feature = "sanitizers") && std::env::var("ROC_SANITIZERS").is_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.into_path();
+
+        let app_ll_file = dir.join("app.ll");
+        let app_bc_file = dir.join("app.bc");
+        let app_o_file = dir.join("app.o");
+
+        // write the ll code to a file, so we can modify it
+        module.print_to_file(&app_ll_file).unwrap();
+
+        // Apply coverage passes.
+        // Note, this is specifically tailored for `cargo afl` and afl++.
+        // It most likely will not work with other fuzzer setups without modification.
+        let mut passes = vec![];
+        let mut extra_args = vec![];
+        let mut unrecognized = vec![];
+        for sanitizer in std::env::var("ROC_SANITIZERS")
+            .unwrap()
+            .split(',')
+            .map(|x| x.trim())
+        {
+            match sanitizer {
+                "address" => passes.push("asan-module"),
+                "memory" => passes.push("msan-module"),
+                "thread" => passes.push("tsan-module"),
+                "fuzzer" => {
+                    passes.push("sancov-module");
+                    extra_args.extend_from_slice(&[
+                        "-sanitizer-coverage-level=3",
+                        "-sanitizer-coverage-prune-blocks=0",
+                        "-sanitizer-coverage-trace-pc-guard",
+                        // This can be used instead of the line above to enable working with `cargo fuzz` and libFuzzer.
+                        // "-sanitizer-coverage-inline-8bit-counters",
+                    ]);
+                }
+                x => unrecognized.push(x.to_owned()),
+            }
+        }
+        if !unrecognized.is_empty() {
+            let out = unrecognized
+                .iter()
+                .map(|x| format!("{:?}", x))
+                .collect::<Vec<String>>()
+                .join(", ");
+            eprintln!("Unrecognized sanitizer: {}\nSupported options are \"address\", \"memory\", \"thread\", and \"fuzzer\"", out);
+        }
+
+        use std::process::Command;
+        let mut opt = Command::new("opt");
+        opt.args([
+            app_ll_file.to_str().unwrap(),
+            "-o",
+            app_bc_file.to_str().unwrap(),
+        ])
+        .args(extra_args);
+        if !passes.is_empty() {
+            opt.arg(format!("-passes={}", passes.join(",")));
+        }
+        let opt = opt.output().unwrap();
+
+        assert!(opt.stderr.is_empty(), "{:#?}", opt);
+
+        // write the .o file. Note that this builds the .o for the local machine,
+        // and ignores the `target_machine` entirely.
+        //
+        // different systems name this executable differently, so we shotgun for
+        // the most common ones and then give up.
+        let bc_to_object = Command::new("llc")
+            .args(&[
+                "-relocation-model=pic",
+                "-filetype=obj",
+                app_bc_file.to_str().unwrap(),
+                "-o",
+                app_o_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        assert!(bc_to_object.status.success(), "{:#?}", bc_to_object);
+
+        MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
+    } else if emit_debug_info {
         module.strip_debug_info();
 
         let mut app_ll_dbg_file = PathBuf::from(roc_file_path);
         app_ll_dbg_file.set_extension("dbg.ll");
-
-        let mut app_bc_file = PathBuf::from(roc_file_path);
-        app_bc_file.set_extension("bc");
 
         let mut app_o_file = PathBuf::from(roc_file_path);
         app_o_file.set_extension("o");
@@ -277,33 +356,23 @@ fn gen_from_mono_module_llvm<'a>(
             | Architecture::X86_32(_)
             | Architecture::Aarch64(_)
             | Architecture::Wasm32 => {
-                let ll_to_bc = Command::new("llvm-as")
-                    .args([
-                        app_ll_dbg_file.to_str().unwrap(),
-                        "-o",
-                        app_bc_file.to_str().unwrap(),
-                    ])
-                    .output()
-                    .unwrap();
-
-                assert!(ll_to_bc.stderr.is_empty(), "{:#?}", ll_to_bc);
-
-                let llc_args = &[
-                    "-relocation-model=pic",
-                    "-filetype=obj",
-                    app_bc_file.to_str().unwrap(),
-                    "-o",
-                    app_o_file.to_str().unwrap(),
-                ];
-
                 // write the .o file. Note that this builds the .o for the local machine,
                 // and ignores the `target_machine` entirely.
                 //
                 // different systems name this executable differently, so we shotgun for
                 // the most common ones and then give up.
-                let bc_to_object = Command::new("llc").args(llc_args).output().unwrap();
+                let ll_to_object = Command::new("llc")
+                    .args(&[
+                        "-relocation-model=pic",
+                        "-filetype=obj",
+                        app_ll_dbg_file.to_str().unwrap(),
+                        "-o",
+                        app_o_file.to_str().unwrap(),
+                    ])
+                    .output()
+                    .unwrap();
 
-                assert!(bc_to_object.stderr.is_empty(), "{:#?}", bc_to_object);
+                assert!(ll_to_object.stderr.is_empty(), "{:#?}", ll_to_object);
             }
             _ => unreachable!(),
         }

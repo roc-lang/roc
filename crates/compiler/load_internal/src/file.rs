@@ -42,8 +42,10 @@ use roc_packaging::cache::{self, RocCacheDir};
 #[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::PackageMetadata;
 use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
-use roc_parse::header::{ExposedName, ImportsEntry, PackageEntry, PlatformHeader, To, TypedIdent};
-use roc_parse::header::{HeaderType, PackagePath};
+use roc_parse::header::{
+    ExposedName, ImportsEntry, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
+};
+use roc_parse::header::{HeaderType, PackageName};
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
@@ -138,7 +140,6 @@ struct ModuleCache<'a> {
     found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
     external_specializations_requested: MutMap<ModuleId, Vec<ExternalSpecializations<'a>>>,
-    expectations: VecMap<ModuleId, Expectations>,
 
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
@@ -215,7 +216,6 @@ impl Default for ModuleCache<'_> {
             can_problems: Default::default(),
             type_problems: Default::default(),
             sources: Default::default(),
-            expectations: Default::default(),
         }
     }
 }
@@ -435,6 +435,7 @@ fn start_phase<'a>(
                     decls,
                     ident_ids,
                     abilities_store,
+                    expectations,
                 } = typechecked;
 
                 let mut imported_module_thunks = bumpalo::collections::Vec::new_in(arena);
@@ -451,8 +452,8 @@ fn start_phase<'a>(
 
                 let derived_module = SharedDerivedModule::clone(&state.derived_module);
 
-                let build_expects = matches!(state.exec_mode, ExecutionMode::Test)
-                    && state.module_cache.expectations.contains_key(&module_id);
+                let build_expects =
+                    matches!(state.exec_mode, ExecutionMode::Test) && expectations.is_some();
 
                 BuildTask::BuildPendingSpecializations {
                     layout_cache,
@@ -467,6 +468,7 @@ fn start_phase<'a>(
                     // TODO: awful, how can we get rid of the clone?
                     exposed_by_module: state.exposed_types.clone(),
                     derived_module,
+                    expectations,
                     build_expects,
                 }
             }
@@ -488,67 +490,90 @@ fn start_phase<'a>(
                     specializations_we_must_make.extend(derived_synth_specializations)
                 }
 
-                let (mut ident_ids, mut subs, mut procs_base, layout_cache, mut module_timing) =
-                    if state.make_specializations_pass.current_pass() == 1
-                        && module_id == ModuleId::DERIVED_GEN
-                    {
-                        // This is the first time the derived module is introduced into the load
-                        // graph. It has no abilities of its own or anything, just generate fresh
-                        // information for it.
-                        (
-                            IdentIds::default(),
-                            Subs::default(),
-                            ProcsBase::default(),
-                            LayoutCache::new(state.layout_interner.fork(), state.target_info),
-                            ModuleTiming::new(Instant::now()),
-                        )
-                    } else if state.make_specializations_pass.current_pass() == 1 {
-                        let found_specializations = state
-                            .module_cache
-                            .found_specializations
-                            .remove(&module_id)
-                            .unwrap();
+                let (
+                    mut ident_ids,
+                    mut subs,
+                    expectations,
+                    mut procs_base,
+                    layout_cache,
+                    mut module_timing,
+                ) = if state.make_specializations_pass.current_pass() == 1
+                    && module_id == ModuleId::DERIVED_GEN
+                {
+                    // This is the first time the derived module is introduced into the load
+                    // graph. It has no abilities of its own or anything, just generate fresh
+                    // information for it.
+                    (
+                        IdentIds::default(),
+                        Subs::default(),
+                        None, // no expectations for derived module
+                        ProcsBase::default(),
+                        LayoutCache::new(state.layout_interner.fork(), state.target_info),
+                        ModuleTiming::new(Instant::now()),
+                    )
+                } else if state.make_specializations_pass.current_pass() == 1 {
+                    let found_specializations = state
+                        .module_cache
+                        .found_specializations
+                        .remove(&module_id)
+                        .unwrap();
 
-                        let FoundSpecializationsModule {
-                            ident_ids,
-                            subs,
-                            procs_base,
-                            layout_cache,
-                            module_timing,
-                            abilities_store,
-                        } = found_specializations;
+                    let FoundSpecializationsModule {
+                        ident_ids,
+                        subs,
+                        procs_base,
+                        layout_cache,
+                        module_timing,
+                        abilities_store,
+                        expectations,
+                    } = found_specializations;
 
-                        let our_exposed_types = state
-                            .exposed_types
-                            .get(&module_id)
-                            .unwrap_or_else(|| {
-                                internal_error!("Exposed types for {:?} missing", module_id)
-                            })
-                            .clone();
+                    let our_exposed_types = state
+                        .exposed_types
+                        .get(&module_id)
+                        .unwrap_or_else(|| {
+                            internal_error!("Exposed types for {:?} missing", module_id)
+                        })
+                        .clone();
 
-                        // Add our abilities to the world.
-                        state.world_abilities.insert(
-                            module_id,
-                            abilities_store,
-                            our_exposed_types.exposed_types_storage_subs,
-                        );
+                    // Add our abilities to the world.
+                    state.world_abilities.insert(
+                        module_id,
+                        abilities_store,
+                        our_exposed_types.exposed_types_storage_subs,
+                    );
 
-                        (ident_ids, subs, procs_base, layout_cache, module_timing)
-                    } else {
-                        let LateSpecializationsModule {
-                            ident_ids,
-                            subs,
-                            module_timing,
-                            layout_cache,
-                            procs_base,
-                        } = state
-                            .module_cache
-                            .late_specializations
-                            .remove(&module_id)
-                            .unwrap();
+                    (
+                        ident_ids,
+                        subs,
+                        expectations,
+                        procs_base,
+                        layout_cache,
+                        module_timing,
+                    )
+                } else {
+                    let LateSpecializationsModule {
+                        ident_ids,
+                        subs,
+                        expectations,
+                        module_timing,
+                        layout_cache,
+                        procs_base,
+                    } = state
+                        .module_cache
+                        .late_specializations
+                        .remove(&module_id)
+                        .unwrap();
 
-                        (ident_ids, subs, procs_base, layout_cache, module_timing)
-                    };
+                    (
+                        ident_ids,
+                        subs,
+                        expectations,
+                        procs_base,
+                        layout_cache,
+                        module_timing,
+                    )
+                };
 
                 if module_id == ModuleId::DERIVED_GEN {
                     load_derived_partial_procs(
@@ -579,6 +604,7 @@ fn start_phase<'a>(
                     // TODO: awful, how can we get rid of the clone?
                     exposed_by_module: state.exposed_types.clone(),
                     derived_module,
+                    expectations,
                 }
             }
         }
@@ -642,7 +668,7 @@ struct ModuleHeader<'a> {
     is_root_module: bool,
     exposed_ident_ids: IdentIds,
     deps_by_name: MutMap<PQModuleName<'a>, ModuleId>,
-    packages: MutMap<&'a str, PackagePath<'a>>,
+    packages: MutMap<&'a str, PackageName<'a>>,
     imported_modules: MutMap<ModuleId, Region>,
     package_qualified_imported_modules: MutSet<PackageQualified<'a, ModuleId>>,
     exposes: Vec<Symbol>,
@@ -679,6 +705,7 @@ pub struct TypeCheckedModule<'a> {
     pub decls: Declarations,
     pub ident_ids: IdentIds,
     pub abilities_store: AbilitiesStore,
+    pub expectations: Option<Expectations>,
 }
 
 #[derive(Debug)]
@@ -689,6 +716,7 @@ struct FoundSpecializationsModule<'a> {
     subs: Subs,
     module_timing: ModuleTiming,
     abilities_store: AbilitiesStore,
+    expectations: Option<Expectations>,
 }
 
 #[derive(Debug)]
@@ -698,6 +726,7 @@ struct LateSpecializationsModule<'a> {
     module_timing: ModuleTiming,
     layout_cache: LayoutCache<'a>,
     procs_base: ProcsBase<'a>,
+    expectations: Option<Expectations>,
 }
 
 #[derive(Debug, Default)]
@@ -831,6 +860,7 @@ enum Msg<'a> {
         module_timing: ModuleTiming,
         abilities_store: AbilitiesStore,
         toplevel_expects: ToplevelExpects,
+        expectations: Option<Expectations>,
     },
     MadeSpecializations {
         module_id: ModuleId,
@@ -842,6 +872,7 @@ enum Msg<'a> {
         update_mode_ids: UpdateModeIds,
         module_timing: ModuleTiming,
         subs: Subs,
+        expectations: Option<Expectations>,
     },
 
     /// The task is to only typecheck AND monomorphize modules
@@ -852,6 +883,7 @@ enum Msg<'a> {
         /// DO NOT use the one on state; that is left in an empty state after specialization is complete!
         layout_interner: STLayoutInterner<'a>,
         exposed_to_host: ExposedToHost,
+        module_expectations: VecMap<ModuleId, Expectations>,
     },
 
     FailedToParse(FileError<'a, SyntaxError<'a>>),
@@ -860,6 +892,7 @@ enum Msg<'a> {
         error: io::ErrorKind,
     },
 
+    FailedToLoad(LoadingProblem<'a>),
     IncorrectModuleName(FileError<'a, IncorrectModuleName<'a>>),
 }
 
@@ -1147,6 +1180,7 @@ enum BuildTask<'a> {
         exposed_by_module: ExposedByModule,
         abilities_store: AbilitiesStore,
         derived_module: SharedDerivedModule,
+        expectations: Option<Expectations>,
         build_expects: bool,
     },
     MakeSpecializations {
@@ -1160,9 +1194,11 @@ enum BuildTask<'a> {
         exposed_by_module: ExposedByModule,
         world_abilities: WorldAbilities,
         derived_module: SharedDerivedModule,
+        expectations: Option<Expectations>,
     },
 }
 
+#[derive(Debug)]
 enum WorkerMsg {
     Shutdown,
     TaskAdded,
@@ -1335,7 +1371,7 @@ impl<'a> LoadStart<'a> {
                     header_output
                 }
 
-                Err(LoadingProblem::ParsingFailed(problem)) => {
+                Err(problem) => {
                     let module_ids = Arc::try_unwrap(arc_modules)
                         .unwrap_or_else(|_| {
                             panic!("There were still outstanding Arc references to module_ids")
@@ -1343,62 +1379,12 @@ impl<'a> LoadStart<'a> {
                         .into_inner()
                         .into_module_ids();
 
-                    // if parsing failed, this module did not add any identifiers
-                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                    let buf = to_parse_problem_report(
-                        problem,
-                        module_ids,
-                        root_exposed_ident_ids,
-                        render,
-                        palette,
-                    );
-                    return Err(LoadingProblem::FormattedReport(buf));
-                }
-                Err(LoadingProblem::FileProblem { filename, error }) => {
-                    let buf = to_file_problem_report(&filename, error);
-                    return Err(LoadingProblem::FormattedReport(buf));
-                }
-                Err(LoadingProblem::ImportCycle(filename, cycle)) => {
-                    let module_ids = Arc::try_unwrap(arc_modules)
-                        .unwrap_or_else(|_| {
-                            panic!("There were still outstanding Arc references to module_ids")
-                        })
-                        .into_inner()
-                        .into_module_ids();
+                    let report = report_loading_problem(problem, module_ids, render, palette);
 
-                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                    let buf = to_import_cycle_report(
-                        module_ids,
-                        root_exposed_ident_ids,
-                        cycle,
-                        filename,
-                        render,
-                    );
-                    return Err(LoadingProblem::FormattedReport(buf));
+                    // TODO try to gracefully recover and continue
+                    // instead of changing the control flow to exit.
+                    return Err(LoadingProblem::FormattedReport(report));
                 }
-                Err(LoadingProblem::IncorrectModuleName(FileError {
-                    problem: SourceError { problem, bytes },
-                    filename,
-                })) => {
-                    let module_ids = Arc::try_unwrap(arc_modules)
-                        .unwrap_or_else(|_| {
-                            panic!("There were still outstanding Arc references to module_ids")
-                        })
-                        .into_inner()
-                        .into_module_ids();
-
-                    let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
-                    let buf = to_incorrect_module_name_report(
-                        module_ids,
-                        root_exposed_ident_ids,
-                        problem,
-                        filename,
-                        bytes,
-                        render,
-                    );
-                    return Err(LoadingProblem::FormattedReport(buf));
-                }
-                Err(e) => return Err(e),
             }
         };
 
@@ -1717,6 +1703,7 @@ fn state_thread_step<'a>(
                     subs,
                     layout_interner,
                     exposed_to_host,
+                    module_expectations,
                 } => {
                     // We're done! There should be no more messages pending.
                     debug_assert!(msg_rx.is_empty());
@@ -1727,6 +1714,7 @@ fn state_thread_step<'a>(
                         subs,
                         layout_interner,
                         exposed_to_host,
+                        module_expectations,
                     )?;
 
                     Ok(ControlFlow::Break(LoadResult::Monomorphized(monomorphized)))
@@ -1843,6 +1831,45 @@ fn state_thread_step<'a>(
             crossbeam::channel::TryRecvError::Empty => Ok(ControlFlow::Continue(state)),
             crossbeam::channel::TryRecvError::Disconnected => Err(LoadingProblem::MsgChannelDied),
         },
+    }
+}
+
+pub fn report_loading_problem(
+    problem: LoadingProblem<'_>,
+    module_ids: ModuleIds,
+    render: RenderTarget,
+    palette: Palette,
+) -> String {
+    match problem {
+        LoadingProblem::ParsingFailed(problem) => {
+            // if parsing failed, this module did not add anything to IdentIds
+            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+
+            to_parse_problem_report(problem, module_ids, root_exposed_ident_ids, render, palette)
+        }
+        LoadingProblem::ImportCycle(filename, cycle) => {
+            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+
+            to_import_cycle_report(module_ids, root_exposed_ident_ids, cycle, filename, render)
+        }
+        LoadingProblem::IncorrectModuleName(FileError {
+            problem: SourceError { problem, bytes },
+            filename,
+        }) => {
+            let root_exposed_ident_ids = IdentIds::exposed_builtins(0);
+
+            to_incorrect_module_name_report(
+                module_ids,
+                root_exposed_ident_ids,
+                problem,
+                filename,
+                bytes,
+                render,
+            )
+        }
+        LoadingProblem::FormattedReport(report) => report,
+        LoadingProblem::FileProblem { filename, error } => to_file_problem_report(&filename, error),
+        err => todo!("Loading error: {:?}", err),
     }
 }
 
@@ -2129,6 +2156,31 @@ fn worker_task<'a>(
                 // added. In that case, do nothing, and keep waiting
                 // until we receive a Shutdown message.
                 if let Some(task) = find_task(&worker, injector, stealers) {
+                    log!(
+                        ">>> {}",
+                        match &task {
+                            BuildTask::LoadModule { module_name, .. } => {
+                                format!("BuildTask::LoadModule({:?})", module_name)
+                            }
+                            BuildTask::Parse { header } => {
+                                format!("BuildTask::Parse({})", header.module_path.display())
+                            }
+                            BuildTask::CanonicalizeAndConstrain { parsed, .. } => format!(
+                                "BuildTask::CanonicalizeAndConstrain({})",
+                                parsed.module_path.display()
+                            ),
+                            BuildTask::Solve { module, .. } => {
+                                format!("BuildTask::Solve({:?})", module.module_id)
+                            }
+                            BuildTask::BuildPendingSpecializations { module_id, .. } => {
+                                format!("BuildTask::BuildPendingSpecializations({:?})", module_id)
+                            }
+                            BuildTask::MakeSpecializations { module_id, .. } => {
+                                format!("BuildTask::MakeSpecializations({:?})", module_id)
+                            }
+                        }
+                    );
+
                     let result = run_task(
                         task,
                         worker_arena,
@@ -2344,23 +2396,29 @@ fn update<'a>(
                         // This wasn't a URL, so it must be a filesystem path.
                         let root_module: PathBuf = src_dir.join(package_str);
                         let root_module_dir = root_module.parent().unwrap_or_else(|| {
-                                if root_module.is_file() {
-                                    // Files must have parents!
-                                    internal_error!("Somehow I got a file path to a real file on the filesystem that has no parent!");
-                                } else {
-                                    // TODO make this a nice report
-                                    todo!(
-                                        "platform module {:?} was not a file.",
-                                        package_str
-                                    )
-                                }
-                            }).into();
+                            if root_module.is_file() {
+                                // Files must have parents!
+                                internal_error!("Somehow I got a file path to a real file on the filesystem that has no parent!");
+                            } else {
+                                // TODO make this a nice report
+                                todo!(
+                                    "platform module {:?} was not a file.",
+                                    package_str
+                                )
+                            }
+                        }).into();
 
                         ShorthandPath::RelativeToSrc {
                             root_module_dir,
                             root_module,
                         }
                     };
+
+                    log!(
+                        "New package shorthand: {:?} => {:?}",
+                        shorthand,
+                        shorthand_path
+                    );
 
                     shorthands.insert(shorthand, shorthand_path);
                 }
@@ -2369,6 +2427,11 @@ fn update<'a>(
                     App { to_platform, .. } => {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::Valid(to_platform);
+                    }
+                    Package {
+                        config_shorthand, ..
+                    } => {
+                        work.extend(state.dependencies.notify_package(config_shorthand));
                     }
                     Platform {
                         config_shorthand,
@@ -2608,22 +2671,19 @@ fn update<'a>(
                     .expect("root or this module is not yet known - that's a bug!")
             };
 
-            if should_include_expects {
+            let opt_expectations = if should_include_expects {
                 let (path, _) = state.module_cache.sources.get(&module_id).unwrap();
 
-                let expectations = Expectations {
+                Some(Expectations {
                     expectations: loc_expects,
                     dbgs: loc_dbgs,
                     subs: solved_subs.clone().into_inner(),
                     path: path.to_owned(),
                     ident_ids: ident_ids.clone(),
-                };
-
-                state
-                    .module_cache
-                    .expectations
-                    .insert(module_id, expectations);
-            }
+                })
+            } else {
+                None
+            };
 
             let work = state.dependencies.notify(module_id, Phase::SolveTypes);
 
@@ -2736,6 +2796,7 @@ fn update<'a>(
                         decls,
                         ident_ids,
                         abilities_store,
+                        expectations: opt_expectations,
                     };
 
                     state
@@ -2775,6 +2836,7 @@ fn update<'a>(
             module_timing,
             abilities_store,
             toplevel_expects,
+            expectations,
         } => {
             log!("found specializations for {:?}", module_id);
 
@@ -2797,6 +2859,7 @@ fn update<'a>(
                 subs,
                 module_timing,
                 abilities_store,
+                expectations,
             };
 
             state
@@ -2822,6 +2885,7 @@ fn update<'a>(
             external_specializations_requested,
             module_timing,
             layout_cache,
+            expectations,
             ..
         } => {
             debug_assert!(
@@ -2843,6 +2907,7 @@ fn update<'a>(
                     subs,
                     layout_cache,
                     procs_base,
+                    expectations,
                 },
             );
 
@@ -2900,6 +2965,9 @@ fn update<'a>(
                         );
                     }
 
+                    let mut module_expectations =
+                        VecMap::with_capacity(state.module_cache.module_names.len());
+
                     // Flush late-specialization module information to the top-level of the state
                     // where it will be visible to others, since we don't need late specialization
                     // anymore.
@@ -2911,6 +2979,7 @@ fn update<'a>(
                             module_timing,
                             layout_cache: _layout_cache,
                             procs_base: _,
+                            expectations,
                         },
                     ) in state.module_cache.late_specializations.drain()
                     {
@@ -2919,6 +2988,9 @@ fn update<'a>(
                             state.root_subs = Some(subs);
                         }
                         state.timings.insert(module_id, module_timing);
+                        if let Some(expectations) = expectations {
+                            module_expectations.insert(module_id, expectations);
+                        }
 
                         #[cfg(debug_assertions)]
                         {
@@ -2981,6 +3053,7 @@ fn update<'a>(
                             subs,
                             layout_interner,
                             exposed_to_host: state.exposed_to_host.clone(),
+                            module_expectations,
                         })
                         .map_err(|_| LoadingProblem::MsgChannelDied)?;
 
@@ -3067,6 +3140,10 @@ fn update<'a>(
                 }
             }
         }
+        Msg::FailedToLoad(problem) => {
+            // TODO report the error and continue instead of erroring out
+            Err(problem)
+        }
         Msg::FinishedAllTypeChecking { .. } => {
             unreachable!();
         }
@@ -3114,6 +3191,7 @@ fn finish_specialization<'a>(
     subs: Subs,
     layout_interner: STLayoutInterner<'a>,
     exposed_to_host: ExposedToHost,
+    module_expectations: VecMap<ModuleId, Expectations>,
 ) -> Result<MonomorphizedModule<'a>, LoadingProblem<'a>> {
     if false {
         println!(
@@ -3154,7 +3232,6 @@ fn finish_specialization<'a>(
     } = state;
 
     let ModuleCache {
-        expectations,
         type_problems,
         can_problems,
         sources,
@@ -3245,7 +3322,7 @@ fn finish_specialization<'a>(
         can_problems,
         type_problems,
         output_path,
-        expectations,
+        expectations: module_expectations,
         exposed_to_host,
         module_id: state.root_id,
         subs,
@@ -3339,8 +3416,8 @@ fn finish(
     }
 }
 
-/// Load a `platform` module from disk
-fn load_platform_module<'a>(
+/// Load a `package` or `platform` module from disk
+fn load_package_from_disk<'a>(
     arena: &'a Bump,
     filename: &Path,
     shorthand: &'a str,
@@ -3349,11 +3426,11 @@ fn load_platform_module<'a>(
     ident_ids_by_module: SharedIdentIdsByModule,
 ) -> Result<Msg<'a>, LoadingProblem<'a>> {
     let module_start_time = Instant::now();
-    let file_io_start = Instant::now();
-    let file = fs::read(filename);
+    let file_io_start = module_start_time;
+    let read_result = fs::read(filename);
     let file_io_duration = file_io_start.elapsed();
 
-    match file {
+    match read_result {
         Ok(bytes_vec) => {
             let parse_start = Instant::now();
             let bytes = arena.alloc(bytes_vec);
@@ -3400,6 +3477,27 @@ fn load_platform_module<'a>(
                 ))),
                 Ok((
                     ast::Module {
+                        header: ast::Header::Package(header),
+                        ..
+                    },
+                    parser_state,
+                )) => {
+                    let (_, _, package_module_msg) = build_package_header(
+                        arena,
+                        Some(shorthand),
+                        false, // since we have an app module ID, the app module must be the root
+                        filename.to_path_buf(),
+                        parser_state,
+                        module_ids,
+                        ident_ids_by_module,
+                        &header,
+                        pkg_module_timing,
+                    );
+
+                    Ok(Msg::Header(package_module_msg))
+                }
+                Ok((
+                    ast::Module {
                         header: ast::Header::Platform(header),
                         ..
                     },
@@ -3412,7 +3510,7 @@ fn load_platform_module<'a>(
                         Some(app_module_id),
                         filename.to_path_buf(),
                         parser_state,
-                        module_ids.clone(),
+                        module_ids,
                         ident_ids_by_module,
                         &header,
                         pkg_module_timing,
@@ -3460,10 +3558,10 @@ fn load_builtin_module_help<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
-                exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
                 header_type: HeaderType::Builtin {
                     name: header.name.value,
+                    exposes: unspace(arena, header.exposes.item.items),
                     generates_with: &[],
                 },
             };
@@ -3763,10 +3861,10 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
-                exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
                 header_type: HeaderType::Interface {
                     name: header.name.value,
+                    exposes: unspace(arena, header.exposes.item.items),
                 },
             };
 
@@ -3814,10 +3912,10 @@ fn parse_header<'a>(
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
-                exposes: unspace(arena, header.exposes.item.items),
                 imports: unspace(arena, header.imports.item.items),
                 header_type: HeaderType::Hosted {
                     name: header.name.value,
+                    exposes: unspace(arena, header.exposes.item.items),
                     generates: header.generates.item,
                     generates_with: unspace(arena, header.generates_with.item.items),
                 },
@@ -3853,33 +3951,31 @@ fn parse_header<'a>(
                 &[]
             };
 
-            let mut exposes = bumpalo::collections::Vec::new_in(arena);
+            let mut provides = bumpalo::collections::Vec::new_in(arena);
 
-            exposes.extend(unspace(arena, header.provides.entries.items));
+            provides.extend(unspace(arena, header.provides.entries.items));
 
             if let Some(provided_types) = header.provides.types {
                 for provided_type in unspace(arena, provided_types.items) {
                     let string: &str = provided_type.value.into();
                     let exposed_name = ExposedName::new(string);
 
-                    exposes.push(Loc::at(provided_type.region, exposed_name));
+                    provides.push(Loc::at(provided_type.region, exposed_name));
                 }
             }
-
-            let exposes = exposes.into_bump_slice();
 
             let info = HeaderInfo {
                 filename,
                 is_root_module,
                 opt_shorthand,
                 packages,
-                exposes,
                 imports: if let Some(imports) = header.imports {
                     unspace(arena, imports.item.items)
                 } else {
                     &[]
                 },
                 header_type: HeaderType::App {
+                    provides: provides.into_bump_slice(),
                     output_name: header.name.value,
                     to_platform: header.provides.to.value,
                 },
@@ -3892,85 +3988,72 @@ fn parse_header<'a>(
                 ident_ids_by_module.clone(),
                 module_timing,
             );
-            let app_module_header_msg = Msg::Header(resolved_header);
+
+            let mut messages = Vec::with_capacity(packages.len() + 1);
+
+            // It's important that the app header is first in the list!
+            messages.push(Msg::Header(resolved_header));
+
+            load_packages(
+                packages,
+                &mut messages,
+                roc_cache_dir,
+                app_file_dir,
+                arena,
+                module_id,
+                module_ids,
+                ident_ids_by_module,
+            );
 
             // Look at the app module's `to` keyword to determine which package was the platform.
             match header.provides.to.value {
                 To::ExistingPackage(shorthand) => {
-                    let package_path = packages.iter().find_map(|loc_package_entry| {
-                        let Loc { value, .. } = loc_package_entry;
-
-                        if value.shorthand == shorthand {
-                            Some(value.package_path.value)
-                        } else {
-                            None
-                        }
-                    }).unwrap_or_else(|| {
+                    if !packages
+                        .iter()
+                        .any(|loc_package_entry| loc_package_entry.value.shorthand == shorthand)
+                    {
                         todo!("Gracefully handle platform shorthand after `to` that didn't map to a shorthand specified in `packages`");
-                    });
-
-                    let src = package_path.to_str();
-
-                    // check whether we can find a `platform` module file on disk
-                    let platform_module_path = if src.starts_with("https://") {
-                        #[cfg(not(target_family = "wasm"))]
-                        {
-                            // If this is a HTTPS package, synchronously download it
-                            // to the cache before proceeding.
-
-                            // TODO we should do this async; however, with the current
-                            // architecture of file.rs (which doesn't use async/await),
-                            // this would be very difficult!
-                            let (package_dir, opt_root_module) =
-                                cache::install_package(roc_cache_dir, src).unwrap_or_else(|err| {
-                                    todo!("TODO gracefully handle package install error {:?}", err);
-                                });
-
-                            // You can optionally specify the root module using the URL fragment,
-                            // e.g. #foo.roc
-                            // (defaults to main.roc)
-                            match opt_root_module {
-                                Some(root_module) => package_dir.join(root_module),
-                                None => package_dir.join("main.roc"),
-                            }
-                        }
-                        #[cfg(target_family = "wasm")]
-                        {
-                            panic!("Specifying packages via URLs is curently unsupported in wasm.");
-                        }
-                    } else {
-                        app_file_dir.join(src)
-                    };
-
-                    if platform_module_path.as_path().exists() {
-                        let load_platform_module_msg = load_platform_module(
-                            arena,
-                            &platform_module_path,
-                            shorthand,
-                            module_id,
-                            module_ids,
-                            ident_ids_by_module,
-                        )?;
-
-                        Ok(HeaderOutput {
-                            module_id,
-                            msg: Msg::Many(vec![app_module_header_msg, load_platform_module_msg]),
-                            opt_platform_shorthand: Some(shorthand),
-                        })
-                    } else {
-                        Err(LoadingProblem::FileProblem {
-                            filename: platform_module_path,
-                            error: io::ErrorKind::NotFound,
-                        })
                     }
+
+                    Ok(HeaderOutput {
+                        module_id,
+                        msg: Msg::Many(messages),
+                        opt_platform_shorthand: Some(shorthand),
+                    })
                 }
                 To::NewPackage(_package_name) => Ok(HeaderOutput {
                     module_id,
-                    msg: app_module_header_msg,
+                    msg: Msg::Many(messages),
                     opt_platform_shorthand: None,
                 }),
             }
         }
+        Ok((
+            ast::Module {
+                header: ast::Header::Package(header),
+                ..
+            },
+            parse_state,
+        )) => {
+            let (module_id, _, header) = build_package_header(
+                arena,
+                None,
+                is_root_module,
+                filename,
+                parse_state,
+                module_ids,
+                ident_ids_by_module,
+                &header,
+                module_timing,
+            );
+
+            Ok(HeaderOutput {
+                module_id,
+                msg: Msg::Header(header),
+                opt_platform_shorthand: None,
+            })
+        }
+
         Ok((
             ast::Module {
                 header: ast::Header::Platform(header),
@@ -3984,7 +4067,7 @@ fn parse_header<'a>(
                 None,
                 filename,
                 parse_state,
-                module_ids.clone(),
+                module_ids,
                 ident_ids_by_module,
                 &header,
                 module_timing,
@@ -4000,6 +4083,81 @@ fn parse_header<'a>(
             fail.map_problem(SyntaxError::Header)
                 .into_file_error(filename),
         )),
+    }
+}
+
+fn load_packages<'a>(
+    packages: &[Loc<PackageEntry<'a>>],
+    load_messages: &mut Vec<Msg<'a>>,
+    roc_cache_dir: RocCacheDir,
+    cwd: PathBuf,
+    arena: &'a Bump,
+    module_id: ModuleId,
+    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
+) {
+    // Load all the packages
+    for Loc { value: entry, .. } in packages.iter() {
+        let PackageEntry {
+            shorthand,
+            package_name:
+                Loc {
+                    value: package_name,
+                    ..
+                },
+            ..
+        } = entry;
+
+        let src = package_name.to_str();
+
+        // find the `package` or `platform` module on disk,
+        // downloading it into a cache dir first if necessary.
+        let root_module_path = if src.starts_with("https://") {
+            #[cfg(not(target_family = "wasm"))]
+            {
+                // If this is a HTTPS package, synchronously download it
+                // to the cache before proceeding.
+
+                // TODO we should do this async; however, with the current
+                // architecture of file.rs (which doesn't use async/await),
+                // this would be very difficult!
+                let (package_dir, opt_root_module) = cache::install_package(roc_cache_dir, src)
+                    .unwrap_or_else(|err| {
+                        todo!("TODO gracefully handle package install error {:?}", err);
+                    });
+
+                // You can optionally specify the root module using the URL fragment,
+                // e.g. #foo.roc
+                // (defaults to main.roc)
+                match opt_root_module {
+                    Some(root_module) => package_dir.join(root_module),
+                    None => package_dir.join("main.roc"),
+                }
+            }
+
+            #[cfg(target_family = "wasm")]
+            {
+                panic!("Specifying packages via URLs is curently unsupported in wasm.");
+            }
+        } else {
+            cwd.join(src)
+        };
+
+        match load_package_from_disk(
+            arena,
+            &root_module_path,
+            shorthand,
+            module_id,
+            module_ids.clone(),
+            ident_ids_by_module.clone(),
+        ) {
+            Ok(msg) => {
+                load_messages.push(msg);
+            }
+            Err(problem) => {
+                load_messages.push(Msg::FailedToLoad(problem));
+            }
+        }
     }
 }
 
@@ -4075,7 +4233,6 @@ struct HeaderInfo<'a> {
     is_root_module: bool,
     opt_shorthand: Option<&'a str>,
     packages: &'a [Loc<PackageEntry<'a>>],
-    exposes: &'a [Loc<ExposedName<'a>>],
     imports: &'a [Loc<ImportsEntry<'a>>],
     header_type: HeaderType<'a>,
 }
@@ -4092,13 +4249,13 @@ fn build_header<'a>(
         is_root_module,
         opt_shorthand,
         packages,
-        exposes,
         imports,
         header_type,
     } = info;
 
     let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
-    let num_exposes = exposes.len();
+    let exposed_values = header_type.exposed_or_provided_values();
+    let num_exposes = exposed_values.len();
     let mut deps_by_name: MutMap<PQModuleName, ModuleId> =
         HashMap::with_capacity_and_hasher(num_exposes, default_hasher());
     let declared_name: ModuleName = match &header_type {
@@ -4117,9 +4274,13 @@ fn build_header<'a>(
                 );
             }
 
-            // Platforms do not have names. This is important because otherwise
+            // Platform modules do not have names. This is important because otherwise
             // those names end up in host-generated symbols, and they may contain
             // characters that hosts might not allow in their function names.
+            String::new().into()
+        }
+        HeaderType::Package { .. } => {
+            // Package modules do not have names.
             String::new().into()
         }
         HeaderType::Interface { name, .. }
@@ -4270,7 +4431,7 @@ fn build_header<'a>(
 
         let ident_ids = ident_ids_by_module.get_mut(&home).unwrap();
 
-        for loc_exposed in exposes.iter() {
+        for loc_exposed in exposed_values.iter() {
             // Use get_or_insert here because the ident_ids may already
             // created an IdentId for this, when it was imported exposed
             // in a dependent module.
@@ -4318,7 +4479,7 @@ fn build_header<'a>(
 
     let package_entries = packages
         .iter()
-        .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_path.value))
+        .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_name.value))
         .collect::<MutMap<_, _>>();
 
     // Send the deps to the coordinator thread for processing,
@@ -4346,8 +4507,9 @@ fn build_header<'a>(
     // and we just have a bunch of definitions with runtime errors in their bodies
     let header_type = {
         match header_type {
-            HeaderType::Interface { name } if home.is_builtin() => HeaderType::Builtin {
+            HeaderType::Interface { name, exposes } if home.is_builtin() => HeaderType::Builtin {
                 name,
+                exposes,
                 generates_with: &[],
             },
             _ => header_type,
@@ -4889,6 +5051,46 @@ fn unspace<'a, T: Copy>(arena: &'a Bump, items: &[Loc<Spaced<'a, T>>]) -> &'a [L
     .into_bump_slice()
 }
 
+fn build_package_header<'a>(
+    arena: &'a Bump,
+    opt_shorthand: Option<&'a str>,
+    is_root_module: bool,
+    filename: PathBuf,
+    parse_state: roc_parse::state::State<'a>,
+    module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: SharedIdentIdsByModule,
+    header: &PackageHeader<'a>,
+    module_timing: ModuleTiming,
+) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
+    let exposes = bumpalo::collections::Vec::from_iter_in(
+        unspace(arena, header.exposes.item.items).iter().copied(),
+        arena,
+    );
+    let packages = unspace(arena, header.packages.item.items);
+    let header_type = HeaderType::Package {
+        // A config_shorthand of "" should be fine
+        config_shorthand: opt_shorthand.unwrap_or_default(),
+        exposes: exposes.into_bump_slice(),
+    };
+
+    let info = HeaderInfo {
+        filename,
+        is_root_module,
+        opt_shorthand,
+        packages,
+        imports: &[],
+        header_type,
+    };
+
+    build_header(
+        info,
+        parse_state,
+        module_ids,
+        ident_ids_by_module,
+        module_timing,
+    )
+}
+
 fn build_platform_header<'a>(
     arena: &'a Bump,
     opt_shorthand: Option<&'a str>,
@@ -4915,6 +5117,10 @@ fn build_platform_header<'a>(
             .zip(requires.iter().copied()),
         arena,
     );
+    let exposes = bumpalo::collections::Vec::from_iter_in(
+        unspace(arena, header.exposes.item.items).iter().copied(),
+        arena,
+    );
     let requires_types = unspace(arena, header.requires.item.rigids.items);
     let imports = unspace(arena, header.imports.item.items);
 
@@ -4923,6 +5129,7 @@ fn build_platform_header<'a>(
         config_shorthand: opt_shorthand.unwrap_or_default(),
         opt_app_module_id,
         provides: provides.into_bump_slice(),
+        exposes: exposes.into_bump_slice(),
         requires,
         requires_types,
     };
@@ -4932,7 +5139,6 @@ fn build_platform_header<'a>(
         is_root_module,
         opt_shorthand,
         packages: &[],
-        exposes: &[], // These are exposed values. TODO move this into header_type!
         imports,
         header_type,
     };
@@ -5013,7 +5219,11 @@ fn canonicalize_and_constrain<'a>(
     // Generate documentation information
     // TODO: store timing information?
     let module_docs = match header_type {
-        HeaderType::Platform { .. } | HeaderType::App { .. } => None,
+        HeaderType::App { .. } => None,
+        HeaderType::Platform { .. } | HeaderType::Package { .. } => {
+            // TODO: actually generate docs for platform and package modules.
+            None
+        }
         HeaderType::Interface { name, .. }
         | HeaderType::Builtin { name, .. }
         | HeaderType::Hosted { name, .. } => {
@@ -5230,6 +5440,7 @@ fn make_specializations<'a>(
     world_abilities: WorldAbilities,
     exposed_by_module: &ExposedByModule,
     derived_module: SharedDerivedModule,
+    mut expectations: Option<Expectations>,
 ) -> Msg<'a> {
     let make_specializations_start = Instant::now();
     let mut update_mode_ids = UpdateModeIds::new();
@@ -5237,6 +5448,7 @@ fn make_specializations<'a>(
     let mut mono_env = roc_mono::ir::Env {
         arena,
         subs: &mut subs,
+        expectation_subs: expectations.as_mut().map(|e| &mut e.subs),
         home,
         ident_ids: &mut ident_ids,
         target_info,
@@ -5288,6 +5500,7 @@ fn make_specializations<'a>(
         procedures,
         update_mode_ids,
         subs,
+        expectations,
         external_specializations_requested,
         module_timing,
     }
@@ -5307,6 +5520,7 @@ fn build_pending_specializations<'a>(
     exposed_by_module: &ExposedByModule,
     abilities_store: AbilitiesStore,
     derived_module: SharedDerivedModule,
+    mut expectations: Option<Expectations>,
     build_expects: bool,
 ) -> Msg<'a> {
     let find_specializations_start = Instant::now();
@@ -5327,6 +5541,7 @@ fn build_pending_specializations<'a>(
     let mut mono_env = roc_mono::ir::Env {
         arena,
         subs: &mut subs,
+        expectation_subs: expectations.as_mut().map(|e| &mut e.subs),
         home,
         ident_ids: &mut ident_ids,
         target_info,
@@ -5716,6 +5931,7 @@ fn build_pending_specializations<'a>(
         module_timing,
         abilities_store,
         toplevel_expects,
+        expectations,
     }
 }
 
@@ -5757,6 +5973,8 @@ fn load_derived_partial_procs<'a>(
         let mut mono_env = roc_mono::ir::Env {
             arena,
             subs,
+            // There are no derived expectations.
+            expectation_subs: None,
             home,
             ident_ids,
             target_info,
@@ -5916,6 +6134,7 @@ fn run_task<'a>(
             abilities_store,
             exposed_by_module,
             derived_module,
+            expectations,
             build_expects,
         } => Ok(build_pending_specializations(
             arena,
@@ -5931,6 +6150,7 @@ fn run_task<'a>(
             &exposed_by_module,
             abilities_store,
             derived_module,
+            expectations,
             build_expects,
         )),
         MakeSpecializations {
@@ -5944,6 +6164,7 @@ fn run_task<'a>(
             world_abilities,
             exposed_by_module,
             derived_module,
+            expectations,
         } => Ok(make_specializations(
             arena,
             module_id,
@@ -5957,6 +6178,7 @@ fn run_task<'a>(
             world_abilities,
             &exposed_by_module,
             derived_module,
+            expectations,
         )),
     }?;
 

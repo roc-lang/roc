@@ -162,9 +162,15 @@ impl<'a> DeclarationToIndex<'a> {
                 }
             }
         }
+
+        let similar = self
+            .elements
+            .iter()
+            .filter_map(|((s, lay), _)| if *s == needle_symbol { Some(lay) } else { None })
+            .collect::<std::vec::Vec<_>>();
         unreachable!(
-            "symbol/layout {:?} {:#?} combo must be in DeclarationToIndex",
-            needle_symbol, needle_layout
+            "symbol/layout {:?} {:#?} combo must be in DeclarationToIndex\nHowever {} similar layouts were found:\n{:#?}",
+            needle_symbol, needle_layout, similar.len(), similar
         )
     }
 }
@@ -942,7 +948,7 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         ListIsUnique => arena.alloc_slice_copy(&[borrowed]),
 
-        Dbg => arena.alloc_slice_copy(&[borrowed]),
+        Dbg => arena.alloc_slice_copy(&[borrowed, /* dbg-spec-var */ irrelevant]),
 
         BoxExpr | UnboxExpr => {
             unreachable!("These lowlevel operations are turned into mono Expr's")

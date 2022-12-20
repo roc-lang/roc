@@ -709,7 +709,6 @@ fn float_with_precision<'a, 'ctx, 'env>(
     match float_width {
         FloatWidth::F64 => env.context.f64_type().const_float(value).into(),
         FloatWidth::F32 => env.context.f32_type().const_float(value).into(),
-        FloatWidth::F128 => todo!("F128 is not implemented"),
     }
 }
 
@@ -1165,14 +1164,11 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     let struct_layout = Layout::struct_no_name_order(fields);
                     let struct_type = basic_type_from_layout(env, &struct_layout);
 
-                    let cast_argument = env
-                        .builder
-                        .build_bitcast(
-                            argument,
-                            struct_type.ptr_type(AddressSpace::Generic),
-                            "cast_rosetree_like",
-                        )
-                        .into_pointer_value();
+                    let cast_argument = env.builder.build_pointer_cast(
+                        argument,
+                        struct_type.ptr_type(AddressSpace::Generic),
+                        "cast_rosetree_like",
+                    );
 
                     let ptr = env
                         .builder
@@ -1402,11 +1398,13 @@ fn build_tag_field_value<'a, 'ctx, 'env>(
         debug_assert!(value.is_pointer_value());
 
         // we store recursive pointers as `i64*`
-        env.builder.build_bitcast(
-            value,
-            env.context.i64_type().ptr_type(AddressSpace::Generic),
-            "cast_recursive_pointer",
-        )
+        env.builder
+            .build_pointer_cast(
+                value.into_pointer_value(),
+                env.context.i64_type().ptr_type(AddressSpace::Generic),
+                "cast_recursive_pointer",
+            )
+            .into()
     } else if tag_field_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
         debug_assert!(value.is_pointer_value());
 
@@ -1839,14 +1837,11 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let ptr = env
-        .builder
-        .build_bitcast(
-            value,
-            struct_type.ptr_type(AddressSpace::Generic),
-            "cast_lookup_at_index_ptr",
-        )
-        .into_pointer_value();
+    let ptr = env.builder.build_pointer_cast(
+        value,
+        struct_type.ptr_type(AddressSpace::Generic),
+        "cast_lookup_at_index_ptr",
+    );
 
     let elem_ptr = builder
         .build_struct_gep(ptr, index as u32, "at_index_struct_gep")
@@ -1861,11 +1856,13 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
         let actual_type = basic_type_from_layout(env, &Layout::Union(*union_layout));
         debug_assert!(actual_type.is_pointer_type());
 
-        builder.build_bitcast(
-            result,
-            actual_type,
-            "cast_rec_pointer_lookup_at_index_ptr_old",
-        )
+        builder
+            .build_pointer_cast(
+                result.into_pointer_value(),
+                actual_type.into_pointer_type(),
+                "cast_rec_pointer_lookup_at_index_ptr_old",
+            )
+            .into()
     } else {
         result
     }
@@ -1883,14 +1880,11 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     let struct_layout = Layout::struct_no_name_order(field_layouts);
     let struct_type = basic_type_from_layout(env, &struct_layout);
 
-    let data_ptr = env
-        .builder
-        .build_bitcast(
-            value,
-            struct_type.ptr_type(AddressSpace::Generic),
-            "cast_lookup_at_index_ptr",
-        )
-        .into_pointer_value();
+    let data_ptr = env.builder.build_pointer_cast(
+        value,
+        struct_type.ptr_type(AddressSpace::Generic),
+        "cast_lookup_at_index_ptr",
+    );
 
     let elem_ptr = builder
         .build_struct_gep(data_ptr, index as u32, "at_index_struct_gep_data")
@@ -1906,11 +1900,13 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
         let actual_type = basic_type_from_layout(env, &Layout::Union(*union_layout));
         debug_assert!(actual_type.is_pointer_type());
 
-        builder.build_bitcast(
-            result,
-            actual_type,
-            "cast_rec_pointer_lookup_at_index_ptr_new",
-        )
+        builder
+            .build_pointer_cast(
+                result.into_pointer_value(),
+                actual_type.into_pointer_type(),
+                "cast_rec_pointer_lookup_at_index_ptr_new",
+            )
+            .into()
     } else {
         result
     }
@@ -1994,8 +1990,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     let ptr_type = value_type.ptr_type(AddressSpace::Generic);
 
     env.builder
-        .build_bitcast(ptr, ptr_type, "alloc_cast_to_desired")
-        .into_pointer_value()
+        .build_pointer_cast(ptr, ptr_type, "alloc_cast_to_desired")
 }
 
 fn list_literal<'a, 'ctx, 'env>(
@@ -2586,7 +2581,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             condition: cond_symbol,
             region,
             lookups,
-            layouts: _,
+            variables,
             remainder,
         } => {
             let bd = env.builder;
@@ -2621,6 +2616,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             *cond_symbol,
                             *region,
                             lookups,
+                            variables,
                         );
 
                         if let LlvmBackendMode::BinaryDev = env.mode {
@@ -2655,7 +2651,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             condition: cond_symbol,
             region,
             lookups,
-            layouts: _,
+            variables,
             remainder,
         } => {
             let bd = env.builder;
@@ -2690,6 +2686,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                             *cond_symbol,
                             *region,
                             lookups,
+                            variables,
                         );
 
                         bd.build_unconditional_branch(then_block);
@@ -2815,7 +2812,13 @@ pub fn complex_bitcast<'ctx>(
         // we can't use the more straightforward bitcast in all cases
         // it seems like a bitcast only works on integers and pointers
         // and crucially does not work not on arrays
-        return builder.build_bitcast(from_value, to_type, name);
+        return builder
+            .build_pointer_cast(
+                from_value.into_pointer_value(),
+                to_type.into_pointer_type(),
+                name,
+            )
+            .into();
     }
 
     complex_bitcast_from_bigger_than_to(builder, from_value, to_type, name)
@@ -2835,7 +2838,14 @@ pub fn complex_bitcast_check_size<'a, 'ctx, 'env>(
         // we can't use the more straightforward bitcast in all cases
         // it seems like a bitcast only works on integers and pointers
         // and crucially does not work not on arrays
-        return env.builder.build_bitcast(from_value, to_type, name);
+        return env
+            .builder
+            .build_pointer_cast(
+                from_value.into_pointer_value(),
+                to_type.into_pointer_type(),
+                name,
+            )
+            .into();
     }
 
     let block = env.builder.get_insert_block().expect("to be in a function");
@@ -2891,13 +2901,11 @@ fn complex_bitcast_from_bigger_than_to<'ctx>(
     builder.build_store(argument_pointer, from_value);
 
     // then read it back as a different type
-    let to_type_pointer = builder
-        .build_bitcast(
-            argument_pointer,
-            to_type.ptr_type(inkwell::AddressSpace::Generic),
-            name,
-        )
-        .into_pointer_value();
+    let to_type_pointer = builder.build_pointer_cast(
+        argument_pointer,
+        to_type.ptr_type(inkwell::AddressSpace::Generic),
+        name,
+    );
 
     builder.build_load(to_type_pointer, "cast_value")
 }
@@ -2914,15 +2922,13 @@ fn complex_bitcast_to_bigger_than_from<'ctx>(
     let storage = builder.build_alloca(to_type, "cast_alloca");
 
     // then cast the pointer to our desired type
-    let from_type_pointer = builder
-        .build_bitcast(
-            storage,
-            from_value
-                .get_type()
-                .ptr_type(inkwell::AddressSpace::Generic),
-            name,
-        )
-        .into_pointer_value();
+    let from_type_pointer = builder.build_pointer_cast(
+        storage,
+        from_value
+            .get_type()
+            .ptr_type(inkwell::AddressSpace::Generic),
+        name,
+    );
 
     // store the value in memory
     builder.build_store(from_type_pointer, from_value);
@@ -3036,7 +3042,6 @@ fn build_switch_ir<'a, 'ctx, 'env>(
             let int_type = match float_width {
                 FloatWidth::F32 => env.context.i32_type(),
                 FloatWidth::F64 => env.context.i64_type(),
-                FloatWidth::F128 => env.context.i128_type(),
             };
 
             builder
@@ -3314,14 +3319,11 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
             // not pretty, but seems to cover all our current cases
             if arg_type.is_pointer_type() && !fastcc_type.is_pointer_type() {
                 // bitcast the ptr
-                let fastcc_ptr = env
-                    .builder
-                    .build_bitcast(
-                        *arg,
-                        fastcc_type.ptr_type(AddressSpace::Generic),
-                        "bitcast_arg",
-                    )
-                    .into_pointer_value();
+                let fastcc_ptr = env.builder.build_pointer_cast(
+                    arg.into_pointer_value(),
+                    fastcc_type.ptr_type(AddressSpace::Generic),
+                    "bitcast_arg",
+                );
 
                 let loaded = env.builder.build_load(fastcc_ptr, "load_arg");
                 arguments_for_call.push(loaded);
@@ -3643,14 +3645,11 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                         c_function.add_attribute(AttributeLoc::Param(param_index), nonnull);
                     }
                     // bitcast the ptr
-                    let fastcc_ptr = env
-                        .builder
-                        .build_bitcast(
-                            *arg,
-                            fastcc_type.ptr_type(AddressSpace::Generic),
-                            "bitcast_arg",
-                        )
-                        .into_pointer_value();
+                    let fastcc_ptr = env.builder.build_pointer_cast(
+                        arg.into_pointer_value(),
+                        fastcc_type.ptr_type(AddressSpace::Generic),
+                        "bitcast_arg",
+                    );
 
                     env.builder.build_load(fastcc_ptr, "load_arg")
                 } else {
@@ -3808,13 +3807,11 @@ pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValu
 
     global.set_initializer(&type_.const_zero());
 
-    env.builder
-        .build_bitcast(
-            global.as_pointer_value(),
-            env.context.i32_type().ptr_type(AddressSpace::Generic),
-            "cast_sjlj_buffer",
-        )
-        .into_pointer_value()
+    env.builder.build_pointer_cast(
+        global.as_pointer_value(),
+        env.context.i32_type().ptr_type(AddressSpace::Generic),
+        "cast_sjlj_buffer",
+    )
 }
 
 pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValueEnum<'ctx> {
@@ -3826,18 +3823,15 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
         // Anywhere else, use the LLVM intrinsic.
         // https://llvm.org/docs/ExceptionHandling.html#llvm-eh-sjlj-setjmp
 
-        let jmp_buf_i8p_arr = env
-            .builder
-            .build_bitcast(
-                jmp_buf,
-                env.context
-                    .i8_type()
-                    .ptr_type(AddressSpace::Generic)
-                    .array_type(5)
-                    .ptr_type(AddressSpace::Generic),
-                "jmp_buf [5 x i8*]",
-            )
-            .into_pointer_value();
+        let jmp_buf_i8p_arr = env.builder.build_pointer_cast(
+            jmp_buf,
+            env.context
+                .i8_type()
+                .ptr_type(AddressSpace::Generic)
+                .array_type(5)
+                .ptr_type(AddressSpace::Generic),
+            "jmp_buf [5 x i8*]",
+        );
 
         // LLVM asks us to please store the frame pointer in the first word.
         let frame_address = env.call_intrinsic(
@@ -3867,11 +3861,14 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
         let stack_save = env.call_intrinsic(LLVM_STACK_SAVE, &[]);
         env.builder.build_store(ss, stack_save);
 
-        let jmp_buf_i8p = env.builder.build_bitcast(
-            jmp_buf,
-            env.context.i8_type().ptr_type(AddressSpace::Generic),
-            "jmp_buf i8*",
-        );
+        let jmp_buf_i8p = env
+            .builder
+            .build_pointer_cast(
+                jmp_buf,
+                env.context.i8_type().ptr_type(AddressSpace::Generic),
+                "jmp_buf i8*",
+            )
+            .into();
         env.call_intrinsic(LLVM_SETJMP, &[jmp_buf_i8p])
     }
 }
@@ -5397,7 +5394,7 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                                 env.builder.build_alloca(param.get_type(), "param_alloca");
                             env.builder.build_store(param_alloca, param);
 
-                            let as_cc_type = env.builder.build_bitcast(
+                            let as_cc_type = env.builder.build_pointer_cast(
                                 param_alloca,
                                 cc_type.into_pointer_type(),
                                 "to_cc_type_ptr",
@@ -5467,14 +5464,11 @@ fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
 ) -> PointerValue<'ctx> {
     let global = define_global_str_literal(env, message);
 
-    let ptr = env
-        .builder
-        .build_bitcast(
-            global,
-            env.context.i8_type().ptr_type(AddressSpace::Generic),
-            "to_opaque",
-        )
-        .into_pointer_value();
+    let ptr = env.builder.build_pointer_cast(
+        global.as_pointer_value(),
+        env.context.i8_type().ptr_type(AddressSpace::Generic),
+        "to_opaque",
+    );
 
     // a pointer to the first actual data (skipping over the refcount)
     let ptr = unsafe {

@@ -9,6 +9,7 @@
 
 "app"
 "platform"
+"package"
 "provides"
 "requires"
 "exposes"

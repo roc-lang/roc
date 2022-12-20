@@ -90,19 +90,19 @@ fn testing_roc_memcpy(dest: *anyopaque, src: *anyopaque, bytes: usize) callconv(
 }
 
 pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
-    return @ptrCast(?[*]u8, @call(.{ .modifier = always_inline }, roc_alloc, .{ size, alignment }));
+    return @ptrCast(?[*]u8, roc_alloc(size, alignment));
 }
 
 pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [*]u8 {
-    return @ptrCast([*]u8, @call(.{ .modifier = always_inline }, roc_realloc, .{ c_ptr, new_size, old_size, alignment }));
+    return @ptrCast([*]u8, roc_realloc(c_ptr, new_size, old_size, alignment));
 }
 
 pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
-    return @call(.{ .modifier = always_inline }, roc_dealloc, .{ c_ptr, alignment });
+    return roc_dealloc(c_ptr, alignment);
 }
 
 pub fn memcpy(dst: [*]u8, src: [*]u8, size: usize) void {
-    @call(.{ .modifier = always_inline }, roc_memcpy, .{ dst, src, size });
+    roc_memcpy(dst, src, size);
 }
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code
@@ -275,7 +275,8 @@ pub inline fn calculateCapacity(
     } else {
         new_capacity = (old_capacity * 3 + 1) / 2;
     }
-    return @maximum(new_capacity, requested_length);
+
+    return std.math.max(new_capacity, requested_length);
 }
 
 pub fn allocateWithRefcountC(

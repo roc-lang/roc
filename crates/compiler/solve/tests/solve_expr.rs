@@ -262,6 +262,7 @@ mod solve_expr {
 
     #[derive(Default)]
     struct InferOptions {
+        print_can_decls: bool,
         print_only_under_alias: bool,
         allow_errors: bool,
     }
@@ -302,7 +303,20 @@ mod solve_expr {
         let queries = parse_queries(&src);
         assert!(!queries.is_empty(), "No queries provided!");
 
-        let mut solved_queries = Vec::with_capacity(queries.len());
+        let mut output_parts = Vec::with_capacity(queries.len() + 2);
+
+        if options.print_can_decls {
+            use roc_can::debug::{pretty_print_declarations, PPCtx};
+            let ctx = PPCtx {
+                home,
+                interns: &interns,
+                print_lambda_names: true,
+            };
+            let pretty_decls = pretty_print_declarations(&ctx, &decls);
+            output_parts.push(pretty_decls);
+            output_parts.push("\n".to_owned());
+        }
+
         for TypeQuery(region) in queries.into_iter() {
             let start = region.start().offset;
             let end = region.end().offset;
@@ -340,12 +354,12 @@ mod solve_expr {
                     }
                 };
 
-            solved_queries.push(elaborated);
+            output_parts.push(elaborated);
         }
 
-        let pretty_solved_queries = solved_queries.join("\n");
+        let pretty_output = output_parts.join("\n");
 
-        expected(&pretty_solved_queries);
+        expected(&pretty_output);
     }
 
     macro_rules! infer_queries {
@@ -505,6 +519,41 @@ mod solve_expr {
                 "#
             ),
             "List U8 -> Result Str [BadUtf8 Utf8ByteProblem Nat]",
+        );
+    }
+
+    #[test]
+    fn choose_correct_recursion_var_under_record() {
+        infer_queries!(
+            indoc!(
+                r#"
+                Parser : [
+                    Specialize Parser,
+                    Record (List {parser: Parser}),
+                ]
+
+                printCombinatorParser : Parser -> Str
+                printCombinatorParser = \parser ->
+                    when parser is
+                #        ^^^^^^
+                        Specialize p ->
+                            printed = printCombinatorParser p
+                            if Bool.false then printed else "foo"
+                        Record fields ->
+                            fields
+                                |> List.map \f ->
+                                    printed = printCombinatorParser f.parser
+                                    if Bool.false then printed else "foo"
+                                |> List.first
+                                |> Result.withDefault ("foo")
+
+                printCombinatorParser (Record [])
+                "#
+            ),
+            @r###"
+            parser : [Record (List { parser : a }), Specialize a] as a
+            "###
+            print_only_under_alias: true
         );
     }
 
@@ -6720,9 +6769,9 @@ mod solve_expr {
                 "#
             ),
             @r#"
-            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8]]-> {})
             Id#id(3) : a -[[] + a:id(3):1]-> ({} -[[] + a:id(3):2]-> a) | a has Id
-            alias : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            alias : {} -[[id(5)]]-> ({} -[[8]]-> {})
             "#
             print_only_under_alias: true
         )
@@ -6751,8 +6800,8 @@ mod solve_expr {
                 "#
             ),
             @r#"
-            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
-            it : {} -[[8(8)]]-> {}
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8]]-> {})
+            it : {} -[[8]]-> {}
             "#
             print_only_under_alias: true
         )
@@ -6782,8 +6831,8 @@ mod solve_expr {
                 "#
             ),
             @r#"
-            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
-            A#id(5) : {} -[[id(5)]]-> ({} -[[8(8)]]-> {})
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8]]-> {})
+            A#id(5) : {} -[[id(5)]]-> ({} -[[8]]-> {})
             "#
             print_only_under_alias: true
         )
@@ -6903,7 +6952,7 @@ mod solve_expr {
                 #^^^^^^^^^^^^^^^^^^^^^^{-1}
                 "#
             ),
-            @r#"[\{} -> {}, \{} -> {}] : List ({}* -[[1(1), 2(2)]]-> {})"#
+            @r###"[\{} -> {}, \{} -> {}] : List ({}* -[[1, 2]]-> {})"###
         )
     }
 
@@ -7078,7 +7127,7 @@ mod solve_expr {
                 #^^^{-1}
                 "#
             ),
-            @r#"fun : {} -[[thunk(9) (({} -[[15(15)]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13(13) Str]]-> Str)), thunk(9) (({} -[[14(14)]]-> Str)) (Str -[[f(3)]]-> ({} -[[11(11)]]-> Str))]]-> Str"#
+            @r#"fun : {} -[[thunk(9) (({} -[[15]]-> { s1 : Str })) ({ s1 : Str } -[[g(4)]]-> ({} -[[13 Str]]-> Str)), thunk(9) (({} -[[14]]-> Str)) (Str -[[f(3)]]-> ({} -[[11]]-> Str))]]-> Str"#
             print_only_under_alias: true
         );
     }
@@ -7323,9 +7372,9 @@ mod solve_expr {
                 "#
             ),
             @r###"
-        Fo#f(7) : Fo, b -[[f(7)]]-> ({} -[[13(13) b]]-> ({} -[[] + b:g(4):2]-> {})) | b has G
-        Go#g(8) : Go -[[g(8)]]-> ({} -[[14(14)]]-> {})
-        Fo#f(7) : Fo, Go -[[f(7)]]-> ({} -[[13(13) Go]]-> ({} -[[14(14)]]-> {}))
+        Fo#f(7) : Fo, b -[[f(7)]]-> ({} -[[13 b]]-> ({} -[[] + b:g(4):2]-> {})) | b has G
+        Go#g(8) : Go -[[g(8)]]-> ({} -[[14]]-> {})
+        Fo#f(7) : Fo, Go -[[f(7)]]-> ({} -[[13 Go]]-> ({} -[[14]]-> {}))
         "###
         );
     }
@@ -7692,7 +7741,7 @@ mod solve_expr {
             @r###"
         const : Str -[[const(2)]]-> (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str)
         compose : (Str -a-> Str), (Str -[[]]-> Str) -[[compose(1)]]-> (Str -a-> Str)
-        \c1, c2 -> compose c1 c2 : (Str -a-> Str), (Str -[[]]-> Str) -[[11(11)]]-> (Str -a-> Str)
+        \c1, c2 -> compose c1 c2 : (Str -a-> Str), (Str -[[]]-> Str) -[[11]]-> (Str -a-> Str)
         res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
         res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
         "###
@@ -8077,7 +8126,7 @@ mod solve_expr {
                 #                           ^^^^^^^^^^^^^^
                 "#
             ),
-            @"N#Decode.decoder(3) : List U8, fmt -[[7(7)]]-> { rest : List U8, result : [Err [TooShort], Ok U8] } | fmt has DecoderFormatting"
+            @"N#Decode.decoder(3) : List U8, fmt -[[7]]-> { rest : List U8, result : [Err [TooShort], Ok U8] } | fmt has DecoderFormatting"
             print_only_under_alias: true
         );
     }
@@ -8360,7 +8409,7 @@ mod solve_expr {
             ),
         @r###"
         isEqQ : ({} -[[]]-> Str), ({} -[[]]-> Str) -[[isEqQ(2)]]-> [False, True]
-        isEqQ : ({} -[[6(6), 7(7)]]-> Str), ({} -[[6(6), 7(7)]]-> Str) -[[isEqQ(2)]]-> [False, True]
+        isEqQ : ({} -[[6, 7]]-> Str), ({} -[[6, 7]]-> Str) -[[isEqQ(2)]]-> [False, True]
         "###
         print_only_under_alias: true
         );
@@ -8454,6 +8503,84 @@ mod solve_expr {
         Set#Bool.isEq(17) : Set U8, Set U8 -[[Set.isEq(17)]]-> Bool
         Set#Bool.isEq(17) : Set Str, Set Str -[[Set.isEq(17)]]-> Bool
         "###
+        );
+    }
+
+    #[test]
+    fn disjoint_nested_lambdas_result_in_disjoint_parents_issue_4712() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Parser a : {} -> a
+
+                v1 : {}
+                v1 = {}
+
+                v2 : Str
+                v2 = ""
+
+                apply : Parser (a -> Str), a -> Parser Str
+                apply = \fnParser, valParser ->
+                    \{} ->
+                        (fnParser {}) (valParser)
+
+                map : a, (a -> Str) -> Parser Str
+                map = \simpleParser, transform ->
+                    apply (\{} -> transform) simpleParser
+
+                parseInput = \{} ->
+                    when [ map v1 (\{} -> ""), map v2 (\s -> s) ] is
+                    #    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                        _ -> ""
+
+                main = parseInput {} == ""
+                "#
+            ),
+        @r###"
+        v1 = {}
+
+        v2 = ""
+
+        apply = \fnParser, valParser-> \{} -[9]-> (fnParser {}) valParser
+
+        map = \simpleParser, transform-> apply \{} -[12]-> transform simpleParser
+
+        parseInput =
+          \{}->
+          when [
+              map v1 \{} -[13]-> "",
+              map v2 \s -[14]-> s,
+            ] is
+            _ -> ""
+
+        main = Bool.isEq (parseInput {}) ""
+
+
+        [ map v1 (\{} -> ""), map v2 (\s -> s) ] : List (({} -[[9 (({} -[[12 (Str -[[14]]-> Str)]]-> (Str -[[14]]-> Str))) Str, 9 (({} -[[12 ({} -[[13]]-> Str)]]-> ({} -[[13]]-> Str))) {}]]-> Str))
+        "###
+        print_only_under_alias: true
+        print_can_decls: true
+        );
+    }
+
+    #[test]
+    fn constrain_dbg_flex_var() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                polyDbg = \x ->
+                #^^^^^^^{-1}
+                    dbg x
+                    x
+
+                main = polyDbg ""
+                "#
+            ),
+        @"polyDbg : a -[[polyDbg(1)]]-> a"
         );
     }
 }

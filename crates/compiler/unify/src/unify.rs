@@ -320,7 +320,6 @@ impl<M: MetaCollector> Outcome<M> {
 
 pub struct Env<'a> {
     pub subs: &'a mut Subs,
-    compute_outcome_only: bool,
     seen_recursion: VecSet<(Variable, Variable)>,
     fixed_variables: VecSet<Variable>,
 }
@@ -329,19 +328,9 @@ impl<'a> Env<'a> {
     pub fn new(subs: &'a mut Subs) -> Self {
         Self {
             subs,
-            compute_outcome_only: false,
             seen_recursion: Default::default(),
             fixed_variables: Default::default(),
         }
-    }
-
-    // Computes a closure in outcome-only mode. Unifications run in outcome-only mode will check
-    // for unifiability, but will not modify type variables or merge them.
-    pub fn with_outcome_only<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        self.compute_outcome_only = true;
-        let result = f(self);
-        self.compute_outcome_only = false;
-        result
     }
 
     fn add_recursion_pair(&mut self, var1: Variable, var2: Variable) {
@@ -1331,7 +1320,7 @@ fn separate_union_lambdas<M: MetaCollector>(
     mode: Mode,
     fields1: UnionLambdas,
     fields2: UnionLambdas,
-) -> (Outcome<M>, SeparatedUnionLambdas) {
+) -> Result<(Outcome<M>, SeparatedUnionLambdas), Outcome<M>> {
     debug_assert!(
         fields1.is_sorted_allow_duplicates(env.subs),
         "not sorted: {:?}",
@@ -1451,19 +1440,55 @@ fn separate_union_lambdas<M: MetaCollector>(
                             //
                             // If they are not unifiable, that means the two lambdas must be
                             // different (since they have different capture sets), and so we don't
-                            // want to merge the variables.
-                            let variables_are_unifiable = env.with_outcome_only(|env| {
-                                unify_pool::<NoCollector>(env, pool, var1, var2, mode)
-                                    .mismatches
-                                    .is_empty()
-                            });
+                            // want to merge the variables. Instead, we'll treat the lambda sets
+                            // are disjoint, and keep them as independent lambda in the resulting
+                            // set.
+                            //
+                            // # Nested lambda sets
+                            //
+                            // XREF https://github.com/roc-lang/roc/issues/4712
+                            //
+                            // We must be careful to ensure that if unifying nested lambda sets
+                            // results in disjoint lambdas, that the parent lambda sets are
+                            // ultimately treated disjointly as well.
+                            // Consider
+                            //
+                            //   v1: {} -[ foo ({} -[ bar Str ]-> {}) ]-> {}
+                            // ~ v2: {} -[ foo ({} -[ bar U64 ]-> {}) ]-> {}
+                            //
+                            // When considering unification of the nested sets
+                            //
+                            //   [ bar Str ]
+                            // ~ [ bar U64 ]
+                            //
+                            // we should not unify these sets, even disjointly, because that would
+                            // ultimately lead us to unifying
+                            //
+                            // v1 ~ v2
+                            // => {} -[ foo ({} -[ bar Str, bar U64 ]-> {}) ] -> {}
+                            //
+                            // which is quite wrong - we do not have a lambda `foo` that captures
+                            // either `bar captures: Str` or `bar captures: U64`, we have two
+                            // different lambdas `foo` that capture different `bars`. The target
+                            // unification is
+                            //
+                            // v1 ~ v2
+                            // => {} -[ foo ({} -[ bar Str ]-> {}),
+                            //          foo ({} -[ bar U64 ]-> {}) ] -> {}
+                            let subs_snapshot = env.subs.snapshot();
+                            let pool_snapshot = pool.len();
+                            let outcome: Outcome<M> = unify_pool(env, pool, var1, var2, mode);
 
-                            if !variables_are_unifiable {
+                            if !outcome.mismatches.is_empty() {
+                                // Rolling back will also pull apart any nested lambdas that
+                                // were joined into the same set.
+                                env.subs.rollback_to(subs_snapshot);
+                                pool.truncate(pool_snapshot);
                                 continue 'try_next_right;
+                            } else {
+                                let outcome = unify_pool(env, pool, var1, var2, mode);
+                                whole_outcome.union(outcome);
                             }
-
-                            let outcome = unify_pool(env, pool, var1, var2, mode);
-                            whole_outcome.union(outcome);
                         }
 
                         // All the variables unified, so we can join the left + right.
@@ -1487,14 +1512,14 @@ fn separate_union_lambdas<M: MetaCollector>(
         }
     }
 
-    (
+    Ok((
         whole_outcome,
         SeparatedUnionLambdas {
             only_in_left,
             only_in_right,
             joined,
         },
-    )
+    ))
 }
 
 /// ULS-SORT-ORDER:
@@ -1829,7 +1854,10 @@ fn unify_lambda_set_help<M: MetaCollector>(
             only_in_right,
             joined,
         },
-    ) = separate_union_lambdas(env, pool, ctx.mode, solved1, solved2);
+    ) = match separate_union_lambdas(env, pool, ctx.mode, solved1, solved2) {
+        Ok((outcome, separated)) => (outcome, separated),
+        Err(err_outcome) => return err_outcome,
+    };
 
     let all_lambdas = joined
         .into_iter()
@@ -2027,33 +2055,41 @@ fn unify_shared_fields<M: MetaCollector>(
                     // this is an error, but we continue to give better error messages
                     continue;
                 }
-                (Demanded(val), Required(_))
-                | (Required(val), Demanded(_))
-                | (Demanded(val), Demanded(_)) => Demanded(val),
-                (Required(val), Required(_)) => Required(val),
-                (Required(val), Optional(_)) => Required(val),
-                (Optional(val), Required(_)) => Required(val),
-                (Optional(val), Optional(_)) => Optional(val),
+
+                (Demanded(a), Required(b))
+                | (Required(a), Demanded(b))
+                | (Demanded(a), Demanded(b)) => Demanded(choose_merged_var(env.subs, a, b)),
+                (Required(a), Required(b))
+                | (Required(a), Optional(b))
+                | (Optional(a), Required(b)) => Required(choose_merged_var(env.subs, a, b)),
+
+                (Optional(a), Optional(b)) => Optional(choose_merged_var(env.subs, a, b)),
 
                 // rigid optional
-                (RigidOptional(val), Optional(_)) | (Optional(_), RigidOptional(val)) => {
-                    RigidOptional(val)
+                (RigidOptional(a), Optional(b)) | (Optional(b), RigidOptional(a)) => {
+                    RigidOptional(choose_merged_var(env.subs, a, b))
+                }
+                (RigidOptional(a), RigidOptional(b)) => {
+                    RigidOptional(choose_merged_var(env.subs, a, b))
                 }
                 (RigidOptional(_), Demanded(_) | Required(_) | RigidRequired(_))
                 | (Demanded(_) | Required(_) | RigidRequired(_), RigidOptional(_)) => {
                     // this is an error, but we continue to give better error messages
                     continue;
                 }
-                (RigidOptional(val), RigidOptional(_)) => RigidOptional(val),
 
                 // rigid required
                 (RigidRequired(_), Optional(_)) | (Optional(_), RigidRequired(_)) => {
                     // this is an error, but we continue to give better error messages
                     continue;
                 }
-                (RigidRequired(val), Demanded(_) | Required(_))
-                | (Demanded(_) | Required(_), RigidRequired(val)) => RigidRequired(val),
-                (RigidRequired(val), RigidRequired(_)) => RigidRequired(val),
+                (RigidRequired(a), Demanded(b) | Required(b))
+                | (Demanded(b) | Required(b), RigidRequired(a)) => {
+                    RigidRequired(choose_merged_var(env.subs, a, b))
+                }
+                (RigidRequired(a), RigidRequired(b)) => {
+                    RigidRequired(choose_merged_var(env.subs, a, b))
+                }
             };
 
             matching_fields.push((name, actual));
@@ -3495,24 +3531,22 @@ fn unify_recursion<M: MetaCollector>(
 pub fn merge<M: MetaCollector>(env: &mut Env, ctx: &Context, content: Content) -> Outcome<M> {
     let mut outcome: Outcome<M> = Outcome::default();
 
-    if !env.compute_outcome_only {
-        let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
-        let desc = Descriptor {
-            content,
-            rank,
-            mark: Mark::NONE,
-            copy: OptVariable::NONE,
-        };
+    let rank = ctx.first_desc.rank.min(ctx.second_desc.rank);
+    let desc = Descriptor {
+        content,
+        rank,
+        mark: Mark::NONE,
+        copy: OptVariable::NONE,
+    };
 
-        outcome
-            .extra_metadata
-            .record_changed_variable(env.subs, ctx.first);
-        outcome
-            .extra_metadata
-            .record_changed_variable(env.subs, ctx.second);
+    outcome
+        .extra_metadata
+        .record_changed_variable(env.subs, ctx.first);
+    outcome
+        .extra_metadata
+        .record_changed_variable(env.subs, ctx.second);
 
-        env.subs.union(ctx.first, ctx.second, desc);
-    }
+    env.subs.union(ctx.first, ctx.second, desc);
 
     outcome
 }

@@ -767,18 +767,23 @@ fn write_content<'a>(
             buf.push_str("[[");
 
             let print_symbol = |symbol: &Symbol| {
+                let ident_str = symbol.as_str(env.interns);
+                let ident_index_str = symbol.ident_id().index().to_string();
+                let disambiguation = if ident_str != ident_index_str {
+                    // The pretty name is a named identifier; print the ident as well to avoid
+                    // ambguity (in shadows or ability specializations).
+                    format!("({ident_index_str})")
+                } else {
+                    "".to_string()
+                };
                 if env.home == symbol.module_id() {
-                    format!(
-                        "{}({})",
-                        symbol.as_str(env.interns),
-                        symbol.ident_id().index(),
-                    )
+                    format!("{}{}", ident_str, disambiguation,)
                 } else {
                     format!(
-                        "{}.{}({})",
+                        "{}.{}{}",
                         symbol.module_string(env.interns),
-                        symbol.as_str(env.interns),
-                        symbol.ident_id().index(),
+                        ident_str,
+                        disambiguation
                     )
                 }
             };

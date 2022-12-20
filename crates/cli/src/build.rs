@@ -186,7 +186,9 @@ pub fn build_file<'a>(
     };
 
     // We don't need to spawn a rebuild thread when using a prebuilt host.
-    let rebuild_thread = if is_prebuilt {
+    let rebuild_thread = if matches!(link_type, LinkType::Dylib | LinkType::None) {
+        None
+    } else if is_prebuilt {
         if !preprocessed_host_path.exists() {
             if prebuilt_requested {
                 eprintln!(
@@ -378,10 +380,11 @@ pub fn build_file<'a>(
 
             std::fs::write(app_o_file, &*roc_app_bytes).unwrap();
 
-            let mut inputs = vec![
-                host_input_path.as_path().to_str().unwrap(),
-                app_o_file.to_str().unwrap(),
-            ];
+            let mut inputs = vec![app_o_file.to_str().unwrap()];
+
+            if !matches!(link_type, LinkType::Dylib | LinkType::None) {
+                inputs.push(host_input_path.as_path().to_str().unwrap());
+            }
 
             let builtins_host_tempfile = {
                 #[cfg(unix)]

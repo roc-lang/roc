@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 roc_wasm_module = { path = "../wasm_module" }
-
+rand = "0.8.4"
 bitvec.workspace = true
 bumpalo.workspace = true
 clap.workspace = true

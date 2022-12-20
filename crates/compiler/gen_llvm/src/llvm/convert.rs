@@ -202,7 +202,6 @@ pub fn float_type_from_float_width<'a, 'ctx, 'env>(
     use FloatWidth::*;
 
     match float_width {
-        F128 => todo!("F128 is not implemented"),
         F64 => env.context.f64_type(),
         F32 => env.context.f32_type(),
     }

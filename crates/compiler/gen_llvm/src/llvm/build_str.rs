@@ -29,14 +29,11 @@ pub(crate) fn decode_from_utf8_result<'a, 'ctx, 'env>(
 
     match env.target_info.ptr_width() {
         PtrWidth::Bytes4 | PtrWidth::Bytes8 => {
-            let result_ptr_cast = env
-                .builder
-                .build_bitcast(
-                    pointer,
-                    record_type.ptr_type(AddressSpace::Generic),
-                    "to_unnamed",
-                )
-                .into_pointer_value();
+            let result_ptr_cast = env.builder.build_pointer_cast(
+                pointer,
+                record_type.ptr_type(AddressSpace::Generic),
+                "to_unnamed",
+            );
 
             builder
                 .build_load(result_ptr_cast, "load_utf8_validate_bytes_result")
