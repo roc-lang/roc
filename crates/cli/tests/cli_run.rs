@@ -117,9 +117,10 @@ mod cli_run {
 
         assert!(
             compile_out.status.success(),
-            "\n___________\nRoc command failed with status {:?}:\n\n  {:?}\n___________\n",
+            "\n___________\nRoc command failed with status {:?}:\n\n  {} {}\n___________\n",
             compile_out.status,
-            compile_out
+            compile_out.stdout,
+            compile_out.stderr,
         );
 
         compile_out
@@ -1031,13 +1032,16 @@ mod cli_run {
             stdin: &[&str],
             executable_filename: &str,
             expected_ending: &str,
-            use_valgrind: bool,
+            use_valgrind: UseValgrind,
         ) {
+            use super::{concatcp, CMD_BUILD, TARGET_FLAG};
+
             check_output_with_stdin(
                 &file_name,
                 stdin,
                 executable_filename,
                 &[concatcp!(TARGET_FLAG, "=x86_32")],
+                &[],
                 &[],
                 expected_ending,
                 use_valgrind,
@@ -1049,6 +1053,7 @@ mod cli_run {
                 stdin,
                 executable_filename,
                 &[concatcp!(TARGET_FLAG, "=x86_32"), OPTIMIZE_FLAG],
+                &[],
                 &[],
                 expected_ending,
                 use_valgrind,
