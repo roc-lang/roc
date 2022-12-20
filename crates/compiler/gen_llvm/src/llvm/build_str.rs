@@ -6,6 +6,7 @@ use roc_mono::layout::Layout;
 use roc_target::PtrWidth;
 
 use super::bitcode::{call_str_bitcode_fn, BitcodeReturns};
+use super::build::BuilderExt;
 
 pub static CHAR_LAYOUT: Layout = Layout::u8();
 
@@ -36,7 +37,11 @@ pub(crate) fn decode_from_utf8_result<'a, 'ctx, 'env>(
             );
 
             builder
-                .build_load(result_ptr_cast, "load_utf8_validate_bytes_result")
+                .new_build_load(
+                    record_type,
+                    result_ptr_cast,
+                    "load_utf8_validate_bytes_result",
+                )
                 .into_struct_value()
         }
     }

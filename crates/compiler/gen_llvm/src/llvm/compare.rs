@@ -15,7 +15,7 @@ use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 
-use super::build::{load_roc_value, use_roc_value};
+use super::build::{load_roc_value, use_roc_value, BuilderExt};
 use super::convert::argument_type_from_union_layout;
 use super::lowlevel::dec_binop_with_unchecked;
 
@@ -527,7 +527,9 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
         builder.build_unconditional_branch(loop_bb);
         builder.position_at_end(loop_bb);
 
-        let curr_index = builder.build_load(index_alloca, "index").into_int_value();
+        let curr_index = builder
+            .new_build_load(env.ptr_int(), index_alloca, "index")
+            .into_int_value();
 
         // #index < end
         let loop_end_cond =
@@ -542,14 +544,16 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
             builder.position_at_end(body_bb);
 
             let elem1 = {
-                let elem_ptr =
-                    unsafe { builder.build_in_bounds_gep(ptr1, &[curr_index], "load_index") };
+                let elem_ptr = unsafe {
+                    builder.new_build_in_bounds_gep(element_type, ptr1, &[curr_index], "load_index")
+                };
                 load_roc_value(env, *element_layout, elem_ptr, "get_elem")
             };
 
             let elem2 = {
-                let elem_ptr =
-                    unsafe { builder.build_in_bounds_gep(ptr2, &[curr_index], "load_index") };
+                let elem_ptr = unsafe {
+                    builder.new_build_in_bounds_gep(element_type, ptr2, &[curr_index], "load_index")
+                };
                 load_roc_value(env, *element_layout, elem_ptr, "get_elem")
             };
 
@@ -756,7 +760,7 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
                 use_roc_value(env, *field_layout, field2, "field2"),
                 field_layout,
                 field_layout,
-                when_recursive.clone(),
+                when_recursive,
             )
             .into_int_value()
         };
@@ -948,7 +952,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                     env,
                     layout_ids,
                     union_layout,
-                    Some(when_recursive.clone()),
+                    Some(when_recursive),
                     field_layouts,
                     tag1,
                     tag2,
@@ -1253,12 +1257,12 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
 
     let struct1 = env
         .builder
-        .build_load(struct1_ptr, "load_struct1")
+        .new_build_load(wrapper_type, struct1_ptr, "load_struct1")
         .into_struct_value();
 
     let struct2 = env
         .builder
-        .build_load(struct2_ptr, "load_struct2")
+        .new_build_load(wrapper_type, struct2_ptr, "load_struct2")
         .into_struct_value();
 
     build_struct_eq(
