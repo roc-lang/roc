@@ -227,14 +227,23 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                             intrinsic,
                         ),
                         None => {
-                            let return_type = zig_function_type.get_param_types()[0]
-                                .into_pointer_type()
-                                .get_element_type()
-                                .into_struct_type()
-                                .into();
+                            let return_type_name = match number_layout {
+                                Layout::Builtin(Builtin::Int(int_width)) => int_width.type_name(),
+                                Layout::Builtin(Builtin::Decimal) => {
+                                    // zig picks 128 for dec.RocDec
+                                    "i128"
+                                }
+                                _ => unreachable!(),
+                            };
 
-                            let zig_return_alloca =
-                                create_entry_block_alloca(env, parent, return_type, "str_to_num");
+                            let return_type = zig_num_parse_result_type(env, return_type_name);
+
+                            let zig_return_alloca = create_entry_block_alloca(
+                                env,
+                                parent,
+                                return_type.into(),
+                                "str_to_num",
+                            );
 
                             let (a, b) =
                                 pass_list_or_string_to_zig_32bit(env, string.into_struct_value());
