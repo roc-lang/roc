@@ -93,11 +93,9 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         index: u32,
         name: &str,
     ) -> Result<PointerValue<'ctx>, ()> {
-        debug_assert_eq!(
-            ptr.get_type().get_element_type().into_struct_type(),
-            struct_type
-        );
-        self.build_struct_gep(ptr, index, name)
+        // debug_assert_eq!( ptr.get_type().get_element_type().into_struct_type(), struct_type);
+        // self.build_struct_gep(ptr, index, name)
+        self.build_struct_gep(struct_type, ptr, index, name)
     }
 
     fn new_build_load(
@@ -106,11 +104,9 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         ptr: PointerValue<'ctx>,
         name: &str,
     ) -> BasicValueEnum<'ctx> {
-        debug_assert_eq!(
-            ptr.get_type().get_element_type(),
-            element_type.as_any_type_enum()
-        );
-        self.build_load(ptr, name)
+        // debug_assert_eq!( ptr.get_type().get_element_type(), element_type.as_any_type_enum());
+        // self.build_load(ptr, name)
+        self.build_load(element_type, ptr, name)
     }
 
     unsafe fn new_build_in_bounds_gep(
@@ -120,12 +116,9 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         ordered_indexes: &[IntValue<'ctx>],
         name: &str,
     ) -> PointerValue<'ctx> {
-        debug_assert_eq!(
-            ptr.get_type().get_element_type(),
-            element_type.as_any_type_enum()
-        );
-
-        self.build_in_bounds_gep(ptr, ordered_indexes, name)
+        // debug_assert_eq!( ptr.get_type().get_element_type(), element_type.as_any_type_enum());
+        // self.build_in_bounds_gep(ptr, ordered_indexes, name)
+        self.build_in_bounds_gep(element_type, ptr, ordered_indexes, name)
     }
 }
 
