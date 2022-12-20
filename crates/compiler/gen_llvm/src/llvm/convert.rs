@@ -447,6 +447,30 @@ pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructT
         .struct_type(&[env.context.bool_type().into(), u8_ptr_t.into()], false)
 }
 
+pub fn zig_num_parse_result_type<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    type_name: &str,
+) -> StructType<'ctx> {
+    let name = format!("num.NumParseResult({type_name})");
+
+    match env.module.get_struct_type(&name) {
+        Some(zig_type) => zig_type,
+        None => panic!("zig does not define the `{name}` type!"),
+    }
+}
+
+pub fn zig_to_int_checked_result_type<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    type_name: &str,
+) -> StructType<'ctx> {
+    let name = format!("num.ToIntCheckedResult({type_name})");
+
+    match env.module.get_struct_type(&name) {
+        Some(zig_type) => zig_type,
+        None => panic!("zig does not define the `{name}` type!"),
+    }
+}
+
 pub fn zig_with_overflow_roc_dec<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {
     env.module
         .get_struct_type("utils.WithOverflow(dec.RocDec)")
