@@ -106,6 +106,7 @@
           rust
           rust-bindgen
           cargo-criterion
+          simple-http-server # to view roc website when trying out edits
         ]);
       in {
 

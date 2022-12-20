@@ -11,8 +11,8 @@
     --repl-prompt: #0ff4f4;
     --body-bg: #fff;
     --code-bg: #e7e7e7;
-    --snippet-bg: #fcfcfc;
-    --snippet-border: #bbb;
+    --language-snippet-bg: #fcfcfc;
+    --language-snippet-border: #bbb;
     --code-color: #303030;
     --toc-background: #f3f3f3;
     --toc-border: #ddd;
@@ -121,16 +121,16 @@ code, samp {
     color: var(--code-color);
 }
 
-.snippet, samp {
+.language-snippet, samp {
     display: block;
     overflow: auto;
     white-space: pre;
     padding: 10px 16px;
-    background-color: var(--snippet-bg);
+    background-color: var(--language-snippet-bg);
     margin-bottom: 16px;
     font-size: 1.2rem;
     line-height: 1.76rem;
-    border: 1px solid var(--snippet-border);
+    border: 1px solid var(--language-snippet-border);
 }
 
 .repl-prompt:before {
@@ -150,32 +150,37 @@ samp .ann {
 
 samp .autovar {
     /* automatic variable names in the repl, e.g. # val1 */
-    color: #3dbd0f;
+    color: #48e111;
 }
 
-samp .kw, samp .op {
-    /* language keywords, e.g. `if`, or operators, e.g. `+` */
+samp .kw {
+    /* language keywords, e.g. `if`*/
     color: #3474db;
 }
 
-samp .paren, samp .brace, samp .comma {
+samp .op {
+    /* operators, e.g. `+` */
+    color: #b157df;
+}
+
+samp .paren, samp .brace, samp .comma, samp .colon {
     /* square braces, parens, commas */
-    color: #3474db;
+    color: #b157df;
 }
 
-samp .str, samp .number {
+samp .number {
+  /* number literals */
+  color: #158086;
+}
+
+samp .str {
     /* string literals */
     color: #158086;
 }
 
-samp .str-esc {
+samp .str-esc, samp .str-interp {
     /* escapes inside string literals, e.g. \t */
     color: #3474db;
-}
-
-samp .str-interp {
-    /* interpolated variables inside string literals */
-    color: var(--text-color);
 }
 
 samp .dim {
@@ -310,7 +315,7 @@ td:last-child {
 
 /* Mobile-friendly screen width */
 @media only screen and (max-device-width: 480px) and (orientation: portrait) {
-    p, code, samp, .snippet {
+    p, code, samp, .language-snippet {
         font-size: 16px;
     }
 
@@ -528,11 +533,11 @@ h4 {
         --repl-prompt: #0ff4f4;
         --body-bg: #0e0e0f;
         --code-bg: #303030;
-        --snippet-bg: #1a1a1a;
-        --snippet-border: #444;
+        --language-snippet-bg: #1a1a1a;
+        --language-snippet-border: #444;
         --code-color: #cdcdcd;
-        --toc-background: var(--snippet-bg);
-        --toc-border: var(--snippet-border);
+        --toc-background: var(--language-snippet-bg);
+        --toc-border: var(--language-snippet-border);
         --toc-search-bg: #333;
         --toc-search-border: #555;
     }
@@ -550,9 +555,14 @@ h4 {
         color: #67a0fb;
     }
 
-    samp .kw, samp .op {
-        /* language keywords, e.g. `if`, or operators, e.g. `+` */
+    samp .kw {
+        /* language keywords, e.g. `if` */
         color: #67a0fb;
+    }
+
+    samp .op {
+        /* operators, e.g. `+` */
+        color: #ca67fb;
     }
 
     samp .str {
