@@ -96,7 +96,7 @@ fn read_state<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     ptr: PointerValue<'ctx>,
 ) -> (IntValue<'ctx>, IntValue<'ctx>) {
-    let ptr_type = env.ptr_int().ptr_type(AddressSpace::Generic);
+    let ptr_type = env.ptr_int().ptr_type(AddressSpace::default());
     let ptr = env.builder.build_pointer_cast(ptr, ptr_type, "");
 
     let one = env.ptr_int().const_int(1, false);
@@ -116,7 +116,7 @@ fn write_state<'a, 'ctx, 'env>(
     count: IntValue<'ctx>,
     offset: IntValue<'ctx>,
 ) {
-    let ptr_type = env.ptr_int().ptr_type(AddressSpace::Generic);
+    let ptr_type = env.ptr_int().ptr_type(AddressSpace::default());
     let ptr = env.builder.build_pointer_cast(ptr, ptr_type, "");
 
     let one = env.ptr_int().const_int(1, false);
@@ -250,7 +250,7 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
                     )
                 };
 
-                let u32_ptr = env.context.i32_type().ptr_type(AddressSpace::Generic);
+                let u32_ptr = env.context.i32_type().ptr_type(AddressSpace::default());
                 let ptr = env
                     .builder
                     .build_pointer_cast(ptr, u32_ptr, "cast_ptr_type");
@@ -322,7 +322,7 @@ fn build_clone<'a, 'ctx, 'env>(
                     )
                 };
 
-                let ptr_type = value.get_type().ptr_type(AddressSpace::Generic);
+                let ptr_type = value.get_type().ptr_type(AddressSpace::default());
                 let ptr = env
                     .builder
                     .build_pointer_cast(ptr, ptr_type, "cast_ptr_type");
@@ -480,7 +480,10 @@ fn build_clone_tag<'a, 'ctx, 'env>(
 
             let function_type = env.ptr_int().fn_type(
                 &[
-                    env.context.i8_type().ptr_type(AddressSpace::Generic).into(),
+                    env.context
+                        .i8_type()
+                        .ptr_type(AddressSpace::default())
+                        .into(),
                     env.ptr_int().into(),
                     env.ptr_int().into(),
                     BasicMetadataTypeEnum::from(value.get_type()),
@@ -555,7 +558,7 @@ fn load_tag_data<'a, 'ctx, 'env>(
 
     let data_ptr = env.builder.build_pointer_cast(
         raw_data_ptr,
-        tag_type.ptr_type(AddressSpace::Generic),
+        tag_type.ptr_type(AddressSpace::default()),
         "data_ptr",
     );
 
@@ -929,7 +932,7 @@ fn build_copy<'a, 'ctx, 'env>(
         )
     };
 
-    let ptr_type = value.get_type().ptr_type(AddressSpace::Generic);
+    let ptr_type = value.get_type().ptr_type(AddressSpace::default());
     let ptr = env
         .builder
         .build_pointer_cast(ptr, ptr_type, "cast_ptr_type");
@@ -999,7 +1002,7 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                 let dest = pointer_at_offset(bd, env.context.i8_type(), ptr, offset);
                 let src = bd.build_pointer_cast(
                     elements,
-                    env.context.i8_type().ptr_type(AddressSpace::Generic),
+                    env.context.i8_type().ptr_type(AddressSpace::default()),
                     "to_bytes_pointer",
                 );
                 bd.build_memcpy(dest, 1, src, 1, elements_width).unwrap();
@@ -1012,7 +1015,7 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                 let element_type = basic_type_from_layout(env, elem);
                 let elements = bd.build_pointer_cast(
                     elements,
-                    element_type.ptr_type(AddressSpace::Generic),
+                    element_type.ptr_type(AddressSpace::default()),
                     "elements",
                 );
 

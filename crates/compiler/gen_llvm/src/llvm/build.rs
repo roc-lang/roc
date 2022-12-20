@@ -702,7 +702,7 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx, 'env>(
 
     let output_type = match roc_main_fn.get_type().get_return_type() {
         Some(return_type) => {
-            let output_type = return_type.ptr_type(AddressSpace::Generic);
+            let output_type = return_type.ptr_type(AddressSpace::default());
             output_type.into()
         }
         None => {
@@ -890,7 +890,7 @@ fn small_str_ptr_width_8<'a, 'ctx, 'env>(
     let len = env.ptr_int().const_int(word2, false);
     let cap = env.ptr_int().const_int(word3, false);
 
-    let address_space = AddressSpace::Generic;
+    let address_space = AddressSpace::default();
     let ptr_type = env.context.i8_type().ptr_type(address_space);
     let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
 
@@ -917,7 +917,7 @@ fn small_str_ptr_width_4<'a, 'ctx, 'env>(
     let len = env.ptr_int().const_int(word2 as u64, false);
     let cap = env.ptr_int().const_int(word3 as u64, false);
 
-    let address_space = AddressSpace::Generic;
+    let address_space = AddressSpace::default();
     let ptr_type = env.context.i8_type().ptr_type(address_space);
     let ptr = env.builder.build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
 
@@ -1040,7 +1040,7 @@ fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
         .builder
         .build_bitcast(
             input_pointer,
-            struct_type.ptr_type(AddressSpace::Generic),
+            struct_type.ptr_type(AddressSpace::default()),
             "struct_ptr",
         )
         .into_pointer_value();
@@ -1273,7 +1273,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let data_ptr = env.builder.build_pointer_cast(
                         opaque_data_ptr,
-                        struct_type.ptr_type(AddressSpace::Generic),
+                        struct_type.ptr_type(AddressSpace::default()),
                         "to_data_pointer",
                     );
 
@@ -1467,7 +1467,7 @@ fn build_tag_field_value<'a, 'ctx, 'env>(
         env.builder
             .build_pointer_cast(
                 value.into_pointer_value(),
-                env.context.i64_type().ptr_type(AddressSpace::Generic),
+                env.context.i64_type().ptr_type(AddressSpace::default()),
                 "cast_recursive_pointer",
             )
             .into()
@@ -1675,7 +1675,7 @@ fn build_tag<'a, 'ctx, 'env>(
             );
 
             if tag_id == *nullable_id as _ {
-                let output_type = roc_union.struct_type().ptr_type(AddressSpace::Generic);
+                let output_type = roc_union.struct_type().ptr_type(AddressSpace::default());
 
                 return output_type.const_null().into();
             }
@@ -1908,7 +1908,7 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
 
     let ptr = env.builder.build_pointer_cast(
         value,
-        struct_type.ptr_type(AddressSpace::Generic),
+        struct_type.ptr_type(AddressSpace::default()),
         "cast_lookup_at_index_ptr",
     );
 
@@ -1951,7 +1951,7 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
 
     let data_ptr = env.builder.build_pointer_cast(
         value,
-        struct_type.ptr_type(AddressSpace::Generic),
+        struct_type.ptr_type(AddressSpace::default()),
         "cast_lookup_at_index_ptr",
     );
 
@@ -2061,7 +2061,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     )
     .into_pointer_value();
 
-    let ptr_type = value_type.ptr_type(AddressSpace::Generic);
+    let ptr_type = value_type.ptr_type(AddressSpace::default());
 
     env.builder
         .build_pointer_cast(ptr, ptr_type, "alloc_cast_to_desired")
@@ -2271,7 +2271,7 @@ pub fn store_roc_value_opaque<'a, 'ctx, 'env>(
     opaque_destination: PointerValue<'ctx>,
     value: BasicValueEnum<'ctx>,
 ) {
-    let target_type = basic_type_from_layout(env, &layout).ptr_type(AddressSpace::Generic);
+    let target_type = basic_type_from_layout(env, &layout).ptr_type(AddressSpace::default());
     let destination =
         env.builder
             .build_pointer_cast(opaque_destination, target_type, "store_roc_value_opaque");
@@ -2515,7 +2515,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
                         .layout
                         .is_passed_by_reference(env.layout_interner, env.target_info)
                     {
-                        basic_type.ptr_type(AddressSpace::Generic).into()
+                        basic_type.ptr_type(AddressSpace::default()).into()
                     } else {
                         basic_type
                     };
@@ -2987,7 +2987,7 @@ fn complex_bitcast_from_bigger_than_to<'ctx>(
     // then read it back as a different type
     let to_type_pointer = builder.build_pointer_cast(
         argument_pointer,
-        to_type.ptr_type(inkwell::AddressSpace::Generic),
+        to_type.ptr_type(inkwell::AddressSpace::default()),
         name,
     );
 
@@ -3010,7 +3010,7 @@ fn complex_bitcast_to_bigger_than_from<'ctx>(
         storage,
         from_value
             .get_type()
-            .ptr_type(inkwell::AddressSpace::Generic),
+            .ptr_type(inkwell::AddressSpace::default()),
         name,
     );
 
@@ -3362,7 +3362,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
             argument_types.insert(0, output_type);
         }
         Some(return_type) => {
-            let output_type = return_type.ptr_type(AddressSpace::Generic);
+            let output_type = return_type.ptr_type(AddressSpace::default());
             argument_types.insert(0, output_type.into());
         }
     }
@@ -3414,7 +3414,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
                 // bitcast the ptr
                 let fastcc_ptr = env.builder.build_pointer_cast(
                     arg.into_pointer_value(),
-                    fastcc_type.ptr_type(AddressSpace::Generic),
+                    fastcc_type.ptr_type(AddressSpace::default()),
                     "bitcast_arg",
                 );
 
@@ -3489,7 +3489,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
     let return_type = wrapper_return_type;
 
     let c_function_spec = {
-        let output_type = return_type.ptr_type(AddressSpace::Generic);
+        let output_type = return_type.ptr_type(AddressSpace::default());
         argument_types.push(output_type.into());
         FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types)
     };
@@ -3744,7 +3744,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                     // bitcast the ptr
                     let fastcc_ptr = env.builder.build_pointer_cast(
                         arg.into_pointer_value(),
-                        fastcc_type.ptr_type(AddressSpace::Generic),
+                        fastcc_type.ptr_type(AddressSpace::default()),
                         "bitcast_arg",
                     );
 
@@ -3911,7 +3911,7 @@ pub fn get_sjlj_buffer<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> PointerValu
 
     env.builder.build_pointer_cast(
         global.as_pointer_value(),
-        env.context.i32_type().ptr_type(AddressSpace::Generic),
+        env.context.i32_type().ptr_type(AddressSpace::default()),
         "cast_sjlj_buffer",
     )
 }
@@ -3928,12 +3928,12 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
         let buf_type = env
             .context
             .i8_type()
-            .ptr_type(AddressSpace::Generic)
+            .ptr_type(AddressSpace::default())
             .array_type(5);
 
         let jmp_buf_i8p_arr = env.builder.build_pointer_cast(
             jmp_buf,
-            buf_type.ptr_type(AddressSpace::Generic),
+            buf_type.ptr_type(AddressSpace::default()),
             "jmp_buf [5 x i8*]",
         );
 
@@ -3974,7 +3974,7 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
             .builder
             .build_pointer_cast(
                 jmp_buf,
-                env.context.i8_type().ptr_type(AddressSpace::Generic),
+                env.context.i8_type().ptr_type(AddressSpace::default()),
                 "jmp_buf i8*",
             )
             .into();
@@ -4123,7 +4123,7 @@ fn roc_call_result_type<'a, 'ctx, 'env>(
     env.context.struct_type(
         &[
             env.context.i64_type().into(),
-            zig_str_type(env).ptr_type(AddressSpace::Generic).into(),
+            zig_str_type(env).ptr_type(AddressSpace::default()).into(),
             return_type,
         ],
         false,
@@ -4191,7 +4191,7 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     let wrapper_return_type =
         roc_call_result_type(env, basic_type_from_layout(env, &return_layout));
 
-    // argument_types.push(wrapper_return_type.ptr_type(AddressSpace::Generic).into());
+    // argument_types.push(wrapper_return_type.ptr_type(AddressSpace::default()).into());
 
     // let wrapper_function_type = env.context.void_type().fn_type(&argument_types, false);
     let wrapper_function_spec = FunctionSpec::cconv(
@@ -4679,7 +4679,7 @@ fn build_closure_caller<'a, 'ctx, 'env>(
 
     for layout in arguments {
         let arg_type = basic_type_from_layout(env, layout);
-        let arg_ptr_type = arg_type.ptr_type(AddressSpace::Generic);
+        let arg_ptr_type = arg_type.ptr_type(AddressSpace::default());
 
         argument_types.push(arg_ptr_type.into());
     }
@@ -4688,7 +4688,7 @@ fn build_closure_caller<'a, 'ctx, 'env>(
         let basic_type =
             basic_type_from_layout(env, &lambda_set.runtime_representation(env.layout_interner));
 
-        basic_type.ptr_type(AddressSpace::Generic)
+        basic_type.ptr_type(AddressSpace::default())
     };
     argument_types.push(closure_argument_type.into());
 
@@ -4697,7 +4697,7 @@ fn build_closure_caller<'a, 'ctx, 'env>(
 
     let result_type = basic_type_from_layout(env, result);
 
-    let output_type = { result_type.ptr_type(AddressSpace::Generic) };
+    let output_type = { result_type.ptr_type(AddressSpace::default()) };
     argument_types.push(output_type.into());
 
     // STEP 1: build function header
@@ -5194,7 +5194,7 @@ fn to_cc_type_builtin<'a, 'ctx, 'env>(
             basic_type_from_builtin(env, builtin)
         }
         Builtin::Str | Builtin::List(_) => {
-            let address_space = AddressSpace::Generic;
+            let address_space = AddressSpace::default();
             let field_types: [BasicTypeEnum; 3] = [
                 env.context.i8_type().ptr_type(address_space).into(),
                 env.ptr_int().into(),
@@ -5315,7 +5315,7 @@ impl<'ctx> FunctionSpec<'ctx> {
         let (typ, opt_sret_parameter) = match cc_return {
             CCReturn::ByPointer => {
                 // turn the output type into a pointer type. Make it the first argument to the function
-                let output_type = return_type.unwrap().ptr_type(AddressSpace::Generic);
+                let output_type = return_type.unwrap().ptr_type(AddressSpace::default());
 
                 let mut arguments: Vec<'_, BasicTypeEnum> =
                     bumpalo::vec![in env.arena; output_type.into()];
@@ -5353,7 +5353,7 @@ impl<'ctx> FunctionSpec<'ctx> {
                 return_type.fn_type(&function_arguments(env, &argument_types), false)
             }
             RocReturn::ByPointer => {
-                argument_types.push(return_type.ptr_type(AddressSpace::Generic).into());
+                argument_types.push(return_type.ptr_type(AddressSpace::default()).into());
                 env.context
                     .void_type()
                     .fn_type(&function_arguments(env, &argument_types), false)
@@ -5590,7 +5590,7 @@ fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
 
     let ptr = env.builder.build_pointer_cast(
         global.as_pointer_value(),
-        env.context.i8_type().ptr_type(AddressSpace::Generic),
+        env.context.i8_type().ptr_type(AddressSpace::default()),
         "to_opaque",
     );
 

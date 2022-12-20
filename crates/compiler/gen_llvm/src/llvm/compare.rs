@@ -508,7 +508,7 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
 
         let builder = env.builder;
         let element_type = basic_type_from_layout(env, element_layout);
-        let ptr_type = element_type.ptr_type(AddressSpace::Generic);
+        let ptr_type = element_type.ptr_type(AddressSpace::default());
         let ptr1 = load_list_ptr(env.builder, list1, ptr_type);
         let ptr2 = load_list_ptr(env.builder, list2, ptr_type);
 
@@ -1245,13 +1245,13 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
     // cast the opaque pointer to a pointer of the correct shape
     let struct1_ptr = env.builder.build_pointer_cast(
         tag1,
-        wrapper_type.ptr_type(AddressSpace::Generic),
+        wrapper_type.ptr_type(AddressSpace::default()),
         "opaque_to_correct",
     );
 
     let struct2_ptr = env.builder.build_pointer_cast(
         tag2,
-        wrapper_type.ptr_type(AddressSpace::Generic),
+        wrapper_type.ptr_type(AddressSpace::default()),
         "opaque_to_correct",
     );
 

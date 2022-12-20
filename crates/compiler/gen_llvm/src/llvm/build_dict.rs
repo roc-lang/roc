@@ -88,7 +88,7 @@ pub fn dict_insert<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::default());
 
     let key_type = basic_type_from_layout(env, key_layout);
     let value_type = basic_type_from_layout(env, value_layout);
@@ -150,7 +150,7 @@ pub fn dict_remove<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::default());
 
     let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
 
@@ -206,7 +206,7 @@ pub fn dict_contains<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::default());
 
     let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
 
@@ -252,7 +252,7 @@ pub fn dict_get<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::default());
 
     let key_ptr = builder.build_alloca(key.get_type(), "key_ptr");
 
@@ -309,7 +309,7 @@ pub fn dict_get<'a, 'ctx, 'env>(
         .unwrap()
         .into_int_value();
 
-    let ptr_type = value_bt.ptr_type(AddressSpace::Generic);
+    let ptr_type = value_bt.ptr_type(AddressSpace::default());
     let value_u8_ptr = env
         .builder
         .build_int_to_ptr(value_u8_ptr_int, ptr_type, "opaque_value_ptr");
@@ -330,7 +330,7 @@ pub fn dict_get<'a, 'ctx, 'env>(
         .builder
         .build_bitcast(
             value_u8_ptr,
-            value_bt.ptr_type(AddressSpace::Generic),
+            value_bt.ptr_type(AddressSpace::default()),
             "from_opaque",
         )
         .into_pointer_value();
@@ -614,7 +614,7 @@ pub fn dict_walk<'a, 'ctx, 'env>(
 ) -> BasicValueEnum<'ctx> {
     let builder = env.builder;
 
-    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    let u8_ptr = env.context.i8_type().ptr_type(AddressSpace::default());
 
     let accum_bt = basic_type_from_layout(env, accum_layout);
     let accum_ptr = builder.build_alloca(accum_bt, "accum_ptr");
@@ -762,7 +762,7 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
         Some(function_value) => function_value,
         None => {
             let seed_type = env.context.i64_type();
-            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+            let arg_type = env.context.i8_type().ptr_type(AddressSpace::default());
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -788,7 +788,7 @@ fn build_hash_wrapper<'a, 'ctx, 'env>(
             seed_arg.set_name(Symbol::ARG_1.as_str(&env.interns));
             value_ptr.set_name(Symbol::ARG_2.as_str(&env.interns));
 
-            let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
+            let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::default());
 
             let value_cast = env
                 .builder

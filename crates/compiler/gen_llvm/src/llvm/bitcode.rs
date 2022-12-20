@@ -211,7 +211,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+    let arg_type = env.context.i8_type().ptr_type(AddressSpace::default());
 
     let function_value = crate::llvm::refcounting::build_header_help(
         env,
@@ -248,7 +248,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         bumpalo::collections::Vec::with_capacity_in(arguments.len(), env.arena);
 
     for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
-        let basic_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
+        let basic_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::default());
 
         let cast_ptr = env.builder.build_pointer_cast(
             argument_ptr.into_pointer_value(),
@@ -271,7 +271,8 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
             // the function doesn't expect a closure argument, nothing to add
         }
         (true, layout) => {
-            let closure_type = basic_type_from_layout(env, &layout).ptr_type(AddressSpace::Generic);
+            let closure_type =
+                basic_type_from_layout(env, &layout).ptr_type(AddressSpace::default());
 
             let closure_cast =
                 env.builder
@@ -360,7 +361,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
     let function_value = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+            let arg_type = env.context.i8_type().ptr_type(AddressSpace::default());
 
             let function_value = match rc_operation {
                 Mode::Inc | Mode::Dec => crate::llvm::refcounting::build_header_help(
@@ -396,7 +397,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
             generic_value_ptr.set_name(Symbol::ARG_1.as_str(&env.interns));
 
             let value_type = basic_type_from_layout(env, layout);
-            let value_ptr_type = value_type.ptr_type(AddressSpace::Generic);
+            let value_ptr_type = value_type.ptr_type(AddressSpace::default());
             let value_ptr =
                 env.builder
                     .build_pointer_cast(generic_value_ptr, value_ptr_type, "load_opaque");
@@ -456,7 +457,7 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
     let function_value = match env.module.get_function(fn_name.as_str()) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+            let arg_type = env.context.i8_type().ptr_type(AddressSpace::default());
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -485,7 +486,7 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
             value_ptr1.set_name(Symbol::ARG_1.as_str(&env.interns));
             value_ptr2.set_name(Symbol::ARG_2.as_str(&env.interns));
 
-            let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
+            let value_type = basic_type_from_layout(env, layout).ptr_type(AddressSpace::default());
 
             let value_cast1 = env
                 .builder
@@ -532,7 +533,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
     let function_value = match env.module.get_function(fn_name) {
         Some(function_value) => function_value,
         None => {
-            let arg_type = env.context.i8_type().ptr_type(AddressSpace::Generic);
+            let arg_type = env.context.i8_type().ptr_type(AddressSpace::default());
 
             let function_value = crate::llvm::refcounting::build_header_help(
                 env,
@@ -567,7 +568,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             value_ptr2.set_name(Symbol::ARG_3.as_str(&env.interns));
 
             let value_type = basic_type_from_layout(env, layout);
-            let value_ptr_type = value_type.ptr_type(AddressSpace::Generic);
+            let value_ptr_type = value_type.ptr_type(AddressSpace::default());
 
             let value_cast1 =
                 env.builder
@@ -596,7 +597,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
                     }
                     other => {
                         let closure_type = basic_type_from_layout(env, &other);
-                        let closure_ptr_type = closure_type.ptr_type(AddressSpace::Generic);
+                        let closure_ptr_type = closure_type.ptr_type(AddressSpace::default());
 
                         let closure_cast = env.builder.build_pointer_cast(
                             closure_ptr,
@@ -771,7 +772,7 @@ fn ptr_len_cap<'a, 'ctx, 'env>(
 
     let ptr = env.builder.build_int_to_ptr(
         lower_word,
-        env.context.i8_type().ptr_type(AddressSpace::Generic),
+        env.context.i8_type().ptr_type(AddressSpace::default()),
         "list_ptr",
     );
 

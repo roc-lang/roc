@@ -38,7 +38,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
         let value = env.builder.build_pointer_cast(
             ptr,
-            refcount_type.ptr_type(AddressSpace::Generic),
+            refcount_type.ptr_type(AddressSpace::default()),
             "to_refcount_ptr",
         );
 
@@ -52,7 +52,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let builder = env.builder;
         // pointer to usize
         let refcount_type = env.ptr_int();
-        let refcount_ptr_type = refcount_type.ptr_type(AddressSpace::Generic);
+        let refcount_ptr_type = refcount_type.ptr_type(AddressSpace::default());
 
         let ptr_as_usize_ptr =
             builder.build_pointer_cast(data_ptr, refcount_ptr_type, "as_usize_ptr");
@@ -140,7 +140,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
             None => {
                 // inc and dec return void
                 let fn_type = context.void_type().fn_type(
-                    &[env.ptr_int().ptr_type(AddressSpace::Generic).into()],
+                    &[env.ptr_int().ptr_type(AddressSpace::default()).into()],
                     false,
                 );
 
@@ -208,7 +208,7 @@ fn incref_pointer<'a, 'ctx, 'env>(
             env.builder
                 .build_pointer_cast(
                     pointer,
-                    env.ptr_int().ptr_type(AddressSpace::Generic),
+                    env.ptr_int().ptr_type(AddressSpace::default()),
                     "to_isize_ptr",
                 )
                 .into(),
@@ -230,7 +230,7 @@ fn decref_pointer<'a, 'ctx, 'env>(
             env.builder
                 .build_pointer_cast(
                     pointer,
-                    env.ptr_int().ptr_type(AddressSpace::Generic),
+                    env.ptr_int().ptr_type(AddressSpace::default()),
                     "to_isize_ptr",
                 )
                 .into(),
@@ -253,7 +253,7 @@ pub fn decref_pointer_check_null<'a, 'ctx, 'env>(
             env.builder
                 .build_pointer_cast(
                     pointer,
-                    env.context.i8_type().ptr_type(AddressSpace::Generic),
+                    env.context.i8_type().ptr_type(AddressSpace::default()),
                     "to_i8_ptr",
                 )
                 .into(),
@@ -702,7 +702,8 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     builder.position_at_end(modification_block);
 
     if element_layout.contains_refcounted(env.layout_interner) {
-        let ptr_type = basic_type_from_layout(env, element_layout).ptr_type(AddressSpace::Generic);
+        let ptr_type =
+            basic_type_from_layout(env, element_layout).ptr_type(AddressSpace::default());
 
         let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
 
@@ -1219,7 +1220,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         // cast the opaque pointer to a pointer of the correct shape
         let struct_ptr = env.builder.build_pointer_cast(
             value_ptr,
-            wrapper_type.ptr_type(AddressSpace::Generic),
+            wrapper_type.ptr_type(AddressSpace::default()),
             "opaque_to_correct_recursive_decrement",
         );
 
@@ -1242,7 +1243,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                     .unwrap();
 
                 let ptr_as_i64_ptr = env.builder.new_build_load(
-                    env.context.i64_type().ptr_type(AddressSpace::Generic),
+                    env.context.i64_type().ptr_type(AddressSpace::default()),
                     elem_pointer,
                     "load_recursive_pointer",
                 );
@@ -1660,7 +1661,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx, 'env>(
 
         let cast_tag_data_pointer = env.builder.build_pointer_cast(
             opaque_tag_data_ptr,
-            data_struct_type.ptr_type(AddressSpace::Generic),
+            data_struct_type.ptr_type(AddressSpace::default()),
             "cast_to_concrete_tag",
         );
 
@@ -1686,7 +1687,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx, 'env>(
 
                 // This is the actual pointer to the recursive data.
                 let field_value = env.builder.new_build_load(
-                    env.context.i64_type().ptr_type(AddressSpace::Generic),
+                    env.context.i64_type().ptr_type(AddressSpace::default()),
                     field_ptr,
                     "load_recursive_pointer",
                 );
