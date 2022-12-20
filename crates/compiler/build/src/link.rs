@@ -1248,14 +1248,17 @@ fn link_macos(
     input_paths: &[&str],
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let (link_type_arg, output_path) = match link_type {
-        LinkType::Executable => ("-execute", output_path),
+    let (link_type_args, output_path) = match link_type {
+        LinkType::Executable => (vec!["-execute"], output_path),
         LinkType::Dylib => {
             let mut output_path = output_path;
 
             output_path.set_extension("dylib");
 
-            ("-dylib", output_path)
+            (
+                vec!["-dylib", "-undefined", "dynamic_lookup", "-no_fixup_chains"],
+                output_path,
+            )
         }
         LinkType::None => internal_error!("link_macos should not be called with link type of none"),
     };
@@ -1272,13 +1275,13 @@ fn link_macos(
         // The `-l` flags should go after the `.o` arguments
         // Don't allow LD_ env vars to affect this
         .env_clear()
+        .args(&link_type_args)
         .args([
             // NOTE: we don't do --gc-sections on macOS because the default
             // macOS linker doesn't support it, but it's a performance
             // optimization, so if we ever switch to a different linker,
             // we'd like to re-enable it on macOS!
             // "--gc-sections",
-            link_type_arg,
             "-arch",
             &arch,
             "-macos_version_min",

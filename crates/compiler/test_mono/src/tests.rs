@@ -1530,6 +1530,34 @@ fn encode_derived_record() {
     )
 }
 
+#[mono_test(no_check)]
+fn choose_correct_recursion_var_under_record() {
+    indoc!(
+        r#"
+        Parser : [
+            Specialize Parser,
+            Record (List {parser: Parser}),
+        ]
+
+        printCombinatorParser : Parser -> Str
+        printCombinatorParser = \parser ->
+            when parser is
+                Specialize p ->
+                    printed = printCombinatorParser p
+                    if Bool.false then printed else "foo"
+                Record fields ->
+                    fields
+                        |> List.map \f ->
+                            printed = printCombinatorParser f.parser
+                            if Bool.false then printed else "foo"
+                        |> List.first
+                        |> Result.withDefault ("foo")
+
+        printCombinatorParser (Record [])
+        "#
+    )
+}
+
 #[mono_test]
 fn tail_call_elimination() {
     indoc!(
@@ -2156,6 +2184,39 @@ fn issue_4705() {
             input = {}
             x = go input
             x
+        "###
+    )
+}
+
+#[mono_test(mode = "test")]
+fn issue_4749() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports [Json]
+
+        expect
+            input = [82, 111, 99]
+            got = Decode.fromBytes input Json.fromUtf8 
+            got == Ok "Roc"
+        "###
+    )
+}
+
+#[mono_test(mode = "test", no_check)]
+fn lambda_set_with_imported_toplevels_issue_4733() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports []
+
+        fn = \{} ->
+            instr : [ Op (U64, U64 -> U64) ]
+            instr = if Bool.true then (Op Num.mul) else (Op Num.add)
+
+            Op op = instr
+
+            \a -> op a a
+
+        expect ((fn {}) 3) == 9
         "###
     )
 }

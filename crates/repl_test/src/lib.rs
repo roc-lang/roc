@@ -1,8 +1,3 @@
-//! Tests the roc REPL.
-#[allow(unused_imports)]
-#[macro_use]
-extern crate lazy_static;
-
 #[cfg(test)]
 mod tests;
 

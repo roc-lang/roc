@@ -1,0 +1,105 @@
+procedure Bool.1 ():
+    let Bool.24 : Int1 = false;
+    ret Bool.24;
+
+procedure List.2 (List.95, List.96):
+    let List.492 : U64 = CallByName List.6 List.95;
+    let List.488 : Int1 = CallByName Num.22 List.96 List.492;
+    if List.488 then
+        let List.490 : Str = CallByName List.66 List.95 List.96;
+        let List.489 : [C {}, C Str] = TagId(1) List.490;
+        ret List.489;
+    else
+        let List.487 : {} = Struct {};
+        let List.486 : [C {}, C Str] = TagId(0) List.487;
+        ret List.486;
+
+procedure List.5 (#Attr.2, #Attr.3):
+    let List.494 : List Str = lowlevel ListMap { xs: `#Attr.#arg1` } #Attr.2 Test.10 #Attr.3;
+    ret List.494;
+
+procedure List.6 (#Attr.2):
+    let List.493 : U64 = lowlevel ListLen #Attr.2;
+    ret List.493;
+
+procedure List.66 (#Attr.2, #Attr.3):
+    let List.491 : Str = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.491;
+
+procedure List.9 (List.283):
+    let List.485 : U64 = 0i64;
+    let List.478 : [C {}, C Str] = CallByName List.2 List.283 List.485;
+    let List.482 : U8 = 1i64;
+    let List.483 : U8 = GetTagId List.478;
+    let List.484 : Int1 = lowlevel Eq List.482 List.483;
+    if List.484 then
+        let List.284 : Str = UnionAtIndex (Id 1) (Index 0) List.478;
+        inc List.284;
+        dec List.478;
+        let List.479 : [C {}, C Str] = TagId(1) List.284;
+        ret List.479;
+    else
+        dec List.478;
+        let List.481 : {} = Struct {};
+        let List.480 : [C {}, C Str] = TagId(0) List.481;
+        ret List.480;
+
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.256 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.256;
+
+procedure Result.5 (Result.12, Result.13):
+    let Result.39 : U8 = 1i64;
+    let Result.40 : U8 = GetTagId Result.12;
+    let Result.41 : Int1 = lowlevel Eq Result.39 Result.40;
+    if Result.41 then
+        let Result.14 : Str = UnionAtIndex (Id 1) (Index 0) Result.12;
+        inc Result.14;
+        dec Result.12;
+        ret Result.14;
+    else
+        dec Result.12;
+        inc Result.13;
+        ret Result.13;
+
+procedure Test.10 (Test.11):
+    let Test.12 : Str = CallByName Test.2 Test.11;
+    let Test.26 : Int1 = CallByName Bool.1;
+    if Test.26 then
+        ret Test.12;
+    else
+        dec Test.12;
+        let Test.25 : Str = "foo";
+        ret Test.25;
+
+procedure Test.2 (Test.6):
+    let Test.29 : U8 = 1i64;
+    let Test.30 : U8 = GetTagId Test.6;
+    let Test.31 : Int1 = lowlevel Eq Test.29 Test.30;
+    if Test.31 then
+        let Test.7 : [<r>C List *self, C *self] = UnionAtIndex (Id 1) (Index 0) Test.6;
+        let Test.8 : Str = CallByName Test.2 Test.7;
+        let Test.18 : Int1 = CallByName Bool.1;
+        if Test.18 then
+            ret Test.8;
+        else
+            dec Test.8;
+            let Test.17 : Str = "foo";
+            ret Test.17;
+    else
+        let Test.9 : List [<r>C List *self, C *self] = UnionAtIndex (Id 0) (Index 0) Test.6;
+        let Test.24 : {} = Struct {};
+        let Test.23 : List Str = CallByName List.5 Test.9 Test.24;
+        let Test.21 : [C {}, C Str] = CallByName List.9 Test.23;
+        dec Test.23;
+        let Test.22 : Str = "foo";
+        let Test.20 : Str = CallByName Result.5 Test.21 Test.22;
+        dec Test.22;
+        ret Test.20;
+
+procedure Test.0 ():
+    let Test.32 : List [<r>C List *self, C *self] = Array [];
+    let Test.15 : [<r>C List *self, C *self] = TagId(0) Test.32;
+    let Test.14 : Str = CallByName Test.2 Test.15;
+    dec Test.15;
+    ret Test.14;

@@ -1195,6 +1195,16 @@ expect pluralize <span class="str">"cactus"</span> <span class="str">"cacti"</sp
 </samp>
 <p>If you put this in a file named <code>main.roc</code> and run <code>roc test</code>, Roc will execute the two <code>expect</code>
 expressions (that is, the two <code>pluralize</code> calls) and report any that returned <code>false</code>.</p>
+
+<p>If a test fails, it will not show the actual value that differs from the expected value.
+To show the actual value, you can write the expect like this:</p>
+
+<samp>expect
+    funcOut <span class="op">=</span> pluralize <span class="str">"cactus"</span> <span class="str">"cacti"</span> 1
+
+    funcOut <span class="op">==</span> <span class="str">"2 cactus"</span>
+</samp>
+
 <h3 id="inline-expects"><a href="#inline-expects">Inline Expectations</a></h3>
 <p>For example:</p>
 <samp>    <span class="kw">if</span> count <span class="op">==</span> <span class="number">1</span> then

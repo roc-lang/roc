@@ -37,10 +37,7 @@ where
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
-        and(
-            space0_e(indent_before_problem),
-            and(parser, space0_no_after_indent_check()),
-        ),
+        and(space0_e(indent_before_problem), and(parser, spaces())),
         spaces_around_help,
     )
 }
@@ -164,474 +161,268 @@ where
     }
 }
 
+pub fn simple_eat_whitespace(bytes: &[u8]) -> usize {
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b' ' => i += 1,
+            _ => break,
+        }
+    }
+    i
+}
+
+pub fn fast_eat_whitespace(bytes: &[u8]) -> usize {
+    // Load 8 bytes at a time, keeping in mind that the initial offset may not be aligned
+    let mut i = 0;
+    while i + 8 <= bytes.len() {
+        let chunk = unsafe {
+            // Safe because we know the pointer is in bounds
+            (bytes.as_ptr().add(i) as *const u64)
+                .read_unaligned()
+                .to_le()
+        };
+
+        // Space character is 0x20, which has a single bit set
+        // We can check for any space character by checking if any other bit is set
+        let spaces = 0x2020_2020_2020_2020;
+
+        // First, generate a mask where each byte is 0xff if the byte is a space,
+        // and some other bit sequence otherwise
+        let mask = !(chunk ^ spaces);
+
+        // Now mask off the high bit, so there's some place to carry into without
+        // overflowing into the next byte.
+        let mask = mask & !0x8080_8080_8080_8080;
+
+        // Now add 0x0101_0101_0101_0101 to each byte, which will carry into the high bit
+        // if and only if the byte is a space.
+        let mask = mask + 0x0101_0101_0101_0101;
+
+        // Now mask off areas where the original bytes had the high bit set, so that
+        // 0x80|0x20 = 0xa0 will not be considered a space.
+        let mask = mask & !(chunk & 0x8080_8080_8080_8080);
+
+        // Make sure all the _other_ bits aside from the high bit are set,
+        // and count the number of trailing one bits, dividing by 8 to get the number of
+        // bytes that are spaces.
+        let count = ((mask | !0x8080_8080_8080_8080).trailing_ones() as usize) / 8;
+
+        if count == 8 {
+            i += 8;
+        } else {
+            return i + count;
+        }
+    }
+
+    // Check the remaining bytes
+    simple_eat_whitespace(&bytes[i..]) + i
+}
+
+pub fn simple_eat_until_control_character(bytes: &[u8]) -> usize {
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] < b' ' {
+            break;
+        } else {
+            i += 1;
+        }
+    }
+    i
+}
+
+pub fn fast_eat_until_control_character(bytes: &[u8]) -> usize {
+    // Load 8 bytes at a time, keeping in mind that the initial offset may not be aligned
+    let mut i = 0;
+    while i + 8 <= bytes.len() {
+        let chunk = unsafe {
+            // Safe because we know the pointer is in bounds
+            (bytes.as_ptr().add(i) as *const u64)
+                .read_unaligned()
+                .to_le()
+        };
+
+        // Control characters are 0x00-0x1F, and don't have any high bits set.
+        // They only have bits set that fall under the 0x1F mask.
+        let control = 0x1F1F_1F1F_1F1F_1F1F;
+
+        // First we set up a value where, if a given byte is a control character,
+        // it'll have a all the non-control bits set to 1. All control bits are set to zero.
+        let mask = !(chunk & !control) & !control;
+
+        // Now, down shift by one bit. This will leave room for the following add to
+        // carry, without impacting the next byte.
+        let mask = mask >> 1;
+
+        // Add one (shifted by the right amount), causing all the one bits in the control
+        // characters to cascade, and put a one in the high bit.
+        let mask = mask.wrapping_add(0x1010_1010_1010_1010);
+
+        // Now, we can count the number of trailing zero bits, dividing by 8 to get the
+        // number of bytes before the first control character.
+        let count = (mask & 0x8080_8080_8080_8080).trailing_zeros() as usize / 8;
+
+        if count == 8 {
+            i += 8;
+        } else {
+            return i + count;
+        }
+    }
+
+    // Check the remaining bytes
+    simple_eat_until_control_character(&bytes[i..]) + i
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn test_eat_whitespace_simple() {
+        let bytes = &[0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(simple_eat_whitespace(bytes), fast_eat_whitespace(bytes));
+    }
+
+    proptest! {
+        #[test]
+        fn test_eat_whitespace(bytes in proptest::collection::vec(any::<u8>(), 0..100)) {
+            prop_assert_eq!(simple_eat_whitespace(&bytes), fast_eat_whitespace(&bytes));
+        }
+    }
+
+    #[test]
+    fn test_eat_until_control_character_simple() {
+        let bytes = &[32, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(
+            simple_eat_until_control_character(bytes),
+            fast_eat_until_control_character(bytes)
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn test_eat_until_control_character(bytes in proptest::collection::vec(any::<u8>(), 0..100)) {
+            prop_assert_eq!(
+                simple_eat_until_control_character(&bytes),
+                fast_eat_until_control_character(&bytes));
+        }
+    }
+}
+
 pub fn space0_e<'a, E>(
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
 where
     E: 'a + SpaceProblem,
 {
-    spaces_help_help(indent_problem)
+    move |arena, state: State<'a>, min_indent: u32| {
+        let start = state.pos();
+        match spaces().parse(arena, state, min_indent) {
+            Ok((progress, spaces, state)) => {
+                if progress == NoProgress || state.column() >= min_indent {
+                    Ok((progress, spaces, state))
+                } else {
+                    Err((progress, indent_problem(start)))
+                }
+            }
+            Err((progress, err)) => Err((progress, err)),
+        }
+    }
 }
 
-#[inline(always)]
-fn spaces_help_help<'a, E>(
-    indent_problem: fn(Position) -> E,
-) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
+fn spaces<'a, E>() -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
 where
     E: 'a + SpaceProblem,
 {
-    move |arena, state: State<'a>, min_indent: u32| match fast_eat_spaces(&state) {
-        FastSpaceState::HasTab(position) => Err((
-            MadeProgress,
-            E::space_problem(BadInputError::HasTab, position),
-        )),
-        FastSpaceState::Good {
-            newlines,
-            consumed,
-            column,
-        } => {
-            if consumed == 0 {
-                Ok((NoProgress, &[] as &[_], state))
-            } else if column < min_indent {
-                Err((MadeProgress, indent_problem(state.pos())))
-            } else {
-                let comments_and_newlines = Vec::with_capacity_in(newlines, arena);
-                let spaces = eat_spaces(state, comments_and_newlines);
-
-                Ok((
-                    MadeProgress,
-                    spaces.comments_and_newlines.into_bump_slice(),
-                    spaces.state,
-                ))
+    move |arena, mut state: State<'a>, _min_indent: u32| {
+        let mut newlines = Vec::new_in(arena);
+        let mut progress = NoProgress;
+        loop {
+            let whitespace = fast_eat_whitespace(state.bytes());
+            if whitespace > 0 {
+                state.advance_mut(whitespace);
+                progress = MadeProgress;
             }
-        }
-    }
-}
 
-#[inline(always)]
-fn space0_no_after_indent_check<'a, E>() -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
-where
-    E: 'a + SpaceProblem,
-{
-    move |arena, state: State<'a>, _min_indent: u32| match fast_eat_spaces(&state) {
-        FastSpaceState::HasTab(position) => Err((
-            MadeProgress,
-            E::space_problem(BadInputError::HasTab, position),
-        )),
-        FastSpaceState::Good {
-            newlines,
-            consumed,
-            column: _,
-        } => {
-            if consumed == 0 {
-                Ok((NoProgress, &[] as &[_], state))
-            } else {
-                let comments_and_newlines = Vec::with_capacity_in(newlines, arena);
-                let spaces = eat_spaces(state, comments_and_newlines);
+            match state.bytes().first() {
+                Some(b'#') => {
+                    state.advance_mut(1);
 
-                Ok((
-                    MadeProgress,
-                    spaces.comments_and_newlines.into_bump_slice(),
-                    spaces.state,
-                ))
-            }
-        }
-    }
-}
-
-enum FastSpaceState {
-    Good {
-        newlines: usize,
-        consumed: usize,
-        column: u32,
-    },
-    HasTab(Position),
-}
-
-fn fast_eat_spaces(state: &State) -> FastSpaceState {
-    use FastSpaceState::*;
-
-    let mut newlines = 0;
-    let mut line_start = state.line_start.offset as usize;
-    let base_offset = state.pos().offset as usize;
-
-    let mut index = base_offset;
-    let bytes = state.original_bytes();
-    let length = bytes.len();
-
-    'outer: while index < length {
-        match bytes[index] {
-            b' ' => {
-                index += 1;
-            }
-            b'\n' => {
-                newlines += 1;
-                index += 1;
-                line_start = index;
-            }
-            b'\r' => {
-                index += 1;
-                line_start = index;
-            }
-            b'\t' => {
-                return HasTab(Position::new(index as u32));
-            }
-            b'#' => {
-                index += 1;
-
-                // try to use SIMD instructions explicitly
-                // run with RUSTFLAGS="-C target-cpu=native" to enable
-                #[cfg(all(
-                    target_arch = "x86_64",
-                    target_feature = "sse2",
-                    target_feature = "sse4.2"
-                ))]
-                {
-                    use std::arch::x86_64::*;
-
-                    // a bytestring with the three characters we're looking for (the rest is ignored)
-                    let needle = b"\r\n\t=============";
-                    let needle = unsafe { _mm_loadu_si128(needle.as_ptr() as *const _) };
-
-                    while index < length {
-                        let remaining = length - index;
-                        let length = if remaining < 16 { remaining as i32 } else { 16 };
-
-                        // the source bytes we'll be looking at
-                        let haystack =
-                            unsafe { _mm_loadu_si128(bytes.as_ptr().add(index) as *const _) };
-
-                        // use first 3 characters of needle, first `length` characters of haystack
-                        // finds the first index where one of the `needle` characters occurs
-                        // or 16 when none of the needle characters occur
-                        let first_special_char = unsafe {
-                            _mm_cmpestri(needle, 3, haystack, length, _SIDD_CMP_EQUAL_ANY)
-                        };
-
-                        // we've made `first_special_char` characters of progress
-                        index += usize::min(first_special_char as usize, remaining);
-
-                        // if we found a special char, let the outer loop handle it
-                        if first_special_char != 16 {
-                            continue 'outer;
-                        }
-                    }
-                }
-
-                #[cfg(not(all(
-                    target_arch = "x86_64",
-                    target_feature = "sse2",
-                    target_feature = "sse4.2"
-                )))]
-                {
-                    while index < length {
-                        match bytes[index] {
-                            b'\n' | b'\t' | b'\r' => {
-                                continue 'outer;
-                            }
-
-                            _ => {
-                                index += 1;
-                            }
-                        }
-                    }
-                }
-            }
-            _ => break,
-        }
-    }
-
-    Good {
-        newlines,
-        consumed: index - base_offset,
-        column: (index - line_start) as u32,
-    }
-}
-
-struct SpaceState<'a> {
-    state: State<'a>,
-    comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
-}
-
-fn eat_spaces<'a>(
-    mut state: State<'a>,
-    mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
-) -> SpaceState<'a> {
-    for c in state.bytes() {
-        match c {
-            b' ' => {
-                state = state.advance(1);
-            }
-            b'\n' => {
-                state = state.advance_newline();
-                comments_and_newlines.push(CommentOrNewline::Newline);
-            }
-            b'\r' => {
-                state = state.advance_newline();
-            }
-            b'\t' => unreachable!(),
-
-            b'#' => {
-                state = state.advance(1);
-                return eat_line_comment(state, comments_and_newlines);
-            }
-            _ => {
-                if !comments_and_newlines.is_empty() {
-                    state = state.mark_current_indent();
-                }
-                break;
-            }
-        }
-    }
-
-    SpaceState {
-        state,
-        comments_and_newlines,
-    }
-}
-
-fn eat_line_comment<'a>(
-    mut state: State<'a>,
-    mut comments_and_newlines: Vec<'a, CommentOrNewline<'a>>,
-) -> SpaceState<'a> {
-    let mut index = state.pos().offset as usize;
-    let bytes = state.original_bytes();
-    let length = bytes.len();
-
-    'outer: loop {
-        let is_doc_comment = if let Some(b'#') = bytes.get(index) {
-            match bytes.get(index + 1) {
-                Some(b' ') => {
-                    state = state.advance(2);
-                    index += 2;
-
-                    true
-                }
-                Some(b'\n') => {
-                    // consume the second # and the \n
-                    state = state.advance(1);
-                    state = state.advance_newline();
-                    index += 2;
-
-                    comments_and_newlines.push(CommentOrNewline::DocComment(""));
-
-                    for c in state.bytes() {
-                        match c {
-                            b' ' => {
-                                state = state.advance(1);
-                            }
-                            b'\n' => {
-                                state = state.advance_newline();
-                                comments_and_newlines.push(CommentOrNewline::Newline);
-                            }
-                            b'\r' => {
-                                state = state.advance_newline();
-                            }
-                            b'\t' => unreachable!(),
-                            b'#' => {
-                                state = state.advance(1);
-                                index += 1;
-                                continue 'outer;
-                            }
-                            _ => {
-                                state = state.mark_current_indent();
-                                break;
-                            }
-                        }
-
-                        index += 1;
-                    }
-
-                    return SpaceState {
-                        state,
-                        comments_and_newlines,
-                    };
-                }
-                None => {
-                    // consume the second #
-                    state = state.advance(1);
-
-                    return SpaceState {
-                        state,
-                        comments_and_newlines,
-                    };
-                }
-
-                Some(_) => false,
-            }
-        } else {
-            false
-        };
-
-        let loop_start = index;
-
-        #[cfg(all(
-            target_arch = "x86_64",
-            target_feature = "sse2",
-            target_feature = "sse4.2"
-        ))]
-        {
-            use std::arch::x86_64::*;
-
-            // a bytestring with the three characters we're looking for (the rest is ignored)
-            let needle = b"\r\n\t=============";
-            let needle = unsafe { _mm_loadu_si128(needle.as_ptr() as *const _) };
-
-            while index < length {
-                let remaining = length - index;
-                let chunk = if remaining < 16 { remaining as i32 } else { 16 };
-
-                // the source bytes we'll be looking at
-                let haystack = unsafe { _mm_loadu_si128(bytes.as_ptr().add(index) as *const _) };
-
-                // use first 3 characters of needle, first  chunk` characters of haystack
-                // finds the first index where one of the `needle` characters occurs
-                // or 16 when none of the needle characters occur
-                let first_special_char =
-                    unsafe { _mm_cmpestri(needle, 3, haystack, chunk, _SIDD_CMP_EQUAL_ANY) };
-
-                // we've made `first_special_char` characters of progress
-                let progress = usize::min(first_special_char as usize, remaining);
-                index += progress;
-                state = state.advance(progress);
-
-                if first_special_char != 16 {
-                    match bytes[index] {
-                        b'\t' => unreachable!(),
-                        b'\n' => {
-                            let comment =
-                                unsafe { std::str::from_utf8_unchecked(&bytes[loop_start..index]) };
-
-                            if is_doc_comment {
-                                comments_and_newlines.push(CommentOrNewline::DocComment(comment));
-                            } else {
-                                comments_and_newlines.push(CommentOrNewline::LineComment(comment));
-                            }
-                            state = state.advance_newline();
-
-                            index += 1;
-                            while index < length {
-                                match bytes[index] {
-                                    b' ' => {
-                                        state = state.advance(1);
-                                    }
-                                    b'\n' => {
-                                        state = state.advance_newline();
-                                        comments_and_newlines.push(CommentOrNewline::Newline);
-                                    }
-                                    b'\r' => {
-                                        state = state.advance_newline();
-                                    }
-                                    b'\t' => unreachable!(),
-                                    b'#' => {
-                                        state = state.advance(1);
-                                        index += 1;
-                                        continue 'outer;
-                                    }
-                                    _ => {
-                                        state = state.mark_current_indent();
-                                        break;
-                                    }
-                                }
-
-                                index += 1;
-                            }
-
-                            return SpaceState {
-                                state,
-                                comments_and_newlines,
-                            };
-                        }
-                        b'\r' => {
-                            state = state.advance_newline();
-                            index += 1;
-                        }
-                        odd_character => {
-                            unreachable!(
-                                "unexpected_character {} {}",
-                                odd_character, odd_character as char
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        #[cfg(not(all(
-            target_arch = "x86_64",
-            target_feature = "sse2",
-            target_feature = "sse4.2"
-        )))]
-        while index < length {
-            match bytes[index] {
-                b'\t' => unreachable!(),
-                b'\n' => {
-                    let comment =
-                        unsafe { std::str::from_utf8_unchecked(&bytes[loop_start..index]) };
+                    let is_doc_comment = state.bytes().first() == Some(&b'#')
+                        && (state.bytes().get(1) == Some(&b' ')
+                            || state.bytes().get(1) == Some(&b'\n')
+                            || state.bytes().get(1) == None);
 
                     if is_doc_comment {
-                        comments_and_newlines.push(CommentOrNewline::DocComment(comment));
-                    } else {
-                        comments_and_newlines.push(CommentOrNewline::LineComment(comment));
-                    }
-                    state = state.advance_newline();
-
-                    index += 1;
-                    while index < length {
-                        match bytes[index] {
-                            b' ' => {
-                                state = state.advance(1);
-                            }
-                            b'\n' => {
-                                state = state.advance_newline();
-                                comments_and_newlines.push(CommentOrNewline::Newline);
-                            }
-                            b'\r' => {
-                                state = state.advance_newline();
-                            }
-                            b'\t' => unreachable!(),
-                            b'#' => {
-                                state = state.advance(1);
-                                index += 1;
-                                continue 'outer;
-                            }
-                            _ => {
-                                state = state.mark_current_indent();
-                                break;
-                            }
+                        state.advance_mut(1);
+                        if state.bytes().first() == Some(&b' ') {
+                            state.advance_mut(1);
                         }
-
-                        index += 1;
                     }
 
-                    return SpaceState {
-                        state,
-                        comments_and_newlines,
+                    let len = fast_eat_until_control_character(state.bytes());
+
+                    // We already checked that the string is valid UTF-8
+                    debug_assert!(std::str::from_utf8(&state.bytes()[..len]).is_ok());
+                    let text = unsafe { std::str::from_utf8_unchecked(&state.bytes()[..len]) };
+
+                    let comment = if is_doc_comment {
+                        CommentOrNewline::DocComment(text)
+                    } else {
+                        CommentOrNewline::LineComment(text)
                     };
+                    newlines.push(comment);
+                    state.advance_mut(len);
+
+                    if state.bytes().first() == Some(&b'\n') {
+                        state = state.advance_newline();
+                    }
+
+                    progress = MadeProgress;
                 }
-                b'\r' => {
+                Some(b'\r') => {
+                    if state.bytes().get(1) == Some(&b'\n') {
+                        newlines.push(CommentOrNewline::Newline);
+                        state.advance_mut(1);
+                        state = state.advance_newline();
+                        progress = MadeProgress;
+                    } else {
+                        return Err((
+                            progress,
+                            E::space_problem(
+                                BadInputError::HasMisplacedCarriageReturn,
+                                state.pos(),
+                            ),
+                        ));
+                    }
+                }
+                Some(b'\n') => {
+                    newlines.push(CommentOrNewline::Newline);
                     state = state.advance_newline();
+                    progress = MadeProgress;
+                }
+                Some(b'\t') => {
+                    return Err((
+                        progress,
+                        E::space_problem(BadInputError::HasTab, state.pos()),
+                    ));
+                }
+                Some(x) if *x < b' ' => {
+                    return Err((
+                        progress,
+                        E::space_problem(BadInputError::HasAsciiControl, state.pos()),
+                    ));
                 }
                 _ => {
-                    state = state.advance(1);
+                    if !newlines.is_empty() {
+                        state = state.mark_current_indent();
+                    }
+                    break;
                 }
             }
-
-            index += 1;
         }
 
-        // We made it to the end of the bytes. This means there's a comment without a trailing newline.
-        let comment = unsafe { std::str::from_utf8_unchecked(&bytes[loop_start..index]) };
-
-        if is_doc_comment {
-            comments_and_newlines.push(CommentOrNewline::DocComment(comment));
-        } else {
-            comments_and_newlines.push(CommentOrNewline::LineComment(comment));
-        }
-
-        return SpaceState {
-            state,
-            comments_and_newlines,
-        };
+        Ok((progress, newlines.into_bump_slice(), state))
     }
 }

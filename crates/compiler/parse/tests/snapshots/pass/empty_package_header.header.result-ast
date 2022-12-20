@@ -1,0 +1,27 @@
+Module {
+    comments: [],
+    header: Package(
+        PackageHeader {
+            before_name: [],
+            name: @8-24 PackageName(
+                "rtfeldman/blah",
+            ),
+            exposes: KeywordItem {
+                keyword: Spaces {
+                    before: [],
+                    item: ExposesKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+            packages: KeywordItem {
+                keyword: Spaces {
+                    before: [],
+                    item: PackagesKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+        },
+    ),
+}
