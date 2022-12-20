@@ -9,7 +9,7 @@ use crate::llvm::refcounting::{
     decrement_refcount_layout, increment_n_refcount_layout, increment_refcount_layout,
 };
 use inkwell::attributes::{Attribute, AttributeLoc};
-use inkwell::types::{BasicType, BasicTypeEnum};
+use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{
     BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue,
     PointerValue, StructValue,
@@ -97,6 +97,7 @@ fn call_bitcode_fn_help<'a, 'ctx, 'env>(
 
 pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    bitcode_return_type: StructType<'ctx>,
     args: &[BasicValueEnum<'ctx>],
     return_layout: &Layout<'_>,
     fn_name: &str,
@@ -119,10 +120,7 @@ pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
                 .get_type()
                 .get_param_types()[0]
                 .into_pointer_type();
-            let cc_return_type: BasicTypeEnum<'ctx> = cc_ptr_return_type
-                .get_element_type()
-                .try_into()
-                .expect("Zig bitcode return type is not a basic type!");
+            let cc_return_type: BasicTypeEnum<'ctx> = bitcode_return_type.into();
 
             // when we write an i128 into this (happens in NumToInt), zig expects this pointer to
             // be 16-byte aligned. Not doing so is UB and will immediately fail on CI
