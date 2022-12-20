@@ -10,13 +10,16 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 use roc_module::symbol::Symbol;
+use roc_mono::ir::LookupType;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
 use roc_region::all::Region;
 
+use super::build::BuilderExt;
 use super::build::{
     add_func, load_roc_value, load_symbol_and_layout, use_roc_value, FunctionSpec, LlvmBackendMode,
-    Scope,
+    Scope, WhenRecursive,
 };
+use super::convert::struct_type_from_union_layout;
 
 pub(crate) struct SharedMemoryPointer<'ctx>(PointerValue<'ctx>);
 
@@ -30,9 +33,9 @@ impl<'ctx> SharedMemoryPointer<'ctx> {
 
         let func = env.module.get_function(start_function).unwrap();
 
-        let call_result =
-            env.builder
-                .build_call(func.get_type(), func, &[], "call_expect_start_failed");
+        let call_result = env
+            .builder
+            .build_call(func, &[], "call_expect_start_failed");
 
         let ptr = call_result
             .try_as_basic_value()
@@ -52,10 +55,11 @@ struct Cursors<'ctx> {
 
 fn pointer_at_offset<'ctx>(
     bd: &Builder<'ctx>,
+    element_type: impl BasicType<'ctx>,
     ptr: PointerValue<'ctx>,
     offset: IntValue<'ctx>,
 ) -> PointerValue<'ctx> {
-    unsafe { bd.build_gep(ptr.get_type(), ptr, &[offset], "offset_ptr") }
+    unsafe { bd.new_build_in_bounds_gep(element_type, ptr, &[offset], "offset_ptr") }
 }
 
 /// Writes the module and region into the buffer
@@ -92,16 +96,16 @@ fn read_state<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     ptr: PointerValue<'ctx>,
 ) -> (IntValue<'ctx>, IntValue<'ctx>) {
-    let ptr_type = env.ptr_int().ptr_type(AddressSpace::Zero);
+    let ptr_type = env.ptr_int().ptr_type(AddressSpace::Generic);
     let ptr = env.builder.build_pointer_cast(ptr, ptr_type, "");
 
     let one = env.ptr_int().const_int(1, false);
-    let offset_ptr = pointer_at_offset(env.builder, ptr, one);
+    let offset_ptr = pointer_at_offset(env.builder, env.ptr_int(), ptr, one);
 
-    let count = env.builder.build_load(env.ptr_int(), ptr, "load_count");
+    let count = env.builder.new_build_load(env.ptr_int(), ptr, "load_count");
     let offset = env
         .builder
-        .build_load(env.ptr_int(), offset_ptr, "load_offset");
+        .new_build_load(env.ptr_int(), offset_ptr, "load_offset");
 
     (count.into_int_value(), offset.into_int_value())
 }
@@ -112,11 +116,11 @@ fn write_state<'a, 'ctx, 'env>(
     count: IntValue<'ctx>,
     offset: IntValue<'ctx>,
 ) {
-    let ptr_type = env.ptr_int().ptr_type(AddressSpace::Zero);
+    let ptr_type = env.ptr_int().ptr_type(AddressSpace::Generic);
     let ptr = env.builder.build_pointer_cast(ptr, ptr_type, "");
 
     let one = env.ptr_int().const_int(1, false);
-    let offset_ptr = pointer_at_offset(env.builder, ptr, one);
+    let offset_ptr = pointer_at_offset(env.builder, env.ptr_int(), ptr, one);
 
     env.builder.build_store(ptr, count);
     env.builder.build_store(offset_ptr, offset);
@@ -129,7 +133,6 @@ pub(crate) fn notify_parent_expect(env: &Env, shared_memory: &SharedMemoryPointe
         .unwrap();
 
     env.builder.build_call(
-        func.get_type(),
         func,
         &[shared_memory.0.into()],
         "call_expect_failed_finalize",
@@ -140,13 +143,27 @@ pub(crate) fn notify_parent_dbg(env: &Env, shared_memory: &SharedMemoryPointer) 
     let func = env.module.get_function(bitcode::NOTIFY_PARENT_DBG).unwrap();
 
     env.builder.build_call(
-        func.get_type(),
         func,
         &[shared_memory.0.into()],
         "call_expect_failed_finalize",
     );
 }
 
+// Shape of expect frame:
+//
+//     ===
+//     Fixed-size header
+//     ===
+// /-- ptr_lookup_1  (ptr_size)
+// |   var_lookup_1  (u32)
+// |   ..
+// |   ptr_lookup_n  (ptr_size)
+// |   var_lookup_n  (u32)
+// \-> lookup_val_1  (varsize)
+//     ..
+//     lookup_val_n  (varsize)
+//
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     scope: &Scope<'a, 'ctx>,
@@ -155,6 +172,7 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     condition: Symbol,
     region: Region,
     lookups: &[Symbol],
+    lookup_variables: &[LookupType],
 ) {
     let original_ptr = shared_memory.0;
 
@@ -164,9 +182,11 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
 
     let after_header = offset;
 
-    let space_for_offsets = env
-        .ptr_int()
-        .const_int((lookups.len() * env.target_info.ptr_size()) as _, false);
+    let space_for_offsets = env.ptr_int().const_int(
+        (lookups.len() * env.target_info.ptr_size() + lookups.len() * std::mem::size_of::<u32>())
+            as _,
+        false,
+    );
 
     let mut lookup_starts = bumpalo::collections::Vec::with_capacity_in(lookups.len(), env.arena);
 
@@ -207,27 +227,53 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     {
         let mut offset = after_header;
 
-        for lookup_start in lookup_starts {
-            build_copy(env, original_ptr, offset, lookup_start.into());
+        for (lookup_start, lookup_var) in lookup_starts.into_iter().zip(lookup_variables) {
+            // Store the pointer to the value
+            {
+                build_copy(env, original_ptr, offset, lookup_start.into());
 
-            let ptr_width = env
-                .ptr_int()
-                .const_int(env.target_info.ptr_size() as _, false);
+                let ptr_width = env
+                    .ptr_int()
+                    .const_int(env.target_info.ptr_size() as _, false);
 
-            offset = env.builder.build_int_add(offset, ptr_width, "offset")
+                offset = env.builder.build_int_add(offset, ptr_width, "offset");
+            }
+
+            // Store the specialized variable of the value
+            {
+                let ptr = unsafe {
+                    env.builder.new_build_in_bounds_gep(
+                        env.context.i8_type(),
+                        original_ptr,
+                        &[offset],
+                        "at_current_offset",
+                    )
+                };
+
+                let u32_ptr = env.context.i32_type().ptr_type(AddressSpace::Generic);
+                let ptr = env
+                    .builder
+                    .build_pointer_cast(ptr, u32_ptr, "cast_ptr_type");
+
+                let var_value = env
+                    .context
+                    .i32_type()
+                    .const_int(lookup_var.index() as _, false);
+
+                env.builder.build_store(ptr, var_value);
+
+                let var_size = env
+                    .ptr_int()
+                    .const_int(std::mem::size_of::<u32>() as _, false);
+
+                offset = env.builder.build_int_add(offset, var_size, "offset");
+            }
         }
     }
 
     let one = env.ptr_int().const_int(1, false);
     let new_count = env.builder.build_int_add(count, one, "inc");
     write_state(env, original_ptr, new_count, offset)
-}
-
-#[derive(Clone, Debug, Copy)]
-enum WhenRecursive<'a> {
-    Unreachable,
-    #[allow(dead_code)]
-    Loop(UnionLayout<'a>),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -268,15 +314,15 @@ fn build_clone<'a, 'ctx, 'env>(
         Layout::Union(union_layout) => {
             if layout.safe_to_memcpy(env.layout_interner) {
                 let ptr = unsafe {
-                    env.builder.build_in_bounds_gep(
-                        ptr.get_type(),
+                    env.builder.new_build_in_bounds_gep(
+                        env.context.i8_type(),
                         ptr,
                         &[cursors.offset],
                         "at_current_offset",
                     )
                 };
 
-                let ptr_type = value.get_type().ptr_type(AddressSpace::Zero);
+                let ptr_type = value.get_type().ptr_type(AddressSpace::Generic);
                 let ptr = env
                     .builder
                     .build_pointer_cast(ptr, ptr_type, "cast_ptr_type");
@@ -340,14 +386,18 @@ fn build_clone<'a, 'ctx, 'env>(
                 let bt = basic_type_from_layout(env, &layout);
 
                 // cast the i64 pointer to a pointer to block of memory
-                let field1_cast = env.builder.build_bitcast(value, bt, "i64_to_opaque");
+                let field1_cast = env.builder.build_pointer_cast(
+                    value.into_pointer_value(),
+                    bt.into_pointer_type(),
+                    "i64_to_opaque",
+                );
 
                 build_clone_tag(
                     env,
                     layout_ids,
                     ptr,
                     cursors,
-                    field1_cast,
+                    field1_cast.into(),
                     union_layout,
                     WhenRecursive::Loop(union_layout),
                 )
@@ -430,7 +480,7 @@ fn build_clone_tag<'a, 'ctx, 'env>(
 
             let function_type = env.ptr_int().fn_type(
                 &[
-                    env.context.i8_type().ptr_type(AddressSpace::Zero).into(),
+                    env.context.i8_type().ptr_type(AddressSpace::Generic).into(),
                     env.ptr_int().into(),
                     env.ptr_int().into(),
                     BasicMetadataTypeEnum::from(value.get_type()),
@@ -468,7 +518,6 @@ fn build_clone_tag<'a, 'ctx, 'env>(
     };
 
     let call = env.builder.build_call(
-        function.get_type(),
         function,
         &[
             ptr.into(),
@@ -488,13 +537,16 @@ fn build_clone_tag<'a, 'ctx, 'env>(
 
 fn load_tag_data<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    union_layout: UnionLayout<'a>,
     tag_value: PointerValue<'ctx>,
     tag_type: BasicTypeEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
+    let union_struct_type = struct_type_from_union_layout(env, &union_layout);
+
     let raw_data_ptr = env
         .builder
-        .build_struct_gep(
-            tag_value.get_type(),
+        .new_build_struct_gep(
+            union_struct_type,
             tag_value,
             RocUnion::TAG_DATA_INDEX,
             "tag_data",
@@ -503,11 +555,11 @@ fn load_tag_data<'a, 'ctx, 'env>(
 
     let data_ptr = env.builder.build_pointer_cast(
         raw_data_ptr,
-        tag_type.ptr_type(AddressSpace::Zero),
+        tag_type.ptr_type(AddressSpace::Generic),
         "data_ptr",
     );
 
-    env.builder.build_load(tag_type, data_ptr, "load_data")
+    env.builder.new_build_load(tag_type, data_ptr, "load_data")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -573,8 +625,14 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                 let layout = Layout::struct_no_name_order(
                     env.arena.alloc([layout, union_layout.tag_id_layout()]),
                 );
+
                 let basic_type = basic_type_from_layout(env, &layout);
-                let data = load_tag_data(env, tag_value.into_pointer_value(), basic_type);
+                let data = load_tag_data(
+                    env,
+                    union_layout,
+                    tag_value.into_pointer_value(),
+                    basic_type,
+                );
 
                 let answer =
                     build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
@@ -621,8 +679,9 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                         env.arena.alloc([layout, union_layout.tag_id_layout()]),
                     )
                 };
+
                 let basic_type = basic_type_from_layout(env, &layout);
-                let data = load_tag_data(env, tag_value, basic_type);
+                let data = load_tag_data(env, union_layout, tag_value, basic_type);
 
                 let (width, _) =
                     union_layout.data_size_and_alignment(env.layout_interner, env.target_info);
@@ -658,8 +717,6 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
             }
         }
         NonNullableUnwrapped(fields) => {
-            //
-
             let tag_value = tag_value.into_pointer_value();
 
             build_copy(env, ptr, offset, extra_offset.into());
@@ -679,7 +736,7 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                 ),
             };
 
-            let data = load_tag_data(env, tag_value, basic_type);
+            let data = load_tag_data(env, union_layout, tag_value, basic_type);
 
             let when_recursive = WhenRecursive::Loop(union_layout);
             let answer = build_clone(env, layout_ids, ptr, cursors, data, layout, when_recursive);
@@ -738,8 +795,7 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                     };
 
                     let tag_value = tag_pointer_clear_tag_id(env, tag_value.into_pointer_value());
-
-                    let data = load_tag_data(env, tag_value, basic_type);
+                    let data = load_tag_data(env, union_layout, tag_value, basic_type);
 
                     let when_recursive = WhenRecursive::Loop(union_layout);
                     let answer =
@@ -813,7 +869,12 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                     ),
                 };
 
-                let data = load_tag_data(env, tag_value.into_pointer_value(), basic_type);
+                let data = load_tag_data(
+                    env,
+                    union_layout,
+                    tag_value.into_pointer_value(),
+                    basic_type,
+                );
 
                 let when_recursive = WhenRecursive::Loop(union_layout);
                 let answer =
@@ -860,11 +921,15 @@ fn build_copy<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
 ) -> IntValue<'ctx> {
     let ptr = unsafe {
-        env.builder
-            .build_in_bounds_gep(ptr.get_type(), ptr, &[offset], "at_current_offset")
+        env.builder.new_build_in_bounds_gep(
+            env.context.i8_type(),
+            ptr,
+            &[offset],
+            "at_current_offset",
+        )
     };
 
-    let ptr_type = value.get_type().ptr_type(AddressSpace::Zero);
+    let ptr_type = value.get_type().ptr_type(AddressSpace::Generic);
     let ptr = env
         .builder
         .build_pointer_cast(ptr, ptr_type, "cast_ptr_type");
@@ -931,10 +996,10 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
 
             if elem.safe_to_memcpy(env.layout_interner) {
                 // NOTE we are not actually sure the dest is properly aligned
-                let dest = pointer_at_offset(bd, ptr, offset);
+                let dest = pointer_at_offset(bd, env.context.i8_type(), ptr, offset);
                 let src = bd.build_pointer_cast(
                     elements,
-                    env.context.i8_type().ptr_type(AddressSpace::Zero),
+                    env.context.i8_type().ptr_type(AddressSpace::Generic),
                     "to_bytes_pointer",
                 );
                 bd.build_memcpy(dest, 1, src, 1, elements_width).unwrap();
@@ -947,7 +1012,7 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                 let element_type = basic_type_from_layout(env, elem);
                 let elements = bd.build_pointer_cast(
                     elements,
-                    element_type.ptr_type(AddressSpace::Zero),
+                    element_type.ptr_type(AddressSpace::Generic),
                     "elements",
                 );
 
@@ -971,7 +1036,7 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                     let current_offset =
                         bd.build_int_add(elements_start_offset, current_offset, "current_offset");
                     let current_extra_offset =
-                        bd.build_load(env.ptr_int(), rest_offset, "element_offset");
+                        bd.new_build_load(env.ptr_int(), rest_offset, "element_offset");
 
                     let offset = current_offset;
                     let extra_offset = current_extra_offset.into_int_value();
@@ -1002,7 +1067,7 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
 
                 incrementing_elem_loop(env, parent, *elem, elements, len, "index", body);
 
-                bd.build_load(env.ptr_int(), rest_offset, "rest_start_offset")
+                bd.new_build_load(env.ptr_int(), rest_offset, "rest_start_offset")
                     .into_int_value()
             }
         }

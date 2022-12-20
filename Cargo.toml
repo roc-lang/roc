@@ -65,7 +65,7 @@ resolver = "2"
 # change the tag value in this Cargo.toml to point to that tag, and `cargo update`.
 # This way, GitHub Actions works and nobody's builds get broken.
 # inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "master", features = [ "llvm13-0" ] }
-inkwell = { git = "https://github.com/matter-labs-forks/inkwell", branch = "az/update-llvm-15-support", features = [ "llvm15-0" ] }
+inkwell = { git = "https://github.com/folkertdev/inkwell", branch = "roc-llvm-15", features = [ "llvm15-0" ] }
 
 
 arrayvec = "0.7.2"

@@ -1982,7 +1982,7 @@ checksum = "adab1eaa3408fb7f0c777a73e7465fd5656136fc93b670eb6df3c88c2c1344e3"
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs-forks/inkwell?branch=az/update-llvm-15-support#4aa2f42ce33e9e9ddda62434c2e604f427f9033d"
+source = "git+https://github.com/folkertdev/inkwell?branch=roc-llvm-15#15275ed1d4bf47168b186e2a955142b6a8151177"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -1995,7 +1995,7 @@ dependencies = [
 [[package]]
 name = "inkwell_internals"
 version = "0.6.0"
-source = "git+https://github.com/matter-labs-forks/inkwell?branch=az/update-llvm-15-support#4aa2f42ce33e9e9ddda62434c2e604f427f9033d"
+source = "git+https://github.com/folkertdev/inkwell?branch=roc-llvm-15#15275ed1d4bf47168b186e2a955142b6a8151177"
 dependencies = [
  "proc-macro2",
  "quote",

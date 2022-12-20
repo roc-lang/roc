@@ -11,7 +11,7 @@ use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
 use roc_module::{low_level::LowLevel, symbol::Symbol};
 use roc_mono::{
-    ir::HigherOrderLowLevel,
+    ir::{HigherOrderLowLevel, LookupType},
     layout::{Builtin, LambdaSet, Layout, LayoutIds},
 };
 use roc_target::PtrWidth;
@@ -24,7 +24,7 @@ use crate::llvm::{
     },
     build::{
         complex_bitcast_check_size, create_entry_block_alloca, function_value_by_func_spec,
-        load_roc_value, roc_function_call, RocReturn,
+        load_roc_value, roc_function_call, BuilderExt, RocReturn,
     },
     build_list::{
         list_append_unsafe, list_capacity, list_concat, list_drop_at, list_get_unsafe, list_len,
@@ -244,7 +244,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                             );
 
                             let roc_return_type =
-                                basic_type_from_layout(env, layout).ptr_type(AddressSpace::Zero);
+                                basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
 
                             let roc_return_alloca = env.builder.build_pointer_cast(
                                 zig_return_alloca,
@@ -460,12 +460,12 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                     let return_type = basic_type_from_layout(env, layout);
                     let cast_result = env.builder.build_pointer_cast(
                         result,
-                        return_type.ptr_type(AddressSpace::Zero),
+                        return_type.ptr_type(AddressSpace::Generic),
                         "cast",
                     );
 
                     env.builder
-                        .build_load(return_type, cast_result, "load_result")
+                        .new_build_load(return_type, cast_result, "load_result")
                 }
                 Unix => {
                     let result = call_str_bitcode_fn(
@@ -1121,13 +1121,18 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             }
         },
         Dbg => {
-            // now what
-            arguments!(condition);
+            assert_eq!(args.len(), 2);
+            let condition = load_symbol(scope, &args[0]);
+            let dbg_spec_var_symbol = args[1];
 
             if env.mode.runs_expects() {
                 let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(args[0]) };
 
                 let shared_memory = crate::llvm::expect::SharedMemoryPointer::get(env);
+
+                // HACK(dbg-spec-var): the specialized type variable is passed along as a fake symbol
+                let specialized_var =
+                    unsafe { LookupType::from_index(dbg_spec_var_symbol.ident_id().index() as _) };
 
                 crate::llvm::expect::clone_to_shared_memory(
                     env,
@@ -1137,6 +1142,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                     args[0],
                     region,
                     &[args[0]],
+                    &[specialized_var],
                 );
 
                 crate::llvm::expect::notify_parent_dbg(env, &shared_memory);
@@ -1599,7 +1605,7 @@ fn dec_alloca<'a, 'ctx, 'env>(
 
     let ptr = env.builder.build_pointer_cast(
         alloca,
-        value.get_type().ptr_type(AddressSpace::Zero),
+        value.get_type().ptr_type(AddressSpace::Generic),
         "cast_to_i128_ptr",
     );
 
@@ -1688,7 +1694,7 @@ fn dec_binop_with_overflow<'a, 'ctx, 'env>(
     }
 
     env.builder
-        .build_load(return_type, return_alloca, "load_dec")
+        .new_build_load(return_type, return_alloca, "load_dec")
         .into_struct_value()
 }
 
@@ -1954,7 +1960,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                 );
 
                                 let roc_return_type = basic_type_from_layout(env, return_layout)
-                                    .ptr_type(AddressSpace::Zero);
+                                    .ptr_type(AddressSpace::Generic);
 
                                 let roc_return_alloca = env.builder.build_pointer_cast(
                                     zig_return_alloca,
@@ -2077,7 +2083,7 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
 
     let xored_arg = bd.build_xor(
         arg,
-        bd.build_load(int_type, shifted_alloca, shifted_name)
+        bd.new_build_load(int_type, shifted_alloca, shifted_name)
             .into_int_value(),
         "xor_arg_shifted",
     );
@@ -2085,7 +2091,7 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
     BasicValueEnum::IntValue(
         bd.build_int_sub(
             xored_arg,
-            bd.build_load(int_type, shifted_alloca, shifted_name)
+            bd.new_build_load(int_type, shifted_alloca, shifted_name)
                 .into_int_value(),
             "sub_xored_shifted",
         ),
@@ -2129,13 +2135,6 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
                     "f64_to_f32",
                 ),
                 (FloatWidth::F64, FloatWidth::F64) => arg.into(),
-                (FloatWidth::F128, FloatWidth::F128) => arg.into(),
-                (FloatWidth::F128, _) => {
-                    unimplemented!("I cannot handle F128 with Num.toFrac yet")
-                }
-                (_, FloatWidth::F128) => {
-                    unimplemented!("I cannot handle F128 with Num.toFrac yet")
-                }
             }
         }
         NumCeiling => {
