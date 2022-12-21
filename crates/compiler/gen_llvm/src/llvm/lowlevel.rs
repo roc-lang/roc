@@ -470,14 +470,14 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             // Str.getScalarUnsafe : Str, Nat -> { bytesParsed : Nat, scalar : U32 }
             arguments!(string, index);
 
+            let return_type = env.context.struct_type(
+                &[env.ptr_int().into(), env.context.i32_type().into()],
+                false,
+            );
+
             use roc_target::OperatingSystem::*;
             match env.target_info.operating_system {
                 Windows => {
-                    let return_type = env.context.struct_type(
-                        &[env.ptr_int().into(), env.context.i32_type().into()],
-                        false,
-                    );
-
                     let result = env.builder.build_alloca(return_type, "result");
 
                     call_void_bitcode_fn(
@@ -505,14 +505,12 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                         bitcode::STR_GET_SCALAR_UNSAFE,
                     );
 
-                    // on 32-bit targets, zig bitpacks the struct
-                    match env.target_info.ptr_width() {
-                        PtrWidth::Bytes8 => result,
-                        PtrWidth::Bytes4 => {
-                            let to = basic_type_from_layout(env, layout);
-                            complex_bitcast_check_size(env, result, to, "to_roc_record")
-                        }
-                    }
+                    // zig will pad the struct to the alignment boundary, or bitpack it on 32-bit
+                    // targets. So we have to cast it to the format that the roc code expects
+                    let alloca = env.builder.build_alloca(result.get_type(), "to_roc_record");
+                    env.builder.build_store(alloca, result);
+
+                    env.builder.build_load(return_type, alloca, "to_roc_record")
                 }
                 Wasi => unimplemented!(),
             }
