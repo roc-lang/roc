@@ -54,11 +54,11 @@ Html state : [
 
 RenderedHtml : [
     RenderedNone,
-    RenderedText JsIndex Str,
-    RenderedElement JsIndex Str Size (List RenderedAttribute) (List RenderedHtml),
+    RenderedText NodeId Str,
+    RenderedElement NodeId Str Size (List RenderedAttribute) (List RenderedHtml),
 ]
 
-JsIndex : Nat # Index of the corresponding real DOM node in the JavaScript `nodes` array
+NodeId : Nat
 Size : Nat
 
 Attribute state : [
