@@ -35,6 +35,7 @@ fn roc_getppid_windows_stub() callconv(.C) c_int {
 fn testing_roc_shm_open(name: *const i8, oflag: c_int, mode: c_uint) callconv(.C) c_int {
     return shm_open(name, oflag, mode);
 }
+
 fn testing_roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_int, offset: c_uint) callconv(.C) *anyopaque {
     return mmap(addr, length, prot, flags, fd, offset);
 }
@@ -48,6 +49,9 @@ comptime {
         @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
         @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
         @export(testing_roc_memcpy, .{ .name = "roc_memcpy", .linkage = .Strong });
+        @export(testing_roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
+        @export(testing_roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
+        @export(testing_roc_geppid, .{ .name = "roc_getppid", .linkage = .Strong });
 
         if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
             @export(testing_roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
