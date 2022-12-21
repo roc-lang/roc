@@ -854,34 +854,27 @@ fn scan_elf_dynamic_deps(
 
     let shared_lib_filename = shared_lib.file_name();
 
+    let dyn_data = &exec_data[dyn_offset..];
     let mut dyn_lib_index = 0;
     let mut shared_lib_index = None;
     loop {
-        let dyn_tag = u64::from_le_bytes(
-            <[u8; 8]>::try_from(
-                &exec_data[dyn_offset + dyn_lib_index * 16..dyn_offset + dyn_lib_index * 16 + 8],
-            )
-            .unwrap(),
-        );
+        let mut dyn_tag_bytes = [0u8; 8];
+        dyn_tag_bytes.copy_from_slice(&dyn_data[dyn_lib_index * 16..][..8]);
+        let dyn_tag = u64::from_le_bytes(dyn_tag_bytes);
+
         if dyn_tag == 0 {
             break;
         } else if dyn_tag == 1 {
-            let dynstr_off = u64::from_le_bytes(
-                <[u8; 8]>::try_from(
-                    &exec_data
-                        [dyn_offset + dyn_lib_index * 16 + 8..dyn_offset + dyn_lib_index * 16 + 16],
-                )
-                .unwrap(),
-            ) as usize;
+            let mut dynstr_off_bytes = [0u8; 8];
+            dynstr_off_bytes.copy_from_slice(&dyn_data[dyn_lib_index * 16 + 8..][..8]);
+            let dynstr_off = u64::from_le_bytes(dynstr_off_bytes) as usize;
+
             let c_buf: *const c_char = dynstr_data[dynstr_off..].as_ptr() as *const i8;
             let c_str = unsafe { CStr::from_ptr(c_buf) }.to_str().unwrap();
             if Path::new(c_str).file_name() == shared_lib_filename {
                 shared_lib_index = Some(dyn_lib_index);
                 if verbose {
-                    println!(
-                        "Found shared lib in dynamic table at index: {}",
-                        dyn_lib_index
-                    );
+                    println!("Found shared lib in dynamic table at index: {dyn_lib_index}",);
                 }
             }
         }
