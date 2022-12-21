@@ -1,11 +1,33 @@
+use rand::prelude::*;
 use roc_wasm_module::Value;
-use std::io::{self, Write};
+use std::io::{self, Read, StderrLock, StdoutLock, Write};
 use std::process::exit;
 
 pub const MODULE_NAME: &str = "wasi_snapshot_preview1";
 
 pub struct WasiDispatcher<'a> {
-    pub args: &'a [&'a String],
+    pub args: &'a [&'a [u8]],
+    pub rng: ThreadRng,
+    pub files: Vec<WasiFile>,
+}
+
+impl Default for WasiDispatcher<'_> {
+    fn default() -> Self {
+        WasiDispatcher::new(&[])
+    }
+}
+
+pub enum WasiFile {
+    ReadOnly(Vec<u8>),
+    WriteOnly(Vec<u8>),
+    ReadWrite(Vec<u8>),
+    HostSystemFile,
+}
+
+enum WriteLock<'a> {
+    StdOut(StdoutLock<'a>),
+    Stderr(StderrLock<'a>),
+    RegularFile(&'a mut Vec<u8>),
 }
 
 /// Implementation of WASI syscalls
@@ -13,8 +35,16 @@ pub struct WasiDispatcher<'a> {
 /// https://github.com/wasmerio/wasmer/blob/ef8d2f651ed29b4b06fdc2070eb8189922c54d82/lib/wasi/src/syscalls/mod.rs
 /// https://github.com/wasm3/wasm3/blob/045040a97345e636b8be4f3086e6db59cdcc785f/source/extra/wasi_core.h
 impl<'a> WasiDispatcher<'a> {
-    pub fn new(args: &'a [&'a String]) -> Self {
-        WasiDispatcher { args }
+    pub fn new(args: &'a [&'a [u8]]) -> Self {
+        WasiDispatcher {
+            args,
+            rng: thread_rng(),
+            files: vec![
+                WasiFile::HostSystemFile,
+                WasiFile::HostSystemFile,
+                WasiFile::HostSystemFile,
+            ],
+        }
     }
 
     pub fn dispatch(
@@ -35,7 +65,7 @@ impl<'a> WasiDispatcher<'a> {
                 for arg in self.args {
                     write_u32(memory, ptr_ptr_argv, ptr_argv_buf as u32);
                     let bytes_target = &mut memory[ptr_argv_buf..][..arg.len()];
-                    bytes_target.copy_from_slice(arg.as_bytes());
+                    bytes_target.copy_from_slice(arg);
                     memory[ptr_argv_buf + arg.len()] = 0; // C string zero termination
                     ptr_argv_buf += arg.len() + 1;
                     ptr_ptr_argv += 4;
@@ -61,8 +91,8 @@ impl<'a> WasiDispatcher<'a> {
             }
             "environ_get" => todo!("WASI {}({:?})", function_name, arguments),
             "environ_sizes_get" => todo!("WASI {}({:?})", function_name, arguments),
-            "clock_res_get" => success_code, // this dummy implementation seems to be good enough
-            "clock_time_get" => success_code, // this dummy implementation seems to be good enough
+            "clock_res_get" => success_code, // this dummy implementation seems to be good enough for some functions
+            "clock_time_get" => success_code,
             "fd_advise" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_allocate" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_close" => todo!("WASI {}({:?})", function_name, arguments),
@@ -74,18 +104,90 @@ impl<'a> WasiDispatcher<'a> {
             "fd_filestat_set_size" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_filestat_set_times" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_pread" => todo!("WASI {}({:?})", function_name, arguments),
-            "fd_prestat_get" => todo!("WASI {}({:?})", function_name, arguments),
-            "fd_prestat_dir_name" => todo!("WASI {}({:?})", function_name, arguments),
+            "fd_prestat_get" => {
+                // The preopened file descriptor to query
+                let fd = arguments[0].expect_i32().unwrap() as usize;
+                // ptr_buf: Where the metadata will be written
+                //  preopen type: 4 bytes, where 0=dir is the only one supported, it seems
+                //  preopen name length: 4 bytes
+                let ptr_buf = arguments[1].expect_i32().unwrap() as usize;
+                memory[ptr_buf..][..8].copy_from_slice(&0u64.to_le_bytes());
+                if fd < self.files.len() {
+                    success_code
+                } else {
+                    println!("WASI warning: file descriptor {} does not exist", fd);
+                    Some(Value::I32(Errno::Badf as i32))
+                }
+            }
+            "fd_prestat_dir_name" => {
+                // We're not giving names to any of our files so just return success
+                success_code
+            }
             "fd_pwrite" => todo!("WASI {}({:?})", function_name, arguments),
-            "fd_read" => todo!("WASI {}({:?})", function_name, arguments),
+            "fd_read" => {
+                use WasiFile::*;
+
+                // file descriptor
+                let fd = arguments[0].expect_i32().unwrap() as usize;
+                // Array of IO vectors
+                let ptr_iovs = arguments[1].expect_i32().unwrap() as usize;
+                // Length of array
+                let iovs_len = arguments[2].expect_i32().unwrap();
+                // Out param: number of bytes read
+                let ptr_nread = arguments[3].expect_i32().unwrap() as usize;
+
+                // https://man7.org/linux/man-pages/man2/readv.2.html
+                // struct iovec {
+                //     void  *iov_base;    /* Starting address */
+                //     size_t iov_len;     /* Number of bytes to transfer */
+                // };
+
+                let mut n_read: usize = 0;
+                match self.files.get(fd) {
+                    Some(ReadOnly(content) | ReadWrite(content)) => {
+                        for _ in 0..iovs_len {
+                            let iov_base = read_u32(memory, ptr_iovs) as usize;
+                            let iov_len = read_i32(memory, ptr_iovs + 4) as usize;
+                            let remaining = content.len() - n_read;
+                            let len = remaining.min(iov_len);
+                            if len == 0 {
+                                break;
+                            }
+                            memory[iov_base..][..len].copy_from_slice(&content[n_read..][..len]);
+                            n_read += len;
+                        }
+                    }
+                    Some(HostSystemFile) if fd == 0 => {
+                        let mut stdin = io::stdin();
+                        for _ in 0..iovs_len {
+                            let iov_base = read_u32(memory, ptr_iovs) as usize;
+                            let iov_len = read_i32(memory, ptr_iovs + 4) as usize;
+                            match stdin.read(&mut memory[iov_base..][..iov_len]) {
+                                Ok(n) => {
+                                    n_read += n;
+                                }
+                                Err(_) => {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    _ => return Some(Value::I32(Errno::Badf as i32)),
+                };
+
+                memory[ptr_nread..][..4].copy_from_slice(&(n_read as u32).to_le_bytes());
+                success_code
+            }
             "fd_readdir" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_renumber" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_seek" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_sync" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_tell" => todo!("WASI {}({:?})", function_name, arguments),
             "fd_write" => {
+                use WasiFile::*;
+
                 // file descriptor
-                let fd = arguments[0].expect_i32().unwrap();
+                let fd = arguments[0].expect_i32().unwrap() as usize;
                 // Array of IO vectors
                 let ptr_iovs = arguments[1].expect_i32().unwrap() as usize;
                 // Length of array
@@ -93,10 +195,18 @@ impl<'a> WasiDispatcher<'a> {
                 // Out param: number of bytes written
                 let ptr_nwritten = arguments[3].expect_i32().unwrap() as usize;
 
-                let mut write_lock = match fd {
-                    1 => Ok(io::stdout().lock()),
-                    2 => Err(io::stderr().lock()),
-                    _ => return Some(Value::I32(Errno::Inval as i32)),
+                // Grab a lock for stdout/stderr before the loop rather than re-acquiring over and over.
+                // Not really necessary for other files, but it's easier to use the same structure.
+                let mut write_lock = match self.files.get_mut(fd) {
+                    Some(HostSystemFile) => match fd {
+                        1 => WriteLock::StdOut(io::stdout().lock()),
+                        2 => WriteLock::Stderr(io::stderr().lock()),
+                        _ => return Some(Value::I32(Errno::Inval as i32)),
+                    },
+                    Some(WriteOnly(content) | ReadWrite(content)) => {
+                        WriteLock::RegularFile(content)
+                    }
+                    _ => return Some(Value::I32(Errno::Badf as i32)),
                 };
 
                 let mut n_written: i32 = 0;
@@ -119,11 +229,15 @@ impl<'a> WasiDispatcher<'a> {
                     let bytes = &memory[iov_base..][..iov_len as usize];
 
                     match &mut write_lock {
-                        Ok(stdout) => {
+                        WriteLock::StdOut(stdout) => {
                             n_written += stdout.write(bytes).unwrap() as i32;
                         }
-                        Err(stderr) => {
+                        WriteLock::Stderr(stderr) => {
                             n_written += stderr.write(bytes).unwrap() as i32;
+                        }
+                        WriteLock::RegularFile(content) => {
+                            content.extend_from_slice(bytes);
+                            n_written += bytes.len() as i32;
                         }
                     }
                 }
@@ -156,7 +270,16 @@ impl<'a> WasiDispatcher<'a> {
             }
             "proc_raise" => todo!("WASI {}({:?})", function_name, arguments),
             "sched_yield" => todo!("WASI {}({:?})", function_name, arguments),
-            "random_get" => todo!("WASI {}({:?})", function_name, arguments),
+            "random_get" => {
+                // A pointer to a buffer where the random bytes will be written
+                let ptr_buf = arguments[0].expect_i32().unwrap() as usize;
+                // The number of bytes that will be written
+                let buf_len = arguments[1].expect_i32().unwrap() as usize;
+                for i in 0..buf_len {
+                    memory[ptr_buf + i] = self.rng.gen();
+                }
+                success_code
+            }
             "sock_recv" => todo!("WASI {}({:?})", function_name, arguments),
             "sock_send" => todo!("WASI {}({:?})", function_name, arguments),
             "sock_shutdown" => todo!("WASI {}({:?})", function_name, arguments),

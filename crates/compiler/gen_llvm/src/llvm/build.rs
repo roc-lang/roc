@@ -53,12 +53,81 @@ use std::convert::TryInto;
 use std::path::Path;
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 
-use super::convert::RocUnion;
+use super::convert::{struct_type_from_union_layout, RocUnion};
 use super::intrinsics::{
     add_intrinsics, LLVM_FRAME_ADDRESS, LLVM_MEMSET_I32, LLVM_MEMSET_I64, LLVM_SETJMP,
     LLVM_STACK_SAVE,
 };
 use super::lowlevel::run_higher_order_low_level;
+
+pub(crate) trait BuilderExt<'ctx> {
+    fn new_build_struct_gep(
+        &self,
+        struct_type: StructType<'ctx>,
+        ptr: PointerValue<'ctx>,
+        index: u32,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, ()>;
+
+    fn new_build_load(
+        &self,
+        element_type: impl BasicType<'ctx>,
+        ptr: PointerValue<'ctx>,
+        name: &str,
+    ) -> BasicValueEnum<'ctx>;
+
+    unsafe fn new_build_in_bounds_gep(
+        &self,
+        element_type: impl BasicType<'ctx>,
+        ptr: PointerValue<'ctx>,
+        ordered_indexes: &[IntValue<'ctx>],
+        name: &str,
+    ) -> PointerValue<'ctx>;
+}
+
+impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
+    fn new_build_struct_gep(
+        &self,
+        struct_type: StructType<'ctx>,
+        ptr: PointerValue<'ctx>,
+        index: u32,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, ()> {
+        debug_assert_eq!(
+            ptr.get_type().get_element_type().into_struct_type(),
+            struct_type
+        );
+        self.build_struct_gep(ptr, index, name)
+    }
+
+    fn new_build_load(
+        &self,
+        element_type: impl BasicType<'ctx>,
+        ptr: PointerValue<'ctx>,
+        name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        debug_assert_eq!(
+            ptr.get_type().get_element_type(),
+            element_type.as_any_type_enum()
+        );
+        self.build_load(ptr, name)
+    }
+
+    unsafe fn new_build_in_bounds_gep(
+        &self,
+        element_type: impl BasicType<'ctx>,
+        ptr: PointerValue<'ctx>,
+        ordered_indexes: &[IntValue<'ctx>],
+        name: &str,
+    ) -> PointerValue<'ctx> {
+        debug_assert_eq!(
+            ptr.get_type().get_element_type(),
+            element_type.as_any_type_enum()
+        );
+
+        self.build_in_bounds_gep(ptr, ordered_indexes, name)
+    }
+}
 
 #[inline(always)]
 fn print_fn_verification_output() -> bool {
@@ -773,7 +842,10 @@ fn build_string_literal<'a, 'ctx, 'env>(
         let alloca = const_str_alloca_ptr(env, parent, ptr, number_of_elements, number_of_elements);
 
         match env.target_info.ptr_width() {
-            PtrWidth::Bytes4 => env.builder.build_load(alloca, "load_const_str"),
+            PtrWidth::Bytes4 => {
+                env.builder
+                    .new_build_load(zig_str_type(env), alloca, "load_const_str")
+            }
             PtrWidth::Bytes8 => alloca.into(),
         }
     }
@@ -977,7 +1049,7 @@ fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
     for (index, (field_layout, field_value)) in values {
         let field_ptr = env
             .builder
-            .build_struct_gep(struct_ptr, index as u32, "field_struct_gep")
+            .new_build_struct_gep(struct_type, struct_ptr, index as u32, "field_struct_gep")
             .unwrap();
 
         store_roc_value(env, field_layout, field_ptr, field_value);
@@ -1157,30 +1229,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
                     let field_layout = field_layouts[*index as usize];
                     use_roc_value(env, field_layout, field_value, "struct_field_tag")
                 }
-                (
-                    PointerValue(argument),
-                    Layout::Union(UnionLayout::NonNullableUnwrapped(fields)),
-                ) => {
-                    let struct_layout = Layout::struct_no_name_order(fields);
-                    let struct_type = basic_type_from_layout(env, &struct_layout);
-
-                    let cast_argument = env.builder.build_pointer_cast(
-                        argument,
-                        struct_type.ptr_type(AddressSpace::Generic),
-                        "cast_rosetree_like",
-                    );
-
-                    let ptr = env
-                        .builder
-                        .build_struct_gep(
-                            cast_argument,
-                            *index as u32,
-                            env.arena.alloc(format!("non_nullable_unwrapped_{}", index)),
-                        )
-                        .unwrap();
-
-                    env.builder.build_load(ptr, "load_rosetree_like")
-                }
                 (other, layout) => {
                     // potential cause: indexing into an unwrapped 1-element record/tag?
                     unreachable!(
@@ -1202,7 +1250,7 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
             union_layout,
         } => {
             // cast the argument bytes into the desired shape for this tag
-            let (argument, _structure_layout) = load_symbol_and_layout(scope, structure);
+            let (argument, structure_layout) = load_symbol_and_layout(scope, structure);
 
             match union_layout {
                 UnionLayout::NonRecursive(tag_layouts) => {
@@ -1215,7 +1263,8 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let opaque_data_ptr = env
                         .builder
-                        .build_struct_gep(
+                        .new_build_struct_gep(
+                            basic_type_from_layout(env, structure_layout).into_struct_type(),
                             argument.into_pointer_value(),
                             RocUnion::TAG_DATA_INDEX,
                             "get_opaque_data_ptr",
@@ -1230,7 +1279,12 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
 
                     let element_ptr = env
                         .builder
-                        .build_struct_gep(data_ptr, *index as _, "get_opaque_data_ptr")
+                        .new_build_struct_gep(
+                            struct_type.into_struct_type(),
+                            data_ptr,
+                            *index as _,
+                            "get_opaque_data_ptr",
+                        )
                         .unwrap();
 
                     load_roc_value(
@@ -1336,13 +1390,20 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
 
     let (field_types, field_values) = build_tag_fields(env, scope, tag_field_layouts, arguments);
 
+    let union_struct_type = struct_type_from_union_layout(env, union_layout);
+
     // Create the struct_type
     let raw_data_ptr = allocate_tag(env, parent, reuse_allocation, union_layout, tags);
     let struct_type = env.context.struct_type(&field_types, false);
 
     if union_layout.stores_tag_id_as_data(env.target_info) {
         let tag_id_ptr = builder
-            .build_struct_gep(raw_data_ptr, RocUnion::TAG_ID_INDEX, "tag_id_index")
+            .new_build_struct_gep(
+                union_struct_type,
+                raw_data_ptr,
+                RocUnion::TAG_ID_INDEX,
+                "tag_id_index",
+            )
             .unwrap();
 
         let tag_id_type = basic_type_from_layout(env, &tag_id_layout).into_int_type();
@@ -1351,7 +1412,12 @@ fn build_wrapped_tag<'a, 'ctx, 'env>(
             .build_store(tag_id_ptr, tag_id_type.const_int(tag_id as u64, false));
 
         let opaque_struct_ptr = builder
-            .build_struct_gep(raw_data_ptr, RocUnion::TAG_DATA_INDEX, "tag_data_index")
+            .new_build_struct_gep(
+                union_struct_type,
+                raw_data_ptr,
+                RocUnion::TAG_DATA_INDEX,
+                "tag_data_index",
+            )
             .unwrap();
 
         struct_pointer_from_fields(
@@ -1464,12 +1530,15 @@ fn build_struct<'a, 'ctx, 'env>(
         // The layout of the struct expects them to be dropped!
         let (field_expr, field_layout) = load_symbol_and_layout(scope, symbol);
         if !field_layout.is_dropped_because_empty() {
-            field_types.push(basic_type_from_layout(env, field_layout));
+            let field_type = basic_type_from_layout(env, field_layout);
+            field_types.push(field_type);
 
             if field_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
-                let field_value = env
-                    .builder
-                    .build_load(field_expr.into_pointer_value(), "load_tag_to_put_in_struct");
+                let field_value = env.builder.new_build_load(
+                    field_type,
+                    field_expr.into_pointer_value(),
+                    "load_tag_to_put_in_struct",
+                );
 
                 field_vals.push(field_value);
             } else {
@@ -1762,13 +1831,13 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
             debug_assert!(argument.is_pointer_value(), "{:?}", argument);
 
             let argument_ptr = argument.into_pointer_value();
-            get_tag_id_wrapped(env, argument_ptr)
+            get_tag_id_wrapped(env, *union_layout, argument_ptr)
         }
         UnionLayout::Recursive(_) => {
             let argument_ptr = argument.into_pointer_value();
 
             if union_layout.stores_tag_id_as_data(env.target_info) {
-                get_tag_id_wrapped(env, argument_ptr)
+                get_tag_id_wrapped(env, *union_layout, argument_ptr)
             } else {
                 tag_pointer_read_tag_id(env, argument_ptr)
             }
@@ -1799,7 +1868,7 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
                 env.builder.position_at_end(else_block);
 
                 let tag_id = if union_layout.stores_tag_id_as_data(env.target_info) {
-                    get_tag_id_wrapped(env, argument_ptr)
+                    get_tag_id_wrapped(env, *union_layout, argument_ptr)
                 } else {
                     tag_pointer_read_tag_id(env, argument_ptr)
                 };
@@ -1810,7 +1879,7 @@ pub fn get_tag_id<'a, 'ctx, 'env>(
             env.builder.position_at_end(cont_block);
 
             env.builder
-                .build_load(result, "load_result")
+                .new_build_load(tag_id_int_type, result, "load_result")
                 .into_int_value()
         }
         UnionLayout::NullableUnwrapped { nullable_id, .. } => {
@@ -1844,7 +1913,7 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
     );
 
     let elem_ptr = builder
-        .build_struct_gep(ptr, index as u32, "at_index_struct_gep")
+        .new_build_struct_gep(struct_type, ptr, index as u32, "at_index_struct_gep")
         .unwrap();
 
     let field_layout = field_layouts[index];
@@ -1878,7 +1947,7 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let struct_layout = Layout::struct_no_name_order(field_layouts);
-    let struct_type = basic_type_from_layout(env, &struct_layout);
+    let struct_type = basic_type_from_layout(env, &struct_layout).into_struct_type();
 
     let data_ptr = env.builder.build_pointer_cast(
         value,
@@ -1887,7 +1956,12 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
     );
 
     let elem_ptr = builder
-        .build_struct_gep(data_ptr, index as u32, "at_index_struct_gep_data")
+        .new_build_struct_gep(
+            struct_type,
+            data_ptr,
+            index as u32,
+            "at_index_struct_gep_data",
+        )
         .unwrap();
 
     let field_layout = field_layouts[index];
@@ -2096,8 +2170,12 @@ fn list_literal<'a, 'ctx, 'env>(
             let offset = env.ptr_int().const_int(zero_elements as _, false);
 
             let ptr = unsafe {
-                env.builder
-                    .build_in_bounds_gep(global, &[zero, offset], "first_element_pointer")
+                env.builder.new_build_in_bounds_gep(
+                    element_type,
+                    global,
+                    &[zero, offset],
+                    "first_element_pointer",
+                )
             };
 
             super::build_list::store_list(env, ptr, list_length_intval).into()
@@ -2119,7 +2197,9 @@ fn list_literal<'a, 'ctx, 'env>(
             // then replace the `undef`s with the values that we evaluate at runtime
             for (index, val) in runtime_evaluated_elements {
                 let index_val = ctx.i64_type().const_int(index as u64, false);
-                let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+                let elem_ptr = unsafe {
+                    builder.new_build_in_bounds_gep(element_type, ptr, &[index_val], "index")
+                };
 
                 builder.build_store(elem_ptr, val);
             }
@@ -2138,7 +2218,9 @@ fn list_literal<'a, 'ctx, 'env>(
                 ListLiteralElement::Symbol(symbol) => load_symbol(scope, symbol),
             };
             let index_val = ctx.i64_type().const_int(index as u64, false);
-            let elem_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index_val], "index") };
+            let elem_ptr = unsafe {
+                builder.new_build_in_bounds_gep(element_type, ptr, &[index_val], "index")
+            };
 
             store_roc_value(env, *element_layout, elem_ptr, val);
         }
@@ -2153,14 +2235,16 @@ pub fn load_roc_value<'a, 'ctx, 'env>(
     source: PointerValue<'ctx>,
     name: &str,
 ) -> BasicValueEnum<'ctx> {
+    let basic_type = basic_type_from_layout(env, &layout);
+
     if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
-        let alloca = entry_block_alloca_zerofill(env, basic_type_from_layout(env, &layout), name);
+        let alloca = entry_block_alloca_zerofill(env, basic_type, name);
 
         store_roc_value(env, layout, alloca, source.into());
 
         alloca.into()
     } else {
-        env.builder.build_load(source, name)
+        env.builder.new_build_load(basic_type, source, name)
     }
 }
 
@@ -2907,7 +2991,7 @@ fn complex_bitcast_from_bigger_than_to<'ctx>(
         name,
     );
 
-    builder.build_load(to_type_pointer, "cast_value")
+    builder.new_build_load(to_type, to_type_pointer, "cast_value")
 }
 
 fn complex_bitcast_to_bigger_than_from<'ctx>(
@@ -2934,21 +3018,30 @@ fn complex_bitcast_to_bigger_than_from<'ctx>(
     builder.build_store(from_type_pointer, from_value);
 
     // then read it back as a different type
-    builder.build_load(storage, "cast_value")
+    builder.new_build_load(to_type, storage, "cast_value")
 }
 
 /// get the tag id out of a pointer to a wrapped (i.e. stores the tag id at runtime) layout
 fn get_tag_id_wrapped<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    union_layout: UnionLayout<'a>,
     from_value: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
+    let union_struct_type = struct_type_from_union_layout(env, &union_layout);
+    let tag_id_type = basic_type_from_layout(env, &union_layout.tag_id_layout());
+
     let tag_id_ptr = env
         .builder
-        .build_struct_gep(from_value, RocUnion::TAG_ID_INDEX, "tag_id_ptr")
+        .new_build_struct_gep(
+            union_struct_type,
+            from_value,
+            RocUnion::TAG_ID_INDEX,
+            "tag_id_ptr",
+        )
         .unwrap();
 
     env.builder
-        .build_load(tag_id_ptr, "load_tag_id")
+        .new_build_load(tag_id_type, tag_id_ptr, "load_tag_id")
         .into_int_value()
 }
 
@@ -3325,7 +3418,9 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx, 'env>(
                     "bitcast_arg",
                 );
 
-                let loaded = env.builder.build_load(fastcc_ptr, "load_arg");
+                let loaded = env
+                    .builder
+                    .new_build_load(fastcc_type, fastcc_ptr, "load_arg");
                 arguments_for_call.push(loaded);
             } else {
                 let as_cc_type = env.builder.build_pointer_cast(
@@ -3441,9 +3536,11 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
         } else {
             match layout {
                 Layout::Builtin(Builtin::List(_)) => {
-                    let loaded = env
-                        .builder
-                        .build_load(arg.into_pointer_value(), "load_list_pointer");
+                    let loaded = env.builder.new_build_load(
+                        arg_type,
+                        arg.into_pointer_value(),
+                        "load_list_pointer",
+                    );
                     let cast =
                         complex_bitcast_check_size(env, loaded, fastcc_type, "to_fastcc_type_1");
                     arguments_for_call.push(cast);
@@ -3541,6 +3638,15 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         Linkage::External,
     );
 
+    let c_abi_roc_str_type = env.context.struct_type(
+        &[
+            env.context.i8_type().ptr_type(AddressSpace::Generic).into(),
+            env.ptr_int().into(),
+            env.ptr_int().into(),
+        ],
+        false,
+    );
+
     // a temporary solution to be able to pass RocStr by-value from a host language.
     {
         let extra = match cc_return {
@@ -3559,7 +3665,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                 // if ret_typ is a pointer type. We need the base type here.
                 let ret_typ = c_function.get_type().get_param_types()[i + extra];
                 let ret_base_typ = if ret_typ.is_pointer_type() {
-                    ret_typ.into_pointer_type().get_element_type()
+                    c_abi_roc_str_type.as_any_type_enum()
                 } else {
                     ret_typ.as_any_type_enum()
                 };
@@ -3614,8 +3720,9 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
     let it = params
         .iter()
         .zip(param_types)
+        .zip(arguments)
         .enumerate()
-        .map(|(i, (arg, fastcc_type))| {
+        .map(|(i, ((arg, fastcc_type), layout))| {
             let arg_type = arg.get_type();
             if arg_type == *fastcc_type {
                 // the C and Fast calling conventions agree
@@ -3629,13 +3736,18 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                         env.target_info.architecture,
                         roc_target::Architecture::X86_32 | roc_target::Architecture::X86_64
                     ) {
+                        let c_abi_type = match layout {
+                            Layout::Builtin(Builtin::Str | Builtin::List(_)) => c_abi_roc_str_type,
+                            _ => todo!("figure out what the C type is"),
+                        };
+
                         let byval = context.create_type_attribute(
                             Attribute::get_named_enum_kind_id("byval"),
-                            arg_type.into_pointer_type().get_element_type(),
+                            c_abi_type.as_any_type_enum(),
                         );
                         let nonnull = context.create_type_attribute(
                             Attribute::get_named_enum_kind_id("nonnull"),
-                            arg_type.into_pointer_type().get_element_type(),
+                            c_abi_type.as_any_type_enum(),
                         );
                         // C return pointer goes at the beginning of params, and we must skip it if it exists.
                         let returns_pointer = matches!(cc_return, CCReturn::ByPointer);
@@ -3651,7 +3763,8 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                         "bitcast_arg",
                     );
 
-                    env.builder.build_load(fastcc_ptr, "load_arg")
+                    env.builder
+                        .new_build_load(*fastcc_type, fastcc_ptr, "load_arg")
                 } else {
                     complex_bitcast_check_size(env, *arg, *fastcc_type, "to_fastcc_type_2")
                 }
@@ -3668,9 +3781,11 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                 env.builder.build_return(Some(&value));
             }
             RocReturn::ByPointer => {
-                let loaded = env
-                    .builder
-                    .build_load(value.into_pointer_value(), "load_result");
+                let loaded = env.builder.new_build_load(
+                    return_type,
+                    value.into_pointer_value(),
+                    "load_result",
+                );
                 env.builder.build_return(Some(&loaded));
             }
         },
@@ -3684,9 +3799,11 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
                     // TODO: ideally, in this case, we should pass the C return pointer directly
                     // into the call_roc_function rather than forcing an extra alloca, load, and
                     // store!
-                    let value = env
-                        .builder
-                        .build_load(value.into_pointer_value(), "load_roc_result");
+                    let value = env.builder.new_build_load(
+                        return_type,
+                        value.into_pointer_value(),
+                        "load_roc_result",
+                    );
                     env.builder.build_store(out_ptr, value);
                 }
             }
@@ -3823,13 +3940,15 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
         // Anywhere else, use the LLVM intrinsic.
         // https://llvm.org/docs/ExceptionHandling.html#llvm-eh-sjlj-setjmp
 
+        let buf_type = env
+            .context
+            .i8_type()
+            .ptr_type(AddressSpace::Generic)
+            .array_type(5);
+
         let jmp_buf_i8p_arr = env.builder.build_pointer_cast(
             jmp_buf,
-            env.context
-                .i8_type()
-                .ptr_type(AddressSpace::Generic)
-                .array_type(5)
-                .ptr_type(AddressSpace::Generic),
+            buf_type.ptr_type(AddressSpace::Generic),
             "jmp_buf [5 x i8*]",
         );
 
@@ -3842,7 +3961,8 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
         let zero = env.context.i32_type().const_zero();
         let fa_index = env.context.i32_type().const_zero();
         let fa = unsafe {
-            env.builder.build_in_bounds_gep(
+            env.builder.new_build_in_bounds_gep(
+                buf_type,
                 jmp_buf_i8p_arr,
                 &[zero, fa_index],
                 "frame address index",
@@ -3855,8 +3975,12 @@ pub fn build_setjmp_call<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> BasicValu
         // usage. But for whatever reason, on x86, it appears we need a stacksave in those words.
         let ss_index = env.context.i32_type().const_int(2, false);
         let ss = unsafe {
-            env.builder
-                .build_in_bounds_gep(jmp_buf_i8p_arr, &[zero, ss_index], "name")
+            env.builder.new_build_in_bounds_gep(
+                buf_type,
+                jmp_buf_i8p_arr,
+                &[zero, ss_index],
+                "name",
+            )
         };
         let stack_save = env.call_intrinsic(LLVM_STACK_SAVE, &[]);
         env.builder.build_store(ss, stack_save);
@@ -3957,7 +4081,8 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
             let v1 = call_result_type.const_zero();
 
             // tag must be non-zero, indicating failure
-            let tag = builder.build_load(error_tag_ptr, "load_panic_tag");
+            let tag =
+                builder.new_build_load(env.context.i64_type(), error_tag_ptr, "load_panic_tag");
 
             let v2 = builder.build_insert_value(v1, tag, 0, "set_error").unwrap();
 
@@ -3974,7 +4099,11 @@ fn set_jump_and_catch_long_jump<'a, 'ctx, 'env>(
 
     env.builder.position_at_end(cont_block);
 
-    builder.build_load(result_alloca, "set_jump_and_catch_long_jump_load_result")
+    builder.new_build_load(
+        call_result_type,
+        result_alloca,
+        "set_jump_and_catch_long_jump_load_result",
+    )
 }
 
 fn make_exception_catcher<'a, 'ctx, 'env>(
@@ -4024,6 +4153,8 @@ fn make_good_roc_result<'a, 'ctx, 'env>(
     let context = env.context;
     let builder = env.builder;
 
+    let return_type = basic_type_from_layout(env, &return_layout);
+
     let v1 = roc_call_result_type(env, basic_type_from_layout(env, &return_layout)).const_zero();
 
     let v2 = builder
@@ -4031,7 +4162,8 @@ fn make_good_roc_result<'a, 'ctx, 'env>(
         .unwrap();
 
     let v3 = if return_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
-        let loaded = env.builder.build_load(
+        let loaded = env.builder.new_build_load(
+            return_type,
             return_value.into_pointer_value(),
             "load_call_result_passed_by_ptr",
         );
@@ -4622,7 +4754,8 @@ fn build_closure_caller<'a, 'ctx, 'env>(
         if param.is_pointer_value()
             && !layout.is_passed_by_reference(env.layout_interner, env.target_info)
         {
-            *param = builder.build_load(param.into_pointer_value(), "load_param");
+            let basic_type = basic_type_from_layout(env, layout);
+            *param = builder.new_build_load(basic_type, param.into_pointer_value(), "load_param");
         }
     }
 
@@ -4922,7 +5055,8 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             debug_assert_eq!(roc_function.get_call_conventions(), FAST_CALL_CONV);
             call.set_call_convention(FAST_CALL_CONV);
 
-            env.builder.build_load(result_alloca, "load_result")
+            env.builder
+                .new_build_load(result_type, result_alloca, "load_result")
         }
         RocReturn::ByPointer => {
             let it = arguments.iter().map(|x| (*x).into());
@@ -4946,8 +5080,11 @@ pub fn call_roc_function<'a, 'ctx, 'env>(
             if result_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
                 result_alloca.into()
             } else {
-                env.builder
-                    .build_load(result_alloca, "return_by_pointer_load_result")
+                env.builder.new_build_load(
+                    result_type,
+                    result_alloca,
+                    "return_by_pointer_load_result",
+                )
             }
         }
         RocReturn::Return => {
@@ -5154,31 +5291,24 @@ pub struct FunctionSpec<'ctx> {
     pub typ: FunctionType<'ctx>,
     call_conv: u32,
 
-    /// Index (0-based) of return-by-pointer parameter, if it exists.
     /// We only care about this for C-call-conv functions, because this may take
     /// ownership of a register due to the convention. For example, on AArch64,
     /// values returned-by-pointer use the x8 register.
     /// But for internal functions we don't need to worry about that and we don't
     /// want the convention, since it might eat a register and cause a spill!
-    cconv_sret_parameter: Option<u32>,
+    cconv_stack_return_type: Option<BasicTypeEnum<'ctx>>,
 }
 
 impl<'ctx> FunctionSpec<'ctx> {
     fn attach_attributes(&self, ctx: &Context, fn_val: FunctionValue<'ctx>) {
         fn_val.set_call_conventions(self.call_conv);
 
-        if let Some(param_index) = self.cconv_sret_parameter {
+        if let Some(stack_return_type) = self.cconv_stack_return_type {
             // Indicate to LLVM that this argument holds the return value of the function.
             let sret_attribute_id = Attribute::get_named_enum_kind_id("sret");
             debug_assert!(sret_attribute_id > 0);
-            let ret_typ = self.typ.get_param_types()[param_index as usize];
-            // if ret_typ is a pointer type. We need the base type here.
-            let ret_base_typ = if ret_typ.is_pointer_type() {
-                ret_typ.into_pointer_type().get_element_type()
-            } else {
-                ret_typ.as_any_type_enum()
-            };
-            let sret_attribute = ctx.create_type_attribute(sret_attribute_id, ret_base_typ);
+            let sret_attribute =
+                ctx.create_type_attribute(sret_attribute_id, stack_return_type.as_any_type_enum());
             fn_val.add_attribute(AttributeLoc::Param(0), sret_attribute);
         }
     }
@@ -5200,7 +5330,11 @@ impl<'ctx> FunctionSpec<'ctx> {
                 arguments.extend(argument_types);
 
                 let arguments = function_arguments(env, &arguments);
-                (env.context.void_type().fn_type(&arguments, false), Some(0))
+
+                (
+                    env.context.void_type().fn_type(&arguments, false),
+                    Some(return_type.unwrap()),
+                )
             }
             CCReturn::Return => {
                 let arguments = function_arguments(env, argument_types);
@@ -5215,7 +5349,7 @@ impl<'ctx> FunctionSpec<'ctx> {
         Self {
             typ,
             call_conv: C_CALL_CONV,
-            cconv_sret_parameter: opt_sret_parameter,
+            cconv_stack_return_type: opt_sret_parameter,
         }
     }
 
@@ -5241,7 +5375,7 @@ impl<'ctx> FunctionSpec<'ctx> {
         Self {
             typ,
             call_conv: FAST_CALL_CONV,
-            cconv_sret_parameter: None,
+            cconv_stack_return_type: None,
         }
     }
 
@@ -5249,7 +5383,7 @@ impl<'ctx> FunctionSpec<'ctx> {
         Self {
             typ: fn_type,
             call_conv: FAST_CALL_CONV,
-            cconv_sret_parameter: None,
+            cconv_stack_return_type: None,
         }
     }
 
@@ -5259,7 +5393,7 @@ impl<'ctx> FunctionSpec<'ctx> {
         Self {
             typ: fn_type,
             call_conv: C_CALL_CONV,
-            cconv_sret_parameter: None,
+            cconv_stack_return_type: None,
         }
     }
 }
@@ -5424,9 +5558,11 @@ fn build_foreign_symbol<'a, 'ctx, 'env>(
                         let return_value = match cc_return {
                             CCReturn::Return => call.try_as_basic_value().left().unwrap(),
 
-                            CCReturn::ByPointer => {
-                                env.builder.build_load(return_pointer, "read_result")
-                            }
+                            CCReturn::ByPointer => env.builder.new_build_load(
+                                return_type,
+                                return_pointer,
+                                "read_result",
+                            ),
                             CCReturn::Void => return_type.const_zero(),
                         };
 
@@ -5472,7 +5608,8 @@ fn define_global_str_literal_ptr<'a, 'ctx, 'env>(
 
     // a pointer to the first actual data (skipping over the refcount)
     let ptr = unsafe {
-        env.builder.build_in_bounds_gep(
+        env.builder.new_build_in_bounds_gep(
+            env.context.i8_type(),
             ptr,
             &[env
                 .ptr_int()
@@ -5611,7 +5748,7 @@ pub fn add_func<'ctx>(
     fn_val
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum WhenRecursive<'a> {
     Unreachable,
     Loop(UnionLayout<'a>),

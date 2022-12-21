@@ -3,7 +3,7 @@ Module {
     header: Platform(
         PlatformHeader {
             before_name: [],
-            name: @9-21 PackagePath(
+            name: @9-21 PackageName(
                 "foo/barbaz",
             ),
             requires: KeywordItem {
@@ -52,7 +52,7 @@ Module {
                     @87-99 PackageEntry {
                         shorthand: "foo",
                         spaces_after_shorthand: [],
-                        package_path: @92-99 PackagePath(
+                        package_name: @92-99 PackageName(
                             "./foo",
                         ),
                     },

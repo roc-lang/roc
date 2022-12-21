@@ -1,4 +1,4 @@
-app "expects"
+app "expects-test"
     packages { pf: "zig-platform/main.roc" }
     imports []
     provides [main] to pf

@@ -1,4 +1,4 @@
-use crate::llvm::build::Env;
+use crate::llvm::build::{BuilderExt, Env};
 use bumpalo::collections::Vec;
 use inkwell::context::Context;
 use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
@@ -53,18 +53,16 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     }
 }
 
-pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
+pub fn struct_type_from_union_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     union_layout: &UnionLayout<'_>,
-) -> BasicTypeEnum<'ctx> {
+) -> StructType<'ctx> {
     use UnionLayout::*;
 
     match union_layout {
         NonRecursive(tags) => {
-            //
             RocUnion::tagged_from_slices(env.layout_interner, env.context, tags, env.target_info)
                 .struct_type()
-                .into()
         }
         Recursive(tags)
         | NullableWrapped {
@@ -78,8 +76,6 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
                     env.target_info,
                 )
                 .struct_type()
-                .ptr_type(AddressSpace::Generic)
-                .into()
             } else {
                 RocUnion::untagged_from_slices(
                     env.layout_interner,
@@ -88,8 +84,6 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
                     env.target_info,
                 )
                 .struct_type()
-                .ptr_type(AddressSpace::Generic)
-                .into()
             }
         }
         NullableUnwrapped { other_fields, .. } => RocUnion::untagged_from_slices(
@@ -98,18 +92,31 @@ pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
             &[other_fields],
             env.target_info,
         )
-        .struct_type()
-        .ptr_type(AddressSpace::Generic)
-        .into(),
+        .struct_type(),
         NonNullableUnwrapped(fields) => RocUnion::untagged_from_slices(
             env.layout_interner,
             env.context,
             &[fields],
             env.target_info,
         )
-        .struct_type()
-        .ptr_type(AddressSpace::Generic)
-        .into(),
+        .struct_type(),
+    }
+}
+
+pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    union_layout: &UnionLayout<'_>,
+) -> BasicTypeEnum<'ctx> {
+    use UnionLayout::*;
+
+    let struct_type = struct_type_from_union_layout(env, union_layout);
+
+    match union_layout {
+        NonRecursive(_) => struct_type.into(),
+        Recursive(_)
+        | NonNullableUnwrapped(_)
+        | NullableWrapped { .. }
+        | NullableUnwrapped { .. } => struct_type.ptr_type(AddressSpace::Generic).into(),
     }
 }
 
@@ -363,7 +370,12 @@ impl<'ctx> RocUnion<'ctx> {
 
         let data_buffer = env
             .builder
-            .build_struct_gep(tag_alloca, Self::TAG_DATA_INDEX, "data_buffer")
+            .new_build_struct_gep(
+                self.struct_type(),
+                tag_alloca,
+                Self::TAG_DATA_INDEX,
+                "data_buffer",
+            )
             .unwrap();
 
         let cast_pointer = env.builder.build_pointer_cast(
@@ -389,7 +401,12 @@ impl<'ctx> RocUnion<'ctx> {
 
             let tag_id_ptr = env
                 .builder
-                .build_struct_gep(tag_alloca, Self::TAG_ID_INDEX, "tag_id_ptr")
+                .new_build_struct_gep(
+                    self.struct_type(),
+                    tag_alloca,
+                    Self::TAG_ID_INDEX,
+                    "tag_id_ptr",
+                )
                 .unwrap();
 
             let tag_id = tag_id_type.const_int(tag_id as u64, false);
@@ -398,7 +415,7 @@ impl<'ctx> RocUnion<'ctx> {
         }
 
         env.builder
-            .build_load(tag_alloca, "load_tag")
+            .new_build_load(self.struct_type(), tag_alloca, "load_tag")
             .into_struct_value()
     }
 }
@@ -428,6 +445,30 @@ pub fn zig_has_tag_id_type<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructT
 
     env.context
         .struct_type(&[env.context.bool_type().into(), u8_ptr_t.into()], false)
+}
+
+pub fn zig_num_parse_result_type<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    type_name: &str,
+) -> StructType<'ctx> {
+    let name = format!("num.NumParseResult({type_name})");
+
+    match env.module.get_struct_type(&name) {
+        Some(zig_type) => zig_type,
+        None => panic!("zig does not define the `{name}` type!"),
+    }
+}
+
+pub fn zig_to_int_checked_result_type<'a, 'ctx, 'env>(
+    env: &Env<'a, 'ctx, 'env>,
+    type_name: &str,
+) -> StructType<'ctx> {
+    let name = format!("num.ToIntCheckedResult({type_name})");
+
+    match env.module.get_struct_type(&name) {
+        Some(zig_type) => zig_type,
+        None => panic!("zig does not define the `{name}` type!"),
+    }
 }
 
 pub fn zig_with_overflow_roc_dec<'a, 'ctx, 'env>(env: &Env<'a, 'ctx, 'env>) -> StructType<'ctx> {

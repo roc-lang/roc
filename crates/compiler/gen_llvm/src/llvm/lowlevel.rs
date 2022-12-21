@@ -24,7 +24,7 @@ use crate::llvm::{
     },
     build::{
         complex_bitcast_check_size, create_entry_block_alloca, function_value_by_func_spec,
-        load_roc_value, roc_function_call, RocReturn,
+        load_roc_value, roc_function_call, BuilderExt, RocReturn,
     },
     build_list::{
         list_append_unsafe, list_capacity, list_concat, list_drop_at, list_get_unsafe, list_len,
@@ -33,7 +33,9 @@ use crate::llvm::{
         pass_update_mode,
     },
     compare::{generic_eq, generic_neq},
-    convert::{self, basic_type_from_layout},
+    convert::{
+        self, basic_type_from_layout, zig_num_parse_result_type, zig_to_int_checked_result_type,
+    },
     intrinsics::{
         LLVM_ADD_SATURATED, LLVM_ADD_WITH_OVERFLOW, LLVM_CEILING, LLVM_COS, LLVM_FABS, LLVM_FLOOR,
         LLVM_LOG, LLVM_MUL_WITH_OVERFLOW, LLVM_POW, LLVM_ROUND, LLVM_SIN, LLVM_SQRT,
@@ -225,14 +227,23 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                             intrinsic,
                         ),
                         None => {
-                            let return_type = zig_function_type.get_param_types()[0]
-                                .into_pointer_type()
-                                .get_element_type()
-                                .into_struct_type()
-                                .into();
+                            let return_type_name = match number_layout {
+                                Layout::Builtin(Builtin::Int(int_width)) => int_width.type_name(),
+                                Layout::Builtin(Builtin::Decimal) => {
+                                    // zig picks 128 for dec.RocDec
+                                    "i128"
+                                }
+                                _ => unreachable!(),
+                            };
 
-                            let zig_return_alloca =
-                                create_entry_block_alloca(env, parent, return_type, "str_to_num");
+                            let return_type = zig_num_parse_result_type(env, return_type_name);
+
+                            let zig_return_alloca = create_entry_block_alloca(
+                                env,
+                                parent,
+                                return_type.into(),
+                                "str_to_num",
+                            );
 
                             let (a, b) =
                                 pass_list_or_string_to_zig_32bit(env, string.into_struct_value());
@@ -257,7 +268,31 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                     }
                 }
                 PtrWidth::Bytes8 => {
-                    call_bitcode_fn_fixing_for_convention(env, &[string], layout, intrinsic)
+                    let cc_return_by_pointer = match number_layout {
+                        Layout::Builtin(Builtin::Int(int_width)) => {
+                            (int_width.stack_size() as usize > env.target_info.ptr_size())
+                                .then_some(int_width.type_name())
+                        }
+                        Layout::Builtin(Builtin::Decimal) => {
+                            // zig picks 128 for dec.RocDec
+                            Some("i128")
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(type_name) = cc_return_by_pointer {
+                        let bitcode_return_type = zig_num_parse_result_type(env, type_name);
+
+                        call_bitcode_fn_fixing_for_convention(
+                            env,
+                            bitcode_return_type,
+                            &[string],
+                            layout,
+                            intrinsic,
+                        )
+                    } else {
+                        call_bitcode_fn(env, &[string], intrinsic)
+                    }
                 }
             };
 
@@ -438,16 +473,10 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             use roc_target::OperatingSystem::*;
             match env.target_info.operating_system {
                 Windows => {
-                    // we have to go digging to find the return type
-                    let function = env
-                        .module
-                        .get_function(bitcode::STR_GET_SCALAR_UNSAFE)
-                        .unwrap();
-
-                    let return_type = function.get_type().get_param_types()[0]
-                        .into_pointer_type()
-                        .get_element_type()
-                        .into_struct_type();
+                    let return_type = env.context.struct_type(
+                        &[env.ptr_int().into(), env.context.i32_type().into()],
+                        false,
+                    );
 
                     let result = env.builder.build_alloca(return_type, "result");
 
@@ -464,7 +493,8 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                         "cast",
                     );
 
-                    env.builder.build_load(cast_result, "load_result")
+                    env.builder
+                        .new_build_load(return_type, cast_result, "load_result")
                 }
                 Unix => {
                     let result = call_str_bitcode_fn(
@@ -1693,7 +1723,7 @@ fn dec_binop_with_overflow<'a, 'ctx, 'env>(
     }
 
     env.builder
-        .build_load(return_alloca, "load_dec")
+        .new_build_load(return_type, return_alloca, "load_dec")
         .into_struct_value()
 }
 
@@ -1939,16 +1969,15 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                 intrinsic,
                             ),
                             None => {
-                                let return_type = zig_function_type.get_param_types()[0]
-                                    .into_pointer_type()
-                                    .get_element_type()
-                                    .into_struct_type()
-                                    .into();
+                                let return_type = zig_to_int_checked_result_type(
+                                    env,
+                                    target_int_width.type_name(),
+                                );
 
                                 let zig_return_alloca = create_entry_block_alloca(
                                     env,
                                     parent,
-                                    return_type,
+                                    return_type.into(),
                                     "num_to_int",
                                 );
 
@@ -1972,14 +2001,20 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                         }
                     }
                     PtrWidth::Bytes8 => {
-                        // call_bitcode_fn_fixing_for_convention(env, &[string], layout, intrinsic)
+                        if target_int_width.stack_size() as usize > env.target_info.ptr_size() {
+                            let bitcode_return_type =
+                                zig_to_int_checked_result_type(env, target_int_width.type_name());
 
-                        call_bitcode_fn_fixing_for_convention(
-                            env,
-                            &[arg.into()],
-                            return_layout,
-                            intrinsic,
-                        )
+                            call_bitcode_fn_fixing_for_convention(
+                                env,
+                                bitcode_return_type,
+                                &[arg.into()],
+                                return_layout,
+                                intrinsic,
+                            )
+                        } else {
+                            call_bitcode_fn(env, &[arg.into()], intrinsic)
+                        }
                     }
                 };
 
@@ -2082,15 +2117,19 @@ fn int_abs_with_overflow<'a, 'ctx, 'env>(
 
     let xored_arg = bd.build_xor(
         arg,
-        bd.build_load(shifted_alloca, shifted_name).into_int_value(),
+        bd.new_build_load(int_type, shifted_alloca, shifted_name)
+            .into_int_value(),
         "xor_arg_shifted",
     );
 
-    BasicValueEnum::IntValue(bd.build_int_sub(
-        xored_arg,
-        bd.build_load(shifted_alloca, shifted_name).into_int_value(),
-        "sub_xored_shifted",
-    ))
+    BasicValueEnum::IntValue(
+        bd.build_int_sub(
+            xored_arg,
+            bd.new_build_load(int_type, shifted_alloca, shifted_name)
+                .into_int_value(),
+            "sub_xored_shifted",
+        ),
+    )
 }
 
 fn build_float_unary_op<'a, 'ctx, 'env>(

@@ -9,8 +9,8 @@ use roc_parse::{
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
-        ModuleName, PackageEntry, PackagePath, PlatformHeader, PlatformRequires, ProvidesTo, To,
-        TypedIdent,
+        ModuleName, PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires,
+        ProvidesTo, To, TypedIdent,
     },
     ident::UppercaseIdent,
 };
@@ -290,6 +290,12 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                 imports: header.imports.remove_spaces(arena),
                 provides: header.provides.remove_spaces(arena),
             }),
+            Header::Package(header) => Header::Package(PackageHeader {
+                before_name: &[],
+                name: header.name.remove_spaces(arena),
+                exposes: header.exposes.remove_spaces(arena),
+                packages: header.packages.remove_spaces(arena),
+            }),
             Header::Platform(header) => Header::Platform(PlatformHeader {
                 before_name: &[],
                 name: header.name.remove_spaces(arena),
@@ -349,7 +355,7 @@ impl<'a> RemoveSpaces<'a> for ModuleName<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for PackagePath<'a> {
+impl<'a> RemoveSpaces<'a> for PackageName<'a> {
     fn remove_spaces(&self, _arena: &'a Bump) -> Self {
         *self
     }
@@ -394,7 +400,7 @@ impl<'a> RemoveSpaces<'a> for PackageEntry<'a> {
         PackageEntry {
             shorthand: self.shorthand,
             spaces_after_shorthand: &[],
-            package_path: self.package_path.remove_spaces(arena),
+            package_name: self.package_name.remove_spaces(arena),
         }
     }
 }
