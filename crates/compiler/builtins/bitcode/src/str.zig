@@ -52,7 +52,7 @@ pub const RocStr = extern struct {
     // small string, and returns a (pointer, len) tuple which points to them.
     pub fn init(bytes_ptr: [*]const u8, length: usize) RocStr {
         var result = RocStr.allocate(length);
-        @memcpy(result.asU8ptr(), bytes_ptr, length);
+        @memcpy(result.asU8ptrMut(), bytes_ptr, length);
 
         return result;
     }
@@ -83,7 +83,7 @@ pub const RocStr = extern struct {
         } else {
             var string = RocStr.empty();
 
-            string.asU8ptr()[@sizeOf(RocStr) - 1] = @intCast(u8, length) | 0b1000_0000;
+            string.asU8ptrMut()[@sizeOf(RocStr) - 1] = @intCast(u8, length) | 0b1000_0000;
 
             return string;
         }
@@ -190,12 +190,12 @@ pub const RocStr = extern struct {
         const old_length = self.len();
         const delta_length = new_length - old_length;
 
-        const result = RocStr.allocate(new_length);
+        var result = RocStr.allocate(new_length);
 
         // transfer the memory
 
         const source_ptr = self.asU8ptr();
-        const dest_ptr = result.asU8ptr();
+        const dest_ptr = result.asU8ptrMut();
 
         @memcpy(dest_ptr, source_ptr, old_length);
         @memset(dest_ptr + old_length, 0, delta_length);
@@ -230,7 +230,7 @@ pub const RocStr = extern struct {
 
     pub fn setLen(self: *RocStr, length: usize) void {
         if (self.isSmallStr()) {
-            self.asU8ptr()[@sizeOf(RocStr) - 1] = @intCast(u8, length) | 0b1000_0000;
+            self.asU8ptrMut()[@sizeOf(RocStr) - 1] = @intCast(u8, length) | 0b1000_0000;
         } else {
             self.str_len = length;
         }
@@ -320,23 +320,29 @@ pub const RocStr = extern struct {
         return (ptr - 1)[0] == utils.REFCOUNT_ONE;
     }
 
-    pub fn asSlice(self: RocStr) []u8 {
+    pub fn asSlice(self: *const RocStr) []const u8 {
         return self.asU8ptr()[0..self.len()];
     }
 
-    pub fn asSliceWithCapacity(self: RocStr) []u8 {
+    pub fn asSliceWithCapacity(self: *const RocStr) []const u8 {
         return self.asU8ptr()[0..self.getCapacity()];
     }
 
-    pub fn asU8ptr(self: RocStr) [*]u8 {
+    pub fn asSliceWithCapacityMut(self: *RocStr) []u8 {
+        return self.asU8ptrMut()[0..self.getCapacity()];
+    }
 
-        // Since this conditional would be prone to branch misprediction,
-        // make sure it will compile to a cmov.
-        // return if (self.isSmallStr()) (&@bitCast([@sizeOf(RocStr)]u8, self)) else (@ptrCast([*]u8, self.str_bytes));
+    pub fn asU8ptr(self: *const RocStr) [*]const u8 {
         if (self.isSmallStr()) {
-            const as_int = @ptrToInt(&self);
-            const as_ptr = @intToPtr([*]u8, as_int);
-            return as_ptr;
+            return @ptrCast([*]const u8, self);
+        } else {
+            return @ptrCast([*]const u8, self.str_bytes);
+        }
+    }
+
+    pub fn asU8ptrMut(self: *RocStr) [*]u8 {
+        if (self.isSmallStr()) {
+            return @ptrCast([*]u8, self);
         } else {
             return @ptrCast([*]u8, self.str_bytes);
         }
@@ -1402,7 +1408,7 @@ pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
     const bytes_ptr = string.asU8ptr();
 
     var ret_string = RocStr.allocate(count * bytes_len);
-    var ret_string_ptr = ret_string.asU8ptr();
+    var ret_string_ptr = ret_string.asU8ptrMut();
 
     var i: usize = 0;
     while (i < count) : (i += 1) {
@@ -1542,9 +1548,8 @@ fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
     } else {
         const combined_length = arg1.len() + arg2.len();
 
-        const result = arg1.reallocate(combined_length);
-
-        @memcpy(result.asU8ptr() + arg1.len(), arg2.asU8ptr(), arg2.len());
+        var result = arg1.reallocate(combined_length);
+        @memcpy(result.asU8ptrMut() + arg1.len(), arg2.asU8ptr(), arg2.len());
 
         return result;
     }
@@ -1615,7 +1620,7 @@ fn strJoinWith(list: RocListStr, separator: RocStr) RocStr {
         total_size += separator.len() * (len - 1);
 
         var result = RocStr.allocate(total_size);
-        var result_ptr = result.asU8ptr();
+        var result_ptr = result.asU8ptrMut();
 
         var offset: usize = 0;
         for (slice[0 .. len - 1]) |substr| {
@@ -2534,7 +2539,7 @@ pub fn appendScalar(string: RocStr, scalar_u32: u32) callconv(.C) RocStr {
     const width = std.unicode.utf8CodepointSequenceLength(scalar) catch unreachable;
 
     var output = string.reallocate(string.len() + width);
-    var slice = output.asSliceWithCapacity();
+    var slice = output.asSliceWithCapacityMut();
 
     _ = std.unicode.utf8Encode(scalar, slice[string.len() .. string.len() + width]) catch unreachable;
 
