@@ -23,7 +23,6 @@ interface Html.Internal
         Effect.{ Effect },
         Encode,
         Json,
-        Html.HostJavaScript.{ hostJavaScript },
     ]
 
 PlatformState state initData : {
@@ -40,10 +39,12 @@ HandlerLookup state : {
 }
 
 App state initData : {
-    init : initData -> state,
+    init : DecodingResult initData -> state,
     render : state -> Html state,
     wasmUrl : Str,
 }
+
+DecodingResult a : Result a [Leftover (List U8), TooShort]
 
 Html state : [
     None,
@@ -240,20 +241,16 @@ keepStaticAttr = \attr ->
 #   EVENT HANDLING
 # -------------------------------
 JsEventResult state initData : {
-    platformState : Box (PlatformState state initData),
+    platformState : PlatformState state initData,
     stopPropagation : Bool,
     preventDefault : Bool,
 }
 
 ## Dispatch a JavaScript event to a Roc handler, given the handler ID and some JSON event data.
-## We use Box to pass data structures on the Wasm heap. This is a lot easier than trying to access Wasm stack from JS.
 ## DANGER: this function does unusual stuff with memory allocation lifetimes. Be as careful as you would with Zig or C code!
-dispatchEvent : Box (PlatformState state initData), Box (List (List U8)), Nat -> Effect (Box (JsEventResult state initData))
-dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
-    { app, state, view, handlerLookup, isOddArena: wasOddArena } =
-        Box.unbox boxedPlatformState
-    eventData =
-        Box.unbox boxedEventData
+dispatchEvent : PlatformState state initData, List (List U8), Nat -> Effect (JsEventResult state initData)
+dispatchEvent = \platformState, eventData, handlerId ->
+    { app, state, view, handlerLookup, isOddArena: wasOddArena } = platformState
     maybeHandler =
         List.get handlerLookup.handlers handlerId
         |> Result.withDefault (Err NoHandler)
@@ -283,7 +280,7 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
 
                 { newHandlers, node: newViewRendered } <-
                     diffAndUpdateDom emptyHandlerLookup view newViewUnrendered |> Effect.after
-                newBoxedPlatformState = Box.box {
+                newPlatformState = {
                     app,
                     state: newState,
                     view: newViewRendered,
@@ -291,10 +288,10 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
                     isOddArena,
                 }
 
-                Effect.always (Box.box { platformState: newBoxedPlatformState, stopPropagation, preventDefault })
+                Effect.always ({ platformState: newPlatformState, stopPropagation, preventDefault })
 
         None ->
-            Effect.always (Box.box { platformState: boxedPlatformState, stopPropagation, preventDefault })
+            Effect.always { platformState, stopPropagation, preventDefault }
 
 runInVdomArena : Bool, ({} -> Effect a) -> Effect a
 runInVdomArena = \useOddArena, run ->
@@ -336,16 +333,17 @@ replaceHandler = \{ handlers, freeList }, index, newHandler ->
 # -------------------------------
 #   SERVER SIDE INIT
 # -------------------------------
-initServerApp : initData, App state initData -> Result (Html []) [InvalidDocument] | initData has Encoding
-initServerApp = \initData, app ->
+initServerApp : App state initData, initData, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
+initServerApp = \app, initData, hostJavaScript ->
     initData
+    |> Ok
     |> app.init
     |> app.render
     |> translateStatic
-    |> insertRocScript initData app.wasmUrl
+    |> insertRocScript initData app.wasmUrl hostJavaScript
 
-insertRocScript : Html [], initData, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
-insertRocScript = \document, initData, wasmUrl ->
+insertRocScript : Html [], initData, Str, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
+insertRocScript = \document, initData, wasmUrl, hostJavaScript ->
     # Convert initData to JSON as a Roc Str, then convert the Roc Str to a JS string.
     # JSON won't have invalid UTF-8 in it, since it would be escaped as part of JSON encoding.
     jsInitData =
@@ -365,8 +363,8 @@ insertRocScript = \document, initData, wasmUrl ->
     script = (element "script") [] [
         text
             """
-            (function(){
             \(hostJavaScript)
+            (function(){
             const initData = \(jsInitData);
             const wasmUrl = \(jsWasmUrl);
             window.roc = roc_init(initData, wasmUrl);
@@ -403,20 +401,12 @@ insertRocScript = \document, initData, wasmUrl ->
 # -------------------------------
 #   CLIENT SIDE INIT
 # -------------------------------
-ClientInit state : {
-    state,
-    staticView : RenderedHtml,
-    dynamicView : Html state,
-}
-
-initClientApp : List U8, App state initData -> Result (ClientInit state) [JsonError] | initData has Decoding
+initClientApp : List U8, App state initData -> Effect (PlatformState state initData) | initData has Decoding
 initClientApp = \json, app ->
-    initData <-
+    state =
         json
         |> Decode.fromBytes Json.fromUtf8
-        |> Result.mapErr (\_ -> JsonError)
-        |> Result.try
-    state = app.init initData
+        |> app.init
     dynamicView = app.render state
     staticUnindexed = translateStatic dynamicView
     staticView =
@@ -425,10 +415,21 @@ initClientApp = \json, app ->
         |> List.first
         |> Result.withDefault (RenderedText 0 "The impossible happened in virtual-dom. Couldn't get the first item in a single-element list.")
 
-    Ok {
+    emptyHandlers = {
+        handlers: [],
+        freeList: [],
+    }
+
+    # Run the first diff. The only differences are event listeners, so they will be attached.
+    { newHandlers: handlerLookup, node: view } <-
+        diffAndUpdateDom emptyHandlers staticView dynamicView |> Effect.after
+
+    Effect.always {
+        app,
         state,
-        staticView,
-        dynamicView,
+        view,
+        handlerLookup,
+        isOddArena: Bool.false,
     }
 
 # Assign an index to each (virtual) DOM node.
