@@ -515,7 +515,8 @@ createSubTree = \previousEffects, node ->
     { newHandlers, renderedNodes } <- previousEffects |> Effect.after
     when node is
         Element name size attrs children ->
-            nodeIndex <- Effect.createElement name |> Effect.after
+            nodeIndex = 0 # TODO: temporary hacks
+            _ <- Effect.createElement nodeIndex name |> Effect.after
             { style, newHandlers: newHandlersAttrs, renderedAttrs, effects: attrEffects } =
                 List.walk attrs { nodeIndex, style: "", newHandlers, renderedAttrs: [], effects: Effect.always {} } addAttribute
 
@@ -533,10 +534,9 @@ createSubTree = \previousEffects, node ->
             }
 
         Text content ->
-            Effect.createTextNode content
-            |> Effect.map \nodeIndex ->
-
-                { newHandlers, renderedNodes: List.append renderedNodes (RenderedText nodeIndex content) }
+            nodeIndex = 0 # TODO: temporary hacks
+            _ <- Effect.createTextNode nodeIndex content |> Effect.after
+            Effect.always { newHandlers, renderedNodes: List.append renderedNodes (RenderedText nodeIndex content) }
 
         None -> Effect.always { newHandlers, renderedNodes: List.append renderedNodes RenderedNone }
 

@@ -1,12 +1,15 @@
 hosted Effect
     exposes [
         Effect,
+        NodeId,
+        EventHandlerId,
+        TagName,
+        AttrType,
+        EventType,
         after,
         always,
         map,
-        NodeId,
         EventHandlerId,
-        eventHandlerId,
         createElement,
         createTextNode,
         updateTextNode,
@@ -24,22 +27,21 @@ hosted Effect
     imports []
     generates Effect with [after, always, map]
 
-# TODO: private type
+# TODO: private types
 NodeId : Nat
-
-EventHandlerId := Nat
-eventHandlerId = \id -> @EventHandlerId id
+EventHandlerId : Nat
 
 # TODO: make these tag unions to avoid encoding/decoding standard names
+# but for now, this is much easier to code and debug!
 TagName : Str
 AttrType : Str
 EventType : Str
 
 ## createElement tagName
-createElement : TagName -> Effect NodeId
+createElement : NodeId, TagName -> Effect {}
 
 ## createTextNode content
-createTextNode : Str -> Effect NodeId
+createTextNode : NodeId, Str -> Effect {}
 
 ## updateTextNode content
 updateTextNode : NodeId, Str -> Effect {}
