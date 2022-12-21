@@ -28,7 +28,7 @@ interface Html.Internal
 PlatformState state initData : {
     app : App state initData,
     state,
-    view : RenderedHtml,
+    nodes : RenderedHtml,
     handlerLookup : HandlerLookup state,
     isOddArena : Bool,
 }
@@ -97,7 +97,7 @@ Handler state := [
 element : Str -> (List (Attribute state), List (Html state) -> Html state)
 element = \tagName ->
     \attrs, children ->
-        # While building the node tree, calculate the size of Str it will render to
+        # While building the node nodes, calculate the size of Str it will render to
         withTag = 2 * (3 + Str.countUtf8Bytes tagName)
         withAttrs = List.walk attrs withTag \acc, attr -> acc + attrSize attr
         totalSize = List.walk children withAttrs \acc, child -> acc + nodeSize child
@@ -250,7 +250,7 @@ JsEventResult state initData : {
 ## DANGER: this function does unusual stuff with memory allocation lifetimes. Be as careful as you would with Zig or C code!
 dispatchEvent : PlatformState state initData, List (List U8), Nat -> Effect (JsEventResult state initData)
 dispatchEvent = \platformState, eventData, handlerId ->
-    { app, state, view, handlerLookup, isOddArena: wasOddArena } = platformState
+    { app, state, nodes, handlerLookup, isOddArena: wasOddArena } = platformState
     maybeHandler =
         List.get handlerLookup.handlers handlerId
         |> Result.withDefault (Err NoHandler)
@@ -279,11 +279,11 @@ dispatchEvent = \platformState, eventData, handlerId ->
                 }
 
                 { newHandlers, node: newViewRendered } <-
-                    diffAndUpdateDom emptyHandlerLookup view newViewUnrendered |> Effect.after
+                    diffAndUpdateDom emptyHandlerLookup nodes newViewUnrendered |> Effect.after
                 newPlatformState = {
                     app,
                     state: newState,
-                    view: newViewRendered,
+                    nodes: newViewRendered,
                     handlerLookup: newHandlers,
                     isOddArena,
                 }
@@ -421,21 +421,21 @@ initClientApp = \json, app ->
     }
 
     # Run the first diff. The only differences are event listeners, so they will be attached.
-    { newHandlers: handlerLookup, node: view } <-
+    { newHandlers: handlerLookup, node: nodes } <-
         diffAndUpdateDom emptyHandlers staticView dynamicView |> Effect.after
 
     Effect.always {
         app,
         state,
-        view,
+        nodes,
         handlerLookup,
         isOddArena: Bool.false,
     }
 
 # Assign an index to each (virtual) DOM node.
 # In JavaScript, we maintain an array of references to real DOM nodes.
-# In Roc, each virtual DOM node in the "old" tree knows the index of its real DOM node in the JS array.
-# Here we traverse the tree in the same order as JavaScript does when it initialises the array.
+# In Roc, each virtual DOM node in the "old" nodes knows the index of its real DOM node in the JS array.
+# Here we traverse the nodes in the same order as JavaScript does when it initialises the array.
 indexNodes : { list : List RenderedHtml, index : Nat }, Html state -> { list : List RenderedHtml, index : Nat }
 indexNodes = \{ list, index }, unrendered ->
     when unrendered is
@@ -554,7 +554,7 @@ addAttribute = \{ nodeIndex, style, newHandlers, renderedAttrs, effects }, attr 
             { handlerLookup: updatedHandlers, index: handlerIndex } =
                 insertHandler newHandlers handler
 
-            # Store the handlerIndex in the rendered virtual DOM tree, since we'll need it for the next diff
+            # Store the handlerIndex in the rendered virtual DOM nodes, since we'll need it for the next diff
             renderedAttr =
                 RenderedEventListener name accessors handlerIndex
 
