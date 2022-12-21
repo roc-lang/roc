@@ -1107,6 +1107,7 @@ trait Backend<'a> {
                 }
             }
 
+            Stmt::Dbg { .. } => todo!("dbg not implemented in the dev backend"),
             Stmt::Expect { .. } => todo!("expect is not implemented in the dev backend"),
             Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the dev backend"),
 

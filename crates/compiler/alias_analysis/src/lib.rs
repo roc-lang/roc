@@ -611,6 +611,7 @@ fn stmt_spec<'a>(
 
             builder.add_choice(block, &cases)
         }
+        Dbg { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         Expect { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         ExpectFx { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         Ret(symbol) => Ok(env.symbols[symbol]),

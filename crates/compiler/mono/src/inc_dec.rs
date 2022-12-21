@@ -108,6 +108,13 @@ pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) 
                 stack.push(cont);
             }
 
+            Dbg {
+                symbol, remainder, ..
+            } => {
+                result.insert(*symbol);
+                stack.push(remainder);
+            }
+
             Expect {
                 condition,
                 remainder,
@@ -1200,6 +1207,26 @@ impl<'a, 'i> Context<'a, 'i> {
                 (switch, case_live_vars)
             }
 
+            Dbg {
+                symbol,
+                variable,
+                remainder,
+            } => {
+                let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
+
+                let expect = self.arena.alloc(Stmt::Dbg {
+                    symbol: *symbol,
+                    variable: *variable,
+                    remainder: b,
+                });
+
+                let expect = self.add_inc_before_consume_all(&[*symbol], expect, &b_live_vars);
+
+                b_live_vars.extend([symbol]);
+
+                (expect, b_live_vars)
+            }
+
             Expect {
                 remainder,
                 condition,
@@ -1362,6 +1389,13 @@ pub fn collect_stmt(
             let symbol = modify.get_symbol();
             vars.insert(symbol);
             collect_stmt(cont, jp_live_vars, vars)
+        }
+
+        Dbg {
+            symbol, remainder, ..
+        } => {
+            vars.insert(*symbol);
+            collect_stmt(remainder, jp_live_vars, vars)
         }
 
         Expect {

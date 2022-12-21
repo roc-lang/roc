@@ -27,7 +27,7 @@ use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapsh
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
+use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
@@ -1640,6 +1640,14 @@ pub enum Stmt<'a> {
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
+    Dbg {
+        /// The expression we're displaying
+        symbol: Symbol,
+        /// The specialized variable of the expression
+        variable: Variable,
+        /// What happens after the dbg
+        remainder: &'a Stmt<'a>,
+    },
     /// a join point `join f <params> = <continuation> in remainder`
     Join {
         id: JoinPointId,
@@ -2229,6 +2237,15 @@ impl<'a> Stmt<'a> {
                 .to_doc(alloc, pretty)
                 .append(alloc.hardline())
                 .append(cont.to_doc(alloc, interner, pretty)),
+
+            Dbg {
+                symbol, remainder, ..
+            } => alloc
+                .text("dbg ")
+                .append(symbol_to_doc(alloc, *symbol, pretty))
+                .append(";")
+                .append(alloc.hardline())
+                .append(remainder.to_doc(alloc, interner, pretty)),
 
             Expect {
                 condition,
@@ -6716,26 +6733,16 @@ pub fn from_can<'a>(
                 .as_mut()
                 .unwrap()
                 .fresh_unnamed_flex_var();
-            // HACK(dbg-spec-var): pass the specialized type variable along injected into a fake symbol
-            let dbg_spec_var_symbol = Symbol::new(ModuleId::ATTR, unsafe {
-                IdentId::from_index(spec_var.index())
-            });
 
-            // TODO: need to store the specialized variable of this dbg in the expectation_subs
-            let call = crate::ir::Call {
-                call_type: CallType::LowLevel {
-                    op: LowLevel::Dbg,
-                    update_mode: env.next_update_mode_id(),
-                },
-                arguments: env.arena.alloc([dbg_symbol, dbg_spec_var_symbol]),
+            let dbg_stmt = Stmt::Dbg {
+                symbol: dbg_symbol,
+                variable: spec_var,
+                remainder: env.arena.alloc(rest),
             };
 
-            let dbg_layout = layout_cache
-                .from_var(env.arena, variable, env.subs)
-                .expect("invalid dbg_layout");
-
-            let expr = Expr::Call(call);
-            let mut stmt = Stmt::Let(dbg_symbol, expr, dbg_layout, env.arena.alloc(rest));
+            // Now that the dbg value has been specialized, export its specialized type into the
+            // expectations subs.
+            store_specialized_expectation_lookups(env, [variable], &[spec_var]);
 
             let symbol_is_reused = matches!(
                 can_reuse_symbol(env, procs, &loc_condition.value, variable),
@@ -6743,23 +6750,19 @@ pub fn from_can<'a>(
             );
 
             // skip evaluating the condition if it's just a symbol
-            if !symbol_is_reused {
-                stmt = with_hole(
+            if symbol_is_reused {
+                dbg_stmt
+            } else {
+                with_hole(
                     env,
                     loc_condition.value,
                     variable,
                     procs,
                     layout_cache,
                     dbg_symbol,
-                    env.arena.alloc(stmt),
-                );
+                    env.arena.alloc(dbg_stmt),
+                )
             }
-
-            // Now that the dbg value has been specialized, export its specialized type into the
-            // expectations subs.
-            store_specialized_expectation_lookups(env, [variable], &[spec_var]);
-
-            stmt
         }
 
         LetRec(defs, cont, _cycle_mark) => {
@@ -7136,6 +7139,23 @@ fn substitute_in_stmt_help<'a>(
                 Some(cont) => Some(arena.alloc(Refcounting(*modify, cont))),
                 None => None,
             }
+        }
+
+        Dbg {
+            symbol,
+            variable,
+            remainder,
+        } => {
+            let new_remainder =
+                substitute_in_stmt_help(arena, remainder, subs).unwrap_or(remainder);
+
+            let expect = Dbg {
+                symbol: substitute(subs, *symbol).unwrap_or(*symbol),
+                variable: *variable,
+                remainder: new_remainder,
+            };
+
+            Some(arena.alloc(expect))
         }
 
         Expect {
