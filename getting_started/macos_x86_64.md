@@ -25,10 +25,18 @@ which includes the Roc compiler and various helpful utilities.
     cd roc_night<TAB TO AUTOCOMPLETE>
     ```
 
+1. To be able to run the `roc` command anywhere on your system; add the line below to your shell startup script (.profile, .zshrc, ...):
+    ```sh
+    export PATH=$PATH:~/path/to/roc_nightly-macos_x86_64-<VERSION>
+    ```
+
+1. Check everything worked by executing `roc version`
+
 ## How to install Roc platform dependencies
 
-In order to compile Roc apps (either in `examples/` or in your own projects),
-you need to install one or more of these platform language compilers, too.
+This step is not necessary if you only want to use the [basic-cli platform](https://github.com/roc-lang/basic-cli), like in the tutorial.
+But, if you want to compile Roc apps with other platforms (either in [`examples/`](https://github.com/roc-lang/roc/tree/main/examples) or in your own projects),
+you'll need to install one or more of these platform languages too.
 
 1. Install the Rust compiler, for apps with Rust-based platforms:
 
