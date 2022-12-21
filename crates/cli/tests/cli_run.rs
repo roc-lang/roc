@@ -719,10 +719,16 @@ mod cli_run {
 
     // TODO: write a new test once mono bugs are resolved in investigation
     #[test]
-    #[serial(cli_platform)]
-    #[cfg_attr(windows, ignore)]
-    fn cli_virtual_dom_check() {
-        let path = file_path_from_root("examples/virtual-dom-wip", "app-server.roc");
+    fn check_virtual_dom_server() {
+        let path = file_path_from_root("examples/virtual-dom-wip", "example-server.roc");
+        let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    // TODO: write a new test once mono bugs are resolved in investigation
+    #[test]
+    fn check_virtual_dom_client() {
+        let path = file_path_from_root("examples/virtual-dom-wip", "example-client.roc");
         let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }

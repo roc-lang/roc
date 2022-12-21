@@ -23,50 +23,59 @@ interface Html.Internal
         Effect.{ Effect },
         Encode,
         Json,
-        Html.HostJavaScript.{ hostJavaScript },
     ]
 
 PlatformState state initData : {
     app : App state initData,
     state,
-    view : Html state,
-    handlers : HandlerLookup state,
+    view : RenderedHtml,
+    handlerLookup : HandlerLookup state,
     isOddArena : Bool,
 }
 
-# TODO: keep a list of free indices that we push and pop like a stack
-HandlerLookup state : List (Result (Handler state) [NoHandler])
+HandlerLookup state : {
+    handlers : List (Result (Handler state) [NoHandler]),
+    freeList : List Nat,
+}
 
 App state initData : {
-    init : initData -> state,
+    init : DecodingResult initData -> state,
     render : state -> Html state,
     wasmUrl : Str,
 }
 
-# TODO: maybe we should have two separate types for rendered and unrendered views?
-# App code would only ever deal with the unrendered type. Diff is between old rendered and new unrendered
+DecodingResult a : Result a [Leftover (List U8), TooShort]
+
 Html state : [
     None,
-    Text MaybeJsIndex Str,
-    Element Str MaybeJsIndex Nat (List (Attribute state)) (List (Html state)),
+    Text Str,
+    Element Str Size (List (Attribute state)) (List (Html state)),
 ]
 
-MaybeJsIndex : [
-    NotRendered, # There's no JavaScript index for virtual nodes not yet rendered to the DOM
-    Rendered Nat, # Index of the corresponding real DOM node in the JavaScript `nodes` array
+RenderedHtml : [
+    RenderedNone,
+    RenderedText JsIndex Str,
+    RenderedElement JsIndex Str Size (List RenderedAttribute) (List RenderedHtml),
 ]
+
+JsIndex : Nat # Index of the corresponding real DOM node in the JavaScript `nodes` array
+Size : Nat
 
 Attribute state : [
-    EventListener Str (List CyclicStructureAccessor) (MaybeRenderedHandler state),
+    EventListener Str (List CyclicStructureAccessor) (Handler state),
     HtmlAttr Str Str,
     DomProp Str (List U8),
     Style Str Str,
 ]
 
-MaybeRenderedHandler state : [
-    NotRendered (Handler state), # Virtual DOM node, not yet rendered. Contains the lambda from app code.
-    Rendered Nat, # Index into a Roc List of lamdas. JS knows this index, and the List is refreshed with new lambdas on every render.
+RenderedAttribute : [
+    RenderedEventListener Str (List CyclicStructureAccessor) HandlerId,
+    RenderedHtmlAttr Str Str,
+    RenderedDomProp Str (List U8),
+    RenderedStyle Str Str,
 ]
+
+HandlerId : Nat
 
 CyclicStructureAccessor : [
     ObjectField Str CyclicStructureAccessor,
@@ -93,10 +102,10 @@ element = \tagName ->
         withAttrs = List.walk attrs withTag \acc, attr -> acc + attrSize attr
         totalSize = List.walk children withAttrs \acc, child -> acc + nodeSize child
 
-        Element tagName NotRendered totalSize attrs children
+        Element tagName totalSize attrs children
 
 text : Str -> Html state
-text = \content -> Text NotRendered content
+text = \content -> Text content
 
 none : Html state
 none = None
@@ -104,8 +113,8 @@ none = None
 nodeSize : Html state -> Nat
 nodeSize = \node ->
     when node is
-        Text _ content -> Str.countUtf8Bytes content
-        Element _ _ size _ _ -> size
+        Text content -> Str.countUtf8Bytes content
+        Element _ size _ _ -> size
         None -> 0
 
 attrSize : Attribute state -> Nat
@@ -122,10 +131,10 @@ attrSize = \attr ->
 appendRenderedStatic : Str, Html [] -> Str
 appendRenderedStatic = \buffer, node ->
     when node is
-        Text _ content ->
+        Text content ->
             Str.concat buffer content
 
-        Element name _ _ attrs children ->
+        Element name _ attrs children ->
             withTagName = "\(buffer)<\(name)"
             withAttrs =
                 if List.isEmpty attrs then
@@ -160,8 +169,6 @@ appendRenderedStaticAttr = \{ buffer, styles }, attr ->
 
             { buffer, styles: newStyles }
 
-        # The remaining variants only make sense on the front end. Ignore for server-side rendering.
-        EventListener _ _ _ -> { buffer, styles }
         DomProp _ _ -> { buffer, styles }
 
 # -------------------------------
@@ -170,25 +177,22 @@ appendRenderedStaticAttr = \{ buffer, styles }, attr ->
 translate : Html c, (p -> c), (c -> p) -> Html p
 translate = \node, parentToChild, childToParent ->
     when node is
-        Text jsIndex content ->
-            Text jsIndex content
+        Text content ->
+            Text content
 
-        Element name jsIndex size attrs children ->
+        Element name size attrs children ->
             newAttrs = List.map attrs \a -> translateAttr a parentToChild childToParent
             newChildren = List.map children \c -> translate c parentToChild childToParent
 
-            Element name jsIndex size newAttrs newChildren
+            Element name size newAttrs newChildren
 
         None -> None
 
 translateAttr : Attribute c, (p -> c), (c -> p) -> Attribute p
 translateAttr = \attr, parentToChild, childToParent ->
     when attr is
-        EventListener eventName accessors (NotRendered childHandler) ->
-            EventListener eventName accessors (NotRendered (translateHandler childHandler parentToChild childToParent))
-
-        EventListener eventName accessors (Rendered handlerId) ->
-            EventListener eventName accessors (Rendered handlerId)
+        EventListener eventName accessors childHandler ->
+            EventListener eventName accessors (translateHandler childHandler parentToChild childToParent)
 
         HtmlAttr k v -> HtmlAttr k v
         DomProp k v -> DomProp k v
@@ -214,14 +218,14 @@ translateHandler = \childHandler, parentToChild, childToParent ->
 translateStatic : Html state -> Html *
 translateStatic = \node ->
     when node is
-        Text jsIndex content ->
-            Text jsIndex content
+        Text content ->
+            Text content
 
-        Element name jsIndex size attrs children ->
+        Element name size attrs children ->
             newAttrs = List.keepOks attrs keepStaticAttr
             newChildren = List.map children translateStatic
 
-            Element name jsIndex size newAttrs newChildren
+            Element name size newAttrs newChildren
 
         None -> None
 
@@ -237,22 +241,18 @@ keepStaticAttr = \attr ->
 #   EVENT HANDLING
 # -------------------------------
 JsEventResult state initData : {
-    platformState : Box (PlatformState state initData),
+    platformState : PlatformState state initData,
     stopPropagation : Bool,
     preventDefault : Bool,
 }
 
 ## Dispatch a JavaScript event to a Roc handler, given the handler ID and some JSON event data.
-## We use Box to pass data structures on the Wasm heap. This is a lot easier than trying to access Wasm stack from JS.
 ## DANGER: this function does unusual stuff with memory allocation lifetimes. Be as careful as you would with Zig or C code!
-dispatchEvent : Box (PlatformState state initData), Box (List (List U8)), Nat -> Effect (Box (JsEventResult state initData))
-dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
-    { app, state, view, handlers, isOddArena: wasOddArena } =
-        Box.unbox boxedPlatformState
-    eventData =
-        Box.unbox boxedEventData
+dispatchEvent : PlatformState state initData, List (List U8), Nat -> Effect (JsEventResult state initData)
+dispatchEvent = \platformState, eventData, handlerId ->
+    { app, state, view, handlerLookup, isOddArena: wasOddArena } = platformState
     maybeHandler =
-        List.get handlers handlerId
+        List.get handlerLookup.handlers handlerId
         |> Result.withDefault (Err NoHandler)
     { action, stopPropagation, preventDefault } =
         when maybeHandler is
@@ -271,23 +271,27 @@ dispatchEvent = \boxedPlatformState, boxedEventData, handlerId ->
             isOddArena = !wasOddArena
 
             runInVdomArena isOddArena \_ ->
-                newViewUnindexed = app.render newState
-                emptyHandlers = List.repeat (Err NoHandler) (List.len handlers)
+                newViewUnrendered = app.render newState
+                numHandlers = List.len handlerLookup.handlers
+                emptyHandlerLookup = {
+                    handlers: List.repeat (Err NoHandler) numHandlers,
+                    freeList: List.range { start: At (numHandlers - 1), end: At 0 },
+                }
 
-                { newHandlers, node: newViewIndexed } <- diffAndUpdateDom emptyHandlers view newViewUnindexed |> Effect.after
-                newBoxedPlatformState = Box.box {
+                { newHandlers, node: newViewRendered } <-
+                    diffAndUpdateDom emptyHandlerLookup view newViewUnrendered |> Effect.after
+                newPlatformState = {
                     app,
                     state: newState,
-                    view: newViewIndexed,
-                    handlers: newHandlers,
+                    view: newViewRendered,
+                    handlerLookup: newHandlers,
                     isOddArena,
                 }
 
-                Effect.always (Box.box { platformState: newBoxedPlatformState, stopPropagation, preventDefault })
+                Effect.always ({ platformState: newPlatformState, stopPropagation, preventDefault })
 
-        # TODO: Roc compiler tells me I need a `_` pattern but I think I should just need `None`
-        _ ->
-            Effect.always (Box.box { platformState: boxedPlatformState, stopPropagation, preventDefault })
+        None ->
+            Effect.always { platformState, stopPropagation, preventDefault }
 
 runInVdomArena : Bool, ({} -> Effect a) -> Effect a
 runInVdomArena = \useOddArena, run ->
@@ -296,41 +300,50 @@ runInVdomArena = \useOddArena, run ->
     _ <- Effect.disableVdomAllocator |> Effect.after
     Effect.always returnVal
 
-insertHandler : List (Result (Handler state) [NoHandler]), Handler state -> { index : Nat, handlers : List (Result (Handler state) [NoHandler]) }
-insertHandler = \handlers, newHandler ->
-    # TODO: speed this up using a free list
-    when List.findFirstIndex handlers Result.isErr is
+insertHandler : HandlerLookup state, Handler state -> { index : Nat, handlerLookup : HandlerLookup state }
+insertHandler = \{ handlers, freeList }, newHandler ->
+    when List.last freeList is
         Ok index ->
             {
                 index,
-                handlers: List.set handlers index (Ok newHandler),
+                handlerLookup: {
+                    handlers: List.set handlers index (Ok newHandler),
+                    freeList: List.dropLast freeList,
+                },
             }
 
-        Err NotFound ->
+        Err _ ->
             {
                 index: List.len handlers,
-                handlers: List.append handlers (Ok newHandler),
+                handlerLookup: {
+                    handlers: List.append handlers (Ok newHandler),
+                    freeList: freeList,
+                },
             }
 
-replaceHandler : List (Result (Handler state) [NoHandler]), Nat, Handler state -> List (Result (Handler state) [NoHandler])
-replaceHandler = \handlers, index, newHandler ->
+replaceHandler : HandlerLookup state, Nat, Handler state -> HandlerLookup state
+replaceHandler = \{ handlers, freeList }, index, newHandler ->
     { list } = List.replace handlers index (Ok newHandler)
 
-    list
+    {
+        handlers: list,
+        freeList,
+    }
 
 # -------------------------------
 #   SERVER SIDE INIT
 # -------------------------------
-initServerApp : initData, App state initData -> Result (Html []) [InvalidDocument] | initData has Encoding
-initServerApp = \initData, app ->
+initServerApp : App state initData, initData, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
+initServerApp = \app, initData, hostJavaScript ->
     initData
+    |> Ok
     |> app.init
     |> app.render
     |> translateStatic
-    |> insertRocScript initData app.wasmUrl
+    |> insertRocScript initData app.wasmUrl hostJavaScript
 
-insertRocScript : Html [], initData, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
-insertRocScript = \document, initData, wasmUrl ->
+insertRocScript : Html [], initData, Str, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
+insertRocScript = \document, initData, wasmUrl, hostJavaScript ->
     # Convert initData to JSON as a Roc Str, then convert the Roc Str to a JS string.
     # JSON won't have invalid UTF-8 in it, since it would be escaped as part of JSON encoding.
     jsInitData =
@@ -350,8 +363,8 @@ insertRocScript = \document, initData, wasmUrl ->
     script = (element "script") [] [
         text
             """
-            (function(){
             \(hostJavaScript)
+            (function(){
             const initData = \(jsInitData);
             const wasmUrl = \(jsWasmUrl);
             window.roc = roc_init(initData, wasmUrl);
@@ -361,14 +374,14 @@ insertRocScript = \document, initData, wasmUrl ->
 
     # append the <script> to the end of the <body>
     when document is
-        Element "html" hIndex hSize hAttrs hChildren ->
+        Element "html" hSize hAttrs hChildren ->
             empty = List.withCapacity (List.len hChildren)
             walkResult =
                 List.walk hChildren { newHtmlChildren: empty, foundBody: Bool.false } \{ newHtmlChildren, foundBody }, hChild ->
                     when hChild is
-                        Element "body" bIndex bSize bAttrs bChildren ->
+                        Element "body" bSize bAttrs bChildren ->
                             {
-                                newHtmlChildren: List.append newHtmlChildren (Element "body" bIndex bSize bAttrs (List.append bChildren script)),
+                                newHtmlChildren: List.append newHtmlChildren (Element "body" bSize bAttrs (List.append bChildren script)),
                                 foundBody: Bool.true,
                             }
 
@@ -379,7 +392,7 @@ insertRocScript = \document, initData, wasmUrl ->
                             }
 
             if walkResult.foundBody then
-                Ok (Element "html" hIndex hSize hAttrs walkResult.newHtmlChildren)
+                Ok (Element "html" hSize hAttrs walkResult.newHtmlChildren)
             else
                 Err InvalidDocument
 
@@ -388,78 +401,84 @@ insertRocScript = \document, initData, wasmUrl ->
 # -------------------------------
 #   CLIENT SIDE INIT
 # -------------------------------
-ClientInit state : {
-    state,
-    staticView : Html state,
-    dynamicView : Html state,
-}
-
-initClientApp : List U8, App state initData -> Result (ClientInit state) [JsonError] | initData has Decoding
+initClientApp : List U8, App state initData -> Effect (PlatformState state initData) | initData has Decoding
 initClientApp = \json, app ->
-    initData <-
+    state =
         json
         |> Decode.fromBytes Json.fromUtf8
-        |> Result.mapErr (\_ -> JsonError)
-        |> Result.try
-    state = app.init initData
+        |> app.init
     dynamicView = app.render state
     staticUnindexed = translateStatic dynamicView
     staticView =
         indexNodes { list: [], index: 0 } staticUnindexed
         |> .list
         |> List.first
-        |> Result.withDefault (Text NotRendered "The impossible happened in virtual-dom. Couldn't get the first item in a single-element list.")
+        |> Result.withDefault (RenderedText 0 "The impossible happened in virtual-dom. Couldn't get the first item in a single-element list.")
 
-    Ok {
+    emptyHandlers = {
+        handlers: [],
+        freeList: [],
+    }
+
+    # Run the first diff. The only differences are event listeners, so they will be attached.
+    { newHandlers: handlerLookup, node: view } <-
+        diffAndUpdateDom emptyHandlers staticView dynamicView |> Effect.after
+
+    Effect.always {
+        app,
         state,
-        staticView,
-        dynamicView,
+        view,
+        handlerLookup,
+        isOddArena: Bool.false,
     }
 
 # Assign an index to each (virtual) DOM node.
 # In JavaScript, we maintain an array of references to real DOM nodes.
 # In Roc, each virtual DOM node in the "old" tree knows the index of its real DOM node in the JS array.
 # Here we traverse the tree in the same order as JavaScript does when it initialises the array.
-indexNodes : { list : List (Html state), index : Nat }, Html state -> { list : List (Html state), index : Nat }
-indexNodes = \{ list, index }, node ->
-    when node is
-        Text jsIndex content ->
-            { nodeIndex, nextIndex } =
-                when jsIndex is
-                    Rendered id -> { nodeIndex: Rendered id, nextIndex: index }
-                    NotRendered -> { nodeIndex: Rendered index, nextIndex: index + 1 }
-
+indexNodes : { list : List RenderedHtml, index : Nat }, Html state -> { list : List RenderedHtml, index : Nat }
+indexNodes = \{ list, index }, unrendered ->
+    when unrendered is
+        Text content ->
             {
-                list: List.append list (Text nodeIndex content),
-                index: nextIndex,
+                list: List.append list (RenderedText index content),
+                index: index + 1,
             }
 
-        Element name jsIndex size attrs children ->
-            { list: newChildren, index: afterChildren } =
+        Element name size attrs children ->
+            { list: renderedChildren, index: nodeIndex } =
                 List.walk children { list, index } indexNodes
-            { nodeIndex, nextIndex } =
-                when jsIndex is
-                    Rendered id -> { nodeIndex: Rendered id, nextIndex: afterChildren }
-                    NotRendered -> { nodeIndex: Rendered afterChildren, nextIndex: afterChildren + 1 }
+            renderedAttrs =
+                List.walk attrs [] \walkedAttrs, attr ->
+                    when attr is
+                        EventListener _ _ _ -> walkedAttrs # Dropped! Server-rendered HTML has no listeners
+                        HtmlAttr k v -> List.append walkedAttrs (RenderedHtmlAttr k v)
+                        DomProp k v -> List.append walkedAttrs (RenderedDomProp k v)
+                        Style k v -> List.append walkedAttrs (RenderedStyle k v)
 
             {
-                list: List.append list (Element name nodeIndex size attrs newChildren),
-                index: nextIndex,
+                list: List.append list (RenderedElement nodeIndex name size renderedAttrs renderedChildren),
+                index: nodeIndex + 1,
             }
 
-        _ ->
+        None ->
             {
-                list: List.append list node,
+                list: List.append list RenderedNone,
                 index,
             }
 
-diffAndUpdateDom : HandlerLookup state, Html state, Html state -> Effect { newHandlers : HandlerLookup state, node : Html state }
+# TODO:
+# Emit patches first, then interpret those into Effects.
+# It'll be way more debuggable and the code will probably be simpler.
+# I can write tests more easily, and run more of it outside the browser.
+# Fits with upcoming plans for how Effects will work anyway?
+# First step is to allocate a NodeId without calling out to JS. Wasm needs to drive it.
+diffAndUpdateDom : HandlerLookup state, RenderedHtml, Html state -> Effect { newHandlers : HandlerLookup state, node : RenderedHtml }
 diffAndUpdateDom = \newHandlers, oldNode, newNode ->
-    doNothing = Effect.always { newHandlers, node: newNode }
-
     when { oldNode, newNode } is
-        { oldNode: Text (Rendered index) oldContent, newNode: Text NotRendered newContent } ->
-            retVal = { newHandlers, node: Text (Rendered index) newContent }
+        { oldNode: RenderedText index oldContent, newNode: Text newContent } ->
+            # Always return the newContent even when equal. This will enable some memory allocation tricks later.
+            retVal = { newHandlers, node: RenderedText index newContent }
 
             if newContent == oldContent then
                 Effect.always retVal
@@ -467,53 +486,41 @@ diffAndUpdateDom = \newHandlers, oldNode, newNode ->
                 Effect.updateTextNode index newContent
                 |> Effect.map \_ -> retVal
 
-        { oldNode: Text _ _, newNode: Text _ _ } ->
-            # Impossible. oldNode is NotRendered or newNode is Rendered
-            # TODO: separate the types!
-            doNothing
-
-        { oldNode: Element _oldName (Rendered _index) _oldSize _oldAttrs _oldChildren, newNode: Element _newName NotRendered _newSize _newAttrs _newChildren } ->
+        { oldNode: RenderedElement _index _oldName _oldSize _oldAttrs _oldChildren, newNode: Element _newName _newSize _newAttrs _newChildren } ->
             # TODO: actual diffing! LOL This is just to get something up and running
             renderFromScratch newHandlers newNode
 
-        { oldNode: Element _ _ _ _ _, newNode: Element _ _ _ _ _ } ->
-            # Impossible. oldNode is NotRendered or newNode is Rendered
-            # TODO: separate the types!
-            doNothing
-
-        { oldNode: None, newNode: None } ->
-            doNothing
+        { oldNode: RenderedNone, newNode: None } ->
+            Effect.always { newHandlers, node: RenderedNone }
 
         _ ->
             # old node has been replaced with a totally different variant. There's no point in diffing, just replace.
             renderFromScratch newHandlers newNode
 
-renderFromScratch : HandlerLookup state, Html state -> Effect { newHandlers : HandlerLookup state, node : Html state }
+renderFromScratch : HandlerLookup state, Html state -> Effect { newHandlers : HandlerLookup state, node : RenderedHtml }
 renderFromScratch = \newHandlers, newNode ->
     { newHandlers: subTreeHandlers, renderedNodes: renderedNewNodeSingleton } <-
         createSubTree (Effect.always { newHandlers, renderedNodes: [] }) newNode |> Effect.after
     renderedNewNode =
         renderedNewNodeSingleton
         |> List.first
-        |> Result.withDefault (Text NotRendered "ERROR createSubTree returned a non-singleton list")
+        |> Result.withDefault (RenderedText 0 "The impossible happened. createSubTree returned a non-singleton list")
 
     Effect.always { newHandlers: subTreeHandlers, node: renderedNewNode }
 
-createSubTree :Effect { newHandlers : HandlerLookup state, renderedNodes : List (Html state) },
+createSubTree :Effect { newHandlers : HandlerLookup state, renderedNodes : List RenderedHtml },
     Html state
-    -> Effect { newHandlers : HandlerLookup state, renderedNodes : List (Html state) }
+    -> Effect { newHandlers : HandlerLookup state, renderedNodes : List RenderedHtml }
 createSubTree = \previousEffects, node ->
     { newHandlers, renderedNodes } <- previousEffects |> Effect.after
     when node is
-        Element name _ size attrs children ->
+        Element name size attrs children ->
             nodeIndex <- Effect.createElement name |> Effect.after
             { style, newHandlers: newHandlersAttrs, renderedAttrs, effects: attrEffects } =
                 List.walk attrs { nodeIndex, style: "", newHandlers, renderedAttrs: [], effects: Effect.always {} } addAttribute
 
             _ <- attrEffects |> Effect.after
             _ <- (if style != "" then Effect.setAttribute nodeIndex "style" style else Effect.always {}) |> Effect.after
-            jsIndex : MaybeJsIndex
-            jsIndex = Rendered nodeIndex
 
             childWalkInit = Effect.always { newHandlers: newHandlersAttrs, renderedNodes: [] }
 
@@ -522,50 +529,44 @@ createSubTree = \previousEffects, node ->
 
             Effect.always {
                 newHandlers: newHandlersKids,
-                renderedNodes: List.append renderedNodes (Element name jsIndex size renderedAttrs renderedNodesKids),
+                renderedNodes: List.append renderedNodes (RenderedElement nodeIndex name size renderedAttrs renderedNodesKids),
             }
 
-        Text _ content ->
+        Text content ->
             Effect.createTextNode content
-            |> Effect.map \index ->
-                jsIndex : MaybeJsIndex
-                jsIndex = Rendered index
+            |> Effect.map \nodeIndex ->
 
-                { newHandlers, renderedNodes: List.append renderedNodes (Text jsIndex content) }
+                { newHandlers, renderedNodes: List.append renderedNodes (RenderedText nodeIndex content) }
 
-        None -> Effect.always { newHandlers, renderedNodes: List.append renderedNodes None }
+        None -> Effect.always { newHandlers, renderedNodes: List.append renderedNodes RenderedNone }
 
 AddAttrWalk state : {
     nodeIndex : Nat,
     style : Str,
     newHandlers : HandlerLookup state,
-    renderedAttrs : List (Attribute state),
+    renderedAttrs : List RenderedAttribute,
     effects : Effect {},
 }
 addAttribute : AddAttrWalk state, Attribute state -> AddAttrWalk state
 addAttribute = \{ nodeIndex, style, newHandlers, renderedAttrs, effects }, attr ->
     when attr is
-        EventListener name accessors (NotRendered handler) ->
-            { handlers: updatedHandlers, index: handlerIndex } =
+        EventListener name accessors handler ->
+            { handlerLookup: updatedHandlers, index: handlerIndex } =
                 insertHandler newHandlers handler
 
             # Store the handlerIndex in the rendered virtual DOM tree, since we'll need it for the next diff
             renderedAttr =
-                EventListener name accessors (Rendered handlerIndex)
+                RenderedEventListener name accessors handlerIndex
 
             { nodeIndex, style, newHandlers: updatedHandlers, renderedAttrs: List.append renderedAttrs renderedAttr, effects }
 
-        EventListener name accessors (Rendered handlerIndex) ->
-            # This pattern should never be reached!
-            { nodeIndex, style, newHandlers, renderedAttrs: List.append renderedAttrs (EventListener name accessors (Rendered handlerIndex)), effects }
-
         HtmlAttr k v ->
-            { nodeIndex, style, newHandlers, renderedAttrs: List.append renderedAttrs (HtmlAttr k v), effects: Effect.after effects (\_ -> Effect.setAttribute nodeIndex k v) }
+            { nodeIndex, style, newHandlers, renderedAttrs: List.append renderedAttrs (RenderedHtmlAttr k v), effects: Effect.after effects (\_ -> Effect.setAttribute nodeIndex k v) }
 
         DomProp k v ->
-            { nodeIndex, style, newHandlers, renderedAttrs: List.append renderedAttrs (DomProp k v), effects: Effect.after effects (\_ -> Effect.setProperty nodeIndex k v) }
+            { nodeIndex, style, newHandlers, renderedAttrs: List.append renderedAttrs (RenderedDomProp k v), effects: Effect.after effects (\_ -> Effect.setProperty nodeIndex k v) }
 
         Style k v ->
             newStyle = "\(style) \(k):\(v);"
 
-            { nodeIndex, style: newStyle, newHandlers, renderedAttrs: List.append renderedAttrs (Style k v), effects }
+            { nodeIndex, style: newStyle, newHandlers, renderedAttrs: List.append renderedAttrs (RenderedStyle k v), effects }
