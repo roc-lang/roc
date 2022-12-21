@@ -2300,15 +2300,6 @@ pub fn store_roc_value<'a, 'ctx, 'env>(
                 .unwrap();
         }
     } else {
-        let destination_type = destination
-            .get_type()
-            .get_element_type()
-            .try_into()
-            .unwrap();
-
-        let value =
-            cast_if_necessary_for_opaque_recursive_pointers(env.builder, value, destination_type);
-
         env.builder.build_store(destination, value);
     }
 }
@@ -3633,7 +3624,10 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
 
     let c_abi_roc_str_type = env.context.struct_type(
         &[
-            env.context.i8_type().ptr_type(AddressSpace::Generic).into(),
+            env.context
+                .i8_type()
+                .ptr_type(AddressSpace::default())
+                .into(),
             env.ptr_int().into(),
             env.ptr_int().into(),
         ],
