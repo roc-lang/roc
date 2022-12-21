@@ -534,10 +534,11 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
             // we expose this function to zig; must use c calling convention
             function_value.set_call_conventions(C_CALL_CONV);
 
-            let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
-            debug_assert!(kind_id > 0);
-            let attr = env.context.create_enum_attribute(kind_id, 1);
-            function_value.add_attribute(AttributeLoc::Function, attr);
+            // TODO figure out why this does not work any more
+            // let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
+            // debug_assert!(kind_id > 0);
+            // let attr = env.context.create_enum_attribute(kind_id, 1);
+            // function_value.add_attribute(AttributeLoc::Function, attr);
 
             let entry = env.context.append_basic_block(function_value, "entry");
             env.builder.position_at_end(entry);
