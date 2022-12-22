@@ -281,7 +281,10 @@ impl Interns {
             Some(ident_ids) => match ident_ids.get_id(ident.as_str()) {
                 Some(ident_id) => Symbol::new(module_id, ident_id),
                 None => {
-                    panic!("Interns::symbol could not find ident entry for {:?} for module {:?} in Interns {:?}", ident, module_id, self);
+                    panic!(
+                        "Interns::symbol could not find ident entry for {:?} for module {:?}",
+                        ident, module_id
+                    );
                 }
             },
             None => {
