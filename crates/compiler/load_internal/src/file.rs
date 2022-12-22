@@ -376,12 +376,6 @@ fn start_phase<'a>(
                     state.cached_types.lock().contains_key(&module_id)
                 };
 
-                let exposed_module_ids = state
-                    .platform_data
-                    .as_ref()
-                    .map(|data| data.exposed_modules)
-                    .unwrap_or_default();
-
                 BuildTask::CanonicalizeAndConstrain {
                     parsed,
                     dep_idents,
@@ -390,7 +384,7 @@ fn start_phase<'a>(
                     aliases,
                     abilities_store,
                     skip_constraint_gen,
-                    exposed_module_ids,
+                    exposed_module_ids: state.exposed_modules,
                 }
             }
 
@@ -931,7 +925,6 @@ struct PlatformData<'a> {
     module_id: ModuleId,
     provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
     is_prebuilt: bool,
-    exposed_modules: &'a [ModuleId],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -970,6 +963,10 @@ struct State<'a> {
     pub output_path: Option<&'a str>,
     pub platform_path: PlatformPath<'a>,
     pub target_info: TargetInfo,
+
+    /// Note: only packages and platforms actually expose any modules;
+    /// for all others, this will be empty.
+    pub exposed_modules: &'a [ModuleId],
 
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
@@ -1055,6 +1052,7 @@ impl<'a> State<'a> {
             procedures: MutMap::default(),
             toplevel_expects: ToplevelExpects::default(),
             exposed_to_host: ExposedToHost::default(),
+            exposed_modules: &[],
             exposed_types,
             arc_modules,
             arc_shorthands,
@@ -2445,8 +2443,14 @@ fn update<'a>(
                         state.platform_path = PlatformPath::Valid(to_platform);
                     }
                     Package {
-                        config_shorthand, ..
+                        config_shorthand,
+                        exposes_ids,
+                        ..
                     } => {
+                        if header.is_root_module {
+                            state.exposed_modules = exposes_ids;
+                        }
+
                         work.extend(state.dependencies.notify_package(config_shorthand));
                     }
                     Platform {
@@ -2484,8 +2488,11 @@ fn update<'a>(
                                 module_id: header.module_id,
                                 provides,
                                 is_prebuilt,
-                                exposed_modules: exposes_ids,
                             });
+                        }
+
+                        if header.is_root_module {
+                            state.exposed_modules = exposes_ids;
                         }
                     }
                     Builtin { .. } | Interface { .. } => {
@@ -3521,8 +3528,12 @@ fn load_package_from_disk<'a>(
                     },
                     parser_state,
                 )) => {
-                    let exposes_ids =
-                        get_exposes_ids(&header, arena, &module_ids, &ident_ids_by_module);
+                    let exposes_ids = get_exposes_ids(
+                        &header.exposes.item.items,
+                        arena,
+                        &module_ids,
+                        &ident_ids_by_module,
+                    );
 
                     // make a `platform` module that ultimately exposes `main` to the host
                     let (_, _, platform_module_msg) = build_platform_header(
@@ -3555,20 +3566,19 @@ fn load_package_from_disk<'a>(
 }
 
 fn get_exposes_ids<'a>(
-    header: &PlatformHeader<'a>,
+    entries: &'a [Loc<Spaced<'a, roc_parse::header::ModuleName<'a>>>],
     arena: &'a Bump,
     module_ids: &Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: &Arc<Mutex<IdentIdsByModule>>,
 ) -> bumpalo::collections::Vec<'a, ModuleId> {
-    let mut exposes_ids =
-        bumpalo::collections::Vec::with_capacity_in(header.exposes.item.items.len(), arena);
+    let mut exposes_ids = bumpalo::collections::Vec::with_capacity_in(entries.len(), arena);
     {
         // Lock just long enough to perform the minimal operations necessary.
         let mut module_ids = (**module_ids).lock();
         let mut ident_ids_by_module = (**ident_ids_by_module).lock();
 
         // TODO can we "iterate unspaced" instead of calling unspace here?
-        for entry in unspace(arena, header.exposes.item.items) {
+        for entry in unspace(arena, entries) {
             let module_id =
                 module_ids.get_or_insert(&PQModuleName::Unqualified(entry.value.as_str().into()));
 
@@ -4111,7 +4121,12 @@ fn parse_header<'a>(
             },
             parse_state,
         )) => {
-            let exposes_ids = get_exposes_ids(&header, arena, &module_ids, &ident_ids_by_module);
+            let exposes_ids = get_exposes_ids(
+                &header.exposes.item.items,
+                arena,
+                &module_ids,
+                &ident_ids_by_module,
+            );
 
             let (module_id, _, header) = build_platform_header(
                 arena,
@@ -5120,10 +5135,17 @@ fn build_package_header<'a>(
         arena,
     );
     let packages = unspace(arena, header.packages.item.items);
+    let exposes_ids = get_exposes_ids(
+        &header.exposes.item.items,
+        arena,
+        &module_ids,
+        &ident_ids_by_module,
+    );
     let header_type = HeaderType::Package {
         // A config_shorthand of "" should be fine
         config_shorthand: opt_shorthand.unwrap_or_default(),
         exposes: exposes.into_bump_slice(),
+        exposes_ids: exposes_ids.into_bump_slice(),
     };
 
     let info = HeaderInfo {
