@@ -207,6 +207,8 @@ impl<'a> Formattable for TypeAnnotation<'a> {
     ) {
         use roc_parse::ast::TypeAnnotation::*;
 
+        let self_is_multiline = self.is_multiline();
+
         match self {
             Function(args, ret) => {
                 let needs_parens = parens != Parens::NotNeeded;
@@ -218,32 +220,31 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 }
 
                 let mut it = args.iter().enumerate().peekable();
-                let should_add_newlines = newlines == Newlines::Yes;
 
                 while let Some((index, argument)) = it.next() {
                     let is_first = index == 0;
                     let is_multiline = &argument.value.is_multiline();
 
-                    if !is_first && !is_multiline && should_add_newlines {
+                    if !is_first && !is_multiline && self_is_multiline {
                         buf.newline();
                     }
 
                     argument.value.format_with_options(
                         buf,
                         Parens::InFunctionType,
-                        Newlines::No,
+                        Newlines::Yes,
                         indent,
                     );
 
                     if it.peek().is_some() {
                         buf.push_str(",");
-                        if !should_add_newlines {
+                        if !self_is_multiline {
                             buf.spaces(1);
                         }
                     }
                 }
 
-                if should_add_newlines {
+                if self_is_multiline {
                     buf.newline();
                     buf.indent(indent);
                 } else {
@@ -332,7 +333,12 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 
             Where(annot, has_clauses) => {
                 annot.format_with_options(buf, parens, newlines, indent);
-                buf.spaces(1);
+                if has_clauses.iter().any(|has| has.is_multiline()) {
+                    buf.newline();
+                    buf.indent(indent);
+                } else {
+                    buf.spaces(1);
+                }
                 for (i, has) in has_clauses.iter().enumerate() {
                     buf.push(if i == 0 { '|' } else { ',' });
                     buf.spaces(1);
@@ -341,19 +347,9 @@ impl<'a> Formattable for TypeAnnotation<'a> {
             }
 
             SpaceBefore(ann, spaces) => {
-                let is_function = matches!(ann, TypeAnnotation::Function(..));
-                let next_newlines = if is_function && newlines == Newlines::Yes {
-                    Newlines::Yes
-                } else {
-                    Newlines::No
-                };
-
-                if !buf.ends_with_newline() {
-                    buf.newline();
-                    buf.indent(indent);
-                }
+                buf.ensure_ends_with_newline();
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
-                ann.format_with_options(buf, parens, next_newlines, indent)
+                ann.format_with_options(buf, parens, newlines, indent)
             }
             SpaceAfter(ann, spaces) => {
                 ann.format_with_options(buf, parens, newlines, indent);

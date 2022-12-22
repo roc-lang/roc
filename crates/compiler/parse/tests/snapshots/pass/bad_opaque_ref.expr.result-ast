@@ -1,0 +1,14 @@
+Apply(
+    @0-1 Tag(
+        "I",
+    ),
+    [
+        @1-2 MalformedIdent(
+            "@",
+            BadOpaqueRef(
+                @2,
+            ),
+        ),
+    ],
+    Space,
+)

@@ -12,9 +12,9 @@ use roc_parse::{
         ModuleName, PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires,
         ProvidesTo, To, TypedIdent,
     },
-    ident::UppercaseIdent,
+    ident::{BadIdent, UppercaseIdent},
 };
-use roc_region::all::{Loc, Region};
+use roc_region::all::{Loc, Position, Region};
 
 use crate::{Ast, Buf};
 
@@ -28,6 +28,17 @@ pub fn fmt_default_spaces<'a, 'buf>(
 ) {
     if spaces.is_empty() {
         buf.spaces(1);
+    } else {
+        fmt_spaces(buf, spaces.iter(), indent);
+    }
+}
+pub fn fmt_default_newline<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    spaces: &[CommentOrNewline<'a>],
+    indent: u16,
+) {
+    if spaces.is_empty() {
+        buf.newline();
     } else {
         fmt_spaces(buf, spaces.iter(), indent);
     }
@@ -714,13 +725,27 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 // The formatter can remove redundant parentheses, so also remove these when normalizing for comparison.
                 a.remove_spaces(arena)
             }
-            Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, b),
+            Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Expr::MalformedClosure => Expr::MalformedClosure,
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
             Expr::SingleQuote(a) => Expr::Num(a),
         }
+    }
+}
+
+fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
+    match ident {
+        BadIdent::Start(_) => BadIdent::Start(Position::zero()),
+        BadIdent::Space(e, _) => BadIdent::Space(e, Position::zero()),
+        BadIdent::Underscore(_) => BadIdent::Underscore(Position::zero()),
+        BadIdent::QualifiedTag(_) => BadIdent::QualifiedTag(Position::zero()),
+        BadIdent::WeirdAccessor(_) => BadIdent::WeirdAccessor(Position::zero()),
+        BadIdent::WeirdDotAccess(_) => BadIdent::WeirdDotAccess(Position::zero()),
+        BadIdent::WeirdDotQualified(_) => BadIdent::WeirdDotQualified(Position::zero()),
+        BadIdent::StrayDot(_) => BadIdent::StrayDot(Position::zero()),
+        BadIdent::BadOpaqueRef(_) => BadIdent::BadOpaqueRef(Position::zero()),
     }
 }
 
@@ -755,7 +780,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::StrLiteral(a) => Pattern::StrLiteral(a),
             Pattern::Underscore(a) => Pattern::Underscore(a),
             Pattern::Malformed(a) => Pattern::Malformed(a),
-            Pattern::MalformedIdent(a, b) => Pattern::MalformedIdent(a, b),
+            Pattern::MalformedIdent(a, b) => Pattern::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Pattern::QualifiedIdentifier { module_name, ident } => {
                 Pattern::QualifiedIdentifier { module_name, ident }
             }
