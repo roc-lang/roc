@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::hash::Hash;
+
 use crate::ir::{Expr, HigherOrderLowLevel, JoinPointId, Param, Proc, ProcLayout, Stmt};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
@@ -23,7 +26,7 @@ pub fn infer_borrow<'a>(
     // intern the layouts
 
     let mut param_map = {
-        let (declaration_to_index, total_number_of_params) = DeclarationToIndex::new(arena, procs);
+        let (declaration_to_index, total_number_of_params) = DeclarationToIndex::new(procs);
 
         ParamMap {
             declaration_to_index,
@@ -71,7 +74,7 @@ pub fn infer_borrow<'a>(
     for (group, _) in sccs.groups() {
         // This is a fixed-point analysis
         //
-        // all functions initiall own all their parameters
+        // all functions initially own all their parameters
         // through a series of checks and heuristics, some arguments are set to borrowed
         // when that doesn't lead to conflicts the change is kept, otherwise it may be reverted
         //
@@ -105,23 +108,36 @@ impl From<ParamOffset> for usize {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct Declaration<'a> {
+    symbol: Symbol,
+    layout: ProcLayout<'a>,
+}
+
+impl<'a> Hash for Declaration<'a> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.symbol.hash(state);
+        // Declaration is used as a key in DeclarationToIndex.
+        // Only the symbol is hashed, as calculating the hash for the layout is slow.
+        // If the symbol is not unique (it collides with another symbol with a different value),
+        // a slower equality comparison will still include the layout.
+    }
+}
+
 #[derive(Debug)]
 struct DeclarationToIndex<'a> {
-    elements: Vec<'a, ((Symbol, ProcLayout<'a>), ParamOffset)>,
+    elements: HashMap<Declaration<'a>, ParamOffset>,
 }
 
 impl<'a> DeclarationToIndex<'a> {
-    fn new(arena: &'a Bump, procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>) -> (Self, usize) {
-        let mut declaration_to_index = Vec::with_capacity_in(procs.len(), arena);
+    fn new(procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>) -> (Self, usize) {
+        let mut declaration_to_index = HashMap::with_capacity(procs.len());
 
         let mut i = 0;
-        for key in procs.keys().copied() {
-            declaration_to_index.push((key, ParamOffset(i)));
-
-            i += key.1.arguments.len();
+        for (symbol, layout) in procs.keys().copied() {
+            declaration_to_index.insert(Declaration { symbol, layout }, ParamOffset(i));
+            i += layout.arguments.len();
         }
-
-        declaration_to_index.sort_unstable_by_key(|t| t.0 .0);
 
         (
             DeclarationToIndex {
@@ -136,37 +152,19 @@ impl<'a> DeclarationToIndex<'a> {
         needle_symbol: Symbol,
         needle_layout: ProcLayout<'a>,
     ) -> ParamOffset {
-        if let Ok(middle_index) = self
-            .elements
-            .binary_search_by_key(&needle_symbol, |t| t.0 .0)
-        {
-            // first, iterate backward until we hit a different symbol
-            let backward = self.elements[..middle_index].iter().rev();
-
-            for ((symbol, proc_layout), param_offset) in backward {
-                if *symbol != needle_symbol {
-                    break;
-                } else if *proc_layout == needle_layout {
-                    return *param_offset;
-                }
-            }
-
-            // if not found, iterate forward until we find our combo
-            let forward = self.elements[middle_index..].iter();
-
-            for ((symbol, proc_layout), param_offset) in forward {
-                if *symbol != needle_symbol {
-                    break;
-                } else if *proc_layout == needle_layout {
-                    return *param_offset;
-                }
-            }
+        if let Some(param_offset) = self.elements.get(&Declaration {
+            symbol: needle_symbol,
+            layout: needle_layout,
+        }) {
+            return *param_offset;
         }
 
         let similar = self
             .elements
             .iter()
-            .filter_map(|((s, lay), _)| if *s == needle_symbol { Some(lay) } else { None })
+            .filter_map(|(Declaration { symbol, layout }, _)| {
+                (*symbol == needle_symbol).then_some(layout)
+            })
             .collect::<std::vec::Vec<_>>();
         unreachable!(
             "symbol/layout {:?} {:#?} combo must be in DeclarationToIndex\nHowever {} similar layouts were found:\n{:#?}",
@@ -209,7 +207,10 @@ impl<'a> ParamMap<'a> {
     }
 
     pub fn iter_symbols(&'a self) -> impl Iterator<Item = &'a Symbol> {
-        self.declaration_to_index.elements.iter().map(|t| &t.0 .0)
+        self.declaration_to_index
+            .elements
+            .iter()
+            .map(|t| &t.0.symbol)
     }
 }
 
