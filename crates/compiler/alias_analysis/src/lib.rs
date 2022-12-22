@@ -1288,14 +1288,6 @@ fn lowlevel_spec<'a>(
 
             builder.add_make_tuple(block, &[byte_index, string, is_ok, problem_code])
         }
-        Dbg => {
-            let arguments = [env.symbols[&arguments[0]]];
-
-            let result_type =
-                layout_spec(env, builder, interner, layout, &WhenRecursive::Unreachable)?;
-
-            builder.add_unknown_with(block, &arguments, result_type)
-        }
         _other => {
             // println!("missing {:?}", _other);
             // TODO overly pessimstic
