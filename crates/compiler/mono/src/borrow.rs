@@ -117,8 +117,10 @@ struct Declaration<'a> {
 impl<'a> Hash for Declaration<'a> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.symbol.hash(state);
-        // Only hash ths symbol, as it's faster and is almost always unique.
-        // If not unique, a slower equality comparison with the layout can be used.
+        // Declaration is used as a key in DeclarationToIndex.
+        // Only the symbol is hashed, as calculating the hash for the layout is slow.
+        // If the symbol is not unique (it collides with another symbol with a different value),
+        // a slower equality comparison will still include the layout.
     }
 }
 
@@ -160,15 +162,9 @@ impl<'a> DeclarationToIndex<'a> {
         let similar = self
             .elements
             .iter()
-            .filter_map(
-                |(
-                    Declaration {
-                        symbol: s,
-                        layout: lay,
-                    },
-                    _,
-                )| if *s == needle_symbol { Some(lay) } else { None },
-            )
+            .filter_map(|(Declaration { symbol, layout }, _)| {
+                (*symbol == needle_symbol).then_some(layout)
+            })
             .collect::<std::vec::Vec<_>>();
         unreachable!(
             "symbol/layout {:?} {:#?} combo must be in DeclarationToIndex\nHowever {} similar layouts were found:\n{:#?}",
