@@ -4545,6 +4545,28 @@ fn build_header<'a>(
         ident_ids.clone()
     };
 
+    // This module depends on all the modules it exposes. We need to load those in order
+    // to do things like report errors for them, generate docs for them, etc.
+    if let HeaderType::Platform {
+        exposes,
+        exposes_ids,
+        ..
+    }
+    | HeaderType::Package {
+        exposes,
+        exposes_ids,
+        ..
+    } = header_type
+    {
+        for (loc_module_name, module_id) in exposes.into_iter().zip(exposes_ids.iter().copied()) {
+            let module_name_str = loc_module_name.value.as_str();
+            let pq_module_name = PackageQualified::Unqualified(module_name_str.into());
+
+            deps_by_name.insert(pq_module_name, module_id);
+            imported_modules.insert(module_id, loc_module_name.region);
+        }
+    }
+
     let package_entries = packages
         .iter()
         .map(|Loc { value: pkg, .. }| (pkg.shorthand, pkg.package_name.value))
