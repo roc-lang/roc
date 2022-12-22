@@ -443,7 +443,7 @@ pub fn canonicalize_module_defs<'a>(
         var_store,
         defs,
         new_output,
-        exposed_symbols,
+        &exposed_symbols,
     );
 
     debug_assert!(
