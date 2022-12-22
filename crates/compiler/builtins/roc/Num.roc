@@ -150,11 +150,9 @@ interface Num
 
 ## Represents a number that could be either an [Int] or a [Frac].
 ##
-## This is useful for functions that can work on either, for example #Num.add, whose type is:
+## This is useful for functions that can work on either, for example [Num.add], whose type is:
 ##
-## ```
-## add : Num a, Num a -> Num a
-## ```
+##     add : Num a, Num a -> Num a
 ##
 ## The number 1.5 technically has the type `Num (Fraction *)`, so when you pass
 ## two of them to [Num.add], the answer you get is `3.0 : Num (Fraction *)`.

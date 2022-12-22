@@ -8,7 +8,7 @@ interface Bool
 ## other, and two values `a`, `b` are identical if and only if `isEq a b` is
 ## `Bool.true`.
 ##
-## Not all types support total equality. For example, [F32] and [F64] can
+## Not all types support total equality. For example, [`F32`](../Num#F32) and [`F64`](../Num#F64) can
 ## be a `NaN` ([Not a Number](https://en.wikipedia.org/wiki/NaN)), and the
 ## [IEEE-754](https://en.wikipedia.org/wiki/IEEE_754) floating point standard
 ## specifies that two `NaN`s are not equal.
