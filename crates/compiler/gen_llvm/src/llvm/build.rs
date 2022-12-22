@@ -2661,6 +2661,39 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             }
         }
 
+        Dbg {
+            symbol,
+            variable: specialized_var,
+            remainder,
+        } => {
+            if env.mode.runs_expects() {
+                let shared_memory = crate::llvm::expect::SharedMemoryPointer::get(env);
+                let region = unsafe { std::mem::transmute::<_, roc_region::all::Region>(*symbol) };
+
+                crate::llvm::expect::clone_to_shared_memory(
+                    env,
+                    scope,
+                    layout_ids,
+                    &shared_memory,
+                    *symbol,
+                    region,
+                    &[*symbol],
+                    &[*specialized_var],
+                );
+
+                crate::llvm::expect::notify_parent_dbg(env, &shared_memory);
+            }
+
+            build_exp_stmt(
+                env,
+                layout_ids,
+                func_spec_solutions,
+                scope,
+                parent,
+                remainder,
+            )
+        }
+
         Expect {
             condition: cond_symbol,
             region,

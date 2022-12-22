@@ -314,6 +314,7 @@ impl<'a> ParamMap<'a> {
                     stack.push(cont);
                 }
 
+                Dbg { remainder, .. } => stack.push(remainder),
                 Expect { remainder, .. } => stack.push(remainder),
                 ExpectFx { remainder, .. } => stack.push(remainder),
 
@@ -823,6 +824,10 @@ impl<'a> BorrowInfState<'a> {
                 self.collect_stmt(param_map, default_branch.1);
             }
 
+            Dbg { remainder, .. } => {
+                self.collect_stmt(param_map, remainder);
+            }
+
             Expect { remainder, .. } => {
                 self.collect_stmt(param_map, remainder);
             }
@@ -948,8 +953,6 @@ pub fn lowlevel_borrow_signature(arena: &Bump, op: LowLevel) -> &[bool] {
 
         ListIsUnique => arena.alloc_slice_copy(&[borrowed]),
 
-        Dbg => arena.alloc_slice_copy(&[borrowed, /* dbg-spec-var */ irrelevant]),
-
         BoxExpr | UnboxExpr => {
             unreachable!("These lowlevel operations are turned into mono Expr's")
         }
@@ -1007,6 +1010,7 @@ fn call_info_stmt<'a>(arena: &'a Bump, stmt: &Stmt<'a>, info: &mut CallInfo<'a>)
                 stack.push(default_branch.1);
             }
 
+            Dbg { remainder, .. } => stack.push(remainder),
             Expect { remainder, .. } => stack.push(remainder),
             ExpectFx { remainder, .. } => stack.push(remainder),
 

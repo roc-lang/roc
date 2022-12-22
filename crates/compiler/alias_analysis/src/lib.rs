@@ -611,6 +611,7 @@ fn stmt_spec<'a>(
 
             builder.add_choice(block, &cases)
         }
+        Dbg { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         Expect { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         ExpectFx { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         Ret(symbol) => Ok(env.symbols[symbol]),
@@ -1286,14 +1287,6 @@ fn lowlevel_spec<'a>(
             let problem_code = builder.add_make_tuple(block, &[])?;
 
             builder.add_make_tuple(block, &[byte_index, string, is_ok, problem_code])
-        }
-        Dbg => {
-            let arguments = [env.symbols[&arguments[0]]];
-
-            let result_type =
-                layout_spec(env, builder, interner, layout, &WhenRecursive::Unreachable)?;
-
-            builder.add_unknown_with(block, &arguments, result_type)
         }
         _other => {
             // println!("missing {:?}", _other);
