@@ -188,7 +188,7 @@ fn canonicalize_field<'a>(
         }
 
         Malformed(_string) => {
-            panic!("TODO canonicalize malformed record field");
+            todo!("canonicalize malformed record field");
         }
     }
 }

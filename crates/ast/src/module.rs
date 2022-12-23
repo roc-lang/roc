@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use roc_error_macros::{internal_error, user_error};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, Threading};
 use roc_packaging::cache::RocCacheDir;
 use roc_reporting::report::DEFAULT_PALETTE;
@@ -32,14 +33,16 @@ pub fn load_module(
     match loaded {
         Ok(x) => x,
         Err(roc_load::LoadingProblem::FormattedReport(report)) => {
-            panic!(
+            user_error!(
                 "Failed to load module from src_file: {:?}. Report: {}",
-                src_file, report
+                src_file,
+                report
             );
         }
-        Err(e) => panic!(
+        Err(e) => internal_error!(
             "Failed to load module from src_file {:?}: {:?}",
-            src_file, e
+            src_file,
+            e
         ),
     }
 }
