@@ -25,7 +25,7 @@ fn main() {
     let emit_timings = false;
     let link_type = LinkType::Executable;
     let linking_strategy = LinkingStrategy::Surgical;
-    let prebuilt_requested = true;
+    let prebuilt_requested = false;
     let wasm_dev_stack_bytes = None;
 
     let roc_cache_dir = roc_packaging::cache::RocCacheDir::Disallowed;
