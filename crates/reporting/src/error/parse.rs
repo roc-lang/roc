@@ -290,10 +290,12 @@ fn to_expr_report<'a>(
                                 ])
                                 .indent(4),
                             alloc.reflow("And to define a function:"),
-                            alloc.vcat(vec![
-                                alloc.text("increment : I64 -> I64"),
-                                alloc.text("increment = \\n -> n + 1"),
-                            ]).indent(4)
+                            alloc
+                                .vcat(vec![
+                                    alloc.text("increment : I64 -> I64"),
+                                    alloc.text("increment = \\n -> n + 1"),
+                                ])
+                                .indent(4),
                         ])]
                     }
                 },
