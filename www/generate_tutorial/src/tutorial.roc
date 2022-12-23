@@ -1,8 +1,8 @@
 app "roc-tutorial"
     packages { pf: "../../../examples/static-site-gen/platform/main.roc" }    
     imports [
-        pf.Html.{ html, head, body, footer, div, main, p, section, h1, h2, label, ol, input, text, nav, a, li, link, meta },
-        pf.Html.Attributes.{ httpEquiv, content, name, for, id, type, placeholder, href, rel, lang, class, title },
+        pf.Html.{ html, head, body, footer, script, div, main, p, section, h1, h2, label, ol, input, text, nav, a, li, link, meta },
+        pf.Html.Attributes.{ content, name, for, id, type, href, rel, lang, class, title, charset, src },
     ]
     provides [transformFileContent] to pf
 
@@ -14,9 +14,12 @@ view : Str -> Html.Node
 view = \htmlContent ->
     html [lang "en"] [
         head [] [
-            meta [httpEquiv "content-type", content "text/html; charset=utf-8"] [],
+            meta [charset "utf-8"] [],
             Html.title [] [text "Roc Tutorial"],
+            meta [name "description", content "Learn how to use the Roc programming language."] [],
+            meta [name "viewport", content "width=device-width"] [],
             link [rel "stylesheet", href "/site.css"] [],
+            link [rel "icon", href "/favicon.svg"] [],
         ],
         body [] [
             viewNavbar,
@@ -24,10 +27,11 @@ view = \htmlContent ->
                 viewTutorialStart,
                 text htmlContent,
             ],
+            footer [] [
+                text "Made by people who like to make nice things. © 2022"
+            ]
         ],
-        footer [] [
-            text "Made by people who like to make nice things. © 2022"
-        ]
+        script [src "/site.js"] [],
     ]
 
 viewNavbar : Html.Node
@@ -50,7 +54,7 @@ viewTutorialStart =
         input [id "tutorial-toc-toggle", name "tutorial-toc-toggle", type "checkbox"] [],
         nav [id "tutorial-toc"] [
             label [id "close-tutorial-toc", for "tutorial-toc-toggle"] [text "close"],
-            input [id "toc-search", type "text", placeholder "Search"] [],
+            # TODO fix search: input [id "toc-search", type "text", placeholder "Search"] [],
             ol [] tocLinks,
         ],
         tutorialIntro,
@@ -93,8 +97,8 @@ tutorialIntro =
             p [] [text "This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and much more!"],
         ],
         section [] [
-            h2 [] [
-                text "Installation",
+            h2 [ id "installation" ] [
+                a [href "#installation"] [text "Installation"]
             ],
             p [] [
                 text "Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS",

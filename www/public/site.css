@@ -8,11 +8,11 @@
     --header-link-hover: #222;
     --link-color: hsl(258, 73%, 58%);
     --h1-color: hsl(258, 73%, 70%);
-    --repl-prompt: #0ff4f4;
+    --repl-prompt: #0064ff;
     --body-bg: #fff;
     --code-bg: #e7e7e7;
-    --language-snippet-bg: #fcfcfc;
-    --language-snippet-border: #bbb;
+    --code-snippet-bg: #fcfcfc;
+    --code-snippet-border: #bbb;
     --code-color: #303030;
     --toc-background: #f3f3f3;
     --toc-border: #ddd;
@@ -121,16 +121,20 @@ code, samp {
     color: var(--code-color);
 }
 
-.language-snippet, samp {
+.code-snippet, samp {
     display: block;
     overflow: auto;
     white-space: pre;
     padding: 10px 16px;
-    background-color: var(--language-snippet-bg);
+    background-color: var(--code-snippet-bg);
     margin-bottom: 16px;
     font-size: 1.2rem;
     line-height: 1.76rem;
-    border: 1px solid var(--language-snippet-border);
+    border: 1px solid var(--code-snippet-border);
+}
+
+pre {
+    white-space: pre-wrap;
 }
 
 .repl-prompt:before {
@@ -140,7 +144,7 @@ code, samp {
 }
 
 .repl-err {
-    color: #ff5f5f;
+    color: #c20000;
 }
 
 samp .ann {
@@ -150,22 +154,17 @@ samp .ann {
 
 samp .autovar {
     /* automatic variable names in the repl, e.g. # val1 */
-    color: #48e111;
+    color: #338545;
 }
 
 samp .kw {
     /* language keywords, e.g. `if`*/
-    color: #3474db;
+    color: #004cc2;
 }
 
-samp .op {
+samp .op, samp .paren, samp .brace, samp .comma, samp .colon {
     /* operators, e.g. `+` */
-    color: #b157df;
-}
-
-samp .paren, samp .brace, samp .comma, samp .colon {
-    /* square braces, parens, commas */
-    color: #b157df;
+    color: #c20000;
 }
 
 samp .number {
@@ -188,7 +187,7 @@ samp .dim {
 }
 
 samp .comment {
-    color: #2b9d44;
+    color: #338545;
 }
 
 /* Tables */
@@ -315,7 +314,7 @@ td:last-child {
 
 /* Mobile-friendly screen width */
 @media only screen and (max-device-width: 480px) and (orientation: portrait) {
-    p, code, samp, .language-snippet {
+    p, code, samp, .code-snippet {
         font-size: 16px;
     }
 
@@ -416,19 +415,19 @@ h1 {
     color: var(--h1-color);
     margin-top: 0;
     margin-bottom: 1.75rem;
-    text-shadow: 2px 2px 2px #010101;
+    text-shadow: 1px 1px 1px #010101;
 }
 
 h2 {
     font-size: 4rem;
     line-height: 4rem;
-    text-shadow: 2px 2px 2px #010101;
+    text-shadow: 1px 1px 1px #010101;
 }
 
 h3 {
     font-size: 3rem;
     line-height: 3rem;
-    text-shadow: 2px 2px 1px #010101;
+    text-shadow: 1px 1px 1px #010101;
 }
 
 h4 {
@@ -530,14 +529,14 @@ h4 {
         --header-link-hover: #ddd;
         --h1-color: #1bc6bd;
         --link-color: #1bc6bd;
-        --repl-prompt: #0ff4f4;
+        --repl-prompt: var(--link-color);
         --body-bg: #0e0e0f;
         --code-bg: #303030;
-        --language-snippet-bg: #1a1a1a;
-        --language-snippet-border: #444;
+        --code-snippet-bg: #1a1a1a;
+        --code-snippet-border: #444;
         --code-color: #cdcdcd;
-        --toc-background: var(--language-snippet-bg);
-        --toc-border: var(--language-snippet-border);
+        --toc-background: var(--code-snippet-bg);
+        --toc-border: var(--code-snippet-border);
         --toc-search-bg: #333;
         --toc-search-border: #555;
     }
@@ -550,27 +549,32 @@ h4 {
         scrollbar-color: #444444 #2f2f2f;
     }
 
-    samp .paren, samp .brace, samp .comma {
-        /* square braces, parens, commas */
-        color: #67a0fb;
-    }
-
     samp .kw {
         /* language keywords, e.g. `if` */
-        color: #67a0fb;
+        color: #00c3ff;
     }
 
-    samp .op {
+    samp .colon, samp .op, samp .paren, samp .brace, samp .comma, .repl-err {
         /* operators, e.g. `+` */
-        color: #ca67fb;
+        color: #ff3966;
     }
 
     samp .str {
         /* string literals */
-        color: #26b2b9;
+        color: var(--link-color);
     }
 
-    samp .comment {
-        color: #88c796;
+    code .str {
+        /* string literals */
+        color: var(--link-color);
+    }
+
+    /* autovar = automatic variable names in the repl, e.g. # val1 */
+    samp .comment, samp .autovar {
+        color: #4ed86c;
+    }
+
+    samp .number {
+        color: #00c3ff;
     }
 }

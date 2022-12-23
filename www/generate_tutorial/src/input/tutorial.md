@@ -1,12 +1,10 @@
-## [Installation](#installation) {#installation}
-
-Roc doesn't have a numbered release or an installer yet, but you can follow the install instructions for your OS [here](https://github.com/roc-lang/roc/tree/main/getting_started#installation). If you get stuck, friendly people will be happy to help if you open a topic in [#beginners](https://roc.zulipchat.com/#narrow/stream/231634-beginners) on [Roc Zulip Chat](https://roc.zulipchat.com/) and ask for assistance!
+<!-- The welcome and installation section are located in tutorial.roc -->
 
 ## [Strings and Numbers](#strings-and-numbers) {#strings-and-numbers}
 
 Let's start by getting acquainted with Roc's [_Read-Eval-Print-Loop_](https://en.wikipedia.org/wiki/Read%E2%80%93eval%E2%80%93print_loop), or **REPL** for short. Run this in a terminal:
 
-<pre><code class="snippet">roc repl</code></pre>
+<code class="block">roc repl</code>
 
 If Roc is [installed](#installation), you should see this:
 
@@ -18,7 +16,7 @@ So far, so good!
 
 Try typing this in the REPL and pressing Enter:
 
-<pre><samp class="repl-prompt">"Hello, World!"</samp></pre>
+<samp class="repl-prompt">"Hello, World!"</samp>
 
 The REPL should cheerfully display the following:
 
@@ -75,8 +73,8 @@ Roc will respect [order of operations](https://en.wikipedia.org/wiki/Order_of_op
 
 <pre><samp><span class="repl-prompt">1 <span class="op">+</span> 2 <span class="op">*</span> (3 <span class="op">-</span> 4)
 
--1 <span class="ann">:</span> Num *
-</span></pre>
+-1 <span class="colon">:</span> Num *
+</span></samp></pre>
 
 
 ### [Calling Functions](#calling-functions) {#calling-functions}
@@ -139,11 +137,11 @@ main <span class="kw">=</span>
 
 Try running this with:
 
-<pre><samp>roc dev</samp></pre>
+<samp>roc dev</samp>
 
 You should see a message about a file being downloaded, followed by this:
 
-<pre><samp>I'm a Roc application!</samp></pre>
+<samp>I'm a Roc application!</samp>
 
 Congratulations, you've written your first Roc application! We'll go over what the parts above `main` do later, but let's play around a bit first.
 
@@ -165,7 +163,7 @@ Now run `roc dev` again. This time the "Downloading …" message won't appear; t
 
 You should see this:
 
-<pre><samp>There are 5 animals.</samp></pre>
+<samp>There are 5 animals.</samp>
 
 `main.roc` now has four definitions (_defs_ for short) `birds`, `iguanas`, `total`, and `main`.
 
@@ -271,16 +269,15 @@ This differently-indented version is equivalent to writing `else if sum < 0 then
 
 Whenever this `dbg` line of code is reached, the value of `count` will be printed to [stderr](<https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)>), along with the source code file and line number where the `dbg` itself was written:
 
-<pre><samp><span class="kw">[pluralize.roc 6:8]</span> 5
-</samp></pre>
+<samp><span class="kw">[pluralize.roc 6:8]</span> 5</samp>
 
 You can give `dbg` any expression you like, for example:
 
-<pre><samp><span class="kw">dbg</span> Str.concat singular plural</samp></pre>
+<samp><span class="kw">dbg</span> Str.concat singular plural</samp>
 
 An easy way to print multiple values at a time is to wrap them in a tag, for example a concise tag like `T`:
 
-<pre><samp><span class="kw">dbg</span> T "the value of `count` is:" count</samp></pre>
+<samp><span class="kw">dbg</span> T "the value of `count` is:" count</samp>
 
 > **Note:** `dbg` is a debugging tool, and is only available when running your program via a `roc` subcommand (for example using `roc dev`, `roc run`, or `roc test`). When you build a standalone application with `roc build`, any uses of `dbg` won't be included!
 
@@ -322,7 +319,7 @@ This works because `addAndStringify` only uses `counts.birds` and `counts.iguana
 
 By the way, this is a comment in Roc:
 
-<pre><samp><span class="comment"># The `name` field is unused by addAndStringify</span></samp></pre>
+<samp><span class="comment"># The `name` field is unused by addAndStringify</span></samp>
 
 Whenever you write `#` it means that the rest of the line is a comment, and will not affect the program.
 
@@ -348,7 +345,7 @@ Instead of writing `\record -> record.x` we can write `.x` and it will evaluate 
 <span class="comment"># and returns the `foo` field of that record.</span>
 returnFoo <span class="kw">=</span> .foo
 
-returnFoo <span class="brace">{</span> foo <span class="colon">:</span> <span class="str">"hi!"</span><span class="comma">,</span> bar <span class="colon">:</span> <span class="str">"blah"</span> <span class="brace"></span>}</span>
+returnFoo <span class="brace">{</span> foo <span class="colon">:</span> <span class="str">"hi!"</span><span class="comma">,</span> bar <span class="colon">:</span> <span class="str">"blah"</span> <span class="brace">}</span></span>
 <span class="comment"># returns "hi!"</span>
 </samp></pre>
 
@@ -544,13 +541,11 @@ As an example of why tags are encouraged for data modeling, in many languages it
 
 Another thing we can do in Roc is to make a _list_ of values. Here's an example:
 
-<pre><samp><span class="attr">names</span> <span class="kw">=</span> [<span class="str">"Sam"</span>, <span class="str">"Lee"</span>, <span class="str">"Ari"</span>]
-</samp></pre>
+<samp><span class="attr">names</span> <span class="kw">=</span> [<span class="str">"Sam"</span>, <span class="str">"Lee"</span>, <span class="str">"Ari"</span>]</samp>
 
 This is a list with three elements in it, all strings. We can add a fourth element using `List.append` like so:
 
-<pre><samp>List.append names <span class="str">"Jess"</span>
-</samp></pre>
+<samp>List.append names <span class="str">"Jess"</span></samp>
 
 This returns a **new** list with `"Jess"` after `"Ari"`, and doesn't modify the original list at all. All values in Roc (including lists, but also records, strings, numbers, and so on) are immutable, meaning whenever we want to "change" them, we want to instead pass them to a function which returns some variation of what was passed in.
 
