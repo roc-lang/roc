@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use cli_utils::helpers::{extract_valgrind_errors, ValgrindError, ValgrindErrorXWhat};
 use roc_build::{
     link::{LinkType, LinkingStrategy},
     program::{CodeGenBackend, CodeGenOptions},
@@ -12,13 +13,6 @@ use roc_build::{
 use roc_cli::build::{BuildOrdering, BuiltFile};
 use roc_load::Threading;
 use roc_mono::ir::OptLevel;
-
-fn list_files(dir: &std::path::Path) -> std::vec::Vec<PathBuf> {
-    std::fs::read_dir(dir)
-        .unwrap()
-        .map(|f| PathBuf::from(f.unwrap().file_name()))
-        .collect::<std::vec::Vec<_>>()
-}
 
 fn run_example(app_module_path: impl AsRef<Path>) {
     let app_module_path = app_module_path.as_ref();
@@ -73,14 +67,41 @@ fn run_example(app_module_path: impl AsRef<Path>) {
                 .to_str()
                 .unwrap();
 
-            let (out, _raw_xml) =
+            let (valgrind_out, raw_xml) =
                 cli_utils::helpers::run_with_valgrind([], &[generated_filename.to_string()]);
 
-            if !out.status.success() {
-                panic!(
-                    "Running the application `{:?}` failed!\n\n{}\n\n{}",
-                    out.cmd_str, out.stdout, out.stderr
-                );
+            if valgrind_out.status.success() {
+                let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
+                                panic!("failed to parse the `valgrind` xml output:\n\n  Error was:\n\n    {:?}\n\n  valgrind xml was:\n\n    \"{}\"\n\n  valgrind stdout was:\n\n    \"{}\"\n\n  valgrind stderr was:\n\n    \"{}\"", err, raw_xml, valgrind_out.stdout, valgrind_out.stderr);
+                            });
+
+                if !memory_errors.is_empty() {
+                    for error in memory_errors {
+                        let ValgrindError {
+                            kind,
+                            what: _,
+                            xwhat,
+                        } = error;
+                        println!("Valgrind Error: {}\n", kind);
+
+                        if let Some(ValgrindErrorXWhat {
+                            text,
+                            leakedbytes: _,
+                            leakedblocks: _,
+                        }) = xwhat
+                        {
+                            println!("    {}", text);
+                        }
+                    }
+                    panic!("Valgrind found memory errors in {:?}", app_module_path);
+                }
+            } else {
+                let exit_code = match valgrind_out.status.code() {
+                    Some(code) => format!("exit code {}", code),
+                    None => "no exit code".to_string(),
+                };
+
+                panic!("`valgrind` exited with {}. valgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", exit_code, valgrind_out.stdout, valgrind_out.stderr);
             }
         }
         Err(e) => panic!("{:?}", e),
@@ -88,13 +109,15 @@ fn run_example(app_module_path: impl AsRef<Path>) {
 }
 
 #[test]
-fn it_works() {
+fn run_valgrind_tests() {
     for dir_entry in std::fs::read_dir("tests").unwrap() {
         let path = dir_entry.unwrap().path();
 
         if path.extension() != Some(OsStr::new("roc")) {
             continue;
         }
+
+        println!("test file: {:?}\n", &path);
 
         run_example(path);
     }

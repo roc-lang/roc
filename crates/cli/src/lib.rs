@@ -13,7 +13,6 @@ use roc_load::{ExpectMetadata, LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
 use roc_packaging::tarball::Compression;
-use roc_reporting::cli::Problems;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
