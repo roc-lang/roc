@@ -153,6 +153,9 @@ flags! {
     /// Writes a `final.wasm` file to /tmp
     ROC_WRITE_FINAL_WASM
 
+    /// Prints Wasm interpreter debug log in test_gen
+    ROC_LOG_WASM_INTERP
+
     // ===Load===
 
     /// Print load phases as they complete.

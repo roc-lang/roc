@@ -253,6 +253,7 @@ fn insert_jumps<'a>(
             condition,
             region,
             lookups,
+            variables,
             remainder,
         } => match insert_jumps(
             arena,
@@ -266,6 +267,7 @@ fn insert_jumps<'a>(
                 condition: *condition,
                 region: *region,
                 lookups,
+                variables,
                 remainder: cont,
             })),
             None => None,
@@ -275,6 +277,7 @@ fn insert_jumps<'a>(
             condition,
             region,
             lookups,
+            variables,
             remainder,
         } => match insert_jumps(
             arena,
@@ -288,6 +291,7 @@ fn insert_jumps<'a>(
                 condition: *condition,
                 region: *region,
                 lookups,
+                variables,
                 remainder: cont,
             })),
             None => None,

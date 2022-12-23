@@ -19,7 +19,7 @@ Module {
                         @31-47 PackageEntry {
                             shorthand: "pf",
                             spaces_after_shorthand: [],
-                            package_path: @35-47 PackagePath(
+                            package_name: @35-47 PackageName(
                                 "./platform",
                             ),
                         },

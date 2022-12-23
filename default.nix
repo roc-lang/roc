@@ -27,7 +27,6 @@ rustPlatform.buildRustPackage {
       "inkwell-0.1.0" = "sha256-Sl50CW9H5IXV3k7BoAc0l2mv57lbrzhNxD0ub1AlOxM=";
       "plotters-0.3.1" = "sha256-noy/RSjoEPZZbOJTZw1yxGcX5S+2q/7mxnUrzDyxOFw=";
       "rustyline-9.1.1" = "sha256-aqQqz6nSp+Qn44gm3jXmmQUO6/fYTx7iLph2tbA24Bs=";
-      "wasm3-0.5.0" = "sha256-Hi1LDBIYW6k+nmvPc6Kwh+l875xg7ikLMV9TvFHXZYQ=";
     };
   };
 
@@ -53,7 +52,6 @@ rustPlatform.buildRustPackage {
     llvmPkgs.clang
     llvmPkgs.llvm.dev
     zig
-    rust-bindgen
   ]);
 
   buildInputs = (with pkgs;

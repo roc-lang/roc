@@ -28,7 +28,7 @@ procedure Decode.24 (Decode.95, Decode.114, Decode.97):
     ret Decode.127;
 
 procedure Decode.25 (Decode.98, Decode.99):
-    let Decode.126 : {} = Struct {};
+    let Decode.126 : {} = CallByName Json.41;
     let Decode.125 : {List U8, [C {}, C Str]} = CallByName Decode.24 Decode.98 Decode.126 Decode.99;
     ret Decode.125;
 

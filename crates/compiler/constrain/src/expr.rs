@@ -705,7 +705,7 @@ pub fn constrain_expr(
                 expected,
             );
 
-            constraints.exists_many([], [cond_con, continuation_con])
+            constraints.exists_many([*variable], [cond_con, continuation_con])
         }
 
         If {

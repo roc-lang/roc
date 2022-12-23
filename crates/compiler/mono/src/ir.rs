@@ -27,14 +27,14 @@ use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapsh
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{IdentIds, ModuleId, Symbol};
+use roc_module::symbol::{IdentId, IdentIds, ModuleId, Symbol};
 use roc_problem::can::{RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
-    instantiate_rigids, Content, ExhaustiveMark, FlatType, RedundantMark, StorageSubs, Subs,
-    Variable, VariableSubsSlice,
+    instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
+    StorageSubs, Subs, Variable, VariableSubsSlice,
 };
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -1465,6 +1465,9 @@ impl<'a> Specializations<'a> {
 pub struct Env<'a, 'i> {
     pub arena: &'a Bump,
     pub subs: &'i mut Subs,
+    /// [Subs] to write specialized variables of lookups in expects.
+    /// [None] if this module doesn't produce any expects.
+    pub expectation_subs: Option<&'i mut Subs>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub target_info: TargetInfo,
@@ -1601,6 +1604,9 @@ pub fn cond<'a>(
 
 pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
 
+/// The specialized type of a lookup. Represented as a type-variable.
+pub type LookupType = Variable;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
     Let(Symbol, Expr<'a>, Layout<'a>, &'a Stmt<'a>),
@@ -1622,6 +1628,7 @@ pub enum Stmt<'a> {
         condition: Symbol,
         region: Region,
         lookups: &'a [Symbol],
+        variables: &'a [LookupType],
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
@@ -1629,6 +1636,7 @@ pub enum Stmt<'a> {
         condition: Symbol,
         region: Region,
         lookups: &'a [Symbol],
+        variables: &'a [LookupType],
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
@@ -6568,12 +6576,14 @@ pub fn from_can<'a>(
             let cond_symbol = env.unique_symbol();
 
             let mut lookups = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut lookup_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut specialized_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
 
             for ExpectLookup {
                 symbol,
                 var,
                 ability_info,
-            } in lookups_in_cond
+            } in lookups_in_cond.iter().copied()
             {
                 let symbol = match ability_info {
                     Some(specialization_id) => late_resolve_ability_specialization(
@@ -6584,16 +6594,28 @@ pub fn from_can<'a>(
                     ),
                     None => symbol,
                 };
+
+                let expectation_subs = env
+                    .expectation_subs
+                    .as_deref_mut()
+                    .expect("if expects are compiled, their subs should be available");
+                let spec_var = expectation_subs.fresh_unnamed_flex_var();
+
                 if !env.subs.is_function(var) {
                     // Exclude functions from lookups
                     lookups.push(symbol);
+                    lookup_variables.push(var);
+                    specialized_variables.push(spec_var);
                 }
             }
+
+            let specialized_variables = specialized_variables.into_bump_slice();
 
             let mut stmt = Stmt::Expect {
                 condition: cond_symbol,
                 region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
+                variables: specialized_variables,
                 remainder: env.arena.alloc(rest),
             };
 
@@ -6606,6 +6628,10 @@ pub fn from_can<'a>(
                 cond_symbol,
                 env.arena.alloc(stmt),
             );
+
+            // Now that the condition has been specialized, export the specialized types of our
+            // lookups into the expectation subs.
+            store_specialized_expectation_lookups(env, lookup_variables, specialized_variables);
 
             stmt
         }
@@ -6619,12 +6645,14 @@ pub fn from_can<'a>(
             let cond_symbol = env.unique_symbol();
 
             let mut lookups = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut lookup_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut specialized_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
 
             for ExpectLookup {
                 symbol,
                 var,
                 ability_info,
-            } in lookups_in_cond
+            } in lookups_in_cond.iter().copied()
             {
                 let symbol = match ability_info {
                     Some(specialization_id) => late_resolve_ability_specialization(
@@ -6635,16 +6663,28 @@ pub fn from_can<'a>(
                     ),
                     None => symbol,
                 };
+
+                let expectation_subs = env
+                    .expectation_subs
+                    .as_deref_mut()
+                    .expect("if expects are compiled, their subs should be available");
+                let spec_var = expectation_subs.fresh_unnamed_flex_var();
+
                 if !env.subs.is_function(var) {
                     // Exclude functions from lookups
                     lookups.push(symbol);
+                    lookup_variables.push(var);
+                    specialized_variables.push(spec_var);
                 }
             }
+
+            let specialized_variables = specialized_variables.into_bump_slice();
 
             let mut stmt = Stmt::ExpectFx {
                 condition: cond_symbol,
                 region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
+                variables: specialized_variables,
                 remainder: env.arena.alloc(rest),
             };
 
@@ -6658,6 +6698,8 @@ pub fn from_can<'a>(
                 env.arena.alloc(stmt),
             );
 
+            store_specialized_expectation_lookups(env, lookup_variables, specialized_variables);
+
             stmt
         }
 
@@ -6669,12 +6711,23 @@ pub fn from_can<'a>(
         } => {
             let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
 
+            let spec_var = env
+                .expectation_subs
+                .as_mut()
+                .unwrap()
+                .fresh_unnamed_flex_var();
+            // HACK(dbg-spec-var): pass the specialized type variable along injected into a fake symbol
+            let dbg_spec_var_symbol = Symbol::new(ModuleId::ATTR, unsafe {
+                IdentId::from_index(spec_var.index())
+            });
+
+            // TODO: need to store the specialized variable of this dbg in the expectation_subs
             let call = crate::ir::Call {
                 call_type: CallType::LowLevel {
                     op: LowLevel::Dbg,
                     update_mode: env.next_update_mode_id(),
                 },
-                arguments: env.arena.alloc([dbg_symbol]),
+                arguments: env.arena.alloc([dbg_symbol, dbg_spec_var_symbol]),
             };
 
             let dbg_layout = layout_cache
@@ -6701,6 +6754,10 @@ pub fn from_can<'a>(
                     env.arena.alloc(stmt),
                 );
             }
+
+            // Now that the dbg value has been specialized, export its specialized type into the
+            // expectations subs.
+            store_specialized_expectation_lookups(env, [variable], &[spec_var]);
 
             stmt
         }
@@ -6737,6 +6794,21 @@ pub fn from_can<'a>(
             let hole = env.arena.alloc(Stmt::Ret(symbol));
             with_hole(env, can_expr, variable, procs, layout_cache, symbol, hole)
         }
+    }
+}
+
+fn store_specialized_expectation_lookups(
+    env: &mut Env,
+    lookup_variables: impl IntoIterator<Item = Variable>,
+    specialized_variables: &[Variable],
+) {
+    let subs = &env.subs;
+    let expectation_subs = env.expectation_subs.as_deref_mut().unwrap();
+    for (lookup_var, stored_var) in lookup_variables.into_iter().zip(specialized_variables) {
+        let stored_specialized_var =
+            storage_copy_var_to(&mut Default::default(), subs, expectation_subs, lookup_var);
+        let stored_specialized_desc = expectation_subs.get(stored_specialized_var);
+        expectation_subs.union(*stored_var, stored_specialized_var, stored_specialized_desc);
     }
 }
 
@@ -7070,6 +7142,7 @@ fn substitute_in_stmt_help<'a>(
             condition,
             region,
             lookups,
+            variables,
             remainder,
         } => {
             let new_remainder =
@@ -7084,6 +7157,7 @@ fn substitute_in_stmt_help<'a>(
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),
+                variables,
                 remainder: new_remainder,
             };
 
@@ -7094,6 +7168,7 @@ fn substitute_in_stmt_help<'a>(
             condition,
             region,
             lookups,
+            variables,
             remainder,
         } => {
             let new_remainder =
@@ -7108,6 +7183,7 @@ fn substitute_in_stmt_help<'a>(
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),
+                variables,
                 remainder: new_remainder,
             };
 
@@ -8218,49 +8294,71 @@ fn specialize_symbol<'a>(
                         Err(e) => return_on_layout_error_help!(env, e, "specialize_symbol"),
                     };
 
-                    if procs.is_imported_module_thunk(original) {
-                        let layout = match raw {
-                            RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
-                            RawFunctionLayout::Function(_, lambda_set, _) => {
-                                Layout::LambdaSet(lambda_set)
-                            }
-                        };
+                    match raw {
+                        RawFunctionLayout::Function(_, lambda_set, _)
+                            if !procs.is_imported_module_thunk(original) =>
+                        {
+                            let lambda_name =
+                                find_lambda_name(env, layout_cache, lambda_set, original, &[]);
 
-                        let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
-                        let top_level = ProcLayout::from_raw(
-                            env.arena,
-                            &layout_cache.interner,
-                            raw,
-                            CapturesNiche::no_niche(),
-                        );
+                            debug_assert!(
+                                lambda_name.no_captures(),
+                                "imported functions are top-level and should never capture"
+                            );
 
-                        procs.insert_passed_by_name(
-                            env,
-                            arg_var,
-                            LambdaName::no_niche(original),
-                            top_level,
-                            layout_cache,
-                        );
+                            let function_ptr_layout = ProcLayout::from_raw(
+                                env.arena,
+                                &layout_cache.interner,
+                                raw,
+                                lambda_name.captures_niche(),
+                            );
+                            procs.insert_passed_by_name(
+                                env,
+                                arg_var,
+                                lambda_name,
+                                function_ptr_layout,
+                                layout_cache,
+                            );
 
-                        force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
-                    } else {
-                        // Imported symbol, so it must have no captures niche (since
-                        // top-levels can't capture)
-                        let top_level = ProcLayout::from_raw(
-                            env.arena,
-                            &layout_cache.interner,
-                            raw,
-                            CapturesNiche::no_niche(),
-                        );
-                        procs.insert_passed_by_name(
-                            env,
-                            arg_var,
-                            LambdaName::no_niche(original),
-                            top_level,
-                            layout_cache,
-                        );
+                            construct_closure_data(
+                                env,
+                                procs,
+                                layout_cache,
+                                lambda_set,
+                                lambda_name,
+                                &[],
+                                assign_to,
+                                env.arena.alloc(result),
+                            )
+                        }
+                        _ => {
+                            // This is an imported ZAT that returns either a value, or the closure
+                            // data for a lambda set.
+                            let layout = match raw {
+                                RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
+                                RawFunctionLayout::Function(_, lambda_set, _) => {
+                                    Layout::LambdaSet(lambda_set)
+                                }
+                            };
 
-                        let_empty_struct(assign_to, env.arena.alloc(result))
+                            let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
+                            let top_level = ProcLayout::from_raw(
+                                env.arena,
+                                &layout_cache.interner,
+                                raw,
+                                CapturesNiche::no_niche(),
+                            );
+
+                            procs.insert_passed_by_name(
+                                env,
+                                arg_var,
+                                LambdaName::no_niche(original),
+                                top_level,
+                                layout_cache,
+                            );
+
+                            force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
+                        }
                     }
                 }
 

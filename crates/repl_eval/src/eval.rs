@@ -388,7 +388,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             match float_width {
                 F32 => num_helper!(f32),
                 F64 => num_helper!(f64),
-                F128 => todo!("F128 not implemented"),
             }
         }
         Layout::Builtin(Builtin::Decimal) => num_helper!(RocDec),
@@ -590,7 +589,6 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             match float_width {
                 F32 => helper!(deref_f32, f32),
                 F64 => helper!(deref_f64, f64),
-                F128 => todo!("F128 not implemented"),
             }
         }
         (_, Layout::Builtin(Builtin::List(elem_layout))) => {

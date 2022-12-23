@@ -1362,18 +1362,7 @@ fn str_trim_right_small_to_small_shared() {
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
 fn str_to_nat() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            when Str.toNat "1" is
-                Ok n -> n
-                Err _ -> 0
-
-               "#
-        ),
-        1,
-        usize
-    );
+    assert_evals_to!(r#"Str.toNat "1" |> Result.withDefault 0"#, 1, usize);
 }
 
 #[test]

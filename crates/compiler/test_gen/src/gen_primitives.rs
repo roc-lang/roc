@@ -1363,7 +1363,7 @@ fn linked_list_singleton() {
             "#
         ),
         0,
-        i64,
+        usize,
         |_| 0
     );
 }

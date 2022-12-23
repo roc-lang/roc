@@ -1,11 +1,12 @@
 use crate::debug_info_init;
 use crate::llvm::bitcode::call_void_bitcode_fn;
+use crate::llvm::build::BuilderExt;
 use crate::llvm::build::{
     add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, use_roc_value, Env,
     WhenRecursive, FAST_CALL_CONV,
 };
 use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
-use crate::llvm::convert::{basic_type_from_layout, RocUnion};
+use crate::llvm::convert::{basic_type_from_layout, zig_str_type, RocUnion};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
@@ -35,14 +36,11 @@ impl<'ctx> PointerToRefcount<'ctx> {
         // must make sure it's a pointer to usize
         let refcount_type = env.ptr_int();
 
-        let value = env
-            .builder
-            .build_bitcast(
-                ptr,
-                refcount_type.ptr_type(AddressSpace::Generic),
-                "to_refcount_ptr",
-            )
-            .into_pointer_value();
+        let value = env.builder.build_pointer_cast(
+            ptr,
+            refcount_type.ptr_type(AddressSpace::Generic),
+            "to_refcount_ptr",
+        );
 
         Self { value }
     }
@@ -56,14 +54,18 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let refcount_type = env.ptr_int();
         let refcount_ptr_type = refcount_type.ptr_type(AddressSpace::Generic);
 
-        let ptr_as_usize_ptr = builder
-            .build_bitcast(data_ptr, refcount_ptr_type, "as_usize_ptr")
-            .into_pointer_value();
+        let ptr_as_usize_ptr =
+            builder.build_pointer_cast(data_ptr, refcount_ptr_type, "as_usize_ptr");
 
         // get a pointer to index -1
         let index_intvalue = refcount_type.const_int(-1_i64 as u64, false);
         let refcount_ptr = unsafe {
-            builder.build_in_bounds_gep(ptr_as_usize_ptr, &[index_intvalue], "get_rc_ptr")
+            builder.new_build_in_bounds_gep(
+                env.ptr_int(),
+                ptr_as_usize_ptr,
+                &[index_intvalue],
+                "get_rc_ptr",
+            )
         };
 
         Self {
@@ -98,7 +100,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
     fn get_refcount<'a, 'env>(&self, env: &Env<'a, 'ctx, 'env>) -> IntValue<'ctx> {
         env.builder
-            .build_load(self.value, "get_refcount")
+            .new_build_load(env.ptr_int(), self.value, "get_refcount")
             .into_int_value()
     }
 
@@ -203,11 +205,13 @@ fn incref_pointer<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            env.builder.build_bitcast(
-                pointer,
-                env.ptr_int().ptr_type(AddressSpace::Generic),
-                "to_isize_ptr",
-            ),
+            env.builder
+                .build_pointer_cast(
+                    pointer,
+                    env.ptr_int().ptr_type(AddressSpace::Generic),
+                    "to_isize_ptr",
+                )
+                .into(),
             amount.into(),
         ],
         roc_builtins::bitcode::UTILS_INCREF,
@@ -223,11 +227,13 @@ fn decref_pointer<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            env.builder.build_bitcast(
-                pointer,
-                env.ptr_int().ptr_type(AddressSpace::Generic),
-                "to_isize_ptr",
-            ),
+            env.builder
+                .build_pointer_cast(
+                    pointer,
+                    env.ptr_int().ptr_type(AddressSpace::Generic),
+                    "to_isize_ptr",
+                )
+                .into(),
             alignment.into(),
         ],
         roc_builtins::bitcode::UTILS_DECREF,
@@ -244,11 +250,13 @@ pub fn decref_pointer_check_null<'a, 'ctx, 'env>(
     call_void_bitcode_fn(
         env,
         &[
-            env.builder.build_bitcast(
-                pointer,
-                env.context.i8_type().ptr_type(AddressSpace::Generic),
-                "to_i8_ptr",
-            ),
+            env.builder
+                .build_pointer_cast(
+                    pointer,
+                    env.context.i8_type().ptr_type(AddressSpace::Generic),
+                    "to_i8_ptr",
+                )
+                .into(),
             alignment.into(),
         ],
         roc_builtins::bitcode::UTILS_DECREF_CHECK_NULL,
@@ -466,10 +474,11 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
                 let bt = basic_type_from_layout(env, &layout);
 
                 // cast the i64 pointer to a pointer to block of memory
-                let field_cast = env
-                    .builder
-                    .build_bitcast(value, bt, "i64_to_opaque")
-                    .into_pointer_value();
+                let field_cast = env.builder.build_pointer_cast(
+                    value.into_pointer_value(),
+                    bt.into_pointer_type(),
+                    "i64_to_opaque",
+                );
 
                 call_help(env, function, call_mode, field_cast.into());
             }
@@ -538,7 +547,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
 
                 NonRecursive(tags) => {
                     let function =
-                        modify_refcount_union(env, layout_ids, mode, when_recursive, tags);
+                        modify_refcount_nonrecursive(env, layout_ids, mode, when_recursive, tags);
 
                     Some(function)
                 }
@@ -795,8 +804,9 @@ fn modify_refcount_str_help<'a, 'ctx, 'env>(
     let arg_val = if Layout::Builtin(Builtin::Str)
         .is_passed_by_reference(env.layout_interner, env.target_info)
     {
+        let str_type = zig_str_type(env);
         env.builder
-            .build_load(arg_val.into_pointer_value(), "load_str_to_stack")
+            .new_build_load(str_type, arg_val.into_pointer_value(), "load_str_to_stack")
     } else {
         // it's already a struct, just do nothing
         debug_assert!(arg_val.is_struct_value());
@@ -1207,14 +1217,11 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
             basic_type_from_layout(env, &Layout::struct_no_name_order(field_layouts));
 
         // cast the opaque pointer to a pointer of the correct shape
-        let struct_ptr = env
-            .builder
-            .build_bitcast(
-                value_ptr,
-                wrapper_type.ptr_type(AddressSpace::Generic),
-                "opaque_to_correct_recursive_decrement",
-            )
-            .into_pointer_value();
+        let struct_ptr = env.builder.build_pointer_cast(
+            value_ptr,
+            wrapper_type.ptr_type(AddressSpace::Generic),
+            "opaque_to_correct_recursive_decrement",
+        );
 
         // defer actually performing the refcount modifications until after the current cell has
         // been decremented, see below
@@ -1226,12 +1233,19 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                 // this field has type `*i64`, but is really a pointer to the data we want
                 let elem_pointer = env
                     .builder
-                    .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
+                    .new_build_struct_gep(
+                        wrapper_type.into_struct_type(),
+                        struct_ptr,
+                        i as u32,
+                        "gep_recursive_pointer",
+                    )
                     .unwrap();
 
-                let ptr_as_i64_ptr = env
-                    .builder
-                    .build_load(elem_pointer, "load_recursive_pointer");
+                let ptr_as_i64_ptr = env.builder.new_build_load(
+                    env.context.i64_type().ptr_type(AddressSpace::Generic),
+                    elem_pointer,
+                    "load_recursive_pointer",
+                );
 
                 debug_assert!(ptr_as_i64_ptr.is_pointer_value());
 
@@ -1243,7 +1257,12 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
             } else if field_layout.contains_refcounted(env.layout_interner) {
                 let elem_pointer = env
                     .builder
-                    .build_struct_gep(struct_ptr, i as u32, "gep_recursive_pointer")
+                    .new_build_struct_gep(
+                        wrapper_type.into_struct_type(),
+                        struct_ptr,
+                        i as u32,
+                        "gep_recursive_pointer",
+                    )
                     .unwrap();
 
                 let field =
@@ -1499,7 +1518,7 @@ fn function_name_from_mode<'a>(
     }
 }
 
-fn modify_refcount_union<'a, 'ctx, 'env>(
+fn modify_refcount_nonrecursive<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -1527,7 +1546,7 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
             let basic_type = argument_type_from_union_layout(env, &union_layout);
             let function_value = build_header(env, basic_type, mode, &fn_name);
 
-            modify_refcount_union_help(
+            modify_refcount_nonrecursive_help(
                 env,
                 layout_ids,
                 mode,
@@ -1547,7 +1566,7 @@ fn modify_refcount_union<'a, 'ctx, 'env>(
     function
 }
 
-fn modify_refcount_union_help<'a, 'ctx, 'env>(
+fn modify_refcount_nonrecursive_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
@@ -1577,15 +1596,28 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
 
     let before_block = env.builder.get_insert_block().expect("to be in a function");
 
+    let union_layout = UnionLayout::NonRecursive(tags);
+    let layout = Layout::Union(union_layout);
+    let union_struct_type = basic_type_from_layout(env, &layout).into_struct_type();
+
     // read the tag_id
     let tag_id_ptr = env
         .builder
-        .build_struct_gep(arg_ptr, RocUnion::TAG_ID_INDEX, "tag_id_ptr")
+        .new_build_struct_gep(
+            union_struct_type,
+            arg_ptr,
+            RocUnion::TAG_ID_INDEX,
+            "tag_id_ptr",
+        )
         .unwrap();
 
     let tag_id = env
         .builder
-        .build_load(tag_id_ptr, "load_tag_id")
+        .new_build_load(
+            basic_type_from_layout(env, &union_layout.tag_id_layout()),
+            tag_id_ptr,
+            "load_tag_id",
+        )
         .into_int_value();
 
     let tag_id_u8 =
@@ -1611,18 +1643,24 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
         let block = env.context.append_basic_block(parent, "tag_id_modify");
         env.builder.position_at_end(block);
 
-        let wrapper_type =
+        let data_struct_type =
             basic_type_from_layout(env, &Layout::struct_no_name_order(field_layouts));
 
-        debug_assert!(wrapper_type.is_struct_type());
+        debug_assert!(data_struct_type.is_struct_type());
+        let data_struct_type = data_struct_type.into_struct_type();
         let opaque_tag_data_ptr = env
             .builder
-            .build_struct_gep(arg_ptr, RocUnion::TAG_DATA_INDEX, "field_ptr")
+            .new_build_struct_gep(
+                union_struct_type,
+                arg_ptr,
+                RocUnion::TAG_DATA_INDEX,
+                "field_ptr",
+            )
             .unwrap();
 
         let cast_tag_data_pointer = env.builder.build_pointer_cast(
             opaque_tag_data_ptr,
-            wrapper_type.ptr_type(AddressSpace::Generic),
+            data_struct_type.ptr_type(AddressSpace::Generic),
             "cast_to_concrete_tag",
         );
 
@@ -1638,11 +1676,20 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
                 // This field is a pointer to the recursive pointer.
                 let field_ptr = env
                     .builder
-                    .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
+                    .new_build_struct_gep(
+                        data_struct_type,
+                        cast_tag_data_pointer,
+                        i as u32,
+                        "modify_tag_field",
+                    )
                     .unwrap();
 
                 // This is the actual pointer to the recursive data.
-                let field_value = env.builder.build_load(field_ptr, "load_recursive_pointer");
+                let field_value = env.builder.new_build_load(
+                    env.context.i64_type().ptr_type(AddressSpace::Generic),
+                    field_ptr,
+                    "load_recursive_pointer",
+                );
 
                 debug_assert!(field_value.is_pointer_value());
 
@@ -1663,14 +1710,23 @@ fn modify_refcount_union_help<'a, 'ctx, 'env>(
             } else if field_layout.contains_refcounted(env.layout_interner) {
                 let field_ptr = env
                     .builder
-                    .build_struct_gep(cast_tag_data_pointer, i as u32, "modify_tag_field")
+                    .new_build_struct_gep(
+                        data_struct_type,
+                        cast_tag_data_pointer,
+                        i as u32,
+                        "modify_tag_field",
+                    )
                     .unwrap();
 
                 let field_value =
                     if field_layout.is_passed_by_reference(env.layout_interner, env.target_info) {
                         field_ptr.into()
                     } else {
-                        env.builder.build_load(field_ptr, "field_value")
+                        env.builder.new_build_load(
+                            basic_type_from_layout(env, field_layout),
+                            field_ptr,
+                            "field_value",
+                        )
                     };
 
                 modify_refcount_layout_help(

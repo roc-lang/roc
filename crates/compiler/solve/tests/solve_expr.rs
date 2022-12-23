@@ -522,6 +522,41 @@ mod solve_expr {
         );
     }
 
+    #[test]
+    fn choose_correct_recursion_var_under_record() {
+        infer_queries!(
+            indoc!(
+                r#"
+                Parser : [
+                    Specialize Parser,
+                    Record (List {parser: Parser}),
+                ]
+
+                printCombinatorParser : Parser -> Str
+                printCombinatorParser = \parser ->
+                    when parser is
+                #        ^^^^^^
+                        Specialize p ->
+                            printed = printCombinatorParser p
+                            if Bool.false then printed else "foo"
+                        Record fields ->
+                            fields
+                                |> List.map \f ->
+                                    printed = printCombinatorParser f.parser
+                                    if Bool.false then printed else "foo"
+                                |> List.first
+                                |> Result.withDefault ("foo")
+
+                printCombinatorParser (Record [])
+                "#
+            ),
+            @r###"
+            parser : [Record (List { parser : a }), Specialize a] as a
+            "###
+            print_only_under_alias: true
+        );
+    }
+
     // #[test]
     // fn block_string_literal() {
     //     infer_eq(
@@ -8527,6 +8562,25 @@ mod solve_expr {
         "###
         print_only_under_alias: true
         print_can_decls: true
+        );
+    }
+
+    #[test]
+    fn constrain_dbg_flex_var() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                polyDbg = \x ->
+                #^^^^^^^{-1}
+                    dbg x
+                    x
+
+                main = polyDbg ""
+                "#
+            ),
+        @"polyDbg : a -[[polyDbg(1)]]-> a"
         );
     }
 }

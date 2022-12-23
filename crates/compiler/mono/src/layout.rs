@@ -2890,7 +2890,6 @@ impl<'a> Builtin<'a> {
                 use FloatWidth::*;
 
                 match float_width {
-                    F128 => alloc.text("Float128"),
                     F64 => alloc.text("Float64"),
                     F32 => alloc.text("Float32"),
                 }

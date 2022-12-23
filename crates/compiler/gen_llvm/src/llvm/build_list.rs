@@ -17,6 +17,7 @@ use roc_mono::layout::{Builtin, Layout, LayoutIds};
 use super::bitcode::{call_list_bitcode_fn, BitcodeReturns};
 use super::build::{
     create_entry_block_alloca, load_roc_value, load_symbol, store_roc_value, struct_from_fields,
+    BuilderExt,
 };
 use super::convert::zig_list_type;
 
@@ -70,11 +71,13 @@ fn pass_element_as_opaque<'a, 'ctx, 'env>(
         .build_alloca(element_type, "element_to_pass_as_opaque");
     store_roc_value(env, layout, element_ptr, element);
 
-    env.builder.build_bitcast(
-        element_ptr,
-        env.context.i8_type().ptr_type(AddressSpace::Generic),
-        "pass_element_as_opaque",
-    )
+    env.builder
+        .build_pointer_cast(
+            element_ptr,
+            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            "pass_element_as_opaque",
+        )
+        .into()
 }
 
 pub(crate) fn layout_width<'a, 'ctx, 'env>(
@@ -93,11 +96,13 @@ pub(crate) fn pass_as_opaque<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     ptr: PointerValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
-    env.builder.build_bitcast(
-        ptr,
-        env.context.i8_type().ptr_type(AddressSpace::Generic),
-        "pass_as_opaque",
-    )
+    env.builder
+        .build_pointer_cast(
+            ptr,
+            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            "pass_as_opaque",
+        )
+        .into()
 }
 
 pub(crate) fn list_with_capacity<'a, 'ctx, 'env>(
@@ -134,8 +139,14 @@ pub(crate) fn list_get_unsafe<'a, 'ctx, 'env>(
 
     // Assume the bounds have already been checked earlier
     // (e.g. by List.get or List.first, which wrap List.#getUnsafe)
-    let elem_ptr =
-        unsafe { builder.build_in_bounds_gep(array_data_ptr, &[elem_index], "list_get_element") };
+    let elem_ptr = unsafe {
+        builder.new_build_in_bounds_gep(
+            elem_type,
+            array_data_ptr,
+            &[elem_index],
+            "list_get_element",
+        )
+    };
 
     let result = load_roc_value(env, *element_layout, elem_ptr, "list_get_load_element");
 
@@ -315,7 +326,9 @@ pub(crate) fn list_replace_unsafe<'a, 'ctx, 'env>(
     };
 
     // Load the element and returned list into a struct.
-    let old_element = env.builder.build_load(element_ptr, "load_element");
+    let old_element = env
+        .builder
+        .new_build_load(element_type, element_ptr, "load_element");
 
     // the list has the same alignment as a usize / ptr. The element comes first in the struct if
     // its alignment is bigger than that of a list.
@@ -604,9 +617,12 @@ where
 {
     let builder = env.builder;
 
+    let element_type = basic_type_from_layout(env, &element_layout);
+
     incrementing_index_loop(env, parent, len, index_name, |index| {
         // The pointer to the element in the list
-        let element_ptr = unsafe { builder.build_in_bounds_gep(ptr, &[index], "load_index") };
+        let element_ptr =
+            unsafe { builder.new_build_in_bounds_gep(element_type, ptr, &[index], "load_index") };
 
         let elem = load_roc_value(
             env,
@@ -651,7 +667,9 @@ where
     {
         builder.position_at_end(loop_bb);
 
-        let current_index = builder.build_load(index_alloca, "index").into_int_value();
+        let current_index = builder
+            .new_build_load(env.ptr_int(), index_alloca, "index")
+            .into_int_value();
         let next_index = builder.build_int_add(current_index, one, "next_index");
         builder.build_store(index_alloca, next_index);
 

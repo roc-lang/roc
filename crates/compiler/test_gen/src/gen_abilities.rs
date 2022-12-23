@@ -885,7 +885,7 @@ mod decode_immediate {
     #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
     use indoc::indoc;
 
-    #[cfg(all(test, any(feature = "gen-llvm", feature = "gen-wasm")))]
+    #[cfg(all(test, any(feature = "gen-llvm")))]
     use roc_std::RocStr;
 
     #[test]
