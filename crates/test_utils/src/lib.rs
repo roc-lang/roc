@@ -23,10 +23,12 @@ macro_rules! assert_multiline_str_eq {
 /**
  * Creates a temporary empty directory that gets deleted when this goes out of scope.
  */
+#[cfg(not(target_family = "wasm"))]
 pub struct TmpDir {
     path: std::path::PathBuf,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl TmpDir {
     pub fn new(dir: &str) -> TmpDir {
         let path = std::path::Path::new(dir);

@@ -10,7 +10,6 @@ mod test_fmt {
     use bumpalo::Bump;
     use roc_fmt::def::fmt_defs;
     use roc_fmt::module::fmt_module;
-    use roc_fmt::test_helpers::expr_formats;
     use roc_fmt::Buf;
     use roc_parse::ast::Module;
     use roc_parse::module::{self, module_defs};
