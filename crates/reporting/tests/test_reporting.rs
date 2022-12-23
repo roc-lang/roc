@@ -5653,6 +5653,7 @@ All branches in an `if` must have the same type!
 
     And to define a function:
 
+        increment : I64 -> I64
         increment = \n -> n + 1
 
     "###
