@@ -279,8 +279,8 @@ fn to_expr_report<'a>(
                                 alloc.reflow("The arrow "),
                                 alloc.parser_suggestion("->"),
                                 alloc.reflow(" is only used to define cases in a "),
-                                alloc.keyword("when"),
-                                alloc.reflow("."),
+                                alloc.keyword("`when`"),
+                                alloc.reflow("expression:"),
                             ]),
                             alloc
                                 .vcat(vec![
@@ -289,6 +289,8 @@ fn to_expr_report<'a>(
                                     alloc.text("Green -> \"go!\"").indent(4),
                                 ])
                                 .indent(4),
+                            alloc.reflow("And to define a function:"),
+                            alloc.reflow("increment = \\n -> n + 1").indent(4),
                         ])]
                     }
                 },

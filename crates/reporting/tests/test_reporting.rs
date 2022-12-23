@@ -5651,7 +5651,7 @@ All branches in an `if` must have the same type!
             Red -> "stop!"
             Green -> "go!"
 
-    And defining functions:
+    And to define a function:
 
         increment = \n -> n + 1
 
