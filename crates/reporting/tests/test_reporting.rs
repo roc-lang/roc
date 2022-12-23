@@ -5645,11 +5645,16 @@ All branches in an `if` must have the same type!
     5│          1 -> True
                   ^^
 
-    The arrow -> is only used to define cases in a `when`.
+    The arrow -> is used to define cases in a `when` expression:
 
         when color is
             Red -> "stop!"
             Green -> "go!"
+
+    And defining functions:
+
+        increment = \n -> n + 1
+
     "###
     );
 
