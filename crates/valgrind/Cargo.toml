@@ -5,7 +5,7 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-roc_cli = { path = "../cli" } # depend on CLI to prevent cyclic dependencies
+roc_cli = { path = "../cli" }
 cli_utils = { path = "../cli_utils" }
 roc_build = { path = "../compiler/build" }
 roc_mono = { path = "../compiler/mono" }
@@ -16,5 +16,12 @@ bumpalo.workspace = true
 target-lexicon.workspace = true
 
 [build-dependencies]
-roc_cli = { path = "../cli" } # depend on CLI to prevent cyclic dependencies
+roc_cli = { path = "../cli" }
 cli_utils = { path = "../cli_utils" }
+roc_build = { path = "../compiler/build" }
+roc_mono = { path = "../compiler/mono" }
+roc_load = { path = "../compiler/load" }
+roc_reporting = { path = "../reporting" }
+roc_packaging = { path = "../packaging" }
+bumpalo.workspace = true
+target-lexicon.workspace = true
