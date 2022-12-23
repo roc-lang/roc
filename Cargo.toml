@@ -17,6 +17,7 @@ members = [
     "crates/repl_wasm",
     "crates/repl_expect",
     "crates/test_utils",
+    "crates/valgrind",
     "crates/tracing",
     "crates/utils",
     "crates/docs",
