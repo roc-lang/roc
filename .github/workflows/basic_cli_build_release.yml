@@ -84,7 +84,7 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: remove all folders except the ci folder
-        run: shopt -s extglob && rm -r ./!(ci)/ 
+        run: ls | grep -v  \<ci\> | xargs rm -rf
 
       # note: moving this step to a bash script will not work, the GITHUB_TOKEN is not passed properly
       - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting due to shared IP of github's macos ci servers.
