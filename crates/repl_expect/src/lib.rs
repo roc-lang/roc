@@ -133,7 +133,6 @@ mod test {
             filename,
             source,
             src_dir.path().to_path_buf(),
-            Default::default(),
             RocCacheDir::Disallowed,
             load_config,
         ) {

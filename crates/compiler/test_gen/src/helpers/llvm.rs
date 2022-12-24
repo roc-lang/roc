@@ -80,7 +80,6 @@ fn create_llvm_module<'a>(
         filename,
         module_src,
         src_dir,
-        Default::default(),
         RocCacheDir::Disallowed,
         load_config,
     );
