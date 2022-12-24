@@ -742,9 +742,17 @@ fn doc_url<'a>(
             Some(module_id) => {
                 let symbol = interns.symbol(module_id, ident.into());
 
+                if symbol.is_builtin() {
+                    // We can always generate links for builtin modules.
+                    // TODO add a `--include-builtins` CLI flag for generating offline docs locally
+                    // which include builtins; if that flag is omitted, have this code path generate
+                    // a link directly to the builtin docs on roc-lang.org instead of to a localhost
+                    // URL that will 404.
+                    module_name = symbol.module_string(interns);
+                }
                 // Note: You can do qualified lookups on your own module, e.g.
                 // if I'm in the Foo module, I can do a `Foo.bar` lookup.
-                if !all_exposed_symbols.contains(&symbol) {
+                else if !all_exposed_symbols.contains(&symbol) {
                     // TODO return Err here
                     panic!(
                             "Tried to generate an automatic link in docs for `{}.{}`, but `{}` does not expose `{}`.",
