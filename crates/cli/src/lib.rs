@@ -417,8 +417,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let target_info = TargetInfo::from(target);
 
     // Step 1: compile the app and generate the .o file
-    let subs_by_module = Default::default();
-
     let load_config = LoadConfig {
         target_info,
         // TODO: expose this from CLI?
@@ -430,7 +428,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let load_result = roc_load::load_and_monomorphize(
         arena,
         path.to_path_buf(),
-        subs_by_module,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         load_config,
     );

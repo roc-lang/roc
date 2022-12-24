@@ -90,13 +90,8 @@ pub fn build_file<'a>(
         threading,
         exec_mode,
     };
-    let load_result = roc_load::load_and_monomorphize(
-        arena,
-        app_module_path.clone(),
-        Default::default(),
-        roc_cache_dir,
-        load_config,
-    );
+    let load_result =
+        roc_load::load_and_monomorphize(arena, app_module_path.clone(), roc_cache_dir, load_config);
     let loaded = match load_result {
         Ok(loaded) => loaded,
         Err(LoadMonomorphizedError::LoadingProblem(problem)) => {

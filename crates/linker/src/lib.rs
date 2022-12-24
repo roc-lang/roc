@@ -121,11 +121,9 @@ pub fn generate_stub_lib(
     // But hopefully it will be removable once we have surgical linking on all platforms.
     let target_info = triple.into();
     let arena = &bumpalo::Bump::new();
-    let subs_by_module = Default::default();
     let loaded = roc_load::load_and_monomorphize(
         arena,
         input_path.to_path_buf(),
-        subs_by_module,
         roc_cache_dir,
         LoadConfig {
             target_info,

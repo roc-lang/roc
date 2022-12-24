@@ -115,7 +115,6 @@ pub fn load_and_monomorphize_from_str<'a>(
 pub fn load_and_monomorphize<'a>(
     arena: &'a Bump,
     filename: PathBuf,
-    exposed_types: ExposedByModule,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
 ) -> Result<MonomorphizedModule<'a>, LoadMonomorphizedError<'a>> {
@@ -128,6 +127,8 @@ pub fn load_and_monomorphize<'a>(
         roc_cache_dir,
         load_config.palette,
     )?;
+
+    let exposed_types = ExposedByModule::default();
 
     match load(arena, load_start, exposed_types, roc_cache_dir, load_config)? {
         Monomorphized(module) => Ok(module),
