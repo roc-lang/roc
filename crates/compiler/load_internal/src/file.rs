@@ -3529,7 +3529,7 @@ fn load_package_from_disk<'a>(
                     parser_state,
                 )) => {
                     let exposes_ids = get_exposes_ids(
-                        &header.exposes.item.items,
+                        header.exposes.item.items,
                         arena,
                         &module_ids,
                         &ident_ids_by_module,
@@ -4122,7 +4122,7 @@ fn parse_header<'a>(
             parse_state,
         )) => {
             let exposes_ids = get_exposes_ids(
-                &header.exposes.item.items,
+                header.exposes.item.items,
                 arena,
                 &module_ids,
                 &ident_ids_by_module,
@@ -4558,7 +4558,7 @@ fn build_header<'a>(
         ..
     } = header_type
     {
-        for (loc_module_name, module_id) in exposes.into_iter().zip(exposes_ids.iter().copied()) {
+        for (loc_module_name, module_id) in exposes.iter().zip(exposes_ids.iter().copied()) {
             let module_name_str = loc_module_name.value.as_str();
             let pq_module_name = PackageQualified::Unqualified(module_name_str.into());
 
@@ -5158,7 +5158,7 @@ fn build_package_header<'a>(
     );
     let packages = unspace(arena, header.packages.item.items);
     let exposes_ids = get_exposes_ids(
-        &header.exposes.item.items,
+        header.exposes.item.items,
         arena,
         &module_ids,
         &ident_ids_by_module,
