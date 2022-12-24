@@ -729,11 +729,12 @@ fn doc_url<'a>(
                 module_name = symbol.module_string(interns);
             }
             Err(_) => {
+                dbg!(scope);
                 // TODO return Err here
                 panic!(
-                "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module.",
-                ident
-            );
+                    "Tried to generate an automatic link in docs for symbol `{}`, but that symbol was not in scope in this module.",
+                    ident
+                );
             }
         }
     } else {
