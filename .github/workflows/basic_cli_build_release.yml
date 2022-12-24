@@ -17,9 +17,9 @@ jobs:
 
       - run: cat roc_releases.json
 
-      - run: ./ci/build_basic_cli.sh linux_x86_64
+      # does a build with the surgical linker and also with the legacy linker
+      - run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
 
-      #TODO add linux-x86_64.o?
       - name: Save .rh1 and .rm1 files 
         uses: actions/upload-artifact@v3
         with:
@@ -27,6 +27,7 @@ jobs:
           path: |
             basic-cli/src/linux-x86_64.rh1
             basic-cli/src/metadata_linux-x86_64.rm1
+            basic-cli/src/linux-x86_64.o
 
   build-macos-x86_64-files:
     runs-on: [macos-11] # I expect the generated files to work on macOS 12
@@ -76,14 +77,25 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      - name: remove all folders except the ci folder
+        run: shopt -s extglob && rm -r ./!(ci)/ 
+
       - name: fetch releases data and save to file
         run: curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
 
-      - run: ./ci/get_latest_release_url.sh linux_x86_64
+      - run: echo "ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh linux_x86_64)" >> $GITHUB_ENV
 
-      #- run: git clone https://github.com/roc-lang/basic-cli.git
+      - name: Get the archive from the url.
+        run: curl -OL ${{ env.ROC_RELEASE_URL }}
+
+      - name: decompress the tar
+        run: ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
+
+      - run: git clone https://github.com/roc-lang/basic-cli.git
 
       - name: Download the previously uploaded files
         uses: actions/download-artifact@v3
 
       - run: ls
+
+      - run: ls linux-x86_64-files

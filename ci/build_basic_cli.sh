@@ -16,4 +16,10 @@ ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 
 # build the basic cli platform
 ./roc build ../basic-cli/examples/file.roc
+
+# In some rare cases it's nice to be able to use the legacy linker, so we produce the .o file to be able to do that
+if [ -n "$2" ]; then
+  ./roc build $2 ../basic-cli/examples/file.roc
+fi
+
 cd ..
