@@ -86,6 +86,8 @@ jobs:
       - name: remove all folders except the ci folder
         run: ls | grep -v  \<ci\> | xargs rm -rf
 
+      - run: ls
+
       # note: moving this step to a bash script will not work, the GITHUB_TOKEN is not passed properly
       - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting due to shared IP of github's macos ci servers.
         run: |
