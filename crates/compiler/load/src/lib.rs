@@ -138,7 +138,6 @@ pub fn load_and_monomorphize<'a>(
 pub fn load_and_typecheck<'a>(
     arena: &'a Bump,
     filename: PathBuf,
-    exposed_types: ExposedByModule,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
@@ -151,6 +150,8 @@ pub fn load_and_typecheck<'a>(
         roc_cache_dir,
         load_config.palette,
     )?;
+
+    let exposed_types = ExposedByModule::default();
 
     match load(arena, load_start, exposed_types, roc_cache_dir, load_config)? {
         Monomorphized(_) => unreachable!(""),

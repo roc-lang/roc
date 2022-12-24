@@ -77,8 +77,6 @@ pub fn build_file<'a>(
     let target_info = TargetInfo::from(target);
 
     // Step 1: compile the app and generate the .o file
-    let subs_by_module = Default::default();
-
     let exec_mode = match order {
         BuildOrdering::BuildIfChecks => ExecutionMode::ExecutableIfCheck,
         BuildOrdering::AlwaysBuild => ExecutionMode::Executable,
@@ -95,7 +93,7 @@ pub fn build_file<'a>(
     let load_result = roc_load::load_and_monomorphize(
         arena,
         app_module_path.clone(),
-        subs_by_module,
+        Default::default(),
         roc_cache_dir,
         load_config,
     );
@@ -515,7 +513,6 @@ pub fn check_file<'a>(
     let target_info = TargetInfo::default_x86_64();
 
     // Step 1: compile the app and generate the .o file
-    let subs_by_module = Default::default();
 
     let load_config = LoadConfig {
         target_info,
@@ -525,13 +522,8 @@ pub fn check_file<'a>(
         threading,
         exec_mode: ExecutionMode::Check,
     };
-    let mut loaded = roc_load::load_and_typecheck(
-        arena,
-        roc_file_path,
-        subs_by_module,
-        roc_cache_dir,
-        load_config,
-    )?;
+    let mut loaded =
+        roc_load::load_and_typecheck(arena, roc_file_path, roc_cache_dir, load_config)?;
 
     let buf = &mut String::with_capacity(1024);
 
