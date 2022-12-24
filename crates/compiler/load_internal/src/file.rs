@@ -3572,21 +3572,20 @@ fn get_exposes_ids<'a>(
     ident_ids_by_module: &Arc<Mutex<IdentIdsByModule>>,
 ) -> bumpalo::collections::Vec<'a, ModuleId> {
     let mut exposes_ids = bumpalo::collections::Vec::with_capacity_in(entries.len(), arena);
-    {
-        // Lock just long enough to perform the minimal operations necessary.
-        let mut module_ids = (**module_ids).lock();
-        let mut ident_ids_by_module = (**ident_ids_by_module).lock();
 
-        // TODO can we "iterate unspaced" instead of calling unspace here?
-        for entry in unspace(arena, entries) {
-            let module_id =
-                module_ids.get_or_insert(&PQModuleName::Unqualified(entry.value.as_str().into()));
+    // Lock just long enough to perform the minimal operations necessary.
+    let mut module_ids = (**module_ids).lock();
+    let mut ident_ids_by_module = (**ident_ids_by_module).lock();
 
-            // Ensure this module has an entry in the ident_ids_by_module map.
-            ident_ids_by_module.get_or_insert(module_id);
+    // TODO can we "iterate unspaced" instead of calling unspace here?
+    for entry in unspace(arena, entries) {
+        let module_id =
+            module_ids.get_or_insert(&PQModuleName::Unqualified(entry.value.as_str().into()));
 
-            exposes_ids.push(module_id);
-        }
+        // Ensure this module has an entry in the ident_ids_by_module map.
+        ident_ids_by_module.get_or_insert(module_id);
+
+        exposes_ids.push(module_id);
     }
 
     exposes_ids
