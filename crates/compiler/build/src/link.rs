@@ -705,18 +705,8 @@ pub fn rebuild_host(
     let env_home = env::var("HOME").unwrap_or_else(|_| "".to_string());
     let env_cpath = env::var("CPATH").unwrap_or_else(|_| "".to_string());
 
-    let builtins_host_tempfile = {
-        #[cfg(windows)]
-        {
-            bitcode::host_windows_tempfile()
-        }
-
-        #[cfg(unix)]
-        {
-            bitcode::host_unix_tempfile()
-        }
-    }
-    .expect("failed to write host builtins object to tempfile");
+    let builtins_host_tempfile =
+        bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
     if zig_host_src.exists() {
         // Compile host.zig

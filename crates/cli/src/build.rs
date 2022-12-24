@@ -379,18 +379,8 @@ pub fn build_file<'a>(
                 inputs.push(host_input_path.as_path().to_str().unwrap());
             }
 
-            let builtins_host_tempfile = {
-                #[cfg(unix)]
-                {
-                    bitcode::host_unix_tempfile()
-                }
-
-                #[cfg(windows)]
-                {
-                    bitcode::host_windows_tempfile()
-                }
-            }
-            .expect("failed to write host builtins object to tempfile");
+            let builtins_host_tempfile =
+                bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
             if matches!(code_gen_options.backend, program::CodeGenBackend::Assembly) {
                 inputs.push(builtins_host_tempfile.path().to_str().unwrap());
