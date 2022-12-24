@@ -17,6 +17,7 @@ jobs:
 
       - run: ./ci/build_basic_cli.sh linux_x86_64
 
+      #TODO add linux-x86_64.o?
       - name: Save .rh1 and .rm1 files 
         uses: actions/upload-artifact@v3
         with:
@@ -46,7 +47,7 @@ jobs:
         with:
           name: macos-x86_64-files
           path: |
-            basic-cli/src/macos-x64.o
+            basic-cli/src/macos-x86_64.o
 
   build-macos-apple-silicon-files:
     name: build apple silicon .o file
