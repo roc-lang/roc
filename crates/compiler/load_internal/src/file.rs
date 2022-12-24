@@ -144,7 +144,7 @@ struct ModuleCache<'a> {
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
     top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
-    documentation: MutMap<ModuleId, ModuleDocumentation>,
+    documentation: VecMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: MutMap<ModuleId, Vec<TypeError>>,
 
@@ -630,7 +630,7 @@ pub struct LoadedModule {
     pub resolved_implementations: ResolvedImplementations,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
-    pub docs_by_module: MutMap<ModuleId, ModuleDocumentation>,
+    pub docs_by_module: VecMap<ModuleId, ModuleDocumentation>,
     pub abilities_store: AbilitiesStore,
 }
 
@@ -856,7 +856,7 @@ enum Msg<'a> {
         exposed_types_storage: ExposedTypesStorageSubs,
         resolved_implementations: ResolvedImplementations,
         dep_idents: IdentIdsByModule,
-        documentation: MutMap<ModuleId, ModuleDocumentation>,
+        documentation: VecMap<ModuleId, ModuleDocumentation>,
         abilities_store: AbilitiesStore,
     },
     FoundSpecializations {
@@ -2773,7 +2773,7 @@ fn update<'a>(
                 }
 
                 let documentation = {
-                    let mut empty = MutMap::default();
+                    let mut empty = VecMap::default();
                     std::mem::swap(&mut empty, &mut state.module_cache.documentation);
 
                     empty
@@ -3388,7 +3388,7 @@ fn finish(
     exposed_types_storage: ExposedTypesStorageSubs,
     resolved_implementations: ResolvedImplementations,
     dep_idents: IdentIdsByModule,
-    documentation: MutMap<ModuleId, ModuleDocumentation>,
+    documentation: VecMap<ModuleId, ModuleDocumentation>,
     abilities_store: AbilitiesStore,
 ) -> LoadedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
