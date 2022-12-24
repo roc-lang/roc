@@ -26,7 +26,9 @@ jobs:
       # does a build with the surgical linker and also with the legacy linker
       - run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
 
-      - name: Save .rh1 and .rm1 files 
+      - run: ls basic-cli/src
+
+      - name: Save .rh1, .rm1 and .o file 
         uses: actions/upload-artifact@v3
         with:
           name: linux-x86_64-files
@@ -86,8 +88,6 @@ jobs:
       - name: remove all folders except the ci folder
         run: ls | grep -v  ci | xargs rm -rf
 
-      - run: ls
-
       # note: moving this step to a bash script will not work, the GITHUB_TOKEN is not passed properly
       - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting due to shared IP of github's macos ci servers.
         run: |
@@ -113,3 +113,19 @@ jobs:
       - run: ls
 
       - run: ls linux-x86_64-files
+
+      - run: cp macos-apple-silicon-files/* ./basic-cli/src
+      
+      - run: cp linux-x86_64-files/* ./basic-cli/src
+
+      - run: cp macos-x86_64-files/* ./basic-cli/src
+
+      - run: roc build --bundle=.tar.br ./basic-cli/src/main.roc
+
+      - name: Upload platform archive
+        uses: actions/upload-artifact@v3
+        with:
+          name: basic-cli-platform
+          path: |
+            *.tar.br
+
