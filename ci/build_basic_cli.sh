@@ -17,9 +17,12 @@ ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 # build the basic cli platform
 ./roc build ../basic-cli/examples/file.roc
 
+# We need this extra variable so we can safely check if $2 is empty later
+EXTRA_ARGS=${2:-}
+
 # In some rare cases it's nice to be able to use the legacy linker, so we produce the .o file to be able to do that
-if [[ -n $2 ]]; then
-  ./roc build $2 ../basic-cli/examples/file.roc
+if [ ! -z ${EXTRA_ARGS} ];
+ then ./roc build $EXTRA_ARGS ../basic-cli/examples/file.roc
 fi
 
 cd ..
