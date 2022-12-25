@@ -4561,7 +4561,10 @@ fn build_header<'a>(
             let module_name_str = loc_module_name.value.as_str();
             let pq_module_name = PackageQualified::Unqualified(module_name_str.into());
 
+            debug_assert!(!deps_by_name.contains_key(&pq_module_name));
             deps_by_name.insert(pq_module_name, module_id);
+
+            debug_assert!(!imported_modules.contains_key(&module_id));
             imported_modules.insert(module_id, loc_module_name.region);
         }
     }
