@@ -256,10 +256,13 @@ diff = \{ rendered, patches }, newNode ->
     when { oldNode, newNode } is
         { oldNode: RenderedText oldContent, newNode: Text newContent } ->
             if newContent != oldContent then
-                newNodes = List.set rendered.nodes rendered.root (Ok (RenderedText newContent))
+                newNodes =
+                    List.set rendered.nodes rendered.root (Ok (RenderedText newContent))
 
                 {
-                    rendered: { rendered & nodes: newNodes },
+                    rendered: { rendered &
+                        nodes: newNodes,
+                    },
                     patches: List.append patches (UpdateTextNode rendered.root newContent),
                 }
             else
@@ -304,7 +307,10 @@ deleteNode = \diffState, id ->
     newPatches = List.append patches (RemoveNode id)
 
     {
-        rendered: { rendered & nodes: newNodes, deletedNodeCache: newDeletedNodeCache },
+        rendered: { rendered &
+            nodes: newNodes,
+            deletedNodeCache: newDeletedNodeCache,
+        },
         patches: newPatches,
     }
 
@@ -312,7 +318,8 @@ createNode : DiffState state, Html state -> { rendered : RenderedTree state, pat
 createNode = \{ rendered, patches }, newNode ->
     when newNode is
         Text content ->
-            { rendered: newRendered, id } = insertNode rendered (RenderedText content)
+            { rendered: newRendered, id } =
+                insertNode rendered (RenderedText content)
 
             {
                 rendered: newRendered,
@@ -321,7 +328,8 @@ createNode = \{ rendered, patches }, newNode ->
             }
 
         None ->
-            { rendered: newRendered, id } = insertNode rendered RenderedNone
+            { rendered: newRendered, id } =
+                insertNode rendered RenderedNone
 
             { rendered: newRendered, patches, id }
 
@@ -348,23 +356,20 @@ renderAttrs = \attrs, rendered, patches, nodeId ->
     List.walk attrs { renderedAttrs: [], rendered, patches } \walkState, attr ->
         when attr is
             HtmlAttr k v ->
-                {
+                { walkState &
                     renderedAttrs: List.append walkState.renderedAttrs (RenderedHtmlAttr k v),
-                    rendered: walkState.rendered,
                     patches: List.append walkState.patches (SetAttribute nodeId k v),
                 }
 
             DomProp k v ->
-                {
+                { walkState &
                     renderedAttrs: List.append walkState.renderedAttrs (RenderedDomProp k v),
-                    rendered: walkState.rendered,
                     patches: List.append walkState.patches (SetProperty nodeId k v),
                 }
 
             Style k v ->
-                {
+                { walkState &
                     renderedAttrs: List.append walkState.renderedAttrs (RenderedStyle k v),
-                    rendered: walkState.rendered,
                     patches: List.append walkState.patches (SetStyle nodeId k v),
                 }
 
@@ -389,7 +394,8 @@ createChildNode :
     Html state
     -> { rendered : RenderedTree state, patches : List Patch, ids : List NodeId }
 createChildNode = \{ rendered, patches, ids }, childHtml ->
-    { rendered: renderedChild, patches: childPatches, id } = createNode { rendered, patches } childHtml
+    { rendered: renderedChild, patches: childPatches, id } =
+        createNode { rendered, patches } childHtml
 
     {
         rendered: renderedChild,
