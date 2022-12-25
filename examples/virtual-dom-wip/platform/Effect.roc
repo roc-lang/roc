@@ -19,6 +19,7 @@ hosted Effect
         removeAttribute,
         setProperty,
         removeProperty,
+        setStyle,
         setListener,
         removeListener,
         enableVdomAllocator,
@@ -67,8 +68,11 @@ setProperty : NodeId, Str, List U8 -> Effect {}
 ## removeProperty nodeId propName
 removeProperty : NodeId, Str -> Effect {}
 
-## setListener nodeId eventType handlerId
-setListener : NodeId, EventType, HandlerId -> Effect {}
+## setStyle nodeId key value
+setStyle : NodeId, Str, Str -> Effect {}
+
+## setListener nodeId eventType accessorsJson handlerId
+setListener : NodeId, EventType, List U8, HandlerId -> Effect {}
 
 ## removeListener nodeId eventType
 removeListener : NodeId, EventType -> Effect {}

@@ -134,6 +134,18 @@ const roc_init = async (initData, wasmUrl) => {
 
     /**
      * @param {number} nodeId
+     * @param {number} keyAddr
+     * @param {number} valueAddr
+     */
+    setStyle: (nodeId, keyAddr, valueAddr) => {
+      const node = nodes[nodeId];
+      const key = decodeRocStr(keyAddr);
+      const value = decodeRocStr(valueAddr);
+      node.style[key] = value;
+    },
+
+    /**
+     * @param {number} nodeId
      * @param {number} eventTypeAddr
      * @param {number} accessorsJsonAddr
      * @param {number} handlerId

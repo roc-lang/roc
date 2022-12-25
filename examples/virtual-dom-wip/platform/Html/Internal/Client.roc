@@ -66,7 +66,8 @@ Patch : [
     RemoveAttribute NodeId AttrType,
     SetProperty NodeId Str (List U8),
     RemoveProperty NodeId Str,
-    SetListener NodeId EventType HandlerId,
+    SetStyle NodeId Str Str,
+    SetListener NodeId EventType (List U8) HandlerId,
     RemoveListener NodeId EventType,
 ]
 
@@ -83,7 +84,8 @@ applyPatch = \patch ->
         RemoveAttribute nodeId attrName -> Effect.removeAttribute nodeId attrName
         SetProperty nodeId propName json -> Effect.setProperty nodeId propName json
         RemoveProperty nodeId propName -> Effect.removeProperty nodeId propName
-        SetListener nodeId eventType handlerId -> Effect.setListener nodeId eventType handlerId
+        SetStyle nodeId key value -> Effect.setStyle nodeId key value
+        SetListener nodeId eventType accessorsJson handlerId -> Effect.setListener nodeId eventType accessorsJson handlerId
         RemoveListener nodeId eventType -> Effect.removeListener nodeId eventType
 
 walkPatches : Effect {}, Patch -> Effect {}
@@ -215,32 +217,30 @@ dispatchEvent = \platformState, eventData, handlerId ->
         None ->
             Effect.always { platformState, stopPropagation, preventDefault }
 
-# insertHandler : HandlerLookup state, Handler state -> { index : Nat, handlerLookup : HandlerLookup state }
-# insertHandler = \{ handlers, freeList }, newHandler ->
-#     when List.last freeList is
-#         Ok index ->
-#             {
-#                 index,
-#                 handlerLookup: {
-#                     handlers: List.set handlers index (Ok newHandler),
-#                     freeList: List.dropLast freeList,
-#                 },
-#             }
-#         Err _ ->
-#             {
-#                 index: List.len handlers,
-#                 handlerLookup: {
-#                     handlers: List.append handlers (Ok newHandler),
-#                     freeList: freeList,
-#                 },
-#             }
-# replaceHandler : HandlerLookup state, Nat, Handler state -> HandlerLookup state
-# replaceHandler = \{ handlers, freeList }, index, newHandler ->
-#     { list } = List.replace handlers index (Ok newHandler)
-#     {
-#         handlers: list,
-#         freeList,
-#     }
+insertHandler : RenderedTree state, Handler state -> { handlerId : HandlerId, rendered : RenderedTree state }
+insertHandler = \rendered, newHandler ->
+    when List.last rendered.deletedHandlerCache is
+        Ok handlerId ->
+            {
+                handlerId,
+                rendered: { rendered &
+                    handlers: List.set rendered.handlers handlerId (Ok newHandler),
+                    deletedHandlerCache: List.dropLast rendered.deletedHandlerCache,
+                },
+            }
+
+        Err _ ->
+            {
+                handlerId: List.len rendered.handlers,
+                rendered: { rendered &
+                    handlers: List.append rendered.handlers (Ok newHandler),
+                },
+            }
+
+# replaceHandler : RenderedTree state, Nat, Handler state -> RenderedTree state
+# replaceHandler = \rendered, index, newHandler ->
+#     { list } = List.replace rendered.handlers index (Ok newHandler)
+#     { rendered & handlers: list }
 # -------------------------------
 #   DIFF
 # -------------------------------
@@ -325,29 +325,65 @@ createNode = \{ rendered, patches }, newNode ->
 
             { rendered: newRendered, patches, id }
 
-        Element name _ _attrs children ->
-            { rendered: renderedWithChildren, patches: patchesChildren, ids: childIds } = List.walk children { rendered, patches, ids: [] } createChildNode
-
-            renderedAttrs = [] # TODO
-            { rendered: newRendered, id } =
-                insertNode renderedWithChildren (RenderedElement name renderedAttrs childIds)
-
-            patchesCreate = List.append patchesChildren (CreateElement id name)
-            patchesAttrs = patchesCreate # TODO
+        Element tagName _ attrs children ->
+            { rendered: renderedWithChildren, patches: patchesWithChildren, ids: childIds } =
+                List.walk children { rendered, patches, ids: [] } createChildNode
+            nodeId =
+                nextNodeId renderedWithChildren
+            patchesWithElem =
+                List.append patchesWithChildren (CreateElement nodeId tagName)
+            { renderedAttrs, rendered: renderedWithAttrs, patches: patchesWithAttrs } =
+                renderAttrs attrs renderedWithChildren patchesWithElem nodeId
+            { rendered: renderedWithNode } =
+                insertNode renderedWithAttrs (RenderedElement tagName renderedAttrs childIds)
 
             {
-                rendered: newRendered,
-                patches: patchesAttrs,
-                id,
+                rendered: renderedWithNode,
+                patches: patchesWithAttrs,
+                id: nodeId,
             }
 
-# renderedAttrs =
-#     List.walk attrs [] \walkedAttrs, attr ->
-#         when attr is
-#             EventListener _ _ _ -> walkedAttrs # Dropped! Server-rendered HTML has no listeners
-#             HtmlAttr k v -> List.append walkedAttrs (RenderedHtmlAttr k v)
-#             DomProp k v -> List.append walkedAttrs (RenderedDomProp k v)
-#             Style k v -> List.append walkedAttrs (RenderedStyle k v)
+renderAttrs : List (Attribute state), RenderedTree state, List Patch, NodeId -> { renderedAttrs : List RenderedAttribute, rendered : RenderedTree state, patches : List Patch }
+renderAttrs = \attrs, rendered, patches, nodeId ->
+    List.walk attrs { renderedAttrs: [], rendered, patches } \walkState, attr ->
+        when attr is
+            HtmlAttr k v ->
+                {
+                    renderedAttrs: List.append walkState.renderedAttrs (RenderedHtmlAttr k v),
+                    rendered: walkState.rendered,
+                    patches: List.append walkState.patches (SetAttribute nodeId k v),
+                }
+
+            DomProp k v ->
+                {
+                    renderedAttrs: List.append walkState.renderedAttrs (RenderedDomProp k v),
+                    rendered: walkState.rendered,
+                    patches: List.append walkState.patches (SetProperty nodeId k v),
+                }
+
+            Style k v ->
+                {
+                    renderedAttrs: List.append walkState.renderedAttrs (RenderedStyle k v),
+                    rendered: walkState.rendered,
+                    patches: List.append walkState.patches (SetStyle nodeId k v),
+                }
+
+            EventListener eventType accessors handler ->
+                { handlerId, rendered: renderedWithHandler } =
+                    insertHandler walkState.rendered handler
+                accessorsJson =
+                    accessors |> Encode.toBytes Json.toUtf8
+                listener =
+                    RenderedEventListener eventType accessors handlerId
+                patch =
+                    SetListener nodeId eventType accessorsJson handlerId
+
+                {
+                    renderedAttrs: List.append walkState.renderedAttrs listener,
+                    rendered: renderedWithHandler,
+                    patches: List.append walkState.patches patch,
+                }
+
 createChildNode :
     { rendered : RenderedTree state, patches : List Patch, ids : List NodeId },
     Html state
@@ -361,6 +397,7 @@ createChildNode = \{ rendered, patches, ids }, childHtml ->
         ids: List.append ids id,
     }
 
+# insert a node into the nodes list, assigning it a NodeId
 insertNode : RenderedTree state, RenderedNode -> { rendered : RenderedTree state, id : NodeId }
 insertNode = \rendered, node ->
     when List.last rendered.deletedNodeCache is
@@ -380,3 +417,10 @@ insertNode = \rendered, node ->
                 }
 
             { rendered: newRendered, id: List.len rendered.nodes }
+
+# Predict what NodeId will be assigned next, without actually assigning it
+nextNodeId : RenderedTree state -> NodeId
+nextNodeId = \rendered ->
+    when List.last rendered.deletedNodeCache is
+        Ok id -> id
+        Err _ -> List.len rendered.nodes
