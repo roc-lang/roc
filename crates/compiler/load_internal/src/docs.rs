@@ -194,7 +194,7 @@ fn generate_entry_docs(
                     ..
                 } => {
                     if let Pattern::Identifier(identifier) = ann_pattern.value {
-                        // Check if the definition is exposed
+                        // Check if this module exposes the def
                         if let Some(ident_id) = ident_ids.get_id(identifier) {
                             let doc_def = DocDef {
                                 name: identifier.to_string(),
@@ -237,6 +237,10 @@ fn generate_entry_docs(
                     }
 
                     let type_annotation =
+                        // If this alias contains an unexposed type, then don't try to render a
+                        // type annotation for it. You're not allowed to see that!
+                        // (This comes up when exporting an alias like Task ok err : InnerTask ok err
+                        // where Task is exposed but InnerTask isn't.)
                         if contains_unexposed_type(&ann.value, exposed_module_ids, module_ids) {
                             TypeAnnotation::NoTypeAnn
                         } else {
@@ -332,6 +336,8 @@ fn generate_entry_docs(
     acc
 }
 
+/// Does this type contain any types which are not exposed outside the package?
+/// (If so, we shouldn't try to render a type annotation for it.)
 fn contains_unexposed_type(
     ann: &ast::TypeAnnotation,
     exposed_module_ids: &[ModuleId],
