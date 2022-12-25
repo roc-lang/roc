@@ -4562,6 +4562,8 @@ fn build_header<'a>(
                 let module_name_str = loc_module_name.value.as_str();
                 let pq_module_name = PackageQualified::Unqualified(module_name_str.into());
 
+                // We should never change an entry here. Either we should have no entry,
+                // or if we do have one, it should be unchanged by this insertion.
                 debug_assert_eq!(
                     &module_id,
                     deps_by_name.get(&pq_module_name).unwrap_or(&module_id),
@@ -4572,6 +4574,8 @@ fn build_header<'a>(
                 );
                 deps_by_name.insert(pq_module_name, module_id);
 
+                // We should never change an entry here. Either we should have no entry,
+                // or if we do have one, it should be unchanged by this insertion.
                 debug_assert_eq!(
                     &loc_module_name.region,
                     imported_modules.get(&module_id).unwrap_or(&loc_module_name.region),
