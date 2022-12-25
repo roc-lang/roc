@@ -4546,32 +4546,28 @@ fn build_header<'a>(
 
     // This module depends on all the modules it exposes. We need to load those in order
     // to do things like report errors for them, generate docs for them, etc.
-    if let HeaderType::Platform {
-        exposes,
-        exposes_ids,
-        config_shorthand,
-        ..
-    }
-    | HeaderType::Package {
-        exposes,
-        exposes_ids,
-        config_shorthand,
-        ..
-    } = header_type
-    {
-        for (loc_module_name, module_id) in exposes.iter().zip(exposes_ids.iter().copied()) {
-            let module_name_str = loc_module_name.value.as_str();
-            let pq_module_name = if info.is_root_module {
-                PackageQualified::Unqualified(module_name_str.into())
-            } else {
-                PackageQualified::Qualified(config_shorthand, module_name_str.into())
-            };
+    if info.is_root_module {
+        if let HeaderType::Platform {
+            exposes,
+            exposes_ids,
+            ..
+        }
+        | HeaderType::Package {
+            exposes,
+            exposes_ids,
+            ..
+        } = header_type
+        {
+            for (loc_module_name, module_id) in exposes.iter().zip(exposes_ids.iter().copied()) {
+                let module_name_str = loc_module_name.value.as_str();
+                let pq_module_name = PackageQualified::Unqualified(module_name_str.into());
 
-            debug_assert!(!deps_by_name.contains_key(&pq_module_name));
-            deps_by_name.insert(pq_module_name, module_id);
+                debug_assert!(!deps_by_name.contains_key(&pq_module_name));
+                deps_by_name.insert(pq_module_name, module_id);
 
-            debug_assert!(!imported_modules.contains_key(&module_id));
-            imported_modules.insert(module_id, loc_module_name.region);
+                debug_assert!(!imported_modules.contains_key(&module_id));
+                imported_modules.insert(module_id, loc_module_name.region);
+            }
         }
     }
 
