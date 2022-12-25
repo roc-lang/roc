@@ -8,11 +8,11 @@ mod test_fmt {
     use std::path::PathBuf;
 
     use bumpalo::Bump;
+    use roc_ast2::{Header, SpacesBefore};
     use roc_fmt::def::fmt_defs;
-    use roc_fmt::module::fmt_module;
+    use roc_fmt::module::fmt_header;
     use roc_fmt::test_helpers::expr_formats;
     use roc_fmt::Buf;
-    use roc_parse::ast::Module;
     use roc_parse::module::{self, module_defs};
     use roc_parse::parser::Parser;
     use roc_parse::state::State;
@@ -36,11 +36,11 @@ mod test_fmt {
     fn fmt_module_and_defs<'a>(
         arena: &Bump,
         src: &str,
-        module: &Module<'a>,
+        header: &SpacesBefore<'a, Header<'a>>,
         state: State<'a>,
         buf: &mut Buf<'_>,
     ) {
-        fmt_module(buf, module);
+        fmt_header(buf, header);
 
         match module_defs().parse(arena, state, 0) {
             Ok((_, loc_defs, _)) => {

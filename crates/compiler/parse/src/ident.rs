@@ -1,86 +1,10 @@
 use crate::parser::Progress::{self, *};
-use crate::parser::{BadInputError, EExpr, ParseResult, Parser};
+use crate::parser::{ParseResult, Parser};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use roc_ast2::{EExpr, EIdent, Ident, UppercaseIdent};
 use roc_region::all::Position;
-
-/// A tag, for example. Must start with an uppercase letter
-/// and then contain only letters and numbers afterwards - no dots allowed!
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct UppercaseIdent<'a>(&'a str);
-
-impl<'a> From<&'a str> for UppercaseIdent<'a> {
-    fn from(string: &'a str) -> Self {
-        UppercaseIdent(string)
-    }
-}
-
-impl<'a> From<UppercaseIdent<'a>> for &'a str {
-    fn from(ident: UppercaseIdent<'a>) -> Self {
-        ident.0
-    }
-}
-
-impl<'a> From<&'a UppercaseIdent<'a>> for &'a str {
-    fn from(ident: &'a UppercaseIdent<'a>) -> Self {
-        ident.0
-    }
-}
-
-/// The parser accepts all of these in any position where any one of them could
-/// appear. This way, canonicalization can give more helpful error messages like
-/// "you can't redefine this tag!" if you wrote `Foo = ...` or
-/// "you can only define unqualified constants" if you wrote `Foo.bar = ...`
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Ident<'a> {
-    /// Foo or Bar
-    Tag(&'a str),
-    /// @Foo or @Bar
-    OpaqueRef(&'a str),
-    /// foo or foo.bar or Foo.Bar.baz.qux
-    Access {
-        module_name: &'a str,
-        parts: &'a [&'a str],
-    },
-    /// .foo { foo: 42 }
-    RecordAccessorFunction(&'a str),
-    /// .1 (1, 2, 3)
-    TupleAccessorFunction(&'a str),
-    /// .Foo or foo. or something like foo.Bar
-    Malformed(&'a str, BadIdent),
-}
-
-impl<'a> Ident<'a> {
-    pub fn len(&self) -> usize {
-        use self::Ident::*;
-
-        match self {
-            Tag(string) | OpaqueRef(string) => string.len(),
-            Access { module_name, parts } => {
-                let mut len = if module_name.is_empty() {
-                    0
-                } else {
-                    module_name.len() + 1
-                    // +1 for the dot
-                };
-
-                for part in parts.iter() {
-                    len += part.len() + 1 // +1 for the dot
-                }
-
-                len - 1
-            }
-            RecordAccessorFunction(string) => string.len(),
-            TupleAccessorFunction(string) => string.len(),
-            Malformed(string, _) => string.len(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
 
 /// This could be:
 ///
@@ -209,8 +133,8 @@ pub fn parse_ident<'a>(
         }
         Err((0, _)) => Err((NoProgress, EExpr::Start(state.pos()))),
         Err((width, fail)) => match fail {
-            BadIdent::Start(pos) => Err((NoProgress, EExpr::Start(pos))),
-            BadIdent::Space(e, pos) => Err((NoProgress, EExpr::Space(e, pos))),
+            EIdent::Start(pos) => Err((NoProgress, EExpr::Start(pos))),
+            EIdent::Space(e, pos) => Err((NoProgress, EExpr::Space(e, pos))),
             _ => malformed_identifier(
                 initial.bytes(),
                 fail,
@@ -222,7 +146,7 @@ pub fn parse_ident<'a>(
 
 fn malformed_identifier<'a>(
     initial_bytes: &'a [u8],
-    problem: BadIdent,
+    problem: EIdent,
     mut state: State<'a>,
 ) -> ParseResult<'a, Ident<'a>, EExpr<'a>> {
     let chomped = chomp_malformed(state.bytes());
@@ -250,20 +174,6 @@ pub fn chomp_malformed(bytes: &[u8]) -> usize {
     }
 
     chomped
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BadIdent {
-    Start(Position),
-    Space(BadInputError, Position),
-
-    Underscore(Position),
-    QualifiedTag(Position),
-    WeirdAccessor(Position),
-    WeirdDotAccess(Position),
-    WeirdDotQualified(Position),
-    StrayDot(Position),
-    BadOpaqueRef(Position),
 }
 
 fn is_alnum(ch: char) -> bool {
@@ -332,7 +242,7 @@ pub enum Accessor<'a> {
 }
 
 /// a `.foo` or `.1` accessor function
-fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
+fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, EIdent> {
     // assumes the leading `.` has been chomped already
     use encode_unicode::CharExt;
 
@@ -341,7 +251,7 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
             let chomped = name.len();
 
             if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-                Err(BadIdent::WeirdAccessor(pos))
+                Err(EIdent::WeirdAccessor(pos))
             } else {
                 Ok(Accessor::RecordField(name))
             }
@@ -352,14 +262,14 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
                     let chomped = name.len();
 
                     if let Ok(('.', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-                        Err(BadIdent::WeirdAccessor(pos))
+                        Err(EIdent::WeirdAccessor(pos))
                     } else {
                         Ok(Accessor::TupleIndex(name))
                     }
                 }
                 Err(_) => {
                     // we've already made progress with the initial `.`
-                    Err(BadIdent::StrayDot(pos.bump_column(1)))
+                    Err(EIdent::StrayDot(pos.bump_column(1)))
                 }
             }
         }
@@ -367,12 +277,12 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
 }
 
 /// a `@Token` opaque
-fn chomp_opaque_ref(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
+fn chomp_opaque_ref(buffer: &[u8], pos: Position) -> Result<&str, EIdent> {
     // assumes the leading `@` has NOT been chomped already
     debug_assert_eq!(buffer.first(), Some(&b'@'));
     use encode_unicode::CharExt;
 
-    let bad_ident = BadIdent::BadOpaqueRef;
+    let bad_ident = EIdent::BadOpaqueRef;
 
     match chomp_uppercase_part(&buffer[1..]) {
         Ok(name) => {
@@ -393,7 +303,7 @@ fn chomp_identifier_chain<'a>(
     arena: &'a Bump,
     buffer: &'a [u8],
     pos: Position,
-) -> Result<(u32, Ident<'a>), (u32, BadIdent)> {
+) -> Result<(u32, Ident<'a>), (u32, EIdent)> {
     use encode_unicode::CharExt;
 
     let first_is_uppercase;
@@ -428,10 +338,10 @@ fn chomp_identifier_chain<'a>(
                 first_is_uppercase = c.is_uppercase();
             }
             _ => {
-                return Err((0, BadIdent::Start(pos)));
+                return Err((0, EIdent::Start(pos)));
             }
         },
-        Err(_) => return Err((0, BadIdent::Start(pos))),
+        Err(_) => return Err((0, EIdent::Start(pos))),
     }
 
     while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
@@ -477,15 +387,15 @@ fn chomp_identifier_chain<'a>(
             }
             Err(0) if !module_name.is_empty() => Err((
                 chomped as u32,
-                BadIdent::QualifiedTag(pos.bump_column(chomped as u32)),
+                EIdent::QualifiedTag(pos.bump_column(chomped as u32)),
             )),
             Err(1) if parts.is_empty() => Err((
                 chomped as u32 + 1,
-                BadIdent::WeirdDotQualified(pos.bump_column(chomped as u32 + 1)),
+                EIdent::WeirdDotQualified(pos.bump_column(chomped as u32 + 1)),
             )),
             Err(width) => Err((
                 chomped as u32 + width,
-                BadIdent::WeirdDotAccess(pos.bump_column(chomped as u32 + width)),
+                EIdent::WeirdDotAccess(pos.bump_column(chomped as u32 + width)),
             )),
         }
     } else if let Ok(('_', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
@@ -494,7 +404,7 @@ fn chomp_identifier_chain<'a>(
         // to give good error messages for this case
         Err((
             chomped as u32 + 1,
-            BadIdent::Underscore(pos.bump_column(chomped as u32 + 1)),
+            EIdent::Underscore(pos.bump_column(chomped as u32 + 1)),
         ))
     } else if first_is_uppercase {
         // just one segment, starting with an uppercase letter; that's a tag

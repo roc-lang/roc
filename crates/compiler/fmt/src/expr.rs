@@ -7,16 +7,16 @@ use crate::spaces::{
     INDENT,
 };
 use crate::Buf;
-use roc_module::called_via::{self, BinOp};
-use roc_parse::ast::{
+use roc_ast2::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, WhenBranch,
 };
-use roc_parse::ast::{StrLiteral, StrSegment};
+use roc_ast2::{StrLiteral, StrSegment};
+use roc_module::called_via::{self, BinOp};
 use roc_region::all::Loc;
 
 impl<'a> Formattable for Expr<'a> {
     fn is_multiline(&self) -> bool {
-        use roc_parse::ast::Expr::*;
+        use roc_ast2::Expr::*;
         // TODO cache these answers using a Map<Pointer, bool>, so
         // we don't have to traverse subexpressions repeatedly
 
@@ -52,7 +52,7 @@ impl<'a> Formattable for Expr<'a> {
             List(items) => items.iter().any(|loc_expr| loc_expr.is_multiline()),
 
             Str(literal) => {
-                use roc_parse::ast::StrLiteral::*;
+                use roc_ast2::StrLiteral::*;
 
                 match literal {
                     PlainLine(string) => {
@@ -92,7 +92,7 @@ impl<'a> Formattable for Expr<'a> {
             }
 
             UnaryOp(loc_subexpr, _)
-            | PrecedenceConflict(roc_parse::ast::PrecedenceConflict {
+            | PrecedenceConflict(roc_ast2::PrecedenceConflict {
                 expr: loc_subexpr, ..
             }) => loc_subexpr.is_multiline(),
 
@@ -446,7 +446,7 @@ pub(crate) fn format_sq_literal(buf: &mut Buf, s: &str) {
 }
 
 fn starts_with_newline(expr: &Expr) -> bool {
-    use roc_parse::ast::Expr::*;
+    use roc_ast2::Expr::*;
 
     match expr {
         SpaceBefore(_, comment_or_newline) => {
@@ -520,7 +520,7 @@ fn push_op(buf: &mut Buf, op: BinOp) {
 }
 
 pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u16) {
-    use roc_parse::ast::StrLiteral::*;
+    use roc_ast2::StrLiteral::*;
 
     match literal {
         PlainLine(string) => {
@@ -627,7 +627,7 @@ fn format_spaces<'a, 'buf>(
 }
 
 fn has_line_comment_before<'a>(expr: &'a Expr<'a>) -> bool {
-    use roc_parse::ast::Expr::*;
+    use roc_ast2::Expr::*;
 
     match expr {
         SpaceBefore(_, spaces) => {
@@ -638,7 +638,7 @@ fn has_line_comment_before<'a>(expr: &'a Expr<'a>) -> bool {
 }
 
 fn empty_line_before_expr<'a>(expr: &'a Expr<'a>) -> bool {
-    use roc_parse::ast::Expr::*;
+    use roc_ast2::Expr::*;
 
     match expr {
         SpaceBefore(_, spaces) => {

@@ -1,4 +1,5 @@
-use roc_parse::parser::{ENumber, FileError, PList, SyntaxError};
+use roc_ast2::{ENumber, EPatternList};
+use roc_parse::parser::{FileError, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
@@ -186,10 +187,10 @@ fn to_expr_report<'a>(
     lines: &LineInfo,
     filename: PathBuf,
     context: Context,
-    parse_problem: &roc_parse::parser::EExpr<'a>,
+    parse_problem: &roc_ast2::EExpr<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EExpr;
+    use roc_ast2::EExpr;
 
     match parse_problem {
         EExpr::If(if_, pos) => to_if_report(alloc, lines, filename, context, if_, *pos),
@@ -638,10 +639,10 @@ fn to_lambda_report<'a>(
     lines: &LineInfo,
     filename: PathBuf,
     _context: Context,
-    parse_problem: &roc_parse::parser::EClosure<'a>,
+    parse_problem: &roc_ast2::EClosure<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EClosure;
+    use roc_ast2::EClosure;
 
     match *parse_problem {
         EClosure::Arrow(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
@@ -868,10 +869,10 @@ fn to_str_report<'a>(
     lines: &LineInfo,
     filename: PathBuf,
     context: Context,
-    parse_problem: &roc_parse::parser::EString<'a>,
+    parse_problem: &roc_ast2::EString<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EString;
+    use roc_ast2::EString;
 
     match *parse_problem {
         EString::Open(_pos) => unreachable!("another branch would be taken"),
@@ -1049,10 +1050,10 @@ fn to_expr_in_parens_report<'a>(
     lines: &LineInfo,
     filename: PathBuf,
     context: Context,
-    parse_problem: &roc_parse::parser::EInParens<'a>,
+    parse_problem: &roc_ast2::EInParens<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EInParens;
+    use roc_ast2::EInParens;
 
     match *parse_problem {
         EInParens::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
@@ -1141,10 +1142,10 @@ fn to_list_report<'a>(
     lines: &LineInfo,
     filename: PathBuf,
     context: Context,
-    parse_problem: &roc_parse::parser::EList<'a>,
+    parse_problem: &roc_ast2::EList<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EList;
+    use roc_ast2::EList;
 
     match *parse_problem {
         EList::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
@@ -1253,27 +1254,25 @@ fn to_dbg_or_expect_report<'a>(
     filename: PathBuf,
     context: Context,
     node: Node,
-    parse_problem: &roc_parse::parser::EExpect<'a>,
+    parse_problem: &roc_ast2::EExpect<'a>,
     start: Position,
 ) -> Report<'a> {
     match parse_problem {
-        roc_parse::parser::EExpect::Space(err, pos) => {
-            to_space_report(alloc, lines, filename, err, *pos)
-        }
+        roc_ast2::EExpect::Space(err, pos) => to_space_report(alloc, lines, filename, err, *pos),
 
-        roc_parse::parser::EExpect::Dbg(_) => unreachable!("another branch would be taken"),
-        roc_parse::parser::EExpect::Expect(_) => unreachable!("another branch would be taken"),
+        roc_ast2::EExpect::Dbg(_) => unreachable!("another branch would be taken"),
+        roc_ast2::EExpect::Expect(_) => unreachable!("another branch would be taken"),
 
-        roc_parse::parser::EExpect::Condition(e_expr, condition_start) => {
+        roc_ast2::EExpect::Condition(e_expr, condition_start) => {
             // is adding context helpful here?
             to_expr_report(alloc, lines, filename, context, e_expr, *condition_start)
         }
-        roc_parse::parser::EExpect::Continuation(e_expr, continuation_start) => {
+        roc_ast2::EExpect::Continuation(e_expr, continuation_start) => {
             let context = Context::InNode(node, start, Box::new(context));
             to_expr_report(alloc, lines, filename, context, e_expr, *continuation_start)
         }
 
-        roc_parse::parser::EExpect::IndentCondition(_) => todo!(),
+        roc_ast2::EExpect::IndentCondition(_) => todo!(),
     }
 }
 
@@ -1282,10 +1281,10 @@ fn to_if_report<'a>(
     lines: &LineInfo,
     filename: PathBuf,
     context: Context,
-    parse_problem: &roc_parse::parser::EIf<'a>,
+    parse_problem: &roc_ast2::EIf<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EIf;
+    use roc_ast2::EIf;
 
     match *parse_problem {
         EIf::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
@@ -1395,10 +1394,10 @@ fn to_when_report<'a>(
     lines: &LineInfo,
     filename: PathBuf,
     context: Context,
-    parse_problem: &roc_parse::parser::EWhen<'a>,
+    parse_problem: &roc_ast2::EWhen<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EWhen;
+    use roc_ast2::EWhen;
 
     match *parse_problem {
         EWhen::IfGuard(nested, pos) => {
@@ -1702,10 +1701,10 @@ fn to_pattern_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::EPattern<'a>,
+    parse_problem: &roc_ast2::EPattern<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EPattern;
+    use roc_ast2::EPattern;
 
     match parse_problem {
         EPattern::Start(pos) => {
@@ -1741,13 +1740,13 @@ fn to_precord_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::PRecord<'a>,
+    parse_problem: &roc_ast2::EPatternRecord<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::PRecord;
+    use roc_ast2::EPatternRecord;
 
     match *parse_problem {
-        PRecord::Open(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
+        EPatternRecord::Open(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Keyword(keyword) => {
                 let surroundings = Region::new(start, pos);
                 let region = to_keyword_region(lines.convert_pos(pos), keyword);
@@ -1788,7 +1787,7 @@ fn to_precord_report<'a>(
             }
         },
 
-        PRecord::End(pos) => {
+        EPatternRecord::End(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -1834,7 +1833,7 @@ fn to_precord_report<'a>(
             }
         }
 
-        PRecord::Field(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
+        EPatternRecord::Field(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Keyword(keyword) => {
                 let surroundings = Region::new(start, pos);
                 let region = to_keyword_region(lines.convert_pos(pos), keyword);
@@ -1883,16 +1882,18 @@ fn to_precord_report<'a>(
             }
         },
 
-        PRecord::Colon(_) => {
+        EPatternRecord::Colon(_) => {
             unreachable!("because `foo` is a valid field; the colon is not required")
         }
-        PRecord::Optional(_) => {
+        EPatternRecord::Optional(_) => {
             unreachable!("because `foo` is a valid field; the question mark is not required")
         }
 
-        PRecord::Pattern(pattern, pos) => to_pattern_report(alloc, lines, filename, pattern, pos),
+        EPatternRecord::Pattern(pattern, pos) => {
+            to_pattern_report(alloc, lines, filename, pattern, pos)
+        }
 
-        PRecord::Expr(expr, pos) => to_expr_report(
+        EPatternRecord::Expr(expr, pos) => to_expr_report(
             alloc,
             lines,
             filename,
@@ -1905,7 +1906,7 @@ fn to_precord_report<'a>(
             pos,
         ),
 
-        PRecord::IndentOpen(pos) => {
+        EPatternRecord::IndentOpen(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -1924,7 +1925,7 @@ fn to_precord_report<'a>(
             }
         }
 
-        PRecord::IndentEnd(pos) => {
+        EPatternRecord::IndentEnd(pos) => {
             match next_line_starts_with_close_curly(alloc.src_lines, lines.convert_pos(pos)) {
                 Some(curly_pos) => {
                     let surroundings = LineColumnRegion::new(lines.convert_pos(start), curly_pos);
@@ -1975,15 +1976,15 @@ fn to_precord_report<'a>(
             }
         }
 
-        PRecord::IndentColon(_) => {
+        EPatternRecord::IndentColon(_) => {
             unreachable!("because `foo` is a valid field; the colon is not required")
         }
 
-        PRecord::IndentOptional(_) => {
+        EPatternRecord::IndentOptional(_) => {
             unreachable!("because `foo` is a valid field; the question mark is not required")
         }
 
-        PRecord::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
+        EPatternRecord::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
     }
 }
 
@@ -1991,11 +1992,11 @@ fn to_plist_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &PList<'a>,
+    parse_problem: &EPatternList<'a>,
     start: Position,
 ) -> Report<'a> {
     match *parse_problem {
-        PList::Open(pos) => {
+        EPatternList::Open(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -2013,7 +2014,7 @@ fn to_plist_report<'a>(
             }
         }
 
-        PList::End(pos) => {
+        EPatternList::End(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
             let doc = alloc.stack([
@@ -2035,7 +2036,7 @@ fn to_plist_report<'a>(
             }
         }
 
-        PList::Rest(pos) => {
+        EPatternList::Rest(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
             let doc = alloc.stack([
@@ -2057,9 +2058,11 @@ fn to_plist_report<'a>(
             }
         }
 
-        PList::Pattern(pattern, pos) => to_pattern_report(alloc, lines, filename, pattern, pos),
+        EPatternList::Pattern(pattern, pos) => {
+            to_pattern_report(alloc, lines, filename, pattern, pos)
+        }
 
-        PList::IndentOpen(pos) => {
+        EPatternList::IndentOpen(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -2078,7 +2081,7 @@ fn to_plist_report<'a>(
             }
         }
 
-        PList::IndentEnd(pos) => {
+        EPatternList::IndentEnd(pos) => {
             match next_line_starts_with_close_square_bracket(
                 alloc.src_lines,
                 lines.convert_pos(pos),
@@ -2132,7 +2135,7 @@ fn to_plist_report<'a>(
             }
         }
 
-        PList::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
+        EPatternList::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
     }
 }
 
@@ -2140,13 +2143,13 @@ fn to_pattern_in_parens_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::PInParens<'a>,
+    parse_problem: &roc_ast2::EPatternInParens<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::PInParens;
+    use roc_ast2::EPatternInParens;
 
     match *parse_problem {
-        PInParens::Open(pos) => {
+        EPatternInParens::Open(pos) => {
             // `Open` case is for exhaustiveness, this case shouldn not be reachable practically.
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
@@ -2173,7 +2176,7 @@ fn to_pattern_in_parens_report<'a>(
             }
         }
 
-        PInParens::Empty(pos) => {
+        EPatternInParens::Empty(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -2194,7 +2197,7 @@ fn to_pattern_in_parens_report<'a>(
             }
         }
 
-        PInParens::End(pos) => {
+        EPatternInParens::End(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -2218,9 +2221,11 @@ fn to_pattern_in_parens_report<'a>(
             }
         }
 
-        PInParens::Pattern(pattern, pos) => to_pattern_report(alloc, lines, filename, pattern, pos),
+        EPatternInParens::Pattern(pattern, pos) => {
+            to_pattern_report(alloc, lines, filename, pattern, pos)
+        }
 
-        PInParens::IndentOpen(pos) => {
+        EPatternInParens::IndentOpen(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -2241,7 +2246,7 @@ fn to_pattern_in_parens_report<'a>(
             }
         }
 
-        PInParens::IndentEnd(pos) => {
+        EPatternInParens::IndentEnd(pos) => {
             match next_line_starts_with_close_parenthesis(alloc.src_lines, lines.convert_pos(pos)) {
                 Some(close_pos) => {
                     let surroundings = LineColumnRegion::new(lines.convert_pos(start), close_pos);
@@ -2292,7 +2297,7 @@ fn to_pattern_in_parens_report<'a>(
             }
         }
 
-        PInParens::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
+        EPatternInParens::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
     }
 }
 
@@ -2322,10 +2327,10 @@ fn to_type_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::EType<'a>,
+    parse_problem: &roc_ast2::EType<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EType;
+    use roc_ast2::EType;
 
     match parse_problem {
         EType::TRecord(record, pos) => to_trecord_report(alloc, lines, filename, record, *pos),
@@ -2464,10 +2469,10 @@ fn to_trecord_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::ETypeRecord<'a>,
+    parse_problem: &roc_ast2::ETypeRecord<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::ETypeRecord;
+    use roc_ast2::ETypeRecord;
 
     match *parse_problem {
         ETypeRecord::Open(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
@@ -2709,10 +2714,10 @@ fn to_ttag_union_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::ETypeTagUnion<'a>,
+    parse_problem: &roc_ast2::ETypeTagUnion<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::ETypeTagUnion;
+    use roc_ast2::ETypeTagUnion;
 
     match *parse_problem {
         ETypeTagUnion::Open(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
@@ -2916,10 +2921,10 @@ fn to_tinparens_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::ETypeInParens<'a>,
+    parse_problem: &roc_ast2::ETypeInParens<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::ETypeInParens;
+    use roc_ast2::ETypeInParens;
 
     match *parse_problem {
         ETypeInParens::Open(pos) => {
@@ -3148,10 +3153,10 @@ fn to_tapply_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::ETypeApply,
+    parse_problem: &roc_ast2::ETypeApply,
     _start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::ETypeApply;
+    use roc_ast2::ETypeApply;
 
     match *parse_problem {
         ETypeApply::DoubleDot(pos) => {
@@ -3263,9 +3268,9 @@ fn to_talias_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::ETypeInlineAlias,
+    parse_problem: &roc_ast2::ETypeInlineAlias,
 ) -> Report<'a> {
-    use roc_parse::parser::ETypeInlineAlias;
+    use roc_ast2::ETypeInlineAlias;
 
     match *parse_problem {
         ETypeInlineAlias::NotAnAlias(pos) => {
@@ -3333,10 +3338,10 @@ fn to_header_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::EHeader<'a>,
+    parse_problem: &roc_ast2::EHeader<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EHeader;
+    use roc_ast2::EHeader;
 
     match parse_problem {
         EHeader::Provides(provides, pos) => {
@@ -3553,10 +3558,10 @@ fn to_generates_with_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::EGeneratesWith,
+    parse_problem: &roc_ast2::EGeneratesWith,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EGeneratesWith;
+    use roc_ast2::EGeneratesWith;
 
     match *parse_problem {
         EGeneratesWith::ListEnd(pos) | // TODO: give this its own error message
@@ -3619,10 +3624,10 @@ fn to_provides_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::EProvides,
+    parse_problem: &roc_ast2::EProvides,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EProvides;
+    use roc_ast2::EProvides;
 
     match *parse_problem {
         EProvides::ListEnd(pos) | // TODO: give this its own error message
@@ -3685,10 +3690,10 @@ fn to_exposes_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::EExposes,
+    parse_problem: &roc_ast2::EExposes,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EExposes;
+    use roc_ast2::EExposes;
 
     match *parse_problem {
         EExposes::ListEnd(pos) | // TODO: give this its own error message
@@ -3750,10 +3755,10 @@ fn to_imports_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::EImports,
+    parse_problem: &roc_ast2::EImports,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EImports;
+    use roc_ast2::EImports;
 
     match *parse_problem {
         EImports::Identifier(pos) => {
@@ -3857,10 +3862,10 @@ fn to_requires_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::ERequires<'a>,
+    parse_problem: &roc_ast2::ERequires<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::ERequires;
+    use roc_ast2::ERequires;
 
     match *parse_problem {
         ERequires::Requires(pos) => {
@@ -3981,10 +3986,10 @@ fn to_packages_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::EPackages,
+    parse_problem: &roc_ast2::EPackages,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EPackages;
+    use roc_ast2::EPackages;
 
     match *parse_problem {
         EPackages::Packages(pos) => {
@@ -4020,13 +4025,13 @@ fn to_space_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    parse_problem: &roc_parse::parser::BadInputError,
+    parse_problem: &roc_ast2::EInput,
     pos: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::BadInputError;
+    use roc_ast2::EInput;
 
     match parse_problem {
-        BadInputError::HasTab => {
+        EInput::HasTab => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             let doc = alloc.stack([
@@ -4051,10 +4056,10 @@ fn to_ability_def_report<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     filename: PathBuf,
-    problem: &roc_parse::parser::EAbility<'a>,
+    problem: &roc_ast2::EAbility<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EAbility;
+    use roc_ast2::EAbility;
 
     match problem {
         EAbility::Space(error, pos) => to_space_report(alloc, lines, filename, error, *pos),

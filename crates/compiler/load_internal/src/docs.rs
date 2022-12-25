@@ -1,12 +1,12 @@
 use crate::docs::DocEntry::DetachedDoc;
 use crate::docs::TypeAnnotation::{Apply, BoundVariable, Function, NoTypeAnn, Record, TagUnion};
 use crate::file::LoadedModule;
+use roc_ast2::AssignedField;
+use roc_ast2::{self as ast, ExtractSpaces, TypeHeader};
+use roc_ast2::{CommentOrNewline, TypeDef, ValueDef};
 use roc_can::scope::Scope;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::IdentIds;
-use roc_parse::ast::AssignedField;
-use roc_parse::ast::{self, ExtractSpaces, TypeHeader};
-use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};
 
 // Documentation generation requirements
 
@@ -99,7 +99,7 @@ pub struct Tag {
 pub fn generate_module_docs(
     scope: Scope,
     module_name: ModuleName,
-    parsed_defs: &roc_parse::ast::Defs,
+    parsed_defs: &roc_ast2::Defs,
 ) -> ModuleDocumentation {
     let entries = generate_entry_docs(&scope.locals.ident_ids, parsed_defs);
 
@@ -111,7 +111,7 @@ pub fn generate_module_docs(
 }
 
 fn detached_docs_from_comments_and_new_lines<'a>(
-    comments_or_new_lines: impl Iterator<Item = &'a roc_parse::ast::CommentOrNewline<'a>>,
+    comments_or_new_lines: impl Iterator<Item = &'a roc_ast2::CommentOrNewline<'a>>,
 ) -> Vec<String> {
     let mut detached_docs: Vec<String> = Vec::new();
 
@@ -137,11 +137,8 @@ fn detached_docs_from_comments_and_new_lines<'a>(
     detached_docs
 }
 
-fn generate_entry_docs<'a>(
-    ident_ids: &'a IdentIds,
-    defs: &roc_parse::ast::Defs<'a>,
-) -> Vec<DocEntry> {
-    use roc_parse::ast::Pattern;
+fn generate_entry_docs<'a>(ident_ids: &'a IdentIds, defs: &roc_ast2::Defs<'a>) -> Vec<DocEntry> {
+    use roc_ast2::Pattern;
 
     let mut acc = Vec::with_capacity(defs.tags.len());
     let mut before_comments_or_new_lines: Option<&[CommentOrNewline]> = None;
@@ -460,7 +457,7 @@ fn tag_to_doc(in_func_ann: bool, tag: ast::Tag) -> Option<Tag> {
 }
 
 fn comments_or_new_lines_to_docs<'a>(
-    comments_or_new_lines: &'a [roc_parse::ast::CommentOrNewline<'a>],
+    comments_or_new_lines: &'a [roc_ast2::CommentOrNewline<'a>],
 ) -> Option<String> {
     let mut docs = String::new();
 

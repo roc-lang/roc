@@ -4,15 +4,9 @@ use std::path::{Path, PathBuf};
 use crate::FormatMode;
 use bumpalo::Bump;
 use roc_error_macros::{internal_error, user_error};
-use roc_fmt::def::fmt_defs;
-use roc_fmt::module::fmt_module;
 use roc_fmt::spaces::RemoveSpaces;
-use roc_fmt::{Ast, Buf};
-use roc_parse::{
-    module::{self, module_defs},
-    parser::{Parser, SyntaxError},
-    state::State,
-};
+use roc_fmt::{module::fmt_module, Buf};
+use roc_parse::module::parse_module;
 
 fn flatten_directories(files: std::vec::Vec<PathBuf>) -> std::vec::Vec<PathBuf> {
     let mut to_flatten = files;
@@ -66,13 +60,13 @@ pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), Str
 
         let src = std::fs::read_to_string(&file).unwrap();
 
-        let ast = arena.alloc(parse_all(&arena, &src).unwrap_or_else(|e| {
+        let ast = arena.alloc(parse_module(&arena, &src).unwrap_or_else(|e| {
             user_error!("Unexpected parse failure when parsing this formatting:\n\n{:?}\n\nParse error was:\n\n{:?}\n\n", src, e)
         }));
         let mut buf = Buf::new_in(&arena);
-        fmt_all(&mut buf, ast);
+        fmt_module(&mut buf, ast);
 
-        let reparsed_ast = arena.alloc(parse_all(&arena, buf.as_str()).unwrap_or_else(|e| {
+        let reparsed_ast = arena.alloc(parse_module(&arena, buf.as_str()).unwrap_or_else(|e| {
             let mut fail_file = file.clone();
             fail_file.set_extension("roc-format-failed");
             std::fs::write(&fail_file, buf.as_str()).unwrap();
@@ -117,7 +111,7 @@ pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), Str
 
         // Now verify that the resultant formatting is _stable_ - i.e. that it doesn't change again if re-formatted
         let mut reformatted_buf = Buf::new_in(&arena);
-        fmt_all(&mut reformatted_buf, reparsed_ast);
+        fmt_module(&mut reformatted_buf, reparsed_ast);
         if buf.as_str() != reformatted_buf.as_str() {
             let mut unstable_1_file = file.clone();
             unstable_1_file.set_extension("roc-format-unstable-1");
@@ -151,21 +145,4 @@ pub fn format(files: std::vec::Vec<PathBuf>, mode: FormatMode) -> Result<(), Str
     }
 
     Ok(())
-}
-
-fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'a>> {
-    let (module, state) = module::parse_header(arena, State::new(src.as_bytes()))
-        .map_err(|e| SyntaxError::Header(e.problem))?;
-
-    let (_, defs, _) = module_defs().parse(arena, state, 0).map_err(|(_, e)| e)?;
-
-    Ok(Ast { module, defs })
-}
-
-fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a Ast) {
-    fmt_module(buf, &ast.module);
-
-    fmt_defs(buf, &ast.defs, 0);
-
-    buf.fmt_end_of_file();
 }

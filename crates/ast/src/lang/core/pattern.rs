@@ -3,6 +3,7 @@
 #![allow(unused_imports)]
 
 use bumpalo::collections::Vec as BumpVec;
+use roc_ast2::{StrLiteral, StrSegment};
 use roc_can::expr::{unescape_char, IntValue};
 use roc_can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, ParsedNumResult,
@@ -10,7 +11,6 @@ use roc_can::num::{
 use roc_collections::all::BumpMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, Symbol};
-use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError, ShadowKind};
 use roc_region::all::Region;
@@ -102,7 +102,7 @@ pub fn as_pattern_id<'a>(
     scope: &mut Scope,
     pattern_id: PatternId,
     pattern_type: PatternType,
-    pattern: &roc_parse::ast::Pattern<'a>,
+    pattern: &roc_ast2::Pattern<'a>,
     region: Region,
 ) -> Output {
     let (output, can_pattern) = to_pattern2(env, scope, pattern_type, pattern, region);
@@ -117,7 +117,7 @@ pub fn to_pattern_id<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     pattern_type: PatternType,
-    pattern: &roc_parse::ast::Pattern<'a>,
+    pattern: &roc_ast2::Pattern<'a>,
     region: Region,
 ) -> (Output, PatternId) {
     let (output, can_pattern) = to_pattern2(env, scope, pattern_type, pattern, region);
@@ -132,10 +132,10 @@ pub fn to_pattern2<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     pattern_type: PatternType,
-    pattern: &roc_parse::ast::Pattern<'a>,
+    pattern: &roc_ast2::Pattern<'a>,
     region: Region,
 ) -> (Output, Pattern2) {
-    use roc_parse::ast::Pattern::*;
+    use roc_ast2::Pattern::*;
     use PatternType::*;
 
     let mut output = Output::default();
@@ -593,7 +593,7 @@ fn unsupported_pattern<'a>(
 }
 
 pub(crate) fn flatten_str_literal(pool: &mut Pool, literal: &StrLiteral<'_>) -> Pattern2 {
-    use roc_parse::ast::StrLiteral::*;
+    use roc_ast2::StrLiteral::*;
 
     match literal {
         PlainLine(str_slice) => Pattern2::StrLiteral(PoolStr::new(str_slice, pool)),

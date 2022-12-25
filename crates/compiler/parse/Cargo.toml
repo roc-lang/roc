@@ -13,6 +13,7 @@ description = "Implements the Roc parser, which transforms a textual representat
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
+roc_ast2 = { path = "../ast2" }
 
 bumpalo.workspace = true
 encode_unicode.workspace = true

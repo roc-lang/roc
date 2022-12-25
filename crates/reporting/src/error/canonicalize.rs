@@ -1165,10 +1165,10 @@ fn to_invalid_optional_value_report_help<'b>(
 fn to_bad_ident_expr_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
-    bad_ident: roc_parse::ident::BadIdent,
+    bad_ident: roc_ast2::EIdent,
     surroundings: Region,
 ) -> RocDocBuilder<'b> {
-    use roc_parse::ident::BadIdent::*;
+    use roc_ast2::EIdent::*;
 
     match bad_ident {
         Start(_) | Space(_, _) => unreachable!("these are handled in the parser"),
@@ -1320,10 +1320,10 @@ fn to_bad_ident_expr_report<'b>(
 fn to_bad_ident_pattern_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
     lines: &LineInfo,
-    bad_ident: roc_parse::ident::BadIdent,
+    bad_ident: roc_ast2::EIdent,
     surroundings: Region,
 ) -> RocDocBuilder<'b> {
-    use roc_parse::ident::BadIdent::*;
+    use roc_ast2::EIdent::*;
 
     match bad_ident {
         Start(_) | Space(_, _) => unreachable!("these are handled in the parser"),
@@ -1569,7 +1569,7 @@ fn pretty_runtime_error<'b>(
             title = CIRCULAR_DEF;
         }
         RuntimeError::MalformedPattern(problem, region) => {
-            use roc_parse::ast::Base;
+            use roc_ast2::Base;
             use roc_problem::can::MalformedPatternProblem::*;
 
             let name = match problem {
@@ -1767,7 +1767,7 @@ fn pretty_runtime_error<'b>(
         }
         RuntimeError::InvalidInt(error @ IntErrorKind::InvalidDigit, base, region, _raw_str)
         | RuntimeError::InvalidInt(error @ IntErrorKind::Empty, base, region, _raw_str) => {
-            use roc_parse::ast::Base::*;
+            use roc_ast2::Base::*;
 
             let (problem, contains) = if let IntErrorKind::InvalidDigit = error {
                 (

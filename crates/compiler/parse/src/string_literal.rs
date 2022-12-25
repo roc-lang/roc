@@ -1,12 +1,10 @@
-use crate::ast::{EscapedChar, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::{self, *};
-use crate::parser::{
-    allocated, loc, reset_min_indent, specialize_ref, word1, BadInputError, EString, Parser,
-};
+use crate::parser::{allocated, loc, reset_min_indent, specialize_ref, word1, Parser};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use roc_ast2::{EInput, EString, EscapedChar, StrLiteral, StrSegment};
 
 /// One or more ASCII hex digits. (Useful when parsing unicode escape codes,
 /// which must consist entirely of ASCII hex digits.)
@@ -149,10 +147,7 @@ fn utf8<'a>(state: State<'a>, string_bytes: &'a [u8]) -> Result<&'a str, (Progre
         // Note Based on where this `utf8` function is used, the fact that we know the whole string
         // in the parser is valid utf8, and barring bugs in the parser itself
         // (e.g. where we accidentally split a multibyte utf8 char), this error _should_ actually be unreachable.
-        (
-            MadeProgress,
-            EString::Space(BadInputError::BadUtf8, state.pos()),
-        )
+        (MadeProgress, EString::Space(EInput::BadUtf8, state.pos()))
     })
 }
 
@@ -221,7 +216,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                         Err(_) => {
                             return Err((
                                 MadeProgress,
-                                EString::Space(BadInputError::BadUtf8, state.pos()),
+                                EString::Space(EInput::BadUtf8, state.pos()),
                             ));
                         }
                     }

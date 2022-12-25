@@ -6,10 +6,10 @@ use crate::num::{
     ParsedNumResult,
 };
 use crate::scope::{PendingAbilitiesInScope, Scope};
+use roc_ast2::{self as ast, StrLiteral, StrSegment};
 use roc_exhaustive::ListArity;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
@@ -229,7 +229,7 @@ pub fn canonicalize_def_header_pattern<'a>(
     pattern: &ast::Pattern<'a>,
     region: Region,
 ) -> Loc<Pattern> {
-    use roc_parse::ast::Pattern::*;
+    use roc_ast2::Pattern::*;
 
     match pattern {
         // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
@@ -300,7 +300,7 @@ pub fn canonicalize_pattern<'a>(
     region: Region,
     permit_shadows: PermitShadows,
 ) -> Loc<Pattern> {
-    use roc_parse::ast::Pattern::*;
+    use roc_ast2::Pattern::*;
     use PatternType::*;
 
     let can_pattern = match pattern {

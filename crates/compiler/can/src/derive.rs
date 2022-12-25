@@ -6,9 +6,9 @@
 //!   - Derived impls for opaques are typically very small, effectively deferring the
 //!     implementation to the value they wrap.
 
+use roc_ast2 as ast;
 use roc_error_macros::internal_error;
 use roc_module::{called_via::CalledVia, symbol::Symbol};
-use roc_parse::ast;
 use roc_region::all::{Loc, Region};
 
 use crate::{env::Env, pattern::Pattern, scope::Scope};

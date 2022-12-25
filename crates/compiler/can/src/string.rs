@@ -1,8 +1,8 @@
 // use bumpalo::collections::string::String;
 // use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_parse::ast::Expr;
-// use roc_parse::ast::{Attempting, Expr};
+use roc_ast2::Expr;
+// use roc_ast2::{Attempting, Expr};
 // use roc_parse::ident;
 // use roc_parse::parser::{unexpected, unexpected_eof, Fail, Parser, State};
 // use roc_parse::problems::{Problem, Problems};

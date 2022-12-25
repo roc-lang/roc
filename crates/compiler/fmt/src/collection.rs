@@ -1,4 +1,4 @@
-use roc_parse::ast::{Collection, CommentOrNewline, ExtractSpaces};
+use roc_ast2::{Collection, CommentOrNewline, ExtractSpaces};
 
 use crate::{
     annotation::{is_collection_multiline, Formattable, Newlines},

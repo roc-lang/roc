@@ -2,11 +2,11 @@
 
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_ast2::Expr::{self, *};
+use roc_ast2::{AssignedField, ValueDef, WhenBranch};
 use roc_module::called_via::BinOp::Pizza;
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
-use roc_parse::ast::Expr::{self, *};
-use roc_parse::ast::{AssignedField, ValueDef, WhenBranch};
 use roc_region::all::{Loc, Region};
 
 // BinOp precedence logic adapted from Gluon by Markus Westerlind
@@ -115,7 +115,7 @@ fn desugar_value_def<'a>(arena: &'a Bump, def: &'a ValueDef<'a>) -> ValueDef<'a>
     }
 }
 
-pub fn desugar_defs<'a>(arena: &'a Bump, defs: &mut roc_parse::ast::Defs<'a>) {
+pub fn desugar_defs<'a>(arena: &'a Bump, defs: &mut roc_ast2::Defs<'a>) {
     for value_def in defs.value_defs.iter_mut() {
         *value_def = desugar_value_def(arena, arena.alloc(*value_def));
     }
@@ -374,7 +374,7 @@ fn desugar_field<'a>(
     arena: &'a Bump,
     field: &'a AssignedField<'a, Expr<'a>>,
 ) -> AssignedField<'a, Expr<'a>> {
-    use roc_parse::ast::AssignedField::*;
+    use roc_ast2::AssignedField::*;
 
     match field {
         RequiredValue(loc_str, spaces, loc_expr) => RequiredValue(
@@ -560,7 +560,7 @@ fn binop_step<'a>(
                             let broken_expr =
                                 arena.alloc(new_op_call_expr(arena, left, stack_op, right));
                             let region = broken_expr.region;
-                            let data = roc_parse::ast::PrecedenceConflict {
+                            let data = roc_ast2::PrecedenceConflict {
                                 whole_region,
                                 binop1_position: stack_op.region.start(),
                                 binop1: stack_op.value,

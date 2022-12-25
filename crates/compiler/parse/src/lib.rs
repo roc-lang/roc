@@ -6,7 +6,6 @@
 
 #[macro_use]
 pub mod parser;
-pub mod ast;
 pub mod blankspace;
 pub mod expr;
 pub mod header;
@@ -20,3 +19,5 @@ pub mod state;
 pub mod string_literal;
 pub mod test_helpers;
 pub mod type_annotation;
+
+pub use roc_ast2 as ast2_for_macros;

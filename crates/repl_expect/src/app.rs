@@ -1,4 +1,4 @@
-use roc_parse::ast::Expr;
+use roc_ast2::Expr;
 use roc_repl_eval::{ReplApp, ReplAppMemory};
 use roc_std::RocStr;
 use roc_target::TargetInfo;

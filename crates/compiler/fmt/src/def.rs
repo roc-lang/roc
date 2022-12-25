@@ -2,7 +2,7 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::pattern::fmt_pattern;
 use crate::spaces::{fmt_default_newline, fmt_spaces, INDENT};
 use crate::Buf;
-use roc_parse::ast::{
+use roc_ast2::{
     AbilityMember, Defs, Expr, ExtractSpaces, Pattern, Spaces, StrLiteral, TypeAnnotation, TypeDef,
     TypeHeader, ValueDef,
 };
@@ -48,7 +48,7 @@ impl<'a> Formattable for Defs<'a> {
 
 impl<'a> Formattable for TypeDef<'a> {
     fn is_multiline(&self) -> bool {
-        use roc_parse::ast::TypeDef::*;
+        use roc_ast2::TypeDef::*;
 
         match self {
             Alias { ann, .. } => ann.is_multiline(),
@@ -64,7 +64,7 @@ impl<'a> Formattable for TypeDef<'a> {
         _newlines: Newlines,
         indent: u16,
     ) {
-        use roc_parse::ast::TypeDef::*;
+        use roc_ast2::TypeDef::*;
 
         match self {
             Alias {
@@ -166,7 +166,7 @@ impl<'a> Formattable for TypeDef<'a> {
 
 impl<'a> Formattable for ValueDef<'a> {
     fn is_multiline(&self) -> bool {
-        use roc_parse::ast::ValueDef::*;
+        use roc_ast2::ValueDef::*;
 
         match self {
             Annotation(loc_pattern, loc_annotation) => {
@@ -187,7 +187,7 @@ impl<'a> Formattable for ValueDef<'a> {
         newlines: Newlines,
         indent: u16,
     ) {
-        use roc_parse::ast::ValueDef::*;
+        use roc_ast2::ValueDef::*;
         match self {
             Annotation(loc_pattern, loc_annotation) => {
                 loc_pattern.format(buf, indent);
@@ -367,15 +367,11 @@ fn fmt_expect_fx<'a, 'buf>(
     condition.format(buf, return_indent);
 }
 
-pub fn fmt_value_def<'a, 'buf>(
-    buf: &mut Buf<'buf>,
-    def: &roc_parse::ast::ValueDef<'a>,
-    indent: u16,
-) {
+pub fn fmt_value_def<'a, 'buf>(buf: &mut Buf<'buf>, def: &ValueDef<'a>, indent: u16) {
     def.format(buf, indent);
 }
 
-pub fn fmt_type_def<'a, 'buf>(buf: &mut Buf<'buf>, def: &roc_parse::ast::TypeDef<'a>, indent: u16) {
+pub fn fmt_type_def<'a, 'buf>(buf: &mut Buf<'buf>, def: &TypeDef<'a>, indent: u16) {
     def.format(buf, indent);
 }
 

@@ -1,8 +1,8 @@
+use roc_ast2::{Base, EIdent};
 use roc_collections::all::MutSet;
 use roc_module::called_via::BinOp;
 use roc_module::ident::{Ident, Lowercase, ModuleName, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
-use roc_parse::ast::Base;
 use roc_parse::pattern::PatternType;
 use roc_region::all::{Loc, Region};
 use roc_types::types::AliasKind;
@@ -546,7 +546,7 @@ pub enum RuntimeError {
         module_exists: bool,
     },
     InvalidPrecedence(PrecedenceProblem, Region),
-    MalformedIdentifier(Box<str>, roc_parse::ident::BadIdent, Region),
+    MalformedIdentifier(Box<str>, EIdent, Region),
     MalformedTypeName(Box<str>, Region),
     MalformedClosure(Region),
     InvalidRecordUpdate {
@@ -604,7 +604,7 @@ pub enum MalformedPatternProblem {
     MalformedBase(Base),
     Unknown,
     QualifiedIdentifier,
-    BadIdent(roc_parse::ident::BadIdent),
+    BadIdent(EIdent),
     EmptySingleQuote,
     MultipleCharsInSingleQuote,
     DuplicateListRestPattern,

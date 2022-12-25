@@ -1,22 +1,34 @@
-use crate::ast::{Collection, Defs, Header, Module, Spaced, Spaces};
 use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
-use crate::header::{
-    package_entry, package_name, AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword,
-    HostedHeader, ImportsEntry, ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName,
-    PackageEntry, PackageHeader, PackagesKeyword, PlatformHeader, PlatformRequires,
-    ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
-};
-use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
+use crate::header::{package_entry, package_name};
+use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase};
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, increment_min_indent, optional, reset_min_indent, specialize, word1, EExposes,
-    EGenerates, EGeneratesWith, EHeader, EImports, EPackages, EProvides, ERequires, ETypedIdent,
-    Parser, SourceError, SpaceProblem, SyntaxError,
+    backtrackable, increment_min_indent, optional, reset_min_indent, specialize, word1, Parser,
+    SourceError, SyntaxError,
 };
 use crate::state::State;
 use crate::string_literal;
 use crate::type_annotation;
+use bumpalo::Bump;
+use roc_ast2::{
+    AppHeader, Defs, EExposes, EGenerates, EGeneratesWith, EHeader, EImports, EPackages, EProvides,
+    ERequires, ETypedIdent, ExposedName, ExposesKeyword, GeneratesKeyword, Header, HostedHeader,
+    ImportsEntry, ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName, PackageEntry,
+    PackageHeader, PackagesKeyword, PlatformHeader, PlatformRequires, ProvidesKeyword, ProvidesTo,
+    RequiresKeyword, SpaceProblem, Spaced, Spaces, To, ToKeyword, TypedIdent, UppercaseIdent,
+    WithKeyword,
+};
+use roc_ast2::{Collection, Module, SpacesBefore};
 use roc_region::all::{Loc, Position};
+
+pub fn parse_module<'a>(arena: &'a Bump, src: &'a str) -> Result<Module<'a>, SyntaxError<'a>> {
+    let (header, state) = parse_header(arena, State::new(src.as_bytes()))
+        .map_err(|e| SyntaxError::Header(e.problem))?;
+
+    let (_, defs, _) = module_defs().parse(arena, state, 0).map_err(|(_, e)| e)?;
+
+    Ok(Module { header, defs })
+}
 
 fn end_of_file<'a>() -> impl Parser<'a, (), SyntaxError<'a>> {
     |_arena, state: State<'a>, _min_indent: u32| {
@@ -39,7 +51,7 @@ pub fn module_defs<'a>() -> impl Parser<'a, Defs<'a>, SyntaxError<'a>> {
 pub fn parse_header<'a>(
     arena: &'a bumpalo::Bump,
     state: State<'a>,
-) -> Result<(Module<'a>, State<'a>), SourceError<'a, EHeader<'a>>> {
+) -> Result<(SpacesBefore<'a, Header<'a>>, State<'a>), SourceError<'a, EHeader<'a>>> {
     let min_indent = 0;
     match header().parse(arena, state.clone(), min_indent) {
         Ok((_, module, state)) => Ok((module, state)),
@@ -47,12 +59,12 @@ pub fn parse_header<'a>(
     }
 }
 
-fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
+fn header<'a>() -> impl Parser<'a, SpacesBefore<'a, Header<'a>>, EHeader<'a>> {
     use crate::parser::keyword_e;
 
-    record!(Module {
-        comments: space0_e(EHeader::IndentStart),
-        header: one_of![
+    record!(SpacesBefore {
+        before: space0_e(EHeader::IndentStart),
+        item: one_of![
             map!(
                 skip_first!(
                     keyword_e("interface", EHeader::Start),

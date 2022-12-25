@@ -3,11 +3,12 @@ use crate::{
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf,
 };
-use roc_parse::ast::{
-    AssignedField, Collection, Expr, ExtractSpaces, HasAbilities, HasAbility, HasClause, HasImpls,
-    Tag, TypeAnnotation, TypeHeader,
+use roc_ast2::Collection;
+use roc_ast2::UppercaseIdent;
+use roc_ast2::{
+    AssignedField, Expr, ExtractSpaces, HasAbilities, HasAbility, HasClause, HasImpls, Tag,
+    TypeAnnotation, TypeHeader,
 };
-use roc_parse::ident::UppercaseIdent;
 use roc_region::all::Loc;
 
 /// Does an AST node need parens around it?
@@ -146,7 +147,7 @@ impl<'a> Formattable for UppercaseIdent<'a> {
 
 impl<'a> Formattable for TypeAnnotation<'a> {
     fn is_multiline(&self) -> bool {
-        use roc_parse::ast::TypeAnnotation::*;
+        use roc_ast2::TypeAnnotation::*;
 
         match self {
             // Return whether these spaces contain any Newlines
@@ -205,7 +206,7 @@ impl<'a> Formattable for TypeAnnotation<'a> {
         newlines: Newlines,
         indent: u16,
     ) {
-        use roc_parse::ast::TypeAnnotation::*;
+        use roc_ast2::TypeAnnotation::*;
 
         let self_is_multiline = self.is_multiline();
 

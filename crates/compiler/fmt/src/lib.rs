@@ -12,13 +12,6 @@ pub mod spaces;
 pub mod test_helpers;
 
 use bumpalo::{collections::String, Bump};
-use roc_parse::ast::Module;
-
-#[derive(Debug)]
-pub struct Ast<'a> {
-    pub module: Module<'a>,
-    pub defs: roc_parse::ast::Defs<'a>,
-}
 
 #[derive(Debug)]
 pub struct Buf<'a> {

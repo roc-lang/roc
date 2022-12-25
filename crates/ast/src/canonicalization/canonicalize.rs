@@ -38,7 +38,7 @@ enum FieldVar {
 pub(crate) fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
-    fields: &'a [Loc<roc_parse::ast::AssignedField<'a, roc_parse::ast::Expr<'a>>>],
+    fields: &'a [Loc<roc_ast2::AssignedField<'a, roc_ast2::Expr<'a>>>],
 ) -> Result<(PoolVec<RecordField>, Output), CanonicalizeRecordProblem> {
     let mut can_fields: MutMap<&'a str, FieldVar> = MutMap::default();
     let mut output = Output::default();
@@ -143,9 +143,9 @@ enum CanonicalField<'a> {
 fn canonicalize_field<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
-    field: &'a roc_parse::ast::AssignedField<'a, roc_parse::ast::Expr<'a>>,
+    field: &'a roc_ast2::AssignedField<'a, roc_ast2::Expr<'a>>,
 ) -> Result<CanonicalField<'a>, CanonicalizeFieldProblem> {
-    use roc_parse::ast::AssignedField::*;
+    use roc_ast2::AssignedField::*;
 
     match field {
         // Both a label and a value, e.g. `{ name: "blah" }`
@@ -197,7 +197,7 @@ fn canonicalize_field<'a>(
 pub(crate) fn canonicalize_when_branch<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
-    branch: &'a roc_parse::ast::WhenBranch<'a>,
+    branch: &'a roc_ast2::WhenBranch<'a>,
     output: &mut Output,
 ) -> (WhenBranch, References) {
     let patterns = PoolVec::with_capacity(branch.patterns.len() as u32, env.pool);

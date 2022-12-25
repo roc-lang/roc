@@ -1,5 +1,6 @@
 use bumpalo::Bump;
-use roc_parse::{ast::CommentOrNewline, parser::SyntaxError};
+use roc_ast2::CommentOrNewline;
+use roc_parse::parser::SyntaxError;
 use roc_region::all::Region;
 
 use crate::lang::{core::expr::expr_to_expr2::loc_expr_to_expr2, env::Env, scope::Scope};
@@ -24,18 +25,18 @@ pub fn toplevel_defs_to_defs2<'a>(
     arena: &'a Bump,
     env: &mut Env<'a>,
     scope: &mut Scope,
-    parsed_defs: roc_parse::ast::Defs<'a>,
+    parsed_defs: roc_ast2::Defs<'a>,
     region: Region,
 ) -> Vec<Def2> {
     let mut result = Vec::with_capacity(parsed_defs.tags.len());
 
     for (index, def) in parsed_defs.defs().enumerate() {
         let mut def = match def {
-            Err(roc_parse::ast::ValueDef::Body(&loc_pattern, &loc_expr)) => {
+            Err(roc_ast2::ValueDef::Body(&loc_pattern, &loc_expr)) => {
                 let expr2 = loc_expr_to_expr2(arena, loc_expr, env, scope, region).0;
                 let expr_id = env.pool.add(expr2);
 
-                use roc_parse::ast::Pattern::*;
+                use roc_ast2::Pattern::*;
 
                 match loc_pattern.value {
                     Identifier(id_str) => {

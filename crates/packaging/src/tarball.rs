@@ -1,8 +1,8 @@
 use brotli::enc::BrotliEncoderParams;
 use bumpalo::Bump;
 use flate2::write::GzEncoder;
-use roc_parse::ast::{Header, Module};
-use roc_parse::header::PlatformHeader;
+use roc_ast2::Header;
+use roc_ast2::PlatformHeader;
 use roc_parse::module::parse_header;
 use roc_parse::state::State;
 use std::ffi::OsStr;
@@ -127,7 +127,7 @@ fn write_archive<W: Write>(path: &Path, writer: W) -> io::Result<()> {
 
     // TODO use this when finding .roc files by discovering them from the root module.
     // let other_modules: &[Module<'_>] =
-    match read_header(&arena, &mut buf, path)?.header {
+    match read_header(&arena, &mut buf, path)? {
         Header::Interface(_) => {
             todo!();
             // TODO report error
@@ -254,7 +254,7 @@ fn read_header<'a>(
     arena: &'a Bump,
     buf: &'a mut Vec<u8>,
     path: &'a Path,
-) -> io::Result<Module<'a>> {
+) -> io::Result<Header<'a>> {
     // Read all the bytes into the buffer.
     {
         let mut file = File::open(path)?;
@@ -265,12 +265,12 @@ fn read_header<'a>(
     // TODO avoid copying the contents of the file into a Bumpalo arena by doing multiple
     // https://doc.rust-lang.org/std/io/trait.Read.html#tymethod.read calls instead of
     // using the much more convenient file.read_to_end - which requires a std::vec::Vec.
-    // (We can't use that for the parser state and still return Module<'a> unfortunately.)
+    // (We can't use that for the parser state and still return Header<'a> unfortunately.)
     let arena_buf = bumpalo::collections::Vec::from_iter_in(buf.iter().copied(), arena);
     let parse_state = State::new(arena_buf.into_bump_slice());
-    let (module, _) = parse_header(arena, parse_state).unwrap_or_else(|_err| {
+    let (header, _) = parse_header(arena, parse_state).unwrap_or_else(|_err| {
         todo!(); // TODO report a nice error and exit 1 - or maybe just return Err, for better testability?
     });
 
-    Ok(module)
+    Ok(header.item)
 }

@@ -176,8 +176,8 @@ pub enum IntStyle {
 }
 
 impl IntStyle {
-    pub fn from_base(base: roc_parse::ast::Base) -> Self {
-        use roc_parse::ast::Base;
+    pub fn from_base(base: roc_ast2::Base) -> Self {
+        use roc_ast2::Base;
         match base {
             Base::Decimal => Self::Decimal,
             Base::Octal => Self::Octal,

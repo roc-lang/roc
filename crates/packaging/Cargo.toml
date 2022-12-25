@@ -9,6 +9,7 @@ description = "Functionality for packaging Roc source code - e.g. for distributi
 
 [dependencies]
 roc_parse = { path = "../compiler/parse" }
+roc_ast2 = { path = "../compiler/ast2" }
 roc_error_macros = { path = "../error_macros" }
 
 tar = "0.4.38" # used for `roc build --tar`

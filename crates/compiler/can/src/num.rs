@@ -1,6 +1,6 @@
 use crate::env::Env;
 use crate::expr::{Expr, IntValue};
-use roc_parse::ast::Base;
+use roc_ast2::Base;
 use roc_problem::can::Problem;
 use roc_problem::can::RuntimeError::*;
 use roc_problem::can::{FloatErrorKind, IntErrorKind};

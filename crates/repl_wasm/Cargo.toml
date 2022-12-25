@@ -27,6 +27,7 @@ roc_collections = {path = "../compiler/collections"}
 roc_gen_wasm = {path = "../compiler/gen_wasm"}
 roc_load = {path = "../compiler/load"}
 roc_parse = {path = "../compiler/parse"}
+roc_ast2 = {path = "../compiler/ast2"}
 roc_repl_eval = {path = "../repl_eval"}
 roc_reporting = {path = "../reporting"}
 roc_target = {path = "../compiler/roc_target"}

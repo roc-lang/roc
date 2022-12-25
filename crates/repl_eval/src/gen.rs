@@ -5,10 +5,10 @@ use roc_problem::Severity;
 use roc_reporting::report::Palette;
 use std::path::PathBuf;
 
+use roc_ast2::Expr;
 use roc_fmt::annotation::Formattable;
 use roc_fmt::annotation::{Newlines, Parens};
 use roc_load::{LoadingProblem, MonomorphizedModule};
-use roc_parse::ast::Expr;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
 use roc_target::TargetInfo;

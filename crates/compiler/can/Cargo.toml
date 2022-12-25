@@ -16,6 +16,7 @@ roc_parse = { path = "../parse" }
 roc_problem = { path = "../problem" }
 roc_types = { path = "../types" }
 roc_serialize = { path = "../serialize" }
+roc_ast2 = { path = "../ast2" }
 
 bumpalo.workspace = true
 static_assertions.workspace = true

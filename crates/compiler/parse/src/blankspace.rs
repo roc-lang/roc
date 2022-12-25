@@ -1,10 +1,10 @@
-use crate::ast::CommentOrNewline;
-use crate::ast::Spaceable;
-use crate::parser::SpaceProblem;
-use crate::parser::{self, and, backtrackable, BadInputError, Parser, Progress::*};
+use crate::parser::{self, and, backtrackable, Parser, Progress::*};
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use roc_ast2::CommentOrNewline;
+use roc_ast2::Spaceable;
+use roc_ast2::{EInput, SpaceProblem};
 use roc_region::all::Loc;
 use roc_region::all::Position;
 
@@ -390,10 +390,7 @@ where
                     } else {
                         return Err((
                             progress,
-                            E::space_problem(
-                                BadInputError::HasMisplacedCarriageReturn,
-                                state.pos(),
-                            ),
+                            E::space_problem(EInput::HasMisplacedCarriageReturn, state.pos()),
                         ));
                     }
                 }
@@ -403,15 +400,12 @@ where
                     progress = MadeProgress;
                 }
                 Some(b'\t') => {
-                    return Err((
-                        progress,
-                        E::space_problem(BadInputError::HasTab, state.pos()),
-                    ));
+                    return Err((progress, E::space_problem(EInput::HasTab, state.pos())));
                 }
                 Some(x) if *x < b' ' => {
                     return Err((
                         progress,
-                        E::space_problem(BadInputError::HasAsciiControl, state.pos()),
+                        E::space_problem(EInput::HasAsciiControl, state.pos()),
                     ));
                 }
                 _ => {

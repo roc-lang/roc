@@ -2,7 +2,7 @@ use crate::annotation::{Formattable, Newlines, Parens};
 use crate::expr::{fmt_str_literal, format_sq_literal};
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt};
 use crate::Buf;
-use roc_parse::ast::{Base, CommentOrNewline, Pattern};
+use roc_ast2::{Base, CommentOrNewline, Pattern};
 
 pub fn fmt_pattern<'a, 'buf>(
     buf: &mut Buf<'buf>,

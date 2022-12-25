@@ -9,12 +9,12 @@ use crate::expr::{
 use crate::pattern::{BindingsFromPattern, Pattern};
 use crate::scope::Scope;
 use bumpalo::Bump;
+use roc_ast2::{Defs, TypeAnnotation};
 use roc_collections::{MutMap, SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
-use roc_parse::ast::{Defs, TypeAnnotation};
 use roc_parse::header::HeaderType;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
@@ -160,7 +160,7 @@ pub struct ModuleOutput {
 }
 
 fn validate_generate_with<'a>(
-    generate_with: &'a [Loc<roc_parse::header::ExposedName<'a>>],
+    generate_with: &'a [Loc<roc_ast2::ExposedName<'a>>],
 ) -> (HostedGeneratedFunctions, Vec<Loc<Ident>>) {
     let mut functions = HostedGeneratedFunctions::default();
     let mut unknown = Vec::new();

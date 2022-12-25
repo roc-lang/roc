@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use roc_ast2::Expr;
 use roc_can::expr::{IntValue, Recursive};
 use roc_can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, ParsedNumResult,
@@ -6,7 +7,7 @@ use roc_can::num::{
 use roc_can::operator::desugar_expr;
 use roc_collections::all::MutSet;
 use roc_module::symbol::Symbol;
-use roc_parse::{ast::Expr, pattern::PatternType};
+use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 
@@ -46,10 +47,10 @@ const ZERO: Region = Region::zero();
 pub fn expr_to_expr2<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
-    parse_expr: &'a roc_parse::ast::Expr<'a>,
+    parse_expr: &'a roc_ast2::Expr<'a>,
     region: Region,
 ) -> (Expr2, self::Output) {
-    use roc_parse::ast::Expr::*;
+    use roc_ast2::Expr::*;
     //dbg!("{:?}", parse_expr);
 
     match parse_expr {
@@ -105,12 +106,8 @@ pub fn expr_to_expr2<'a>(
                 }
                 Err((raw, error)) => {
                     // emit runtime error
-                    let runtime_error = RuntimeError::InvalidInt(
-                        error,
-                        roc_parse::ast::Base::Decimal,
-                        ZERO,
-                        raw.into(),
-                    );
+                    let runtime_error =
+                        RuntimeError::InvalidInt(error, roc_ast2::Base::Decimal, ZERO, raw.into());
 
                     env.problem(Problem::RuntimeError(runtime_error));
                     //
@@ -704,7 +701,7 @@ pub fn expr_to_expr2<'a>(
 pub fn to_expr_id<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
-    parse_expr: &'a roc_parse::ast::Expr<'a>,
+    parse_expr: &'a roc_ast2::Expr<'a>,
     region: Region,
 ) -> (ExprId, Output) {
     let (expr, output) = expr_to_expr2(env, scope, parse_expr, region);

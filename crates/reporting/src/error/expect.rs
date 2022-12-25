@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use bumpalo::Bump;
+use roc_ast2::Expr;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_parse::ast::Expr;
 use roc_problem::Severity;
 use roc_region::all::{LineColumnRegion, LineInfo, Region};
 use roc_types::{

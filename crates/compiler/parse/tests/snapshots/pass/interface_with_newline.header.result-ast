@@ -1,6 +1,6 @@
-Module {
-    comments: [],
-    header: Interface(
+SpacesBefore {
+    before: [],
+    item: Interface(
         InterfaceHeader {
             before_name: [],
             name: @10-11 ModuleName(

@@ -1,23 +1,33 @@
 use crate::annotation::{is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
+use crate::def::fmt_defs;
 use crate::expr::fmt_str_literal;
 use crate::spaces::RemoveSpaces;
 use crate::spaces::{fmt_comments_only, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use bumpalo::Bump;
-use roc_parse::ast::{Collection, Header, Module, Spaced, Spaces};
-use roc_parse::header::{
+use roc_ast2::UppercaseIdent;
+use roc_ast2::{
     AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword, HostedHeader, ImportsEntry,
     ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName, PackageEntry, PackageHeader,
     PackageKeyword, PackageName, PackagesKeyword, PlatformHeader, PlatformRequires,
     ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
 };
-use roc_parse::ident::UppercaseIdent;
+use roc_ast2::{Collection, Header, Spaces};
+use roc_ast2::{Module, Spaced, SpacesBefore};
 use roc_region::all::Loc;
 
-pub fn fmt_module<'a>(buf: &mut Buf<'_>, module: &'a Module<'a>) {
-    fmt_comments_only(buf, module.comments.iter(), NewlineAt::Bottom, 0);
-    match &module.header {
+pub fn fmt_module<'a>(buf: &mut Buf<'a>, module: &'a Module) {
+    fmt_header(buf, &module.header);
+
+    fmt_defs(buf, &module.defs, 0);
+
+    buf.fmt_end_of_file();
+}
+
+pub fn fmt_header<'a>(buf: &mut Buf<'_>, header: &'a SpacesBefore<'a, Header<'a>>) {
+    fmt_comments_only(buf, header.before.iter(), NewlineAt::Bottom, 0);
+    match &header.item {
         Header::Interface(header) => {
             fmt_interface_header(buf, header);
         }
@@ -474,7 +484,7 @@ fn fmt_packages_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &PackageEntry<'a>, i
 }
 
 fn fmt_imports_entry<'a, 'buf>(buf: &mut Buf<'buf>, entry: &ImportsEntry<'a>, indent: u16) {
-    use roc_parse::header::ImportsEntry::*;
+    use roc_ast2::ImportsEntry::*;
 
     buf.indent(indent);
 

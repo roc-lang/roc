@@ -13,6 +13,7 @@ roc_collections = { path = "../compiler/collections" }
 roc_region = { path = "../compiler/region" }
 roc_module = { path = "../compiler/module" }
 roc_parse = { path = "../compiler/parse" }
+roc_ast2 = { path = "../compiler/ast2" }
 roc_problem = { path = "../compiler/problem" }
 roc_types = { path = "../compiler/types" }
 roc_unify = { path = "../compiler/unify"}

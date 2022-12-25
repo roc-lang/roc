@@ -3286,6 +3286,7 @@ dependencies = [
  "indoc",
  "libc",
  "page_size",
+ "roc_ast2",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -3304,6 +3305,16 @@ dependencies = [
  "snafu",
  "ven_graph",
  "winapi",
+]
+
+[[package]]
+name = "roc_ast2"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "roc_collections",
+ "roc_module",
+ "roc_region",
 ]
 
 [[package]]
@@ -3362,6 +3373,7 @@ dependencies = [
  "bumpalo",
  "indoc",
  "pretty_assertions",
+ "roc_ast2",
  "roc_collections",
  "roc_error_macros",
  "roc_exhaustive",
@@ -3507,6 +3519,7 @@ dependencies = [
  "pretty_assertions",
  "pulldown-cmark",
  "roc_ast",
+ "roc_ast2",
  "roc_builtins",
  "roc_can",
  "roc_code_markup",
@@ -3604,6 +3617,7 @@ dependencies = [
  "bumpalo",
  "indoc",
  "pretty_assertions",
+ "roc_ast2",
  "roc_collections",
  "roc_module",
  "roc_parse",
@@ -3793,6 +3807,7 @@ dependencies = [
  "maplit",
  "parking_lot 0.12.1",
  "pretty_assertions",
+ "roc_ast2",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -3875,6 +3890,7 @@ dependencies = [
  "indoc",
  "pretty_assertions",
  "reqwest",
+ "roc_ast2",
  "roc_error_macros",
  "roc_parse",
  "tar",
@@ -3894,6 +3910,7 @@ dependencies = [
  "proptest",
  "quickcheck",
  "quickcheck_macros",
+ "roc_ast2",
  "roc_collections",
  "roc_module",
  "roc_region",
@@ -3904,6 +3921,7 @@ dependencies = [
 name = "roc_problem"
 version = "0.0.1"
 dependencies = [
+ "roc_ast2",
  "roc_collections",
  "roc_module",
  "roc_parse",
@@ -3926,6 +3944,7 @@ dependencies = [
  "const_format",
  "inkwell",
  "libloading",
+ "roc_ast2",
  "roc_build",
  "roc_builtins",
  "roc_collections",
@@ -3952,6 +3971,7 @@ name = "roc_repl_eval"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
+ "roc_ast2",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -3980,6 +4000,7 @@ dependencies = [
  "libc",
  "libloading",
  "pretty_assertions",
+ "roc_ast2",
  "roc_build",
  "roc_builtins",
  "roc_can",
@@ -4013,6 +4034,7 @@ dependencies = [
  "console_error_panic_hook",
  "futures",
  "js-sys",
+ "roc_ast2",
  "roc_builtins",
  "roc_collections",
  "roc_gen_wasm",
@@ -4038,6 +4060,7 @@ dependencies = [
  "indoc",
  "insta",
  "pretty_assertions",
+ "roc_ast2",
  "roc_builtins",
  "roc_can",
  "roc_collections",

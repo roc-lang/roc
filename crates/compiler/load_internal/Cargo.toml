@@ -20,6 +20,7 @@ roc_builtins = { path = "../builtins" }
 roc_problem = { path = "../problem" }
 roc_unify = { path = "../unify" }
 roc_parse = { path = "../parse" }
+roc_ast2 = { path = "../ast2" }
 roc_solve = { path = "../solve" }
 roc_solve_problem = { path = "../solve_problem" }
 roc_late_solve = { path = "../late_solve" }

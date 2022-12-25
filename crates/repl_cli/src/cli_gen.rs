@@ -1,6 +1,7 @@
 use bumpalo::Bump;
 use inkwell::context::Context;
 use libloading::Library;
+use roc_ast2::Expr;
 use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
@@ -10,7 +11,6 @@ use roc_intern::SingleThreadedInterner;
 use roc_load::{EntryPoint, MonomorphizedModule};
 use roc_mono::ir::OptLevel;
 use roc_mono::layout::Layout;
-use roc_parse::ast::Expr;
 use roc_repl_eval::eval::jit_to_ast;
 use roc_repl_eval::gen::{compile_to_mono, format_answer, Problems, ReplOutput};
 use roc_repl_eval::{ReplApp, ReplAppMemory};

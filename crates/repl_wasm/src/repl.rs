@@ -1,10 +1,10 @@
 use bumpalo::{collections::vec::Vec, Bump};
 use std::mem::size_of;
 
+use roc_ast2::Expr;
 use roc_collections::all::MutSet;
 use roc_gen_wasm::wasm32_result;
 use roc_load::MonomorphizedModule;
-use roc_parse::ast::Expr;
 use roc_repl_eval::{
     eval::jit_to_ast,
     gen::{compile_to_mono, format_answer},

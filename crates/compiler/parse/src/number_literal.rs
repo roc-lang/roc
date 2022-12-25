@@ -1,6 +1,6 @@
-use crate::ast::Base;
-use crate::parser::{ENumber, ParseResult, Parser, Progress};
+use crate::parser::{ParseResult, Parser, Progress};
 use crate::state::State;
+use roc_ast2::{Base, ENumber};
 
 pub enum NumLiteral<'a> {
     Float(&'a str),

@@ -3,6 +3,7 @@ use bumpalo::Bump;
 use roc_types::types::AliasKind;
 use std::cmp::{max_by_key, min_by_key};
 
+use roc_ast2::{AssignedField, Collection, Expr, Pattern, StrLiteral};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_module::called_via::CalledVia;
@@ -13,7 +14,6 @@ use roc_mono::layout::{
     self, union_sorted_tags_pub, Builtin, Layout, LayoutCache, LayoutInterner, UnionLayout,
     UnionVariant, WrappedVariant,
 };
-use roc_parse::ast::{AssignedField, Collection, Expr, Pattern, StrLiteral};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;

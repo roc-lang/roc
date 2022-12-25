@@ -1,22 +1,17 @@
+use crate::Buf;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_module::called_via::{BinOp, UnaryOp};
-use roc_parse::{
-    ast::{
-        AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, Has, HasAbilities,
-        HasAbility, HasClause, HasImpls, Header, Module, Pattern, Spaced, Spaces, StrLiteral,
-        StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
-    },
-    header::{
-        AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
-        ModuleName, PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires,
-        ProvidesTo, To, TypedIdent,
-    },
-    ident::{BadIdent, UppercaseIdent},
+use roc_ast2::Module;
+use roc_ast2::{
+    AbilityMember, AppHeader, AssignedField, Collection, CommentOrNewline, Defs, EIdent,
+    ExposedName, Expr, Has, HasAbilities, HasAbility, HasClause, HasImpls, Header, HostedHeader,
+    ImportsEntry, InterfaceHeader, KeywordItem, ModuleName, PackageEntry, PackageHeader,
+    PackageName, Pattern, PlatformHeader, PlatformRequires, ProvidesTo, Spaced, Spaces,
+    SpacesBefore, StrLiteral, StrSegment, Tag, To, TypeAnnotation, TypeDef, TypeHeader, TypedIdent,
+    UppercaseIdent, ValueDef, WhenBranch,
 };
+use roc_module::called_via::{BinOp, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
-
-use crate::{Ast, Buf};
 
 /// The number of spaces to indent.
 pub const INDENT: u16 = 4;
@@ -221,10 +216,10 @@ pub trait RemoveSpaces<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self;
 }
 
-impl<'a> RemoveSpaces<'a> for Ast<'a> {
+impl<'a> RemoveSpaces<'a> for Module<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        Ast {
-            module: self.module.remove_spaces(arena),
+        Module {
+            header: self.header.remove_spaces(arena),
             defs: self.defs.remove_spaces(arena),
         }
     }
@@ -264,6 +259,15 @@ impl<'a, V: RemoveSpaces<'a>> RemoveSpaces<'a> for Spaces<'a, V> {
     }
 }
 
+impl<'a, V: RemoveSpaces<'a>> RemoveSpaces<'a> for SpacesBefore<'a, V> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        SpacesBefore {
+            before: &[],
+            item: self.item.remove_spaces(arena),
+        }
+    }
+}
+
 impl<'a, K: RemoveSpaces<'a>, V: RemoveSpaces<'a>> RemoveSpaces<'a> for KeywordItem<'a, K, V> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
         KeywordItem {
@@ -285,9 +289,9 @@ impl<'a> RemoveSpaces<'a> for ProvidesTo<'a> {
     }
 }
 
-impl<'a> RemoveSpaces<'a> for Module<'a> {
+impl<'a> RemoveSpaces<'a> for Header<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        let header = match &self.header {
+        match self {
             Header::Interface(header) => Header::Interface(InterfaceHeader {
                 before_name: &[],
                 name: header.name.remove_spaces(arena),
@@ -324,10 +328,6 @@ impl<'a> RemoveSpaces<'a> for Module<'a> {
                 generates: header.generates.remove_spaces(arena),
                 generates_with: header.generates_with.remove_spaces(arena),
             }),
-        };
-        Module {
-            comments: &[],
-            header,
         }
     }
 }
@@ -735,17 +735,17 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
     }
 }
 
-fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
+fn remove_spaces_bad_ident(ident: EIdent) -> EIdent {
     match ident {
-        BadIdent::Start(_) => BadIdent::Start(Position::zero()),
-        BadIdent::Space(e, _) => BadIdent::Space(e, Position::zero()),
-        BadIdent::Underscore(_) => BadIdent::Underscore(Position::zero()),
-        BadIdent::QualifiedTag(_) => BadIdent::QualifiedTag(Position::zero()),
-        BadIdent::WeirdAccessor(_) => BadIdent::WeirdAccessor(Position::zero()),
-        BadIdent::WeirdDotAccess(_) => BadIdent::WeirdDotAccess(Position::zero()),
-        BadIdent::WeirdDotQualified(_) => BadIdent::WeirdDotQualified(Position::zero()),
-        BadIdent::StrayDot(_) => BadIdent::StrayDot(Position::zero()),
-        BadIdent::BadOpaqueRef(_) => BadIdent::BadOpaqueRef(Position::zero()),
+        EIdent::Start(_) => EIdent::Start(Position::zero()),
+        EIdent::Space(e, _) => EIdent::Space(e, Position::zero()),
+        EIdent::Underscore(_) => EIdent::Underscore(Position::zero()),
+        EIdent::QualifiedTag(_) => EIdent::QualifiedTag(Position::zero()),
+        EIdent::WeirdAccessor(_) => EIdent::WeirdAccessor(Position::zero()),
+        EIdent::WeirdDotAccess(_) => EIdent::WeirdDotAccess(Position::zero()),
+        EIdent::WeirdDotQualified(_) => EIdent::WeirdDotQualified(Position::zero()),
+        EIdent::StrayDot(_) => EIdent::StrayDot(Position::zero()),
+        EIdent::BadOpaqueRef(_) => EIdent::BadOpaqueRef(Position::zero()),
     }
 }
 

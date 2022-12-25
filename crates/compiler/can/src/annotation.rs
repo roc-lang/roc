@@ -1,10 +1,10 @@
 use crate::env::Env;
 use crate::procedure::References;
 use crate::scope::{PendingAbilitiesInScope, Scope};
+use roc_ast2::{AssignedField, ExtractSpaces, Pattern, Tag, TypeAnnotation, TypeHeader};
 use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{AssignedField, ExtractSpaces, Pattern, Tag, TypeAnnotation, TypeHeader};
 use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -417,9 +417,9 @@ pub(crate) fn make_apply_symbol(
 /// `U8`, and `Str`.
 pub fn find_type_def_symbols(
     scope: &mut Scope,
-    initial_annotation: &roc_parse::ast::TypeAnnotation,
+    initial_annotation: &roc_ast2::TypeAnnotation,
 ) -> Vec<Symbol> {
-    use roc_parse::ast::TypeAnnotation::*;
+    use roc_ast2::TypeAnnotation::*;
 
     let mut result = Vec::new();
 
@@ -530,7 +530,7 @@ fn find_fresh_var_name(introduced_variables: &IntroducedVariables) -> Lowercase 
 fn can_annotation_help(
     env: &mut Env,
     pol: CanPolarity,
-    annotation: &roc_parse::ast::TypeAnnotation,
+    annotation: &roc_ast2::TypeAnnotation,
     region: Region,
     scope: &mut Scope,
     var_store: &mut VarStore,
@@ -538,7 +538,7 @@ fn can_annotation_help(
     local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
 ) -> Type {
-    use roc_parse::ast::TypeAnnotation::*;
+    use roc_ast2::TypeAnnotation::*;
 
     match annotation {
         Function(argument_types, return_type) => {
@@ -1014,13 +1014,13 @@ fn canonicalize_has_clause(
     scope: &mut Scope,
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
-    clause: &Loc<roc_parse::ast::HasClause<'_>>,
+    clause: &Loc<roc_ast2::HasClause<'_>>,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
     references: &mut VecSet<Symbol>,
 ) -> Result<(), Type> {
     let Loc {
         region,
-        value: roc_parse::ast::HasClause { var, abilities },
+        value: roc_ast2::HasClause { var, abilities },
     } = clause;
     let region = *region;
 
@@ -1314,7 +1314,7 @@ fn can_assigned_fields<'a>(
     local_aliases: &mut VecMap<Symbol, Alias>,
     references: &mut VecSet<Symbol>,
 ) -> SendMap<Lowercase, RecordField<Type>> {
-    use roc_parse::ast::AssignedField::*;
+    use roc_ast2::AssignedField::*;
     use roc_types::types::RecordField::*;
 
     // SendMap doesn't have a `with_capacity`

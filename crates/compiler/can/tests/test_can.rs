@@ -94,7 +94,7 @@ mod test_can {
 
     #[test]
     fn int_too_large() {
-        use roc_parse::ast::Base;
+        use roc_ast2::Base;
 
         let string = "340_282_366_920_938_463_463_374_607_431_768_211_456".to_string();
 
@@ -111,7 +111,7 @@ mod test_can {
 
     #[test]
     fn int_too_small() {
-        use roc_parse::ast::Base;
+        use roc_ast2::Base;
 
         let string = "-170_141_183_460_469_231_731_687_303_715_884_105_729".to_string();
 

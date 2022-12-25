@@ -20,6 +20,11 @@ use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Patte
 use crate::procedure::References;
 use crate::scope::create_alias;
 use crate::scope::{PendingAbilitiesInScope, Scope};
+use roc_ast2 as ast;
+use roc_ast2::AssignedField;
+use roc_ast2::Defs;
+use roc_ast2::ExtractSpaces;
+use roc_ast2::TypeHeader;
 use roc_collections::ReferenceMatrix;
 use roc_collections::VecMap;
 use roc_collections::VecSet;
@@ -30,11 +35,6 @@ use roc_module::ident::Lowercase;
 use roc_module::symbol::IdentId;
 use roc_module::symbol::ModuleId;
 use roc_module::symbol::Symbol;
-use roc_parse::ast;
-use roc_parse::ast::AssignedField;
-use roc_parse::ast::Defs;
-use roc_parse::ast::ExtractSpaces;
-use roc_parse::ast::TypeHeader;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::ShadowKind;
 use roc_problem::can::{CycleEntry, Problem, RuntimeError};
@@ -905,7 +905,7 @@ pub(crate) fn canonicalize_defs<'a>(
     mut output: Output,
     var_store: &mut VarStore,
     scope: &mut Scope,
-    loc_defs: &'a mut roc_parse::ast::Defs<'a>,
+    loc_defs: &'a mut roc_ast2::Defs<'a>,
     pattern_type: PatternType,
 ) -> (CanDefs, Output, MutMap<Symbol, Region>) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:

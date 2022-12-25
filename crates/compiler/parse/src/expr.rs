@@ -1,24 +1,27 @@
-use crate::ast::{
-    AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Has, HasAbilities,
-    Pattern, Spaceable, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
-};
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
     space0_before_optional_after, space0_e,
 };
-use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident};
+use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor};
 use crate::keyword;
+use crate::parser::Either;
 use crate::parser::{
     self, backtrackable, increment_min_indent, line_min_indent, optional, reset_min_indent,
     sep_by1, sep_by1_e, set_min_indent, specialize, specialize_ref, then, trailing_sep_by0, word1,
-    word1_indent, word2, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern,
-    ERecord, EString, ETuple, EType, EWhen, Either, ParseResult, Parser,
+    word1_indent, word2, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_has_parser};
 use crate::state::State;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_ast2::SingleDef;
+use roc_ast2::{
+    AssignedField, Defs, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern,
+    ERecord, EString, ETuple, EType, EWhen, Expr, ExtractSpaces, Has, HasAbilities, Ident, Pattern,
+    Spaceable, SpacesBefore, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+};
+use roc_ast2::{Collection, CommentOrNewline};
 use roc_collections::soa::Slice;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
@@ -540,7 +543,7 @@ pub fn parse_single_def<'a>(
     min_indent: u32,
     arena: &'a Bump,
     state: State<'a>,
-) -> ParseResult<'a, Option<SingleDef<'a>>, EExpr<'a>> {
+) -> ParseResult<'a, Option<SpacesBefore<Loc<SingleDef<'a>>>>, EExpr<'a>> {
     let initial = state.clone();
 
     let mut spaces_before_current = &[] as &[_];
@@ -629,10 +632,9 @@ pub fn parse_single_def<'a>(
 
                     return Ok((
                         MadeProgress,
-                        Some(SingleDef {
-                            type_or_value: Either::First(type_def),
-                            region: def_region,
-                            spaces_before: spaces_before_current,
+                        Some(SpacesBefore {
+                            before: spaces_before_current,
+                            item: Loc::at(def_region, SingleDef::Type(type_def)),
                         }),
                         state,
                     ));
@@ -655,10 +657,9 @@ pub fn parse_single_def<'a>(
 
                     Ok((
                         MadeProgress,
-                        Some(SingleDef {
-                            type_or_value: Either::Second(value_def),
-                            region,
-                            spaces_before: spaces_before_current,
+                        Some(SpacesBefore {
+                            before: spaces_before_current,
+                            item: Loc::at(region, SingleDef::Value(value_def)),
                         }),
                         state,
                     ))
@@ -692,10 +693,9 @@ pub fn parse_single_def<'a>(
 
                             Ok((
                                 MadeProgress,
-                                Some(SingleDef {
-                                    type_or_value: Either::First(type_def),
-                                    region,
-                                    spaces_before: spaces_before_current,
+                                Some(SpacesBefore {
+                                    before: spaces_before_current,
+                                    item: Loc::at(region, SingleDef::Type(type_def)),
                                 }),
                                 state,
                             ))
@@ -715,10 +715,9 @@ pub fn parse_single_def<'a>(
 
                             Ok((
                                 MadeProgress,
-                                Some(SingleDef {
-                                    type_or_value: Either::First(type_def),
-                                    region,
-                                    spaces_before: spaces_before_current,
+                                Some(SpacesBefore {
+                                    before: spaces_before_current,
+                                    item: Loc::at(region, SingleDef::Type(type_def)),
                                 }),
                                 state,
                             ))
@@ -728,10 +727,9 @@ pub fn parse_single_def<'a>(
 
                             Ok((
                                 MadeProgress,
-                                Some(SingleDef {
-                                    type_or_value: Either::Second(value_def),
-                                    region,
-                                    spaces_before: spaces_before_current,
+                                Some(SpacesBefore {
+                                    before: spaces_before_current,
+                                    item: Loc::at(region, SingleDef::Value(value_def)),
                                 }),
                                 state,
                             ))
@@ -765,10 +763,9 @@ pub fn parse_single_def<'a>(
 
                             Ok((
                                 MadeProgress,
-                                Some(SingleDef {
-                                    type_or_value: Either::First(type_def),
-                                    region,
-                                    spaces_before: spaces_before_current,
+                                Some(SpacesBefore {
+                                    before: spaces_before_current,
+                                    item: Loc::at(region, SingleDef::Type(type_def)),
                                 }),
                                 state,
                             ))
@@ -789,10 +786,9 @@ pub fn parse_single_def<'a>(
 
                             Ok((
                                 MadeProgress,
-                                Some(SingleDef {
-                                    type_or_value: Either::First(type_def),
-                                    region,
-                                    spaces_before: spaces_before_current,
+                                Some(SpacesBefore {
+                                    before: spaces_before_current,
+                                    item: Loc::at(region, SingleDef::Type(type_def)),
                                 }),
                                 state,
                             ))
@@ -802,10 +798,9 @@ pub fn parse_single_def<'a>(
 
                             Ok((
                                 MadeProgress,
-                                Some(SingleDef {
-                                    type_or_value: Either::Second(value_def),
-                                    region,
-                                    spaces_before: spaces_before_current,
+                                Some(SpacesBefore {
+                                    before: spaces_before_current,
+                                    item: Loc::at(region, SingleDef::Value(value_def)),
                                 }),
                                 state,
                             ))
@@ -829,7 +824,7 @@ fn parse_statement_inside_def<'a>(
     spaces_before_current_start: Position,
     spaces_before_current: &'a [CommentOrNewline<'a>],
     get_value_def: impl Fn(Region, Loc<Expr<'a>>) -> ValueDef<'a>,
-) -> Result<(Progress, Option<SingleDef<'a>>, State<'a>), (Progress, EExpr<'a>)> {
+) -> ParseResult<Option<SpacesBefore<Loc<SingleDef<'a>>>>, EExpr<'a>> {
     let parse_def_expr =
         space0_before_e(increment_min_indent(expr_start(options)), EExpr::IndentEnd);
     let (_, loc_def_expr, state) = parse_def_expr.parse(arena, state, min_indent)?;
@@ -855,10 +850,9 @@ fn parse_statement_inside_def<'a>(
 
     Ok((
         MadeProgress,
-        Some(SingleDef {
-            type_or_value: Either::Second(value_def),
-            region,
-            spaces_before: spaces_before_current,
+        Some(SpacesBefore {
+            before: spaces_before_current,
+            item: Loc::at(region, SingleDef::Value(value_def)),
         }),
         state,
     ))
@@ -875,7 +869,7 @@ macro_rules! join_ann_to_body {
             ann_type: $arena.alloc(*$ann_type),
             comment: $spaces_before_current
                 .first()
-                .and_then($crate::ast::CommentOrNewline::comment_str),
+                .and_then($crate::ast2_for_macros::CommentOrNewline::comment_str),
             body_pattern: $arena.alloc($loc_pattern),
             body_expr: *$arena.alloc($loc_def_expr),
         };
@@ -911,7 +905,7 @@ macro_rules! join_alias_to_body {
             ann_type: $arena.alloc(*$ann_type),
             comment: $spaces_before_current
                 .first()
-                .and_then($crate::ast::CommentOrNewline::comment_str),
+                .and_then($crate::ast2_for_macros::CommentOrNewline::comment_str),
             body_pattern: $arena.alloc($loc_pattern),
             body_expr: *$arena.alloc($loc_def_expr),
         };
@@ -937,14 +931,14 @@ fn parse_defs_end<'a>(
 
         global_state = match parse_single_def(_options, min_indent, arena, state) {
             Ok((_, Some(single_def), next_state)) => {
-                let region = single_def.region;
-                let spaces_before_current = single_def.spaces_before;
+                let region = single_def.item.region;
+                let spaces_before_current = single_def.before;
 
-                match single_def.type_or_value {
-                    Either::First(type_def) => {
+                match single_def.item.value {
+                    SingleDef::Type(type_def) => {
                         defs.push_type_def(type_def, region, spaces_before_current, &[]);
                     }
-                    Either::Second(value_def) => {
+                    SingleDef::Value(value_def) => {
                         // If we got a ValueDef::Body, check if a type annotation preceded it.
                         // If so, we may need to combine them into an AnnotatedBody.
                         let joined = match value_def {
@@ -1015,12 +1009,6 @@ fn parse_defs_end<'a>(
             Err((progress, err)) => return Err((progress, err)),
         };
     }
-}
-
-pub struct SingleDef<'a> {
-    pub type_or_value: Either<TypeDef<'a>, ValueDef<'a>>,
-    pub region: Region,
-    pub spaces_before: &'a [CommentOrNewline<'a>],
 }
 
 fn parse_defs_expr<'a>(
@@ -1225,10 +1213,7 @@ fn finish_parsing_alias_or_opaque<'a>(
 
 mod ability {
     use super::*;
-    use crate::{
-        ast::{AbilityMember, Spaceable, Spaced},
-        parser::EAbility,
-    };
+    use roc_ast2::{AbilityMember, EAbility, Spaceable, Spaced};
 
     /// Parses a single ability demand line; see `parse_demand`.
     fn parse_demand_help<'a>() -> impl Parser<'a, AbilityMember<'a>, EAbility<'a>> {
@@ -2025,7 +2010,7 @@ fn closure_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EClo
 
 mod when {
     use super::*;
-    use crate::ast::WhenBranch;
+    use roc_ast2::WhenBranch;
 
     /// Parser for when expressions.
     pub fn expr_help<'a>(options: ExprParseOptions) -> impl Parser<'a, Expr<'a>, EWhen<'a>> {

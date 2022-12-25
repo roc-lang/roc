@@ -1,0 +1,14 @@
+[package]
+name = "roc_ast2"
+version = "0.0.1"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+description = "Exposes data structures representing the roc AST and utilities for manipulating them."
+
+[dependencies]
+roc_collections = { path = "../collections" }
+roc_region = { path = "../region" }
+roc_module = { path = "../module" }
+
+bumpalo.workspace = true

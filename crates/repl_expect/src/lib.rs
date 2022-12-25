@@ -1,13 +1,13 @@
 //! Supports evaluating `expect` and printing contextual information when they fail.
 #[cfg(not(windows))]
 use {
+    roc_ast2::Expr,
     roc_intern::GlobalInterner,
     roc_module::symbol::Interns,
     roc_mono::{
         ir::ProcLayout,
         layout::{CapturesNiche, Layout, LayoutCache},
     },
-    roc_parse::ast::Expr,
     roc_repl_eval::{eval::jit_to_ast, ReplAppMemory},
     roc_target::TargetInfo,
     roc_types::subs::{Subs, Variable},

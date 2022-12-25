@@ -1,24 +1,24 @@
-use crate::ast::{
-    AssignedField, CommentOrNewline, HasAbilities, HasAbility, HasClause, HasImpls, Pattern,
-    Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
-};
 use crate::blankspace::{
     space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
 };
 use crate::expr::record_value_field;
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
-use crate::parser::{
-    absolute_column_min_indent, increment_min_indent, then, ERecord, ETypeAbilityImpl,
-};
+use crate::parser::{absolute_column_min_indent, increment_min_indent, then};
 use crate::parser::{
     allocated, backtrackable, fail, optional, specialize, specialize_ref, word1, word2, word3,
-    EType, ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion, Parser,
+    Parser,
     Progress::{self, *},
 };
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use roc_ast2::CommentOrNewline;
+use roc_ast2::{
+    AssignedField, ERecord, ETypeAbilityImpl, HasAbilities, HasAbility, HasClause, HasImpls,
+    Pattern, Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
+};
+use roc_ast2::{EType, ETypeApply, ETypeInParens, ETypeInlineAlias, ETypeRecord, ETypeTagUnion};
 use roc_region::all::{Loc, Position, Region};
 
 pub fn located<'a>(

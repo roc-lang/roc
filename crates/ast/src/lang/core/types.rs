@@ -191,7 +191,7 @@ pub enum Annotation2 {
 pub fn to_annotation2<'a>(
     env: &mut Env,
     scope: &mut Scope,
-    annotation: &'a roc_parse::ast::TypeAnnotation<'a>,
+    annotation: &'a roc_ast2::TypeAnnotation<'a>,
     region: Region,
 ) -> Annotation2 {
     let mut references = References::default();
@@ -302,7 +302,7 @@ pub fn to_type_id<'a>(
     env: &mut Env,
     scope: &mut Scope,
     rigids: &mut References,
-    annotation: &roc_parse::ast::TypeAnnotation<'a>,
+    annotation: &roc_ast2::TypeAnnotation<'a>,
     region: Region,
 ) -> TypeId {
     let type2 = to_type2(env, scope, rigids, annotation, region);
@@ -315,7 +315,7 @@ pub fn as_type_id<'a>(
     scope: &mut Scope,
     rigids: &mut References,
     type_id: TypeId,
-    annotation: &roc_parse::ast::TypeAnnotation<'a>,
+    annotation: &roc_ast2::TypeAnnotation<'a>,
     region: Region,
 ) {
     let type2 = to_type2(env, scope, rigids, annotation, region);
@@ -328,12 +328,12 @@ pub fn to_type2<'a>(
     env: &mut Env,
     scope: &mut Scope,
     references: &mut References,
-    annotation: &roc_parse::ast::TypeAnnotation<'a>,
+    annotation: &roc_ast2::TypeAnnotation<'a>,
     region: Region,
 ) -> Type2 {
-    use roc_parse::ast::Pattern;
-    use roc_parse::ast::TypeAnnotation::*;
-    use roc_parse::ast::TypeHeader;
+    use roc_ast2::Pattern;
+    use roc_ast2::TypeAnnotation::*;
+    use roc_ast2::TypeHeader;
 
     match annotation {
         Apply(module_name, ident, targs) => {
@@ -575,10 +575,10 @@ fn can_assigned_fields<'a>(
     env: &mut Env,
     scope: &mut Scope,
     rigids: &mut References,
-    fields: &&[Loc<roc_parse::ast::AssignedField<'a, roc_parse::ast::TypeAnnotation<'a>>>],
+    fields: &&[Loc<roc_ast2::AssignedField<'a, roc_ast2::TypeAnnotation<'a>>>],
     region: Region,
 ) -> MutMap<Lowercase, RecordField<Type2>> {
-    use roc_parse::ast::AssignedField::*;
+    use roc_ast2::AssignedField::*;
     use roc_types::types::RecordField::*;
 
     // SendMap doesn't have a `with_capacity`
@@ -663,10 +663,10 @@ fn can_tags<'a>(
     env: &mut Env,
     scope: &mut Scope,
     rigids: &mut References,
-    tags: &'a [Loc<roc_parse::ast::Tag<'a>>],
+    tags: &'a [Loc<roc_ast2::Tag<'a>>],
     region: Region,
 ) -> Vec<(TagName, PoolVec<Type2>)> {
-    use roc_parse::ast::Tag;
+    use roc_ast2::Tag;
     let mut tag_types = Vec::with_capacity(tags.len());
 
     // tag names we've seen so far in this tag union
@@ -734,7 +734,7 @@ fn to_type_apply<'a>(
     rigids: &mut References,
     module_name: &str,
     ident: &str,
-    type_arguments: &[Loc<roc_parse::ast::TypeAnnotation<'a>>],
+    type_arguments: &[Loc<roc_ast2::TypeAnnotation<'a>>],
     region: Region,
 ) -> TypeApply {
     let symbol = if module_name.is_empty() {

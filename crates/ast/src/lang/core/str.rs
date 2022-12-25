@@ -1,6 +1,6 @@
+use roc_ast2::StrLiteral;
 use roc_error_macros::internal_error;
 use roc_module::{called_via::CalledVia, symbol::Symbol};
-use roc_parse::ast::StrLiteral;
 
 use crate::{
     ast_error::{ASTResult, UnexpectedASTNodeSnafu},
@@ -25,7 +25,7 @@ pub(crate) fn flatten_str_literal<'a>(
     scope: &mut Scope,
     literal: &StrLiteral<'a>,
 ) -> (Expr2, Output) {
-    use roc_parse::ast::StrLiteral::*;
+    use roc_ast2::StrLiteral::*;
 
     match literal {
         PlainLine(str_slice) => {
@@ -47,9 +47,9 @@ enum StrSegment {
 fn flatten_str_lines<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
-    lines: &[&[roc_parse::ast::StrSegment<'a>]],
+    lines: &[&[roc_ast2::StrSegment<'a>]],
 ) -> (Expr2, Output) {
-    use roc_parse::ast::StrSegment::*;
+    use roc_ast2::StrSegment::*;
 
     let mut buf = String::new();
     let mut segments = Vec::new();

@@ -12,11 +12,11 @@
 // };
 // use crate::pattern::{bindings_from_patterns, canonicalize_pattern, Pattern};
 // use crate::procedure::References;
+use roc_ast2::{self as ast, CommentOrNewline, Defs, TypeDef, TypeHeader, ValueDef as AstValueDef};
 use roc_collections::all::{default_hasher, ImMap, MutMap, MutSet, SendMap};
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::ident::Lowercase;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, CommentOrNewline, Defs, TypeDef, TypeHeader, ValueDef as AstValueDef};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};

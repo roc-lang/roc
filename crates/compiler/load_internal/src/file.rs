@@ -6,6 +6,11 @@ use crossbeam::channel::{bounded, Sender};
 use crossbeam::deque::{Injector, Stealer, Worker};
 use crossbeam::thread;
 use parking_lot::Mutex;
+use roc_ast2::PackageName;
+use roc_ast2::{self as ast, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
+use roc_ast2::{
+    ExposedName, ImportsEntry, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
+};
 use roc_builtins::roc::module_source;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
@@ -41,11 +46,7 @@ use roc_mono::layout::{
 use roc_packaging::cache::{self, RocCacheDir};
 #[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::PackageMetadata;
-use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
-use roc_parse::header::{
-    ExposedName, ImportsEntry, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
-};
-use roc_parse::header::{HeaderType, PackageName};
+use roc_parse::header::HeaderType;
 use roc_parse::module::module_defs;
 use roc_parse::parser::{FileError, Parser, SourceError, SyntaxError};
 use roc_problem::Severity;
@@ -3446,8 +3447,8 @@ fn load_package_from_disk<'a>(
 
             match parsed {
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Interface(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::Interface(header),
                         ..
                     },
                     _parse_state,
@@ -3456,8 +3457,8 @@ fn load_package_from_disk<'a>(
                     header
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Hosted(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::Hosted(header),
                         ..
                     },
                     _parse_state,
@@ -3466,8 +3467,8 @@ fn load_package_from_disk<'a>(
                     header
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::App(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::App(header),
                         ..
                     },
                     _parse_state,
@@ -3476,8 +3477,8 @@ fn load_package_from_disk<'a>(
                     header
                 ))),
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Package(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::Package(header),
                         ..
                     },
                     parser_state,
@@ -3497,8 +3498,8 @@ fn load_package_from_disk<'a>(
                     Ok(Msg::Header(package_module_msg))
                 }
                 Ok((
-                    ast::Module {
-                        header: ast::Header::Platform(header),
+                    ast::SpacesBefore {
+                        item: ast::Header::Platform(header),
                         ..
                     },
                     parser_state,
@@ -3547,8 +3548,8 @@ fn load_builtin_module_help<'a>(
 
     match parsed {
         Ok((
-            ast::Module {
-                header: ast::Header::Interface(header),
+            ast::SpacesBefore {
+                item: ast::Header::Interface(header),
                 ..
             },
             parse_state,
@@ -3774,7 +3775,7 @@ fn find_task<T>(local: &Worker<T>, global: &Injector<T>, stealers: &[Stealer<T>]
 }
 
 fn verify_interface_matches_file_path<'a>(
-    interface_name: Loc<roc_parse::header::ModuleName<'a>>,
+    interface_name: Loc<roc_ast2::ModuleName<'a>>,
     path: &Path,
     state: &roc_parse::state::State<'a>,
 ) -> Result<(), LoadingProblem<'a>> {
@@ -3802,7 +3803,7 @@ fn verify_interface_matches_file_path<'a>(
         return Ok(());
     }
 
-    use roc_parse::parser::EHeader;
+    use roc_ast2::EHeader;
     let syntax_problem =
         SyntaxError::Header(EHeader::InconsistentModuleName(interface_name.region));
     let problem = LoadingProblem::ParsingFailed(FileError {
@@ -3846,8 +3847,8 @@ fn parse_header<'a>(
 
     match parsed {
         Ok((
-            ast::Module {
-                header: ast::Header::Interface(header),
+            ast::SpacesBefore {
+                item: ast::Header::Interface(header),
                 ..
             },
             parse_state,
@@ -3901,8 +3902,8 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::Hosted(header),
+            ast::SpacesBefore {
+                item: ast::Header::Hosted(header),
                 ..
             },
             parse_state,
@@ -3936,8 +3937,8 @@ fn parse_header<'a>(
             })
         }
         Ok((
-            ast::Module {
-                header: ast::Header::App(header),
+            ast::SpacesBefore {
+                item: ast::Header::App(header),
                 ..
             },
             parse_state,
@@ -4029,8 +4030,8 @@ fn parse_header<'a>(
             }
         }
         Ok((
-            ast::Module {
-                header: ast::Header::Package(header),
+            ast::SpacesBefore {
+                item: ast::Header::Package(header),
                 ..
             },
             parse_state,
@@ -4055,8 +4056,8 @@ fn parse_header<'a>(
         }
 
         Ok((
-            ast::Module {
-                header: ast::Header::Platform(header),
+            ast::SpacesBefore {
+                item: ast::Header::Platform(header),
                 ..
             },
             parse_state,
@@ -5388,7 +5389,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
 }
 
 fn exposed_from_import<'a>(entry: &ImportsEntry<'a>) -> (QualifiedModuleName<'a>, Vec<Loc<Ident>>) {
-    use roc_parse::header::ImportsEntry::*;
+    use roc_ast2::ImportsEntry::*;
 
     match entry {
         Module(module_name, exposes) => {

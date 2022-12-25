@@ -11,6 +11,7 @@ use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitS
 use crate::procedure::References;
 use crate::scope::Scope;
 use crate::traverse::{walk_expr, Visitor};
+use roc_ast2::{self as ast, Defs, EscapedChar, StrLiteral};
 use roc_collections::soa::Index;
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
@@ -18,7 +19,6 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, Defs, EscapedChar, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -914,7 +914,7 @@ pub fn canonicalize_expr<'a>(
             // we parse underscores, but they are not valid expression syntax
             let problem = roc_problem::can::RuntimeError::MalformedIdentifier(
                 (*name).into(),
-                roc_parse::ident::BadIdent::Underscore(region.start()),
+                roc_ast2::EIdent::Underscore(region.start()),
                 region,
             );
 
@@ -1668,7 +1668,7 @@ fn canonicalize_field<'a>(
     scope: &mut Scope,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
 ) -> Result<(Lowercase, Loc<Expr>, Output, Variable), CanonicalizeFieldProblem> {
-    use roc_parse::ast::AssignedField::*;
+    use roc_ast2::AssignedField::*;
 
     match field {
         // Both a label and a value, e.g. `{ name: "blah" }`

@@ -15,10 +15,10 @@ extern crate roc_parse;
 mod test_parse {
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
-    use roc_parse::ast::Expr::{self, *};
-    use roc_parse::ast::StrLiteral::*;
-    use roc_parse::ast::StrSegment::*;
-    use roc_parse::ast::{self, EscapedChar};
+    use roc_ast2::EscapedChar;
+    use roc_ast2::Expr::{self, *};
+    use roc_ast2::StrSegment::*;
+    use roc_ast2::{StrLiteral::*, StrSegment};
     use roc_parse::module::module_defs;
     use roc_parse::parser::{Parser, SyntaxError};
     use roc_parse::state::State;
@@ -451,7 +451,7 @@ mod test_parse {
         assert!(actual.is_err());
     }
 
-    fn assert_segments<E: Fn(&Bump) -> Vec<'_, ast::StrSegment<'_>>>(input: &str, to_expected: E) {
+    fn assert_segments<E: Fn(&Bump) -> Vec<'_, StrSegment<'_>>>(input: &str, to_expected: E) {
         let arena = Bump::new();
         let actual = parse_expr_with(&arena, arena.alloc(input));
         let expected_slice = to_expected(&arena);
@@ -462,7 +462,7 @@ mod test_parse {
 
     fn parses_with_escaped_char<
         I: Fn(&str) -> String,
-        E: Fn(EscapedChar, &Bump) -> Vec<'_, ast::StrSegment<'_>>,
+        E: Fn(EscapedChar, &Bump) -> Vec<'_, StrSegment<'_>>,
     >(
         to_input: I,
         to_expected: E,
@@ -929,7 +929,7 @@ mod test_parse {
 
     #[test]
     fn parse_expr_size() {
-        assert_eq!(std::mem::size_of::<roc_parse::ast::Expr>(), 40);
+        assert_eq!(std::mem::size_of::<Expr>(), 40);
     }
 
     // PARSE ERROR

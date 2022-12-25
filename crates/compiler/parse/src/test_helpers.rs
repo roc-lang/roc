@@ -1,18 +1,17 @@
-use crate::ast;
-use crate::ast::Defs;
 use crate::module::module_defs;
 use crate::parser::Parser;
 use crate::parser::SourceError;
 use crate::parser::SyntaxError;
 use crate::state::State;
 use bumpalo::Bump;
+use roc_ast2::Defs;
+use roc_ast2::Expr;
+use roc_ast2::Header;
+use roc_ast2::SpacesBefore;
 use roc_region::all::Loc;
 use roc_region::all::Position;
 
-pub fn parse_expr_with<'a>(
-    arena: &'a Bump,
-    input: &'a str,
-) -> Result<ast::Expr<'a>, SyntaxError<'a>> {
+pub fn parse_expr_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Expr<'a>, SyntaxError<'a>> {
     parse_loc_with(arena, input)
         .map(|loc_expr| loc_expr.value)
         .map_err(|e| e.problem)
@@ -22,7 +21,7 @@ pub fn parse_expr_with<'a>(
 pub fn parse_loc_with<'a>(
     arena: &'a Bump,
     input: &'a str,
-) -> Result<Loc<ast::Expr<'a>>, SourceError<'a, SyntaxError<'a>>> {
+) -> Result<Loc<Expr<'a>>, SourceError<'a, SyntaxError<'a>>> {
     let state = State::new(input.trim().as_bytes());
 
     match crate::expr::test_parse_expr(0, arena, state.clone()) {
@@ -45,7 +44,7 @@ pub fn parse_defs_with<'a>(arena: &'a Bump, input: &'a str) -> Result<Defs<'a>, 
 pub fn parse_header_with<'a>(
     arena: &'a Bump,
     input: &'a str,
-) -> Result<ast::Module<'a>, SyntaxError<'a>> {
+) -> Result<SpacesBefore<'a, Header<'a>>, SyntaxError<'a>> {
     let state = State::new(input.trim().as_bytes());
 
     match crate::module::parse_header(arena, state.clone()) {
