@@ -2,14 +2,13 @@ hosted Effect
     exposes [
         Effect,
         NodeId,
-        EventHandlerId,
+        HandlerId,
         TagName,
         AttrType,
         EventType,
         after,
         always,
         map,
-        EventHandlerId,
         createElement,
         createTextNode,
         updateTextNode,
@@ -30,7 +29,7 @@ hosted Effect
 
 # TODO: private types
 NodeId : Nat
-EventHandlerId : Nat
+HandlerId : Nat
 
 # TODO: make these tag unions to avoid encoding/decoding standard names
 # but for now, this is much easier to code and debug!
@@ -69,7 +68,7 @@ setProperty : NodeId, Str, List U8 -> Effect {}
 removeProperty : NodeId, Str -> Effect {}
 
 ## setListener nodeId eventType handlerId
-setListener : NodeId, EventType, EventHandlerId -> Effect {}
+setListener : NodeId, EventType, HandlerId -> Effect {}
 
 ## removeListener nodeId eventType
 removeListener : NodeId, EventType -> Effect {}
