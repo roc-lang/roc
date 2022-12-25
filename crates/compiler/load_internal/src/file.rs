@@ -4562,10 +4562,24 @@ fn build_header<'a>(
                 let module_name_str = loc_module_name.value.as_str();
                 let pq_module_name = PackageQualified::Unqualified(module_name_str.into());
 
-                debug_assert!(!deps_by_name.contains_key(&pq_module_name));
+                debug_assert_eq!(
+                    &module_id,
+                    deps_by_name.get(&pq_module_name).unwrap_or(&module_id),
+                    "Already had a deps_by_name entry for {:?}, but it was {:?} rather than the expected {:?}",
+                    pq_module_name,
+                    deps_by_name.get(&pq_module_name).unwrap(),
+                    module_id,
+                );
                 deps_by_name.insert(pq_module_name, module_id);
 
-                debug_assert!(!imported_modules.contains_key(&module_id));
+                debug_assert_eq!(
+                    &loc_module_name.region,
+                    imported_modules.get(&module_id).unwrap_or(&loc_module_name.region),
+                    "Already had an imported_modules entry for {:?}, but it was {:?} rather than the expected {:?}",
+                    module_id,
+                    imported_modules.get(&module_id).unwrap(),
+                    loc_module_name.region,
+                );
                 imported_modules.insert(module_id, loc_module_name.region);
             }
         }
