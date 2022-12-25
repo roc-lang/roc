@@ -22,13 +22,13 @@ interface Html.Internal.Client
             translateStatic,
         },
         Json,
+        Action,
     ]
 
 PlatformState state initData : {
     app : App state initData,
     state,
     rendered : RenderedTree state,
-    isOddArena : Bool,
 }
 
 # The rendered tree uses indices rather than pointers
@@ -128,7 +128,6 @@ initClientApp = \json, app ->
         app,
         state,
         rendered,
-        isOddArena: Bool.false,
     }
 
 # Assign an index to each (virtual) DOM node.
@@ -175,51 +174,47 @@ JsEventResult state initData : {
     stopPropagation : Bool,
     preventDefault : Bool,
 }
-# ## Dispatch a JavaScript event to a Roc handler, given the handler ID and some JSON event data.
-# ## DANGER: this function does unusual stuff with memory allocation lifetimes. Be as careful as you would with Zig or C code!
-dispatchEvent : PlatformState state initData, List (List U8), Nat -> Effect (JsEventResult state initData) | initData has Decoding & Encoding
-# dispatchEvent = \platformState, eventData, handlerId ->
-#     { app, state, rendered, isOddArena: wasOddArena } = platformState
-#     maybeHandler =
-#         List.get handlerLookup.handlers handlerId
-#         |> Result.withDefault (Err DeletedHandler)
-#     { action, stopPropagation, preventDefault } =
-#         when maybeHandler is
-#             Err DeletedHandler ->
-#                 { action: Action.none, stopPropagation: Bool.false, preventDefault: Bool.false }
-#             Ok (Normal handler) ->
-#                 { action: handler state eventData, stopPropagation: Bool.false, preventDefault: Bool.false }
-#             Ok (Custom handler) ->
-#                 handler state eventData
-#     when action is
-#         Update newState ->
-#             # Any values created in the arena will all be freed on the next update
-#             isOddArena = !wasOddArena
-#             runInVdomArena isOddArena \_ ->
-#                 newViewUnrendered = app.render newState
-#                 numHandlers = List.len handlerLookup.handlers
-#                 emptyHandlerLookup = {
-#                     handlers: List.repeat (Err DeletedHandler) numHandlers,
-#                     freeList: List.range { start: At (numHandlers - 1), end: At 0 },
-#                 }
-#                 # { newHandlers, rendered: newRendered } <-
-#                 #     diffAndUpdateDom emptyHandlerLookup rendered newViewUnrendered |> Effect.after
-#                 newPlatformState = {
-#                     app,
-#                     state: newState,
-#                     rendered: [], #newRendered,
-#                     handlerLookup: emptyHandlerLookup, # newHandlers,
-#                     isOddArena,
-#                 }
-#                 Effect.always ({ platformState: newPlatformState, stopPropagation, preventDefault })
-#         None ->
-#             Effect.always { platformState, stopPropagation, preventDefault }
-# runInVdomArena : Bool, ({} -> Effect a) -> Effect a
-# runInVdomArena = \useOddArena, run ->
-#     _ <- Effect.enableVdomAllocator useOddArena |> Effect.after
-#     returnVal <- run {} |> Effect.after
-#     _ <- Effect.disableVdomAllocator |> Effect.after
-#     Effect.always returnVal
+
+## Dispatch a JavaScript event to a Roc handler, given the handler ID and some JSON event data.
+dispatchEvent : PlatformState state initData, List (List U8), HandlerId -> Effect (JsEventResult state initData) | initData has Decoding & Encoding
+dispatchEvent = \platformState, eventData, handlerId ->
+    { app, state, rendered } =
+        platformState
+    maybeHandler =
+        List.get rendered.handlers handlerId
+        |> Result.withDefault (Err DeletedHandler)
+    { action, stopPropagation, preventDefault } =
+        when maybeHandler is
+            Err DeletedHandler ->
+                { action: Action.none, stopPropagation: Bool.false, preventDefault: Bool.false }
+
+            Ok (Normal handler) ->
+                { action: handler state eventData, stopPropagation: Bool.false, preventDefault: Bool.false }
+
+            Ok (Custom handler) ->
+                handler state eventData
+
+    when action is
+        Update newState ->
+            newViewUnrendered =
+                app.render newState
+            { rendered: newRendered, patches } =
+                diff { rendered, patches: [] } newViewUnrendered
+
+            _ <- applyPatches patches |> Effect.after
+            Effect.always {
+                platformState: {
+                    app,
+                    state: newState,
+                    rendered: newRendered,
+                },
+                stopPropagation,
+                preventDefault,
+            }
+
+        None ->
+            Effect.always { platformState, stopPropagation, preventDefault }
+
 # insertHandler : HandlerLookup state, Handler state -> { index : Nat, handlerLookup : HandlerLookup state }
 # insertHandler = \{ handlers, freeList }, newHandler ->
 #     when List.last freeList is
