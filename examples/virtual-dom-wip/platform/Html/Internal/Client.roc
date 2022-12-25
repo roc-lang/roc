@@ -1,8 +1,7 @@
 interface Html.Internal.Client
     exposes [
-        Patch,
         initClientApp,
-
+        dispatchEvent,
     ]
     imports [
         Effect.{
@@ -98,7 +97,7 @@ applyPatches = \patches ->
 # -------------------------------
 #   INITIALISATION
 # -------------------------------
-initClientApp : List U8, App state initData -> Effect (PlatformState state initData) | initData has Decoding
+initClientApp : List U8, App state initData -> Effect (PlatformState state initData) | initData has Decoding & Encoding
 initClientApp = \json, app ->
     state =
         json
@@ -171,14 +170,14 @@ indexNodes = \{ nodes, siblingIds }, unrendered ->
 # -------------------------------
 #   EVENT HANDLING
 # -------------------------------
-# JsEventResult state initData : {
-#     platformState : PlatformState state initData,
-#     stopPropagation : Bool,
-#     preventDefault : Bool,
-# }
+JsEventResult state initData : {
+    platformState : PlatformState state initData,
+    stopPropagation : Bool,
+    preventDefault : Bool,
+}
 # ## Dispatch a JavaScript event to a Roc handler, given the handler ID and some JSON event data.
 # ## DANGER: this function does unusual stuff with memory allocation lifetimes. Be as careful as you would with Zig or C code!
-# dispatchEvent : PlatformState state initData, List (List U8), Nat -> Effect (JsEventResult state initData)
+dispatchEvent : PlatformState state initData, List (List U8), Nat -> Effect (JsEventResult state initData) | initData has Decoding & Encoding
 # dispatchEvent = \platformState, eventData, handlerId ->
 #     { app, state, rendered, isOddArena: wasOddArena } = platformState
 #     maybeHandler =

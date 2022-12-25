@@ -3,7 +3,8 @@ platform "client-side"
     exposes []
     packages {}
     imports [
-        Html.Internal.{ App, JsEventResult, PlatformState },
+        Html.Internal.Shared.{ App, PlatformState },
+        Html.Internal.Client.{ initClientApp, dispatchEvent },
         Effect.{ Effect },
     ]
     provides [main]
@@ -24,18 +25,18 @@ ToHost state initData : {
     eventStopPropagation : Bool,
 }
 
-# Note: named type variables cause a type error here!
-main : FromHost _ _ -> Effect (ToHost _ _)
-main = \{ eventHandlerId, eventJsonList, eventPlatformState, initJson, isInitEvent } ->
-    if isInitEvent then
-        Html.Internal.initClientApp initJson app
+# TODO: type checker bug! PlatformState doesn't match itself
+main : FromHost state initData -> Effect (ToHost state initData) | initData has Decoding & Encoding
+main = \fromHost ->
+    if fromHost.isInitEvent then
+        initClientApp fromHost.initJson app
         |> Effect.map \platformState -> {
             platformState: Box.box platformState,
             eventPreventDefault: Bool.false,
             eventStopPropagation: Bool.false,
         }
     else
-        Html.Internal.dispatchEvent (Box.unbox eventPlatformState) eventJsonList eventHandlerId
+        dispatchEvent (Box.unbox fromHost.eventPlatformState) fromHost.eventJsonList fromHost.eventHandlerId
         |> Effect.map \jsEventResult -> {
             platformState: Box.box jsEventResult.platformState,
             eventPreventDefault: jsEventResult.preventDefault,

@@ -11,6 +11,7 @@ interface Html.Internal.Shared
         none,
         translate,
         translateStatic,
+        nodeSize,
     ]
     imports [
         Action.{ Action },
