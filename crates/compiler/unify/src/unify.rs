@@ -2979,7 +2979,18 @@ fn unify_flat_type<M: MetaCollector>(
             let mut outcome = unify_zip_slices(env, pool, *l_args, *r_args, ctx.mode);
 
             if outcome.mismatches.is_empty() {
-                outcome.union(merge(env, ctx, Structure(Apply(*r_symbol, *r_args))));
+                let chosen_args = SubsSlice::reserve_into_subs(env.subs, l_args.len());
+                for ((store, var1), var2) in chosen_args
+                    .into_iter()
+                    .zip(l_args.into_iter())
+                    .zip(r_args.into_iter())
+                {
+                    let var1 = env.subs[var1];
+                    let var2 = env.subs[var2];
+                    env.subs[store] = choose_merged_var(env.subs, var1, var2);
+                }
+
+                outcome.union(merge(env, ctx, Structure(Apply(*r_symbol, chosen_args))));
             }
 
             outcome
