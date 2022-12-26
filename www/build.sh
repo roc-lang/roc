@@ -52,10 +52,11 @@ mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
 # Manually add this tip to all the builtin docs.
 find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div class="builtins-tip"><b>Tip:</b> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
 
-echo 'Building tutorial.html from tutorial.md...'
-mkdir www/build/tutorial
-cargo run --release run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
-mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
+# TODO to enable this, we either need to install LLVM on Netlify or get it working using the dev backend.
+# echo 'Building tutorial.html from tutorial.md...'
+# mkdir www/build/tutorial
+# cargo run --release run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
+# mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
 
 echo 'Generating CLI example platform docs...'
 # Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
