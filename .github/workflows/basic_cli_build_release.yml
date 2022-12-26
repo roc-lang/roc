@@ -122,10 +122,12 @@ jobs:
 
       - run: ./roc build --bundle=.tar.br ./basic-cli/src/main.roc
 
+      - run: echo "TAR_FILENAME=$(ls | grep '.tar.br')" >> $GITHUB_ENV
+
       - name: Upload platform archive
         uses: actions/upload-artifact@v3
         with:
           name: basic-cli-platform
           path: |
-            *.tar.br
+            ${{ env.TAR_FILENAME }}
 
