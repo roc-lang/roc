@@ -4573,18 +4573,6 @@ fn build_header<'a>(
                     module_id,
                 );
                 deps_by_name.insert(pq_module_name, module_id);
-
-                // We should never change an entry here. Either we should have no entry,
-                // or if we do have one, it should be unchanged by this insertion.
-                debug_assert_eq!(
-                    &loc_module_name.region,
-                    imported_modules.get(&module_id).unwrap_or(&loc_module_name.region),
-                    "Already had an imported_modules entry for {:?}, but it was {:?} rather than the expected {:?}",
-                    module_id,
-                    imported_modules.get(&module_id).unwrap(),
-                    loc_module_name.region,
-                );
-                imported_modules.insert(module_id, loc_module_name.region);
             }
         }
     }
