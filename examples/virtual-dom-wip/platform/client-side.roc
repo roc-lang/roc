@@ -3,8 +3,8 @@ platform "client-side"
     exposes []
     packages {}
     imports [
-        Html.Internal.Shared.{ App, PlatformState },
-        Html.Internal.Client.{ initClientApp, dispatchEvent },
+        Html.Internal.Shared.{ App },
+        Html.Internal.Client.{ PlatformState, initClientApp, dispatchEvent },
         Effect.{ Effect },
     ]
     provides [main]
@@ -25,8 +25,9 @@ ToHost state initData : {
     eventStopPropagation : Bool,
 }
 
-# TODO: type checker bug! PlatformState doesn't match itself
-main : FromHost state initData -> Effect (ToHost state initData) | initData has Decoding & Encoding
+# TODO: naming the type variables causes a type 'mismatch'
+# main : FromHost state initData -> Effect (ToHost state initData) | initData has Decoding & Encoding
+main : FromHost _ _ -> Effect (ToHost _ _)
 main = \fromHost ->
     if fromHost.isInitEvent then
         initClientApp fromHost.initJson app

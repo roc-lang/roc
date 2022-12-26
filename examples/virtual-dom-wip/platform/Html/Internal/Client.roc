@@ -1,5 +1,6 @@
 interface Html.Internal.Client
     exposes [
+        PlatformState,
         initClientApp,
         dispatchEvent,
     ]
