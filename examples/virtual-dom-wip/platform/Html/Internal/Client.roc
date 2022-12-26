@@ -72,36 +72,29 @@ Patch : [
     RemoveListener NodeId EventType,
 ]
 
-applyPatch : Patch -> Effect {}
-applyPatch = \patch ->
-    when patch is
-        CreateElement nodeId tagName -> Effect.createElement nodeId tagName
-        CreateTextNode nodeId content -> Effect.createTextNode nodeId content
-        UpdateTextNode nodeId content -> Effect.updateTextNode nodeId content
-        AppendChild parentId childId -> Effect.appendChild parentId childId
-        RemoveNode id -> Effect.removeNode id
-        ReplaceNode oldId newId -> Effect.replaceNode oldId newId
-        SetAttribute nodeId attrName value -> Effect.setAttribute nodeId attrName value
-        RemoveAttribute nodeId attrName -> Effect.removeAttribute nodeId attrName
-        SetProperty nodeId propName json -> Effect.setProperty nodeId propName json
-        RemoveProperty nodeId propName -> Effect.removeProperty nodeId propName
-        SetStyle nodeId key value -> Effect.setStyle nodeId key value
-        SetListener nodeId eventType accessorsJson handlerId -> Effect.setListener nodeId eventType accessorsJson handlerId
-        RemoveListener nodeId eventType -> Effect.removeListener nodeId eventType
-
-walkPatches : Effect {}, Patch -> Effect {}
-walkPatches = \previousEffects, patch ->
-    Effect.after previousEffects \{} -> applyPatch patch
-
-applyPatches : List Patch -> Effect {}
-applyPatches = \patches ->
-    List.walk patches (Effect.always {}) walkPatches
+DiffState state : { rendered : RenderedTree state, patches : List Patch }
 
 # -------------------------------
 #   INITIALISATION
 # -------------------------------
-initClientApp : List U8, App state initData -> Effect (PlatformState state initData) | initData has Decoding & Encoding
+initClientApp : List U8, App state initData -> Effect (PlatformState state initData) | initData has Decoding
 initClientApp = \json, app ->
+    # Initialise the Roc representation of the rendered DOM, and calculate patches (for event listeners)
+    { state, rendered, patches } =
+        initClientAppHelp json app
+
+    # Call out to JS to patch the DOM, attaching the event listeners
+    _ <- applyPatches patches |> Effect.after
+
+    Effect.always {
+        app,
+        state,
+        rendered,
+    }
+
+# Testable helper function to initialise the app
+initClientAppHelp : List U8, App state initData -> { state, rendered : RenderedTree state, patches : List Patch } | initData has Decoding
+initClientAppHelp = \json, app ->
     state =
         json
         |> Decode.fromBytes Json.fromUtf8
@@ -112,26 +105,19 @@ initClientApp = \json, app ->
         translateStatic dynamicView
     { nodes: staticNodes } =
         indexNodes { nodes: [], siblingIds: [] } staticUnindexed
-
-    staticRendered : RenderedTree state
     staticRendered = {
-        root: 0,
+        root: List.len staticNodes - 1,
         nodes: List.map staticNodes Ok,
         deletedNodeCache: [],
         handlers: [],
         deletedHandlerCache: [],
     }
-    # Run the first diff. The only differences are event listeners, so they will be inserted into the real DOM.
+
+    # Run our first diff. The only differences will be event listeners, so we will generate patches to attach those.
     { rendered, patches } =
         diff { rendered: staticRendered, patches: [] } dynamicView
 
-    _ <- applyPatches patches |> Effect.after
-
-    Effect.always {
-        app,
-        state,
-        rendered,
-    }
+    { state, rendered, patches }
 
 # Assign an index to each (virtual) DOM node.
 # In JavaScript, we maintain an array of references to real DOM nodes.
@@ -170,6 +156,34 @@ indexNodes = \{ nodes, siblingIds }, unrendered ->
             }
 
 # -------------------------------
+#   Patches
+# -------------------------------
+applyPatch : Patch -> Effect {}
+applyPatch = \patch ->
+    when patch is
+        CreateElement nodeId tagName -> Effect.createElement nodeId tagName
+        CreateTextNode nodeId content -> Effect.createTextNode nodeId content
+        UpdateTextNode nodeId content -> Effect.updateTextNode nodeId content
+        AppendChild parentId childId -> Effect.appendChild parentId childId
+        RemoveNode id -> Effect.removeNode id
+        ReplaceNode oldId newId -> Effect.replaceNode oldId newId
+        SetAttribute nodeId attrName value -> Effect.setAttribute nodeId attrName value
+        RemoveAttribute nodeId attrName -> Effect.removeAttribute nodeId attrName
+        SetProperty nodeId propName json -> Effect.setProperty nodeId propName json
+        RemoveProperty nodeId propName -> Effect.removeProperty nodeId propName
+        SetStyle nodeId key value -> Effect.setStyle nodeId key value
+        SetListener nodeId eventType accessorsJson handlerId -> Effect.setListener nodeId eventType accessorsJson handlerId
+        RemoveListener nodeId eventType -> Effect.removeListener nodeId eventType
+
+walkPatches : Effect {}, Patch -> Effect {}
+walkPatches = \previousEffects, patch ->
+    Effect.after previousEffects \{} -> applyPatch patch
+
+applyPatches : List Patch -> Effect {}
+applyPatches = \patches ->
+    List.walk patches (Effect.always {}) walkPatches
+
+# -------------------------------
 #   EVENT HANDLING
 # -------------------------------
 JsEventResult state initData : {
@@ -179,7 +193,7 @@ JsEventResult state initData : {
 }
 
 ## Dispatch a JavaScript event to a Roc handler, given the handler ID and some JSON event data.
-dispatchEvent : PlatformState state initData, List (List U8), HandlerId -> Effect (JsEventResult state initData) | initData has Decoding & Encoding
+dispatchEvent : PlatformState state initData, List (List U8), HandlerId -> Effect (JsEventResult state initData) | initData has Decoding
 dispatchEvent = \platformState, eventData, handlerId ->
     { app, state, rendered } =
         platformState
@@ -245,8 +259,6 @@ insertHandler = \rendered, newHandler ->
 # -------------------------------
 #   DIFF
 # -------------------------------
-DiffState state : { rendered : RenderedTree state, patches : List Patch }
-
 diff : DiffState state, Html state -> DiffState state
 diff = \{ rendered, patches }, newNode ->
     oldNode =
@@ -431,3 +443,96 @@ nextNodeId = \rendered ->
     when List.last rendered.deletedNodeCache is
         Ok id -> id
         Err _ -> List.len rendered.nodes
+
+# -------------------------------
+#   TESTS
+# -------------------------------
+# indexNodes
+expect
+    html : Html {}
+    html =
+        Element "a" 43 [HtmlAttr "href" "https://www.roc-lang.org/"] [Text "Roc"]
+
+    actual : { nodes : List RenderedNode, siblingIds : List Nat }
+    actual =
+        indexNodes { nodes: [], siblingIds: [] } html
+
+    expected : { nodes : List RenderedNode, siblingIds : List Nat }
+    expected = {
+        nodes: [
+            RenderedText "Roc",
+            RenderedElement "a" [RenderedHtmlAttr "href" "https://www.roc-lang.org/"] [0],
+        ],
+        siblingIds: [1],
+    }
+
+    actual == expected
+
+# initClientAppHelp
+expect
+    State : { answer : Nat }
+
+    init = \result ->
+        when result is
+            Ok state -> state
+            Err _ -> { answer: 0 }
+
+    onClickHandler : Handler State
+    onClickHandler =
+        Normal \state, _ -> Action.update { answer: state.answer + 1 }
+
+    render : State -> Html State
+    render = \state ->
+        num = Num.toStr state.answer
+
+        onClickAttr : Attribute State
+        onClickAttr =
+            EventListener "click" [] onClickHandler
+
+        Element "body" 0 [] [
+            Element "h1" 0 [] [Text "The app"],
+            Element "div" 0 [onClickAttr] [Text "The answer is \(num)"],
+        ]
+
+    app : App State State
+    app = {
+        init,
+        render,
+        wasmUrl: "assets/test.wasm",
+    }
+
+    initJson : List U8
+    initJson =
+        # { answer: 42 } |> Encode.toBytes Json.toUtf8 # panics at mono/src/ir.rs:5739:56
+        "{ answer: 42 }" |> Str.toUtf8
+
+    # COMPILER BUG? 'no lambdaset found'
+    actual : { state : State, rendered : RenderedTree State, patches : List Patch }
+    actual =
+        initClientAppHelp initJson app
+
+    expected : { state : State, rendered : RenderedTree State, patches : List Patch }
+    expected = {
+        state: { answer: 42 },
+        rendered: {
+            root: 0,
+            nodes: [
+                Ok (RenderedText "The app"),
+                Ok (RenderedElement "h1" [] [0]),
+                Ok (RenderedText "The answer is 42"),
+                Ok (RenderedElement "div" [RenderedEventListener "click" [] 0] [2]),
+                Ok (RenderedElement "body" [] [1, 3]),
+            ],
+            deletedNodeCache: [],
+            handlers: [Ok onClickHandler],
+            deletedHandlerCache: [],
+        },
+        patches: [SetListener 3 "click" [] 0],
+    }
+
+    (actual.state == expected.state)
+    && (actual.rendered.root == expected.rendered.root)
+    && (actual.rendered.nodes == expected.rendered.nodes)
+    && (actual.rendered.deletedNodeCache == expected.rendered.deletedNodeCache)
+    && (actual.rendered.deletedHandlerCache == expected.rendered.deletedHandlerCache)
+    && (actual.patches == expected.patches)
