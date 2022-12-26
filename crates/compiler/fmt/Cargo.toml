@@ -11,11 +11,10 @@ roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_parse = { path = "../parse" }
+roc_test_utils = { path = "../../test_utils" }
 bumpalo.workspace = true 
 
 [dev-dependencies]
-roc_test_utils = { path = "../../test_utils" }
-
 pretty_assertions.workspace = true
 indoc.workspace = true
 walkdir.workspace = true

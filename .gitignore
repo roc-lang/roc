@@ -70,3 +70,6 @@ roc_linux_x86_64.tar.gz
 
 # nix
 result
+
+# tutorial
+www/src/roc-tutorial

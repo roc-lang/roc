@@ -1867,8 +1867,6 @@ impl<'a> LowLevelCall<'a> {
                 },
                 StoredValue::StackMemory { .. } => { /* do nothing */ }
             },
-
-            Dbg => todo!("{:?}", self.lowlevel),
         }
     }
 

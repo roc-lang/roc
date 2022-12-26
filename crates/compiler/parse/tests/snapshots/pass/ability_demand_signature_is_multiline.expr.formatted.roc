@@ -1,4 +1,5 @@
 Hash has
-    hash : a -> U64
+    hash : a
+        -> U64
 
 1

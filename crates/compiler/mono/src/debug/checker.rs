@@ -305,6 +305,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 self.check_modify_rc(rc);
                 self.check_stmt(rest);
             }
+            &Stmt::Dbg { remainder, .. } => {
+                self.check_stmt(remainder);
+            }
             &Stmt::Expect {
                 condition,
                 region: _,

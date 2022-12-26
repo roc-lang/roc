@@ -81,7 +81,7 @@ Defs(
                     "f",
                 ),
                 @61-118 Where(
-                    @61-67 SpaceBefore(
+                    @61-67 SpaceAfter(
                         Function(
                             [
                                 @61-62 BoundVariable(

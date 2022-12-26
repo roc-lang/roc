@@ -249,6 +249,26 @@ fn insert_jumps<'a>(
             }
         }
 
+        Dbg {
+            symbol,
+            variable,
+            remainder,
+        } => match insert_jumps(
+            arena,
+            remainder,
+            goal_id,
+            needle,
+            needle_arguments,
+            needle_result,
+        ) {
+            Some(cont) => Some(arena.alloc(Dbg {
+                symbol: *symbol,
+                variable: *variable,
+                remainder: cont,
+            })),
+            None => None,
+        },
+
         Expect {
             condition,
             region,

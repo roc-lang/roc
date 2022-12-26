@@ -20,7 +20,7 @@ Defs(
                     "f",
                 ),
                 @4-29 Where(
-                    @4-12 SpaceBefore(
+                    @4-12 SpaceAfter(
                         Function(
                             [
                                 @4-5 BoundVariable(

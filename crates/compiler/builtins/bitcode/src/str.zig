@@ -95,6 +95,10 @@ pub const RocStr = extern struct {
         }
     }
 
+    fn decref(self: RocStr) void {
+        self.deinit();
+    }
+
     pub fn eq(self: RocStr, other: RocStr) bool {
         // If they are byte-for-byte equal, they're definitely equal!
         if (self.str_bytes == other.str_bytes and self.str_len == other.str_len and self.str_capacity == other.str_capacity) {
@@ -1539,10 +1543,9 @@ pub fn strConcatC(arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
 }
 
 fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
-    if (arg1.isEmpty()) {
-        // the second argument is borrowed, so we must increment its refcount before returning
-        return RocStr.clone(arg2);
-    } else if (arg2.isEmpty()) {
+    // NOTE: we don't special-case the first argument being empty. That is because it is owned and
+    // may have sufficient capacity to store the rest of the list.
+    if (arg2.isEmpty()) {
         // the first argument is owned, so we can return it without cloning
         return arg1;
     } else {
@@ -2089,7 +2092,13 @@ pub fn strTrim(string: RocStr) callconv(.C) RocStr {
 
         const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
         if (small_or_shared) {
-            return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+            // consume the input string; this will not free the
+            // bytes because the string is small or shared
+            const result = RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+
+            string.decref();
+
+            return result;
         } else {
             // nonempty, large, and unique: shift everything over in-place if necessary.
             // Note: must use memmove over memcpy, because the bytes definitely overlap!
@@ -2320,7 +2329,6 @@ test "strTrim: large to large" {
 test "strTrim: large to small" {
     const original_bytes = "             hello         ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
 
     try expect(!original.isSmallStr());
 

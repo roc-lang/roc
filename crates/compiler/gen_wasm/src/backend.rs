@@ -714,6 +714,7 @@ impl<'a> WasmBackend<'a> {
 
             Stmt::Refcounting(modify, following) => self.stmt_refcounting(modify, following),
 
+            Stmt::Dbg { .. } => todo!("dbg is not implemented in the wasm backend"),
             Stmt::Expect { .. } => todo!("expect is not implemented in the wasm backend"),
             Stmt::ExpectFx { .. } => todo!("expect-fx is not implemented in the wasm backend"),
 

@@ -620,6 +620,7 @@ pub enum PInParens<'a> {
 pub enum EType<'a> {
     Space(BadInputError, Position),
 
+    UnderscoreSpacing(Position),
     TRecord(ETypeRecord<'a>, Position),
     TTagUnion(ETypeTagUnion<'a>, Position),
     TInParens(ETypeInParens<'a>, Position),
@@ -1200,18 +1201,6 @@ where
             Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
             Err((NoProgress, _fail)) => Err((NoProgress, to_element_error(original_state.pos()))),
         }
-    }
-}
-
-pub fn fail_when_progress<T, E>(
-    progress: Progress,
-    fail: E,
-    value: T,
-    state: State<'_>,
-) -> ParseResult<'_, T, E> {
-    match progress {
-        MadeProgress => Err((MadeProgress, fail)),
-        NoProgress => Ok((NoProgress, value, state)),
     }
 }
 

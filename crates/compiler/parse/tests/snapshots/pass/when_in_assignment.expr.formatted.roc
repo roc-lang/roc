@@ -1,4 +1,4 @@
-x = when n is
-    0 -> 0
-
+x =
+    when n is
+        0 -> 0
 42

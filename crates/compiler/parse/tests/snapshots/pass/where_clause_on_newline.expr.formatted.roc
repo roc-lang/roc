@@ -1,5 +1,3 @@
-f :
-    a
-    -> U64 | a has Hash
+f : a -> U64 | a has Hash
 
 f

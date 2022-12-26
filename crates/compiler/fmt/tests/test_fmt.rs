@@ -8,80 +8,15 @@ mod test_fmt {
     use std::path::PathBuf;
 
     use bumpalo::Bump;
-    use roc_fmt::annotation::{Formattable, Newlines, Parens};
     use roc_fmt::def::fmt_defs;
     use roc_fmt::module::fmt_module;
+    use roc_fmt::test_helpers::expr_formats;
     use roc_fmt::Buf;
     use roc_parse::ast::Module;
     use roc_parse::module::{self, module_defs};
     use roc_parse::parser::Parser;
     use roc_parse::state::State;
     use roc_test_utils::{assert_multiline_str_eq, workspace_root};
-
-    /// Check that the given input is formatted to the given output.
-    /// If the expected output is `None`, then this only checks that the input
-    /// parses without error, formats without error, and
-    /// (optionally, based on the value of `check_stability`) re-parses to
-    /// the same AST as the original.
-    fn expr_formats(input: &str, check_formatting: impl Fn(&str), check_stability: bool) {
-        let arena = Bump::new();
-        let input = input.trim();
-
-        match roc_parse::test_helpers::parse_expr_with(&arena, input) {
-            Ok(actual) => {
-                use roc_fmt::spaces::RemoveSpaces;
-
-                let mut buf = Buf::new_in(&arena);
-
-                actual.format_with_options(&mut buf, Parens::NotNeeded, Newlines::Yes, 0);
-
-                let output = buf.as_str();
-
-                check_formatting(output);
-
-                let reparsed_ast = roc_parse::test_helpers::parse_expr_with(&arena, output).unwrap_or_else(|err| {
-                    panic!(
-                        "After formatting, the source code no longer parsed!\n\n\
-                        Parse error was: {:?}\n\n\
-                        The code that failed to parse:\n\n{}\n\n\
-                        The original ast was:\n\n{:#?}\n\n",
-                        err, output, actual
-                    );
-                });
-
-                let ast_normalized = actual.remove_spaces(&arena);
-                let reparsed_ast_normalized = reparsed_ast.remove_spaces(&arena);
-
-                // HACK!
-                // We compare the debug format strings of the ASTs, because I'm finding in practice that _somewhere_ deep inside the ast,
-                // the PartialEq implementation is returning `false` even when the Debug-formatted impl is exactly the same.
-                // I don't have the patience to debug this right now, so let's leave it for another day...
-                // TODO: fix PartialEq impl on ast types
-                if format!("{:?}", ast_normalized) != format!("{:?}", reparsed_ast_normalized) {
-                    panic!(
-                        "Formatting bug; formatting didn't reparse to the same AST (after removing spaces)\n\n\
-                        * * * Source code before formatting:\n{}\n\n\
-                        * * * Source code after formatting:\n{}\n\n",
-                        input,
-                        output
-                    );
-                }
-
-                // Now verify that the resultant formatting is _stable_ - i.e. that it doesn't change again if re-formatted
-                if check_stability {
-                    let mut reformatted_buf = Buf::new_in(&arena);
-                    reparsed_ast.format_with_options(&mut reformatted_buf, Parens::NotNeeded, Newlines::Yes, 0);
-
-                    if output != reformatted_buf.as_str() {
-                        eprintln!("Formatting bug; formatting is not stable. Reformatting the formatted code changed it again, as follows:\n\n");
-
-                        assert_multiline_str_eq!(output, reformatted_buf.as_str());
-                    }
-                }
-            }
-            Err(error) => panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:?}\n\n", input, error)
-        };
-    }
 
     fn check_formatting(expected: &'_ str) -> impl Fn(&str) + '_ {
         let expected = expected.trim();
@@ -1071,9 +1006,7 @@ mod test_fmt {
                 f = \x, y ->
                     y = 4
                     z = 8
-
                     x
-
                 "string"
             "#
             ),
@@ -1365,9 +1298,8 @@ mod test_fmt {
 
     #[test]
     fn defs_with_defs() {
-        expr_formats_to(
-            indoc!(
-                r#"
+        expr_formats_same(indoc!(
+            r#"
                 x =
                     y = 4
                     z = 8
@@ -1375,19 +1307,7 @@ mod test_fmt {
 
                 x
                 "#
-            ),
-            indoc!(
-                r#"
-                x =
-                    y = 4
-                    z = 8
-
-                    w
-
-                x
-                "#
-            ),
-        );
+        ));
     }
 
     #[test]
@@ -2326,27 +2246,14 @@ mod test_fmt {
             "#
         ));
 
-        expr_formats_to(
-            indoc!(
-                r#"
+        expr_formats_same(indoc!(
+            r#"
                     foo :
                         Str, Int, Nat -> Bool
 
                     foo
                 "#
-            ),
-            indoc!(
-                r#"
-                    foo :
-                        Str,
-                        Int,
-                        Nat
-                        -> Bool
-
-                    foo
-                "#
-            ),
-        );
+        ));
 
         expr_formats_to(
             indoc!(
@@ -2408,9 +2315,7 @@ mod test_fmt {
             indoc!(
                 r#"
                     foo :
-                        Str,
-                        Nat
-                        -> Bool
+                        Str, Nat -> Bool
 
                     foo
                 "#
@@ -4895,6 +4800,25 @@ mod test_fmt {
     }
 
     #[test]
+    fn weird_triple_string() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                _""""w"""
+                "#
+            ),
+            indoc!(
+                r#"
+                _
+                    """
+                    "w
+                    """
+                "#
+            ),
+        );
+    }
+
+    #[test]
     fn multiline_tag_union_annotation_no_comments() {
         expr_formats_same(indoc!(
             r#"
@@ -5255,29 +5179,17 @@ mod test_fmt {
             "#
         ));
 
-        expr_formats_to(
-            indoc!(
-                r#"
+        expr_formats_same(indoc!(
+            r#"
                 foo :
                     (Str -> Bool) -> Bool
 
                 42
                 "#
-            ),
-            indoc!(
-                r#"
-                foo :
-                    (Str -> Bool)
-                    -> Bool
+        ));
 
-                42
-                "#
-            ),
-        );
-
-        expr_formats_to(
-            indoc!(
-                r#"
+        expr_formats_same(indoc!(
+            r#"
                 foo :
                     (Str -> Bool), Str -> Bool
                 foo = \bar, baz ->
@@ -5285,24 +5197,10 @@ mod test_fmt {
 
                 42
                 "#
-            ),
-            indoc!(
-                r#"
-                foo :
-                    (Str -> Bool),
-                    Str
-                    -> Bool
-                foo = \bar, baz ->
-                    42
+        ));
 
-                42
-                "#
-            ),
-        );
-
-        expr_formats_to(
-            indoc!(
-                r#"
+        expr_formats_same(indoc!(
+            r#"
                 foo :
                     (Str -> Bool), Str -> Bool # comment
                 foo = \bar, baz ->
@@ -5310,20 +5208,7 @@ mod test_fmt {
 
                 42
                 "#
-            ),
-            indoc!(
-                r#"
-                foo :
-                    (Str -> Bool),
-                    Str
-                    -> Bool # comment
-                foo = \bar, baz ->
-                    42
-
-                42
-                "#
-            ),
-        );
+        ));
     }
 
     #[test]
@@ -5402,6 +5287,37 @@ mod test_fmt {
 
                 0
                 "#
+            ),
+        );
+    }
+
+    #[test]
+    fn comma_prefixed_indented_record() {
+        expr_formats_to(
+            indoc!(
+                r#"
+            Model position :
+                { evaluated : Set position
+                , openSet : Set position
+                , costs : Dict.Dict position F64
+                , cameFrom : Dict.Dict position position
+                }
+
+
+            a
+            "#,
+            ),
+            indoc!(
+                r#"
+            Model position : {
+                evaluated : Set position,
+                openSet : Set position,
+                costs : Dict.Dict position F64,
+                cameFrom : Dict.Dict position position,
+            }
+
+            a
+            "#,
             ),
         );
     }
@@ -5502,6 +5418,22 @@ mod test_fmt {
     }
 
     #[test]
+    fn test_where_after() {
+        expr_formats_same(indoc!(
+            r#"
+                Dict k v := {
+                    metadata : List I8,
+                    dataIndices : List Nat,
+                    data : List (T k v),
+                    size : Nat,
+                } | k has Hash & Eq
+
+                a
+                "#
+        ));
+    }
+
+    #[test]
     /// Test that everything under examples/ is formatted correctly
     /// If this test fails on your diff, it probably means you need to re-format the examples.
     /// Try this:
@@ -5531,7 +5463,7 @@ mod test_fmt {
     /// Test that builtins are formatted correctly
     /// If this test fails on your diff, it probably means you need to re-format a builtin.
     /// Try this:
-    /// `cargo run -- format $(find compiler/builtins/roc -name \*.roc)`
+    /// `cargo run -- format $(find crates/compiler/builtins/roc -name \*.roc)`
     fn test_fmt_builtins() {
         let mut count = 0;
         let builtins_path = workspace_root()
@@ -5868,7 +5800,6 @@ mod test_fmt {
                 _ = crash
                 _ = crash ""
                 _ = crash "" ""
-
                 try
                     foo
                     (\_ -> crash "")
@@ -5959,7 +5890,7 @@ mod test_fmt {
                 expr_formats(
                     &contents,
                     check_saved_formatting(&contents, formatted_path),
-                    false,
+                    true,
                 );
             } else if file.ends_with(".module.roc") {
                 // TODO: re-format module defs and ensure they're correct.

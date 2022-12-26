@@ -1,6 +1,6 @@
 use crate::ast::{
     AssignedField, CommentOrNewline, HasAbilities, HasAbility, HasClause, HasImpls, Pattern,
-    Spaced, Tag, TypeAnnotation, TypeHeader,
+    Spaceable, Spaced, Tag, TypeAnnotation, TypeHeader,
 };
 use crate::blankspace::{
     space0_around_ee, space0_before_e, space0_before_optional_after, space0_e,
@@ -168,16 +168,37 @@ fn loc_wildcard<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
 
 /// The `_` indicating an inferred type, e.g. in (List _)
 fn loc_inferred<'a>() -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    map!(loc!(word1(b'_', EType::TInferred)), |loc_val: Loc<()>| {
-        loc_val.map(|_| TypeAnnotation::Inferred)
-    })
+    // TODO: make this more combinator based, or perhaps make the underlying
+    // representation token-based
+    move |_arena, mut state: State<'a>, _min_indent: u32| {
+        if !state.bytes().starts_with(b"_") {
+            return Err((NoProgress, EType::TInferred(state.pos())));
+        }
+
+        // the next character should not be an identifier character
+        // to prevent treating `_a` as an inferred type
+        match state.bytes().get(1) {
+            Some(b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_') => {
+                Err((NoProgress, EType::TInferred(state.pos())))
+            }
+            _ => {
+                let start = state.pos();
+                state.advance_mut(1);
+                let end = state.pos();
+                let region = Region::new(start, end);
+                Ok((
+                    MadeProgress,
+                    Loc::at(region, TypeAnnotation::Inferred),
+                    state,
+                ))
+            }
+        }
+    }
 }
 
 fn loc_applied_arg<'a>(
     stop_at_surface_has: bool,
 ) -> impl Parser<'a, Loc<TypeAnnotation<'a>>, EType<'a>> {
-    use crate::ast::Spaceable;
-
     map_with_arena!(
         and!(
             backtrackable(space0_e(EType::TIndentStart)),
@@ -555,8 +576,6 @@ fn expression<'a>(
                 ]
             ))
             .trace("type_annotation:expression:rest_args"),
-            // TODO this space0 is dropped, so newlines just before the function arrow when there
-            // is only one argument are not seen by the formatter. Can we do better?
             skip_second!(
                 space0_e(EType::TIndentStart),
                 word2(b'-', b'>', EType::TStart)
@@ -566,7 +585,7 @@ fn expression<'a>(
         .parse(arena, state.clone(), min_indent);
 
         let (progress, annot, state) = match result {
-            Ok((p2, (rest, _dropped_spaces), state)) => {
+            Ok((p2, (rest, space_before_arrow), state)) => {
                 let (p3, return_type, state) =
                     space0_before_e(term(stop_at_surface_has), EType::TIndentStart)
                         .parse(arena, state, min_indent)?;
@@ -577,6 +596,14 @@ fn expression<'a>(
                 let mut arguments = Vec::with_capacity_in(rest.len() + 1, arena);
                 arguments.push(first);
                 arguments.extend(rest);
+
+                if !space_before_arrow.is_empty() {
+                    if let Some(last) = arguments.last_mut() {
+                        let new_value = arena.alloc(last.value).after(space_before_arrow);
+                        last.value = new_value;
+                    }
+                }
+
                 let output = arena.alloc(arguments);
 
                 let result = Loc {
@@ -613,13 +640,13 @@ fn expression<'a>(
         // The where clause must be at least as deep as where the type annotation started.
         match has_clause_chain().parse(arena, state.clone(), min_indent) {
             Ok((where_progress, (spaces_before, has_chain), state)) => {
-                use crate::ast::Spaceable;
-
                 let region = Region::span_across(&annot.region, &has_chain.last().unwrap().region);
                 let type_annot = if !spaces_before.is_empty() {
+                    // We're transforming the spaces_before the '|'
+                    // into spaces_after the thing before the '|'
                     let spaced = arena
                         .alloc(annot.value)
-                        .with_spaces_before(spaces_before, annot.region);
+                        .with_spaces_after(spaces_before, annot.region);
                     &*arena.alloc(spaced)
                 } else {
                     &*arena.alloc(annot)
