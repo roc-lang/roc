@@ -9,7 +9,6 @@ pub mod expr;
 pub mod module;
 pub mod pattern;
 pub mod spaces;
-pub mod test_helpers;
 
 use bumpalo::{collections::String, Bump};
 use roc_parse::ast::Module;
