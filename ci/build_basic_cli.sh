@@ -21,7 +21,7 @@ ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 EXTRA_ARGS=${2:-}
 
 # In some rare cases it's nice to be able to use the legacy linker, so we produce the .o file to be able to do that
-if [ ! -z ${EXTRA_ARGS} ];
+if [ -n "${EXTRA_ARGS}" ];
  then ./roc build $EXTRA_ARGS ../basic-cli/examples/file.roc
 fi
 
