@@ -313,7 +313,7 @@ fn to_encoder_record(
             };
 
             // rcd.a
-            let field_access = Access {
+            let field_access = RecordAccess {
                 record_var,
                 ext_var: env.subs.fresh_unnamed_flex_var(),
                 field_var,

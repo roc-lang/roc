@@ -15,6 +15,9 @@ pub static WILDCARD: &str = "*";
 static EMPTY_RECORD: &str = "{}";
 static EMPTY_TAG_UNION: &str = "[]";
 
+// TODO: since we technically don't support empty tuples at the source level, this should probably be removed
+static EMPTY_TUPLE: &str = "()";
+
 /// Requirements for parentheses.
 ///
 /// If we're inside a function (that is, this is either an argument or a return
@@ -225,6 +228,28 @@ fn find_names_needed(
                 find_under_alias,
             );
         }
+        Structure(Tuple(elems, ext_var)) => {
+            for index in elems.iter_variables() {
+                let var = subs[index];
+                find_names_needed(
+                    var,
+                    subs,
+                    roots,
+                    root_appearances,
+                    names_taken,
+                    find_under_alias,
+                );
+            }
+
+            find_names_needed(
+                *ext_var,
+                subs,
+                roots,
+                root_appearances,
+                names_taken,
+                find_under_alias,
+            );
+        }
         Structure(TagUnion(tags, ext_var)) => {
             for slice_index in tags.variables() {
                 let slice = subs[slice_index];
@@ -372,7 +397,7 @@ fn find_names_needed(
                 find_under_alias,
             );
         }
-        Error | Structure(EmptyRecord) | Structure(EmptyTagUnion) => {
+        Error | Structure(EmptyRecord) | Structure(EmptyTuple) | Structure(EmptyTagUnion) => {
             // Errors and empty records don't need names.
         }
     }
@@ -1112,6 +1137,7 @@ fn write_flat_type<'a>(
             pol,
         ),
         EmptyRecord => buf.push_str(EMPTY_RECORD),
+        EmptyTuple => buf.push_str(EMPTY_TUPLE),
         EmptyTagUnion => buf.push_str(EMPTY_TAG_UNION),
         Func(args, closure, ret) => write_fn(
             env,
@@ -1183,6 +1209,55 @@ fn write_flat_type<'a>(
                     //
                     // e.g. the "*" at the end of `{ x: I64 }*`
                     // or the "r" at the end of `{ x: I64 }r`
+                    write_content(env, ctx, content, subs, buf, parens, pol)
+                }
+            }
+        }
+        Tuple(elems, ext_var) => {
+            use crate::types::{gather_tuple_elems, TupleStructure};
+
+            // If the `ext` has concrete elems (e.g. (I64, I64)(Bool)), merge them
+            let TupleStructure {
+                elems: sorted_elems,
+                ext,
+            } = gather_tuple_elems(subs, *elems, *ext_var)
+                .expect("Something ended up weird in this record type");
+            let ext_var = ext;
+
+            buf.push_str("( ");
+
+            let mut any_written_yet = false;
+
+            for (_, var) in sorted_elems {
+                if any_written_yet {
+                    buf.push_str(", ");
+                } else {
+                    any_written_yet = true;
+                }
+
+                write_content(
+                    env,
+                    ctx,
+                    subs.get_content_without_compacting(var),
+                    subs,
+                    buf,
+                    Parens::Unnecessary,
+                    pol,
+                );
+            }
+
+            buf.push_str(" )");
+
+            match subs.get_content_without_compacting(ext_var) {
+                Content::Structure(EmptyTuple) => {
+                    // This is a closed tuple. We're done!
+                }
+                content => {
+                    // This is an open tuple, so print the variable
+                    // right after the ')'
+                    //
+                    // e.g. the "*" at the end of `( I64, I64 )*`
+                    // or the "r" at the end of `( I64, I64 )r`
                     write_content(env, ctx, content, subs, buf, parens, pol)
                 }
             }

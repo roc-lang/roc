@@ -4330,6 +4330,8 @@ pub fn with_hole<'a>(
             }
         }
 
+        Tuple { .. } => todo!("implement tuple hole"),
+
         Record {
             record_var,
             mut fields,
@@ -4719,7 +4721,7 @@ pub fn with_hole<'a>(
             assign_to_symbols(env, procs, layout_cache, iter, stmt)
         }
 
-        Access {
+        RecordAccess {
             record_var,
             field_var,
             field,
@@ -4807,7 +4809,7 @@ pub fn with_hole<'a>(
             stmt
         }
 
-        Accessor(accessor_data) => {
+        RecordAccessor(accessor_data) => {
             let field_var = accessor_data.field_var;
             let fresh_record_symbol = env.unique_symbol();
 
@@ -4861,6 +4863,9 @@ pub fn with_hole<'a>(
                 ),
             }
         }
+
+        TupleAccess { .. } => todo!(),
+        TupleAccessor(_) => todo!(),
 
         OpaqueWrapFunction(wrap_fn_data) => {
             let opaque_var = wrap_fn_data.opaque_var;
@@ -4919,7 +4924,7 @@ pub fn with_hole<'a>(
             }
         }
 
-        Update {
+        RecordUpdate {
             record_var,
             symbol: structure,
             updates,

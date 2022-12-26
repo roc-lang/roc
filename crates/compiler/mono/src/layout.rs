@@ -2078,6 +2078,13 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                     }
                     stack.push((*ext, depth_any + 1, depth_lset));
                 }
+                FlatType::Tuple(elems, ext) => {
+                    for var_index in elems.iter_variables() {
+                        let var = subs[var_index];
+                        stack.push((var, depth_any + 1, depth_lset));
+                    }
+                    stack.push((*ext, depth_any + 1, depth_lset));
+                }
                 FlatType::FunctionOrTagUnion(_, _, ext) => {
                     stack.push((ext.var(), depth_any + 1, depth_lset));
                 }
@@ -2098,7 +2105,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                     }
                     stack.push((ext.var(), depth_any + 1, depth_lset));
                 }
-                FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
+                FlatType::EmptyRecord | FlatType::EmptyTuple | FlatType::EmptyTagUnion => {}
             },
             Content::FlexVar(_)
             | Content::RigidVar(_)
@@ -3176,6 +3183,9 @@ fn layout_from_flat_type<'a>(
 
             Cacheable(result, criteria)
         }
+        Tuple(_elems, _ext_var) => {
+            todo!();
+        }
         TagUnion(tags, ext_var) => {
             let (tags, ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
 
@@ -3205,6 +3215,7 @@ fn layout_from_flat_type<'a>(
         }
         EmptyTagUnion => cacheable(Ok(Layout::VOID)),
         EmptyRecord => cacheable(Ok(Layout::UNIT)),
+        EmptyTuple => cacheable(Ok(Layout::UNIT)),
     }
 }
 

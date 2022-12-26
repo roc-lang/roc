@@ -182,6 +182,14 @@ fn index_var(
 
                     return Ok(field_types);
                 }
+                FlatType::Tuple(elems, ext) => {
+                    let elem_types = elems
+                        .sorted_iterator(subs, *ext)
+                        .map(|(_, elem)| elem)
+                        .collect();
+
+                    return Ok(elem_types);
+                }
                 FlatType::TagUnion(tags, ext) | FlatType::RecursiveTagUnion(_, tags, ext) => {
                     let tag_ctor = match ctor {
                         IndexCtor::Tag(name) => name,
@@ -212,6 +220,9 @@ fn index_var(
                         ),
                     };
                     return Ok(std::iter::repeat(Variable::NULL).take(num_fields).collect());
+                }
+                FlatType::EmptyTuple => {
+                    return Ok(std::iter::repeat(Variable::NULL).take(0).collect());
                 }
                 FlatType::EmptyTagUnion => {
                     internal_error!("empty tag unions are not indexable")

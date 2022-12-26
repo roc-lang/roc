@@ -757,6 +757,9 @@ fn add_type_help<'a>(
         | Content::RigidAbleVar(_, _) => {
             todo!("TODO give a nice error message for a non-concrete type being passed to the host")
         }
+        Content::Structure(FlatType::Tuple(..)) => {
+            todo!();
+        }
         Content::Structure(FlatType::Record(fields, ext)) => {
             let it = fields
                 .unsorted_iterator(subs, *ext)
@@ -862,6 +865,9 @@ fn add_type_help<'a>(
             todo!()
         }
         Content::Structure(FlatType::EmptyRecord) => {
+            types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
+        }
+        Content::Structure(FlatType::EmptyTuple) => {
             types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
         }
         Content::Structure(FlatType::EmptyTagUnion) => {

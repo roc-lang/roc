@@ -1,7 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{
     name_type_var, AbilitySet, AliasKind, ErrorType, ExtImplicitOpenness, Polarity, RecordField,
-    RecordFieldsError, TypeExt, Uls,
+    RecordFieldsError, TupleElemsError, TypeExt, Uls,
 };
 use roc_collections::all::{FnvMap, ImMap, ImSet, MutSet, SendMap};
 use roc_collections::{VecMap, VecSet};
@@ -70,6 +70,7 @@ struct SubsHeader {
     tag_names: u64,
     symbol_names: u64,
     field_names: u64,
+    tuple_elem_indices: u64,
     record_fields: u64,
     variable_slices: u64,
     unspecialized_lambda_sets: u64,
@@ -85,6 +86,7 @@ impl SubsHeader {
             tag_names: subs.tag_names.len() as u64,
             symbol_names: subs.symbol_names.len() as u64,
             field_names: subs.field_names.len() as u64,
+            tuple_elem_indices: subs.tuple_elem_indices.len() as u64,
             record_fields: subs.record_fields.len() as u64,
             variable_slices: subs.variable_slices.len() as u64,
             unspecialized_lambda_sets: subs.unspecialized_lambda_sets.len() as u64,
@@ -127,6 +129,7 @@ impl Subs {
         written = Self::serialize_tag_names(&self.tag_names, writer, written)?;
         written = bytes::serialize_slice(&self.symbol_names, writer, written)?;
         written = Self::serialize_field_names(&self.field_names, writer, written)?;
+        written = bytes::serialize_slice(&self.tuple_elem_indices, writer, written)?;
         written = bytes::serialize_slice(&self.record_fields, writer, written)?;
         written = bytes::serialize_slice(&self.variable_slices, writer, written)?;
         written = bytes::serialize_slice(&self.unspecialized_lambda_sets, writer, written)?;
@@ -220,6 +223,8 @@ impl Subs {
             bytes::deserialize_slice(bytes, header.symbol_names as usize, offset);
         let (field_names, offset) =
             Self::deserialize_field_names(bytes, header.field_names as usize, offset);
+        let (tuple_elem_indices, offset) =
+            bytes::deserialize_slice(bytes, header.tuple_elem_indices as usize, offset);
         let (record_fields, offset) =
             bytes::deserialize_slice(bytes, header.record_fields as usize, offset);
         let (variable_slices, offset) =
@@ -239,6 +244,7 @@ impl Subs {
                     tag_names: tag_names.to_vec(),
                     symbol_names: symbol_names.to_vec(),
                     field_names,
+                    tuple_elem_indices: tuple_elem_indices.to_vec(),
                     record_fields: record_fields.to_vec(),
                     variable_slices: variable_slices.to_vec(),
                     unspecialized_lambda_sets: unspecialized_lambda_sets.to_vec(),
@@ -368,6 +374,7 @@ impl UlsOfVar {
 pub struct Subs {
     utable: UnificationTable,
     pub variables: Vec<Variable>,
+    pub tuple_elem_indices: Vec<usize>,
     pub tag_names: Vec<TagName>,
     pub symbol_names: Vec<Symbol>,
     pub field_names: Vec<Lowercase>,
@@ -442,6 +449,14 @@ impl std::ops::Index<SubsIndex<Lowercase>> for Subs {
 
     fn index(&self, index: SubsIndex<Lowercase>) -> &Self::Output {
         &self.field_names[index.index as usize]
+    }
+}
+
+impl std::ops::Index<SubsIndex<usize>> for Subs {
+    type Output = usize;
+
+    fn index(&self, index: SubsIndex<usize>) -> &Self::Output {
+        &self.tuple_elem_indices[index.index as usize]
     }
 }
 
@@ -742,6 +757,12 @@ impl GetSubsSlice<Uls> for Subs {
     }
 }
 
+impl GetSubsSlice<usize> for Subs {
+    fn get_subs_slice(&self, subs_slice: SubsSlice<usize>) -> &[usize] {
+        subs_slice.get_slice(&self.tuple_elem_indices)
+    }
+}
+
 impl fmt::Debug for Subs {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f)?;
@@ -928,6 +949,20 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
 
             write!(f, "}}<{:?}>", new_ext)
         }
+        FlatType::Tuple(elems, ext) => {
+            write!(f, "( ")?;
+
+            let (it, new_ext) = elems.sorted_iterator_and_ext(subs, *ext);
+            for (_i, content) in it {
+                write!(
+                    f,
+                    "{:?}, ",
+                    SubsFmtContent(subs.get_content_without_compacting(content), subs)
+                )?;
+            }
+
+            write!(f, ")<{:?}>", new_ext)
+        }
         FlatType::TagUnion(tags, ext) => {
             write!(f, "[")?;
 
@@ -967,6 +1002,7 @@ fn subs_fmt_flat_type(this: &FlatType, subs: &Subs, f: &mut fmt::Formatter) -> f
             write!(f, "]<{:?}> as <{:?}>", new_ext, rec)
         }
         FlatType::EmptyRecord => write!(f, "EmptyRecord"),
+        FlatType::EmptyTuple => write!(f, "EmptyTuple"),
         FlatType::EmptyTagUnion => write!(f, "EmptyTagUnion"),
     }
 }
@@ -1224,6 +1260,7 @@ define_const_var! {
     NULL,
 
     :pub EMPTY_RECORD,
+    :pub EMPTY_TUPLE,
     :pub EMPTY_TAG_UNION,
 
     BOOL_ENUM,
@@ -1714,6 +1751,7 @@ impl Subs {
             symbol_names,
             field_names: Vec::new(),
             record_fields: Vec::new(),
+            tuple_elem_indices: Vec::new(),
             variable_slices: vec![
                 // used for "TagOrFunction"
                 VariableSubsSlice::default(),
@@ -2563,6 +2601,7 @@ pub enum FlatType {
     Apply(Symbol, VariableSubsSlice),
     Func(VariableSubsSlice, Variable, Variable),
     Record(RecordFields, Variable),
+    Tuple(TupleElems, Variable),
     TagUnion(UnionTags, TagExt),
 
     /// `A` might either be a function
@@ -2572,6 +2611,7 @@ pub enum FlatType {
 
     RecursiveTagUnion(Variable, UnionTags, TagExt),
     EmptyRecord,
+    EmptyTuple,
     EmptyTagUnion,
 }
 
@@ -3068,7 +3108,8 @@ fn first<K: Ord, V>(x: &(K, V), y: &(K, V)) -> std::cmp::Ordering {
     x.0.cmp(&y.0)
 }
 
-pub type SortedIterator<'a> = Box<dyn Iterator<Item = (Lowercase, RecordField<Variable>)> + 'a>;
+pub type SortedFieldIterator<'a> =
+    Box<dyn Iterator<Item = (Lowercase, RecordField<Variable>)> + 'a>;
 
 impl RecordFields {
     pub const fn len(&self) -> usize {
@@ -3190,7 +3231,7 @@ impl RecordFields {
     ///
     /// Hopefully the inline will get rid of the Box in practice
     #[inline(always)]
-    pub fn sorted_iterator<'a>(&'_ self, subs: &'a Subs, ext: Variable) -> SortedIterator<'a> {
+    pub fn sorted_iterator<'a>(&'_ self, subs: &'a Subs, ext: Variable) -> SortedFieldIterator<'a> {
         self.sorted_iterator_and_ext(subs, ext).0
     }
 
@@ -3199,7 +3240,7 @@ impl RecordFields {
         &'_ self,
         subs: &'a Subs,
         ext: Variable,
-    ) -> (SortedIterator<'a>, Variable) {
+    ) -> (SortedFieldIterator<'a>, Variable) {
         if is_empty_record(subs, ext) {
             (
                 Box::new(self.iter_all().map(move |(i1, i2, i3)| {
@@ -3271,6 +3312,128 @@ fn is_empty_record(subs: &Subs, mut var: Variable) -> bool {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct TupleElems {
+    pub length: u16,
+
+    // TODO: make this a Result<u32, u32>, where Ok(x) means that the tuple is
+    // is fully sparse (the current case), and Err(x) means that the tuple is locally dense
+    // (meaning all the non-sparse elements are sequential) where x is the start of the
+    // dense section. This means we can encode both sparse tuple types generated by e.g. `.5`
+    // and dense tuple types, e.g. `(1, 2, 3)` without taking up any extra space.
+    pub elem_index_start: u32,
+
+    pub variables_start: u32,
+}
+
+impl TupleElems {
+    pub const fn len(&self) -> usize {
+        self.length as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn empty() -> Self {
+        Self {
+            length: 0,
+            elem_index_start: 0,
+            variables_start: 0,
+        }
+    }
+
+    pub const fn variables(&self) -> SubsSlice<Variable> {
+        SubsSlice::new(self.variables_start, self.length)
+    }
+
+    pub const fn elem_indices(&self) -> SubsSlice<usize> {
+        SubsSlice::new(self.elem_index_start, self.length)
+    }
+
+    pub fn iter_variables(&self) -> impl Iterator<Item = SubsIndex<Variable>> {
+        let slice = SubsSlice::new(self.variables_start, self.length);
+        slice.into_iter()
+    }
+
+    pub fn iter_all(&self) -> impl Iterator<Item = (SubsIndex<usize>, SubsIndex<Variable>)> {
+        let helper = |start| start..(start + self.length as u32);
+
+        let range1 = helper(self.elem_index_start);
+        let range2 = helper(self.variables_start);
+
+        let it = range1.into_iter().zip(range2.into_iter());
+
+        it.map(|(i1, i2)| (SubsIndex::new(i1), SubsIndex::new(i2)))
+    }
+
+    pub fn insert_into_subs<I>(subs: &mut Subs, input: I) -> Self
+    where
+        I: IntoIterator<Item = (usize, Variable)>,
+    {
+        let variables_start = subs.variables.len() as u32;
+        let elem_index_start = subs.tuple_elem_indices.len() as u32;
+
+        let it = input.into_iter();
+        let size_hint = it.size_hint().0;
+
+        subs.variables.reserve(size_hint);
+        subs.tuple_elem_indices.reserve(size_hint);
+
+        let mut length = 0;
+        for (index, var) in it {
+            subs.variables.push(var);
+            subs.tuple_elem_indices.push(index);
+
+            length += 1;
+        }
+
+        TupleElems {
+            length,
+            elem_index_start,
+            variables_start,
+        }
+    }
+
+    #[inline(always)]
+    pub fn unsorted_iterator<'a>(
+        &'a self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> Result<impl Iterator<Item = (usize, Variable)> + 'a, TupleElemsError> {
+        let (it, _) = crate::types::gather_tuple_elems_unsorted_iter(subs, *self, ext)?;
+
+        Ok(it)
+    }
+
+    /// get a sorted iterator over the elems of this tuple type
+    ///
+    /// This involves looking at both the type itself and the ext var and unioning the results
+    #[inline(always)]
+    pub fn sorted_iterator<'a>(
+        &'_ self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> Box<dyn Iterator<Item = (usize, Variable)> + 'a> {
+        self.sorted_iterator_and_ext(subs, ext).0
+    }
+
+    #[inline(always)]
+    pub fn sorted_iterator_and_ext<'a>(
+        &'_ self,
+        subs: &'a Subs,
+        ext: Variable,
+    ) -> (Box<dyn Iterator<Item = (usize, Variable)> + 'a>, Variable) {
+        let tuple_structure = crate::types::gather_tuple_elems(subs, *self, ext)
+            .expect("Something ended up weird in this tuple type");
+
+        (
+            Box::new(tuple_structure.elems.into_iter()),
+            tuple_structure.ext,
+        )
+    }
+}
+
 std::thread_local! {
     static SCRATCHPAD_FOR_OCCURS: RefCell<Option<Vec<Variable>>> = RefCell::new(Some(Vec::with_capacity(1024)));
 }
@@ -3323,6 +3486,11 @@ fn occurs(
                     let it = once(ext).chain(subs.get_subs_slice(slice).iter());
                     short_circuit(subs, root_var, seen, it)
                 }
+                Tuple(vars_by_elem, ext) => {
+                    let slice = SubsSlice::new(vars_by_elem.variables_start, vars_by_elem.length);
+                    let it = once(ext).chain(subs.get_subs_slice(slice).iter());
+                    short_circuit(subs, root_var, seen, it)
+                }
                 TagUnion(tags, ext) => {
                     occurs_union(subs, root_var, seen, tags)?;
 
@@ -3336,7 +3504,7 @@ fn occurs(
 
                     short_circuit_help(subs, root_var, seen, ext.var())
                 }
-                EmptyRecord | EmptyTagUnion => Ok(()),
+                EmptyRecord | EmptyTuple | EmptyTagUnion => Ok(()),
             },
             Alias(_, args, real_var, _) => {
                 for var_index in args.into_iter() {
@@ -3505,8 +3673,19 @@ fn explicit_substitute(
 
                         subs.set_content(in_var, Structure(Record(vars_by_field, new_ext)));
                     }
+                    Tuple(vars_by_elem, ext) => {
+                        let new_ext = explicit_substitute(subs, from, to, ext, seen);
 
-                    EmptyRecord | EmptyTagUnion => {}
+                        for index in vars_by_elem.iter_variables() {
+                            let var = subs[index];
+                            let new_var = explicit_substitute(subs, from, to, var, seen);
+                            subs[index] = new_var;
+                        }
+
+                        subs.set_content(in_var, Structure(Tuple(vars_by_elem, new_ext)));
+                    }
+
+                    EmptyRecord | EmptyTuple | EmptyTagUnion => {}
                 }
 
                 in_var
@@ -3689,12 +3868,25 @@ fn get_var_names(
                     accum
                 }
 
-                FlatType::EmptyRecord | FlatType::EmptyTagUnion => taken_names,
+                FlatType::EmptyRecord | FlatType::EmptyTuple | FlatType::EmptyTagUnion => {
+                    taken_names
+                }
 
                 FlatType::Record(vars_by_field, ext) => {
                     let mut accum = get_var_names(subs, ext, taken_names);
 
                     for var_index in vars_by_field.iter_variables() {
+                        let arg_var = subs[var_index];
+
+                        accum = get_var_names(subs, arg_var, accum)
+                    }
+
+                    accum
+                }
+                FlatType::Tuple(vars_by_elems, ext) => {
+                    let mut accum = get_var_names(subs, ext, taken_names);
+
+                    for var_index in vars_by_elems.iter_variables() {
                         let arg_var = subs[var_index];
 
                         accum = get_var_names(subs, arg_var, accum)
@@ -3938,6 +4130,55 @@ fn content_to_err_type(
     }
 }
 
+fn sorted_union<T>(a: Vec<(usize, T)>, b: Vec<(usize, T)>) -> Vec<(usize, T)> {
+    // Asuming the two slices are sorted (by the first element), merge them into a single sorted slice
+    // If we see duplicates, panic.
+
+    let mut result = Vec::with_capacity(a.len() + b.len());
+
+    let mut a_iter = a.into_iter();
+    let mut b_iter = b.into_iter();
+
+    let mut a_next = a_iter.next();
+    let mut b_next = b_iter.next();
+
+    loop {
+        match (a_next, b_next) {
+            (Some((a_index, a_value)), Some((b_index, b_value))) => {
+                if a_index == b_index {
+                    panic!("Duplicate index in sorted_union");
+                }
+
+                if a_index < b_index {
+                    result.push((a_index, a_value));
+                    a_next = a_iter.next();
+                    b_next = Some((b_index, b_value));
+                } else {
+                    result.push((b_index, b_value));
+                    b_next = b_iter.next();
+                    a_next = Some((a_index, a_value));
+                }
+            }
+
+            (Some((a_index, a_value)), None) => {
+                result.push((a_index, a_value));
+                a_next = a_iter.next();
+                b_next = None;
+            }
+
+            (None, Some((b_index, b_value))) => {
+                result.push((b_index, b_value));
+                b_next = b_iter.next();
+                a_next = None;
+            }
+
+            (None, None) => break,
+        }
+    }
+
+    result
+}
+
 fn flat_type_to_err_type(
     subs: &mut Subs,
     state: &mut ErrorTypeState,
@@ -3975,6 +4216,7 @@ fn flat_type_to_err_type(
         }
 
         EmptyRecord => ErrorType::Record(SendMap::default(), TypeExt::Closed),
+        EmptyTuple => ErrorType::Tuple(Vec::default(), TypeExt::Closed),
         EmptyTagUnion => ErrorType::TagUnion(SendMap::default(), TypeExt::Closed, pol),
 
         Record(vars_by_field, ext) => {
@@ -4013,6 +4255,38 @@ fn flat_type_to_err_type(
                 }
 
                 ErrorType::Error => ErrorType::Record(err_fields, TypeExt::Closed),
+
+                other =>
+                    panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {:?}", other)
+            }
+        }
+
+        Tuple(vars_by_elems, ext) => {
+            let mut err_elems = Vec::default();
+
+            for (i1, i2) in vars_by_elems.iter_all() {
+                let index = subs[i1];
+                let var = subs[i2];
+
+                let error_type = var_to_err_type(subs, state, var, pol);
+
+                err_elems.push((index, error_type));
+            }
+
+            match var_to_err_type(subs, state, ext, pol).unwrap_structural_alias() {
+                ErrorType::Tuple(sub_elems, sub_ext) => {
+                    ErrorType::Tuple(sorted_union(sub_elems, err_elems), sub_ext)
+                }
+
+                ErrorType::FlexVar(var) => {
+                    ErrorType::Tuple(err_elems, TypeExt::FlexOpen(var))
+                }
+
+                ErrorType::RigidVar(var) => {
+                    ErrorType::Tuple(err_elems, TypeExt::RigidOpen(var))
+                }
+
+                ErrorType::Error => ErrorType::Tuple(err_elems, TypeExt::Closed),
 
                 other =>
                     panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {:?}", other)
@@ -4369,6 +4643,10 @@ impl StorageSubs {
                 Self::offset_record_fields(offsets, *record_fields),
                 Self::offset_variable(offsets, *ext),
             ),
+            FlatType::Tuple(tuple_elems, ext) => FlatType::Tuple(
+                Self::offset_tuple_elems(offsets, *tuple_elems),
+                Self::offset_variable(offsets, *ext),
+            ),
             FlatType::TagUnion(union_tags, ext) => FlatType::TagUnion(
                 Self::offset_tag_union(offsets, *union_tags),
                 ext.map(|v| Self::offset_variable(offsets, v)),
@@ -4384,6 +4662,7 @@ impl StorageSubs {
                 ext.map(|v| Self::offset_variable(offsets, v)),
             ),
             FlatType::EmptyRecord => FlatType::EmptyRecord,
+            FlatType::EmptyTuple => FlatType::EmptyTuple,
             FlatType::EmptyTagUnion => FlatType::EmptyTagUnion,
         }
     }
@@ -4474,6 +4753,12 @@ impl StorageSubs {
         record_fields.field_types_start += offsets.record_fields;
 
         record_fields
+    }
+
+    fn offset_tuple_elems(offsets: &StorageSubsOffsets, mut tuple_elems: TupleElems) -> TupleElems {
+        tuple_elems.variables_start += offsets.variables;
+
+        tuple_elems
     }
 
     fn offset_tag_name_slice(
@@ -4670,7 +4955,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                     Func(new_arguments, new_closure_var, new_ret_var)
                 }
 
-                same @ EmptyRecord | same @ EmptyTagUnion => same,
+                same @ EmptyRecord | same @ EmptyTuple | same @ EmptyTagUnion => same,
 
                 Record(fields, ext) => {
                     let record_fields = {
@@ -4705,6 +4990,33 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
                     };
 
                     Record(record_fields, storage_copy_var_to_help(env, ext))
+                }
+
+                Tuple(elems, ext) => {
+                    let tuple_elems = {
+                        let new_variables =
+                            VariableSubsSlice::reserve_into_subs(env.target, elems.len());
+
+                        let it = (new_variables.indices()).zip(elems.iter_variables());
+                        for (target_index, var_index) in it {
+                            let var = env.source[var_index];
+                            let copy_var = storage_copy_var_to_help(env, var);
+                            env.target.variables[target_index] = copy_var;
+                        }
+
+                        let elem_index_start = env.target.tuple_elem_indices.len() as u32;
+
+                        // TODO: introduce a dense variant of TupleElems, by making the indices a result
+                        env.target.tuple_elem_indices.extend(0..elems.len());
+
+                        TupleElems {
+                            length: elems.len() as _,
+                            variables_start: new_variables.start,
+                            elem_index_start,
+                        }
+                    };
+
+                    Tuple(tuple_elems, storage_copy_var_to_help(env, ext))
                 }
 
                 TagUnion(tags, ext) => {
@@ -5118,7 +5430,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                     Func(new_arguments, new_closure_var, new_ret_var)
                 }
 
-                same @ EmptyRecord | same @ EmptyTagUnion => same,
+                same @ EmptyRecord | same @ EmptyTuple | same @ EmptyTagUnion => same,
 
                 Record(fields, ext) => {
                     let record_fields = {
@@ -5153,6 +5465,33 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
                     };
 
                     Record(record_fields, copy_import_to_help(env, max_rank, ext))
+                }
+
+                Tuple(elems, ext) => {
+                    let tuple_elems = {
+                        let new_variables =
+                            VariableSubsSlice::reserve_into_subs(env.target, elems.len());
+
+                        let it = (new_variables.indices()).zip(elems.iter_variables());
+                        for (target_index, var_index) in it {
+                            let var = env.source[var_index];
+                            let copy_var = copy_import_to_help(env, max_rank, var);
+                            env.target.variables[target_index] = copy_var;
+                        }
+
+                        let elem_index_start = env.target.tuple_elem_indices.len() as u32;
+
+                        // TODO: introduce a dense variant of TupleElems, by making the indices a result
+                        env.target.tuple_elem_indices.extend(0..elems.len());
+
+                        TupleElems {
+                            length: elems.len() as _,
+                            variables_start: new_variables.start,
+                            elem_index_start,
+                        }
+                    };
+
+                    Tuple(tuple_elems, copy_import_to_help(env, max_rank, ext))
                 }
 
                 TagUnion(tags, ext) => {
@@ -5450,13 +5789,20 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
                     stack.push(closure_var);
                 }
 
-                EmptyRecord => (),
-                EmptyTagUnion => (),
+                EmptyRecord | EmptyTuple | EmptyTagUnion => (),
 
                 Record(fields, ext) => {
                     let fields = *fields;
                     let ext = *ext;
                     stack.extend(var_slice!(fields.variables()));
+
+                    stack.push(ext);
+                }
+
+                Tuple(elems, ext) => {
+                    let elems = *elems;
+                    let ext = *ext;
+                    stack.extend(var_slice!(elems.variables()));
 
                     stack.push(ext);
                 }
@@ -5570,6 +5916,10 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
                     stack.extend(subs.get_subs_slice(fields.variables()));
                     stack.push(*ext);
                 }
+                FlatType::Tuple(elems, ext) => {
+                    stack.extend(subs.get_subs_slice(elems.variables()));
+                    stack.push(*ext);
+                }
                 FlatType::TagUnion(tags, ext) => {
                     stack.extend(
                         subs.get_subs_slice(tags.variables())
@@ -5590,7 +5940,7 @@ pub fn get_member_lambda_sets_at_region(subs: &Subs, var: Variable, target_regio
                     );
                     stack.push(ext.var());
                 }
-                FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
+                FlatType::EmptyRecord | FlatType::EmptyTuple | FlatType::EmptyTagUnion => {}
             },
             Content::Alias(_, _, real_var, _) => {
                 stack.push(*real_var);
@@ -5642,6 +5992,12 @@ fn is_inhabited(subs: &Subs, var: Variable) -> bool {
                         stack.extend(field_vars)
                     }
                 }
+                FlatType::Tuple(elems, ext) => {
+                    if let Ok(iter) = elems.unsorted_iterator(subs, *ext) {
+                        let elem_vars = iter.map(|(_, elem)| elem);
+                        stack.extend(elem_vars)
+                    }
+                }
                 FlatType::TagUnion(tags, ext) | FlatType::RecursiveTagUnion(_, tags, ext) => {
                     let mut is_uninhabited = true;
                     // If any tag is inhabited, the union is inhabited!
@@ -5658,6 +6014,7 @@ fn is_inhabited(subs: &Subs, var: Variable) -> bool {
                 }
                 FlatType::FunctionOrTagUnion(_, _, _) => {}
                 FlatType::EmptyRecord => {}
+                FlatType::EmptyTuple => {}
                 FlatType::EmptyTagUnion => {
                     return false;
                 }

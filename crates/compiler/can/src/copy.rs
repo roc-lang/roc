@@ -1,6 +1,9 @@
 use crate::{
     def::Def,
-    expr::{AccessorData, ClosureData, Expr, Field, OpaqueWrapFunctionData, WhenBranchPattern},
+    expr::{
+        ClosureData, Expr, Field, OpaqueWrapFunctionData, RecordAccessorData, TupleAccessorData,
+        WhenBranchPattern,
+    },
     pattern::{DestructType, ListPatterns, Pattern, RecordDestruct},
 };
 use roc_module::{
@@ -10,7 +13,7 @@ use roc_module::{
 use roc_types::{
     subs::{
         self, AliasVariables, Descriptor, GetSubsSlice, OptVariable, RecordFields, Subs, SubsIndex,
-        SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+        SubsSlice, TupleElems, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
     },
     types::{RecordField, Uls},
 };
@@ -62,6 +65,11 @@ trait CopyEnv {
 
     fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase>;
 
+    fn clone_tuple_elem_indices(
+        &mut self,
+        tuple_elem_indices: SubsSlice<usize>,
+    ) -> SubsSlice<usize>;
+
     fn clone_tag_names(&mut self, tag_names: SubsSlice<TagName>) -> SubsSlice<TagName>;
 
     fn clone_lambda_names(&mut self, lambda_names: SubsSlice<Symbol>) -> SubsSlice<Symbol>;
@@ -96,6 +104,14 @@ impl CopyEnv for Subs {
     #[inline(always)]
     fn clone_field_names(&mut self, field_names: SubsSlice<Lowercase>) -> SubsSlice<Lowercase> {
         field_names
+    }
+
+    #[inline(always)]
+    fn clone_tuple_elem_indices(
+        &mut self,
+        tuple_elem_indices: SubsSlice<usize>,
+    ) -> SubsSlice<usize> {
+        tuple_elem_indices
     }
 
     #[inline(always)]
@@ -148,6 +164,20 @@ impl<'a> CopyEnv for AcrossSubs<'a> {
         SubsSlice::extend_new(
             &mut self.target.field_names,
             self.source.get_subs_slice(field_names).iter().cloned(),
+        )
+    }
+
+    #[inline(always)]
+    fn clone_tuple_elem_indices(
+        &mut self,
+        tuple_elem_indices: SubsSlice<usize>,
+    ) -> SubsSlice<usize> {
+        SubsSlice::extend_new(
+            &mut self.target.tuple_elem_indices,
+            self.source
+                .get_subs_slice(tuple_elem_indices)
+                .iter()
+                .cloned(),
         )
     }
 
@@ -461,13 +491,21 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
 
         EmptyRecord => EmptyRecord,
 
-        Access {
+        Tuple { tuple_var, elems } => Tuple {
+            tuple_var: sub!(*tuple_var),
+            elems: elems
+                .iter()
+                .map(|(var, loc_expr)| (sub!(*var), Box::new(loc_expr.map(|e| go_help!(e)))))
+                .collect(),
+        },
+
+        RecordAccess {
             record_var,
             ext_var,
             field_var,
             loc_expr,
             field,
-        } => Access {
+        } => RecordAccess {
             record_var: sub!(*record_var),
             ext_var: sub!(*ext_var),
             field_var: sub!(*field_var),
@@ -475,7 +513,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             field: field.clone(),
         },
 
-        Accessor(AccessorData {
+        RecordAccessor(RecordAccessorData {
             name,
             function_var,
             record_var,
@@ -483,7 +521,7 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             ext_var,
             field_var,
             field,
-        }) => Accessor(AccessorData {
+        }) => RecordAccessor(RecordAccessorData {
             name: *name,
             function_var: sub!(*function_var),
             record_var: sub!(*record_var),
@@ -493,12 +531,44 @@ fn deep_copy_expr_help<C: CopyEnv>(env: &mut C, copied: &mut Vec<Variable>, expr
             field: field.clone(),
         }),
 
-        Update {
+        TupleAccess {
+            tuple_var,
+            ext_var,
+            elem_var,
+            loc_expr,
+            index,
+        } => TupleAccess {
+            tuple_var: sub!(*tuple_var),
+            ext_var: sub!(*ext_var),
+            elem_var: sub!(*elem_var),
+            loc_expr: Box::new(loc_expr.map(|e| go_help!(e))),
+            index: *index,
+        },
+
+        TupleAccessor(TupleAccessorData {
+            name,
+            function_var,
+            tuple_var: record_var,
+            closure_var,
+            ext_var,
+            elem_var: field_var,
+            index,
+        }) => TupleAccessor(TupleAccessorData {
+            name: *name,
+            function_var: sub!(*function_var),
+            tuple_var: sub!(*record_var),
+            closure_var: sub!(*closure_var),
+            ext_var: sub!(*ext_var),
+            elem_var: sub!(*field_var),
+            index: *index,
+        }),
+
+        RecordUpdate {
             record_var,
             ext_var,
             symbol,
             updates,
-        } => Update {
+        } => RecordUpdate {
             record_var: sub!(*record_var),
             ext_var: sub!(*ext_var),
             symbol: *symbol,
@@ -861,7 +931,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
 
             // Everything else is a mechanical descent.
             Structure(flat_type) => match flat_type {
-                EmptyRecord | EmptyTagUnion => Structure(flat_type),
+                EmptyRecord | EmptyTuple | EmptyTagUnion => Structure(flat_type),
                 Apply(symbol, arguments) => {
                     descend_slice!(arguments);
 
@@ -901,6 +971,26 @@ fn deep_copy_type_vars<C: CopyEnv>(
                         };
 
                         Structure(Record(new_fields, new_ext_var))
+                    })
+                }
+                Tuple(elems, ext_var) => {
+                    let new_ext_var = descend_var!(ext_var);
+
+                    descend_slice!(elems.variables());
+
+                    perform_clone!({
+                        let new_variables = clone_var_slice!(elems.variables());
+                        let new_elem_indices = env.clone_tuple_elem_indices(elems.elem_indices());
+
+                        let new_elems = {
+                            TupleElems {
+                                length: elems.length,
+                                variables_start: new_variables.start,
+                                elem_index_start: new_elem_indices.start,
+                            }
+                        };
+
+                        Structure(Tuple(new_elems, new_ext_var))
                     })
                 }
                 TagUnion(tags, ext_var) => {
