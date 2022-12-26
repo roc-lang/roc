@@ -120,7 +120,7 @@ jobs:
 
       - run: cp macos-x86_64-files/* ./basic-cli/src
 
-      - run: roc build --bundle=.tar.br ./basic-cli/src/main.roc
+      - run: ./roc build --bundle=.tar.br ./basic-cli/src/main.roc
 
       - name: Upload platform archive
         uses: actions/upload-artifact@v3
