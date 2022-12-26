@@ -489,6 +489,7 @@ expect
         onClickAttr =
             EventListener "click" [] onClickHandler
 
+        # Sizes don't matter for this front-end test, only for back end rendering of HTML strings.
         Element "body" 0 [] [
             Element "h1" 0 [] [Text "The app"],
             Element "div" 0 [onClickAttr] [Text "The answer is \(num)"],

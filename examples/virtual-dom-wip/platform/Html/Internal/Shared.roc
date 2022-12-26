@@ -31,6 +31,7 @@ Html state : [
     Element Str Size (List (Attribute state)) (List (Html state)),
 ]
 
+# The pre-calculated byte size of the rendered HTML string
 Size : Nat
 
 Attribute state : [
