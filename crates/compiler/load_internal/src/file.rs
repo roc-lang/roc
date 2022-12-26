@@ -144,7 +144,7 @@ struct ModuleCache<'a> {
     /// Various information
     imports: MutMap<ModuleId, MutSet<ModuleId>>,
     top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
-    documentation: MutMap<ModuleId, ModuleDocumentation>,
+    documentation: VecMap<ModuleId, ModuleDocumentation>,
     can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     type_problems: MutMap<ModuleId, Vec<TypeError>>,
 
@@ -384,6 +384,7 @@ fn start_phase<'a>(
                     aliases,
                     abilities_store,
                     skip_constraint_gen,
+                    exposed_module_ids: state.exposed_modules,
                 }
             }
 
@@ -629,7 +630,7 @@ pub struct LoadedModule {
     pub resolved_implementations: ResolvedImplementations,
     pub sources: MutMap<ModuleId, (PathBuf, Box<str>)>,
     pub timings: MutMap<ModuleId, ModuleTiming>,
-    pub documentation: MutMap<ModuleId, ModuleDocumentation>,
+    pub docs_by_module: VecMap<ModuleId, ModuleDocumentation>,
     pub abilities_store: AbilitiesStore,
 }
 
@@ -651,6 +652,13 @@ impl LoadedModule {
     pub fn exposed_values_str(&self) -> Vec<&str> {
         self.exposed_values
             .iter()
+            .map(|symbol| symbol.as_str(&self.interns))
+            .collect()
+    }
+
+    pub fn exposed_aliases_str(&self) -> Vec<&str> {
+        self.exposed_aliases
+            .keys()
             .map(|symbol| symbol.as_str(&self.interns))
             .collect()
     }
@@ -848,7 +856,7 @@ enum Msg<'a> {
         exposed_types_storage: ExposedTypesStorageSubs,
         resolved_implementations: ResolvedImplementations,
         dep_idents: IdentIdsByModule,
-        documentation: MutMap<ModuleId, ModuleDocumentation>,
+        documentation: VecMap<ModuleId, ModuleDocumentation>,
         abilities_store: AbilitiesStore,
     },
     FoundSpecializations {
@@ -956,6 +964,10 @@ struct State<'a> {
     pub platform_path: PlatformPath<'a>,
     pub target_info: TargetInfo,
 
+    /// Note: only packages and platforms actually expose any modules;
+    /// for all others, this will be empty.
+    pub exposed_modules: &'a [ModuleId],
+
     pub module_cache: ModuleCache<'a>,
     pub dependencies: Dependencies<'a>,
     pub procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
@@ -1040,6 +1052,7 @@ impl<'a> State<'a> {
             procedures: MutMap::default(),
             toplevel_expects: ToplevelExpects::default(),
             exposed_to_host: ExposedToHost::default(),
+            exposed_modules: &[],
             exposed_types,
             arc_modules,
             arc_shorthands,
@@ -1151,6 +1164,7 @@ enum BuildTask<'a> {
         exposed_symbols: VecSet<Symbol>,
         aliases: MutMap<Symbol, Alias>,
         abilities_store: PendingAbilitiesStore,
+        exposed_module_ids: &'a [ModuleId],
         skip_constraint_gen: bool,
     },
     Solve {
@@ -2429,13 +2443,20 @@ fn update<'a>(
                         state.platform_path = PlatformPath::Valid(to_platform);
                     }
                     Package {
-                        config_shorthand, ..
+                        config_shorthand,
+                        exposes_ids,
+                        ..
                     } => {
+                        if header.is_root_module {
+                            state.exposed_modules = exposes_ids;
+                        }
+
                         work.extend(state.dependencies.notify_package(config_shorthand));
                     }
                     Platform {
                         config_shorthand,
                         provides,
+                        exposes_ids,
                         ..
                     } => {
                         work.extend(state.dependencies.notify_package(config_shorthand));
@@ -2468,6 +2489,10 @@ fn update<'a>(
                                 provides,
                                 is_prebuilt,
                             });
+                        }
+
+                        if header.is_root_module {
+                            state.exposed_modules = exposes_ids;
                         }
                     }
                     Builtin { .. } | Interface { .. } => {
@@ -2748,7 +2773,7 @@ fn update<'a>(
                 }
 
                 let documentation = {
-                    let mut empty = MutMap::default();
+                    let mut empty = VecMap::default();
                     std::mem::swap(&mut empty, &mut state.module_cache.documentation);
 
                     empty
@@ -3363,7 +3388,7 @@ fn finish(
     exposed_types_storage: ExposedTypesStorageSubs,
     resolved_implementations: ResolvedImplementations,
     dep_idents: IdentIdsByModule,
-    documentation: MutMap<ModuleId, ModuleDocumentation>,
+    documentation: VecMap<ModuleId, ModuleDocumentation>,
     abilities_store: AbilitiesStore,
 ) -> LoadedModule {
     let module_ids = Arc::try_unwrap(state.arc_modules)
@@ -3411,7 +3436,7 @@ fn finish(
         resolved_implementations,
         sources,
         timings: state.timings,
-        documentation,
+        docs_by_module: documentation,
         abilities_store,
     }
 }
@@ -3503,6 +3528,13 @@ fn load_package_from_disk<'a>(
                     },
                     parser_state,
                 )) => {
+                    let exposes_ids = get_exposes_ids(
+                        header.exposes.item.items,
+                        arena,
+                        &module_ids,
+                        &ident_ids_by_module,
+                    );
+
                     // make a `platform` module that ultimately exposes `main` to the host
                     let (_, _, platform_module_msg) = build_platform_header(
                         arena,
@@ -3511,6 +3543,7 @@ fn load_package_from_disk<'a>(
                         filename.to_path_buf(),
                         parser_state,
                         module_ids,
+                        exposes_ids.into_bump_slice(),
                         ident_ids_by_module,
                         &header,
                         pkg_module_timing,
@@ -3530,6 +3563,32 @@ fn load_package_from_disk<'a>(
             error: err.kind(),
         }),
     }
+}
+
+fn get_exposes_ids<'a>(
+    entries: &'a [Loc<Spaced<'a, roc_parse::header::ModuleName<'a>>>],
+    arena: &'a Bump,
+    module_ids: &Arc<Mutex<PackageModuleIds<'a>>>,
+    ident_ids_by_module: &Arc<Mutex<IdentIdsByModule>>,
+) -> bumpalo::collections::Vec<'a, ModuleId> {
+    let mut exposes_ids = bumpalo::collections::Vec::with_capacity_in(entries.len(), arena);
+
+    // Lock just long enough to perform the minimal operations necessary.
+    let mut module_ids = (**module_ids).lock();
+    let mut ident_ids_by_module = (**ident_ids_by_module).lock();
+
+    // TODO can we "iterate unspaced" instead of calling unspace here?
+    for entry in unspace(arena, entries) {
+        let module_id =
+            module_ids.get_or_insert(&PQModuleName::Unqualified(entry.value.as_str().into()));
+
+        // Ensure this module has an entry in the ident_ids_by_module map.
+        ident_ids_by_module.get_or_insert(module_id);
+
+        exposes_ids.push(module_id);
+    }
+
+    exposes_ids
 }
 
 fn load_builtin_module_help<'a>(
@@ -4061,6 +4120,13 @@ fn parse_header<'a>(
             },
             parse_state,
         )) => {
+            let exposes_ids = get_exposes_ids(
+                header.exposes.item.items,
+                arena,
+                &module_ids,
+                &ident_ids_by_module,
+            );
+
             let (module_id, _, header) = build_platform_header(
                 arena,
                 None,
@@ -4068,6 +4134,7 @@ fn parse_header<'a>(
                 filename,
                 parse_state,
                 module_ids,
+                exposes_ids.into_bump_slice(),
                 ident_ids_by_module,
                 &header,
                 module_timing,
@@ -4326,7 +4393,7 @@ fn build_header<'a>(
         };
         home = module_ids.get_or_insert(&name);
 
-        // Ensure this module has an entry in the exposed_ident_ids map.
+        // Ensure this module has an entry in the ident_ids_by_module map.
         ident_ids_by_module.get_or_insert(home);
 
         // For each of our imports, add an entry to deps_by_name
@@ -4476,6 +4543,39 @@ fn build_header<'a>(
 
         ident_ids.clone()
     };
+
+    // This module depends on all the modules it exposes. We need to load those in order
+    // to do things like report errors for them, generate docs for them, etc.
+    if info.is_root_module {
+        if let HeaderType::Platform {
+            exposes,
+            exposes_ids,
+            ..
+        }
+        | HeaderType::Package {
+            exposes,
+            exposes_ids,
+            ..
+        } = header_type
+        {
+            for (loc_module_name, module_id) in exposes.iter().zip(exposes_ids.iter().copied()) {
+                let module_name_str = loc_module_name.value.as_str();
+                let pq_module_name = PackageQualified::Unqualified(module_name_str.into());
+
+                // We should never change an entry here. Either we should have no entry,
+                // or if we do have one, it should be unchanged by this insertion.
+                debug_assert_eq!(
+                    &module_id,
+                    deps_by_name.get(&pq_module_name).unwrap_or(&module_id),
+                    "Already had a deps_by_name entry for {:?}, but it was {:?} rather than the expected {:?}",
+                    pq_module_name,
+                    deps_by_name.get(&pq_module_name).unwrap(),
+                    module_id,
+                );
+                deps_by_name.insert(pq_module_name, module_id);
+            }
+        }
+    }
 
     let package_entries = packages
         .iter()
@@ -5067,10 +5167,17 @@ fn build_package_header<'a>(
         arena,
     );
     let packages = unspace(arena, header.packages.item.items);
+    let exposes_ids = get_exposes_ids(
+        header.exposes.item.items,
+        arena,
+        &module_ids,
+        &ident_ids_by_module,
+    );
     let header_type = HeaderType::Package {
         // A config_shorthand of "" should be fine
         config_shorthand: opt_shorthand.unwrap_or_default(),
         exposes: exposes.into_bump_slice(),
+        exposes_ids: exposes_ids.into_bump_slice(),
     };
 
     let info = HeaderInfo {
@@ -5098,6 +5205,7 @@ fn build_platform_header<'a>(
     filename: PathBuf,
     parse_state: roc_parse::state::State<'a>,
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
+    exposes_ids: &'a [ModuleId],
     ident_ids_by_module: SharedIdentIdsByModule,
     header: &PlatformHeader<'a>,
     module_timing: ModuleTiming,
@@ -5127,6 +5235,7 @@ fn build_platform_header<'a>(
     let header_type = HeaderType::Platform {
         // A config_shorthand of "" should be fine
         config_shorthand: opt_shorthand.unwrap_or_default(),
+        exposes_ids,
         opt_app_module_id,
         provides: provides.into_bump_slice(),
         exposes: exposes.into_bump_slice(),
@@ -5162,6 +5271,7 @@ fn canonicalize_and_constrain<'a>(
     imported_abilities_state: PendingAbilitiesStore,
     parsed: ParsedModule<'a>,
     skip_constraint_gen: bool,
+    exposed_module_ids: &[ModuleId],
 ) -> CanAndCon {
     let canonicalize_start = Instant::now();
 
@@ -5195,7 +5305,7 @@ fn canonicalize_and_constrain<'a>(
         aliases,
         imported_abilities_state,
         exposed_imports,
-        &exposed_symbols,
+        exposed_symbols,
         &symbols_from_requires,
         &mut var_store,
     );
@@ -5226,16 +5336,26 @@ fn canonicalize_and_constrain<'a>(
         }
         HeaderType::Interface { name, .. }
         | HeaderType::Builtin { name, .. }
-        | HeaderType::Hosted { name, .. } => {
+        | HeaderType::Hosted { name, .. }
+            if exposed_module_ids.contains(&parsed.module_id) =>
+        {
             let mut scope = module_output.scope.clone();
             scope.add_docs_imports();
             let docs = crate::docs::generate_module_docs(
                 scope,
+                module_id,
+                module_ids,
                 name.as_str().into(),
                 &parsed_defs_for_docs,
+                exposed_module_ids,
+                module_output.exposed_symbols.clone(),
             );
 
             Some(docs)
+        }
+        HeaderType::Interface { .. } | HeaderType::Builtin { .. } | HeaderType::Hosted { .. } => {
+            // This module isn't exposed by the platform, so don't generate docs for it!
+            None
         }
     };
 
@@ -5301,7 +5421,7 @@ fn canonicalize_and_constrain<'a>(
     let module = Module {
         module_id,
         exposed_imports: module_output.exposed_imports,
-        exposed_symbols,
+        exposed_symbols: module_output.exposed_symbols,
         referenced_values: module_output.referenced_values,
         referenced_types: module_output.referenced_types,
         aliases,
@@ -6079,6 +6199,7 @@ fn run_task<'a>(
             aliases,
             abilities_store,
             skip_constraint_gen,
+            exposed_module_ids,
         } => {
             let can_and_con = canonicalize_and_constrain(
                 arena,
@@ -6089,6 +6210,7 @@ fn run_task<'a>(
                 abilities_store,
                 parsed,
                 skip_constraint_gen,
+                exposed_module_ids,
             );
 
             Ok(Msg::CanonicalizedAndConstrained(can_and_con))

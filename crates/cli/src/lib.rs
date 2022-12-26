@@ -270,12 +270,13 @@ pub fn build_app<'a>() -> Command<'a> {
             )
         .subcommand(
             Command::new(CMD_DOCS)
-                .about("Generate documentation for Roc modules (Work In Progress)")
-                .arg(Arg::new(DIRECTORY_OR_FILES)
+                .about("Generate documentation for a Roc package")
+                .arg(Arg::new(ROC_FILE)
                     .multiple_values(true)
-                    .required(false)
-                    .help("The directory or files to build documentation for")
+                    .help("The package's main .roc file")
                     .allow_invalid_utf8(true)
+                    .required(false)
+                    .default_value(DEFAULT_ROC_FILENAME),
                 )
         )
         .subcommand(Command::new(CMD_GLUE)

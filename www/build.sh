@@ -45,7 +45,7 @@ rustc --version
 # is set up to serve them.
 export ROC_DOCS_URL_ROOT=/builtins
 
-cargo run --release --bin roc-docs crates/compiler/builtins/roc/*.roc
+cargo run --release --bin roc-docs crates/compiler/builtins/roc/main.roc
 mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
 mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
 
@@ -66,9 +66,7 @@ rm -rf ./downloaded-basic-cli
 
 git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
 
-# Until https://github.com/roc-lang/roc/issues/3280 is done,
-# manually exclude the Internal* modules and `main.roc`.
-ls downloaded-basic-cli/src/*.roc | grep -v Internal | grep -v main.roc | grep -v Effect.roc | xargs cargo run --bin roc-docs
+cargo run --bin roc-docs downloaded-basic-cli/src/main.roc
 
 rm -rf ./downloaded-basic-cli
 
