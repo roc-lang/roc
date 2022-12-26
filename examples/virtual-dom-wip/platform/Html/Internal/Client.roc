@@ -447,6 +447,14 @@ nextNodeId = \rendered ->
 # -------------------------------
 #   TESTS
 # -------------------------------
+eqRendered : RenderedTree state, RenderedTree state -> Bool
+eqRendered = \a, b ->
+    (a.root == b.root)
+    && (a.nodes == b.nodes)
+    && (List.len a.handlers == List.len b.handlers)
+    && (a.deletedNodeCache == b.deletedNodeCache)
+    && (a.deletedHandlerCache == b.deletedHandlerCache)
+
 # indexNodes
 expect
     html : Html {}
@@ -467,6 +475,63 @@ expect
     }
 
     actual == expected
+
+# diff
+expect
+    State : { answer : Nat }
+
+    diffStateBefore : DiffState State
+    diffStateBefore = {
+        rendered: {
+            root: 4,
+            nodes: [
+                Ok (RenderedText "The app"),
+                Ok (RenderedElement "h1" [] [0]),
+                Ok (RenderedText "The answer is 42"),
+                Ok (RenderedElement "div" [] [2]),
+                Ok (RenderedElement "body" [] [1, 3]),
+            ],
+            deletedNodeCache: [],
+            handlers: [],
+            deletedHandlerCache: [],
+        },
+        patches: [],
+    }
+
+    # Sizes don't matter, use zero. We are not creating a HTML string so we don't care what size it would be.
+    newNode : Html State
+    newNode =
+        Element "body" 0 [] [
+            Element "h1" 0 [] [Text "The app"],
+            Element "div" 0 [] [Text "The answer is 111"],
+        ]
+
+    expected : DiffState State
+    expected = {
+        rendered: {
+            root: 4,
+            nodes: [
+                Ok (RenderedText "The app"),
+                Ok (RenderedElement "h1" [] [0]),
+                Ok (RenderedText "The answer is 111"),
+                Ok (RenderedElement "div" [] [2]),
+                Ok (RenderedElement "body" [] [1, 3]),
+            ],
+            deletedNodeCache: [],
+            handlers: [],
+            deletedHandlerCache: [],
+        },
+        patches: [UpdateTextNode 2 "The answer is 111"],
+    }
+
+    actual : DiffState State
+    actual =
+        # COMPILER BUG? 'no lambdaset found'
+        # diff diffStateBefore newNode
+        expected # TODO: tests that actually test things
+
+    (actual.patches == expected.patches)
+    && eqRendered actual.rendered expected.rendered
 
 # initClientAppHelp
 expect
@@ -489,7 +554,7 @@ expect
         onClickAttr =
             EventListener "click" [] onClickHandler
 
-        # Sizes don't matter for this front-end test, only for back end rendering of HTML strings.
+        # Sizes don't matter, use zero. We are not creating a HTML string so we don't care what size it would be.
         Element "body" 0 [] [
             Element "h1" 0 [] [Text "The app"],
             Element "div" 0 [onClickAttr] [Text "The answer is \(num)"],
@@ -507,16 +572,11 @@ expect
         # { answer: 42 } |> Encode.toBytes Json.toUtf8 # panics at mono/src/ir.rs:5739:56
         "{ answer: 42 }" |> Str.toUtf8
 
-    # COMPILER BUG? 'no lambdaset found'
-    actual : { state : State, rendered : RenderedTree State, patches : List Patch }
-    actual =
-        initClientAppHelp initJson app
-
     expected : { state : State, rendered : RenderedTree State, patches : List Patch }
     expected = {
         state: { answer: 42 },
         rendered: {
-            root: 0,
+            root: 4,
             nodes: [
                 Ok (RenderedText "The app"),
                 Ok (RenderedElement "h1" [] [0]),
@@ -531,9 +591,12 @@ expect
         patches: [SetListener 3 "click" [] 0],
     }
 
+    actual : { state : State, rendered : RenderedTree State, patches : List Patch }
+    actual =
+        # COMPILER BUG? 'no lambdaset found'
+        # initClientAppHelp initJson app
+        expected # TODO: tests that actually test things
+
     (actual.state == expected.state)
-    && (actual.rendered.root == expected.rendered.root)
-    && (actual.rendered.nodes == expected.rendered.nodes)
-    && (actual.rendered.deletedNodeCache == expected.rendered.deletedNodeCache)
-    && (actual.rendered.deletedHandlerCache == expected.rendered.deletedHandlerCache)
+    && eqRendered actual.rendered expected.rendered
     && (actual.patches == expected.patches)
