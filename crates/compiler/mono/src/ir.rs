@@ -3036,8 +3036,7 @@ fn specialize_suspended<'a>(
             Err(SpecializeFailure {
                 attempted_layout, ..
             }) => {
-                let proc =
-                    generate_runtime_error_function(env, layout_cache, name, attempted_layout);
+                let proc = generate_runtime_error_function(env, name, attempted_layout);
 
                 let top_level = ProcLayout::from_raw_named(env.arena, name, attempted_layout);
 
@@ -3196,7 +3195,7 @@ fn specialize_external_help<'a>(
                 .insert_specialized(name.name(), top_level, proc);
         }
         Err(SpecializeFailure { attempted_layout }) => {
-            let proc = generate_runtime_error_function(env, layout_cache, name, attempted_layout);
+            let proc = generate_runtime_error_function(env, name, attempted_layout);
 
             let top_level = ProcLayout::from_raw_named(env.arena, name, attempted_layout);
 
@@ -3209,7 +3208,6 @@ fn specialize_external_help<'a>(
 
 fn generate_runtime_error_function<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &LayoutCache<'a>,
     lambda_name: LambdaName<'a>,
     layout: RawFunctionLayout<'a>,
 ) -> Proc<'a> {
@@ -8976,7 +8974,6 @@ fn call_by_name_help<'a>(
                             Err(SpecializeFailure { attempted_layout }) => {
                                 let proc = generate_runtime_error_function(
                                     env,
-                                    layout_cache,
                                     proc_name,
                                     attempted_layout,
                                 );
@@ -9120,7 +9117,6 @@ fn call_by_name_module_thunk<'a>(
                             Err(SpecializeFailure { attempted_layout }) => {
                                 let proc = generate_runtime_error_function(
                                     env,
-                                    layout_cache,
                                     LambdaName::no_niche(proc_name),
                                     attempted_layout,
                                 );
@@ -10477,7 +10473,6 @@ fn match_on_lambda_set<'a>(
 
             let result = union_lambda_set_to_switch(
                 env,
-                layout_cache,
                 lambda_set,
                 closure_tag_id_symbol,
                 union_layout.tag_id_layout(),
@@ -10515,12 +10510,7 @@ fn match_on_lambda_set<'a>(
                     let lambda_name = LambdaName::no_niche(name);
                     let function_layout =
                         RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout);
-                    let proc = generate_runtime_error_function(
-                        env,
-                        layout_cache,
-                        lambda_name,
-                        function_layout,
-                    );
+                    let proc = generate_runtime_error_function(env, lambda_name, function_layout);
                     let top_level =
                         ProcLayout::from_raw_named(env.arena, lambda_name, function_layout);
 
@@ -10540,7 +10530,6 @@ fn match_on_lambda_set<'a>(
 
             union_lambda_set_branch_help(
                 env,
-                layout_cache,
                 function_symbol,
                 closure_info,
                 argument_symbols,
@@ -10563,7 +10552,6 @@ fn match_on_lambda_set<'a>(
 
             union_lambda_set_branch_help(
                 env,
-                layout_cache,
                 function_symbol,
                 closure_info,
                 argument_symbols,
@@ -10611,7 +10599,6 @@ fn match_on_lambda_set<'a>(
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_to_switch<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &LayoutCache<'a>,
     lambda_set: LambdaSet<'a>,
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
@@ -10646,7 +10633,6 @@ fn union_lambda_set_to_switch<'a>(
 
         let stmt = union_lambda_set_branch(
             env,
-            layout_cache,
             join_point_id,
             lambda_name,
             closure_info,
@@ -10688,7 +10674,6 @@ fn union_lambda_set_to_switch<'a>(
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_branch<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &LayoutCache<'a>,
     join_point_id: JoinPointId,
     lambda_name: LambdaName<'a>,
     closure_info: ClosureInfo<'a>,
@@ -10702,7 +10687,6 @@ fn union_lambda_set_branch<'a>(
 
     union_lambda_set_branch_help(
         env,
-        layout_cache,
         lambda_name,
         closure_info,
         argument_symbols_slice,
@@ -10726,7 +10710,6 @@ enum ClosureInfo<'a> {
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_branch_help<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &LayoutCache<'a>,
     lambda_name: LambdaName<'a>,
     closure_info: ClosureInfo<'a>,
     argument_symbols_slice: &'a [Symbol],
