@@ -683,6 +683,7 @@ struct ModuleHeader<'a> {
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parse_state: roc_parse::state::State<'a>,
     header_type: HeaderType<'a>,
+    header_docs: &'a [&'a str],
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     module_timing: ModuleTiming,
 }
@@ -824,6 +825,7 @@ struct ParsedModule<'a> {
     parsed_defs: Defs<'a>,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     header_type: HeaderType<'a>,
+    header_docs: &'a [&'a str],
 }
 
 type LocExpects = VecMap<Region, Vec<ExpectLookup>>;
@@ -3623,6 +3625,7 @@ fn load_builtin_module_help<'a>(
                     exposes: unspace(arena, header.exposes.item.items),
                     generates_with: &[],
                 },
+                header_docs: header.docs(arena),
             };
 
             (info, parse_state)
@@ -3914,7 +3917,6 @@ fn parse_header<'a>(
             verify_interface_matches_file_path(header.name, &filename, &parse_state)?;
 
             let header_name_region = header.name.region;
-
             let info = HeaderInfo {
                 filename,
                 is_root_module,
@@ -3925,6 +3927,7 @@ fn parse_header<'a>(
                     name: header.name.value,
                     exposes: unspace(arena, header.exposes.item.items),
                 },
+                header_docs: header.docs(arena),
             };
 
             let (module_id, module_name, header) = build_header(
@@ -3978,6 +3981,7 @@ fn parse_header<'a>(
                     generates: header.generates.item,
                     generates_with: unspace(arena, header.generates_with.item.items),
                 },
+                header_docs: header.docs(arena),
             };
 
             let (module_id, _, header) = build_header(
@@ -4001,6 +4005,7 @@ fn parse_header<'a>(
             },
             parse_state,
         )) => {
+            let header_docs = header.docs(arena);
             let mut app_file_dir = filename.clone();
             app_file_dir.pop();
 
@@ -4038,6 +4043,7 @@ fn parse_header<'a>(
                     output_name: header.name.value,
                     to_platform: header.provides.to.value,
                 },
+                header_docs,
             };
 
             let (module_id, _, resolved_header) = build_header(
@@ -4302,6 +4308,7 @@ struct HeaderInfo<'a> {
     packages: &'a [Loc<PackageEntry<'a>>],
     imports: &'a [Loc<ImportsEntry<'a>>],
     header_type: HeaderType<'a>,
+    header_docs: &'a [&'a str],
 }
 
 fn build_header<'a>(
@@ -4318,6 +4325,7 @@ fn build_header<'a>(
         packages,
         imports,
         header_type,
+        header_docs,
     } = info;
 
     let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
@@ -4633,6 +4641,7 @@ fn build_header<'a>(
             exposed_imports: scope,
             symbols_from_requires,
             header_type,
+            header_docs,
             module_timing,
         },
     )
@@ -5187,6 +5196,7 @@ fn build_package_header<'a>(
         packages,
         imports: &[],
         header_type,
+        header_docs: header.docs(arena),
     };
 
     build_header(
@@ -5250,6 +5260,7 @@ fn build_platform_header<'a>(
         packages: &[],
         imports,
         header_type,
+        header_docs: header.docs(arena),
     };
 
     build_header(
@@ -5349,6 +5360,7 @@ fn canonicalize_and_constrain<'a>(
                 &parsed_defs_for_docs,
                 exposed_module_ids,
                 module_output.exposed_symbols.clone(),
+                parsed.header_docs,
             );
 
             Some(docs)
@@ -5487,6 +5499,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         module_path,
         header_type,
         symbols_from_requires,
+        header_docs,
         ..
     } = header;
 
@@ -5502,6 +5515,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         parsed_defs,
         symbols_from_requires,
         header_type,
+        header_docs,
     };
 
     Ok(Msg::Parsed(parsed))

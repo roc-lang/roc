@@ -98,6 +98,7 @@ pub fn generate_module_docs(
     parsed_defs: &roc_parse::ast::Defs,
     exposed_module_ids: &[ModuleId],
     exposed_symbols: VecSet<Symbol>,
+    header_docs: &[&str],
 ) -> ModuleDocumentation {
     let entries = generate_entry_docs(
         home,
@@ -105,6 +106,7 @@ pub fn generate_module_docs(
         module_ids,
         parsed_defs,
         exposed_module_ids,
+        header_docs,
     );
 
     ModuleDocumentation {
@@ -148,10 +150,23 @@ fn generate_entry_docs(
     module_ids: &ModuleIds,
     defs: &roc_parse::ast::Defs<'_>,
     exposed_module_ids: &[ModuleId],
+    header_docs: &[&str],
 ) -> Vec<DocEntry> {
     use roc_parse::ast::Pattern;
 
-    let mut acc = Vec::with_capacity(defs.tags.len());
+    let mut acc = Vec::with_capacity(defs.tags.len() + 1);
+
+    if !header_docs.is_empty() {
+        let mut buf = String::with_capacity(128);
+
+        for line in header_docs {
+            buf.push_str(line);
+            buf.push('\n');
+        }
+
+        acc.push(DetachedDoc(buf));
+    }
+
     let mut before_comments_or_new_lines: Option<&[CommentOrNewline]> = None;
     let mut scratchpad = Vec::new();
 
