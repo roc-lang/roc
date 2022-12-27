@@ -1221,30 +1221,54 @@ impl std::fmt::Debug for LambdaSet<'_> {
     }
 }
 
+/// See [Niche].
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 enum NichePriv<'a> {
-    /// Sometimes we can end up with lambdas of the same name and different captures in the same
-    /// lambda set, like `fun` having lambda set `[[thunk U64, thunk U8]]` due to the following program:
-    ///
-    /// ```roc
-    /// capture : _ -> ({} -> Str)
-    /// capture = \val ->
-    ///     thunk = \{} -> Num.toStr val
-    ///     thunk
-    ///
-    /// fun = \x ->
-    ///     when x is
-    ///         True -> capture 123u64
-    ///         False -> capture 18u8
-    /// ```
-    ///
-    /// By recording the captures layouts this lambda expects in its identifier, we can distinguish
-    /// between such differences when constructing closure capture data.
-    ///
-    /// See also https://github.com/roc-lang/roc/issues/3336.
+    /// Distinguishes captures this proc takes, when it is a part of a lambda set that has multiple
+    /// lambdas of the same name, but different captures.
     Captures(&'a [InLayout<'a>]),
 }
 
+/// Niches identify lambdas (including thunks) in ways that are not distinguishable solely by their
+/// [runtime function layout][RawFunctionLayout].
+///
+/// Currently, there are two kinds of niches.
+///
+/// # Captures niches
+///
+/// Captures niches identify a procedure's set of captured symbols. This is relevant when a
+/// procedure is part of a lambda set that has multiple lambdas of the procedure's name, but each
+/// has a different set of captures.
+///
+/// The capture set is identified only in the body of a procedure and not in its runtime layout.
+/// Any capturing lambda takes the whole lambda set as an argument, rather than just its captures.
+/// A captures niche can be attached to a [lambda name][LambdaName] to uniquely identify lambdas
+/// in these scenarios.
+///
+/// Procedure names with captures niches are typically produced by [find_lambda_name][LambdaSet::find_lambda_name].
+/// Captures niches are irrelevant for thunks.
+///
+/// ## Example
+///
+/// `fun` has lambda set `[[forcer U64, forcer U8]]` in the following program:
+///
+/// ```roc
+/// capture : _ -> ({} -> Str)
+/// capture = \val ->
+///     forcer = \{} -> Num.toStr val
+///     forcer
+///
+/// fun = \x ->
+///     when x is
+///         True -> capture 123u64
+///         False -> capture 18u8
+/// ```
+///
+/// By recording the captures layouts each `forcer` expects, we can distinguish
+/// between such differences when constructing the closure capture data that is
+/// return value of `fun`.
+///
+/// See also https://github.com/roc-lang/roc/issues/3336.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Niche<'a>(NichePriv<'a>);
