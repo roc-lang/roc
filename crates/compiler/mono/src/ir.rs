@@ -2439,17 +2439,6 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, cont.value)
             }
-            Accessor(accessor_data) => {
-                let fresh_record_symbol = env.unique_symbol();
-                register_noncapturing_closure(
-                    env,
-                    procs,
-                    *symbol,
-                    accessor_data.to_closure_data(fresh_record_symbol),
-                );
-
-                lower_rest!(variable, cont.value)
-            }
             Var(original, _) | AbilityMember(original, _, _)
                 if procs.get_partial_proc(original).is_none() =>
             {
