@@ -4101,6 +4101,24 @@ impl<'a> ProcLayout<'a> {
             }
         }
     }
+
+    fn from_raw_named(
+        arena: &'a Bump,
+        lambda_name: LambdaName<'a>,
+        raw: RawFunctionLayout<'a>,
+        captures_niche: CapturesNiche<'a>,
+    ) -> Self {
+        match raw {
+            RawFunctionLayout::Function(arguments, lambda_set, result) => {
+                let arguments =
+                    lambda_set.extend_argument_list_for_named(arena, lambda_name, arguments);
+                ProcLayout::new(arena, arguments, captures_niche, *result)
+            }
+            RawFunctionLayout::ZeroArgumentThunk(result) => {
+                ProcLayout::new(arena, &[], CapturesNiche::no_niche(), result)
+            }
+        }
+    }
 }
 
 fn specialize_naked_symbol<'a>(

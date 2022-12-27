@@ -1644,6 +1644,27 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
+    pub fn extend_argument_list_for_named(
+        &self,
+        arena: &'a Bump,
+        lambda_name: LambdaName<'a>,
+        argument_layouts: &'a [Layout<'a>],
+    ) -> &'a [Layout<'a>] {
+        debug_assert!(self
+            .set
+            .contains(&(lambda_name.name, lambda_name.captures_niche.0)));
+        // If we don't capture, there is nothing to extend.
+        if lambda_name.captures_niche.0.is_empty() {
+            argument_layouts
+        } else {
+            let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
+            arguments.extend(argument_layouts);
+            arguments.push(Layout::LambdaSet(*self));
+
+            arguments.into_bump_slice()
+        }
+    }
+
     pub fn from_var_pub(
         cache: &mut LayoutCache<'a>,
         arena: &'a Bump,
