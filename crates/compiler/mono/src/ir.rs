@@ -2985,38 +2985,11 @@ fn specialize_suspended<'a>(
         };
 
         match specialize_variable(env, procs, name, layout_cache, var, &[], partial_proc) {
-            Ok((proc, _layout)) => {
-                // TODO this code is duplicated elsewhere
-
-                // the `layout` is a function pointer, while `_ignore_layout` can be a
-                // closure. We only specialize functions, storing this value with a closure
-                // layout will give trouble.
-                let arguments = Vec::from_iter_in(proc.args.iter().map(|(l, _)| *l), env.arena)
-                    .into_bump_slice();
-
-                let proper_layout = ProcLayout {
-                    arguments,
-                    result: proc.ret_layout,
-                    captures_niche: proc.name.captures_niche(),
-                };
-                if procs.is_module_thunk(proc.name.name()) {
-                    debug_assert!(
-                        proper_layout.arguments.is_empty(),
-                        "{:?} from {:?}",
-                        name,
-                        proper_layout
-                    );
-                }
-
-                // NOTE: some functions are specialized to have a closure, but don't actually
-                // need any closure argument. Here is where we correct this sort of thing,
-                // by trusting the layout of the Proc, not of what we specialize for
+            Ok((proc, raw_layout)) => {
+                let proc_layout = ProcLayout::from_raw_named(env.arena, name, raw_layout);
                 procs
                     .specialized
-                    .remove_specialized(name.name(), &outside_layout);
-                procs
-                    .specialized
-                    .insert_specialized(name.name(), proper_layout, proc);
+                    .insert_specialized(name.name(), proc_layout, proc);
             }
             Err(SpecializeFailure {
                 attempted_layout, ..
