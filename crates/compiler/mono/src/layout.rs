@@ -1241,9 +1241,9 @@ impl std::fmt::Debug for LambdaSet<'_> {
 ///
 /// See also https://github.com/roc-lang/roc/issues/3336.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct CapturesNiche<'a>(&'a [InLayout<'a>]);
+pub struct Captures<'a>(&'a [InLayout<'a>]);
 
-impl<'a> CapturesNiche<'a> {
+impl<'a> Captures<'a> {
     pub(crate) fn captures(&self) -> &'a [Layout<'a>] {
         self.0
     }
@@ -1252,11 +1252,11 @@ impl<'a> CapturesNiche<'a> {
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Niche<'a> {
     /// A niche for a proc are its captures.
-    Captures(CapturesNiche<'a>),
+    Captures(Captures<'a>),
 }
 
 impl<'a> Niche<'a> {
-    pub const NONE: Niche<'a> = Niche::Captures(CapturesNiche(&[]));
+    pub const NONE: Niche<'a> = Niche::Captures(Captures(&[]));
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -1390,7 +1390,7 @@ impl<'a> LambdaSet<'a> {
         self.set.iter().map(|(name, captures_layouts)| {
             let niche = match captures_layouts {
                 [] => Niche::NONE,
-                _ => Niche::Captures(CapturesNiche(captures_layouts)),
+                _ => Niche::Captures(Captures(captures_layouts)),
             };
             LambdaName { name: *name, niche }
         })
@@ -1472,7 +1472,7 @@ impl<'a> LambdaSet<'a> {
 
         LambdaName {
             name: *name,
-            niche: Niche::Captures(CapturesNiche(layouts)),
+            niche: Niche::Captures(Captures(layouts)),
         }
     }
 
