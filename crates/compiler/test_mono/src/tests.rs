@@ -1925,6 +1925,28 @@ fn encode_derived_tag_one_field_string() {
     )
 }
 
+#[mono_test(no_check)]
+fn polymorphic_expression_unification() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        RenderTree : [
+            Text Str,
+            Indent (List RenderTree),
+        ]
+        parseFunction : Str -> RenderTree
+        parseFunction = \name ->
+            last = Indent [Text ".trace(\"\(name)\")" ]
+            Indent [last]
+
+        values = parseFunction "interface_header"
+
+        main = values == Text ""
+        "#
+    )
+}
+
 #[mono_test]
 fn encode_derived_tag_two_payloads_string() {
     indoc!(
