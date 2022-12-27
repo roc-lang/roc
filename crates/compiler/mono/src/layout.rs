@@ -1610,6 +1610,10 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
+    /// If `lambda_name` captures, extend the arguments to the lambda with the lambda set, from
+    /// which the lambda should extract its captures from.
+    ///
+    /// If `lambda_name` doesn't capture, the arguments are unaffected.
     pub(crate) fn extend_argument_list_for_named(
         &self,
         arena: &'a Bump,
