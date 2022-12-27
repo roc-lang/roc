@@ -1221,42 +1221,57 @@ impl std::fmt::Debug for LambdaSet<'_> {
     }
 }
 
-/// Sometimes we can end up with lambdas of the same name and different captures in the same
-/// lambda set, like `fun` having lambda set `[[thunk U64, thunk U8]]` due to the following program:
-///
-/// ```roc
-/// capture : _ -> ({} -> Str)
-/// capture = \val ->
-///     thunk = \{} -> Num.toStr val
-///     thunk
-///
-/// fun = \x ->
-///     when x is
-///         True -> capture 123u64
-///         False -> capture 18u8
-/// ```
-///
-/// By recording the captures layouts this lambda expects in its identifier, we can distinguish
-/// between such differences when constructing closure capture data.
-///
-/// See also https://github.com/roc-lang/roc/issues/3336.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Captures<'a>(&'a [InLayout<'a>]);
-
-impl<'a> Captures<'a> {
-    pub(crate) fn captures(&self) -> &'a [Layout<'a>] {
-        self.0
-    }
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+enum NichePriv<'a> {
+    /// Sometimes we can end up with lambdas of the same name and different captures in the same
+    /// lambda set, like `fun` having lambda set `[[thunk U64, thunk U8]]` due to the following program:
+    ///
+    /// ```roc
+    /// capture : _ -> ({} -> Str)
+    /// capture = \val ->
+    ///     thunk = \{} -> Num.toStr val
+    ///     thunk
+    ///
+    /// fun = \x ->
+    ///     when x is
+    ///         True -> capture 123u64
+    ///         False -> capture 18u8
+    /// ```
+    ///
+    /// By recording the captures layouts this lambda expects in its identifier, we can distinguish
+    /// between such differences when constructing closure capture data.
+    ///
+    /// See also https://github.com/roc-lang/roc/issues/3336.
+    Captures(&'a [InLayout<'a>]),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub enum Niche<'a> {
-    /// A niche for a proc are its captures.
-    Captures(Captures<'a>),
-}
+#[repr(transparent)]
+pub struct Niche<'a>(NichePriv<'a>);
 
 impl<'a> Niche<'a> {
-    pub const NONE: Niche<'a> = Niche::Captures(Captures(&[]));
+    pub const NONE: Niche<'a> = Niche(NichePriv::Captures(&[]));
+
+    pub fn to_doc<'b, D, A, I>(self, alloc: &'b D, interner: &I) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+        I: Interner<'a, Layout<'a>>,
+    {
+        match self.0 {
+            NichePriv::Captures(captures) => alloc.concat([
+                alloc.reflow("(niche {"),
+                alloc.intersperse(
+                    captures
+                        .iter()
+                        .map(|c| c.to_doc(alloc, interner, Parens::NotNeeded)),
+                    alloc.reflow(", "),
+                ),
+                alloc.reflow("})"),
+            ]),
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -1278,9 +1293,8 @@ impl<'a> LambdaName<'a> {
 
     #[inline(always)]
     pub(crate) fn no_captures(&self) -> bool {
-        match self.niche {
-            Niche::NONE => true,
-            Niche::Captures(captures) => captures.0.is_empty(),
+        match self.niche.0 {
+            NichePriv::Captures(captures) => captures.is_empty(),
         }
     }
 
@@ -1390,7 +1404,7 @@ impl<'a> LambdaSet<'a> {
         self.set.iter().map(|(name, captures_layouts)| {
             let niche = match captures_layouts {
                 [] => Niche::NONE,
-                _ => Niche::Captures(Captures(captures_layouts)),
+                _ => Niche(NichePriv::Captures(captures_layouts)),
             };
             LambdaName { name: *name, niche }
         })
@@ -1416,9 +1430,7 @@ impl<'a> LambdaSet<'a> {
     {
         debug_assert!(self.contains(lambda_name.name));
 
-        let captures = match lambda_name.niche {
-            Niche::Captures(captures) => captures.0,
-        };
+        let NichePriv::Captures(captures) = lambda_name.niche.0;
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[InLayout]| {
             other_name == lambda_name.name
@@ -1472,7 +1484,7 @@ impl<'a> LambdaSet<'a> {
 
         LambdaName {
             name: *name,
-            niche: Niche::Captures(Captures(layouts)),
+            niche: Niche(NichePriv::Captures(layouts)),
         }
     }
 
