@@ -2222,7 +2222,7 @@ fn lambda_set_with_imported_toplevels_issue_4733() {
 }
 
 #[mono_test]
-fn issue_4717() {
+fn anonymous_closure_in_polymorphic_expression_issue_4717() {
     indoc!(
         r###"
         app "test" provides [main] to "platform"
