@@ -5547,14 +5547,7 @@ pub fn with_hole<'a>(
                         "match_on_closure_argument"
                     );
 
-                    // NB: I don't think the top_level here can have a captures niche?
-                    let top_level_capture_niche = CapturesNiche::no_niche();
-                    let top_level = ProcLayout::from_raw(env.arena, &layout_cache.interner, closure_data_layout, top_level_capture_niche);
-
                     let arena = env.arena;
-
-                    let arg_layouts = top_level.arguments;
-                    let ret_layout = top_level.result;
 
                     match closure_data_layout {
                         RawFunctionLayout::Function(_, lambda_set, _) =>  {
@@ -5564,16 +5557,20 @@ pub fn with_hole<'a>(
                                 lambda_set,
                                 op,
                                 closure_data_symbol,
-                                |(top_level_function, closure_data, closure_env_layout,  specialization_id, update_mode)| {
+                                |(lambda_name, closure_data, closure_env_layout,  specialization_id, update_mode)| {
+                                    // Build a call for a specific lambda in the set
+                                    let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, closure_data_layout, lambda_name.captures_niche());
+                                    let arg_layouts = top_level.arguments;
+                                    let ret_layout = top_level.result;
+
                                     let passed_function = PassedFunction {
-                                        name: top_level_function,
+                                        name: lambda_name,
                                         captured_environment: closure_data_symbol,
                                         owns_captured_environment: false,
                                         specialization_id,
                                         argument_layouts: arg_layouts,
                                         return_layout: ret_layout,
                                     };
-
 
                                     let higher_order = HigherOrderLowLevel {
                                         op: crate::low_level::HigherOrder::$ho { $($x,)* },
@@ -5584,7 +5581,7 @@ pub fn with_hole<'a>(
 
                                     self::Call {
                                         call_type: CallType::HigherOrder(arena.alloc(higher_order)),
-                                        arguments: arena.alloc([$($x,)* top_level_function.name(), closure_data]),
+                                        arguments: arena.alloc([$($x,)* lambda_name.name(), closure_data]),
                                     }
                                 },
                                 layout,

@@ -2240,3 +2240,27 @@ fn issue_4717() {
         "###
     )
 }
+
+#[mono_test]
+fn list_map_take_capturing_or_noncapturing() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "platform"
+
+        main =
+            x = 1u8
+            y = 2u8
+            f = when "" is
+                "A" ->
+                    g = \n -> n + x
+                    g
+                "B" ->
+                    h = \n -> n + y
+                    h
+                _   ->
+                    k = \n -> n + n
+                    k
+            List.map [1u8, 2u8, 3u8] f
+        "###
+    )
+}
