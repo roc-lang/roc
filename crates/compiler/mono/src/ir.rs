@@ -3036,12 +3036,8 @@ fn specialize_suspended<'a>(
             Err(SpecializeFailure {
                 attempted_layout, ..
             }) => {
-                let proc = generate_runtime_error_function(
-                    env,
-                    layout_cache,
-                    name.name(),
-                    attempted_layout,
-                );
+                let proc =
+                    generate_runtime_error_function(env, layout_cache, name, attempted_layout);
 
                 let top_level = ProcLayout::from_raw_named(env.arena, name, attempted_layout);
 
@@ -3200,8 +3196,7 @@ fn specialize_external_help<'a>(
                 .insert_specialized(name.name(), top_level, proc);
         }
         Err(SpecializeFailure { attempted_layout }) => {
-            let proc =
-                generate_runtime_error_function(env, layout_cache, name.name(), attempted_layout);
+            let proc = generate_runtime_error_function(env, layout_cache, name, attempted_layout);
 
             let top_level = ProcLayout::from_raw_named(env.arena, name, attempted_layout);
 
@@ -3215,7 +3210,7 @@ fn specialize_external_help<'a>(
 fn generate_runtime_error_function<'a>(
     env: &mut Env<'a, '_>,
     layout_cache: &LayoutCache<'a>,
-    name: Symbol,
+    lambda_name: LambdaName<'a>,
     layout: RawFunctionLayout<'a>,
 ) -> Proc<'a> {
     let mut msg = bumpalo::collections::string::String::with_capacity_in(80, env.arena);
@@ -3223,7 +3218,7 @@ fn generate_runtime_error_function<'a>(
     write!(
         &mut msg,
         "The {:?} function could not be generated, likely due to a type error.",
-        name
+        lambda_name.name(),
     )
     .unwrap();
 
@@ -3239,7 +3234,7 @@ fn generate_runtime_error_function<'a>(
     let (args, ret_layout) = match layout {
         RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
             let real_arg_layouts =
-                lambda_set.extend_argument_list(env.arena, &layout_cache.interner, arg_layouts);
+                lambda_set.extend_argument_list_for_named(env.arena, lambda_name, arg_layouts);
             let mut args = Vec::with_capacity_in(real_arg_layouts.len(), env.arena);
 
             for arg in arg_layouts {
@@ -3255,7 +3250,7 @@ fn generate_runtime_error_function<'a>(
     };
 
     Proc {
-        name: LambdaName::no_niche(name),
+        name: lambda_name,
         args,
         body: runtime_error,
         closure_data_layout: None,
@@ -8773,7 +8768,7 @@ fn call_by_name_help<'a>(
     // number of arguments actually passed.
     let top_level_layout = {
         let argument_layouts =
-            lambda_set.extend_argument_list(env.arena, &layout_cache.interner, argument_layouts);
+            lambda_set.extend_argument_list_for_named(env.arena, proc_name, argument_layouts);
         ProcLayout::new(
             env.arena,
             argument_layouts,
@@ -8982,7 +8977,7 @@ fn call_by_name_help<'a>(
                                 let proc = generate_runtime_error_function(
                                     env,
                                     layout_cache,
-                                    proc_name.name(),
+                                    proc_name,
                                     attempted_layout,
                                 );
 
@@ -9126,7 +9121,7 @@ fn call_by_name_module_thunk<'a>(
                                 let proc = generate_runtime_error_function(
                                     env,
                                     layout_cache,
-                                    proc_name,
+                                    LambdaName::no_niche(proc_name),
                                     attempted_layout,
                                 );
 
@@ -10520,8 +10515,12 @@ fn match_on_lambda_set<'a>(
                     let lambda_name = LambdaName::no_niche(name);
                     let function_layout =
                         RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout);
-                    let proc =
-                        generate_runtime_error_function(env, layout_cache, name, function_layout);
+                    let proc = generate_runtime_error_function(
+                        env,
+                        layout_cache,
+                        lambda_name,
+                        function_layout,
+                    );
                     let top_level =
                         ProcLayout::from_raw_named(env.arena, lambda_name, function_layout);
 
@@ -10741,9 +10740,10 @@ fn union_lambda_set_branch_help<'a>(
             lambda_set,
             closure_data_symbol,
         } => {
-            let argument_layouts = lambda_set.extend_argument_list(
+            // TODO(4717): can we get rid of ClosureInfo here now?
+            let argument_layouts = lambda_set.extend_argument_list_for_named(
                 env.arena,
-                &layout_cache.interner,
+                lambda_name,
                 argument_layouts_slice,
             );
             let argument_symbols = if argument_layouts.len() > argument_layouts_slice.len() {
