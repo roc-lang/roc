@@ -69,7 +69,7 @@ Patch : [
     RemoveProperty NodeId Str,
     SetStyle NodeId Str Str,
     SetListener NodeId EventType (List U8) HandlerId,
-    RemoveListener NodeId EventType,
+    RemoveListener NodeId HandlerId,
 ]
 
 DiffState state : { rendered : RenderedTree state, patches : List Patch }
@@ -173,7 +173,7 @@ applyPatch = \patch ->
         RemoveProperty nodeId propName -> Effect.removeProperty nodeId propName
         SetStyle nodeId key value -> Effect.setStyle nodeId key value
         SetListener nodeId eventType accessorsJson handlerId -> Effect.setListener nodeId eventType accessorsJson handlerId
-        RemoveListener nodeId eventType -> Effect.removeListener nodeId eventType
+        RemoveListener nodeId handlerId -> Effect.removeListener nodeId handlerId
 
 walkPatches : Effect {}, Patch -> Effect {}
 walkPatches = \previousEffects, patch ->
@@ -303,6 +303,11 @@ replaceNode = \diffState, oldNodeId, newNode ->
 
     deleteNode preDeleteState oldNodeId
 
+# Delete a node, and drop any JS references to its children and event listeners
+# TODO: see if it would speed things up to leave this junk lying around until the slot is reused.
+# Any danger of spurious events being sent to the wrong handler?
+# Otherwise, can we sweep everything at once at the end of the diff?
+# Let's be conservative on things like this until we have more test cases working.
 deleteNode : DiffState state, NodeId -> DiffState state
 deleteNode = \diffState, id ->
     { rendered, patches } =
@@ -315,9 +320,25 @@ deleteNode = \diffState, id ->
                     _ -> diffState
 
             _ -> diffState
-    newNodes = List.set rendered.nodes id (Err DeletedNode)
-    newDeletedNodeCache = List.append rendered.deletedNodeCache id
-    newPatches = List.append patches (RemoveNode id)
+
+    patchesRemoveListeners =
+        when List.get rendered.nodes id is
+            Ok (Ok (RenderedElement _ attrs _)) ->
+                List.walk attrs patches \p, attr ->
+                    when attr is
+                        RenderedEventListener _ _ handlerId ->
+                            List.append p (RemoveListener id handlerId)
+
+                        _ -> p
+
+            _ -> patches
+
+    newNodes =
+        List.set rendered.nodes id (Err DeletedNode)
+    newDeletedNodeCache =
+        List.append rendered.deletedNodeCache id
+    newPatches =
+        List.append patchesRemoveListeners (RemoveNode id)
 
     {
         rendered: { rendered &
