@@ -2242,3 +2242,17 @@ fn lambda_set_with_imported_toplevels_issue_4733() {
         "###
     )
 }
+
+#[mono_test]
+fn issue_4557() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        isEqQ = \q1, q2 -> when T q1 q2 is
+            T (U f1) (U f2) -> Bool.or (isEqQ (U f2) (U f1)) (f1 {} == f2 {})
+
+        main = isEqQ (U \{} -> "a") (U \{} -> "a")
+        "###
+    )
+}
