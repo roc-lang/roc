@@ -10161,15 +10161,6 @@ fn from_can_pattern_help<'a>(
                 // it must be an optional field, and we will use the default
                 match &destruct.value.typ {
                     roc_can::pattern::DestructType::Optional(field_var, loc_expr) => {
-                        // TODO these don't match up in the uniqueness inference; when we remove
-                        // that, reinstate this assert!
-                        //
-                        // dbg!(&env.subs.get_content_without_compacting(*field_var));
-                        // dbg!(&env.subs.get_content_without_compacting(destruct.var).content);
-                        // debug_assert_eq!(
-                        //     env.subs.get_root_key_without_compacting(*field_var),
-                        //     env.subs.get_root_key_without_compacting(destruct.value.var)
-                        // );
                         assignments.push((
                             destruct.value.symbol,
                             // destruct.value.var,
