@@ -4003,7 +4003,7 @@ pub struct ProcLayout<'a> {
 }
 
 impl<'a> ProcLayout<'a> {
-    pub fn new(
+    pub(crate) fn new(
         arena: &'a Bump,
         old_arguments: &'a [Layout<'a>],
         old_captures_niche: CapturesNiche<'a>,
