@@ -29,9 +29,6 @@
         },
         {
             "pattern": "/builtins"
-        },
-        {
-            "pattern": "https://roc-lang.org/tutorial"
-        },
+        }
     ]
 }
