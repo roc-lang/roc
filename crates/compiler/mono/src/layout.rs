@@ -1610,40 +1610,6 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    pub(crate) fn extend_argument_list<I>(
-        &self,
-        arena: &'a Bump,
-        interner: &I,
-        argument_layouts: &'a [Layout<'a>],
-    ) -> &'a [Layout<'a>]
-    where
-        I: Interner<'a, Layout<'a>>,
-    {
-        match self.call_by_name_options(interner) {
-            ClosureCallOptions::Void => argument_layouts,
-            ClosureCallOptions::Struct {
-                field_layouts: &[], ..
-            } => {
-                // this function does not have anything in its closure, and the lambda set is a
-                // singleton, so we pass no extra argument
-                argument_layouts
-            }
-            ClosureCallOptions::Struct { .. }
-            | ClosureCallOptions::Union(_)
-            | ClosureCallOptions::UnwrappedCapture(_) => {
-                let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
-                arguments.extend(argument_layouts);
-                arguments.push(Layout::LambdaSet(*self));
-
-                arguments.into_bump_slice()
-            }
-            ClosureCallOptions::EnumDispatch(_) => {
-                // No captures, don't pass this along
-                argument_layouts
-            }
-        }
-    }
-
     pub(crate) fn extend_argument_list_for_named(
         &self,
         arena: &'a Bump,
