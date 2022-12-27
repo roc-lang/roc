@@ -57,6 +57,9 @@ jobs:
       - name: wasm repl test
         run: crates/repl_test/test_wasm.sh && sccache --show-stats
 
+      - name: test building wasm repl
+        run: ./ci/www-repl.sh && sccache --show-stats
+
       #TODO i386 (32-bit linux) cli tests
 
       #TODO verify-no-git-changes

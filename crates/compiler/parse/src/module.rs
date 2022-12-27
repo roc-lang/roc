@@ -47,7 +47,7 @@ pub fn parse_header<'a>(
     }
 }
 
-fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
+pub fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
     use crate::parser::keyword_e;
 
     record!(Module {
