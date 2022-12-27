@@ -1311,7 +1311,7 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
     )
 }
 
-#[mono_test(no_check)]
+#[mono_test]
 fn issue_2810() {
     indoc!(
         r#"
@@ -1530,7 +1530,7 @@ fn encode_derived_record() {
     )
 }
 
-#[mono_test(no_check)]
+#[mono_test]
 fn choose_correct_recursion_var_under_record() {
     indoc!(
         r#"
@@ -1925,7 +1925,7 @@ fn encode_derived_tag_one_field_string() {
     )
 }
 
-#[mono_test(no_check)]
+#[mono_test]
 fn polymorphic_expression_unification() {
     indoc!(
         r#"
@@ -2224,7 +2224,7 @@ fn issue_4749() {
     )
 }
 
-#[mono_test(mode = "test", no_check)]
+#[mono_test(mode = "test")]
 fn lambda_set_with_imported_toplevels_issue_4733() {
     indoc!(
         r###"
