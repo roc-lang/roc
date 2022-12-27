@@ -1650,9 +1650,12 @@ impl<'a> LambdaSet<'a> {
         lambda_name: LambdaName<'a>,
         argument_layouts: &'a [Layout<'a>],
     ) -> &'a [Layout<'a>] {
-        debug_assert!(self
-            .set
-            .contains(&(lambda_name.name, lambda_name.captures_niche.0)));
+        debug_assert!(
+            self.set
+                .contains(&(lambda_name.name, lambda_name.captures_niche.0)),
+            "{:?}",
+            (self, lambda_name)
+        );
         // If we don't capture, there is nothing to extend.
         if lambda_name.captures_niche.0.is_empty() {
             argument_layouts
