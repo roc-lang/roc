@@ -36,7 +36,7 @@ use roc_mono::ir::{
     UpdateModeIds,
 };
 use roc_mono::layout::{
-    CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, STLayoutInterner,
+    CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner,
 };
 use roc_packaging::cache::{self, RocCacheDir};
 #[cfg(not(target_family = "wasm"))]
@@ -3426,7 +3426,7 @@ fn proc_layout_for<'a>(
             roc_mono::ir::ProcLayout {
                 arguments: &[],
                 result: Layout::struct_no_name_order(&[]),
-                captures_niche: CapturesNiche::no_niche(),
+                niche: Niche::NONE,
             }
         }
     }

@@ -1,9 +1,9 @@
 #![allow(clippy::manual_map)]
 
 use crate::layout::{
-    self, Builtin, CapturesNiche, ClosureCallOptions, ClosureRepresentation, EnumDispatch,
-    LambdaName, LambdaSet, Layout, LayoutCache, LayoutProblem, RawFunctionLayout, STLayoutInterner,
-    TagIdIntType, UnionLayout, WrappedVariant,
+    self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, LambdaName, LambdaSet,
+    Layout, LayoutCache, LayoutProblem, Niche, RawFunctionLayout, STLayoutInterner, TagIdIntType,
+    UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -3391,7 +3391,7 @@ fn specialize_proc_help<'a>(
                     let top_level = ProcLayout::new(
                         env.arena,
                         top_level_arguments.into_bump_slice(),
-                        CapturesNiche::no_niche(),
+                        Niche::NONE,
                         *return_layout,
                     );
 
@@ -3424,7 +3424,7 @@ fn specialize_proc_help<'a>(
                         *symbol,
                         (
                             name,
-                            ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), result),
+                            ProcLayout::new(env.arena, &[], Niche::NONE, result),
                             layout,
                         ),
                     );
@@ -3956,14 +3956,14 @@ fn specialize_variable<'a>(
 pub struct ProcLayout<'a> {
     pub arguments: &'a [Layout<'a>],
     pub result: Layout<'a>,
-    pub captures_niche: CapturesNiche<'a>,
+    pub niche: Niche<'a>,
 }
 
 impl<'a> ProcLayout<'a> {
     pub(crate) fn new(
         arena: &'a Bump,
         old_arguments: &'a [Layout<'a>],
-        old_captures_niche: CapturesNiche<'a>,
+        old_niche: Niche<'a>,
         result: Layout<'a>,
     ) -> Self {
         let mut arguments = Vec::with_capacity_in(old_arguments.len(), arena);
@@ -3978,7 +3978,7 @@ impl<'a> ProcLayout<'a> {
 
         ProcLayout {
             arguments: arguments.into_bump_slice(),
-            captures_niche: old_captures_niche,
+            niche: old_niche,
             result: new_result,
         }
     }
@@ -3992,10 +3992,10 @@ impl<'a> ProcLayout<'a> {
             RawFunctionLayout::Function(arguments, lambda_set, result) => {
                 let arguments =
                     lambda_set.extend_argument_list_for_named(arena, lambda_name, arguments);
-                ProcLayout::new(arena, arguments, lambda_name.captures_niche(), *result)
+                ProcLayout::new(arena, arguments, lambda_name.niche(), *result)
             }
             RawFunctionLayout::ZeroArgumentThunk(result) => {
-                ProcLayout::new(arena, &[], CapturesNiche::no_niche(), result)
+                ProcLayout::new(arena, &[], Niche::NONE, result)
             }
         }
     }
@@ -8382,8 +8382,7 @@ fn specialize_symbol<'a>(
                         // let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
                         // panic!("suspicious");
                         let layout = Layout::LambdaSet(lambda_set);
-                        let top_level =
-                            ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), layout);
+                        let top_level = ProcLayout::new(env.arena, &[], Niche::NONE, layout);
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
@@ -8427,8 +8426,7 @@ fn specialize_symbol<'a>(
                 }
                 RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
                     // this is a 0-argument thunk
-                    let top_level =
-                        ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), ret_layout);
+                    let top_level = ProcLayout::new(env.arena, &[], Niche::NONE, ret_layout);
                     procs.insert_passed_by_name(
                         env,
                         arg_var,
@@ -8756,12 +8754,7 @@ fn call_by_name_help<'a>(
     let top_level_layout = {
         let argument_layouts =
             lambda_set.extend_argument_list_for_named(env.arena, proc_name, argument_layouts);
-        ProcLayout::new(
-            env.arena,
-            argument_layouts,
-            proc_name.captures_niche(),
-            *ret_layout,
-        )
+        ProcLayout::new(env.arena, argument_layouts, proc_name.niche(), *ret_layout)
     };
 
     // the variables of the given arguments
@@ -9016,7 +9009,7 @@ fn call_by_name_module_thunk<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let top_level_layout = ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), *ret_layout);
+    let top_level_layout = ProcLayout::new(env.arena, &[], Niche::NONE, *ret_layout);
 
     let inner_layout = *ret_layout;
 

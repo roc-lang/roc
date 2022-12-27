@@ -15,7 +15,7 @@ use roc_mono::ir::{
     Literal, ModifyRc, OptLevel, Proc, ProcLayout, SingleEntryPoint, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, CapturesNiche, FieldOrderHash, Layout, RawFunctionLayout, STLayoutInterner,
+    Builtin, CapturesNiche, FieldOrderHash, Layout, Niche, RawFunctionLayout, STLayoutInterner,
     UnionLayout,
 };
 
@@ -31,7 +31,7 @@ pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     let bytes = func_name_bytes_help(
         proc.name.name(),
         proc.args.iter().map(|x| x.0),
-        proc.name.captures_niche(),
+        proc.name.niche(),
         &proc.ret_layout,
     );
     bytes
@@ -75,7 +75,7 @@ impl TagUnionId {
 pub fn func_name_bytes_help<'a, I>(
     symbol: Symbol,
     argument_layouts: I,
-    captures_niche: CapturesNiche<'a>,
+    niche: Niche<'a>,
     return_layout: &Layout<'a>,
 ) -> [u8; SIZE]
 where
@@ -94,7 +94,7 @@ where
             layout.hash(&mut hasher);
         }
 
-        captures_niche.hash(&mut hasher);
+        niche.hash(&mut hasher);
 
         return_layout.hash(&mut hasher);
 
@@ -189,22 +189,14 @@ where
                     match layout {
                         RawFunctionLayout::Function(_, _, _) => {
                             let it = top_level.arguments.iter().copied();
-                            let bytes = func_name_bytes_help(
-                                *symbol,
-                                it,
-                                CapturesNiche::no_niche(),
-                                &top_level.result,
-                            );
+                            let bytes =
+                                func_name_bytes_help(*symbol, it, Niche::NONE, &top_level.result);
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
-                            let bytes = func_name_bytes_help(
-                                *symbol,
-                                [],
-                                CapturesNiche::no_niche(),
-                                &top_level.result,
-                            );
+                            let bytes =
+                                func_name_bytes_help(*symbol, [], Niche::NONE, &top_level.result);
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
@@ -237,7 +229,7 @@ where
                 let roc_main_bytes = func_name_bytes_help(
                     entry_point_symbol,
                     entry_point_layout.arguments.iter().copied(),
-                    CapturesNiche::no_niche(),
+                    Niche::NONE,
                     &entry_point_layout.result,
                 );
                 let roc_main = FuncName(&roc_main_bytes);
@@ -265,19 +257,14 @@ where
                         field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
                         field_layouts: &[],
                     },
-                    captures_niche: CapturesNiche::no_niche(),
+                    niche: Niche::NONE,
                 };
 
                 let host_exposed: Vec<_> = symbols
                     .iter()
                     .map(|symbol| {
                         (
-                            func_name_bytes_help(
-                                *symbol,
-                                [],
-                                CapturesNiche::no_niche(),
-                                &layout.result,
-                            ),
+                            func_name_bytes_help(*symbol, [], Niche::NONE, &layout.result),
                             [].as_slice(),
                         )
                     })
@@ -808,7 +795,7 @@ fn call_spec<'a>(
 
             let arg_value_id = build_tuple_value(builder, env, block, call.arguments)?;
             let args_it = arg_layouts.iter().copied();
-            let captures_niche = name.captures_niche();
+            let captures_niche = name.niche();
             let bytes = func_name_bytes_help(name.name(), args_it, captures_niche, ret_layout);
             let name = FuncName(&bytes);
             let module = MOD_APP;
@@ -860,7 +847,7 @@ fn call_spec<'a>(
             let update_mode_var = UpdateModeVar(&mode);
 
             let args_it = passed_function.argument_layouts.iter().copied();
-            let captures_niche = passed_function.name.captures_niche();
+            let captures_niche = passed_function.name.niche();
             let bytes = func_name_bytes_help(
                 passed_function.name.name(),
                 args_it,

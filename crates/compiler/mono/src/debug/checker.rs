@@ -556,7 +556,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 let proc_layout = ProcLayout {
                     arguments: arg_layouts,
                     result: **ret_layout,
-                    captures_niche: name.captures_niche(),
+                    niche: name.niche(),
                 };
                 if !self.procs.contains_key(&(name.name(), proc_layout)) {
                     let similar = self

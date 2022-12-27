@@ -62,7 +62,7 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
         ProcLayout {
             arguments: [],
             result,
-            captures_niche: _,
+            niche: _,
         } => {
             // This is a thunk, which cannot be defined in userspace, so we know
             // it's `main` and can be executed.
