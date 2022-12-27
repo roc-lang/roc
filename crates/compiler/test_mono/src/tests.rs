@@ -593,7 +593,7 @@ fn record_optional_field_function_use_default() {
     "#
 }
 
-#[mono_test(no_check)]
+#[mono_test(no_check = "https://github.com/roc-lang/roc/issues/4694")]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r#"
