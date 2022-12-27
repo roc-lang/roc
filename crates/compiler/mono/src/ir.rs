@@ -10681,23 +10681,21 @@ fn union_lambda_set_branch_help<'a>(
             lambda_set,
             closure_data_symbol,
         } => {
-            // TODO(4717): can we get rid of ClosureInfo here now?
             let argument_layouts = lambda_set.extend_argument_list_for_named(
                 env.arena,
                 lambda_name,
                 argument_layouts_slice,
             );
-            let argument_symbols = if argument_layouts.len() > argument_layouts_slice.len() {
-                // extend symbols with the symbol of the closure environment
-                let mut argument_symbols =
-                    Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
-                argument_symbols.extend(argument_symbols_slice);
-                argument_symbols.push(closure_data_symbol);
-                argument_symbols.into_bump_slice()
-            } else {
-                argument_symbols_slice
-            };
-            (argument_layouts, argument_symbols)
+
+            // Since this lambda captures, the arguments must have been extended.
+            debug_assert!(argument_layouts.len() > argument_layouts_slice.len());
+            // Extend symbols with the symbol of the closure environment.
+            let mut argument_symbols =
+                Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
+            argument_symbols.extend(argument_symbols_slice);
+            argument_symbols.push(closure_data_symbol);
+
+            (argument_layouts, argument_symbols.into_bump_slice())
         }
         ClosureInfo::DoesNotCapture => {
             // sometimes unification causes a function that does not itself capture anything
