@@ -1204,18 +1204,28 @@ impl std::fmt::Debug for LambdaSet<'_> {
 ///
 /// See also https://github.com/roc-lang/roc/issues/3336.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct CapturesNiche<'a>(pub(crate) &'a [Layout<'a>]);
+pub struct CapturesNiche<'a>(&'a [Layout<'a>]);
 
-impl CapturesNiche<'_> {
-    pub fn no_niche() -> Self {
-        Self(&[])
+impl<'a> CapturesNiche<'a> {
+    pub(crate) fn captures(&self) -> &'a [Layout<'a>] {
+        self.0
     }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub enum Niche<'a> {
+    /// A niche for a proc are its captures.
+    Captures(CapturesNiche<'a>),
+}
+
+impl<'a> Niche<'a> {
+    pub const NONE: Niche<'a> = Niche::Captures(CapturesNiche(&[]));
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct LambdaName<'a> {
     name: Symbol,
-    captures_niche: CapturesNiche<'a>,
+    niche: Niche<'a>,
 }
 
 impl<'a> LambdaName<'a> {
@@ -1225,29 +1235,29 @@ impl<'a> LambdaName<'a> {
     }
 
     #[inline(always)]
-    pub fn captures_niche(&self) -> CapturesNiche<'a> {
-        self.captures_niche
+    pub fn niche(&self) -> Niche<'a> {
+        self.niche
     }
 
     #[inline(always)]
-    pub fn no_captures(&self) -> bool {
-        self.captures_niche.0.is_empty()
+    pub(crate) fn no_captures(&self) -> bool {
+        match self.niche {
+            Niche::NONE => true,
+            Niche::Captures(captures) => captures.0.is_empty(),
+        }
     }
 
     #[inline(always)]
     pub fn no_niche(name: Symbol) -> Self {
         Self {
             name,
-            captures_niche: CapturesNiche::no_niche(),
+            niche: Niche::NONE,
         }
     }
 
     #[inline(always)]
-    pub fn replace_name(&self, name: Symbol) -> Self {
-        Self {
-            name,
-            captures_niche: self.captures_niche,
-        }
+    pub(crate) fn replace_name(&self, name: Symbol) -> Self {
+        Self { name, ..*self }
     }
 }
 
@@ -1340,9 +1350,12 @@ impl<'a> LambdaSet<'a> {
     }
 
     pub fn iter_set(&self) -> impl ExactSizeIterator<Item = LambdaName<'a>> {
-        self.set.iter().map(|(name, captures_layouts)| LambdaName {
-            name: *name,
-            captures_niche: CapturesNiche(captures_layouts),
+        self.set.iter().map(|(name, captures_layouts)| {
+            let niche = match captures_layouts {
+                [] => Niche::NONE,
+                _ => Niche::Captures(CapturesNiche(captures_layouts)),
+            };
+            LambdaName { name: *name, niche }
         })
     }
 
@@ -1366,12 +1379,17 @@ impl<'a> LambdaSet<'a> {
     {
         debug_assert!(self.contains(lambda_name.name));
 
+        let captures = match lambda_name.niche {
+            Niche::Captures(captures) => captures.0,
+            Niche::NONE => &[],
+        };
+
         let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
             other_name == lambda_name.name
                 // Make sure all captures are equal
                 && other_captures_layouts
                     .iter()
-                    .eq(lambda_name.captures_niche.0)
+                    .eq(captures)
         };
 
         self.layout_for_member(interner, comparator)
@@ -1418,7 +1436,7 @@ impl<'a> LambdaSet<'a> {
 
         LambdaName {
             name: *name,
-            captures_niche: CapturesNiche(layouts),
+            niche: Niche::Captures(CapturesNiche(layouts)),
         }
     }
 
@@ -1620,14 +1638,14 @@ impl<'a> LambdaSet<'a> {
         lambda_name: LambdaName<'a>,
         argument_layouts: &'a [Layout<'a>],
     ) -> &'a [Layout<'a>] {
+        let Niche::Captures(CapturesNiche(captures)) = lambda_name.niche;
         debug_assert!(
-            self.set
-                .contains(&(lambda_name.name, lambda_name.captures_niche.0)),
+            self.set.contains(&(lambda_name.name, captures)),
             "{:?}",
             (self, lambda_name)
         );
         // If we don't capture, there is nothing to extend.
-        if lambda_name.captures_niche.0.is_empty() {
+        if captures.is_empty() {
             argument_layouts
         } else {
             let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);

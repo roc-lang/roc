@@ -124,7 +124,7 @@ fn build_app_mono<'a>(
     let proc_layout = ProcLayout {
         arguments: &[],
         result: int_layout,
-        captures_niche: CapturesNiche::no_niche(),
+        niche: CapturesNiche::no_niche(),
     };
 
     let mut app = MutMap::default();

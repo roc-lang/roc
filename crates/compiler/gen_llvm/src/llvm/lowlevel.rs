@@ -2252,7 +2252,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 func_spec,
                 function_name.name(),
                 argument_layouts,
-                function_name.captures_niche(),
+                function_name.niche(),
                 return_layout,
             );
 

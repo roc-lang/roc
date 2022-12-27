@@ -2199,7 +2199,7 @@ pub fn call_higher_order_lowlevel<'a>(
         let passed_proc_layout = ProcLayout {
             arguments: argument_layouts,
             result: *result_layout,
-            captures_niche: fn_name.captures_niche(),
+            niche: fn_name.niche(),
         };
         let passed_proc_index = backend
             .proc_lookup
@@ -2241,13 +2241,13 @@ pub fn call_higher_order_lowlevel<'a>(
                 ProcLayout {
                     arguments: wrapper_arg_layouts.into_bump_slice(),
                     result: Layout::UNIT,
-                    captures_niche: fn_name.captures_niche(),
+                    niche: fn_name.niche(),
                 }
             }
             ProcSource::HigherOrderCompare(_) => ProcLayout {
                 arguments: wrapper_arg_layouts.into_bump_slice(),
                 result: *result_layout,
-                captures_niche: fn_name.captures_niche(),
+                niche: fn_name.niche(),
             },
             ProcSource::Roc | ProcSource::Helper => {
                 internal_error!("Should never reach here for {:?}", helper_proc_source)

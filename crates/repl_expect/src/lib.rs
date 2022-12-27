@@ -5,7 +5,7 @@ use {
     roc_module::symbol::Interns,
     roc_mono::{
         ir::ProcLayout,
-        layout::{CapturesNiche, Layout, LayoutCache},
+        layout::{Layout, LayoutCache, Niche},
     },
     roc_parse::ast::Expr,
     roc_repl_eval::{eval::jit_to_ast, ReplAppMemory},
@@ -67,7 +67,7 @@ pub fn get_values<'a>(
             let proc_layout = ProcLayout {
                 arguments: &[],
                 result: layout,
-                captures_niche: CapturesNiche::no_niche(),
+                niche: Niche::NONE,
             };
 
             jit_to_ast(
