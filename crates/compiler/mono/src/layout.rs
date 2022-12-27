@@ -1610,7 +1610,7 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    pub fn extend_argument_list<I>(
+    pub(crate) fn extend_argument_list<I>(
         &self,
         arena: &'a Bump,
         interner: &I,
@@ -1644,7 +1644,7 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    pub fn extend_argument_list_for_named(
+    pub(crate) fn extend_argument_list_for_named(
         &self,
         arena: &'a Bump,
         lambda_name: LambdaName<'a>,
