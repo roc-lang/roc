@@ -3199,12 +3199,8 @@ fn specialize_external_help<'a>(
 
     match specialization_result {
         Ok((proc, layout)) => {
-            let top_level = ProcLayout::from_raw(
-                env.arena,
-                &layout_cache.interner,
-                layout,
-                proc.name.captures_niche(),
-            );
+            let top_level =
+                ProcLayout::from_raw_named(env.arena, name, layout, proc.name.captures_niche());
 
             if procs.is_module_thunk(name.name()) {
                 debug_assert!(top_level.arguments.is_empty());
@@ -3218,9 +3214,9 @@ fn specialize_external_help<'a>(
             let proc =
                 generate_runtime_error_function(env, layout_cache, name.name(), attempted_layout);
 
-            let top_level = ProcLayout::from_raw(
+            let top_level = ProcLayout::from_raw_named(
                 env.arena,
-                &layout_cache.interner,
+                name,
                 attempted_layout,
                 proc.name.captures_niche(),
             );
@@ -3473,8 +3469,9 @@ fn specialize_proc_help<'a>(
                     let hole = env.arena.alloc(Stmt::Ret(assigned));
                     let forced = force_thunk(env, lambda_name.name(), result, assigned, hole);
 
+                    let lambda_name = LambdaName::no_niche(name);
                     let proc = Proc {
-                        name: LambdaName::no_niche(name),
+                        name: lambda_name,
                         args: &[],
                         body: forced,
                         closure_data_layout: None,
@@ -3484,9 +3481,9 @@ fn specialize_proc_help<'a>(
                         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
                     };
 
-                    let top_level = ProcLayout::from_raw(
+                    let top_level = ProcLayout::from_raw_named(
                         env.arena,
-                        &layout_cache.interner,
+                        lambda_name,
                         layout,
                         CapturesNiche::no_niche(),
                     );
@@ -8423,9 +8420,9 @@ fn specialize_symbol<'a>(
                         );
 
                         // define the function pointer
-                        let function_ptr_layout = ProcLayout::from_raw(
+                        let function_ptr_layout = ProcLayout::from_raw_named(
                             env.arena,
-                            &layout_cache.interner,
+                            lambda_name,
                             res_layout,
                             lambda_name.captures_niche(),
                         );
@@ -8478,9 +8475,9 @@ fn specialize_symbol<'a>(
                         debug_assert!(lambda_name.no_captures());
 
                         // define the function pointer
-                        let function_ptr_layout = ProcLayout::from_raw(
+                        let function_ptr_layout = ProcLayout::from_raw_named(
                             env.arena,
-                            &layout_cache.interner,
+                            lambda_name,
                             res_layout,
                             lambda_name.captures_niche(),
                         );
@@ -9017,9 +9014,9 @@ fn call_by_name_help<'a>(
                         ) {
                             Ok((proc, layout)) => {
                                 let proc_name = proc.name;
-                                let function_layout = ProcLayout::from_raw(
+                                let function_layout = ProcLayout::from_raw_named(
                                     env.arena,
-                                    &layout_cache.interner,
+                                    proc_name,
                                     layout,
                                     proc_name.captures_niche(),
                                 );
@@ -9053,9 +9050,9 @@ fn call_by_name_help<'a>(
                                 );
 
                                 let proc_name = proc.name;
-                                let function_layout = ProcLayout::from_raw(
+                                let function_layout = ProcLayout::from_raw_named(
                                     env.arena,
-                                    &layout_cache.interner,
+                                    proc_name,
                                     attempted_layout,
                                     proc_name.captures_niche(),
                                 );
@@ -10584,19 +10581,21 @@ fn match_on_lambda_set<'a>(
                     // Lambda set is empty, so this function is never called; synthesize a function
                     // that always yields a runtime error.
                     let name = env.unique_symbol();
+                    let lambda_name = LambdaName::no_niche(name);
                     let function_layout =
                         RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout);
                     let proc =
                         generate_runtime_error_function(env, layout_cache, name, function_layout);
-                    let top_level = ProcLayout::from_raw(
+                    let top_level = ProcLayout::from_raw_named(
                         env.arena,
-                        &layout_cache.interner,
+                        lambda_name,
                         function_layout,
                         CapturesNiche::no_niche(),
                     );
 
                     procs.specialized.insert_specialized(name, top_level, proc);
-                    LambdaName::no_niche(name)
+
+                    lambda_name
                 }
             };
 
