@@ -35,9 +35,7 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs, ProcsBase,
     UpdateModeIds,
 };
-use roc_mono::layout::{
-    CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner,
-};
+use roc_mono::layout::{LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner};
 use roc_packaging::cache::{self, RocCacheDir};
 #[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::PackageMetadata;

@@ -1381,7 +1381,6 @@ impl<'a> LambdaSet<'a> {
 
         let captures = match lambda_name.niche {
             Niche::Captures(captures) => captures.0,
-            Niche::NONE => &[],
         };
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {

@@ -14,8 +14,7 @@ use roc_mono::ir::{
     Literal, ModifyRc, OptLevel, Proc, ProcLayout, SingleEntryPoint, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, CapturesNiche, FieldOrderHash, Layout, Niche, RawFunctionLayout, STLayoutInterner,
-    UnionLayout,
+    Builtin, FieldOrderHash, Layout, Niche, RawFunctionLayout, STLayoutInterner, UnionLayout,
 };
 
 // just using one module for now
