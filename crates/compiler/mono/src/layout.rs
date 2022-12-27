@@ -1254,9 +1254,9 @@ impl<'a> LambdaName<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LambdaSet<'a> {
     /// collection of function names and their closure arguments
-    set: &'a [(Symbol, &'a [Layout<'a>])],
+    pub(crate) set: &'a [(Symbol, &'a [Layout<'a>])],
     /// how the closure will be represented at runtime
-    representation: Interned<Layout<'a>>,
+    pub(crate) representation: Interned<Layout<'a>>,
 }
 
 #[derive(Debug)]
