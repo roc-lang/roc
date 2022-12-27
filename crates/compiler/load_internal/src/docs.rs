@@ -90,6 +90,7 @@ pub struct Tag {
     pub values: Vec<TypeAnnotation>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn generate_module_docs(
     scope: Scope,
     home: ModuleId,
