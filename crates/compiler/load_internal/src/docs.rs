@@ -208,10 +208,11 @@ fn generate_entry_docs(
                     }
                 }
 
-                ValueDef::Body(_, _) => (),
+                ValueDef::Body(_, _) => {
+                    // TODO generate docs for un-annotated bodies
+                }
 
                 ValueDef::Dbg { .. } => {
-
                     // Don't generate docs for `dbg`s
                 }
 
