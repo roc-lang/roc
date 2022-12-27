@@ -2220,3 +2220,23 @@ fn lambda_set_with_imported_toplevels_issue_4733() {
         "###
     )
 }
+
+#[mono_test]
+fn issue_4717() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "platform"
+
+        chompWhile : (List U8) -> (List U8)
+        chompWhile = \input ->
+                index = List.walkUntil input 0 \i, _ -> Break i
+
+                if index == 0 then
+                    input
+                else
+                    List.drop input index
+
+        main = chompWhile [1u8, 2u8, 3u8]
+        "###
+    )
+}

@@ -1089,12 +1089,8 @@ impl<'a> Procs<'a> {
             .raw_from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-        let top_level = ProcLayout::from_raw(
-            env.arena,
-            &layout_cache.interner,
-            raw_layout,
-            name.captures_niche(),
-        );
+        let top_level =
+            ProcLayout::from_raw_named(env.arena, name, raw_layout, name.captures_niche());
 
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         // EXCEPT when the closure conversion makes it tail-recursive.
@@ -1169,16 +1165,8 @@ impl<'a> Procs<'a> {
                             let partial_proc_id = if let Some(partial_proc_id) =
                                 self.partial_procs.symbol_to_id(name.name())
                             {
-                                let existing = self.partial_procs.get_id(partial_proc_id);
-                                // if we're adding the same partial proc twice, they must be the actual same!
-                                //
-                                // NOTE we can't skip extra work! we still need to make the specialization for this
-                                // invocation. The content of the `annotation` can be different, even if the variable
-                                // number is the same
-                                debug_assert_eq!(annotation, existing.annotation);
-                                debug_assert_eq!(captured_symbols, existing.captured_symbols);
-                                debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
-
+                                // NOTE we can't skip extra work! We still need to make the specialization for this
+                                // invocation.
                                 partial_proc_id
                             } else {
                                 let pattern_symbols = pattern_symbols.into_bump_slice();
@@ -1204,29 +1192,17 @@ impl<'a> Procs<'a> {
                                 &[],
                                 partial_proc_id,
                             ) {
-                                Ok((proc, _ignore_layout)) => {
-                                    // the `layout` is a function pointer, while `_ignore_layout` can be a
-                                    // closure. We only specialize functions, storing this value with a closure
-                                    // layout will give trouble.
-                                    let arguments = Vec::from_iter_in(
-                                        proc.args.iter().map(|(l, _)| *l),
+                                Ok((proc, layout)) => {
+                                    let proc_name = proc.name;
+                                    let function_layout = ProcLayout::from_raw_named(
                                         env.arena,
-                                    )
-                                    .into_bump_slice();
-
-                                    let proper_layout = ProcLayout {
-                                        arguments,
-                                        result: proc.ret_layout,
-                                        captures_niche: proc.name.captures_niche(),
-                                    };
-
-                                    // NOTE: some functions are specialized to have a closure, but don't actually
-                                    // need any closure argument. Here is where we correct this sort of thing,
-                                    // by trusting the layout of the Proc, not of what we specialize for
-                                    self.specialized.remove_specialized(name.name(), &layout);
+                                        proc_name,
+                                        layout,
+                                        proc_name.captures_niche(),
+                                    );
                                     self.specialized.insert_specialized(
-                                        name.name(),
-                                        proper_layout,
+                                        proc_name.name(),
+                                        function_layout,
                                         proc,
                                     );
                                 }
