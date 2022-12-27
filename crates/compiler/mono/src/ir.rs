@@ -3059,9 +3059,9 @@ fn specialize_suspended<'a>(
                     attempted_layout,
                 );
 
-                let top_level = ProcLayout::from_raw(
+                let top_level = ProcLayout::from_raw_named(
                     env.arena,
-                    &layout_cache.interner,
+                    name,
                     attempted_layout,
                     CapturesNiche::no_niche(),
                 );
@@ -8320,9 +8320,9 @@ fn specialize_symbol<'a>(
                                 "imported functions are top-level and should never capture"
                             );
 
-                            let function_ptr_layout = ProcLayout::from_raw(
+                            let function_ptr_layout = ProcLayout::from_raw_named(
                                 env.arena,
-                                &layout_cache.interner,
+                                lambda_name,
                                 raw,
                                 lambda_name.captures_niche(),
                             );
@@ -8356,9 +8356,10 @@ fn specialize_symbol<'a>(
                             };
 
                             let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
-                            let top_level = ProcLayout::from_raw(
+                            let lambda_name = LambdaName::no_niche(original);
+                            let top_level = ProcLayout::from_raw_named(
                                 env.arena,
-                                &layout_cache.interner,
+                                lambda_name,
                                 raw,
                                 CapturesNiche::no_niche(),
                             );
@@ -8366,7 +8367,7 @@ fn specialize_symbol<'a>(
                             procs.insert_passed_by_name(
                                 env,
                                 arg_var,
-                                LambdaName::no_niche(original),
+                                lambda_name,
                                 top_level,
                                 layout_cache,
                             );
