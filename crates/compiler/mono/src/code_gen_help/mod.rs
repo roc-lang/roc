@@ -9,9 +9,7 @@ use crate::ir::{
     Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
     SelfRecursive, Stmt, UpdateModeId,
 };
-use crate::layout::{
-    Builtin, CapturesNiche, LambdaName, Layout, Niche, STLayoutInterner, UnionLayout,
-};
+use crate::layout::{Builtin, LambdaName, Layout, Niche, STLayoutInterner, UnionLayout};
 
 mod equality;
 mod refcount;
