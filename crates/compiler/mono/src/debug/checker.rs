@@ -9,7 +9,7 @@ use crate::{
         Call, CallSpecId, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
         ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
-    layout::{Builtin, Layout, STLayoutInterner, TagIdIntType, UnionLayout},
+    layout::{Builtin, LambdaSet, Layout, STLayoutInterner, TagIdIntType, UnionLayout},
 };
 
 pub enum UseKind {
@@ -525,7 +525,11 @@ impl<'a, 'r> Ctx<'a, 'r> {
                         });
                         return None;
                     }
-                    let layout = resolve_recursive_layout(payloads[index as usize], union_layout);
+                    let layout = resolve_recursive_layout(
+                        self.arena,
+                        payloads[index as usize],
+                        union_layout,
+                    );
                     Some(layout)
                 }
             }
@@ -609,7 +613,8 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     });
                 }
                 for (arg, wanted_layout) in arguments.iter().zip(payloads.iter()) {
-                    let wanted_layout = resolve_recursive_layout(*wanted_layout, union_layout);
+                    let wanted_layout =
+                        resolve_recursive_layout(self.arena, *wanted_layout, union_layout);
                     self.check_sym_layout(*arg, wanted_layout, UseKind::TagPayloadArg);
                 }
             }
@@ -626,11 +631,79 @@ impl<'a, 'r> Ctx<'a, 'r> {
     }
 }
 
-fn resolve_recursive_layout<'a>(layout: Layout<'a>, when_recursive: UnionLayout<'a>) -> Layout<'a> {
+fn resolve_recursive_layout<'a>(
+    arena: &'a Bump,
+    layout: Layout<'a>,
+    when_recursive: UnionLayout<'a>,
+) -> Layout<'a> {
     // TODO check if recursive pointer not in recursive union
     match layout {
         Layout::RecursivePointer => Layout::Union(when_recursive),
-        other => other,
+        Layout::Union(union_layout) => match union_layout {
+            UnionLayout::NonRecursive(payloads) => {
+                let payloads = payloads.iter().map(|args| {
+                    let args = args
+                        .iter()
+                        .map(|lay| resolve_recursive_layout(arena, *lay, when_recursive));
+                    &*arena.alloc_slice_fill_iter(args)
+                });
+                let payloads = arena.alloc_slice_fill_iter(payloads);
+                Layout::Union(UnionLayout::NonRecursive(payloads))
+            }
+            UnionLayout::Recursive(_)
+            | UnionLayout::NonNullableUnwrapped(_)
+            | UnionLayout::NullableWrapped { .. }
+            | UnionLayout::NullableUnwrapped { .. } => {
+                // This is the recursive layout.
+                // TODO will need fixing to be modified once we support multiple
+                // recursive pointers in one structure.
+                layout
+            }
+        },
+        Layout::Boxed(inner) => {
+            Layout::Boxed(arena.alloc(resolve_recursive_layout(arena, *inner, when_recursive)))
+        }
+        Layout::Struct {
+            field_order_hash,
+            field_layouts,
+        } => {
+            let field_layouts = field_layouts
+                .iter()
+                .map(|lay| resolve_recursive_layout(arena, *lay, when_recursive));
+            let field_layouts = arena.alloc_slice_fill_iter(field_layouts);
+            Layout::Struct {
+                field_order_hash,
+                field_layouts,
+            }
+        }
+        Layout::Builtin(builtin) => match builtin {
+            Builtin::List(inner) => {
+                let inner = arena.alloc(resolve_recursive_layout(arena, *inner, when_recursive));
+                Layout::Builtin(Builtin::List(inner))
+            }
+            Builtin::Int(_)
+            | Builtin::Float(_)
+            | Builtin::Bool
+            | Builtin::Decimal
+            | Builtin::Str => layout,
+        },
+        Layout::LambdaSet(LambdaSet {
+            set,
+            representation,
+        }) => {
+            let set = set.iter().map(|(symbol, captures)| {
+                let captures = captures
+                    .iter()
+                    .map(|lay| resolve_recursive_layout(arena, *lay, when_recursive));
+                let captures = &*arena.alloc_slice_fill_iter(captures);
+                (*symbol, captures)
+            });
+            let set = arena.alloc_slice_fill_iter(set);
+            Layout::LambdaSet(LambdaSet {
+                set,
+                representation,
+            })
+        }
     }
 }
 
