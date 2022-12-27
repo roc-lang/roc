@@ -95,65 +95,6 @@ pub enum Header<'a> {
     Hosted(HostedHeader<'a>),
 }
 
-impl<'a> HostedHeader<'a> {
-    pub fn docs(&self, arena: &'a Bump) -> &'a [&'a str] {
-        bumpalo::collections::Vec::from_iter_in(
-            doc_comments(self.before_name.iter().copied()),
-            arena,
-        )
-        .into_bump_slice()
-    }
-}
-
-impl<'a> PackageHeader<'a> {
-    pub fn docs(&self, arena: &'a Bump) -> &'a [&'a str] {
-        bumpalo::collections::Vec::from_iter_in(
-            doc_comments(self.before_name.iter().copied()),
-            arena,
-        )
-        .into_bump_slice()
-    }
-}
-
-impl<'a> PlatformHeader<'a> {
-    pub fn docs(&self, arena: &'a Bump) -> &'a [&'a str] {
-        bumpalo::collections::Vec::from_iter_in(
-            doc_comments(self.before_name.iter().copied()),
-            arena,
-        )
-        .into_bump_slice()
-    }
-}
-
-impl<'a> AppHeader<'a> {
-    pub fn docs(&self, arena: &'a Bump) -> &'a [&'a str] {
-        bumpalo::collections::Vec::from_iter_in(
-            doc_comments(self.before_name.iter().copied()),
-            arena,
-        )
-        .into_bump_slice()
-    }
-}
-
-impl<'a> InterfaceHeader<'a> {
-    pub fn docs(&self, arena: &'a Bump) -> &'a [&'a str] {
-        bumpalo::collections::Vec::from_iter_in(
-            doc_comments(self.before_name.iter().copied()),
-            arena,
-        )
-        .into_bump_slice()
-    }
-}
-
-fn doc_comments<'a>(
-    before_name: impl IntoIterator<Item = CommentOrNewline<'a>>,
-) -> impl Iterator<Item = &'a str> {
-    before_name.into_iter().filter_map(|doc| match doc {
-        CommentOrNewline::Newline | CommentOrNewline::LineComment(_) => None,
-        CommentOrNewline::DocComment(line) => Some(line),
-    })
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WhenBranch<'a> {
     pub patterns: &'a [Loc<Pattern<'a>>],

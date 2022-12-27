@@ -41,7 +41,9 @@ use roc_mono::layout::{
 use roc_packaging::cache::{self, RocCacheDir};
 #[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::PackageMetadata;
-use roc_parse::ast::{self, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation};
+use roc_parse::ast::{
+    self, CommentOrNewline, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation,
+};
 use roc_parse::header::{
     ExposedName, ImportsEntry, PackageEntry, PackageHeader, PlatformHeader, To, TypedIdent,
 };
@@ -683,7 +685,7 @@ struct ModuleHeader<'a> {
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
     parse_state: roc_parse::state::State<'a>,
     header_type: HeaderType<'a>,
-    header_docs: &'a [&'a str],
+    header_comments: &'a [CommentOrNewline<'a>],
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     module_timing: ModuleTiming,
 }
@@ -825,7 +827,7 @@ struct ParsedModule<'a> {
     parsed_defs: Defs<'a>,
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<TypeAnnotation<'a>>)>,
     header_type: HeaderType<'a>,
-    header_docs: &'a [&'a str],
+    header_comments: &'a [CommentOrNewline<'a>],
 }
 
 type LocExpects = VecMap<Region, Vec<ExpectLookup>>;
@@ -3505,7 +3507,7 @@ fn load_package_from_disk<'a>(
                 Ok((
                     ast::Module {
                         header: ast::Header::Package(header),
-                        ..
+                        comments,
                     },
                     parser_state,
                 )) => {
@@ -3518,6 +3520,7 @@ fn load_package_from_disk<'a>(
                         module_ids,
                         ident_ids_by_module,
                         &header,
+                        comments,
                         pkg_module_timing,
                     );
 
@@ -3526,7 +3529,7 @@ fn load_package_from_disk<'a>(
                 Ok((
                     ast::Module {
                         header: ast::Header::Platform(header),
-                        ..
+                        comments,
                     },
                     parser_state,
                 )) => {
@@ -3548,6 +3551,7 @@ fn load_package_from_disk<'a>(
                         exposes_ids.into_bump_slice(),
                         ident_ids_by_module,
                         &header,
+                        comments,
                         pkg_module_timing,
                     );
 
@@ -3610,7 +3614,7 @@ fn load_builtin_module_help<'a>(
         Ok((
             ast::Module {
                 header: ast::Header::Interface(header),
-                ..
+                comments,
             },
             parse_state,
         )) => {
@@ -3625,7 +3629,7 @@ fn load_builtin_module_help<'a>(
                     exposes: unspace(arena, header.exposes.item.items),
                     generates_with: &[],
                 },
-                header_docs: header.docs(arena),
+                module_comments: comments,
             };
 
             (info, parse_state)
@@ -3910,7 +3914,7 @@ fn parse_header<'a>(
         Ok((
             ast::Module {
                 header: ast::Header::Interface(header),
-                ..
+                comments,
             },
             parse_state,
         )) => {
@@ -3927,7 +3931,7 @@ fn parse_header<'a>(
                     name: header.name.value,
                     exposes: unspace(arena, header.exposes.item.items),
                 },
-                header_docs: header.docs(arena),
+                module_comments: comments,
             };
 
             let (module_id, module_name, header) = build_header(
@@ -3965,7 +3969,7 @@ fn parse_header<'a>(
         Ok((
             ast::Module {
                 header: ast::Header::Hosted(header),
-                ..
+                comments,
             },
             parse_state,
         )) => {
@@ -3981,7 +3985,7 @@ fn parse_header<'a>(
                     generates: header.generates.item,
                     generates_with: unspace(arena, header.generates_with.item.items),
                 },
-                header_docs: header.docs(arena),
+                module_comments: comments,
             };
 
             let (module_id, _, header) = build_header(
@@ -4001,11 +4005,10 @@ fn parse_header<'a>(
         Ok((
             ast::Module {
                 header: ast::Header::App(header),
-                ..
+                comments,
             },
             parse_state,
         )) => {
-            let header_docs = header.docs(arena);
             let mut app_file_dir = filename.clone();
             app_file_dir.pop();
 
@@ -4043,7 +4046,7 @@ fn parse_header<'a>(
                     output_name: header.name.value,
                     to_platform: header.provides.to.value,
                 },
-                header_docs,
+                module_comments: comments,
             };
 
             let (module_id, _, resolved_header) = build_header(
@@ -4096,7 +4099,7 @@ fn parse_header<'a>(
         Ok((
             ast::Module {
                 header: ast::Header::Package(header),
-                ..
+                comments,
             },
             parse_state,
         )) => {
@@ -4109,6 +4112,7 @@ fn parse_header<'a>(
                 module_ids,
                 ident_ids_by_module,
                 &header,
+                comments,
                 module_timing,
             );
 
@@ -4122,7 +4126,7 @@ fn parse_header<'a>(
         Ok((
             ast::Module {
                 header: ast::Header::Platform(header),
-                ..
+                comments,
             },
             parse_state,
         )) => {
@@ -4143,6 +4147,7 @@ fn parse_header<'a>(
                 exposes_ids.into_bump_slice(),
                 ident_ids_by_module,
                 &header,
+                comments,
                 module_timing,
             );
 
@@ -4308,7 +4313,7 @@ struct HeaderInfo<'a> {
     packages: &'a [Loc<PackageEntry<'a>>],
     imports: &'a [Loc<ImportsEntry<'a>>],
     header_type: HeaderType<'a>,
-    header_docs: &'a [&'a str],
+    module_comments: &'a [CommentOrNewline<'a>],
 }
 
 fn build_header<'a>(
@@ -4325,7 +4330,7 @@ fn build_header<'a>(
         packages,
         imports,
         header_type,
-        header_docs,
+        module_comments: header_comments,
     } = info;
 
     let mut imported_modules: MutMap<ModuleId, Region> = MutMap::default();
@@ -4641,7 +4646,7 @@ fn build_header<'a>(
             exposed_imports: scope,
             symbols_from_requires,
             header_type,
-            header_docs,
+            header_comments,
             module_timing,
         },
     )
@@ -5169,6 +5174,7 @@ fn build_package_header<'a>(
     module_ids: Arc<Mutex<PackageModuleIds<'a>>>,
     ident_ids_by_module: SharedIdentIdsByModule,
     header: &PackageHeader<'a>,
+    comments: &'a [CommentOrNewline<'a>],
     module_timing: ModuleTiming,
 ) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
     let exposes = bumpalo::collections::Vec::from_iter_in(
@@ -5196,7 +5202,7 @@ fn build_package_header<'a>(
         packages,
         imports: &[],
         header_type,
-        header_docs: header.docs(arena),
+        module_comments: comments,
     };
 
     build_header(
@@ -5218,6 +5224,7 @@ fn build_platform_header<'a>(
     exposes_ids: &'a [ModuleId],
     ident_ids_by_module: SharedIdentIdsByModule,
     header: &PlatformHeader<'a>,
+    comments: &'a [CommentOrNewline<'a>],
     module_timing: ModuleTiming,
 ) -> (ModuleId, PQModuleName<'a>, ModuleHeader<'a>) {
     // If we have an app module, then it's the root module;
@@ -5260,7 +5267,7 @@ fn build_platform_header<'a>(
         packages: &[],
         imports,
         header_type,
-        header_docs: header.docs(arena),
+        module_comments: comments,
     };
 
     build_header(
@@ -5360,7 +5367,7 @@ fn canonicalize_and_constrain<'a>(
                 &parsed_defs_for_docs,
                 exposed_module_ids,
                 module_output.exposed_symbols.clone(),
-                parsed.header_docs,
+                parsed.header_comments,
             );
 
             Some(docs)
@@ -5499,7 +5506,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         module_path,
         header_type,
         symbols_from_requires,
-        header_docs,
+        header_comments: header_docs,
         ..
     } = header;
 
@@ -5515,7 +5522,7 @@ fn parse<'a>(arena: &'a Bump, header: ModuleHeader<'a>) -> Result<Msg<'a>, Loadi
         parsed_defs,
         symbols_from_requires,
         header_type,
-        header_docs,
+        header_comments: header_docs,
     };
 
     Ok(Msg::Parsed(parsed))
