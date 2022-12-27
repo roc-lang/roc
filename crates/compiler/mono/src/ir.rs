@@ -4047,23 +4047,6 @@ impl<'a> ProcLayout<'a> {
         }
     }
 
-    pub fn from_raw(
-        arena: &'a Bump,
-        interner: &LayoutInterner<'a>,
-        raw: RawFunctionLayout<'a>,
-        captures_niche: CapturesNiche<'a>,
-    ) -> Self {
-        match raw {
-            RawFunctionLayout::Function(arguments, lambda_set, result) => {
-                let arguments = lambda_set.extend_argument_list(arena, interner, arguments);
-                ProcLayout::new(arena, arguments, captures_niche, *result)
-            }
-            RawFunctionLayout::ZeroArgumentThunk(result) => {
-                ProcLayout::new(arena, &[], CapturesNiche::no_niche(), result)
-            }
-        }
-    }
-
     fn from_raw_named(
         arena: &'a Bump,
         lambda_name: LambdaName<'a>,
