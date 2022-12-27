@@ -1253,17 +1253,20 @@ impl<'a> Procs<'a> {
                 suspended.specialization(env.subs, name, layout, fn_var);
             }
             (PendingSpecializations::Making(_), false) => {
-                let symbol = name;
+                let proc_name = name;
 
-                let partial_proc_id = match self.partial_procs.symbol_to_id(symbol.name()) {
+                let partial_proc_id = match self.partial_procs.symbol_to_id(proc_name.name()) {
                     Some(p) => p,
-                    None => panic!("no partial_proc for {:?} in module {:?}", symbol, env.home),
+                    None => panic!(
+                        "no partial_proc for {:?} in module {:?}",
+                        proc_name, env.home
+                    ),
                 };
 
                 // Mark this proc as in-progress, so if we're dealing with
                 // mutually recursive functions, we don't loop forever.
                 // (We had a bug around this before this system existed!)
-                self.specialized.mark_in_progress(symbol.name(), layout);
+                self.specialized.mark_in_progress(proc_name.name(), layout);
 
                 // See https://github.com/roc-lang/roc/issues/1600
                 //
@@ -1272,39 +1275,21 @@ impl<'a> Procs<'a> {
                 //
                 // fn_var is the variable representing the type that we actually need for the
                 // function right here.
-                //
-                // For some reason, it matters that we unify with the original variable. Extracting
-                // that variable into a SolvedType and then introducing it again severs some
-                // connection that turns out to be important
                 match specialize_variable(
                     env,
                     self,
-                    symbol,
+                    proc_name,
                     layout_cache,
                     fn_var,
                     Default::default(),
                     partial_proc_id,
                 ) {
-                    Ok((proc, _ignore_layout)) => {
-                        // the `layout` is a function pointer, while `_ignore_layout` can be a
-                        // closure. We only specialize functions, storing this value with a closure
-                        // layout will give trouble.
-                        let arguments =
-                            Vec::from_iter_in(proc.args.iter().map(|(l, _)| *l), env.arena)
-                                .into_bump_slice();
+                    Ok((proc, raw_layout)) => {
+                        let proc_layout =
+                            ProcLayout::from_raw_named(env.arena, proc_name, raw_layout);
 
-                        let proper_layout = ProcLayout {
-                            arguments,
-                            result: proc.ret_layout,
-                            captures_niche: proc.name.captures_niche(),
-                        };
-
-                        // NOTE: some functions are specialized to have a closure, but don't actually
-                        // need any closure argument. Here is where we correct this sort of thing,
-                        // by trusting the layout of the Proc, not of what we specialize for
-                        self.specialized.remove_specialized(symbol.name(), &layout);
                         self.specialized
-                            .insert_specialized(symbol.name(), proper_layout, proc);
+                            .insert_specialized(proc_name.name(), proc_layout, proc);
                     }
                     Err(error) => {
                         panic!("TODO generate a RuntimeError message for {:?}", error);
