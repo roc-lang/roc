@@ -24,6 +24,22 @@ impl OperatingSystem {
             _ => None,
         }
     }
+
+    pub const fn object_file_ext(&self) -> &str {
+        match self {
+            OperatingSystem::Windows => "obj",
+            OperatingSystem::Unix => "o",
+            OperatingSystem::Wasi => "o",
+        }
+    }
+
+    pub const fn executable_file_ext(&self) -> Option<&str> {
+        match self {
+            OperatingSystem::Windows => Some("exe"),
+            OperatingSystem::Unix => None,
+            OperatingSystem::Wasi => None,
+        }
+    }
 }
 
 impl From<target_lexicon::OperatingSystem> for OperatingSystem {

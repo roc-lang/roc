@@ -34,7 +34,7 @@ pub mod build;
 mod format;
 pub use format::format;
 
-use crate::build::{BuildFileError, BuildOrdering};
+use crate::build::{standard_load_config, BuildFileError, BuildOrdering};
 
 const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
@@ -672,6 +672,8 @@ pub fn build(
         emit_debug_info,
     };
 
+    let load_config = standard_load_config(&triple, build_ordering, threading);
+
     let res_binary_path = build_file(
         &arena,
         &triple,
@@ -681,10 +683,9 @@ pub fn build(
         link_type,
         linking_strategy,
         prebuilt,
-        threading,
         wasm_dev_stack_bytes,
         roc_cache_dir,
-        build_ordering,
+        load_config,
     );
 
     match res_binary_path {

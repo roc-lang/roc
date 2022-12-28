@@ -69,6 +69,7 @@ roc_wasm_interp = { path = "../wasm_interp", optional = true }
 
 ven_pretty = { path = "../vendor/pretty" }
 
+indoc.workspace = true
 clap.workspace = true
 const_format.workspace = true
 mimalloc.workspace = true
