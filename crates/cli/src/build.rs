@@ -145,27 +145,16 @@ fn build_loaded_file<'a>(
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let operating_system = roc_target::OperatingSystem::from(target.operating_system);
 
-    let host_input_path = match &loaded.entry_point {
-        EntryPoint::Executable { platform_path, .. } => {
-            use roc_target::OperatingSystem::*;
-
-            let host_filename = match operating_system {
-                Wasi => "host.zig".to_string(),
-                Unix => legacy_host_filename(target).unwrap(),
-                Windows => legacy_host_filename(target).unwrap(),
-            };
-
-            platform_path.with_file_name(host_filename)
-        }
+    let platform_main_roc = match &loaded.entry_point {
+        EntryPoint::Executable { platform_path, .. } => platform_path.to_path_buf(),
         _ => unreachable!(),
     };
 
+    // the preprocessed host is stored beside the platform's main.roc
     let preprocessed_host_path = if linking_strategy == LinkingStrategy::Legacy {
-        let filename = legacy_host_filename(target).unwrap();
-        host_input_path.with_file_name(filename)
+        platform_main_roc.with_file_name(legacy_host_filename(target).unwrap())
     } else {
-        let filename = preprocessed_host_filename(target).unwrap();
-        host_input_path.with_file_name(filename)
+        platform_main_roc.with_file_name(preprocessed_host_filename(target).unwrap())
     };
 
     // For example, if we're loading the platform from a URL, it's automatically prebuilt
@@ -225,7 +214,7 @@ fn build_loaded_file<'a>(
         let join_handle = spawn_rebuild_thread(
             code_gen_options.opt_level,
             linking_strategy,
-            host_input_path.clone(),
+            platform_main_roc.clone(),
             preprocessed_host_path.clone(),
             output_exe_path.clone(),
             target,
@@ -348,7 +337,7 @@ fn build_loaded_file<'a>(
         (LinkingStrategy::Surgical, _) => {
             roc_linker::link_preprocessed_host(
                 target,
-                &host_input_path,
+                &platform_main_roc,
                 &roc_app_bytes,
                 &output_exe_path,
             );
@@ -374,7 +363,8 @@ fn build_loaded_file<'a>(
             let mut inputs = vec![app_o_file.to_str().unwrap()];
 
             if !matches!(link_type, LinkType::Dylib | LinkType::None) {
-                inputs.push(host_input_path.as_path().to_str().unwrap());
+                // the host has been compiled into a .o or .obj file
+                inputs.push(preprocessed_host_path.as_path().to_str().unwrap());
             }
 
             if matches!(code_gen_options.backend, program::CodeGenBackend::Assembly) {
@@ -444,7 +434,7 @@ fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: P
 fn spawn_rebuild_thread(
     opt_level: OptLevel,
     linking_strategy: LinkingStrategy,
-    host_input_path: PathBuf,
+    platform_main_roc: PathBuf,
     preprocessed_host_path: PathBuf,
     output_exe_path: PathBuf,
     target: &Triple,
@@ -465,7 +455,7 @@ fn spawn_rebuild_thread(
                 let host_dest = rebuild_host(
                     opt_level,
                     &thread_local_target,
-                    host_input_path.as_path(),
+                    platform_main_roc.as_path(),
                     None,
                 );
 
@@ -475,7 +465,7 @@ fn spawn_rebuild_thread(
                 roc_linker::build_and_preprocess_host(
                     opt_level,
                     &thread_local_target,
-                    host_input_path.as_path(),
+                    platform_main_roc.as_path(),
                     preprocessed_host_path.as_path(),
                     exported_symbols,
                     exported_closure_types,
@@ -489,7 +479,7 @@ fn spawn_rebuild_thread(
                 rebuild_host(
                     opt_level,
                     &thread_local_target,
-                    host_input_path.as_path(),
+                    platform_main_roc.as_path(),
                     None,
                 );
             }
