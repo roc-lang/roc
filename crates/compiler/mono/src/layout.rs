@@ -1711,7 +1711,7 @@ impl<'a> LambdaSet<'a> {
         lambda_name: LambdaName<'a>,
         argument_layouts: &'a [Layout<'a>],
     ) -> &'a [Layout<'a>] {
-        let Niche::Captures(CapturesNiche(captures)) = lambda_name.niche;
+        let Niche(NichePriv::Captures(captures)) = lambda_name.niche;
         // TODO(https://github.com/roc-lang/roc/issues/4831): we should turn on this debug-assert;
         // however, currently it causes false-positives, because host-exposed functions that are
         // function pointers to platform-exposed functions are compiled as if they are proper
