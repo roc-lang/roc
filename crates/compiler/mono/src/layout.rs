@@ -630,6 +630,39 @@ impl<'a> RawFunctionLayout<'a> {
             }
         })
     }
+
+    fn to_doc<'b, D, A, I>(self, alloc: &'b D, interner: &I) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+        I: Interner<'a, Layout<'a>>,
+    {
+        use RawFunctionLayout::*;
+        match self {
+            Function(args, lambda_set, ret) => alloc.concat([
+                alloc.text("("),
+                alloc.intersperse(
+                    args.iter()
+                        .map(|lay| lay.to_doc(alloc, interner, Parens::NotNeeded)),
+                    alloc.text(", "),
+                ),
+                alloc.text(")-["),
+                lambda_set.runtime_representation(interner).to_doc(
+                    alloc,
+                    interner,
+                    Parens::NotNeeded,
+                ),
+                alloc.text("]->"),
+                ret.to_doc(alloc, interner, Parens::NotNeeded),
+            ]),
+            ZeroArgumentThunk(ret) => {
+                alloc
+                    .text("{} -> ")
+                    .append(ret.to_doc(alloc, interner, Parens::NotNeeded))
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -1189,8 +1222,27 @@ impl std::fmt::Debug for LambdaSet<'_> {
 enum NichePriv<'a> {
     /// Distinguishes captures this proc takes, when it is a part of a lambda set that has multiple
     /// lambdas of the same name, but different captures.
-    Captures(&'a [Layout<'a>]),
+    Captures(
+        // NB: double reference is used to cut from a slice fat pointer (2 words) to just a pointer
+        // (1 word). Since usages of the actual capture set here are infrequent (only for lookups
+        // of specialization), saving a word of memory is preferable, as it's a word needed per
+        // reference to a proc.
+        //
+        // TODO: consider interning all data used in niches. Maybe that will fall away if we
+        // start interning all layouts in general.
+        &'a &'a [Layout<'a>],
+    ),
+
+    /// A top-level, non-capturing value (currently compiled as a thunk) that returns a lambda set
+    /// to a specialized proc. The niche records the signature of the specialized proc, so that
+    /// when two specializations of the thunked-value return the same lambda set but with different
+    /// specializations, the specializations are distinguished.
+    #[allow(dead_code)]
+    EtaReducedThunk(&'a RawFunctionLayout<'a>),
 }
+
+roc_error_macros::assert_sizeof_all!(&&[Layout], 8);
+roc_error_macros::assert_sizeof_all!(NichePriv, 16);
 
 /// Niches identify lambdas (including thunks) in ways that are not distinguishable solely by their
 /// [runtime function layout][RawFunctionLayout].
@@ -1201,7 +1253,7 @@ enum NichePriv<'a> {
 ///
 /// Captures niches identify a procedure's set of captured symbols. This is relevant when a
 /// procedure is part of a lambda set that has multiple lambdas of the procedure's name, but each
-/// has a different set of captures.
+/// has a different set of captures. Lambda sets with this property are called "multimorphic".
 ///
 /// The capture set is identified only in the body of a procedure and not in its runtime layout.
 /// Any capturing lambda takes the whole lambda set as an argument, rather than just its captures.
@@ -1231,13 +1283,116 @@ enum NichePriv<'a> {
 /// between such differences when constructing the closure capture data that is
 /// return value of `fun`.
 ///
+/// ## References
+///
 /// See also https://github.com/roc-lang/roc/issues/3336.
+///
+/// ## Eta-reduced thunk niches
+///
+/// An "eta-reduced thunk" is a top-level, non-capturing value (compiled as a thunk)
+/// that returns a specialized procedure. Had the value been eta-expanded, it would
+/// be a function that returns another function.
+///
+/// Because
+///   1. specialized functions are identified by their [function signature][RawFunctionLayout],
+///      consisting of arguments, lambda set, and return layout
+///   2. the runtime representation of a function is only its lambda set
+///   3. top-level, non-capturing values are identified only by their runtime representation
+///
+/// eta-reduced thunks lose information about the specialized procedures they resolve to, as their
+/// layout identification includes only the lambda set of the returned procedure, but that returned
+/// procedure is fully identified by its signature as described in (1).
+///
+/// To recover this information, eta-reduced thunks are installed a niche that is the [function
+/// signature][RawFunctionLayout] of the specialized procedure they return.
+///
+/// ## Example
+///
+/// Consider
+///
+/// ```ignore(illustrative)
+/// andThen = \{} ->
+///     x = 10
+///     \newFn -[5]-> Num.add (newFn {}) x
+///
+/// between = andThen {}
+///
+/// it = between \{} -[7]-> between \{} -[8]-> 10
+///
+/// main = it
+/// ```
+///
+/// Here `between` is an eta-reduced thunk, for which we want two specializations
+///
+/// ```ignore(illustrative)
+/// between : ({} -[[7]]-> U8) -[[5 U8]]-> U8
+/// between : ({} -[[8]]-> U8) -[[5 U8]]-> U8
+/// ```
+///
+/// Since `between` always resolves to the function `-[5]->`, its layout identification is
+///
+/// ```ignore(illustrative)
+/// {} -> [[5 U8]]
+/// ```
+///
+/// But, the construction of that returned lambda set `[[5 U8]]` is different between the two
+/// specializations. To distinguish those differences, we attach the returned functions' layout as
+/// a niche to each specialization of the thunk.
+///
+/// ```ignore(illustrative)
+/// between spec 1: {} -> [[5 U8]] (niche: η({} -[[7]]-> U8) -[[5 U8]]-> U8)
+/// between spec 1: {} -> [[5 U8]] (niche: η({} -[[8]]-> U8) -[[5 U8]]-> U8)
+/// ```
+///
+/// ## Composing with multimorphic lambda sets
+///
+/// Eta-reduced thunk niches compose with specializations involved in multimorphic lambda sets
+/// naturally, because the two concepts are disjoint.
+///
+/// Consider
+///
+/// ```ignore(illustrative)
+/// andThen = \x ->
+///     \newFn -[5]-> Str.concat (newFn {}) (Num.toStr x)
+///
+/// between = if Bool.true
+///     then andThen 11u8
+///     else andThen 22u16
+///
+/// it = between \{} -[7]-> between \{} -[8]-> "end"
+///
+/// main = it
+/// ```
+///
+/// For this program, we want two specializations of `between`
+///
+/// ```ignore(illustrative)
+/// between : ({} -[[7]]-> Str) -[[5 U16, 5 U8]]-> Str
+/// between : ({} -[[8]]-> Str) -[[5 U16, 5 U8]]-> Str
+/// ```
+///
+/// It is again enough to specify that each `between` thunk returns a closure data of lambda set
+/// shape `[[5 U16, 5 U8]]`, with an appropriate eta-reduced thunk niche.
+///
+/// The thunk itself does not capture, and the disambiguation of procedures in the multimorphic
+/// lambda set is only relevant at the site of the construction of the lambda set (and its dispatch).
+///
+/// That is, the niches needed to distinguish the constructed procedures in the lambda set are only
+/// relevant
+///   - **inside** the body of `between` (specifically, inside the specialization of `andThen`)
+///   - OR, **outside** the body of `between`, when matching on it to make the calls in `it`
+/// And so, nothing extra is needed on the surface of the eta-reduced thunk's niche to identify
+/// this program correctly.
+///
+/// ## References
+///
+/// See also https://github.com/roc-lang/roc/issues/4734
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Niche<'a>(NichePriv<'a>);
 
 impl<'a> Niche<'a> {
-    pub const NONE: Niche<'a> = Niche(NichePriv::Captures(&[]));
+    pub const NONE: Niche<'a> = Niche(NichePriv::Captures(&(&[] as &[Layout])));
 
     pub fn to_doc<'b, D, A, I>(self, alloc: &'b D, interner: &I) -> DocBuilder<'b, D, A>
     where
@@ -1256,6 +1411,11 @@ impl<'a> Niche<'a> {
                     alloc.reflow(", "),
                 ),
                 alloc.reflow("})"),
+            ]),
+            NichePriv::EtaReducedThunk(proc_signature) => alloc.concat([
+                alloc.reflow("(niche η"),
+                proc_signature.to_doc(alloc, interner),
+                alloc.reflow(")"),
             ]),
         }
     }
@@ -1282,6 +1442,10 @@ impl<'a> LambdaName<'a> {
     pub(crate) fn no_captures(&self) -> bool {
         match self.niche.0 {
             NichePriv::Captures(captures) => captures.is_empty(),
+            NichePriv::EtaReducedThunk(_) => {
+                // Top-level values never capture
+                true
+            }
         }
     }
 
@@ -1417,14 +1581,18 @@ impl<'a> LambdaSet<'a> {
     {
         debug_assert!(self.contains(lambda_name.name));
 
-        let NichePriv::Captures(captures) = lambda_name.niche.0;
+        let captures = match lambda_name.niche.0 {
+            NichePriv::Captures(captures) => captures,
+            NichePriv::EtaReducedThunk(..) => internal_error!("a top-level value that has an eta-reduced thunk niche cannot itself be a named proc, \
+                and should never be involed in a lambda set itself: {:?}", lambda_name),
+        };
 
         let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
             other_name == lambda_name.name
                 // Make sure all captures are equal
                 && other_captures_layouts
                     .iter()
-                    .eq(captures)
+                    .eq(*captures)
         };
 
         self.layout_for_member(interner, comparator)
@@ -1673,7 +1841,15 @@ impl<'a> LambdaSet<'a> {
         lambda_name: LambdaName<'a>,
         argument_layouts: &'a [Layout<'a>],
     ) -> &'a [Layout<'a>] {
-        let Niche(NichePriv::Captures(captures)) = lambda_name.niche;
+        let captures = match lambda_name.niche.0 {
+            NichePriv::Captures(captures) => captures,
+            NichePriv::EtaReducedThunk(..) => internal_error!(
+                "an top-level value that has a eta-reduced thunk niche \
+                is not itself a resolved proc, and should never be called directly: {:?}.",
+                lambda_name
+            ),
+        };
+
         debug_assert!(
             self.set.contains(&(lambda_name.name, captures)),
             "{:?}",
