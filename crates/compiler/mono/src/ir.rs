@@ -2,8 +2,8 @@
 
 use crate::layout::{
     self, Builtin, CapturesNiche, ClosureCallOptions, ClosureRepresentation, EnumDispatch,
-    LambdaName, LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, RawFunctionLayout,
-    STLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
+    LambdaName, LambdaSet, Layout, LayoutCache, LayoutProblem, RawFunctionLayout, STLayoutInterner,
+    TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -1089,12 +1089,7 @@ impl<'a> Procs<'a> {
             .raw_from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-        let top_level = ProcLayout::from_raw(
-            env.arena,
-            &layout_cache.interner,
-            raw_layout,
-            name.captures_niche(),
-        );
+        let top_level = ProcLayout::from_raw_named(env.arena, name, raw_layout);
 
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         // EXCEPT when the closure conversion makes it tail-recursive.
@@ -1169,16 +1164,8 @@ impl<'a> Procs<'a> {
                             let partial_proc_id = if let Some(partial_proc_id) =
                                 self.partial_procs.symbol_to_id(name.name())
                             {
-                                let existing = self.partial_procs.get_id(partial_proc_id);
-                                // if we're adding the same partial proc twice, they must be the actual same!
-                                //
-                                // NOTE we can't skip extra work! we still need to make the specialization for this
-                                // invocation. The content of the `annotation` can be different, even if the variable
-                                // number is the same
-                                debug_assert_eq!(annotation, existing.annotation);
-                                debug_assert_eq!(captured_symbols, existing.captured_symbols);
-                                debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
-
+                                // NOTE we can't skip extra work! We still need to make the specialization for this
+                                // invocation.
                                 partial_proc_id
                             } else {
                                 let pattern_symbols = pattern_symbols.into_bump_slice();
@@ -1204,29 +1191,13 @@ impl<'a> Procs<'a> {
                                 &[],
                                 partial_proc_id,
                             ) {
-                                Ok((proc, _ignore_layout)) => {
-                                    // the `layout` is a function pointer, while `_ignore_layout` can be a
-                                    // closure. We only specialize functions, storing this value with a closure
-                                    // layout will give trouble.
-                                    let arguments = Vec::from_iter_in(
-                                        proc.args.iter().map(|(l, _)| *l),
-                                        env.arena,
-                                    )
-                                    .into_bump_slice();
-
-                                    let proper_layout = ProcLayout {
-                                        arguments,
-                                        result: proc.ret_layout,
-                                        captures_niche: proc.name.captures_niche(),
-                                    };
-
-                                    // NOTE: some functions are specialized to have a closure, but don't actually
-                                    // need any closure argument. Here is where we correct this sort of thing,
-                                    // by trusting the layout of the Proc, not of what we specialize for
-                                    self.specialized.remove_specialized(name.name(), &layout);
+                                Ok((proc, layout)) => {
+                                    let proc_name = proc.name;
+                                    let function_layout =
+                                        ProcLayout::from_raw_named(env.arena, proc_name, layout);
                                     self.specialized.insert_specialized(
-                                        name.name(),
-                                        proper_layout,
+                                        proc_name.name(),
+                                        function_layout,
                                         proc,
                                     );
                                 }
@@ -1282,17 +1253,20 @@ impl<'a> Procs<'a> {
                 suspended.specialization(env.subs, name, layout, fn_var);
             }
             (PendingSpecializations::Making(_), false) => {
-                let symbol = name;
+                let proc_name = name;
 
-                let partial_proc_id = match self.partial_procs.symbol_to_id(symbol.name()) {
+                let partial_proc_id = match self.partial_procs.symbol_to_id(proc_name.name()) {
                     Some(p) => p,
-                    None => panic!("no partial_proc for {:?} in module {:?}", symbol, env.home),
+                    None => panic!(
+                        "no partial_proc for {:?} in module {:?}",
+                        proc_name, env.home
+                    ),
                 };
 
                 // Mark this proc as in-progress, so if we're dealing with
                 // mutually recursive functions, we don't loop forever.
                 // (We had a bug around this before this system existed!)
-                self.specialized.mark_in_progress(symbol.name(), layout);
+                self.specialized.mark_in_progress(proc_name.name(), layout);
 
                 // See https://github.com/roc-lang/roc/issues/1600
                 //
@@ -1301,39 +1275,21 @@ impl<'a> Procs<'a> {
                 //
                 // fn_var is the variable representing the type that we actually need for the
                 // function right here.
-                //
-                // For some reason, it matters that we unify with the original variable. Extracting
-                // that variable into a SolvedType and then introducing it again severs some
-                // connection that turns out to be important
                 match specialize_variable(
                     env,
                     self,
-                    symbol,
+                    proc_name,
                     layout_cache,
                     fn_var,
                     Default::default(),
                     partial_proc_id,
                 ) {
-                    Ok((proc, _ignore_layout)) => {
-                        // the `layout` is a function pointer, while `_ignore_layout` can be a
-                        // closure. We only specialize functions, storing this value with a closure
-                        // layout will give trouble.
-                        let arguments =
-                            Vec::from_iter_in(proc.args.iter().map(|(l, _)| *l), env.arena)
-                                .into_bump_slice();
+                    Ok((proc, raw_layout)) => {
+                        let proc_layout =
+                            ProcLayout::from_raw_named(env.arena, proc_name, raw_layout);
 
-                        let proper_layout = ProcLayout {
-                            arguments,
-                            result: proc.ret_layout,
-                            captures_niche: proc.name.captures_niche(),
-                        };
-
-                        // NOTE: some functions are specialized to have a closure, but don't actually
-                        // need any closure argument. Here is where we correct this sort of thing,
-                        // by trusting the layout of the Proc, not of what we specialize for
-                        self.specialized.remove_specialized(symbol.name(), &layout);
                         self.specialized
-                            .insert_specialized(symbol.name(), proper_layout, proc);
+                            .insert_specialized(proc_name.name(), proc_layout, proc);
                     }
                     Err(error) => {
                         panic!("TODO generate a RuntimeError message for {:?}", error);
@@ -2463,17 +2419,6 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, cont.value)
             }
-            Accessor(accessor_data) => {
-                let fresh_record_symbol = env.unique_symbol();
-                register_noncapturing_closure(
-                    env,
-                    procs,
-                    *symbol,
-                    accessor_data.to_closure_data(fresh_record_symbol),
-                );
-
-                lower_rest!(variable, cont.value)
-            }
             Var(original, _) | AbilityMember(original, _, _)
                 if procs.get_partial_proc(original).is_none() =>
             {
@@ -3040,55 +2985,18 @@ fn specialize_suspended<'a>(
         };
 
         match specialize_variable(env, procs, name, layout_cache, var, &[], partial_proc) {
-            Ok((proc, _layout)) => {
-                // TODO this code is duplicated elsewhere
-
-                // the `layout` is a function pointer, while `_ignore_layout` can be a
-                // closure. We only specialize functions, storing this value with a closure
-                // layout will give trouble.
-                let arguments = Vec::from_iter_in(proc.args.iter().map(|(l, _)| *l), env.arena)
-                    .into_bump_slice();
-
-                let proper_layout = ProcLayout {
-                    arguments,
-                    result: proc.ret_layout,
-                    captures_niche: proc.name.captures_niche(),
-                };
-                if procs.is_module_thunk(proc.name.name()) {
-                    debug_assert!(
-                        proper_layout.arguments.is_empty(),
-                        "{:?} from {:?}",
-                        name,
-                        proper_layout
-                    );
-                }
-
-                // NOTE: some functions are specialized to have a closure, but don't actually
-                // need any closure argument. Here is where we correct this sort of thing,
-                // by trusting the layout of the Proc, not of what we specialize for
+            Ok((proc, raw_layout)) => {
+                let proc_layout = ProcLayout::from_raw_named(env.arena, name, raw_layout);
                 procs
                     .specialized
-                    .remove_specialized(name.name(), &outside_layout);
-                procs
-                    .specialized
-                    .insert_specialized(name.name(), proper_layout, proc);
+                    .insert_specialized(name.name(), proc_layout, proc);
             }
             Err(SpecializeFailure {
                 attempted_layout, ..
             }) => {
-                let proc = generate_runtime_error_function(
-                    env,
-                    layout_cache,
-                    name.name(),
-                    attempted_layout,
-                );
+                let proc = generate_runtime_error_function(env, name, attempted_layout);
 
-                let top_level = ProcLayout::from_raw(
-                    env.arena,
-                    &layout_cache.interner,
-                    attempted_layout,
-                    CapturesNiche::no_niche(),
-                );
+                let top_level = ProcLayout::from_raw_named(env.arena, name, attempted_layout);
 
                 procs
                     .specialized
@@ -3234,12 +3142,7 @@ fn specialize_external_help<'a>(
 
     match specialization_result {
         Ok((proc, layout)) => {
-            let top_level = ProcLayout::from_raw(
-                env.arena,
-                &layout_cache.interner,
-                layout,
-                proc.name.captures_niche(),
-            );
+            let top_level = ProcLayout::from_raw_named(env.arena, name, layout);
 
             if procs.is_module_thunk(name.name()) {
                 debug_assert!(top_level.arguments.is_empty());
@@ -3250,15 +3153,9 @@ fn specialize_external_help<'a>(
                 .insert_specialized(name.name(), top_level, proc);
         }
         Err(SpecializeFailure { attempted_layout }) => {
-            let proc =
-                generate_runtime_error_function(env, layout_cache, name.name(), attempted_layout);
+            let proc = generate_runtime_error_function(env, name, attempted_layout);
 
-            let top_level = ProcLayout::from_raw(
-                env.arena,
-                &layout_cache.interner,
-                attempted_layout,
-                proc.name.captures_niche(),
-            );
+            let top_level = ProcLayout::from_raw_named(env.arena, name, attempted_layout);
 
             procs
                 .specialized
@@ -3269,8 +3166,7 @@ fn specialize_external_help<'a>(
 
 fn generate_runtime_error_function<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &LayoutCache<'a>,
-    name: Symbol,
+    lambda_name: LambdaName<'a>,
     layout: RawFunctionLayout<'a>,
 ) -> Proc<'a> {
     let mut msg = bumpalo::collections::string::String::with_capacity_in(80, env.arena);
@@ -3278,7 +3174,7 @@ fn generate_runtime_error_function<'a>(
     write!(
         &mut msg,
         "The {:?} function could not be generated, likely due to a type error.",
-        name
+        lambda_name.name(),
     )
     .unwrap();
 
@@ -3294,7 +3190,7 @@ fn generate_runtime_error_function<'a>(
     let (args, ret_layout) = match layout {
         RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
             let real_arg_layouts =
-                lambda_set.extend_argument_list(env.arena, &layout_cache.interner, arg_layouts);
+                lambda_set.extend_argument_list_for_named(env.arena, lambda_name, arg_layouts);
             let mut args = Vec::with_capacity_in(real_arg_layouts.len(), env.arena);
 
             for arg in arg_layouts {
@@ -3310,7 +3206,7 @@ fn generate_runtime_error_function<'a>(
     };
 
     Proc {
-        name: LambdaName::no_niche(name),
+        name: lambda_name,
         args,
         body: runtime_error,
         closure_data_layout: None,
@@ -3508,8 +3404,9 @@ fn specialize_proc_help<'a>(
                     let hole = env.arena.alloc(Stmt::Ret(assigned));
                     let forced = force_thunk(env, lambda_name.name(), result, assigned, hole);
 
+                    let lambda_name = LambdaName::no_niche(name);
                     let proc = Proc {
-                        name: LambdaName::no_niche(name),
+                        name: lambda_name,
                         args: &[],
                         body: forced,
                         closure_data_layout: None,
@@ -3519,12 +3416,7 @@ fn specialize_proc_help<'a>(
                         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
                     };
 
-                    let top_level = ProcLayout::from_raw(
-                        env.arena,
-                        &layout_cache.interner,
-                        layout,
-                        CapturesNiche::no_niche(),
-                    );
+                    let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, layout);
 
                     procs.specialized.insert_specialized(name, top_level, proc);
 
@@ -4062,7 +3954,7 @@ pub struct ProcLayout<'a> {
 }
 
 impl<'a> ProcLayout<'a> {
-    pub fn new(
+    pub(crate) fn new(
         arena: &'a Bump,
         old_arguments: &'a [Layout<'a>],
         old_captures_niche: CapturesNiche<'a>,
@@ -4085,16 +3977,16 @@ impl<'a> ProcLayout<'a> {
         }
     }
 
-    pub fn from_raw(
+    fn from_raw_named(
         arena: &'a Bump,
-        interner: &LayoutInterner<'a>,
+        lambda_name: LambdaName<'a>,
         raw: RawFunctionLayout<'a>,
-        captures_niche: CapturesNiche<'a>,
     ) -> Self {
         match raw {
             RawFunctionLayout::Function(arguments, lambda_set, result) => {
-                let arguments = lambda_set.extend_argument_list(arena, interner, arguments);
-                ProcLayout::new(arena, arguments, captures_niche, *result)
+                let arguments =
+                    lambda_set.extend_argument_list_for_named(arena, lambda_name, arguments);
+                ProcLayout::new(arena, arguments, lambda_name.captures_niche(), *result)
             }
             RawFunctionLayout::ZeroArgumentThunk(result) => {
                 ProcLayout::new(arena, &[], CapturesNiche::no_niche(), result)
@@ -5567,14 +5459,7 @@ pub fn with_hole<'a>(
                         "match_on_closure_argument"
                     );
 
-                    // NB: I don't think the top_level here can have a captures niche?
-                    let top_level_capture_niche = CapturesNiche::no_niche();
-                    let top_level = ProcLayout::from_raw(env.arena, &layout_cache.interner, closure_data_layout, top_level_capture_niche);
-
                     let arena = env.arena;
-
-                    let arg_layouts = top_level.arguments;
-                    let ret_layout = top_level.result;
 
                     match closure_data_layout {
                         RawFunctionLayout::Function(_, lambda_set, _) =>  {
@@ -5584,16 +5469,20 @@ pub fn with_hole<'a>(
                                 lambda_set,
                                 op,
                                 closure_data_symbol,
-                                |(top_level_function, closure_data, closure_env_layout,  specialization_id, update_mode)| {
+                                |(lambda_name, closure_data, closure_env_layout,  specialization_id, update_mode)| {
+                                    // Build a call for a specific lambda in the set
+                                    let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, closure_data_layout);
+                                    let arg_layouts = top_level.arguments;
+                                    let ret_layout = top_level.result;
+
                                     let passed_function = PassedFunction {
-                                        name: top_level_function,
+                                        name: lambda_name,
                                         captured_environment: closure_data_symbol,
                                         owns_captured_environment: false,
                                         specialization_id,
                                         argument_layouts: arg_layouts,
                                         return_layout: ret_layout,
                                     };
-
 
                                     let higher_order = HigherOrderLowLevel {
                                         op: crate::low_level::HigherOrder::$ho { $($x,)* },
@@ -5604,7 +5493,7 @@ pub fn with_hole<'a>(
 
                                     self::Call {
                                         call_type: CallType::HigherOrder(arena.alloc(higher_order)),
-                                        arguments: arena.alloc([$($x,)* top_level_function.name(), closure_data]),
+                                        arguments: arena.alloc([$($x,)* lambda_name.name(), closure_data]),
                                     }
                                 },
                                 layout,
@@ -8334,12 +8223,8 @@ fn specialize_symbol<'a>(
                                 "imported functions are top-level and should never capture"
                             );
 
-                            let function_ptr_layout = ProcLayout::from_raw(
-                                env.arena,
-                                &layout_cache.interner,
-                                raw,
-                                lambda_name.captures_niche(),
-                            );
+                            let function_ptr_layout =
+                                ProcLayout::from_raw_named(env.arena, lambda_name, raw);
                             procs.insert_passed_by_name(
                                 env,
                                 arg_var,
@@ -8370,17 +8255,13 @@ fn specialize_symbol<'a>(
                             };
 
                             let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
-                            let top_level = ProcLayout::from_raw(
-                                env.arena,
-                                &layout_cache.interner,
-                                raw,
-                                CapturesNiche::no_niche(),
-                            );
+                            let lambda_name = LambdaName::no_niche(original);
+                            let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, raw);
 
                             procs.insert_passed_by_name(
                                 env,
                                 arg_var,
-                                LambdaName::no_niche(original),
+                                lambda_name,
                                 top_level,
                                 layout_cache,
                             );
@@ -8447,12 +8328,8 @@ fn specialize_symbol<'a>(
                         );
 
                         // define the function pointer
-                        let function_ptr_layout = ProcLayout::from_raw(
-                            env.arena,
-                            &layout_cache.interner,
-                            res_layout,
-                            lambda_name.captures_niche(),
-                        );
+                        let function_ptr_layout =
+                            ProcLayout::from_raw_named(env.arena, lambda_name, res_layout);
 
                         // this is a closure by capture, meaning it itself captures local variables.
                         procs.insert_passed_by_name(
@@ -8502,12 +8379,8 @@ fn specialize_symbol<'a>(
                         debug_assert!(lambda_name.no_captures());
 
                         // define the function pointer
-                        let function_ptr_layout = ProcLayout::from_raw(
-                            env.arena,
-                            &layout_cache.interner,
-                            res_layout,
-                            lambda_name.captures_niche(),
-                        );
+                        let function_ptr_layout =
+                            ProcLayout::from_raw_named(env.arena, lambda_name, res_layout);
 
                         procs.insert_passed_by_name(
                             env,
@@ -8859,7 +8732,7 @@ fn call_by_name_help<'a>(
     // number of arguments actually passed.
     let top_level_layout = {
         let argument_layouts =
-            lambda_set.extend_argument_list(env.arena, &layout_cache.interner, argument_layouts);
+            lambda_set.extend_argument_list_for_named(env.arena, proc_name, argument_layouts);
         ProcLayout::new(
             env.arena,
             argument_layouts,
@@ -9041,12 +8914,8 @@ fn call_by_name_help<'a>(
                         ) {
                             Ok((proc, layout)) => {
                                 let proc_name = proc.name;
-                                let function_layout = ProcLayout::from_raw(
-                                    env.arena,
-                                    &layout_cache.interner,
-                                    layout,
-                                    proc_name.captures_niche(),
-                                );
+                                let function_layout =
+                                    ProcLayout::from_raw_named(env.arena, proc_name, layout);
                                 procs.specialized.insert_specialized(
                                     proc_name.name(),
                                     function_layout,
@@ -9071,17 +8940,15 @@ fn call_by_name_help<'a>(
                             Err(SpecializeFailure { attempted_layout }) => {
                                 let proc = generate_runtime_error_function(
                                     env,
-                                    layout_cache,
-                                    proc_name.name(),
+                                    proc_name,
                                     attempted_layout,
                                 );
 
                                 let proc_name = proc.name;
-                                let function_layout = ProcLayout::from_raw(
+                                let function_layout = ProcLayout::from_raw_named(
                                     env.arena,
-                                    &layout_cache.interner,
+                                    proc_name,
                                     attempted_layout,
-                                    proc_name.captures_niche(),
                                 );
                                 procs.specialized.insert_specialized(
                                     proc_name.name(),
@@ -9216,8 +9083,7 @@ fn call_by_name_module_thunk<'a>(
                             Err(SpecializeFailure { attempted_layout }) => {
                                 let proc = generate_runtime_error_function(
                                     env,
-                                    layout_cache,
-                                    proc_name,
+                                    LambdaName::no_niche(proc_name),
                                     attempted_layout,
                                 );
 
@@ -10175,15 +10041,6 @@ fn from_can_pattern_help<'a>(
                 // it must be an optional field, and we will use the default
                 match &destruct.value.typ {
                     roc_can::pattern::DestructType::Optional(field_var, loc_expr) => {
-                        // TODO these don't match up in the uniqueness inference; when we remove
-                        // that, reinstate this assert!
-                        //
-                        // dbg!(&env.subs.get_content_without_compacting(*field_var));
-                        // dbg!(&env.subs.get_content_without_compacting(destruct.var).content);
-                        // debug_assert_eq!(
-                        //     env.subs.get_root_key_without_compacting(*field_var),
-                        //     env.subs.get_root_key_without_compacting(destruct.value.var)
-                        // );
                         assignments.push((
                             destruct.value.symbol,
                             // destruct.value.var,
@@ -10582,7 +10439,6 @@ fn match_on_lambda_set<'a>(
 
             let result = union_lambda_set_to_switch(
                 env,
-                layout_cache,
                 lambda_set,
                 closure_tag_id_symbol,
                 union_layout.tag_id_layout(),
@@ -10617,19 +10473,16 @@ fn match_on_lambda_set<'a>(
                     // Lambda set is empty, so this function is never called; synthesize a function
                     // that always yields a runtime error.
                     let name = env.unique_symbol();
+                    let lambda_name = LambdaName::no_niche(name);
                     let function_layout =
                         RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout);
-                    let proc =
-                        generate_runtime_error_function(env, layout_cache, name, function_layout);
-                    let top_level = ProcLayout::from_raw(
-                        env.arena,
-                        &layout_cache.interner,
-                        function_layout,
-                        CapturesNiche::no_niche(),
-                    );
+                    let proc = generate_runtime_error_function(env, lambda_name, function_layout);
+                    let top_level =
+                        ProcLayout::from_raw_named(env.arena, lambda_name, function_layout);
 
                     procs.specialized.insert_specialized(name, top_level, proc);
-                    LambdaName::no_niche(name)
+
+                    lambda_name
                 }
             };
 
@@ -10643,7 +10496,6 @@ fn match_on_lambda_set<'a>(
 
             union_lambda_set_branch_help(
                 env,
-                layout_cache,
                 function_symbol,
                 closure_info,
                 argument_symbols,
@@ -10666,7 +10518,6 @@ fn match_on_lambda_set<'a>(
 
             union_lambda_set_branch_help(
                 env,
-                layout_cache,
                 function_symbol,
                 closure_info,
                 argument_symbols,
@@ -10714,7 +10565,6 @@ fn match_on_lambda_set<'a>(
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_to_switch<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &LayoutCache<'a>,
     lambda_set: LambdaSet<'a>,
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
@@ -10749,7 +10599,6 @@ fn union_lambda_set_to_switch<'a>(
 
         let stmt = union_lambda_set_branch(
             env,
-            layout_cache,
             join_point_id,
             lambda_name,
             closure_info,
@@ -10791,7 +10640,6 @@ fn union_lambda_set_to_switch<'a>(
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_branch<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &LayoutCache<'a>,
     join_point_id: JoinPointId,
     lambda_name: LambdaName<'a>,
     closure_info: ClosureInfo<'a>,
@@ -10805,7 +10653,6 @@ fn union_lambda_set_branch<'a>(
 
     union_lambda_set_branch_help(
         env,
-        layout_cache,
         lambda_name,
         closure_info,
         argument_symbols_slice,
@@ -10829,7 +10676,6 @@ enum ClosureInfo<'a> {
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_branch_help<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &LayoutCache<'a>,
     lambda_name: LambdaName<'a>,
     closure_info: ClosureInfo<'a>,
     argument_symbols_slice: &'a [Symbol],
@@ -10843,22 +10689,21 @@ fn union_lambda_set_branch_help<'a>(
             lambda_set,
             closure_data_symbol,
         } => {
-            let argument_layouts = lambda_set.extend_argument_list(
+            let argument_layouts = lambda_set.extend_argument_list_for_named(
                 env.arena,
-                &layout_cache.interner,
+                lambda_name,
                 argument_layouts_slice,
             );
-            let argument_symbols = if argument_layouts.len() > argument_layouts_slice.len() {
-                // extend symbols with the symbol of the closure environment
-                let mut argument_symbols =
-                    Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
-                argument_symbols.extend(argument_symbols_slice);
-                argument_symbols.push(closure_data_symbol);
-                argument_symbols.into_bump_slice()
-            } else {
-                argument_symbols_slice
-            };
-            (argument_layouts, argument_symbols)
+
+            // Since this lambda captures, the arguments must have been extended.
+            debug_assert!(argument_layouts.len() > argument_layouts_slice.len());
+            // Extend symbols with the symbol of the closure environment.
+            let mut argument_symbols =
+                Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
+            argument_symbols.extend(argument_symbols_slice);
+            argument_symbols.push(closure_data_symbol);
+
+            (argument_layouts, argument_symbols.into_bump_slice())
         }
         ClosureInfo::DoesNotCapture => {
             // sometimes unification causes a function that does not itself capture anything

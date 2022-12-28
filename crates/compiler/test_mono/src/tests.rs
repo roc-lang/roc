@@ -2244,6 +2244,50 @@ fn lambda_set_with_imported_toplevels_issue_4733() {
 }
 
 #[mono_test]
+fn anonymous_closure_in_polymorphic_expression_issue_4717() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "platform"
+
+        chompWhile : (List U8) -> (List U8)
+        chompWhile = \input ->
+                index = List.walkUntil input 0 \i, _ -> Break i
+
+                if index == 0 then
+                    input
+                else
+                    List.drop input index
+
+        main = chompWhile [1u8, 2u8, 3u8]
+        "###
+    )
+}
+
+#[mono_test]
+fn list_map_take_capturing_or_noncapturing() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "platform"
+
+        main =
+            x = 1u8
+            y = 2u8
+            f = when "" is
+                "A" ->
+                    g = \n -> n + x
+                    g
+                "B" ->
+                    h = \n -> n + y
+                    h
+                _   ->
+                    k = \n -> n + n
+                    k
+            List.map [1u8, 2u8, 3u8] f
+        "###
+    )
+}
+
+#[mono_test]
 fn issue_4557() {
     indoc!(
         r###"
