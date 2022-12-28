@@ -473,11 +473,26 @@ mod cli_run {
 
     #[test]
     #[serial(cli_platform)]
-    #[cfg_attr(windows, ignore)]
+    #[ignore]
+    // ignored because downloaded prebuilt platforms cause problems with nix and NixOS
+    // this is explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)
     fn hello_world() {
         test_roc_app_slim(
             "examples",
             "helloWorld.roc",
+            "helloWorld",
+            "Hello, World!\n",
+            UseValgrind::Yes,
+        )
+    }
+
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn hello_world_no_url() {
+        test_roc_app_slim(
+            "examples",
+            "helloWorldNoURL.roc",
             "helloWorld",
             "Hello, World!\n",
             UseValgrind::Yes,

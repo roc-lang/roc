@@ -62,7 +62,7 @@ procedure Decode.26 (Decode.100, Decode.101):
         let Decode.116 : [C [C List U8, C ], C Str] = TagId(0) Decode.117;
         ret Decode.116;
 
-procedure Json.139 (Json.450, Json.451):
+procedure Json.139 (Json.452, Json.453):
     joinpoint Json.421 Json.418 Json.138:
         let Json.141 : List U8 = StructAtIndex 0 Json.418;
         inc Json.141;
@@ -91,7 +91,7 @@ procedure Json.139 (Json.450, Json.451):
             let Json.435 : {List U8, List U8} = Struct {Json.141, Json.140};
             ret Json.435;
     in
-    jump Json.421 Json.450 Json.451;
+    jump Json.421 Json.452 Json.453;
 
 procedure Json.143 (Json.432):
     let Json.433 : List U8 = StructAtIndex 1 Json.432;

@@ -593,7 +593,7 @@ fn record_optional_field_function_use_default() {
     "#
 }
 
-#[mono_test(no_check)]
+#[mono_test(no_check = "https://github.com/roc-lang/roc/issues/4694")]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r#"
@@ -1311,7 +1311,7 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
     )
 }
 
-#[mono_test(no_check)]
+#[mono_test]
 fn issue_2810() {
     indoc!(
         r#"
@@ -1530,7 +1530,7 @@ fn encode_derived_record() {
     )
 }
 
-#[mono_test(no_check)]
+#[mono_test]
 fn choose_correct_recursion_var_under_record() {
     indoc!(
         r#"
@@ -1926,6 +1926,28 @@ fn encode_derived_tag_one_field_string() {
 }
 
 #[mono_test]
+fn polymorphic_expression_unification() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        RenderTree : [
+            Text Str,
+            Indent (List RenderTree),
+        ]
+        parseFunction : Str -> RenderTree
+        parseFunction = \name ->
+            last = Indent [Text ".trace(\"\(name)\")" ]
+            Indent [last]
+
+        values = parseFunction "interface_header"
+
+        main = values == Text ""
+        "#
+    )
+}
+
+#[mono_test]
 fn encode_derived_tag_two_payloads_string() {
     indoc!(
         r#"
@@ -2202,7 +2224,7 @@ fn issue_4749() {
     )
 }
 
-#[mono_test(mode = "test", no_check)]
+#[mono_test(mode = "test")]
 fn lambda_set_with_imported_toplevels_issue_4733() {
     indoc!(
         r###"
@@ -2231,6 +2253,64 @@ fn order_list_size_tests_issue_4732() {
             [3, 2, 1, ..]    -> "B3"
             [4, 3, 2, 1, ..] -> "B4"
             _                -> "Catchall"
+        "###
+    )
+}
+
+#[mono_test]
+fn anonymous_closure_in_polymorphic_expression_issue_4717() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "platform"
+
+        chompWhile : (List U8) -> (List U8)
+        chompWhile = \input ->
+                index = List.walkUntil input 0 \i, _ -> Break i
+
+                if index == 0 then
+                    input
+                else
+                    List.drop input index
+
+        main = chompWhile [1u8, 2u8, 3u8]
+        "###
+    )
+}
+
+#[mono_test]
+fn list_map_take_capturing_or_noncapturing() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "platform"
+
+        main =
+            x = 1u8
+            y = 2u8
+            f = when "" is
+                "A" ->
+                    g = \n -> n + x
+                    g
+                "B" ->
+                    h = \n -> n + y
+                    h
+                _   ->
+                    k = \n -> n + n
+                    k
+            List.map [1u8, 2u8, 3u8] f
+        "###
+    )
+}
+
+#[mono_test]
+fn issue_4557() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        isEqQ = \q1, q2 -> when T q1 q2 is
+            T (U f1) (U f2) -> Bool.or (isEqQ (U f2) (U f1)) (f1 {} == f2 {})
+
+        main = isEqQ (U \{} -> "a") (U \{} -> "a")
         "###
     )
 }

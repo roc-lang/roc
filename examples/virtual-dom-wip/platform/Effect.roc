@@ -1,21 +1,25 @@
 hosted Effect
     exposes [
         Effect,
+        NodeId,
+        HandlerId,
+        TagName,
+        AttrType,
+        EventType,
         after,
         always,
         map,
-        NodeId,
-        EventHandlerId,
-        eventHandlerId,
         createElement,
         createTextNode,
         updateTextNode,
         appendChild,
         removeNode,
+        replaceNode,
         setAttribute,
         removeAttribute,
         setProperty,
         removeProperty,
+        setStyle,
         setListener,
         removeListener,
         enableVdomAllocator,
@@ -24,22 +28,21 @@ hosted Effect
     imports []
     generates Effect with [after, always, map]
 
-# TODO: private type
+# TODO: private types
 NodeId : Nat
-
-EventHandlerId := Nat
-eventHandlerId = \id -> @EventHandlerId id
+HandlerId : Nat
 
 # TODO: make these tag unions to avoid encoding/decoding standard names
+# but for now, this is much easier to code and debug!
 TagName : Str
 AttrType : Str
 EventType : Str
 
 ## createElement tagName
-createElement : TagName -> Effect NodeId
+createElement : NodeId, TagName -> Effect {}
 
 ## createTextNode content
-createTextNode : Str -> Effect NodeId
+createTextNode : NodeId, Str -> Effect {}
 
 ## updateTextNode content
 updateTextNode : NodeId, Str -> Effect {}
@@ -49,6 +52,9 @@ appendChild : NodeId, NodeId -> Effect {}
 
 ## removeNode id
 removeNode : NodeId -> Effect {}
+
+## replaceNode oldId newId
+replaceNode : NodeId, NodeId -> Effect {}
 
 ## setAttribute nodeId attrName value
 setAttribute : NodeId, AttrType, Str -> Effect {}
@@ -62,8 +68,11 @@ setProperty : NodeId, Str, List U8 -> Effect {}
 ## removeProperty nodeId propName
 removeProperty : NodeId, Str -> Effect {}
 
-## setListener nodeId eventType handlerId
-setListener : NodeId, EventType, EventHandlerId -> Effect {}
+## setStyle nodeId key value
+setStyle : NodeId, Str, Str -> Effect {}
+
+## setListener nodeId eventType accessorsJson handlerId
+setListener : NodeId, EventType, List U8, HandlerId -> Effect {}
 
 ## removeListener nodeId eventType
 removeListener : NodeId, EventType -> Effect {}

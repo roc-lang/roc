@@ -1,0 +1,35 @@
+procedure Bool.11 (#Attr.2, #Attr.3):
+    let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.23;
+
+procedure Str.3 (#Attr.2, #Attr.3):
+    let Str.266 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.266;
+
+procedure Test.2 (Test.7):
+    let Test.24 : Str = ".trace(\"";
+    let Test.26 : Str = "\")";
+    let Test.25 : Str = CallByName Str.3 Test.7 Test.26;
+    dec Test.26;
+    let Test.23 : Str = CallByName Str.3 Test.24 Test.25;
+    dec Test.25;
+    let Test.22 : [<r>C List *self, C Str] = TagId(1) Test.23;
+    let Test.21 : List [<r>C List *self, C Str] = Array [Test.22];
+    let Test.8 : [<r>C List *self, C Str] = TagId(0) Test.21;
+    let Test.20 : List [<r>C List *self, C Str] = Array [Test.8];
+    let Test.19 : [<r>C List *self, C Str] = TagId(0) Test.20;
+    ret Test.19;
+
+procedure Test.3 ():
+    let Test.18 : Str = "interface_header";
+    let Test.17 : [<r>C List *self, C Str] = CallByName Test.2 Test.18;
+    ret Test.17;
+
+procedure Test.0 ():
+    let Test.14 : [<r>C List *self, C Str] = CallByName Test.3;
+    let Test.16 : Str = "";
+    let Test.15 : [<r>C List *self, C Str] = TagId(1) Test.16;
+    let Test.13 : Int1 = CallByName Bool.11 Test.14 Test.15;
+    dec Test.15;
+    dec Test.14;
+    ret Test.13;

@@ -45,6 +45,7 @@ pub enum HeaderType<'a> {
         /// usually something other than `pf`
         config_shorthand: &'a str,
         exposes: &'a [Loc<ModuleName<'a>>],
+        exposes_ids: &'a [ModuleId],
     },
     Platform {
         opt_app_module_id: Option<ModuleId>,
@@ -54,6 +55,7 @@ pub enum HeaderType<'a> {
         requires: &'a [Loc<TypedIdent<'a>>],
         requires_types: &'a [Loc<UppercaseIdent<'a>>],
         exposes: &'a [Loc<ModuleName<'a>>],
+        exposes_ids: &'a [ModuleId],
 
         /// usually `pf`
         config_shorthand: &'a str,

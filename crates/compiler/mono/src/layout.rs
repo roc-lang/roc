@@ -1254,9 +1254,9 @@ impl<'a> LambdaName<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LambdaSet<'a> {
     /// collection of function names and their closure arguments
-    set: &'a [(Symbol, &'a [Layout<'a>])],
+    pub(crate) set: &'a [(Symbol, &'a [Layout<'a>])],
     /// how the closure will be represented at runtime
-    representation: Interned<Layout<'a>>,
+    pub(crate) representation: Interned<Layout<'a>>,
 }
 
 #[derive(Debug)]
@@ -1610,37 +1610,31 @@ impl<'a> LambdaSet<'a> {
         }
     }
 
-    pub fn extend_argument_list<I>(
+    /// If `lambda_name` captures, extend the arguments to the lambda with the lambda set, from
+    /// which the lambda should extract its captures from.
+    ///
+    /// If `lambda_name` doesn't capture, the arguments are unaffected.
+    pub(crate) fn extend_argument_list_for_named(
         &self,
         arena: &'a Bump,
-        interner: &I,
+        lambda_name: LambdaName<'a>,
         argument_layouts: &'a [Layout<'a>],
-    ) -> &'a [Layout<'a>]
-    where
-        I: Interner<'a, Layout<'a>>,
-    {
-        match self.call_by_name_options(interner) {
-            ClosureCallOptions::Void => argument_layouts,
-            ClosureCallOptions::Struct {
-                field_layouts: &[], ..
-            } => {
-                // this function does not have anything in its closure, and the lambda set is a
-                // singleton, so we pass no extra argument
-                argument_layouts
-            }
-            ClosureCallOptions::Struct { .. }
-            | ClosureCallOptions::Union(_)
-            | ClosureCallOptions::UnwrappedCapture(_) => {
-                let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
-                arguments.extend(argument_layouts);
-                arguments.push(Layout::LambdaSet(*self));
+    ) -> &'a [Layout<'a>] {
+        debug_assert!(
+            self.set
+                .contains(&(lambda_name.name, lambda_name.captures_niche.0)),
+            "{:?}",
+            (self, lambda_name)
+        );
+        // If we don't capture, there is nothing to extend.
+        if lambda_name.captures_niche.0.is_empty() {
+            argument_layouts
+        } else {
+            let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);
+            arguments.extend(argument_layouts);
+            arguments.push(Layout::LambdaSet(*self));
 
-                arguments.into_bump_slice()
-            }
-            ClosureCallOptions::EnumDispatch(_) => {
-                // No captures, don't pass this along
-                argument_layouts
-            }
+            arguments.into_bump_slice()
         }
     }
 

@@ -3602,14 +3602,10 @@ name = "roc_fmt"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "indoc",
- "pretty_assertions",
  "roc_collections",
  "roc_module",
  "roc_parse",
  "roc_region",
- "roc_test_utils",
- "walkdir",
 ]
 
 [[package]]
@@ -4917,6 +4913,22 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "test_syntax"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "indoc",
+ "pretty_assertions",
+ "roc_collections",
+ "roc_fmt",
+ "roc_module",
+ "roc_parse",
+ "roc_region",
+ "roc_test_utils",
+ "walkdir",
 ]
 
 [[package]]

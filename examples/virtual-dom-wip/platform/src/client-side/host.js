@@ -30,20 +30,22 @@ const roc_init = async (initData, wasmUrl) => {
   const effects = {
     /**
      * @param {number} tagAddr
+     * @param {number} id
      */
-    createElement: (tagAddr) => {
+    createElement: (tagAddr, id) => {
       const tagName = decodeRocStr(tagAddr);
       const node = document.createElement(tagName);
-      return insertNode(node);
+      nodes[id] = node;
     },
 
     /**
      * @param {number} contentAddr
+     * @param {number} id
      */
-    createTextNode: (contentAddr) => {
+    createTextNode: (contentAddr, id) => {
       const content = decodeRocStr(contentAddr);
       const node = document.createTextNode(content);
-      return insertNode(node);
+      nodes[id] = node;
     },
 
     /**
@@ -72,6 +74,17 @@ const roc_init = async (initData, wasmUrl) => {
       const node = nodes[id];
       nodes[id] = null;
       node.parentElement.removeChild(node);
+    },
+
+    /**
+     * @param {number} id
+     */
+    replaceNode: (oldId, newId) => {
+      const oldNode = nodes[oldId];
+      const newNode = nodes[newId];
+      const parent = oldNode.parentElement;
+      parent.replaceChild(newNode, oldNode);
+      nodes[oldId] = null;
     },
 
     /**
@@ -117,6 +130,18 @@ const roc_init = async (initData, wasmUrl) => {
       const node = nodes[nodeId];
       const propName = decodeRocStr(propNameAddr);
       node[propName] = typeof node[propName] === "string" ? "" : null;
+    },
+
+    /**
+     * @param {number} nodeId
+     * @param {number} keyAddr
+     * @param {number} valueAddr
+     */
+    setStyle: (nodeId, keyAddr, valueAddr) => {
+      const node = nodes[nodeId];
+      const key = decodeRocStr(keyAddr);
+      const value = decodeRocStr(valueAddr);
+      node.style[key] = value;
     },
 
     /**
@@ -237,18 +262,6 @@ const roc_init = async (initData, wasmUrl) => {
     const len = memory32[listIndex32 + 1];
     const bytes = memory8.slice(bytesAddr8, bytesAddr8 + len);
     return utf8Decoder.decode(bytes);
-  };
-
-  /**
-   * @param {Node} node
-   */
-  const insertNode = (node) => {
-    let i = 0;
-    for (; i < nodes.length; i++) {
-      if (!nodes[i]) break;
-    }
-    nodes[i] = node;
-    return i;
   };
 
   /**

@@ -3967,6 +3967,8 @@ fn flat_type_to_err_type(
                     ErrorType::Record(err_fields, TypeExt::RigidOpen(var))
                 }
 
+                ErrorType::Error => ErrorType::Record(err_fields, TypeExt::Closed),
+
                 other =>
                     panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {:?}", other)
             }
@@ -3990,6 +3992,8 @@ fn flat_type_to_err_type(
                 ErrorType::RigidVar(var) | ErrorType::RigidAbleVar(var, _)=> {
                     ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var), pol)
                 }
+
+                ErrorType::Error => ErrorType::TagUnion(err_tags, TypeExt::Closed, pol),
 
                 other =>
                     panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
@@ -4018,6 +4022,8 @@ fn flat_type_to_err_type(
                 ErrorType::RigidVar(var) | ErrorType::RigidAbleVar(var, _)=> {
                     ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var), pol)
                 }
+
+                ErrorType::Error => ErrorType::TagUnion(err_tags, TypeExt::Closed, pol),
 
                 other =>
                     panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
@@ -4048,6 +4054,8 @@ fn flat_type_to_err_type(
                 ErrorType::RigidVar(var) => {
                     ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::RigidOpen(var), pol)
                 }
+
+                ErrorType::Error => ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::Closed, pol),
 
                 other =>
                     panic!("Tried to convert a recursive tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)

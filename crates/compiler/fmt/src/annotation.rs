@@ -288,9 +288,18 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                     buf.push(')')
                 }
             }
-            BoundVariable(v) => buf.push_str(v),
-            Wildcard => buf.push('*'),
-            Inferred => buf.push('_'),
+            BoundVariable(v) => {
+                buf.indent(indent);
+                buf.push_str(v)
+            }
+            Wildcard => {
+                buf.indent(indent);
+                buf.push('*')
+            }
+            Inferred => {
+                buf.indent(indent);
+                buf.push('_')
+            }
 
             TagUnion { tags, ext } => {
                 fmt_collection(buf, indent, Braces::Square, *tags, newlines);
@@ -355,8 +364,10 @@ impl<'a> Formattable for TypeAnnotation<'a> {
                 ann.format_with_options(buf, parens, newlines, indent);
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
             }
-
-            Malformed(raw) => buf.push_str(raw),
+            Malformed(raw) => {
+                buf.indent(indent);
+                buf.push_str(raw)
+            }
         }
     }
 }

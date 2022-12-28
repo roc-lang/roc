@@ -45,17 +45,33 @@ rustc --version
 # is set up to serve them.
 export ROC_DOCS_URL_ROOT=/builtins
 
-cargo run --release --bin roc-docs crates/compiler/builtins/roc/*.roc
+cargo run --release --bin roc-docs crates/compiler/builtins/roc/main.roc
 mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
 mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
 
 # Manually add this tip to all the builtin docs.
 find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div class="builtins-tip"><b>Tip:</b> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
 
+
+echo 'Fetching latest roc nightly...'
+curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
+# get the url of the latest release
+export ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh linux_x86_64)
+# get roc release archive
+curl -OL $ROC_RELEASE_URL
+# extract archive
+ls | grep "roc_nightly" | xargs tar --one-top-level=roc_nightly -xzvf
+# delete archive
+ls | grep "roc_nightly.*tar.gz" | xargs rm
+
 echo 'Building tutorial.html from tutorial.md...'
 mkdir www/build/tutorial
-cargo run --release run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
+./roc_nightly/roc version
+./roc_nightly/roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
 mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
+
+# cleanup roc
+rm -rf roc_nightly roc_releases.json
 
 echo 'Generating CLI example platform docs...'
 # Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
@@ -66,9 +82,7 @@ rm -rf ./downloaded-basic-cli
 
 git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
 
-# Until https://github.com/roc-lang/roc/issues/3280 is done,
-# manually exclude the Internal* modules and `main.roc`.
-ls downloaded-basic-cli/src/*.roc | grep -v Internal | grep -v main.roc | grep -v Effect.roc | xargs cargo run --bin roc-docs
+cargo run --bin roc-docs downloaded-basic-cli/src/main.roc
 
 rm -rf ./downloaded-basic-cli
 

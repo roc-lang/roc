@@ -8,7 +8,6 @@ interface Html
         translate,
         translateStatic,
         text,
-        # lazy,TODO
         none,
         html,
         base,
@@ -124,19 +123,18 @@ interface Html
         slot,
         template,
     ]
-    imports [Html.Internal]
+    imports [Html.Internal.Shared, Html.Internal.Server]
 
-App state initData : Html.Internal.App state initData
-Html state : Html.Internal.Html state
-Attribute state : Html.Internal.Attribute state
+App state initData : Html.Internal.Shared.App state initData
+Html state : Html.Internal.Shared.Html state
+Attribute state : Html.Internal.Shared.Attribute state
 
-element = Html.Internal.element
-text = Html.Internal.text
-# lazy = Html.Internal.lazy TODO
-none = Html.Internal.none
+element = Html.Internal.Shared.element
+text = Html.Internal.Shared.text
+none = Html.Internal.Shared.none
 
-translate = Html.Internal.translate
-translateStatic = Html.Internal.translateStatic
+translate = Html.Internal.Shared.translate
+translateStatic = Html.Internal.Shared.translateStatic
 
 ## Render a static Html node to a string, for saving to disk or sending over a network
 ##
@@ -146,16 +144,16 @@ translateStatic = Html.Internal.translateStatic
 ## See also `renderStaticWithoutDocType`.
 renderStatic : Html [] -> Str
 renderStatic = \node ->
-    buffer = Str.reserve "<!DOCTYPE html>" (Html.Internal.nodeSize node)
+    buffer = Str.reserve "<!DOCTYPE html>" (Html.Internal.Shared.nodeSize node)
 
-    Html.Internal.appendRenderedStatic buffer node
+    Html.Internal.Server.appendRenderedStatic buffer node
 
 ## Render a Html node to a static string, without a DOCTYPE
 renderStaticWithoutDocType : Html [] -> Str
 renderStaticWithoutDocType = \node ->
-    buffer = Str.reserve "" (Html.Internal.nodeSize node)
+    buffer = Str.reserve "" (Html.Internal.Shared.nodeSize node)
 
-    Html.Internal.appendRenderedStatic buffer node
+    Html.Internal.Server.appendRenderedStatic buffer node
 
 html = element "html"
 base = element "base"

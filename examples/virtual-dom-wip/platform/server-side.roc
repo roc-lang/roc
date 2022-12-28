@@ -3,7 +3,8 @@ platform "server-side"
     exposes []
     packages {}
     imports [
-        Html.Internal.{ App, initServerApp },
+        Html.Internal.Shared.{ App },
+        Html.Internal.Server.{ initServerApp },
         Html.{ renderStatic },
         Json,
     ]
