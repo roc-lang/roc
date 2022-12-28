@@ -152,7 +152,13 @@ fn build_loaded_file<'a>(
 
     // the preprocessed host is stored beside the platform's main.roc
     let preprocessed_host_path = if linking_strategy == LinkingStrategy::Legacy {
-        platform_main_roc.with_file_name(legacy_host_filename(target).unwrap())
+        if let roc_target::OperatingSystem::Wasi = operating_system {
+            // when compiling a wasm application, we implicitly assume here that the host is in zig
+            // and has a file called "host.zig"
+            platform_main_roc.with_file_name("host.zig")
+        } else {
+            platform_main_roc.with_file_name(legacy_host_filename(target).unwrap())
+        }
     } else {
         platform_main_roc.with_file_name(preprocessed_host_filename(target).unwrap())
     };
