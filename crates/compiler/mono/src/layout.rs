@@ -1290,7 +1290,7 @@ pub enum ClosureRepresentation<'a> {
     /// We MUST sort these according to their stack size before code gen!
     AlphabeticOrderStruct(&'a [InLayout<'a>]),
     /// The closure is one function that captures a single identifier, whose value is unwrapped.
-    UnwrappedCapture(Layout<'a>),
+    UnwrappedCapture(InLayout<'a>),
     /// The closure dispatches to multiple functions, but none of them capture anything, so this is
     /// a boolean or integer flag.
     EnumDispatch(EnumDispatch),
@@ -1471,12 +1471,12 @@ impl<'a> LambdaSet<'a> {
         I: Interner<'a, Layout<'a>>,
         F: Fn(Symbol, &[InLayout]) -> bool,
     {
-        let repr = interner.get(self.representation);
-
         if self.has_unwrapped_capture_repr() {
             // Only one function, that captures one identifier.
-            return ClosureRepresentation::UnwrappedCapture(*repr);
+            return ClosureRepresentation::UnwrappedCapture(self.representation);
         }
+
+        let repr = interner.get(self.representation);
 
         match repr {
             Layout::Union(union) => {
