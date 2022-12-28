@@ -17,7 +17,7 @@ use roc_mono::ir::{
     Call, CallType, Expr, HostExposedLayouts, Literal, Proc, ProcLayout, SelfRecursive, Stmt,
     UpdateModeId,
 };
-use roc_mono::layout::{Builtin, Captures, LambdaName, Layout, STLayoutInterner};
+use roc_mono::layout::{Builtin, LambdaName, Layout, Niche, STLayoutInterner};
 use roc_wasm_interp::{wasi, ImportDispatcher, Instance, WasiDispatcher};
 use roc_wasm_module::{Value, WasmModule};
 
@@ -124,7 +124,7 @@ fn build_app_mono<'a>(
     let proc_layout = ProcLayout {
         arguments: &[],
         result: int_layout,
-        niche: Captures::no_niche(),
+        niche: Niche::NONE,
     };
 
     let mut app = MutMap::default();
