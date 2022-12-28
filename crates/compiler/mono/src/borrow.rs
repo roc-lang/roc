@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use crate::ir::{Expr, HigherOrderLowLevel, JoinPointId, Param, Proc, ProcLayout, Stmt};
+use crate::ir::{
+    Expr, HigherOrderLowLevel, JoinPointId, Param, PassedFunction, Proc, ProcLayout, Stmt,
+};
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -977,7 +979,12 @@ fn call_info_call<'a>(call: &crate::ir::Call<'a>, info: &mut CallInfo<'a>) {
         }
         Foreign { .. } => {}
         LowLevel { .. } => {}
-        HigherOrder(_) => {}
+        HigherOrder(HigherOrderLowLevel {
+            passed_function: PassedFunction { name, .. },
+            ..
+        }) => {
+            info.keys.push(name.name());
+        }
     }
 }
 
