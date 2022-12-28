@@ -487,7 +487,7 @@ where
                 captures_niche
                     .0
                     .iter()
-                    .map(|c| c.to_doc(f, interner, Parens::NotNeeded)),
+                    .map(|&c| interner.get(c).to_doc(f, interner, Parens::NotNeeded)),
                 f.reflow(", "),
             ),
             f.reflow("})"),

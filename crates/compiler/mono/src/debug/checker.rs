@@ -2,6 +2,7 @@
 
 use bumpalo::Bump;
 use roc_collections::{MutMap, VecMap, VecSet};
+use roc_intern::Interner;
 use roc_module::symbol::Symbol;
 
 use crate::{
@@ -131,8 +132,8 @@ impl<'a> Problems<'a> {
 
 pub fn check_procs<'a>(
     arena: &'a Bump,
-    interner: &'a STLayoutInterner<'a>,
-    procs: &'a Procs<'a>,
+    interner: &mut STLayoutInterner<'a>,
+    procs: &Procs<'a>,
 ) -> Problems<'a> {
     let mut problems = Default::default();
 
@@ -161,9 +162,9 @@ type JoinPoints<'a> = VecMap<JoinPointId, (usize, &'a [Param<'a>])>;
 type CallSpecIds = VecMap<CallSpecId, usize>;
 struct Ctx<'a, 'r> {
     arena: &'a Bump,
-    interner: &'a STLayoutInterner<'a>,
+    interner: &'r mut STLayoutInterner<'a>,
     problems: &'r mut Vec<Problem<'a>>,
-    proc: &'a Proc<'a>,
+    proc: &'r Proc<'a>,
     proc_layout: ProcLayout<'a>,
     procs: &'r Procs<'a>,
     call_spec_ids: CallSpecIds,
@@ -180,7 +181,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
 
     fn problem(&mut self, problem_kind: ProblemKind<'a>) {
         self.problems.push(Problem {
-            proc: self.proc,
+            proc: self.arena.alloc(self.proc.clone()),
             proc_layout: self.proc_layout,
             line: self.line,
             kind: problem_kind,
@@ -526,7 +527,8 @@ impl<'a, 'r> Ctx<'a, 'r> {
                         return None;
                     }
                     let layout = resolve_recursive_layout(
-                        self.arena,
+                        ctx.arena,
+                        &mut ctx.interner,
                         payloads[index as usize],
                         union_layout,
                     );
@@ -613,8 +615,12 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     });
                 }
                 for (arg, wanted_layout) in arguments.iter().zip(payloads.iter()) {
-                    let wanted_layout =
-                        resolve_recursive_layout(self.arena, *wanted_layout, union_layout);
+                    let wanted_layout = resolve_recursive_layout(
+                        self.arena,
+                        self.interner,
+                        *wanted_layout,
+                        union_layout,
+                    );
                     self.check_sym_layout(*arg, wanted_layout, UseKind::TagPayloadArg);
                 }
             }
@@ -633,12 +639,13 @@ impl<'a, 'r> Ctx<'a, 'r> {
 
 fn resolve_recursive_layout<'a>(
     arena: &'a Bump,
+    interner: &mut STLayoutInterner<'a>,
     layout: Layout<'a>,
     when_recursive: UnionLayout<'a>,
 ) -> Layout<'a> {
     macro_rules! go {
         ($lay:expr) => {
-            resolve_recursive_layout(arena, $lay, when_recursive)
+            resolve_recursive_layout(arena, interner, $lay, when_recursive)
         };
     }
 
@@ -671,7 +678,7 @@ fn resolve_recursive_layout<'a>(
         } => {
             let field_layouts = field_layouts
                 .iter()
-                .map(|lay| resolve_recursive_layout(arena, *lay, when_recursive));
+                .map(|lay| resolve_recursive_layout(arena, interner, *lay, when_recursive));
             let field_layouts = arena.alloc_slice_fill_iter(field_layouts);
             Layout::Struct {
                 field_order_hash,
@@ -680,7 +687,12 @@ fn resolve_recursive_layout<'a>(
         }
         Layout::Builtin(builtin) => match builtin {
             Builtin::List(inner) => {
-                let inner = arena.alloc(resolve_recursive_layout(arena, *inner, when_recursive));
+                let inner = arena.alloc(resolve_recursive_layout(
+                    arena,
+                    interner,
+                    *inner,
+                    when_recursive,
+                ));
                 Layout::Builtin(Builtin::List(inner))
             }
             Builtin::Int(_)
@@ -694,7 +706,10 @@ fn resolve_recursive_layout<'a>(
             representation,
         }) => {
             let set = set.iter().map(|(symbol, captures)| {
-                let captures = captures.iter().map(|lay| go!(*lay));
+                let captures = captures.iter().map(|lay_in| {
+                    let new_lay = go!(*interner.get(*lay_in));
+                    interner.insert(arena.alloc(new_lay))
+                });
                 let captures = &*arena.alloc_slice_fill_iter(captures);
                 (*symbol, captures)
             });

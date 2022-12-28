@@ -135,7 +135,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
         module_id: home,
         procedures,
         exposed_to_host,
-        layout_interner,
+        mut layout_interner,
         interns,
         ..
     } = loaded;
@@ -152,7 +152,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
     let main_fn_symbol = exposed_to_host.values.keys().copied().next();
 
     if !no_check {
-        check_procedures(arena, &interns, &layout_interner, &procedures);
+        check_procedures(arena, &interns, &mut layout_interner, &procedures);
     }
 
     verify_procedures(test_name, layout_interner, procedures, main_fn_symbol);
@@ -161,7 +161,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
 fn check_procedures<'a>(
     arena: &'a Bump,
     interns: &Interns,
-    interner: &STLayoutInterner<'a>,
+    interner: &mut STLayoutInterner<'a>,
     procedures: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
     use roc_mono::debug::{check_procs, format_problems};
