@@ -122,3 +122,54 @@ fn run_valgrind_tests() {
         run_example(path);
     }
 }
+
+macro_rules! valgrind_test {
+    ($source:expr) => {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let app_roc = temp_dir.path().join("app.roc");
+
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&app_roc)
+            .unwrap();
+
+        use std::io::Write;
+
+        let pf = std::env::current_dir()
+            .unwrap()
+            .join("zig-platform/main.roc");
+
+        assert!(pf.exists(), "{:?}", &pf);
+
+        write!(
+            &mut file,
+            indoc::indoc!(
+                r#"
+                app "test"
+                    packages {{ pf: "{}" }}
+                    imports []
+                    provides [main] to pf
+
+                main =
+            "#
+            ),
+            pf.to_str().unwrap()
+        )
+        .unwrap();
+
+        for line in $source.lines() {
+            write!(&mut file, "    {}", line).unwrap();
+        }
+
+        run_example(app_roc);
+
+        drop(file);
+        drop(temp_dir)
+    };
+}
+
+#[test]
+fn list_concat_consumes_first_argument() {
+    valgrind_test!("List.concat (List.withCapacity 1024) [1,2,3] |> List.len |> Num.toStr");
+}

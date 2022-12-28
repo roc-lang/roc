@@ -5286,6 +5286,7 @@ version = "0.1.0"
 dependencies = [
  "bumpalo",
  "cli_utils",
+ "indoc",
  "roc_build",
  "roc_cli",
  "roc_load",
@@ -5293,6 +5294,7 @@ dependencies = [
  "roc_packaging",
  "roc_reporting",
  "target-lexicon",
+ "tempfile",
 ]
 
 [[package]]
