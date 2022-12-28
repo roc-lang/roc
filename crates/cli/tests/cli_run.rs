@@ -734,6 +734,7 @@ mod cli_run {
 
     // TODO: write a new test once mono bugs are resolved in investigation
     #[test]
+    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
     fn check_virtual_dom_server() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-server.roc");
         let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
@@ -742,6 +743,7 @@ mod cli_run {
 
     // TODO: write a new test once mono bugs are resolved in investigation
     #[test]
+    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
     fn check_virtual_dom_client() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-client.roc");
         let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
