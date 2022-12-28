@@ -3402,7 +3402,7 @@ fn specialize_proc_help<'a>(
                 RawFunctionLayout::ZeroArgumentThunk(result) => {
                     let assigned = env.unique_symbol();
                     let hole = env.arena.alloc(Stmt::Ret(assigned));
-                    let forced = force_thunk(env, lambda_name.name(), result, assigned, hole);
+                    let forced = force_thunk(env, lambda_name, result, assigned, hole);
 
                     let lambda_name = LambdaName::no_niche(name);
                     let proc = Proc {
@@ -5229,12 +5229,10 @@ pub fn with_hole<'a>(
                         Imported(thunk_name) => {
                             debug_assert!(procs.is_imported_module_thunk(thunk_name));
 
-                            add_needed_external(
-                                procs,
-                                env,
-                                fn_var,
-                                LambdaName::no_niche(thunk_name),
-                            );
+                            let (thunk_name, _ret) =
+                                LambdaName::thunk(env.arena, thunk_name, full_layout);
+
+                            add_needed_external(procs, env, fn_var, thunk_name);
 
                             let function_symbol = env.unique_symbol();
 
@@ -8110,12 +8108,15 @@ where
             .flatten();
 
         for (variable, left, _deepest_use) in needed_specializations_of_left {
-            add_needed_external(procs, env, variable, LambdaName::no_niche(right));
+            let raw_res_layout = layout_cache.raw_from_var(env.arena, variable, env.subs);
+            let raw_res_layout =
+                return_on_layout_error!(env, raw_res_layout, "handle_variable_aliasing");
 
-            let res_layout = layout_cache.from_var(env.arena, variable, env.subs);
-            let layout = return_on_layout_error!(env, res_layout, "handle_variable_aliasing");
+            let (right_thunk, res_layout) = LambdaName::thunk(env.arena, right, raw_res_layout);
 
-            result = force_thunk(env, right, layout, left, env.arena.alloc(result));
+            add_needed_external(procs, env, variable, right_thunk);
+
+            result = force_thunk(env, right_thunk, res_layout, left, env.arena.alloc(result));
         }
         result
     } else if env.is_imported_symbol(right) {
@@ -8167,14 +8168,14 @@ where
 
 fn force_thunk<'a>(
     env: &mut Env<'a, '_>,
-    thunk_name: Symbol,
+    thunk_name: LambdaName<'a>,
     layout: Layout<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
     let call = self::Call {
         call_type: CallType::ByName {
-            name: LambdaName::no_niche(thunk_name),
+            name: thunk_name,
             ret_layout: env.arena.alloc(layout),
             arg_layouts: &[],
             specialization_id: env.next_call_specialization_id(),
@@ -8247,15 +8248,9 @@ fn specialize_symbol<'a>(
                         _ => {
                             // This is an imported ZAT that returns either a value, or the closure
                             // data for a lambda set.
-                            let layout = match raw {
-                                RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
-                                RawFunctionLayout::Function(_, lambda_set, _) => {
-                                    Layout::LambdaSet(lambda_set)
-                                }
-                            };
+                            let (lambda_name, res_layout) =
+                                LambdaName::thunk(env.arena, original, raw);
 
-                            let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
-                            let lambda_name = LambdaName::no_niche(original);
                             let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, raw);
 
                             procs.insert_passed_by_name(
@@ -8266,7 +8261,13 @@ fn specialize_symbol<'a>(
                                 layout_cache,
                             );
 
-                            force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
+                            force_thunk(
+                                env,
+                                lambda_name,
+                                res_layout,
+                                assign_to,
+                                env.arena.alloc(result),
+                            )
                         }
                     }
                 }
@@ -8359,16 +8360,20 @@ fn specialize_symbol<'a>(
                         // let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
                         // panic!("suspicious");
                         let layout = Layout::LambdaSet(lambda_set);
-                        let top_level = ProcLayout::new(env.arena, &[], Niche::NONE, layout);
+                        let (lambda_name, ret_layout) =
+                            LambdaName::thunk(env.arena, original, res_layout);
+
+                        let top_level =
+                            ProcLayout::new(env.arena, &[], lambda_name.niche(), ret_layout);
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
-                            LambdaName::no_niche(original),
+                            lambda_name,
                             top_level,
                             layout_cache,
                         );
 
-                        force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
+                        force_thunk(env, lambda_name, layout, assign_to, env.arena.alloc(result))
                     } else {
                         // even though this function may not itself capture,
                         // unification may still cause it to have an extra argument
@@ -8401,20 +8406,16 @@ fn specialize_symbol<'a>(
                         )
                     }
                 }
-                RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
-                    // this is a 0-argument thunk
+                RawFunctionLayout::ZeroArgumentThunk(_) => {
+                    // this is a 0-argument thunk to a non-function value
+                    let (lambda_name, ret_layout) =
+                        LambdaName::thunk(env.arena, original, res_layout);
                     let top_level = ProcLayout::new(env.arena, &[], Niche::NONE, ret_layout);
-                    procs.insert_passed_by_name(
-                        env,
-                        arg_var,
-                        LambdaName::no_niche(original),
-                        top_level,
-                        layout_cache,
-                    );
+                    procs.insert_passed_by_name(env, arg_var, lambda_name, top_level, layout_cache);
 
                     force_thunk(
                         env,
-                        original,
+                        lambda_name,
                         ret_layout,
                         assign_to,
                         env.arena.alloc(result),
@@ -8568,7 +8569,7 @@ fn call_by_name<'a>(
 
             evaluate_arguments_then_runtime_error(env, procs, layout_cache, msg, loc_args)
         }
-        Ok(RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout)) => {
+        Ok(raw_layout @ RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout)) => {
             if procs.is_module_thunk(proc_name) {
                 if loc_args.is_empty() {
                     call_by_name_module_thunk(
@@ -8576,6 +8577,7 @@ fn call_by_name<'a>(
                         procs,
                         fn_var,
                         proc_name,
+                        raw_layout,
                         env.arena.alloc(Layout::LambdaSet(lambda_set)),
                         layout_cache,
                         assigned,
@@ -8628,6 +8630,7 @@ fn call_by_name<'a>(
                         procs,
                         fn_var,
                         proc_name,
+                        raw_layout,
                         env.arena.alloc(Layout::LambdaSet(lambda_set)),
                         layout_cache,
                         closure_data_symbol,
@@ -8653,7 +8656,7 @@ fn call_by_name<'a>(
                 )
             }
         }
-        Ok(RawFunctionLayout::ZeroArgumentThunk(ret_layout)) => {
+        Ok(raw_layout @ RawFunctionLayout::ZeroArgumentThunk(ret_layout)) => {
             if procs.is_module_thunk(proc_name) {
                 // here we turn a call to a module thunk into  forcing of that thunk
                 call_by_name_module_thunk(
@@ -8661,14 +8664,16 @@ fn call_by_name<'a>(
                     procs,
                     fn_var,
                     proc_name,
+                    raw_layout,
                     env.arena.alloc(ret_layout),
                     layout_cache,
                     assigned,
                     hole,
                 )
             } else if env.is_imported_symbol(proc_name) {
-                add_needed_external(procs, env, fn_var, LambdaName::no_niche(proc_name));
-                force_thunk(env, proc_name, ret_layout, assigned, hole)
+                let (thunk_name, ret_layout) = LambdaName::thunk(env.arena, proc_name, raw_layout);
+                add_needed_external(procs, env, fn_var, thunk_name);
+                force_thunk(env, thunk_name, ret_layout, assigned, hole)
             } else {
                 panic!("most likely we're trying to call something that is not a function");
             }
@@ -8783,7 +8788,7 @@ fn call_by_name_help<'a>(
         if procs.is_imported_module_thunk(proc_name.name()) {
             force_thunk(
                 env,
-                proc_name.name(),
+                proc_name,
                 Layout::LambdaSet(lambda_set),
                 assigned,
                 hole,
@@ -8981,14 +8986,14 @@ fn call_by_name_module_thunk<'a>(
     procs: &mut Procs<'a>,
     fn_var: Variable,
     proc_name: Symbol,
+    raw_return_layout: RawFunctionLayout<'a>,
     ret_layout: &'a Layout<'a>,
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let top_level_layout = ProcLayout::new(env.arena, &[], Niche::NONE, *ret_layout);
-
-    let inner_layout = *ret_layout;
+    let (lambda_name, inner_layout) = LambdaName::thunk(env.arena, proc_name, raw_return_layout);
+    let top_level_layout = ProcLayout::new(env.arena, &[], lambda_name.niche(), inner_layout);
 
     // If we've already specialized this one, no further work is needed.
     let already_specialized = procs
@@ -8996,7 +9001,7 @@ fn call_by_name_module_thunk<'a>(
         .is_specialized(proc_name, &top_level_layout);
 
     if already_specialized {
-        force_thunk(env, proc_name, inner_layout, assigned, hole)
+        force_thunk(env, lambda_name, inner_layout, assigned, hole)
     } else {
         // When requested (that is, when procs.pending_specializations is `Some`),
         // store a pending specialization rather than specializing immediately.
@@ -9023,14 +9028,9 @@ fn call_by_name_module_thunk<'a>(
                 debug_assert!(!env.is_imported_symbol(proc_name));
 
                 // register the pending specialization, so this gets code genned later
-                suspended.specialization(
-                    env.subs,
-                    LambdaName::no_niche(proc_name),
-                    top_level_layout,
-                    fn_var,
-                );
+                suspended.specialization(env.subs, lambda_name, top_level_layout, fn_var);
 
-                force_thunk(env, proc_name, inner_layout, assigned, hole)
+                force_thunk(env, lambda_name, inner_layout, assigned, hole)
             }
             (PendingSpecializations::Making(_), false) => {
                 let opt_partial_proc = procs.partial_procs.symbol_to_id(proc_name);
@@ -9047,7 +9047,7 @@ fn call_by_name_module_thunk<'a>(
                         match specialize_variable(
                             env,
                             procs,
-                            LambdaName::no_niche(proc_name),
+                            lambda_name,
                             layout_cache,
                             fn_var,
                             &[],
@@ -9071,12 +9071,12 @@ fn call_by_name_module_thunk<'a>(
                                     proc,
                                 );
 
-                                force_thunk(env, proc_name, inner_layout, assigned, hole)
+                                force_thunk(env, lambda_name, inner_layout, assigned, hole)
                             }
                             Err(SpecializeFailure { attempted_layout }) => {
                                 let proc = generate_runtime_error_function(
                                     env,
-                                    LambdaName::no_niche(proc_name),
+                                    lambda_name,
                                     attempted_layout,
                                 );
 
@@ -9091,7 +9091,7 @@ fn call_by_name_module_thunk<'a>(
                                     proc,
                                 );
 
-                                force_thunk(env, proc_name, inner_layout, assigned, hole)
+                                force_thunk(env, lambda_name, inner_layout, assigned, hole)
                             }
                         }
                     }

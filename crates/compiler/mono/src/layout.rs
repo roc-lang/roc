@@ -1449,6 +1449,31 @@ impl<'a> LambdaName<'a> {
         }
     }
 
+    /// Creates the lambda name for a thunk from its return value raw function signature.
+    /// Returns the lambda name and the runtime layout of the value.
+    pub fn thunk(
+        arena: &'a Bump,
+        name: Symbol,
+        return_value_function_layout: RawFunctionLayout<'a>,
+    ) -> (Self, Layout<'a>) {
+        match return_value_function_layout {
+            RawFunctionLayout::Function(_, lambda_set, _) => {
+                // This thunk resolves to a function; leave behind the lambda set as its value, and
+                // the function signature as the niche, so that we propogate the function's
+                // specialization.
+                let niche = Niche(NichePriv::EtaReducedThunk(
+                    arena.alloc(return_value_function_layout),
+                ));
+
+                (Self { name, niche }, Layout::LambdaSet(lambda_set))
+            }
+            RawFunctionLayout::ZeroArgumentThunk(ret) => {
+                // No captures or reference to a specialized function; we don't need a niche.
+                (Self::no_niche(name), ret)
+            }
+        }
+    }
+
     #[inline(always)]
     pub fn no_niche(name: Symbol) -> Self {
         Self {
