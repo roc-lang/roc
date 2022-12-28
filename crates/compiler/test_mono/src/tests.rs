@@ -1925,6 +1925,28 @@ fn encode_derived_tag_one_field_string() {
     )
 }
 
+#[mono_test(no_check)]
+fn polymorphic_expression_unification() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        RenderTree : [
+            Text Str,
+            Indent (List RenderTree),
+        ]
+        parseFunction : Str -> RenderTree
+        parseFunction = \name ->
+            last = Indent [Text ".trace(\"\(name)\")" ]
+            Indent [last]
+
+        values = parseFunction "interface_header"
+
+        main = values == Text ""
+        "#
+    )
+}
+
 #[mono_test]
 fn encode_derived_tag_two_payloads_string() {
     indoc!(
@@ -2261,6 +2283,20 @@ fn list_map_take_capturing_or_noncapturing() {
                     k = \n -> n + n
                     k
             List.map [1u8, 2u8, 3u8] f
+        "###
+    )
+}
+
+#[mono_test]
+fn issue_4557() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        isEqQ = \q1, q2 -> when T q1 q2 is
+            T (U f1) (U f2) -> Bool.or (isEqQ (U f2) (U f1)) (f1 {} == f2 {})
+
+        main = isEqQ (U \{} -> "a") (U \{} -> "a")
         "###
     )
 }

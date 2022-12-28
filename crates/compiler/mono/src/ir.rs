@@ -6968,9 +6968,17 @@ fn substitute_in_stmt_help<'a>(
             default_branch,
             ret_layout,
         } => {
-            let opt_default = substitute_in_stmt_help(arena, default_branch.1, subs);
-
             let mut did_change = false;
+
+            let cond_symbol = match substitute(subs, *cond_symbol) {
+                Some(s) => {
+                    did_change = true;
+                    s
+                }
+                None => *cond_symbol,
+            };
+
+            let opt_default = substitute_in_stmt_help(arena, default_branch.1, subs);
 
             let opt_branches = Vec::from_iter_in(
                 branches.iter().map(|(label, info, branch)| {
@@ -7008,7 +7016,7 @@ fn substitute_in_stmt_help<'a>(
                 };
 
                 Some(arena.alloc(Switch {
-                    cond_symbol: *cond_symbol,
+                    cond_symbol,
                     cond_layout: *cond_layout,
                     default_branch,
                     branches,

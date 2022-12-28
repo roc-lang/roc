@@ -41,7 +41,7 @@ viewNavbar =
             a [class "home-link", href "/", title "The Roc Programming Language"] [text "roc"],
             div [id "top-bar-links"] [
                 a [href "/tutorial"] [text "tutorial"],
-                a [href "/install"] [text "install"],
+                a [href "https://github.com/roc-lang/roc/tree/main/getting_started"] [text "install"],
                 a [href "/repl"] [text "repl"],
                 a [href "/builtins/Bool"] [text "docs"],
             ],
