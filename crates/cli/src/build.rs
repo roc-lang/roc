@@ -151,8 +151,8 @@ fn build_loaded_file<'a>(
 
             let host_filename = match operating_system {
                 Wasi => "host.zig".to_string(),
-                Unix => legacy_host_filename(target, code_gen_options.opt_level).unwrap(),
-                Windows => legacy_host_filename(target, code_gen_options.opt_level).unwrap(),
+                Unix => legacy_host_filename(target).unwrap(),
+                Windows => legacy_host_filename(target).unwrap(),
             };
 
             platform_path.with_file_name(host_filename)
@@ -161,7 +161,7 @@ fn build_loaded_file<'a>(
     };
 
     let preprocessed_host_path = if linking_strategy == LinkingStrategy::Legacy {
-        let filename = legacy_host_filename(target, code_gen_options.opt_level).unwrap();
+        let filename = legacy_host_filename(target).unwrap();
         host_input_path.with_file_name(filename)
     } else {
         let filename = preprocessed_host_filename(target).unwrap();

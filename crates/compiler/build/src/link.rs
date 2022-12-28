@@ -60,31 +60,6 @@ pub fn link(
     }
 }
 
-const fn legacy_host_filename_ext(
-    os: roc_target::OperatingSystem,
-    opt_level: OptLevel,
-) -> &'static str {
-    use roc_target::OperatingSystem::*;
-
-    match os {
-        Wasi => {
-            // TODO wasm host extension should be something else ideally
-            // .bc does not seem to work because
-            //
-            // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
-            //
-            // and zig does not currently emit `.a` webassembly static libraries
-            if matches!(opt_level, OptLevel::Development) {
-                "wasm"
-            } else {
-                "zig"
-            }
-        }
-        Unix => "o",
-        Windows => "obj",
-    }
-}
-
 const PRECOMPILED_HOST_EXT: &str = "rh1"; // Short for "roc host version 1" (so we can change format in the future)
 
 const WASM_TARGET_STR: &str = "wasm32";
@@ -208,9 +183,9 @@ pub fn get_target_triple_str(target: &Triple) -> Option<&'static str> {
 }
 
 /// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
-pub fn legacy_host_filename(target: &Triple, opt_level: OptLevel) -> Option<String> {
+pub fn legacy_host_filename(target: &Triple) -> Option<String> {
     let os = roc_target::OperatingSystem::from(target.operating_system);
-    let ext = legacy_host_filename_ext(os, opt_level);
+    let ext = os.object_file_ext();
 
     Some(preprocessed_host_filename(target)?.replace(PRECOMPILED_HOST_EXT, ext))
 }
@@ -698,7 +673,7 @@ pub fn rebuild_host(
             .with_file_name("dynhost")
             .with_extension(executable_extension)
     } else {
-        host_input_path.with_file_name(legacy_host_filename(target, opt_level).unwrap())
+        host_input_path.with_file_name(legacy_host_filename(target).unwrap())
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
