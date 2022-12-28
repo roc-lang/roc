@@ -1673,7 +1673,7 @@ impl<'a> LambdaSet<'a> {
         lambda_name: LambdaName<'a>,
         argument_layouts: &'a [Layout<'a>],
     ) -> &'a [Layout<'a>] {
-        let Niche::Captures(CapturesNiche(captures)) = lambda_name.niche;
+        let Niche(NichePriv::Captures(captures)) = lambda_name.niche;
         debug_assert!(
             self.set.contains(&(lambda_name.name, captures)),
             "{:?}",
