@@ -742,6 +742,9 @@ fn swapElements(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2
 pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_width: usize) callconv(.C) RocList {
     // NOTE we always use list_a! because it is owned, we must consume it, and it may have unused capacity
     if (list_b.isEmpty()) {
+        // we must consume this list. Even though it has no elements, it could still have capacity
+        list_b.deinit(usize);
+
         return list_a;
     } else if (list_a.isUnique()) {
         const total_length: usize = list_a.len() + list_b.len();
