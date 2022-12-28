@@ -636,15 +636,19 @@ fn resolve_recursive_layout<'a>(
     layout: Layout<'a>,
     when_recursive: UnionLayout<'a>,
 ) -> Layout<'a> {
+    macro_rules! go {
+        ($lay:expr) => {
+            resolve_recursive_layout(arena, $lay, when_recursive)
+        };
+    }
+
     // TODO check if recursive pointer not in recursive union
     match layout {
         Layout::RecursivePointer => Layout::Union(when_recursive),
         Layout::Union(union_layout) => match union_layout {
             UnionLayout::NonRecursive(payloads) => {
                 let payloads = payloads.iter().map(|args| {
-                    let args = args
-                        .iter()
-                        .map(|lay| resolve_recursive_layout(arena, *lay, when_recursive));
+                    let args = args.iter().map(|lay| go!(*lay));
                     &*arena.alloc_slice_fill_iter(args)
                 });
                 let payloads = arena.alloc_slice_fill_iter(payloads);
@@ -660,9 +664,7 @@ fn resolve_recursive_layout<'a>(
                 layout
             }
         },
-        Layout::Boxed(inner) => {
-            Layout::Boxed(arena.alloc(resolve_recursive_layout(arena, *inner, when_recursive)))
-        }
+        Layout::Boxed(inner) => Layout::Boxed(arena.alloc(go!(*inner))),
         Layout::Struct {
             field_order_hash,
             field_layouts,
@@ -692,9 +694,7 @@ fn resolve_recursive_layout<'a>(
             representation,
         }) => {
             let set = set.iter().map(|(symbol, captures)| {
-                let captures = captures
-                    .iter()
-                    .map(|lay| resolve_recursive_layout(arena, *lay, when_recursive));
+                let captures = captures.iter().map(|lay| go!(*lay));
                 let captures = &*arena.alloc_slice_fill_iter(captures);
                 (*symbol, captures)
             });
