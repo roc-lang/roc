@@ -8578,7 +8578,6 @@ fn call_by_name<'a>(
                         fn_var,
                         proc_name,
                         raw_layout,
-                        env.arena.alloc(Layout::LambdaSet(lambda_set)),
                         layout_cache,
                         assigned,
                         hole,
@@ -8631,7 +8630,6 @@ fn call_by_name<'a>(
                         fn_var,
                         proc_name,
                         raw_layout,
-                        env.arena.alloc(Layout::LambdaSet(lambda_set)),
                         layout_cache,
                         closure_data_symbol,
                         env.arena.alloc(result),
@@ -8656,7 +8654,7 @@ fn call_by_name<'a>(
                 )
             }
         }
-        Ok(raw_layout @ RawFunctionLayout::ZeroArgumentThunk(ret_layout)) => {
+        Ok(raw_layout @ RawFunctionLayout::ZeroArgumentThunk(_)) => {
             if procs.is_module_thunk(proc_name) {
                 // here we turn a call to a module thunk into  forcing of that thunk
                 call_by_name_module_thunk(
@@ -8665,7 +8663,6 @@ fn call_by_name<'a>(
                     fn_var,
                     proc_name,
                     raw_layout,
-                    env.arena.alloc(ret_layout),
                     layout_cache,
                     assigned,
                     hole,
@@ -8987,7 +8984,6 @@ fn call_by_name_module_thunk<'a>(
     fn_var: Variable,
     proc_name: Symbol,
     raw_return_layout: RawFunctionLayout<'a>,
-    ret_layout: &'a Layout<'a>,
     layout_cache: &mut LayoutCache<'a>,
     assigned: Symbol,
     hole: &'a Stmt<'a>,
