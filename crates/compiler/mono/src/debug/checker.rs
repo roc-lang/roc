@@ -427,7 +427,8 @@ impl<'a, 'r> Ctx<'a, 'r> {
                         }
                     }
                 }
-                Some(Layout::Builtin(Builtin::List(self.alloc(*elem_layout))))
+                let elem_layout = self.interner.insert(self.alloc(*elem_layout));
+                Some(Layout::Builtin(Builtin::List(elem_layout)))
             }
             Expr::EmptyArray => {
                 // TODO don't know what the element layout is
@@ -694,9 +695,10 @@ fn resolve_recursive_layout<'a>(
                 let inner = arena.alloc(resolve_recursive_layout(
                     arena,
                     interner,
-                    *inner,
+                    *interner.get(inner),
                     when_recursive,
                 ));
+                let inner = interner.insert(arena.alloc(inner));
                 Layout::Builtin(Builtin::List(inner))
             }
             Builtin::Int(_)

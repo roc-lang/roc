@@ -11,8 +11,8 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
-    self, union_sorted_tags_pub, Builtin, Layout, LayoutCache, LayoutInterner, UnionLayout,
-    UnionVariant, WrappedVariant,
+    self, union_sorted_tags_pub, Builtin, InLayout, Layout, LayoutCache, LayoutInterner,
+    UnionLayout, UnionVariant, WrappedVariant,
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, Pattern, StrLiteral};
 use roc_region::all::{Loc, Region};
@@ -409,7 +409,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                     mem,
                     addr,
                     len,
-                    elem_layout,
+                    *elem_layout,
                     env.subs.get_content_without_compacting(raw_var),
                 )
             },
@@ -597,7 +597,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             let len = mem.deref_usize(addr + env.target_info.ptr_width() as usize);
             let _cap = mem.deref_usize(addr + 2 * env.target_info.ptr_width() as usize);
 
-            list_to_ast(env, mem, elem_addr, len, elem_layout, raw_content)
+            list_to_ast(env, mem, elem_addr, len, *elem_layout, raw_content)
         }
         (_, Layout::Builtin(Builtin::Str)) => {
             let string = mem.deref_str(addr);
@@ -892,7 +892,7 @@ fn list_to_ast<'a, M: ReplAppMemory>(
     mem: &'a M,
     addr: usize,
     len: usize,
-    elem_layout: &Layout<'a>,
+    elem_layout: InLayout<'a>,
     content: &Content,
 ) -> Expr<'a> {
     let elem_var = match content {
@@ -912,6 +912,7 @@ fn list_to_ast<'a, M: ReplAppMemory>(
 
     let arena = env.arena;
     let mut output = Vec::with_capacity_in(len, arena);
+    let elem_layout = *env.layout_cache.get_in(elem_layout);
     let elem_size = elem_layout.stack_size(&env.layout_cache.interner, env.target_info) as usize;
 
     for index in 0..len {
@@ -923,7 +924,7 @@ fn list_to_ast<'a, M: ReplAppMemory>(
             env,
             mem,
             elem_addr,
-            elem_layout,
+            &elem_layout,
             WhenRecursive::Unreachable,
             elem_content,
         );

@@ -9,6 +9,7 @@ use inkwell::{
 use morphic_lib::{FuncSpec, UpdateMode};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
+use roc_intern::Interner;
 use roc_module::{low_level::LowLevel, symbol::Symbol};
 use roc_mono::{
     ir::HigherOrderLowLevel,
@@ -52,7 +53,7 @@ use super::{
 macro_rules! list_element_layout {
     ($list_layout:expr) => {
         match $list_layout {
-            Layout::Builtin(Builtin::List(list_layout)) => *list_layout,
+            Layout::Builtin(Builtin::List(list_layout)) => list_layout,
             _ => unreachable!("invalid list layout"),
         }
     };
@@ -645,7 +646,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             list_with_capacity(
                 env,
                 list_len.into_int_value(),
-                &list_element_layout!(result_layout),
+                list_element_layout!(result_layout),
             )
         }
         ListConcat => {
@@ -657,7 +658,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
 
             let element_layout = list_element_layout!(list_layout);
 
-            list_concat(env, first_list, second_list, element_layout)
+            list_concat(env, first_list, second_list, *element_layout)
         }
         ListAppendUnsafe => {
             // List.appendUnsafe : List elem, elem -> List elem
@@ -685,7 +686,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             let element_layout = list_element_layout!(list_layout);
             let spare = load_symbol(scope, &args[1]);
 
-            list_reserve(env, list, spare, element_layout, update_mode)
+            list_reserve(env, list, spare, *element_layout, update_mode)
         }
         ListSwap => {
             // List.swap : List elem, Nat, Nat -> List elem
@@ -703,7 +704,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 original_wrapper,
                 index_1.into_int_value(),
                 index_2.into_int_value(),
-                element_layout,
+                *element_layout,
                 update_mode,
             )
         }
@@ -723,7 +724,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 original_wrapper,
                 start.into_int_value(),
                 len.into_int_value(),
-                element_layout,
+                *element_layout,
             )
         }
         ListDropAt => {
@@ -741,7 +742,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 layout_ids,
                 original_wrapper,
                 count.into_int_value(),
-                element_layout,
+                *element_layout,
             )
         }
         StrGetUnsafe => {
@@ -763,7 +764,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             list_get_unsafe(
                 env,
                 layout_ids,
-                list_element_layout!(list_layout),
+                *list_element_layout!(list_layout),
                 element_index.into_int_value(),
                 wrapper_struct.into_struct_value(),
             )
@@ -2275,7 +2276,10 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     Layout::Builtin(Builtin::List(element_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let argument_layouts = &[**element_layout];
+                    let element_layout = env.layout_interner.get(*element_layout);
+                    let result_layout = env.layout_interner.get(*result_layout);
+
+                    let argument_layouts = &[*element_layout];
 
                     let roc_function_call = roc_function_call(
                         env,
@@ -2285,7 +2289,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        **result_layout,
+                        *result_layout,
                     );
 
                     list_map(env, roc_function_call, list, element_layout, result_layout)
@@ -2305,7 +2309,11 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     Layout::Builtin(Builtin::List(element2_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let argument_layouts = &[**element1_layout, **element2_layout];
+                    let element1_layout = env.layout_interner.get(*element1_layout);
+                    let element2_layout = env.layout_interner.get(*element2_layout);
+                    let result_layout = env.layout_interner.get(*result_layout);
+
+                    let argument_layouts = &[*element1_layout, *element2_layout];
 
                     let roc_function_call = roc_function_call(
                         env,
@@ -2315,7 +2323,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        **result_layout,
+                        *result_layout,
                     );
 
                     list_map2(
@@ -2346,8 +2354,12 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     Layout::Builtin(Builtin::List(element3_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let argument_layouts =
-                        &[**element1_layout, **element2_layout, **element3_layout];
+                    let element1_layout = env.layout_interner.get(*element1_layout);
+                    let element2_layout = env.layout_interner.get(*element2_layout);
+                    let element3_layout = env.layout_interner.get(*element3_layout);
+                    let result_layout = env.layout_interner.get(*result_layout);
+
+                    let argument_layouts = &[*element1_layout, *element2_layout, *element3_layout];
 
                     let roc_function_call = roc_function_call(
                         env,
@@ -2357,7 +2369,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        **result_layout,
+                        *result_layout,
                     );
 
                     list_map3(
@@ -2398,11 +2410,17 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     Layout::Builtin(Builtin::List(element4_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
+                    let element1_layout = env.layout_interner.get(*element1_layout);
+                    let element2_layout = env.layout_interner.get(*element2_layout);
+                    let element3_layout = env.layout_interner.get(*element3_layout);
+                    let element4_layout = env.layout_interner.get(*element4_layout);
+                    let result_layout = env.layout_interner.get(*result_layout);
+
                     let argument_layouts = &[
-                        **element1_layout,
-                        **element2_layout,
-                        **element3_layout,
-                        **element4_layout,
+                        *element1_layout,
+                        *element2_layout,
+                        *element3_layout,
+                        *element4_layout,
                     ];
 
                     let roc_function_call = roc_function_call(
@@ -2413,7 +2431,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        **result_layout,
+                        *result_layout,
                     );
 
                     list_map4(
@@ -2444,7 +2462,9 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::List(element_layout)) => {
                     use crate::llvm::bitcode::build_compare_wrapper;
 
-                    let argument_layouts = &[**element_layout, **element_layout];
+                    let element_layout = env.layout_interner.get(*element_layout);
+
+                    let argument_layouts = &[*element_layout, *element_layout];
 
                     let compare_wrapper =
                         build_compare_wrapper(env, function, closure_layout, element_layout)

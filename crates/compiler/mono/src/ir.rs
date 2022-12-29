@@ -4631,19 +4631,23 @@ pub fn with_hole<'a>(
             match opt_elem_layout {
                 Ok(elem_layout) => {
                     let expr = Expr::EmptyArray;
+                    // TODO don't alloc once elem_layout is interned
+                    let elem_layout = layout_cache.put_in(env.arena.alloc(elem_layout));
                     Stmt::Let(
                         assigned,
                         expr,
-                        Layout::Builtin(Builtin::List(env.arena.alloc(elem_layout))),
+                        Layout::Builtin(Builtin::List(elem_layout)),
                         hole,
                     )
                 }
                 Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                     let expr = Expr::EmptyArray;
+                    // TODO don't alloc once elem_layout is interned
+                    let elem_layout = layout_cache.put_in(env.arena.alloc(Layout::VOID));
                     Stmt::Let(
                         assigned,
                         expr,
-                        Layout::Builtin(Builtin::List(&Layout::VOID)),
+                        Layout::Builtin(Builtin::List(elem_layout)),
                         hole,
                     )
                 }
@@ -4688,10 +4692,12 @@ pub fn with_hole<'a>(
                 elems: elements.into_bump_slice(),
             };
 
+            let elem_layout = layout_cache.put_in(env.arena.alloc(elem_layout));
+
             let stmt = Stmt::Let(
                 assigned,
                 expr,
-                Layout::Builtin(Builtin::List(env.arena.alloc(elem_layout))),
+                Layout::Builtin(Builtin::List(elem_layout)),
                 hole,
             );
 

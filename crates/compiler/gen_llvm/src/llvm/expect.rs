@@ -990,6 +990,7 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
             offset = build_copy(env, ptr, offset, len.into());
             offset = build_copy(env, ptr, offset, len.into());
 
+            let elem = env.layout_interner.get(elem);
             let (element_width, _element_align) =
                 elem.stack_size_and_alignment(env.layout_interner, env.target_info);
             let element_width = env.ptr_int().const_int(element_width as _, false);

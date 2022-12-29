@@ -630,11 +630,13 @@ fn eq_list<'a>(
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
     layout_interner: &mut STLayoutInterner<'a>,
-    elem_layout: &Layout<'a>,
+    elem_layout: InLayout<'a>,
 ) -> Stmt<'a> {
     use LowLevel::*;
     let layout_isize = root.layout_isize;
     let arena = root.arena;
+
+    let elem_layout = layout_interner.get(elem_layout);
 
     // A "Box" layout (heap pointer to a single list element)
     let box_union_layout = UnionLayout::NonNullableUnwrapped(root.arena.alloc([*elem_layout]));

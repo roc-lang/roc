@@ -127,7 +127,7 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
             env,
             layout_ids,
             &Layout::Builtin(*builtin),
-            elem,
+            *elem,
             lhs_val.into_struct_value(),
             rhs_val.into_struct_value(),
             when_recursive,
@@ -299,7 +299,7 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
                 env,
                 layout_ids,
                 &Layout::Builtin(*builtin),
-                elem,
+                *elem,
                 lhs_val.into_struct_value(),
                 rhs_val.into_struct_value(),
                 when_recursive,
@@ -394,7 +394,7 @@ fn build_list_eq<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     list_layout: &Layout<'a>,
-    element_layout: &Layout<'a>,
+    element_layout: InLayout<'a>,
     list1: StructValue<'ctx>,
     list2: StructValue<'ctx>,
     when_recursive: WhenRecursive<'a>,
@@ -403,6 +403,7 @@ fn build_list_eq<'a, 'ctx, 'env>(
     let di_location = env.builder.get_current_debug_location().unwrap();
 
     let symbol = Symbol::LIST_EQ;
+    let element_layout = env.layout_interner.get(element_layout);
     let element_layout = when_recursive.unwrap_recursive_pointer(*element_layout);
     let fn_name = layout_ids
         .get(symbol, &element_layout)

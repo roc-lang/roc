@@ -444,10 +444,11 @@ impl<'a> CodeGenHelp<'a> {
         layout: Layout<'a>,
     ) -> Layout<'a> {
         match layout {
-            Layout::Builtin(Builtin::List(v)) => Layout::Builtin(Builtin::List(
-                self.arena
-                    .alloc(self.replace_rec_ptr(ctx, layout_interner, *v)),
-            )),
+            Layout::Builtin(Builtin::List(v)) => {
+                let v = self.replace_rec_ptr(ctx, layout_interner, *layout_interner.get(v));
+                let v = layout_interner.insert(self.arena.alloc(v));
+                Layout::Builtin(Builtin::List(v))
+            }
 
             Layout::Builtin(_) => layout,
 

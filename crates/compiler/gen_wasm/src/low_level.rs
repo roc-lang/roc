@@ -7,7 +7,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::code_gen_help::HelperOp;
 use roc_mono::ir::{HigherOrderLowLevel, PassedFunction, ProcLayout};
-use roc_mono::layout::{Builtin, FieldOrderHash, Layout, UnionLayout};
+use roc_mono::layout::{Builtin, FieldOrderHash, InLayout, Layout, UnionLayout};
 use roc_mono::low_level::HigherOrder;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
@@ -416,7 +416,7 @@ impl<'a> LowLevelCall<'a> {
                     Layout::Struct {
                         field_layouts: &[Layout::Builtin(Builtin::List(list_elem)), value_layout],
                         ..
-                    } if value_layout == *list_elem => {
+                    } if value_layout == *backend.layout_interner.get(list_elem) => {
                         let list_offset = 0;
                         let elem_offset = Layout::Builtin(Builtin::List(list_elem))
                             .stack_size(backend.layout_interner, TARGET_INFO);
@@ -425,7 +425,7 @@ impl<'a> LowLevelCall<'a> {
                     Layout::Struct {
                         field_layouts: &[value_layout, Layout::Builtin(Builtin::List(list_elem))],
                         ..
-                    } if value_layout == *list_elem => {
+                    } if value_layout == *backend.layout_interner.get(list_elem) => {
                         let list_offset =
                             value_layout.stack_size(backend.layout_interner, TARGET_INFO);
                         let elem_offset = 0;
@@ -484,6 +484,7 @@ impl<'a> LowLevelCall<'a> {
 
                 let capacity: Symbol = self.arguments[0];
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let elem_layout = backend.layout_interner.get(elem_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
 
@@ -522,6 +523,7 @@ impl<'a> LowLevelCall<'a> {
 
                 // Load monomorphization constants
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let elem_layout = backend.layout_interner.get(elem_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
                 backend.code_builder.i32_const(elem_align as i32);
@@ -537,6 +539,7 @@ impl<'a> LowLevelCall<'a> {
                 let spare: Symbol = self.arguments[1];
 
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let elem_layout = backend.layout_interner.get(elem_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
                 let (spare_local, spare_offset, _) = ensure_symbol_is_in_memory(
@@ -586,6 +589,7 @@ impl<'a> LowLevelCall<'a> {
                 let elem: Symbol = self.arguments[1];
 
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let elem_layout = backend.layout_interner.get(elem_layout);
                 let elem_width = elem_layout.stack_size(backend.layout_interner, TARGET_INFO);
                 let (elem_local, elem_offset, _) =
                     ensure_symbol_is_in_memory(backend, elem, *elem_layout, backend.env.arena);
@@ -623,6 +627,7 @@ impl<'a> LowLevelCall<'a> {
                 let elem: Symbol = self.arguments[1];
 
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let elem_layout = backend.layout_interner.get(elem_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
                 let (elem_local, elem_offset, _) =
@@ -665,6 +670,7 @@ impl<'a> LowLevelCall<'a> {
                 let len: Symbol = self.arguments[2];
 
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let elem_layout = backend.layout_interner.get(elem_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
 
@@ -710,6 +716,7 @@ impl<'a> LowLevelCall<'a> {
                 let drop_index: Symbol = self.arguments[1];
 
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let elem_layout = backend.layout_interner.get(elem_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
 
@@ -756,6 +763,7 @@ impl<'a> LowLevelCall<'a> {
                 let index_2: Symbol = self.arguments[2];
 
                 let elem_layout = unwrap_list_elem_layout(self.ret_layout);
+                let elem_layout = backend.layout_interner.get(elem_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
 
@@ -2325,6 +2333,7 @@ pub fn call_higher_order_lowlevel<'a>(
 
         ListSortWith { xs } => {
             let elem_layout = unwrap_list_elem_layout(backend.storage.symbol_layouts[xs]);
+            let elem_layout = backend.layout_interner.get(elem_layout);
             let (element_width, alignment) =
                 elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
 
@@ -2361,7 +2370,7 @@ pub fn call_higher_order_lowlevel<'a>(
     }
 }
 
-fn unwrap_list_elem_layout(list_layout: Layout<'_>) -> &Layout<'_> {
+fn unwrap_list_elem_layout(list_layout: Layout<'_>) -> InLayout<'_> {
     match list_layout {
         Layout::Builtin(Builtin::List(x)) => x,
         e => internal_error!("expected List layout, got {:?}", e),
@@ -2382,13 +2391,15 @@ fn list_map_n<'a>(
     owns_captured_environment: bool,
 ) {
     let arg_elem_layouts = Vec::from_iter_in(
-        arg_symbols
-            .iter()
-            .map(|sym| *unwrap_list_elem_layout(backend.storage.symbol_layouts[sym])),
+        arg_symbols.iter().map(|sym| {
+            let lay = unwrap_list_elem_layout(backend.storage.symbol_layouts[sym]);
+            *backend.layout_interner.get(lay)
+        }),
         backend.env.arena,
     );
 
     let elem_ret = unwrap_list_elem_layout(return_layout);
+    let elem_ret = backend.layout_interner.get(elem_ret);
     let (elem_ret_size, elem_ret_align) =
         elem_ret.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
 

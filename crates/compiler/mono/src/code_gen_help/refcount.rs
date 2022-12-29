@@ -11,7 +11,7 @@ use crate::code_gen_help::let_lowlevel;
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, Layout, STLayoutInterner, TagIdIntType, UnionLayout};
+use crate::layout::{Builtin, InLayout, Layout, STLayoutInterner, TagIdIntType, UnionLayout};
 
 use super::{CodeGenHelp, Context, HelperOp};
 
@@ -425,7 +425,10 @@ where
     use UnionLayout::*;
 
     match layout {
-        Layout::Builtin(Builtin::List(elem_layout)) => is_rc_implemented_yet(interner, elem_layout),
+        Layout::Builtin(Builtin::List(elem_layout)) => {
+            let elem_layout = interner.get(*elem_layout);
+            is_rc_implemented_yet(interner, elem_layout)
+        }
         Layout::Builtin(_) => true,
         Layout::Struct { field_layouts, .. } => field_layouts
             .iter()
@@ -761,11 +764,13 @@ fn refcount_list<'a>(
     ctx: &mut Context<'a>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout: &Layout,
-    elem_layout: &'a Layout,
+    elem_layout: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
     let layout_isize = root.layout_isize;
     let arena = root.arena;
+
+    let elem_layout = layout_interner.get(elem_layout);
 
     // A "Box" layout (heap pointer to a single list element)
     let box_union_layout = UnionLayout::NonNullableUnwrapped(arena.alloc([*elem_layout]));

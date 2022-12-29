@@ -15,6 +15,7 @@ use inkwell::values::{
     BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, IntPredicate};
+use roc_intern::Interner;
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::layout::{Builtin, InLayout, Layout, LayoutIds, STLayoutInterner, UnionLayout};
@@ -408,7 +409,7 @@ fn modify_refcount_builtin<'a, 'ctx, 'env>(
     match builtin {
         List(element_layout) => {
             let function =
-                modify_refcount_list(env, layout_ids, mode, when_recursive, element_layout);
+                modify_refcount_list(env, layout_ids, mode, when_recursive, *element_layout);
 
             Some(function)
         }
@@ -606,13 +607,15 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
     when_recursive: &WhenRecursive<'a>,
-    element_layout: &Layout<'a>,
+    element_layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
+    let element_layout = env.layout_interner.get(element_layout);
     let element_layout = when_recursive.unwrap_recursive_pointer(*element_layout);
-    let list_layout = &Layout::Builtin(Builtin::List(env.arena.alloc(element_layout)));
+    let element_layout = env.layout_interner.insert(env.arena.alloc(element_layout));
+    let list_layout = &Layout::Builtin(Builtin::List(element_layout));
     let (_, fn_name) = function_name_from_mode(
         layout_ids,
         &env.interns,
@@ -634,7 +637,7 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
                 mode,
                 when_recursive,
                 list_layout,
-                &element_layout,
+                element_layout,
                 function_value,
             );
 
@@ -662,7 +665,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     mode: Mode,
     when_recursive: &WhenRecursive<'a>,
     layout: &Layout<'a>,
-    element_layout: &Layout<'a>,
+    element_layout: InLayout<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
     let builder = env.builder;
@@ -701,6 +704,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
 
     builder.position_at_end(modification_block);
 
+    let element_layout = env.layout_interner.get(element_layout);
     if element_layout.contains_refcounted(env.layout_interner) {
         let ptr_type = basic_type_from_layout(env, element_layout).ptr_type(AddressSpace::Generic);
 
