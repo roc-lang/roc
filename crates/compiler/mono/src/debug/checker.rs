@@ -529,7 +529,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     }
                     let layout = resolve_recursive_layout(
                         ctx.arena,
-                        &mut ctx.interner,
+                        ctx.interner,
                         payloads[index as usize],
                         union_layout,
                     );
