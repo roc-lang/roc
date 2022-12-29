@@ -14,7 +14,7 @@ which includes the Roc compiler and various helpful utilities.
     cd roc_night<TAB TO AUTOCOMPLETE>
     ```
 
-1. To be able to run the `roc` command anywhere on your system; add the line below to your shell startup script (.profile, .zshrc, ...):
+1. To be able to run the `roc` command anywhere on your system, add the line below to your shell startup script (.profile, .zshrc, ...):
     ```sh
     export PATH=$PATH:~/path/to/roc_nightly-linux_x86_64-<VERSION>
     ```
@@ -46,7 +46,7 @@ you'll need to install one or more of these platform languages too.
     ```sh
     # On a Debian-based distro like Ubuntu
     sudo apt update && sudo apt install build-essential clang
-    
+
     # On an RPM-based distro like Fedora
     sudo dnf check-update && sudo dnf install clang
     ```

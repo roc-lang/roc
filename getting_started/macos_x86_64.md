@@ -25,7 +25,7 @@ which includes the Roc compiler and various helpful utilities.
     cd roc_night<TAB TO AUTOCOMPLETE>
     ```
 
-1. To be able to run the `roc` command anywhere on your system; add the line below to your shell startup script (.profile, .zshrc, ...):
+1. To be able to run the `roc` command anywhere on your system, add the line below to your shell startup script (.profile, .zshrc, ...):
     ```sh
     export PATH=$PATH:~/path/to/roc_nightly-macos_x86_64-<VERSION>
     ```

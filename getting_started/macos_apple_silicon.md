@@ -29,7 +29,7 @@ which includes the Roc compiler and various helpful utilities.
     brew install llvm@13
     ```
 
-1. To be able to run the `roc` command anywhere on your system; add the line below to your shell startup script (.profile, .zshrc, ...):
+1. To be able to run the `roc` command anywhere on your system, add the line below to your shell startup script (.profile, .zshrc, ...):
     ```sh
     export PATH=$PATH:~/path/to/roc_nightly-macos_apple_silicon-<VERSION>
     ```
