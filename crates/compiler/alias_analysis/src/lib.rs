@@ -134,15 +134,15 @@ fn bytes_as_ascii(bytes: &[u8]) -> String {
     buf
 }
 
-pub fn spec_program<'a, I>(
+pub fn spec_program<'a, 'r, I>(
     arena: &'a Bump,
-    interner: &mut STLayoutInterner<'a>,
+    interner: &'r mut STLayoutInterner<'a>,
     opt_level: OptLevel,
     entry_point: roc_mono::ir::EntryPoint<'a>,
     procs: I,
 ) -> Result<morphic_lib::Solutions>
 where
-    I: Iterator<Item = &'a Proc<'a>>,
+    I: Iterator<Item = &'r Proc<'a>>,
 {
     let main_module = {
         let mut m = ModDefBuilder::new();

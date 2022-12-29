@@ -197,7 +197,7 @@ fn mono_module_to_dylib<'a>(
         entry_point,
         interns,
         subs,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
@@ -216,7 +216,6 @@ fn mono_module_to_dylib<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
-        layout_interner: &layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -251,6 +250,7 @@ fn mono_module_to_dylib<'a>(
 
     let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,
+        &mut layout_interner,
         opt_level,
         procedures,
         entry_point,

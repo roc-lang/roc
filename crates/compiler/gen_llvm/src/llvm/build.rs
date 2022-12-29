@@ -166,7 +166,7 @@ macro_rules! debug_info_init {
 pub struct Scope<'a, 'ctx> {
     symbols: ImMap<Symbol, (Layout<'a>, BasicValueEnum<'ctx>)>,
     pub top_level_thunks: ImMap<Symbol, (ProcLayout<'a>, FunctionValue<'ctx>)>,
-    join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, &'a [PhiValue<'ctx>])>,
+    join_points: ImMap<JoinPointId, (BasicBlock<'ctx>, std::vec::Vec<PhiValue<'ctx>>)>,
 }
 
 impl<'a, 'ctx> Scope<'a, 'ctx> {
@@ -179,11 +179,11 @@ impl<'a, 'ctx> Scope<'a, 'ctx> {
     pub(crate) fn insert_top_level_thunk(
         &mut self,
         symbol: Symbol,
-        layout: &'a ProcLayout<'a>,
+        layout: ProcLayout<'a>,
         function_value: FunctionValue<'ctx>,
     ) {
         self.top_level_thunks
-            .insert(symbol, (*layout, function_value));
+            .insert(symbol, (layout, function_value));
     }
     fn remove(&mut self, symbol: &Symbol) {
         self.symbols.remove(symbol);
@@ -1575,27 +1575,27 @@ fn build_tag_field_value<'a, 'ctx, 'env>(
     }
 }
 
-fn build_tag_fields<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
-    scope: &Scope<'a, 'ctx>,
+fn build_tag_fields<'a, 'r, 'ctx, 'env>(
+    env: &'r Env<'a, 'ctx, 'env>,
+    layout_interner: &'r mut STLayoutInterner<'a>,
+    scope: &'r Scope<'a, 'ctx>,
     fields: &[Layout<'a>],
     arguments: &[Symbol],
 ) -> (
-    Vec<'a, BasicTypeEnum<'ctx>>,
-    Vec<'a, (Layout<'a>, BasicValueEnum<'ctx>)>,
+    std::vec::Vec<BasicTypeEnum<'ctx>>,
+    std::vec::Vec<(Layout<'a>, BasicValueEnum<'ctx>)>,
 ) {
     debug_assert_eq!(fields.len(), arguments.len());
 
     let capacity = fields.len();
-    let mut field_types = Vec::with_capacity_in(capacity, env.arena);
-    let mut field_values = Vec::with_capacity_in(capacity, env.arena);
+    let mut field_types = std::vec::Vec::with_capacity(capacity);
+    let mut field_values = std::vec::Vec::with_capacity(capacity);
 
     for (field_symbol, tag_field_layout) in arguments.iter().zip(fields.iter()) {
         let field_type = basic_type_from_layout(env, layout_interner, tag_field_layout);
         field_types.push(field_type);
 
-        let raw_value = load_symbol(scope, field_symbol);
+        let raw_value: BasicValueEnum<'ctx> = load_symbol(scope, field_symbol);
         let field_value = build_tag_field_value(env, layout_interner, raw_value, *tag_field_layout);
 
         field_values.push((*tag_field_layout, field_value));
@@ -1746,9 +1746,10 @@ fn build_tag<'a, 'ctx, 'env>(
                 &[fields],
             );
 
-            let struct_type = env
-                .context
-                .struct_type(field_types.into_bump_slice(), false);
+            let struct_type = env.context.struct_type(
+                env.arena.alloc_slice_fill_iter(field_types.into_iter()),
+                false,
+            );
 
             struct_pointer_from_fields(
                 env,
@@ -2658,7 +2659,7 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             // create new block
             let cont_block = context.append_basic_block(parent, "joinpointcont");
 
-            let mut joinpoint_args = Vec::with_capacity_in(parameters.len(), env.arena);
+            let mut joinpoint_args = std::vec::Vec::with_capacity(parameters.len());
             {
                 let current = builder.get_insert_block().unwrap();
                 builder.position_at_end(cont_block);
@@ -2683,7 +2684,6 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             }
 
             // store this join point
-            let joinpoint_args = joinpoint_args.into_bump_slice();
             scope.join_points.insert(*id, (cont_block, joinpoint_args));
 
             // construct the blocks that may jump to this join point
@@ -2703,9 +2703,10 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             builder.position_at_end(cont_block);
 
             // bind the values
-            for (phi_value, param) in joinpoint_args.iter().zip(parameters.iter()) {
+            let ref_join_points = &scope.join_points.get(id).unwrap().1;
+            for (phi_value, param) in ref_join_points.iter().zip(parameters.iter()) {
                 let value = phi_value.as_basic_value();
-                scope.insert(param.symbol, (param.layout, value));
+                scope.symbols.insert(param.symbol, (param.layout, value));
             }
 
             // put the continuation in
@@ -4542,23 +4543,20 @@ fn make_exception_catching_wrapper<'a, 'ctx, 'env>(
     wrapper_function
 }
 
-pub fn build_proc_headers<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+pub fn build_proc_headers<'a, 'r, 'ctx, 'env>(
+    env: &'r Env<'a, 'ctx, 'env>,
+    layout_interner: &'r mut STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
     scope: &mut Scope<'a, 'ctx>,
     layout_ids: &mut LayoutIds<'a>,
     // alias_analysis_solutions: AliasAnalysisSolutions,
-) -> Vec<
-    'a,
-    (
-        roc_mono::ir::Proc<'a>,
-        &'a [(&'a FuncSpecSolutions, FunctionValue<'ctx>)],
-    ),
-> {
+) -> std::vec::Vec<(
+    roc_mono::ir::Proc<'a>,
+    std::vec::Vec<(&'a FuncSpecSolutions, FunctionValue<'ctx>)>,
+)> {
     // Populate Procs further and get the low-level Expr from the canonical Expr
-    let mut headers = Vec::with_capacity_in(procedures.len(), env.arena);
+    let mut headers = std::vec::Vec::with_capacity(procedures.len());
     for ((symbol, layout), proc) in procedures {
         let name_bytes = roc_alias_analysis::func_name_bytes(&proc);
         let func_name = FuncName(&name_bytes);
@@ -4566,7 +4564,7 @@ pub fn build_proc_headers<'a, 'ctx, 'env>(
         let func_solutions = mod_solutions.func_solutions(func_name).unwrap();
 
         let it = func_solutions.specs();
-        let mut function_values = Vec::with_capacity_in(it.size_hint().0, env.arena);
+        let mut function_values = std::vec::Vec::with_capacity(it.size_hint().0);
         for specialization in it {
             let fn_val = build_proc_header(
                 env,
@@ -4580,14 +4578,14 @@ pub fn build_proc_headers<'a, 'ctx, 'env>(
             if proc.args.is_empty() {
                 // this is a 0-argument thunk, i.e. a top-level constant definition
                 // it must be in-scope everywhere in the module!
-                scope.insert_top_level_thunk(symbol, env.arena.alloc(layout), fn_val);
+                scope.insert_top_level_thunk(symbol, layout, fn_val);
             }
 
             let func_spec_solutions = func_solutions.spec(specialization).unwrap();
 
             function_values.push((func_spec_solutions, fn_val));
         }
-        headers.push((proc, function_values.into_bump_slice()));
+        headers.push((proc, function_values));
     }
 
     headers
@@ -4665,7 +4663,7 @@ pub fn build_procedures_expose_expects<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     opt_level: OptLevel,
-    expects: &[Symbol],
+    expects: &'a [Symbol],
     procedures: MutMap<(Symbol, ProcLayout<'a>), roc_mono::ir::Proc<'a>>,
 ) -> Vec<'a, &'a str> {
     let entry_point = EntryPoint::Expects { symbols: expects };
@@ -4796,17 +4794,17 @@ fn build_procedures_help<'a, 'ctx, 'env>(
                 layout_interner,
                 mod_solutions,
                 &mut layout_ids,
-                func_spec_solutions,
+                &func_spec_solutions,
                 scope.clone(),
                 &proc,
-                *fn_val,
+                fn_val,
             );
 
             // call finalize() before any code generation/verification
             env.dibuilder.finalize();
 
             if fn_val.verify(true) {
-                function_pass.run_on(fn_val);
+                function_pass.run_on(&fn_val);
             } else {
                 let mode = "NON-OPTIMIZED";
 
@@ -4932,7 +4930,7 @@ fn build_proc_header<'a, 'ctx, 'env>(
 
 #[allow(clippy::too_many_arguments)]
 fn expose_alias_to_host<'a, 'ctx, 'env>(
-    env: &'a Env<'a, 'ctx, 'env>,
+    env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
     proc_name: LambdaName,
@@ -5019,7 +5017,7 @@ fn expose_alias_to_host<'a, 'ctx, 'env>(
 
 #[allow(clippy::too_many_arguments)]
 fn build_closure_caller<'a, 'ctx, 'env>(
-    env: &'a Env<'a, 'ctx, 'env>,
+    env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     def_name: &str,
     evaluator: FunctionValue<'ctx>,
@@ -5160,9 +5158,9 @@ fn build_closure_caller<'a, 'ctx, 'env>(
     );
 }
 
-fn build_host_exposed_alias_size<'a, 'ctx, 'env>(
-    env: &'a Env<'a, 'ctx, 'env>,
-    layout_interner: &mut STLayoutInterner<'a>,
+fn build_host_exposed_alias_size<'a, 'r, 'ctx, 'env>(
+    env: &'r Env<'a, 'ctx, 'env>,
+    layout_interner: &'r mut STLayoutInterner<'a>,
     def_name: &str,
     alias_symbol: Symbol,
     layout: Layout<'a>,
@@ -5222,7 +5220,7 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
 }
 
 pub fn build_proc<'a, 'ctx, 'env>(
-    env: &'a Env<'a, 'ctx, 'env>,
+    env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
     layout_ids: &mut LayoutIds<'a>,

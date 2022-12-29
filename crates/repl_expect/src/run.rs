@@ -716,7 +716,7 @@ pub fn expect_mono_module_to_dylib<'a>(
         toplevel_expects,
         procedures,
         interns,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
@@ -735,7 +735,6 @@ pub fn expect_mono_module_to_dylib<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
-        layout_interner: &layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -760,8 +759,9 @@ pub fn expect_mono_module_to_dylib<'a>(
 
     let expect_names = roc_gen_llvm::llvm::build::build_procedures_expose_expects(
         &env,
+        &mut layout_interner,
         opt_level,
-        &expect_symbols,
+        expect_symbols.into_bump_slice(),
         procedures,
     );
 

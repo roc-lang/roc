@@ -100,7 +100,7 @@ fn create_llvm_module<'a>(
     let MonomorphizedModule {
         procedures,
         interns,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
@@ -217,7 +217,6 @@ fn create_llvm_module<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
-        layout_interner: &layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -258,12 +257,14 @@ fn create_llvm_module<'a>(
         LlvmBackendMode::CliTest => unreachable!(),
         LlvmBackendMode::WasmGenTest => roc_gen_llvm::llvm::build::build_wasm_test_wrapper(
             &env,
+            &mut layout_interner,
             config.opt_level,
             procedures,
             entry_point,
         ),
         LlvmBackendMode::GenTest => roc_gen_llvm::llvm::build::build_procedures_return_main(
             &env,
+            &mut layout_interner,
             config.opt_level,
             procedures,
             entry_point,
