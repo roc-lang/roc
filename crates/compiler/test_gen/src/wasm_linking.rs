@@ -141,7 +141,7 @@ struct BackendInputs<'a> {
 }
 
 impl<'a> BackendInputs<'a> {
-    fn new(arena: &'a Bump, layout_interner: &'a STLayoutInterner<'a>) -> Self {
+    fn new(arena: &'a Bump) -> Self {
         // Compile the host from an external source file
         let host_bytes = fs::read(LINKING_TEST_HOST_WASM).unwrap();
         let host_module: WasmModule = roc_gen_wasm::parse_host(arena, &host_bytes).unwrap();
@@ -159,7 +159,6 @@ impl<'a> BackendInputs<'a> {
         exposed_to_host.insert(roc_main_sym);
         let env = Env {
             arena,
-            layout_interner,
             module_id,
             exposed_to_host,
             stack_bytes: Env::DEFAULT_STACK_BYTES,
@@ -263,22 +262,27 @@ fn test_help(
     dump_filename: &str,
 ) {
     let arena = Bump::new();
-    let layout_interner = STLayoutInterner::with_capacity(4);
+    let mut layout_interner = STLayoutInterner::with_capacity(4);
 
     let BackendInputs {
         env,
         mut interns,
         host_module,
         procedures,
-    } = BackendInputs::new(&arena, &layout_interner);
+    } = BackendInputs::new(&arena);
 
     let host_import_names = Vec::from_iter(host_module.import.imports.iter().map(|imp| imp.name));
     assert_eq!(&host_import_names, expected_host_import_names);
 
     assert!(&host_module.names.function_names.is_empty());
 
-    let (mut final_module, called_fns, _roc_main_index) =
-        roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
+    let (mut final_module, called_fns, _roc_main_index) = roc_gen_wasm::build_app_module(
+        &env,
+        &mut layout_interner,
+        &mut interns,
+        host_module,
+        procedures,
+    );
 
     if eliminate_dead_code {
         final_module.eliminate_dead_code(env.arena, called_fns);
