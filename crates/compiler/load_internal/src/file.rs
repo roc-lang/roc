@@ -3746,9 +3746,9 @@ enum ShorthandPath {
         root_module: PathBuf,
     },
     RelativeToSrc {
-        /// e.g. "/home/rtfeldman/my-roc-code/examples/cli/cli-platform/"
+        /// e.g. "/home/rtfeldman/my-roc-code/basic-cli/"
         root_module_dir: PathBuf,
-        /// e.g. "/home/rtfeldman/my-roc-code/examples/cli/cli-platform/main.roc"
+        /// e.g. "/home/rtfeldman/my-roc-code/basic-cli/main.roc"
         root_module: PathBuf,
     },
 }
