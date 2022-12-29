@@ -246,8 +246,6 @@ fn build_object<'a, B: Backend<'a>>(
 
     // Generate IR for specialized helper procs (refcounting & equality)
     let helper_procs = {
-        let module_id = backend.env().module_id;
-
         let (module_id, _interner, interns, helper_proc_gen) = backend.module_interns_helpers_mut();
 
         let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
