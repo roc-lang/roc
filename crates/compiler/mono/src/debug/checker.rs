@@ -746,8 +746,13 @@ fn get_tag_id_payloads(union_layout: UnionLayout, tag_id: TagIdIntType) -> TagPa
             if tag_id == nullable_id {
                 TagPayloads::Payloads(&[])
             } else {
-                check_tag_id_oob!(other_tags.len());
-                let payloads = other_tags[tag_id as usize];
+                check_tag_id_oob!(other_tags.len() + 1);
+                let tag_id_idx = if tag_id > nullable_id {
+                    tag_id - 1
+                } else {
+                    tag_id
+                };
+                let payloads = other_tags[tag_id_idx as usize];
                 TagPayloads::Payloads(payloads)
             }
         }
