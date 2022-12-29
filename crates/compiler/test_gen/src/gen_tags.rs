@@ -2133,3 +2133,34 @@ fn non_unary_union_with_lambda_set_with_imported_toplevels_issue_4733() {
         i64
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn nullable_wrapped_with_non_nullable_singleton_tags() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            F : [
+                A F,
+                B,
+                C,
+            ]
+
+            g : F -> Str
+            g = \f -> when f is
+                    A _ -> "A"
+                    B -> "B"
+                    C -> "C"
+
+            main =
+                g (A (B))
+                |> Str.concat (g B)
+                |> Str.concat (g C)
+            "#
+        ),
+        RocStr::from("ABC"),
+        RocStr
+    );
+}
