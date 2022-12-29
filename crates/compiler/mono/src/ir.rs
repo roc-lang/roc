@@ -9786,36 +9786,21 @@ fn from_can_pattern_help<'a>(
                         } => {
                             debug_assert!(!tags.is_empty());
 
-                            let mut i = 0;
-                            for (tag_name, args) in tags.iter() {
+                            for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 if i == nullable_id as usize {
+                                    debug_assert!(args.is_empty());
                                     ctors.push(Ctor {
                                         tag_id: TagId(i as _),
                                         name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
-                                        // don't include tag discriminant in arity
                                         arity: 0,
                                     });
-
-                                    i += 1;
+                                } else {
+                                    ctors.push(Ctor {
+                                        tag_id: TagId(i as _),
+                                        name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
+                                        arity: args.len(),
+                                    });
                                 }
-
-                                ctors.push(Ctor {
-                                    tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
-                                    // don't include tag discriminant in arity
-                                    arity: args.len() - 1,
-                                });
-
-                                i += 1;
-                            }
-
-                            if i == nullable_id as usize {
-                                ctors.push(Ctor {
-                                    tag_id: TagId(i as _),
-                                    name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
-                                    // don't include tag discriminant in arity
-                                    arity: 0,
-                                });
                             }
 
                             let union = roc_exhaustive::Union {
