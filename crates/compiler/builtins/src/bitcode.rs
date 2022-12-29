@@ -62,6 +62,11 @@ pub fn host_tempfile() -> std::io::Result<NamedTempFile> {
     {
         host_windows_tempfile()
     }
+
+    #[cfg(not(any(windows, unix)))]
+    {
+        unreachable!()
+    }
 }
 
 #[derive(Debug, Default, Copy, Clone)]
