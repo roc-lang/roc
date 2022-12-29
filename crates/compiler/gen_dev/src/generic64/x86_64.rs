@@ -803,7 +803,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
             X86_64Assembler,
             X86_64WindowsFastcall,
         >,
-        layout_interner: &mut STLayoutInterner<'a>,
+        _layout_interner: &mut STLayoutInterner<'a>,
         _sym: &Symbol,
         _layout: &Layout<'a>,
     ) {
@@ -820,7 +820,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
             X86_64Assembler,
             X86_64WindowsFastcall,
         >,
-        layout_interner: &mut STLayoutInterner<'a>,
+        _layout_interner: &mut STLayoutInterner<'a>,
         _sym: &Symbol,
         _layout: &Layout<'a>,
     ) {

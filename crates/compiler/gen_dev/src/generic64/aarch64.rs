@@ -315,7 +315,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             AArch64Assembler,
             AArch64Call,
         >,
-        layout_interner: &mut STLayoutInterner<'a>,
+        _layout_interner: &mut STLayoutInterner<'a>,
         _args: &'a [(Layout<'a>, Symbol)],
         _ret_layout: &Layout<'a>,
     ) {
@@ -333,7 +333,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             AArch64Assembler,
             AArch64Call,
         >,
-        layout_interner: &mut STLayoutInterner<'a>,
+        _layout_interner: &mut STLayoutInterner<'a>,
         _dst: &Symbol,
         _args: &[Symbol],
         _arg_layouts: &[Layout<'a>],
@@ -352,7 +352,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             AArch64Assembler,
             AArch64Call,
         >,
-        layout_interner: &mut STLayoutInterner<'a>,
+        _layout_interner: &mut STLayoutInterner<'a>,
         _sym: &Symbol,
         _layout: &Layout<'a>,
     ) {
@@ -369,7 +369,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             AArch64Assembler,
             AArch64Call,
         >,
-        layout_interner: &mut STLayoutInterner<'a>,
+        _layout_interner: &mut STLayoutInterner<'a>,
         _sym: &Symbol,
         _layout: &Layout<'a>,
     ) {
