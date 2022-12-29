@@ -1620,12 +1620,21 @@ impl<'a> LambdaSet<'a> {
         lambda_name: LambdaName<'a>,
         argument_layouts: &'a [Layout<'a>],
     ) -> &'a [Layout<'a>] {
-        debug_assert!(
-            self.set
-                .contains(&(lambda_name.name, lambda_name.captures_niche.0)),
-            "{:?}",
-            (self, lambda_name)
-        );
+        // TODO(https://github.com/roc-lang/roc/issues/4831): we should turn on this debug-assert;
+        // however, currently it causes false-positives, because host-exposed functions that are
+        // function pointers to platform-exposed functions are compiled as if they are proper
+        // functions, despite not appearing in the lambda set.
+        // We don't want to compile them as thunks, so we need to figure out a special-casing for
+        // them.
+        // To reproduce: test cli_run
+        //
+        // debug_assert!(
+        //     self.set
+        //         .contains(&(lambda_name.name, lambda_name.captures_niche.0)),
+        //     "{:?}",
+        //     (self, lambda_name)
+        // );
+
         // If we don't capture, there is nothing to extend.
         if lambda_name.captures_niche.0.is_empty() {
             argument_layouts
