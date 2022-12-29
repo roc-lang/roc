@@ -37,7 +37,7 @@ impl OperatingSystem {
         match self {
             OperatingSystem::Windows => Some("exe"),
             OperatingSystem::Unix => None,
-            OperatingSystem::Wasi => None,
+            OperatingSystem::Wasi => Some("wasm"),
         }
     }
 }
