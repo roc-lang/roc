@@ -805,7 +805,32 @@ impl<'a> UnionLayout<'a> {
                     .append(tags_doc)
                     .append(alloc.text("]"))
             }
-            _ => alloc.text("TODO"),
+            NullableWrapped {
+                nullable_id,
+                other_tags,
+            } => {
+                let nullable_id = nullable_id as usize;
+                let tags_docs = (0..(other_tags.len() + 1)).map(|i| {
+                    if i == nullable_id {
+                        alloc.text("<null>")
+                    } else {
+                        let idx = if i > nullable_id { i - 1 } else { i };
+                        alloc.text("C ").append(
+                            alloc.intersperse(
+                                other_tags[idx]
+                                    .iter()
+                                    .map(|x| x.to_doc(alloc, interner, Parens::InTypeParam)),
+                                " ",
+                            ),
+                        )
+                    }
+                });
+                let tags_docs = alloc.intersperse(tags_docs, alloc.text(", "));
+                alloc
+                    .text("[<rnw>")
+                    .append(tags_docs)
+                    .append(alloc.text("]"))
+            }
         }
     }
 
