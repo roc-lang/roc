@@ -81,64 +81,14 @@ Handler state := [
 
 translateStatic : Html state -> Html *
 
-
-
-
-# -------------------------------
-#   SERVER SIDE INIT
-# -------------------------------
-initServerApp : App state initData, initData, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
+initServerApp : App state initData, initData, Str -> Html []
 initServerApp = \app, initData, hostJavaScript ->
-    initData
-    |> Ok
-    |> app.init
-    |> app.render
-    |> translateStatic
+    translateStatic None
 
-# -------------------------------
-#   CLIENT SIDE INIT
-# -------------------------------
-initClientApp : List U8, App state initData -> Effect (PlatformState state initData) | initData has Decoding
+initClientApp : List U8, App state initData -> { list : List RenderedHtml, index : Nat }
 initClientApp = \json, app ->
-    staticView =
-        indexNodes { list: [], index: 0 } None
-        |> .list
-        |> List.first
-        |> Result.withDefault (RenderedText 0 "The impossible happened in virtual-dom. Couldn't get the first item in a single-element list.")
-
-    emptyHandlers = {
-        handlers: [],
-        freeList: [],
-    }
-
-    Effect.always {
-        app,
-        state,
-        view: RenderedNone,
-        handlerLookup: emptyHandlers,
-        isOddArena: Bool.false,
-    }
+    indexNodes { list: [], index: 0 } None
 
 indexNodes : { list : List RenderedHtml, index : Nat }, Html state -> { list : List RenderedHtml, index : Nat }
 indexNodes = \{ list, index }, unrendered ->
-    when unrendered is
-        Text content ->
-            {
-                list: [],
-                index,
-            }
-
-        Element name size attrs children ->
-            { list: renderedChildren, index: nodeIndex } =
-                List.walk children { list, index } indexNodes
-
-            {
-                list: [],
-                index,
-            }
-
-        None ->
-            {
-                list: [],
-                index,
-            }
+    List.walk [] { list, index } indexNodes
