@@ -9,6 +9,7 @@ interface Html.Internal
 Action state : [Action state]
 
 Html state : [
+    None,
     Element (state -> Action state) (Html state),
 ]
 
@@ -20,11 +21,11 @@ translateStatic : Html state -> Html *
 
 initServerApp : {} -> Html []
 initServerApp = \{} ->
-    translateStatic (Element [] [])
+    translateStatic (Element Action None)
 
 initClientApp : {} -> { thing : RenderedHtml }
 initClientApp = \{} ->
-    indexNodes { thing: RenderedNone } (Element [] [])
+    indexNodes { thing: RenderedNone } (Element Action None)
 
 indexNodes : { thing : RenderedHtml }, Html state -> { thing : RenderedHtml }
 indexNodes = \{ thing }, unrendered ->
