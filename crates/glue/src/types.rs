@@ -1455,6 +1455,7 @@ fn add_tag_union<'a>(
             }
         }
         Layout::Boxed(elem_layout) => {
+            let elem_layout = env.layout_cache.get_in(elem_layout);
             let (tag_name, payload_fields) =
                 single_tag_payload_fields(union_tags, subs, &[*elem_layout], env, types);
 

@@ -5,6 +5,7 @@ use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::values::StructValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_intern::Interner;
 use roc_mono::layout::{round_up_to_alignment, Builtin, Layout, STLayoutInterner, UnionLayout};
 use roc_target::TargetInfo;
 
@@ -38,6 +39,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
             basic_type_from_layout(env, &lambda_set.runtime_representation(env.layout_interner))
         }
         Boxed(inner_layout) => {
+            let inner_layout = env.layout_interner.get(*inner_layout);
             let inner_type = basic_type_from_layout(env, inner_layout);
 
             inner_type.ptr_type(AddressSpace::Generic).into()

@@ -1,5 +1,6 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
+use roc_intern::Interner;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
@@ -73,7 +74,6 @@ pub struct Context<'a> {
 ///
 pub struct CodeGenHelp<'a> {
     arena: &'a Bump,
-    layout_interner: &'a STLayoutInterner<'a>,
     home: ModuleId,
     target_info: TargetInfo,
     layout_isize: Layout<'a>,
@@ -83,12 +83,7 @@ pub struct CodeGenHelp<'a> {
 }
 
 impl<'a> CodeGenHelp<'a> {
-    pub fn new(
-        arena: &'a Bump,
-        layout_interner: &'a STLayoutInterner<'a>,
-        target_info: TargetInfo,
-        home: ModuleId,
-    ) -> Self {
+    pub fn new(arena: &'a Bump, target_info: TargetInfo, home: ModuleId) -> Self {
         let layout_isize = Layout::isize(target_info);
 
         // Refcount is a boxed isize. TODO: use the new Box layout when dev backends support it
@@ -96,7 +91,6 @@ impl<'a> CodeGenHelp<'a> {
 
         CodeGenHelp {
             arena,
-            layout_interner,
             home,
             target_info,
             layout_isize,
@@ -125,11 +119,12 @@ impl<'a> CodeGenHelp<'a> {
     pub fn expand_refcount_stmt(
         &mut self,
         ident_ids: &mut IdentIds,
+        layout_interner: &mut STLayoutInterner<'a>,
         layout: Layout<'a>,
         modify: &ModifyRc,
         following: &'a Stmt<'a>,
     ) -> (&'a Stmt<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
-        if !refcount::is_rc_implemented_yet(self.layout_interner, &layout) {
+        if !refcount::is_rc_implemented_yet(layout_interner, &layout) {
             // Just a warning, so we can decouple backend development from refcounting development.
             // When we are closer to completion, we can change it to a panic.
             println!(
@@ -154,13 +149,22 @@ impl<'a> CodeGenHelp<'a> {
             op,
         };
 
-        let rc_stmt = refcount::refcount_stmt(self, ident_ids, &mut ctx, layout, modify, following);
+        let rc_stmt = refcount::refcount_stmt(
+            self,
+            ident_ids,
+            &mut ctx,
+            layout_interner,
+            layout,
+            modify,
+            following,
+        );
         (rc_stmt, ctx.new_linker_data)
     }
 
     pub fn call_reset_refcount(
         &mut self,
         ident_ids: &mut IdentIds,
+        layout_interner: &mut STLayoutInterner<'a>,
         layout: Layout<'a>,
         argument: Symbol,
     ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
@@ -170,7 +174,7 @@ impl<'a> CodeGenHelp<'a> {
             op: HelperOp::Reset,
         };
 
-        let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout);
+        let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout_interner, layout);
 
         let arguments = self.arena.alloc([argument]);
         let ret_layout = self.arena.alloc(layout);
@@ -194,6 +198,7 @@ impl<'a> CodeGenHelp<'a> {
     pub fn gen_refcount_proc(
         &mut self,
         ident_ids: &mut IdentIds,
+        layout_interner: &mut STLayoutInterner<'a>,
         layout: Layout<'a>,
         op: HelperOp,
     ) -> (Symbol, Vec<'a, (Symbol, ProcLayout<'a>)>) {
@@ -203,7 +208,7 @@ impl<'a> CodeGenHelp<'a> {
             op,
         };
 
-        let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout);
+        let proc_name = self.find_or_create_proc(ident_ids, &mut ctx, layout_interner, layout);
 
         (proc_name, ctx.new_linker_data)
     }
@@ -213,6 +218,7 @@ impl<'a> CodeGenHelp<'a> {
     pub fn call_specialized_equals(
         &mut self,
         ident_ids: &mut IdentIds,
+        layout_interner: &mut STLayoutInterner<'a>,
         layout: &Layout<'a>,
         arguments: &'a [Symbol],
     ) -> (Expr<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
@@ -223,7 +229,7 @@ impl<'a> CodeGenHelp<'a> {
         };
 
         let expr = self
-            .call_specialized_op(ident_ids, &mut ctx, *layout, arguments)
+            .call_specialized_op(ident_ids, &mut ctx, layout_interner, *layout, arguments)
             .unwrap();
 
         (expr, ctx.new_linker_data)
@@ -239,6 +245,7 @@ impl<'a> CodeGenHelp<'a> {
         &mut self,
         ident_ids: &mut IdentIds,
         ctx: &mut Context<'a>,
+        layout_interner: &mut STLayoutInterner<'a>,
         called_layout: Layout<'a>,
         arguments: &'a [Symbol],
     ) -> Option<Expr<'a>> {
@@ -255,10 +262,10 @@ impl<'a> CodeGenHelp<'a> {
         };
 
         if layout_needs_helper_proc(&layout, ctx.op) {
-            let proc_name = self.find_or_create_proc(ident_ids, ctx, layout);
+            let proc_name = self.find_or_create_proc(ident_ids, ctx, layout_interner, layout);
 
             let (ret_layout, arg_layouts): (&'a Layout<'a>, &'a [Layout<'a>]) = {
-                let arg = self.replace_rec_ptr(ctx, layout);
+                let arg = self.replace_rec_ptr(ctx, layout_interner, layout);
                 match ctx.op {
                     Dec | DecRef(_) => (&LAYOUT_UNIT, self.arena.alloc([arg])),
                     Reset => (self.arena.alloc(layout), self.arena.alloc([layout])),
@@ -293,11 +300,12 @@ impl<'a> CodeGenHelp<'a> {
         &mut self,
         ident_ids: &mut IdentIds,
         ctx: &mut Context<'a>,
+        layout_interner: &mut STLayoutInterner<'a>,
         orig_layout: Layout<'a>,
     ) -> Symbol {
         use HelperOp::*;
 
-        let layout = self.replace_rec_ptr(ctx, orig_layout);
+        let layout = self.replace_rec_ptr(ctx, layout_interner, orig_layout);
 
         let found = self
             .specializations
@@ -325,15 +333,29 @@ impl<'a> CodeGenHelp<'a> {
         let (ret_layout, body) = match ctx.op {
             Inc | Dec | DecRef(_) => (
                 LAYOUT_UNIT,
-                refcount::refcount_generic(self, ident_ids, ctx, layout, Symbol::ARG_1),
+                refcount::refcount_generic(
+                    self,
+                    ident_ids,
+                    ctx,
+                    layout_interner,
+                    layout,
+                    Symbol::ARG_1,
+                ),
             ),
             Reset => (
                 layout,
-                refcount::refcount_reset_proc_body(self, ident_ids, ctx, layout, Symbol::ARG_1),
+                refcount::refcount_reset_proc_body(
+                    self,
+                    ident_ids,
+                    ctx,
+                    layout_interner,
+                    layout,
+                    Symbol::ARG_1,
+                ),
             ),
             Eq => (
                 LAYOUT_BOOL,
-                equality::eq_generic(self, ident_ids, ctx, layout),
+                equality::eq_generic(self, ident_ids, ctx, layout_interner, layout),
             ),
         };
 
@@ -415,10 +437,16 @@ impl<'a> CodeGenHelp<'a> {
     // For example if a program uses `RoseTree a : [Tree a (List (RoseTree a))]`
     // then it could have both `RoseTree I64` and `RoseTree Str`. In this case it
     // needs *two* specializations for `List(RecursivePointer)`, not just one.
-    fn replace_rec_ptr(&self, ctx: &Context<'a>, layout: Layout<'a>) -> Layout<'a> {
+    fn replace_rec_ptr(
+        &mut self,
+        ctx: &Context<'a>,
+        layout_interner: &mut STLayoutInterner<'a>,
+        layout: Layout<'a>,
+    ) -> Layout<'a> {
         match layout {
             Layout::Builtin(Builtin::List(v)) => Layout::Builtin(Builtin::List(
-                self.arena.alloc(self.replace_rec_ptr(ctx, *v)),
+                self.arena
+                    .alloc(self.replace_rec_ptr(ctx, layout_interner, *v)),
             )),
 
             Layout::Builtin(_) => layout,
@@ -427,9 +455,12 @@ impl<'a> CodeGenHelp<'a> {
                 field_layouts,
                 field_order_hash,
             } => {
-                let new_fields_iter = field_layouts.iter().map(|f| self.replace_rec_ptr(ctx, *f));
+                let mut new_field_layouts = Vec::with_capacity_in(field_layouts.len(), self.arena);
+                for f in field_layouts.iter() {
+                    new_field_layouts.push(self.replace_rec_ptr(ctx, layout_interner, *f));
+                }
                 Layout::Struct {
-                    field_layouts: self.arena.alloc_slice_fill_iter(new_fields_iter),
+                    field_layouts: new_field_layouts.into_bump_slice(),
                     field_order_hash,
                 }
             }
@@ -439,7 +470,7 @@ impl<'a> CodeGenHelp<'a> {
                 for fields in tags {
                     let mut new_fields = Vec::with_capacity_in(fields.len(), self.arena);
                     for field in fields.iter() {
-                        new_fields.push(self.replace_rec_ptr(ctx, *field))
+                        new_fields.push(self.replace_rec_ptr(ctx, layout_interner, *field))
                     }
                     new_tags.push(new_fields.into_bump_slice());
                 }
@@ -453,12 +484,19 @@ impl<'a> CodeGenHelp<'a> {
             }
 
             Layout::Boxed(inner) => {
-                Layout::Boxed(self.arena.alloc(self.replace_rec_ptr(ctx, *inner)))
+                let inner = layout_interner.get(inner);
+                let inner = self
+                    .arena
+                    .alloc(self.replace_rec_ptr(ctx, layout_interner, *inner));
+                let inner = layout_interner.insert(inner);
+                Layout::Boxed(inner)
             }
 
-            Layout::LambdaSet(lambda_set) => {
-                self.replace_rec_ptr(ctx, lambda_set.runtime_representation(self.layout_interner))
-            }
+            Layout::LambdaSet(lambda_set) => self.replace_rec_ptr(
+                ctx,
+                layout_interner,
+                lambda_set.runtime_representation(layout_interner),
+            ),
 
             // This line is the whole point of the function
             Layout::RecursivePointer => Layout::Union(ctx.recursive_union.unwrap()),

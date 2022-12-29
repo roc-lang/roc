@@ -315,6 +315,10 @@ impl<'a> LayoutCache<'a> {
         self.interner.get(interned)
     }
 
+    pub fn put_in(&mut self, layout: &'a Layout<'a>) -> InLayout<'a> {
+        self.interner.insert(layout)
+    }
+
     #[cfg(debug_assertions)]
     pub fn statistics(&self) -> (CacheStatistics, CacheStatistics) {
         (self.stats, self.raw_function_stats)
@@ -678,7 +682,7 @@ pub enum Layout<'a> {
         field_order_hash: FieldOrderHash,
         field_layouts: &'a [Layout<'a>],
     },
-    Boxed(&'a Layout<'a>),
+    Boxed(InLayout<'a>),
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),
     RecursivePointer,
@@ -2494,7 +2498,9 @@ impl<'a> Layout<'a> {
                 .runtime_representation(interner)
                 .allocation_alignment_bytes(interner, target_info),
             Layout::RecursivePointer => unreachable!("should be looked up to get an actual layout"),
-            Layout::Boxed(inner) => inner.allocation_alignment_bytes(interner, target_info),
+            Layout::Boxed(inner) => interner
+                .get(*inner)
+                .allocation_alignment_bytes(interner, target_info),
         }
     }
 
@@ -2612,7 +2618,7 @@ impl<'a> Layout<'a> {
             RecursivePointer => alloc.text("*self"),
             Boxed(inner) => alloc
                 .text("Boxed(")
-                .append(inner.to_doc(alloc, interner, parens))
+                .append(interner.get(inner).to_doc(alloc, interner, parens))
                 .append(")"),
         }
     }
@@ -3024,8 +3030,9 @@ fn layout_from_flat_type<'a>(
 
                     let inner_var = args[0];
                     let inner_layout = cached!(Layout::from_var(env, inner_var), criteria);
+                    let inner_layout = env.cache.put_in(env.arena.alloc(inner_layout));
 
-                    Cacheable(Ok(Layout::Boxed(env.arena.alloc(inner_layout))), criteria)
+                    Cacheable(Ok(Layout::Boxed(inner_layout)), criteria)
                 }
                 _ => {
                     panic!(

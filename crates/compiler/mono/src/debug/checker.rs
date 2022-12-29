@@ -434,11 +434,12 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 None
             }
             &Expr::ExprBox { symbol } => self.with_sym_layout(symbol, |ctx, _def_line, layout| {
-                Some(Layout::Boxed(ctx.alloc(layout)))
+                let inner = ctx.interner.insert(ctx.alloc(layout));
+                Some(Layout::Boxed(inner))
             }),
             &Expr::ExprUnbox { symbol } => {
                 self.with_sym_layout(symbol, |ctx, def_line, layout| match ctx.resolve(layout) {
-                    Layout::Boxed(inner) => Some(*inner),
+                    Layout::Boxed(inner) => Some(*ctx.interner.get(inner)),
                     _ => {
                         ctx.problem(ProblemKind::UnboxNotABox { symbol, def_line });
                         None
@@ -671,7 +672,10 @@ fn resolve_recursive_layout<'a>(
                 layout
             }
         },
-        Layout::Boxed(inner) => Layout::Boxed(arena.alloc(go!(*inner))),
+        Layout::Boxed(inner) => {
+            let inner = go!(*interner.get(inner));
+            Layout::Boxed(interner.insert(arena.alloc(inner)))
+        }
         Layout::Struct {
             field_order_hash,
             field_layouts,

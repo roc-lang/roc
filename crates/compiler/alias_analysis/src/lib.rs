@@ -6,6 +6,7 @@ use morphic_lib::{
     TypeDefBuilder, TypeId, TypeName, UpdateModeVar, ValueId,
 };
 use roc_collections::all::{MutMap, MutSet};
+use roc_intern::Interner;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
@@ -1730,6 +1731,7 @@ fn layout_spec_help<'a>(
         }
 
         Boxed(inner_layout) => {
+            let inner_layout = interner.get(*inner_layout);
             let inner_type =
                 layout_spec_help(env, builder, interner, inner_layout, when_recursive)?;
             let cell_type = builder.add_heap_cell_type();

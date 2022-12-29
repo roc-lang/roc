@@ -17,7 +17,7 @@ use inkwell::values::{
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout, LayoutIds, STLayoutInterner, UnionLayout};
+use roc_mono::layout::{Builtin, InLayout, Layout, LayoutIds, STLayoutInterner, UnionLayout};
 
 use super::build::{cast_if_necessary_for_opaque_recursive_pointers, load_roc_value, FunctionSpec};
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
@@ -531,7 +531,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
         }
 
         Boxed(inner) => {
-            let function = modify_refcount_boxed(env, layout_ids, mode, inner);
+            let function = modify_refcount_boxed(env, layout_ids, mode, *inner);
 
             Some(function)
         }
@@ -851,7 +851,7 @@ fn modify_refcount_boxed<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_ids: &mut LayoutIds<'a>,
     mode: Mode,
-    inner_layout: &'a Layout<'a>,
+    inner_layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
@@ -889,7 +889,7 @@ fn modify_refcount_boxed<'a, 'ctx, 'env>(
 fn modify_refcount_box_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     mode: Mode,
-    inner_layout: &Layout<'a>,
+    inner_layout: InLayout<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
     let builder = env.builder;

@@ -4,7 +4,7 @@ use bumpalo::collections::Vec;
 use packed_struct::prelude::*;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::Layout;
+use roc_mono::layout::{Layout, STLayoutInterner};
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
@@ -305,15 +305,17 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     }
 
     #[inline(always)]
-    fn load_args<'a>(
+    fn load_args<'a, 'r>(
         _buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<
             'a,
+            'r,
             AArch64GeneralReg,
             AArch64FloatReg,
             AArch64Assembler,
             AArch64Call,
         >,
+        layout_interner: &mut STLayoutInterner<'a>,
         _args: &'a [(Layout<'a>, Symbol)],
         _ret_layout: &Layout<'a>,
     ) {
@@ -321,15 +323,17 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     }
 
     #[inline(always)]
-    fn store_args<'a>(
+    fn store_args<'a, 'r>(
         _buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<
             'a,
+            'r,
             AArch64GeneralReg,
             AArch64FloatReg,
             AArch64Assembler,
             AArch64Call,
         >,
+        layout_interner: &mut STLayoutInterner<'a>,
         _dst: &Symbol,
         _args: &[Symbol],
         _arg_layouts: &[Layout<'a>],
@@ -338,30 +342,34 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         todo!("Storing args for AArch64");
     }
 
-    fn return_complex_symbol<'a>(
+    fn return_complex_symbol<'a, 'r>(
         _buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<
             'a,
+            'r,
             AArch64GeneralReg,
             AArch64FloatReg,
             AArch64Assembler,
             AArch64Call,
         >,
+        layout_interner: &mut STLayoutInterner<'a>,
         _sym: &Symbol,
         _layout: &Layout<'a>,
     ) {
         todo!("Returning complex symbols for AArch64");
     }
 
-    fn load_returned_complex_symbol<'a>(
+    fn load_returned_complex_symbol<'a, 'r>(
         _buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<
             'a,
+            'r,
             AArch64GeneralReg,
             AArch64FloatReg,
             AArch64Assembler,
             AArch64Call,
         >,
+        layout_interner: &mut STLayoutInterner<'a>,
         _sym: &Symbol,
         _layout: &Layout<'a>,
     ) {
@@ -443,9 +451,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!("register signed multiplication for AArch64");
     }
 
-    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
+    fn umul_reg64_reg64_reg64<'a, 'r, ASM, CC>(
         _buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<'a, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
         _dst: AArch64GeneralReg,
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
@@ -456,9 +464,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!("register unsigned multiplication for AArch64");
     }
 
-    fn idiv_reg64_reg64_reg64<'a, ASM, CC>(
+    fn idiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
         _buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<'a, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
         _dst: AArch64GeneralReg,
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
@@ -469,9 +477,9 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!("register signed division for AArch64");
     }
 
-    fn udiv_reg64_reg64_reg64<'a, ASM, CC>(
+    fn udiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
         _buf: &mut Vec<'a, u8>,
-        _storage_manager: &mut StorageManager<'a, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
         _dst: AArch64GeneralReg,
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,

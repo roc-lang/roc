@@ -12,8 +12,9 @@ use inkwell::values::{
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_builtins::bitcode;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
+use roc_intern::Interner;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
+use roc_mono::layout::{Builtin, InLayout, Layout, LayoutIds, UnionLayout};
 
 use super::build::{load_roc_value, use_roc_value, BuilderExt};
 use super::convert::argument_type_from_union_layout;
@@ -182,7 +183,7 @@ fn build_eq<'a, 'ctx, 'env>(
             layout_ids,
             when_recursive,
             lhs_layout,
-            inner_layout,
+            *inner_layout,
             lhs_val,
             rhs_val,
         ),
@@ -371,7 +372,7 @@ fn build_neq<'a, 'ctx, 'env>(
                 layout_ids,
                 when_recursive,
                 lhs_layout,
-                inner_layout,
+                *inner_layout,
                 lhs_val,
                 rhs_val,
             )
@@ -1283,7 +1284,7 @@ fn build_box_eq<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     when_recursive: WhenRecursive<'a>,
     box_layout: &Layout<'a>,
-    inner_layout: &Layout<'a>,
+    inner_layout: InLayout<'a>,
     tag1: BasicValueEnum<'ctx>,
     tag2: BasicValueEnum<'ctx>,
 ) -> BasicValueEnum<'ctx> {
@@ -1336,7 +1337,7 @@ fn build_box_eq_help<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     when_recursive: WhenRecursive<'a>,
     parent: FunctionValue<'ctx>,
-    inner_layout: &Layout<'a>,
+    inner_layout: InLayout<'a>,
 ) {
     let ctx = env.context;
     let builder = env.builder;
@@ -1399,6 +1400,8 @@ fn build_box_eq_help<'a, 'ctx, 'env>(
     // clear the tag_id so we get a pointer to the actual data
     let box1 = box1.into_pointer_value();
     let box2 = box2.into_pointer_value();
+
+    let inner_layout = env.layout_interner.get(inner_layout);
 
     let value1 = load_roc_value(env, *inner_layout, box1, "load_box1");
     let value2 = load_roc_value(env, *inner_layout, box2, "load_box2");

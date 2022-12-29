@@ -251,27 +251,29 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     }
 
     #[inline(always)]
-    fn load_args<'a>(
+    fn load_args<'a, 'r>(
         _buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<
             'a,
+            'r,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
             X86_64SystemV,
         >,
+        layout_interner: &mut STLayoutInterner<'a>,
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
     ) {
         let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 16; // 16 is the size of the pushed return address and base pointer.
         let mut general_i = 0;
         let mut float_i = 0;
-        if X86_64SystemV::returns_via_arg_pointer(storage_manager.env.layout_interner, ret_layout) {
+        if X86_64SystemV::returns_via_arg_pointer(layout_interner, ret_layout) {
             storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[0]);
             general_i += 1;
         }
         for (layout, sym) in args.iter() {
-            let stack_size = layout.stack_size(storage_manager.env.layout_interner, TARGET_INFO);
+            let stack_size = layout.stack_size(layout_interner, TARGET_INFO);
             match layout {
                 single_register_integers!() => {
                     if general_i < Self::GENERAL_PARAM_REGS.len() {
@@ -307,15 +309,17 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
     }
 
     #[inline(always)]
-    fn store_args<'a>(
+    fn store_args<'a, 'r>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<
             'a,
+            'r,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
             X86_64SystemV,
         >,
+        layout_interner: &mut STLayoutInterner<'a>,
         dst: &Symbol,
         args: &[Symbol],
         arg_layouts: &[Layout<'a>],
@@ -324,12 +328,10 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
         let mut general_i = 0;
         let mut float_i = 0;
-        if Self::returns_via_arg_pointer(storage_manager.env.layout_interner, ret_layout) {
+        if Self::returns_via_arg_pointer(layout_interner, ret_layout) {
             // Save space on the stack for the result we will be return.
-            let base_offset = storage_manager.claim_stack_area(
-                dst,
-                ret_layout.stack_size(storage_manager.env.layout_interner, TARGET_INFO),
-            );
+            let base_offset = storage_manager
+                .claim_stack_area(dst, ret_layout.stack_size(layout_interner, TARGET_INFO));
             // Set the first reg to the address base + offset.
             let ret_reg = Self::GENERAL_PARAM_REGS[general_i];
             general_i += 1;
@@ -388,8 +390,8 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                         tmp_stack_offset += 8;
                     }
                 }
-                x if x.stack_size(storage_manager.env.layout_interner, TARGET_INFO) == 0 => {}
-                x if x.stack_size(storage_manager.env.layout_interner, TARGET_INFO) > 16 => {
+                x if x.stack_size(layout_interner, TARGET_INFO) == 0 => {}
+                x if x.stack_size(layout_interner, TARGET_INFO) > 16 => {
                     // TODO: Double check this.
                     // Just copy onto the stack.
                     // Use return reg as buffer because it will be empty right now.
@@ -417,15 +419,17 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         storage_manager.update_fn_call_stack_size(tmp_stack_offset as u32);
     }
 
-    fn return_complex_symbol<'a>(
+    fn return_complex_symbol<'a, 'r>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<
             'a,
+            'r,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
             X86_64SystemV,
         >,
+        layout_interner: &mut STLayoutInterner<'a>,
         sym: &Symbol,
         layout: &Layout<'a>,
     ) {
@@ -433,8 +437,8 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
-            x if x.stack_size(storage_manager.env.layout_interner, TARGET_INFO) == 0 => {}
-            x if !Self::returns_via_arg_pointer(storage_manager.env.layout_interner, x) => {
+            x if x.stack_size(layout_interner, TARGET_INFO) == 0 => {}
+            x if !Self::returns_via_arg_pointer(layout_interner, x) => {
                 let (base_offset, size) = storage_manager.stack_offset_and_size(sym);
                 debug_assert_eq!(base_offset % 8, 0);
                 if size <= 8 {
@@ -473,15 +477,17 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         }
     }
 
-    fn load_returned_complex_symbol<'a>(
+    fn load_returned_complex_symbol<'a, 'r>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<
             'a,
+            'r,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
             X86_64SystemV,
         >,
+        layout_interner: &mut STLayoutInterner<'a>,
         sym: &Symbol,
         layout: &Layout<'a>,
     ) {
@@ -489,9 +495,9 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             single_register_layouts!() => {
                 internal_error!("single register layouts are not complex symbols");
             }
-            x if x.stack_size(storage_manager.env.layout_interner, TARGET_INFO) == 0 => {}
-            x if !Self::returns_via_arg_pointer(storage_manager.env.layout_interner, x) => {
-                let size = layout.stack_size(storage_manager.env.layout_interner, TARGET_INFO);
+            x if x.stack_size(layout_interner, TARGET_INFO) == 0 => {}
+            x if !Self::returns_via_arg_pointer(layout_interner, x) => {
+                let size = layout.stack_size(layout_interner, TARGET_INFO);
                 let offset = storage_manager.claim_stack_area(sym, size);
                 if size <= 8 {
                     X86_64Assembler::mov_base32_reg64(buf, offset, Self::GENERAL_RETURN_REGS[0]);
@@ -658,24 +664,23 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     }
 
     #[inline(always)]
-    fn load_args<'a>(
+    fn load_args<'a, 'r>(
         _buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<
             'a,
+            'r,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
             X86_64WindowsFastcall,
         >,
+        layout_interner: &mut STLayoutInterner<'a>,
         args: &'a [(Layout<'a>, Symbol)],
         ret_layout: &Layout<'a>,
     ) {
         let mut arg_offset = Self::SHADOW_SPACE_SIZE as i32 + 16; // 16 is the size of the pushed return address and base pointer.
         let mut i = 0;
-        if X86_64WindowsFastcall::returns_via_arg_pointer(
-            storage_manager.env.layout_interner,
-            ret_layout,
-        ) {
+        if X86_64WindowsFastcall::returns_via_arg_pointer(layout_interner, ret_layout) {
             storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[i]);
             i += 1;
         }
@@ -690,7 +695,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         storage_manager.float_reg_arg(sym, Self::FLOAT_PARAM_REGS[i]);
                         i += 1;
                     }
-                    x if x.stack_size(storage_manager.env.layout_interner, TARGET_INFO) == 0 => {}
+                    x if x.stack_size(layout_interner, TARGET_INFO) == 0 => {}
                     x => {
                         todo!("Loading args with layout {:?}", x);
                     }
@@ -710,27 +715,27 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
     }
 
     #[inline(always)]
-    fn store_args<'a>(
+    fn store_args<'a, 'r>(
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<
             'a,
+            'r,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
             X86_64WindowsFastcall,
         >,
+        layout_interner: &mut STLayoutInterner<'a>,
         dst: &Symbol,
         args: &[Symbol],
         arg_layouts: &[Layout<'a>],
         ret_layout: &Layout<'a>,
     ) {
         let mut tmp_stack_offset = Self::SHADOW_SPACE_SIZE as i32;
-        if Self::returns_via_arg_pointer(storage_manager.env.layout_interner, ret_layout) {
+        if Self::returns_via_arg_pointer(layout_interner, ret_layout) {
             // Save space on the stack for the arg we will return.
-            storage_manager.claim_stack_area(
-                dst,
-                ret_layout.stack_size(storage_manager.env.layout_interner, TARGET_INFO),
-            );
+            storage_manager
+                .claim_stack_area(dst, ret_layout.stack_size(layout_interner, TARGET_INFO));
             todo!("claim first parama reg for the address");
         }
         for (i, (sym, layout)) in args.iter().zip(arg_layouts.iter()).enumerate() {
@@ -779,7 +784,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
                         tmp_stack_offset += 8;
                     }
                 }
-                x if x.stack_size(storage_manager.env.layout_interner, TARGET_INFO) == 0 => {}
+                x if x.stack_size(layout_interner, TARGET_INFO) == 0 => {}
                 x => {
                     todo!("calling with arg type, {:?}", x);
                 }
@@ -788,30 +793,34 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Windo
         storage_manager.update_fn_call_stack_size(tmp_stack_offset as u32);
     }
 
-    fn return_complex_symbol<'a>(
+    fn return_complex_symbol<'a, 'r>(
         _buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<
             'a,
+            'r,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
             X86_64WindowsFastcall,
         >,
+        layout_interner: &mut STLayoutInterner<'a>,
         _sym: &Symbol,
         _layout: &Layout<'a>,
     ) {
         todo!("Returning complex symbols for X86_64");
     }
 
-    fn load_returned_complex_symbol<'a>(
+    fn load_returned_complex_symbol<'a, 'r>(
         _buf: &mut Vec<'a, u8>,
         _storage_manager: &mut StorageManager<
             'a,
+            'r,
             X86_64GeneralReg,
             X86_64FloatReg,
             X86_64Assembler,
             X86_64WindowsFastcall,
         >,
+        layout_interner: &mut STLayoutInterner<'a>,
         _sym: &Symbol,
         _layout: &Layout<'a>,
     ) {
@@ -1029,9 +1038,9 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         imul_reg64_reg64(buf, dst, src2);
     }
 
-    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
+    fn umul_reg64_reg64_reg64<'a, 'r, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
@@ -1113,9 +1122,9 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         }
     }
 
-    fn idiv_reg64_reg64_reg64<'a, ASM, CC>(
+    fn idiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,
@@ -1133,9 +1142,9 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         mov_reg64_reg64(buf, dst, X86_64GeneralReg::RAX);
     }
 
-    fn udiv_reg64_reg64_reg64<'a, ASM, CC>(
+    fn udiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, 'r, X86_64GeneralReg, X86_64FloatReg, ASM, CC>,
         dst: X86_64GeneralReg,
         src1: X86_64GeneralReg,
         src2: X86_64GeneralReg,

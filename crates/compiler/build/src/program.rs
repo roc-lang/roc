@@ -470,7 +470,7 @@ fn gen_from_mono_module_dev_wasm32<'a>(
         module_id,
         procedures,
         mut interns,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
@@ -483,7 +483,6 @@ fn gen_from_mono_module_dev_wasm32<'a>(
 
     let env = roc_gen_wasm::Env {
         arena,
-        layout_interner: &layout_interner,
         module_id,
         exposed_to_host,
         stack_bytes: wasm_dev_stack_bytes.unwrap_or(roc_gen_wasm::Env::DEFAULT_STACK_BYTES),
@@ -505,8 +504,13 @@ fn gen_from_mono_module_dev_wasm32<'a>(
         )
     });
 
-    let final_binary_bytes =
-        roc_gen_wasm::build_app_binary(&env, &mut interns, host_module, procedures);
+    let final_binary_bytes = roc_gen_wasm::build_app_binary(
+        &env,
+        &mut layout_interner,
+        &mut interns,
+        host_module,
+        procedures,
+    );
 
     let code_gen = code_gen_start.elapsed();
 
@@ -536,20 +540,20 @@ fn gen_from_mono_module_dev_assembly<'a>(
         procedures,
         mut interns,
         exposed_to_host,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
     let env = roc_gen_dev::Env {
         arena,
-        layout_interner: &layout_interner,
         module_id,
         exposed_to_host: exposed_to_host.values.keys().copied().collect(),
         lazy_literals,
         generate_allocators,
     };
 
-    let module_object = roc_gen_dev::build_module(&env, &mut interns, target, procedures);
+    let module_object =
+        roc_gen_dev::build_module(&env, &mut interns, &mut layout_interner, target, procedures);
 
     let code_gen = code_gen_start.elapsed();
 

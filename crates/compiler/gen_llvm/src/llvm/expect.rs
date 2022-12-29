@@ -9,6 +9,7 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
+use roc_intern::Interner;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::LookupType;
 use roc_mono::layout::{Builtin, Layout, LayoutIds, UnionLayout};
@@ -348,6 +349,7 @@ fn build_clone<'a, 'ctx, 'env>(
             build_copy(env, ptr, cursors.offset, cursors.extra_offset.into());
 
             let source = value.into_pointer_value();
+            let inner_layout = env.layout_interner.get(inner_layout);
             let value = load_roc_value(env, *inner_layout, source, "inner");
 
             let inner_width = env.ptr_int().const_int(
