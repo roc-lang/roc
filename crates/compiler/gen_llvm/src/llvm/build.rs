@@ -4793,7 +4793,7 @@ fn build_procedures_help<'a, 'ctx, 'env>(
                 layout_interner,
                 mod_solutions,
                 &mut layout_ids,
-                &func_spec_solutions,
+                func_spec_solutions,
                 scope.clone(),
                 &proc,
                 fn_val,
