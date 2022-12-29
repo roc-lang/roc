@@ -1,41 +1,31 @@
 interface Html.Internal
     exposes [
-        App,
         Html,
-        Handler,
         initServerApp,
         initClientApp,
     ]
-    imports [
-        Action.{ Action },
-    ]
+    imports []
 
-App state initData : {
-    init : initData -> state,
-}
+Action state : [Action state]
 
 Html state : [
-    Element (Handler state) (Html state),
+    Element (state -> Action state) (Html state),
 ]
 
 RenderedHtml : [
     RenderedNone,
 ]
 
-Handler state := [
-    Normal (state -> Action state),
-]
-
 translateStatic : Html state -> Html *
 
-initServerApp : App state initData, initData -> Html []
-initServerApp = \app, initData ->
+initServerApp : {} -> Html []
+initServerApp = \{} ->
     translateStatic (Element [] [])
 
-initClientApp : List U8, App state initData -> { list : List RenderedHtml, index : Nat }
-initClientApp = \json, app ->
-    indexNodes { list: [], index: 0 } (Element [] [])
+initClientApp : {} -> { thing : RenderedHtml }
+initClientApp = \{} ->
+    indexNodes { thing: RenderedNone } (Element [] [])
 
-indexNodes : { list : List RenderedHtml, index : Nat }, Html state -> { list : List RenderedHtml, index : Nat }
-indexNodes = \{ list, index }, unrendered ->
-    List.walk [] { list, index } indexNodes
+indexNodes : { thing : RenderedHtml }, Html state -> { thing : RenderedHtml }
+indexNodes = \{ thing }, unrendered ->
+    List.walk [] { thing } indexNodes
