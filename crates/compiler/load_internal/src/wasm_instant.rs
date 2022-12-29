@@ -29,6 +29,10 @@ impl Duration {
     pub fn checked_sub(&self, _: Duration) -> Option<Duration> {
         Some(Duration)
     }
+
+    pub fn as_secs_f64(&self) -> f64 {
+        0.0
+    }
 }
 
 impl Default for Duration {
