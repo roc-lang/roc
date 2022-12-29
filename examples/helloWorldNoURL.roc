@@ -1,7 +1,6 @@
 app "helloWorld"
-    packages { pf: "cli/cli-platform/main.roc" }
-    imports [pf.Stdout]
+    packages { pf: "platform-switching/c-platform/main.roc" }
+    imports []
     provides [main] to pf
 
-main =
-    Stdout.line "Hello, World!"
+main = "Hello, World!\n"
