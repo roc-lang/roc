@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use bumpalo::collections::vec::Vec;
 use roc_builtins::bitcode::IntWidth;
 use roc_intern::Interner;
@@ -879,7 +881,6 @@ fn refcount_list<'a>(
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn refcount_list_elems<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
@@ -1275,7 +1276,6 @@ fn refcount_union_nonrec<'a>(
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn refcount_union_contents<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
@@ -1424,7 +1424,6 @@ fn refcount_union_rec<'a>(
 }
 
 // Refcount a recursive union using tail-call elimination to limit stack growth
-#[allow(clippy::too_many_arguments)]
 fn refcount_union_tailrec<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
@@ -1629,7 +1628,6 @@ fn refcount_union_tailrec<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn refcount_tag_fields<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
