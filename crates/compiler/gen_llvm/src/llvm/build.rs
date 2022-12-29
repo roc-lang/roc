@@ -1449,7 +1449,6 @@ pub fn build_exp_expr<'a, 'ctx, 'env>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_wrapped_tag<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -4928,7 +4927,6 @@ fn build_proc_header<'a, 'ctx, 'env>(
     fn_val
 }
 
-#[allow(clippy::too_many_arguments)]
 fn expose_alias_to_host<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -5015,7 +5013,6 @@ fn expose_alias_to_host<'a, 'ctx, 'env>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_closure_caller<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -5493,7 +5490,6 @@ pub struct RocFunctionCall<'ctx> {
     pub data_is_owned: IntValue<'ctx>,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn roc_function_call<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,

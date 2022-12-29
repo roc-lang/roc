@@ -164,7 +164,6 @@ pub(crate) fn notify_parent_dbg(env: &Env, shared_memory: &SharedMemoryPointer) 
 //     ..
 //     lookup_val_n  (varsize)
 //
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -279,7 +278,6 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
     write_state(env, original_ptr, new_count, offset)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_clone<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -416,7 +414,6 @@ fn build_clone<'a, 'ctx, 'env>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_clone_struct<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -470,7 +467,6 @@ fn build_clone_struct<'a, 'ctx, 'env>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_clone_tag<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -577,7 +573,6 @@ fn load_tag_data<'a, 'ctx, 'env>(
     env.builder.new_build_load(tag_type, data_ptr, "load_data")
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_clone_tag_help<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -999,7 +994,6 @@ fn build_copy<'a, 'ctx, 'env>(
     env.builder.build_int_add(offset, width, "new_offset")
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_clone_builtin<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,

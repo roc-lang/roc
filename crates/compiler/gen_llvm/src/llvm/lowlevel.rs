@@ -59,7 +59,6 @@ macro_rules! list_element_layout {
     };
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
@@ -2274,7 +2273,6 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,

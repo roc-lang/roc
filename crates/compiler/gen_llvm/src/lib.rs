@@ -5,6 +5,8 @@
 #![allow(clippy::large_enum_variant)]
 // we actually want to compare against the literal float bits
 #![allow(clippy::float_cmp)]
+// Not a useful lint for us
+#![allow(clippy::too_many_arguments)]
 
 pub mod llvm;
 
