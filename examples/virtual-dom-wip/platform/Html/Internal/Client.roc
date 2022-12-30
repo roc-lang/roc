@@ -775,9 +775,7 @@ expect
 
     actual : DiffState State
     actual =
-        # COMPILER BUG? 'no lambdaset found'
-        # diff diffStateBefore newNode
-        expected # TODO: tests that actually test things
+        diff diffStateBefore newNode
 
     (actual.patches == expected.patches)
     && eqRenderedTree actual.rendered expected.rendered
@@ -818,9 +816,7 @@ expect
 
     initJson : List U8
     initJson =
-        # { answer: 42 } |> Encode.toBytes Json.toUtf8 # panics at mono/src/ir.rs:5739:56
-        "{ answer: 42 }" |> Str.toUtf8
-
+        { answer: 42 } |> Encode.toBytes Json.toUtf8 # panics at mono/src/ir.rs:5739:56
     expected : { state : State, rendered : RenderedTree State, patches : List Patch }
     expected = {
         state: { answer: 42 },
@@ -842,9 +838,7 @@ expect
 
     actual : { state : State, rendered : RenderedTree State, patches : List Patch }
     actual =
-        # COMPILER BUG? 'no lambdaset found'
-        # initClientAppHelp initJson app
-        expected # TODO: tests that actually test things
+        initClientAppHelp initJson app
 
     (actual.state == expected.state)
     && eqRenderedTree actual.rendered expected.rendered
