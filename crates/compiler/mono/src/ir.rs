@@ -3533,10 +3533,12 @@ fn specialize_proc_help<'a>(
                             let ptr_bytes = env.target_info;
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
-                                let size1 =
-                                    layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
-                                let size2 =
-                                    layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size1 = layout_cache
+                                    .get_in(**layout1)
+                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size2 = layout_cache
+                                    .get_in(**layout2)
+                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                                 size2.cmp(&size1)
                             });
@@ -3575,16 +3577,20 @@ fn specialize_proc_help<'a>(
                             let ptr_bytes = env.target_info;
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
-                                let size1 =
-                                    layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
-                                let size2 =
-                                    layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size1 = layout_cache
+                                    .get_in(**layout1)
+                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size2 = layout_cache
+                                    .get_in(**layout2)
+                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                                 size2.cmp(&size1)
                             });
 
                             let ordered_field_layouts = Vec::from_iter_in(
-                                combined.iter().map(|(_, layout)| **layout),
+                                combined
+                                    .iter()
+                                    .map(|(_, layout)| *layout_cache.get_in(**layout)),
                                 env.arena,
                             );
                             let ordered_field_layouts = ordered_field_layouts.into_bump_slice();
@@ -3610,7 +3616,7 @@ fn specialize_proc_help<'a>(
                                 specialized_body = Stmt::Let(
                                     symbol,
                                     expr,
-                                    **layout,
+                                    *layout_cache.get_in(**layout),
                                     env.arena.alloc(specialized_body),
                                 );
                             }
@@ -5730,8 +5736,12 @@ where
             let ptr_bytes = env.target_info;
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
-                let size1 = layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
-                let size2 = layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size1 = layout_cache
+                    .get_in(**layout1)
+                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size2 = layout_cache
+                    .get_in(**layout2)
+                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                 size2.cmp(&size1)
             });
@@ -5760,16 +5770,23 @@ where
             let ptr_bytes = env.target_info;
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
-                let size1 = layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
-                let size2 = layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size1 = layout_cache
+                    .get_in(**layout1)
+                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size2 = layout_cache
+                    .get_in(**layout2)
+                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                 size2.cmp(&size1)
             });
 
             let symbols =
                 Vec::from_iter_in(combined.iter().map(|(a, _)| *a), env.arena).into_bump_slice();
-            let field_layouts =
-                Vec::from_iter_in(combined.iter().map(|(_, b)| **b), env.arena).into_bump_slice();
+            let field_layouts = Vec::from_iter_in(
+                combined.iter().map(|(_, b)| *layout_cache.get_in(**b)),
+                env.arena,
+            )
+            .into_bump_slice();
 
             debug_assert_eq!(
                 Layout::struct_no_name_order(field_layouts),

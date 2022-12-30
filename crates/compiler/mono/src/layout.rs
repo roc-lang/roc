@@ -5,7 +5,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, FnvMap, MutMap};
 use roc_error_macros::{internal_error, todo_abilities};
-use roc_intern::{Interned, Interner, SingleThreadedInterner, ThreadLocalInterner};
+use roc_intern::{Interner, SingleThreadedInterner, ThreadLocalInterner};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
@@ -309,6 +309,14 @@ impl<'a> LayoutCache<'a> {
                 roc_tracing::debug!(?var, "invalidating cached layout");
             }
         }
+    }
+
+    pub fn get_in(&self, interned: InLayout<'a>) -> &Layout<'a> {
+        self.interner.get(interned)
+    }
+
+    pub fn put_in(&mut self, layout: &'a Layout<'a>) -> InLayout<'a> {
+        self.interner.insert(layout)
     }
 
     #[cfg(debug_assertions)]
@@ -653,6 +661,10 @@ impl FieldOrderHash {
     }
 }
 
+/// An interned layout.
+// One day I would like to take over `LayoutId` as the name here, but that is currently used elsewhere.
+pub type InLayout<'a> = roc_intern::Interned<Layout<'a>>;
+
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Layout<'a> {
@@ -670,7 +682,7 @@ pub enum Layout<'a> {
         field_order_hash: FieldOrderHash,
         field_layouts: &'a [Layout<'a>],
     },
-    Boxed(&'a Layout<'a>),
+    Boxed(InLayout<'a>),
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),
     RecursivePointer,
@@ -1174,7 +1186,7 @@ impl Discriminant {
 /// concurrently. The number does not change and will give a reliable output.
 struct SetElement<'a> {
     symbol: Symbol,
-    layout: &'a [Layout<'a>],
+    layout: &'a [InLayout<'a>],
 }
 
 impl std::fmt::Debug for SetElement<'_> {
@@ -1188,7 +1200,7 @@ impl std::fmt::Debug for SetElement<'_> {
 impl std::fmt::Debug for LambdaSet<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         struct Helper<'a> {
-            set: &'a [(Symbol, &'a [Layout<'a>])],
+            set: &'a [(Symbol, &'a [InLayout<'a>])],
         }
 
         impl std::fmt::Debug for Helper<'_> {
@@ -1229,7 +1241,7 @@ impl std::fmt::Debug for LambdaSet<'_> {
 ///
 /// See also https://github.com/roc-lang/roc/issues/3336.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct CapturesNiche<'a>(pub(crate) &'a [Layout<'a>]);
+pub struct CapturesNiche<'a>(pub(crate) &'a [InLayout<'a>]);
 
 impl CapturesNiche<'_> {
     pub fn no_niche() -> Self {
@@ -1279,9 +1291,9 @@ impl<'a> LambdaName<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LambdaSet<'a> {
     /// collection of function names and their closure arguments
-    pub(crate) set: &'a [(Symbol, &'a [Layout<'a>])],
+    pub(crate) set: &'a [(Symbol, &'a [InLayout<'a>])],
     /// how the closure will be represented at runtime
-    pub(crate) representation: Interned<Layout<'a>>,
+    pub(crate) representation: InLayout<'a>,
 }
 
 #[derive(Debug)]
@@ -1296,7 +1308,7 @@ pub enum ClosureRepresentation<'a> {
     /// The closure is represented as a union. Includes the tag ID!
     /// Each variant is a different function, and its payloads are the captures.
     Union {
-        alphabetic_order_fields: &'a [Layout<'a>],
+        alphabetic_order_fields: &'a [InLayout<'a>],
         closure_name: Symbol,
         tag_id: TagIdIntType,
         union_layout: UnionLayout<'a>,
@@ -1305,9 +1317,9 @@ pub enum ClosureRepresentation<'a> {
     /// The layouts are sorted alphabetically by the identifier that is captured.
     ///
     /// We MUST sort these according to their stack size before code gen!
-    AlphabeticOrderStruct(&'a [Layout<'a>]),
+    AlphabeticOrderStruct(&'a [InLayout<'a>]),
     /// The closure is one function that captures a single identifier, whose value is unwrapped.
-    UnwrappedCapture(Layout<'a>),
+    UnwrappedCapture(InLayout<'a>),
     /// The closure dispatches to multiple functions, but none of them capture anything, so this is
     /// a boolean or integer flag.
     EnumDispatch(EnumDispatch),
@@ -1391,7 +1403,7 @@ impl<'a> LambdaSet<'a> {
     {
         debug_assert!(self.contains(lambda_name.name));
 
-        let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
+        let comparator = |other_name: Symbol, other_captures_layouts: &[InLayout]| {
             other_name == lambda_name.name
                 // Make sure all captures are equal
                 && other_captures_layouts
@@ -1419,7 +1431,7 @@ impl<'a> LambdaSet<'a> {
             self
         );
 
-        let comparator = |other_name: Symbol, other_captures_layouts: &[Layout]| {
+        let comparator = |other_name: Symbol, other_captures_layouts: &[InLayout<'a>]| {
             other_name == function_symbol
                 && other_captures_layouts.iter().zip(captures_layouts).all(
                     |(other_layout, layout)| {
@@ -1449,10 +1461,11 @@ impl<'a> LambdaSet<'a> {
 
     /// Checks if two captured layouts are equivalent under the current lambda set.
     /// Resolves recursive pointers to the layout of the lambda set.
-    fn capture_layouts_eq<I>(&self, interner: &I, left: &Layout, right: &Layout) -> bool
+    fn capture_layouts_eq<I>(&self, interner: &I, left: &InLayout<'a>, right: &Layout) -> bool
     where
         I: Interner<'a, Layout<'a>>,
     {
+        let left = interner.get(*left);
         if left == right {
             return true;
         }
@@ -1485,14 +1498,14 @@ impl<'a> LambdaSet<'a> {
     fn layout_for_member<I, F>(&self, interner: &I, comparator: F) -> ClosureRepresentation<'a>
     where
         I: Interner<'a, Layout<'a>>,
-        F: Fn(Symbol, &[Layout]) -> bool,
+        F: Fn(Symbol, &[InLayout]) -> bool,
     {
-        let repr = interner.get(self.representation);
-
         if self.has_unwrapped_capture_repr() {
             // Only one function, that captures one identifier.
-            return ClosureRepresentation::UnwrappedCapture(*repr);
+            return ClosureRepresentation::UnwrappedCapture(self.representation);
         }
+
+        let repr = interner.get(self.representation);
 
         match repr {
             Layout::Union(union) => {
@@ -1721,7 +1734,7 @@ impl<'a> LambdaSet<'a> {
                 // sort the tags; make sure ordering stays intact!
                 lambdas.sort_by_key(|(sym, _)| *sym);
 
-                let mut set: Vec<(Symbol, &[Layout])> =
+                let mut set: Vec<(Symbol, &[InLayout])> =
                     Vec::with_capacity_in(lambdas.len(), env.arena);
                 let mut set_with_variables: std::vec::Vec<(&Symbol, &[Variable])> =
                     std::vec::Vec::with_capacity(lambdas.len());
@@ -1742,7 +1755,8 @@ impl<'a> LambdaSet<'a> {
                         // representation, so here the criteria doesn't matter.
                         let mut criteria = CACHEABLE;
                         let arg = cached!(Layout::from_var(env, *var), criteria);
-                        arguments.push(arg);
+                        let arg_in = env.cache.interner.insert(env.arena.alloc(arg));
+                        arguments.push(arg_in);
                     }
 
                     let arguments = arguments.into_bump_slice();
@@ -2375,41 +2389,6 @@ impl<'a> Layout<'a> {
         false // TODO this should use is_zero_sized once doing so doesn't break things!
     }
 
-    /// Like stack_size, but doesn't require target info because
-    /// whether something is zero sized is not target-dependent.
-    #[allow(dead_code)]
-    fn is_zero_sized(&self) -> bool {
-        match self {
-            // There are no zero-sized builtins
-            Layout::Builtin(_) => false,
-            // Functions are never zero-sized
-            Layout::LambdaSet(_) => false,
-            // Empty structs, or structs with all zero-sized fields, are zero-sized
-            Layout::Struct { field_layouts, .. } => field_layouts.iter().all(Self::is_zero_sized),
-            // A Box that points to nothing should be unwrapped
-            Layout::Boxed(content) => content.is_zero_sized(),
-            Layout::Union(union_layout) => match union_layout {
-                UnionLayout::NonRecursive(tags)
-                | UnionLayout::Recursive(tags)
-                | UnionLayout::NullableWrapped {
-                    other_tags: tags, ..
-                } => tags
-                    .iter()
-                    .all(|payloads| payloads.iter().all(Self::is_zero_sized)),
-                UnionLayout::NonNullableUnwrapped(tags)
-                | UnionLayout::NullableUnwrapped {
-                    other_fields: tags, ..
-                } => tags.iter().all(Self::is_zero_sized),
-            },
-            // Recursive pointers are considered zero-sized because
-            // if you have a recursive data structure where everything
-            // else but the recutsive pointer is zero-sized, then
-            // the whole thing is unnecessary at runtime and should
-            // be zero-sized.
-            Layout::RecursivePointer => true,
-        }
-    }
-
     pub fn is_passed_by_reference<I>(&self, interner: &I, target_info: TargetInfo) -> bool
     where
         I: Interner<'a, Layout<'a>>,
@@ -2553,7 +2532,9 @@ impl<'a> Layout<'a> {
                 .runtime_representation(interner)
                 .allocation_alignment_bytes(interner, target_info),
             Layout::RecursivePointer => unreachable!("should be looked up to get an actual layout"),
-            Layout::Boxed(inner) => inner.allocation_alignment_bytes(interner, target_info),
+            Layout::Boxed(inner) => interner
+                .get(*inner)
+                .allocation_alignment_bytes(interner, target_info),
         }
     }
 
@@ -2671,7 +2652,7 @@ impl<'a> Layout<'a> {
             RecursivePointer => alloc.text("*self"),
             Boxed(inner) => alloc
                 .text("Boxed(")
-                .append(inner.to_doc(alloc, interner, parens))
+                .append(interner.get(inner).to_doc(alloc, interner, parens))
                 .append(")"),
         }
     }
@@ -3083,8 +3064,9 @@ fn layout_from_flat_type<'a>(
 
                     let inner_var = args[0];
                     let inner_layout = cached!(Layout::from_var(env, inner_var), criteria);
+                    let inner_layout = env.cache.put_in(env.arena.alloc(inner_layout));
 
-                    Cacheable(Ok(Layout::Boxed(env.arena.alloc(inner_layout))), criteria)
+                    Cacheable(Ok(Layout::Boxed(inner_layout)), criteria)
                 }
                 _ => {
                     panic!(

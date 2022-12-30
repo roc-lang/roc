@@ -1,5 +1,6 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_intern::Interner;
 use roc_types::types::AliasKind;
 use std::cmp::{max_by_key, min_by_key};
 
@@ -854,6 +855,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             let inner_var = env.subs[inner_var_index];
 
             let addr_of_inner = mem.deref_usize(addr);
+            let inner_layout = env.layout_cache.interner.get(*inner_layout);
             let inner_expr = addr_to_ast(
                 env,
                 mem,

@@ -28,7 +28,6 @@ mod run_roc;
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
-    pub layout_interner: &'a STLayoutInterner<'a>,
     pub module_id: ModuleId,
     pub exposed_to_host: MutSet<Symbol>,
     pub lazy_literals: bool,
@@ -68,7 +67,14 @@ trait Backend<'a> {
     // This method is suboptimal, but it seems to be the only way to make rust understand
     // that all of these values can be mutable at the same time. By returning them together,
     // rust understands that they are part of a single use of mutable self.
-    fn env_interns_helpers_mut(&mut self) -> (&Env<'a>, &mut Interns, &mut CodeGenHelp<'a>);
+    fn module_interns_helpers_mut(
+        &mut self,
+    ) -> (
+        ModuleId,
+        &mut STLayoutInterner<'a>,
+        &mut Interns,
+        &mut CodeGenHelp<'a>,
+    );
 
     fn symbol_to_string(&self, symbol: Symbol, layout_id: LayoutId) -> String {
         layout_id.to_symbol_string(symbol, self.interns())
@@ -155,11 +161,17 @@ trait Backend<'a> {
                 // If this layout requires a new RC proc, we get enough info to create a linker symbol
                 // for it. Here we don't create linker symbols at this time, but in Wasm backend, we do.
                 let (rc_stmt, new_specializations) = {
-                    let (env, interns, rc_proc_gen) = self.env_interns_helpers_mut();
-                    let module_id = env.module_id;
+                    let (module_id, layout_interner, interns, rc_proc_gen) =
+                        self.module_interns_helpers_mut();
                     let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
 
-                    rc_proc_gen.expand_refcount_stmt(ident_ids, layout, modify, following)
+                    rc_proc_gen.expand_refcount_stmt(
+                        ident_ids,
+                        layout_interner,
+                        layout,
+                        modify,
+                        following,
+                    )
                 };
 
                 for spec in new_specializations.into_iter() {

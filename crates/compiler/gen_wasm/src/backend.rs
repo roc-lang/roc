@@ -4,6 +4,7 @@ use bumpalo::collections::{String, Vec};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
+use roc_intern::Interner;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, HelperOp, REFCOUNT_MAX};
@@ -11,7 +12,7 @@ use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc,
     Param, Proc, ProcLayout, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, LayoutIds, TagIdIntType, UnionLayout};
+use roc_mono::layout::{Builtin, Layout, LayoutIds, STLayoutInterner, TagIdIntType, UnionLayout};
 use roc_std::RocDec;
 
 use roc_wasm_module::linking::{DataSymbol, WasmObjectSymbol};
@@ -48,9 +49,10 @@ pub struct ProcLookupData<'a> {
     pub source: ProcSource,
 }
 
-pub struct WasmBackend<'a> {
-    pub env: &'a Env<'a>,
-    interns: &'a mut Interns,
+pub struct WasmBackend<'a, 'r> {
+    pub env: &'r Env<'a>,
+    pub(crate) layout_interner: &'r mut STLayoutInterner<'a>,
+    interns: &'r mut Interns,
 
     // Module-level data
     module: WasmModule<'a>,
@@ -72,11 +74,12 @@ pub struct WasmBackend<'a> {
     joinpoint_label_map: MutMap<JoinPointId, (u32, Vec<'a, StoredValue>)>,
 }
 
-impl<'a> WasmBackend<'a> {
+impl<'a, 'r> WasmBackend<'a, 'r> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        env: &'a Env<'a>,
-        interns: &'a mut Interns,
+        env: &'r Env<'a>,
+        layout_interner: &'r mut STLayoutInterner<'a>,
+        interns: &'r mut Interns,
         layout_ids: LayoutIds<'a>,
         proc_lookup: Vec<'a, ProcLookupData<'a>>,
         host_to_app_map: Vec<'a, (&'a str, u32)>,
@@ -114,6 +117,7 @@ impl<'a> WasmBackend<'a> {
 
         WasmBackend {
             env,
+            layout_interner,
             interns,
 
             // Module-level data
@@ -403,7 +407,7 @@ impl<'a> WasmBackend<'a> {
 
     fn start_proc(&mut self, proc: &Proc<'a>) {
         use ReturnMethod::*;
-        let ret_layout = WasmLayout::new(self.env.layout_interner, &proc.ret_layout);
+        let ret_layout = WasmLayout::new(self.layout_interner, &proc.ret_layout);
 
         let ret_type = match ret_layout.return_method(CallConv::C) {
             Primitive(ty, _) => Some(ty),
@@ -422,7 +426,7 @@ impl<'a> WasmBackend<'a> {
         self.start_block();
 
         self.storage.allocate_args(
-            self.env.layout_interner,
+            self.layout_interner,
             proc.args,
             &mut self.code_builder,
             self.env.arena,
@@ -500,7 +504,9 @@ impl<'a> WasmBackend<'a> {
         // Our convention is that the last arg of the wrapper is the heap return pointer
         let heap_return_ptr_id = LocalId(wrapper_arg_layouts.len() as u32 - 1);
         let inner_ret_layout = match wrapper_arg_layouts.last() {
-            Some(Layout::Boxed(inner)) => WasmLayout::new(self.env.layout_interner, inner),
+            Some(Layout::Boxed(inner)) => {
+                WasmLayout::new(self.layout_interner, self.layout_interner.get(*inner))
+            }
             x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
         };
 
@@ -531,10 +537,10 @@ impl<'a> WasmBackend<'a> {
             }
 
             let inner_layout = match wrapper_arg {
-                Layout::Boxed(inner) => inner,
+                Layout::Boxed(inner) => self.layout_interner.get(*inner),
                 x => internal_error!("Expected a Boxed layout, got {:?}", x),
             };
-            if inner_layout.stack_size(self.env.layout_interner, TARGET_INFO) == 0 {
+            if inner_layout.stack_size(self.layout_interner, TARGET_INFO) == 0 {
                 continue;
             }
 
@@ -546,7 +552,7 @@ impl<'a> WasmBackend<'a> {
 
         // If the inner function has closure data, it's the last arg of the inner fn
         let closure_data_layout = wrapper_arg_layouts[0];
-        if closure_data_layout.stack_size(self.env.layout_interner, TARGET_INFO) > 0 {
+        if closure_data_layout.stack_size(self.layout_interner, TARGET_INFO) > 0 {
             // The closure data exists, and will have been passed in to the wrapper as a
             // one-element struct.
             let inner_closure_data_layout = match closure_data_layout {
@@ -621,13 +627,13 @@ impl<'a> WasmBackend<'a> {
         let value_layout = wrapper_proc_layout.arguments[1];
 
         let mut n_inner_args = 2;
-        if closure_data_layout.stack_size(self.env.layout_interner, TARGET_INFO) > 0 {
+        if closure_data_layout.stack_size(self.layout_interner, TARGET_INFO) > 0 {
             self.code_builder.get_local(LocalId(0));
             n_inner_args += 1;
         }
 
         let inner_layout = match value_layout {
-            Layout::Boxed(inner) => inner,
+            Layout::Boxed(inner) => self.layout_interner.get(inner),
             x => internal_error!("Expected a Boxed layout, got {:?}", x),
         };
         self.code_builder.get_local(LocalId(1));
@@ -770,7 +776,7 @@ impl<'a> WasmBackend<'a> {
     ) {
         let sym_storage = self
             .storage
-            .allocate_var(self.env.layout_interner, *layout, sym, kind);
+            .allocate_var(self.layout_interner, *layout, sym, kind);
 
         self.expr(sym, expr, layout, &sym_storage);
 
@@ -848,7 +854,7 @@ impl<'a> WasmBackend<'a> {
 
         let is_bool = matches!(cond_layout, Layout::Builtin(Builtin::Bool));
         let cond_type =
-            WasmLayout::new(self.env.layout_interner, cond_layout).arg_types(CallConv::C)[0];
+            WasmLayout::new(self.layout_interner, cond_layout).arg_types(CallConv::C)[0];
 
         // then, we jump whenever the value under scrutiny is equal to the value of a branch
         for (i, (value, _, _)) in branches.iter().enumerate() {
@@ -910,7 +916,7 @@ impl<'a> WasmBackend<'a> {
         let mut jp_param_storages = Vec::with_capacity_in(parameters.len(), self.env.arena);
         for parameter in parameters.iter() {
             let mut param_storage = self.storage.allocate_var(
-                self.env.layout_interner,
+                self.layout_interner,
                 parameter.layout,
                 parameter.symbol,
                 StoredVarKind::Variable,
@@ -967,15 +973,19 @@ impl<'a> WasmBackend<'a> {
             .get_mut(&self.env.module_id)
             .unwrap();
 
-        let (rc_stmt, new_specializations) = self
-            .helper_proc_gen
-            .expand_refcount_stmt(ident_ids, layout, modify, following);
+        let (rc_stmt, new_specializations) = self.helper_proc_gen.expand_refcount_stmt(
+            ident_ids,
+            self.layout_interner,
+            layout,
+            modify,
+            following,
+        );
 
         if false {
             self.register_symbol_debug_names();
             println!(
                 "## rc_stmt:\n{}\n{:?}",
-                rc_stmt.to_pretty(self.env.layout_interner, 200, true),
+                rc_stmt.to_pretty(self.layout_interner, 200, true),
                 rc_stmt
             );
         }
@@ -991,7 +1001,7 @@ impl<'a> WasmBackend<'a> {
     pub fn stmt_internal_error(&mut self, msg: &'a str) {
         let msg_sym = self.create_symbol("panic_str");
         let msg_storage = self.storage.allocate_var(
-            self.env.layout_interner,
+            self.layout_interner,
             Layout::Builtin(Builtin::Str),
             msg_sym,
             StoredVarKind::Variable,
@@ -1264,7 +1274,7 @@ impl<'a> WasmBackend<'a> {
                 ret_layout,
             } => {
                 let name = foreign_symbol.as_str();
-                let wasm_layout = WasmLayout::new(self.env.layout_interner, ret_layout);
+                let wasm_layout = WasmLayout::new(self.layout_interner, ret_layout);
                 let (num_wasm_args, has_return_val, ret_zig_packed_struct) =
                     self.storage.load_symbols_for_call(
                         self.env.arena,
@@ -1289,7 +1299,7 @@ impl<'a> WasmBackend<'a> {
         ret_layout: &Layout<'a>,
         ret_storage: &StoredValue,
     ) {
-        let wasm_layout = WasmLayout::new(self.env.layout_interner, ret_layout);
+        let wasm_layout = WasmLayout::new(self.layout_interner, ret_layout);
 
         // If this function is just a lowlevel wrapper, then inline it
         if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
@@ -1391,7 +1401,7 @@ impl<'a> WasmBackend<'a> {
         // Get an IR expression for the call to the specialized procedure
         let (specialized_call_expr, new_specializations) = self
             .helper_proc_gen
-            .call_specialized_equals(ident_ids, arg_layout, arguments);
+            .call_specialized_equals(ident_ids, self.layout_interner, arg_layout, arguments);
 
         // If any new specializations were created, register their symbol data
         for (spec_sym, spec_layout) in new_specializations.into_iter() {
@@ -1446,7 +1456,7 @@ impl<'a> WasmBackend<'a> {
             }
             Layout::LambdaSet(lambdaset) => self.expr_struct(
                 sym,
-                &lambdaset.runtime_representation(self.env.layout_interner),
+                &lambdaset.runtime_representation(self.layout_interner),
                 storage,
                 fields,
             ),
@@ -1497,7 +1507,7 @@ impl<'a> WasmBackend<'a> {
             }
         };
         for field in field_layouts.iter().take(index as usize) {
-            offset += field.stack_size(self.env.layout_interner, TARGET_INFO);
+            offset += field.stack_size(self.layout_interner, TARGET_INFO);
         }
         self.storage
             .copy_value_from_memory(&mut self.code_builder, sym, from_addr_val, offset);
@@ -1515,12 +1525,12 @@ impl<'a> WasmBackend<'a> {
         elems: &'a [ListLiteralElement<'a>],
     ) {
         if let StoredValue::StackMemory { location, .. } = storage {
-            let size = elem_layout.stack_size(self.env.layout_interner, TARGET_INFO)
-                * (elems.len() as u32);
+            let size =
+                elem_layout.stack_size(self.layout_interner, TARGET_INFO) * (elems.len() as u32);
 
             // Allocate heap space and store its address in a local variable
             let heap_local_id = self.storage.create_anonymous_local(PTR_TYPE);
-            let heap_alignment = elem_layout.alignment_bytes(self.env.layout_interner, TARGET_INFO);
+            let heap_alignment = elem_layout.alignment_bytes(self.layout_interner, TARGET_INFO);
             self.allocate_with_refcount(Some(size), heap_alignment, 1);
             self.code_builder.set_local(heap_local_id);
 
@@ -1618,7 +1628,7 @@ impl<'a> WasmBackend<'a> {
         let stores_tag_id_as_data = union_layout.stores_tag_id_as_data(TARGET_INFO);
         let stores_tag_id_in_pointer = union_layout.stores_tag_id_in_pointer(TARGET_INFO);
         let (data_size, data_alignment) =
-            union_layout.data_size_and_alignment(self.env.layout_interner, TARGET_INFO);
+            union_layout.data_size_and_alignment(self.layout_interner, TARGET_INFO);
 
         // We're going to use the pointer many times, so put it in a local variable
         let stored_with_local =
@@ -1672,7 +1682,7 @@ impl<'a> WasmBackend<'a> {
         if stores_tag_id_as_data {
             let id_offset = data_offset
                 + union_layout
-                    .tag_id_offset(self.env.layout_interner, TARGET_INFO)
+                    .tag_id_offset(self.layout_interner, TARGET_INFO)
                     .unwrap();
 
             let id_align = union_layout.discriminant().alignment_bytes();
@@ -1757,7 +1767,7 @@ impl<'a> WasmBackend<'a> {
 
         if union_layout.stores_tag_id_as_data(TARGET_INFO) {
             let id_offset = union_layout
-                .tag_id_offset(self.env.layout_interner, TARGET_INFO)
+                .tag_id_offset(self.layout_interner, TARGET_INFO)
                 .unwrap();
 
             let id_align = union_layout.discriminant().alignment_bytes();
@@ -1818,7 +1828,7 @@ impl<'a> WasmBackend<'a> {
         let field_offset: u32 = field_layouts
             .iter()
             .take(index as usize)
-            .map(|field_layout| field_layout.stack_size(self.env.layout_interner, TARGET_INFO))
+            .map(|field_layout| field_layout.stack_size(self.layout_interner, TARGET_INFO))
             .sum();
 
         // Get pointer and offset to the tag's data
@@ -1881,11 +1891,11 @@ impl<'a> WasmBackend<'a> {
 
         // allocate heap memory and load its data address onto the value stack
         let arg_layout = match layout {
-            Layout::Boxed(arg) => *arg,
+            Layout::Boxed(arg) => self.layout_interner.get(*arg),
             _ => internal_error!("ExprBox should always produce a Boxed layout"),
         };
         let (size, alignment) =
-            arg_layout.stack_size_and_alignment(self.env.layout_interner, TARGET_INFO);
+            arg_layout.stack_size_and_alignment(self.layout_interner, TARGET_INFO);
         self.allocate_with_refcount(Some(size), alignment, 1);
 
         // store the pointer value from the value stack into the local variable
@@ -1984,7 +1994,7 @@ impl<'a> WasmBackend<'a> {
         let layout = self.storage.symbol_layouts[&argument];
         let (specialized_call_expr, new_specializations) = self
             .helper_proc_gen
-            .call_reset_refcount(ident_ids, layout, argument);
+            .call_reset_refcount(ident_ids, self.layout_interner, layout, argument);
 
         // If any new specializations were created, register their symbol data
         for (spec_sym, spec_layout) in new_specializations.into_iter() {
@@ -2009,9 +2019,9 @@ impl<'a> WasmBackend<'a> {
             .get_mut(&self.env.module_id)
             .unwrap();
 
-        let (proc_symbol, new_specializations) = self
-            .helper_proc_gen
-            .gen_refcount_proc(ident_ids, layout, op);
+        let (proc_symbol, new_specializations) =
+            self.helper_proc_gen
+                .gen_refcount_proc(ident_ids, self.layout_interner, layout, op);
 
         // If any new specializations were created, register their symbol data
         for (spec_sym, spec_layout) in new_specializations.into_iter() {
