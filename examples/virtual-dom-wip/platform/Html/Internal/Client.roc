@@ -239,33 +239,15 @@ dispatchEvent = \platformState, eventData, handlerId ->
         None ->
             Effect.always { platformState, stopPropagation, preventDefault }
 
-insertHandler : RenderedTree state, Handler state -> { handlerId : HandlerId, rendered : RenderedTree state }
-insertHandler = \rendered, newHandler ->
-    when List.last rendered.deletedHandlerCache is
-        Ok handlerId ->
-            {
-                handlerId,
-                rendered: { rendered &
-                    handlers: List.set rendered.handlers handlerId (Ok newHandler),
-                    deletedHandlerCache: List.dropLast rendered.deletedHandlerCache,
-                },
-            }
-
-        Err _ ->
-            {
-                handlerId: List.len rendered.handlers,
-                rendered: { rendered &
-                    handlers: List.append rendered.handlers (Ok newHandler),
-                },
-            }
-
 # -------------------------------
 #   DIFF
 # -------------------------------
 diff : DiffState state, Html state -> DiffState state
 diff = \{ rendered, patches }, newNode ->
+    root =
+        rendered.root
     oldNode =
-        List.get rendered.nodes rendered.root
+        List.get rendered.nodes root
         |> Result.withDefault (Ok RenderedNone)
         |> Result.withDefault (RenderedNone)
 
@@ -284,24 +266,51 @@ diff = \{ rendered, patches }, newNode ->
             else
                 { rendered, patches }
 
-        { oldNode: RenderedElement oldName oldAttrs oldChildren, newNode: Element newName newSize newAttrs newChildren } ->
+        { oldNode: RenderedElement oldName oldAttrs oldChildren, newNode: Element newName _ newAttrs newChildren } ->
             if newName != oldName then
-                replaceNode { rendered, patches } rendered.root newNode
+                replaceNode { rendered, patches } root newNode
             else
                 stateAttrs =
-                    diffAttrs { rendered, patches } rendered.root oldAttrs newAttrs
+                    diffAttrs { rendered, patches } root oldAttrs newAttrs
                 stateChildPairs =
-                    List.map2 oldChildren newChildren (\oldChild, newChild -> { oldChild, newChild })
-                    |> List.walk stateAttrs diffChildPair
+                    List.map2 oldChildren newChildren (\oldChildId, newChild -> { oldChildId, newChild })
+                    |> List.walk stateAttrs \childWalkState, { oldChildId, newChild } ->
+                        { rendered: childWalkRendered, patches: childWalkPatches } = childWalkState
+                        diff { rendered: { childWalkRendered & root: oldChildId }, patches: childWalkPatches } newChild
+                { rendered: renderedLeftOverChildren, patches: patchesLeftOverChildren } =
+                    if List.len oldChildren > List.len newChildren then
+                        List.walkFrom oldChildren (List.len newChildren) stateChildPairs deleteNode
+                    else if List.len oldChildren < List.len newChildren then
+                        stateBeforeCreate = {
+                            rendered: stateChildPairs.rendered,
+                            patches: stateChildPairs.patches,
+                            ids: [],
+                        }
+                        { rendered: renderedAfterCreate, patches: patchesAfterCreate, ids: createdIds } =
+                            List.walkFrom newChildren (List.len oldChildren) stateBeforeCreate createChildNode
+                        # Find the children again since they might have new node IDs!
+                        latestNode =
+                            List.get renderedAfterCreate.nodes root
+                            |> Result.withDefault (Ok RenderedNone)
+                            |> Result.withDefault (RenderedNone)
+                        nodeWithUpdatedChildren =
+                            when latestNode is
+                                RenderedElement n a c -> RenderedElement n a (List.concat c createdIds)
+                                _ -> latestNode # impossible
+                        updatedNodes =
+                            List.set renderedAfterCreate.nodes root (Ok nodeWithUpdatedChildren)
 
-                if List.len oldChildren > List.len newChildren then
-                    # TODO: delete old nodeIDs
-                    stateChildPairs
-                else if List.len oldChildren < List.len newChildren then
-                    # TODO: render new nodes
-                    stateChildPairs
-                else
-                    stateChildPairs
+                        {
+                            rendered: { renderedAfterCreate & nodes: updatedNodes },
+                            patches: List.walk createdIds patchesAfterCreate \p, id -> List.append p (AppendChild root id),
+                        }
+                    else
+                        stateChildPairs
+
+                {
+                    rendered: { renderedLeftOverChildren & root },
+                    patches: patchesLeftOverChildren,
+                }
 
         { oldNode: RenderedNone, newNode: None } ->
             { rendered, patches }
@@ -309,9 +318,6 @@ diff = \{ rendered, patches }, newNode ->
         _ ->
             # old node has been replaced with a totally different variant. There's no point in diffing, just replace.
             replaceNode { rendered, patches } rendered.root newNode
-
-# TODO
-diffChildPair : DiffState state, { oldChild : Nat, newChild : Html state } -> DiffState state
 
 replaceNode : DiffState state, NodeId, Html state -> DiffState state
 replaceNode = \diffState, oldNodeId, newNode ->
