@@ -16,7 +16,6 @@ fn valgrind_test(source: &str) {
 
 #[cfg(target_os = "linux")]
 fn valgrind_test_linux(source: &str) {
-    use cli_utils::helpers::{extract_valgrind_errors, ValgrindError, ValgrindErrorXWhat};
     use roc_cli::build::BuiltFile;
 
     let pf = std::env::current_dir()
@@ -66,54 +65,87 @@ fn valgrind_test_linux(source: &str) {
             if problems.exit_code() != 0 {
                 panic!("there are problems")
             }
-            // If possible, report the generated executable name relative to the current dir.
-            let generated_filename = binary_path
-                .strip_prefix(std::env::current_dir().unwrap())
-                .unwrap_or(&binary_path)
-                .to_str()
-                .unwrap();
 
-            let (valgrind_out, raw_xml) =
-                cli_utils::helpers::run_with_valgrind([], &[generated_filename.to_string()]);
-
-            if valgrind_out.status.success() {
-                let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
-                                panic!("failed to parse the `valgrind` xml output:\n\n  Error was:\n\n    {:?}\n\n  valgrind xml was:\n\n    \"{}\"\n\n  valgrind stdout was:\n\n    \"{}\"\n\n  valgrind stderr was:\n\n    \"{}\"", err, raw_xml, valgrind_out.stdout, valgrind_out.stderr);
-                            });
-
-                if !memory_errors.is_empty() {
-                    for error in memory_errors {
-                        let ValgrindError {
-                            kind,
-                            what: _,
-                            xwhat,
-                        } = error;
-                        println!("Valgrind Error: {}\n", kind);
-
-                        if let Some(ValgrindErrorXWhat {
-                            text,
-                            leakedbytes: _,
-                            leakedblocks: _,
-                        }) = xwhat
-                        {
-                            println!("    {}", text);
-                        }
-                    }
-                    panic!("Valgrind found memory errors in {:?}", app_module_path);
-                }
-            } else {
-                let exit_code = match valgrind_out.status.code() {
-                    Some(code) => format!("exit code {}", code),
-                    None => "no exit code".to_string(),
-                };
-
-                panic!("`valgrind` exited with {}. valgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"", exit_code, valgrind_out.stdout, valgrind_out.stderr);
-            }
+            run_with_valgrind(&binary_path);
         }
         Err(e) => panic!("{:?}", e),
     }
 
     drop(temp_dir)
+}
+
+fn run_with_valgrind(binary_path: &std::path::Path) {
+    use cli_utils::helpers::{extract_valgrind_errors, ValgrindError, ValgrindErrorXWhat};
+
+    // If possible, report the generated executable name relative to the current dir.
+    let generated_filename = binary_path
+        .strip_prefix(std::env::current_dir().unwrap())
+        .unwrap_or(binary_path)
+        .to_str()
+        .unwrap();
+
+    let (valgrind_out, raw_xml) =
+        cli_utils::helpers::run_with_valgrind([], &[generated_filename.to_string()]);
+
+    if valgrind_out.status.success() {
+        let memory_errors = extract_valgrind_errors(&raw_xml).unwrap_or_else(|err| {
+            panic!(
+                indoc!(
+                    r#"
+                    failed to parse the `valgrind` xml output:
+                      
+                        Error was:
+  
+                            {:?}
+  
+                        valgrind xml was:
+  
+                            {}
+  
+                        valgrind stdout was:
+  
+                            {}
+  
+                        valgrind stderr was:
+  
+                            {}
+                    "#
+                ),
+                err, raw_xml, valgrind_out.stdout, valgrind_out.stderr
+            );
+        });
+
+        if !memory_errors.is_empty() {
+            for error in memory_errors {
+                let ValgrindError {
+                    kind,
+                    what: _,
+                    xwhat,
+                } = error;
+                println!("Valgrind Error: {}\n", kind);
+
+                if let Some(ValgrindErrorXWhat {
+                    text,
+                    leakedbytes: _,
+                    leakedblocks: _,
+                }) = xwhat
+                {
+                    println!("    {}", text);
+                }
+            }
+            panic!("Valgrind found memory errors");
+        }
+    } else {
+        let exit_code = match valgrind_out.status.code() {
+            Some(code) => format!("exit code {}", code),
+            None => "no exit code".to_string(),
+        };
+
+        panic!(
+            "`valgrind` exited with {}. valgrind stdout was: \"{}\"\n\nvalgrind stderr was: \"{}\"",
+            exit_code, valgrind_out.stdout, valgrind_out.stderr
+        );
+    }
 }
 
 #[test]
