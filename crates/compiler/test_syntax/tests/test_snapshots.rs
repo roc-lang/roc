@@ -354,6 +354,8 @@ mod test_snapshots {
         pass/parenthetical_var.expr,
         pass/parse_alias.expr,
         pass/parse_as_ann.expr,
+        pass/pattern_as.expr,
+        pass/pattern_as_spaces.expr,
         pass/pattern_with_space_in_parens.expr, // https://github.com/roc-lang/roc/issues/929
         pass/plus_if.expr,
         pass/plus_when.expr,

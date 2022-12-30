@@ -450,6 +450,7 @@ pub fn to_pattern2<'a>(
         Tuple(..) => todo!(),
         List(..) => todo!(),
         ListRest => todo!(),
+        As(_, _, _) => todo!(),
 
         Malformed(_str) => {
             let problem = MalformedPatternProblem::Unknown;

@@ -1,6 +1,6 @@
 use crate::annotation::{Formattable, Newlines, Parens};
 use crate::expr::{fmt_str_literal, format_sq_literal};
-use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt};
+use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use roc_parse::ast::{Base, CommentOrNewline, Pattern};
 
@@ -27,6 +27,10 @@ impl<'a> Formattable for Pattern<'a> {
             Pattern::RequiredField(_, subpattern) => subpattern.is_multiline(),
 
             Pattern::OptionalField(_, expr) => expr.is_multiline(),
+
+            Pattern::As(pattern, spaces, _identifier) => {
+                pattern.is_multiline() || spaces.iter().any(|s| s.is_comment())
+            }
 
             Pattern::Identifier(_)
             | Pattern::Tag(_)
@@ -197,6 +201,27 @@ impl<'a> Formattable for Pattern<'a> {
             ListRest => {
                 buf.indent(indent);
                 buf.push_str("..");
+            }
+
+            As(pattern, spaces, identifier) => {
+                fmt_pattern(buf, &pattern.value, indent, parens);
+
+                let as_indent = indent + INDENT;
+
+                buf.indent(as_indent);
+
+                if !buf.ends_with_space() {
+                    buf.spaces(1);
+                }
+
+                buf.push_str("as");
+                buf.spaces(1);
+
+                // these spaces "belong" to the identifier, which can never be multiline
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
+
+                buf.indent(as_indent);
+                buf.push_str(identifier.value);
             }
 
             // Space

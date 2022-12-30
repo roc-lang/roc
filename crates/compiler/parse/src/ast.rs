@@ -702,6 +702,12 @@ pub enum Pattern<'a> {
     /// Can only occur inside of a [Pattern::List]
     ListRest,
 
+    As(
+        &'a Loc<Pattern<'a>>,
+        &'a [CommentOrNewline<'a>],
+        Loc<&'a str>,
+    ),
+
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
@@ -934,6 +940,12 @@ impl<'a> Pattern<'a> {
                 }
             }
             ListRest => matches!(other, ListRest),
+            As(pattern, _, identifier) => match other {
+                As(other_pattern, _, other_identifier) => {
+                    identifier == other_identifier && pattern.value.equivalent(&other_pattern.value)
+                }
+                _ => false,
+            },
             MalformedIdent(str_x, _) => {
                 if let MalformedIdent(str_y, _) = other {
                     str_x == str_y

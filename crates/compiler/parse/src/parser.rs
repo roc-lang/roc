@@ -556,6 +556,8 @@ pub enum EPattern<'a> {
     Record(PRecord<'a>, Position),
     List(PList<'a>, Position),
     Underscore(Position),
+    As(Position),
+    AsIdentifier(Position),
     NotAPattern(Position),
 
     Start(Position),

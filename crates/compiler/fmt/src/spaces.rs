@@ -766,6 +766,11 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::OptionalField(a, b) => {
                 Pattern::OptionalField(a, arena.alloc(b.remove_spaces(arena)))
             }
+            Pattern::As(pattern, spaces, identifier) => Pattern::As(
+                arena.alloc(pattern.remove_spaces(arena)),
+                spaces,
+                identifier,
+            ),
             Pattern::NumLiteral(a) => Pattern::NumLiteral(a),
             Pattern::NonBase10Literal {
                 string,

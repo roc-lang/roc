@@ -738,6 +738,10 @@ pub fn canonicalize_pattern<'a>(
             malformed_pattern(env, problem, region)
         }
 
+        As(_pattern, _spaces, _identifier) => {
+            todo!();
+        }
+
         Malformed(_str) => {
             let problem = MalformedPatternProblem::Unknown;
             malformed_pattern(env, problem, region)
