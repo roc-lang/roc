@@ -60,7 +60,7 @@ impl<'a> Formattable for Pattern<'a> {
             Pattern::As(pattern, pattern_as) => pattern.is_multiline() || pattern_as.is_multiline(),
             Pattern::ListRest (opt_pattern_as) => match opt_pattern_as { 
                 None => false,
-                Some(pattern_as) => pattern_as.is_multiline(),
+                Some((list_rest_spaces, pattern_as)) => list_rest_spaces.iter().any(|s| s.is_comment()) || pattern_as.is_multiline(),
             },
 
             Pattern::Identifier(_)
@@ -232,7 +232,10 @@ impl<'a> Formattable for Pattern<'a> {
                 buf.indent(indent);
                 buf.push_str("..");
 
-                if let Some(pattern_as) = opt_pattern_as {
+                if let Some((list_rest_spaces, pattern_as)) = opt_pattern_as {
+                    // these spaces "belong" to the `..`, which can never be multiline
+                    fmt_comments_only(buf, list_rest_spaces.iter(), NewlineAt::Bottom, indent);
+
                     pattern_as.format(buf, indent + INDENT);
                 }
             }

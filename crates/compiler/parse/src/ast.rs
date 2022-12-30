@@ -712,7 +712,7 @@ pub enum Pattern<'a> {
 
     /// A list-rest pattern ".."
     /// Can only occur inside of a [Pattern::List]
-    ListRest(Option<PatternAs<'a>>),
+    ListRest(Option<(&'a [CommentOrNewline<'a>], PatternAs<'a>)>),
 
     As(&'a Loc<Pattern<'a>>, PatternAs<'a>),
 
@@ -950,7 +950,7 @@ impl<'a> Pattern<'a> {
 
             ListRest(pattern_as) => match other {
                 ListRest(other_pattern_as) => match (pattern_as, other_pattern_as) {
-                    (Some(a), Some(b)) => a.equivalent(b),
+                    (Some((_, a)), Some((_, b))) => a.equivalent(b),
                     _ => false,
                 },
                 _ => false,
