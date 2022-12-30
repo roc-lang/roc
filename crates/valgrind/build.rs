@@ -1,3 +1,4 @@
+#[cfg(target_os = "linux")]
 fn main() {
     let temp_dir = tempfile::tempdir().unwrap();
     let app_module_path = temp_dir.path().join("app.roc");
@@ -31,3 +32,6 @@ fn main() {
 
     res_binary_path.unwrap();
 }
+
+#[cfg(not(target_os = "linux"))]
+fn main() {}

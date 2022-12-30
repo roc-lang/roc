@@ -133,7 +133,7 @@ pub fn build_file<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn build_loaded_file<'a>(
+fn build_loaded_file<'a>(
     arena: &'a Bump,
     target: &Triple,
     app_module_path: PathBuf,

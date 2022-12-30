@@ -6,6 +6,19 @@ use cli_utils::helpers::{extract_valgrind_errors, ValgrindError, ValgrindErrorXW
 use roc_cli::build::BuiltFile;
 
 fn valgrind_test(source: &str) {
+    #[cfg(target_os = "linux")]
+    {
+        valgrind_test_linux(source)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = source;
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn valgrind_test_linux(source: &str) {
     let pf = std::env::current_dir()
         .unwrap()
         .join("zig-platform/main.roc");
