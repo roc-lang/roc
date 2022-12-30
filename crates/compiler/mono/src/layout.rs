@@ -1289,7 +1289,7 @@ impl<'a> Niche<'a> {
                 alloc.intersperse(
                     captures
                         .iter()
-                        .map(|c| c.to_doc(alloc, interner, Parens::NotNeeded)),
+                        .map(|c| interner.get(*c).to_doc(alloc, interner, Parens::NotNeeded)),
                     alloc.reflow(", "),
                 ),
                 alloc.reflow("})"),
