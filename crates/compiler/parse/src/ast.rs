@@ -656,6 +656,18 @@ impl<'a> CommentOrNewline<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PatternAs<'a> {
+    pub spaces_before: &'a [CommentOrNewline<'a>],
+    pub identifier: Loc<&'a str>,
+}
+
+impl<'a> PatternAs<'a> {
+    pub fn equivalent(&self, other: &Self) -> bool {
+        self.identifier.value == other.identifier.value
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
@@ -700,13 +712,9 @@ pub enum Pattern<'a> {
 
     /// A list-rest pattern ".."
     /// Can only occur inside of a [Pattern::List]
-    ListRest,
+    ListRest(Option<PatternAs<'a>>),
 
-    As(
-        &'a Loc<Pattern<'a>>,
-        &'a [CommentOrNewline<'a>],
-        Loc<&'a str>,
-    ),
+    As(&'a Loc<Pattern<'a>>, PatternAs<'a>),
 
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
@@ -939,13 +947,23 @@ impl<'a> Pattern<'a> {
                     false
                 }
             }
-            ListRest => matches!(other, ListRest),
-            As(pattern, _, identifier) => match other {
-                As(other_pattern, _, other_identifier) => {
-                    identifier == other_identifier && pattern.value.equivalent(&other_pattern.value)
+
+            ListRest(pattern_as) => match other {
+                ListRest(other_pattern_as) => match (pattern_as, other_pattern_as) {
+                    (Some(a), Some(b)) => a.equivalent(b),
+                    _ => false,
+                },
+                _ => false,
+            },
+
+            As(pattern, pattern_as) => match other {
+                As(other_pattern, other_pattern_as) => {
+                    pattern_as.equivalent(other_pattern_as)
+                        && pattern.value.equivalent(&other_pattern.value)
                 }
                 _ => false,
             },
+
             MalformedIdent(str_x, _) => {
                 if let MalformedIdent(str_y, _) = other {
                     str_x == str_y

@@ -1,4 +1,4 @@
-use crate::ast::{CommentOrNewline, Has, Pattern, Spaceable};
+use crate::ast::{Has, Pattern, PatternAs, Spaceable};
 use crate::blankspace::{space0_before_e, space0_e};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
 use crate::keyword;
@@ -58,12 +58,12 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
                 MadeProgress => Err((MadeProgress, e)),
                 NoProgress => Ok((MadeProgress, pattern, pattern_state)),
             },
-            Ok((_, (spaces, identifier), state)) => {
-                let region = Region::span_across(&pattern.region, &identifier.region);
+            Ok((_, pattern_as, state)) => {
+                let region = Region::span_across(&pattern.region, &pattern_as.identifier.region);
                 let pattern = arena
                     .alloc(pattern.value)
                     .with_spaces_after(pattern_spaces, pattern.region);
-                let as_pattern = Pattern::As(arena.alloc(pattern), spaces, identifier);
+                let as_pattern = Pattern::As(arena.alloc(pattern), pattern_as);
 
                 Ok((MadeProgress, Loc::at(region, as_pattern), state))
             }
@@ -87,7 +87,7 @@ fn loc_pattern_help_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>
     )
 }
 
-fn pattern_as<'a>() -> impl Parser<'a, (&'a [CommentOrNewline<'a>], Loc<&'a str>), EPattern<'a>> {
+fn pattern_as<'a>() -> impl Parser<'a, PatternAs<'a>, EPattern<'a>> {
     move |arena, state: State<'a>, min_indent| {
         let (_, _, state) =
             parser::keyword_e(keyword::AS, EPattern::As).parse(arena, state, min_indent)?;
@@ -98,7 +98,14 @@ fn pattern_as<'a>() -> impl Parser<'a, (&'a [CommentOrNewline<'a>], Loc<&'a str>
         let position = state.pos();
 
         match loc!(lowercase_ident()).parse(arena, state, min_indent) {
-            Ok((_, identifier, state)) => Ok((MadeProgress, (spaces, identifier), state)),
+            Ok((_, identifier, state)) => Ok((
+                MadeProgress,
+                PatternAs {
+                    spaces_before: spaces,
+                    identifier,
+                },
+                state,
+            )),
             Err((_, ())) => Err((MadeProgress, EPattern::AsIdentifier(position))),
         }
     }
@@ -276,7 +283,7 @@ fn three_list_rest_pattern_error<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PLis
 
 fn list_rest_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
     map!(loc!(word2(b'.', b'.', PList::Open)), |loc_word: Loc<_>| {
-        loc_word.map(|_| Pattern::ListRest)
+        loc_word.map(|_| Pattern::ListRest(None))
     })
 }
 
