@@ -60,31 +60,6 @@ pub fn link(
     }
 }
 
-const fn legacy_host_filename_ext(
-    os: roc_target::OperatingSystem,
-    opt_level: OptLevel,
-) -> &'static str {
-    use roc_target::OperatingSystem::*;
-
-    match os {
-        Wasi => {
-            // TODO wasm host extension should be something else ideally
-            // .bc does not seem to work because
-            //
-            // > Non-Emscripten WebAssembly hasn't implemented __builtin_return_address
-            //
-            // and zig does not currently emit `.a` webassembly static libraries
-            if matches!(opt_level, OptLevel::Development) {
-                "wasm"
-            } else {
-                "zig"
-            }
-        }
-        Unix => "o",
-        Windows => "obj",
-    }
-}
-
 const PRECOMPILED_HOST_EXT: &str = "rh1"; // Short for "roc host version 1" (so we can change format in the future)
 
 const WASM_TARGET_STR: &str = "wasm32";
@@ -208,9 +183,9 @@ pub fn get_target_triple_str(target: &Triple) -> Option<&'static str> {
 }
 
 /// Same format as the precompiled host filename, except with a file extension like ".o" or ".obj"
-pub fn legacy_host_filename(target: &Triple, opt_level: OptLevel) -> Option<String> {
+pub fn legacy_host_filename(target: &Triple) -> Option<String> {
     let os = roc_target::OperatingSystem::from(target.operating_system);
-    let ext = legacy_host_filename_ext(os, opt_level);
+    let ext = os.object_file_ext();
 
     Some(preprocessed_host_filename(target)?.replace(PRECOMPILED_HOST_EXT, ext))
 }
@@ -668,17 +643,17 @@ pub fn build_swift_host_native(
 pub fn rebuild_host(
     opt_level: OptLevel,
     target: &Triple,
-    host_input_path: &Path,
+    platform_main_roc: &Path,
     shared_lib_path: Option<&Path>,
 ) -> PathBuf {
-    let c_host_src = host_input_path.with_file_name("host.c");
-    let c_host_dest = host_input_path.with_file_name("c_host.o");
-    let zig_host_src = host_input_path.with_file_name("host.zig");
-    let rust_host_src = host_input_path.with_file_name("host.rs");
-    let rust_host_dest = host_input_path.with_file_name("rust_host.o");
-    let cargo_host_src = host_input_path.with_file_name("Cargo.toml");
-    let swift_host_src = host_input_path.with_file_name("host.swift");
-    let swift_host_header_src = host_input_path.with_file_name("host.h");
+    let c_host_src = platform_main_roc.with_file_name("host.c");
+    let c_host_dest = platform_main_roc.with_file_name("c_host.o");
+    let zig_host_src = platform_main_roc.with_file_name("host.zig");
+    let rust_host_src = platform_main_roc.with_file_name("host.rs");
+    let rust_host_dest = platform_main_roc.with_file_name("rust_host.o");
+    let cargo_host_src = platform_main_roc.with_file_name("Cargo.toml");
+    let swift_host_src = platform_main_roc.with_file_name("host.swift");
+    let swift_host_header_src = platform_main_roc.with_file_name("host.h");
 
     let os = roc_target::OperatingSystem::from(target.operating_system);
     let executable_extension = match os {
@@ -689,34 +664,24 @@ pub fn rebuild_host(
 
     let host_dest = if matches!(target.architecture, Architecture::Wasm32) {
         if matches!(opt_level, OptLevel::Development) {
-            host_input_path.with_extension("o")
+            platform_main_roc.with_extension("o")
         } else {
-            host_input_path.with_extension("bc")
+            platform_main_roc.with_extension("bc")
         }
     } else if shared_lib_path.is_some() {
-        host_input_path
+        platform_main_roc
             .with_file_name("dynhost")
             .with_extension(executable_extension)
     } else {
-        host_input_path.with_file_name(legacy_host_filename(target, opt_level).unwrap())
+        platform_main_roc.with_file_name(legacy_host_filename(target).unwrap())
     };
 
     let env_path = env::var("PATH").unwrap_or_else(|_| "".to_string());
     let env_home = env::var("HOME").unwrap_or_else(|_| "".to_string());
     let env_cpath = env::var("CPATH").unwrap_or_else(|_| "".to_string());
 
-    let builtins_host_tempfile = {
-        #[cfg(windows)]
-        {
-            bitcode::host_windows_tempfile()
-        }
-
-        #[cfg(unix)]
-        {
-            bitcode::host_unix_tempfile()
-        }
-    }
-    .expect("failed to write host builtins object to tempfile");
+    let builtins_host_tempfile =
+        bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
     if zig_host_src.exists() {
         // Compile host.zig
@@ -785,7 +750,7 @@ pub fn rebuild_host(
         run_build_command(zig_cmd, "host.zig", 0);
     } else if cargo_host_src.exists() {
         // Compile and link Cargo.toml, if it exists
-        let cargo_dir = host_input_path.parent().unwrap();
+        let cargo_dir = platform_main_roc.parent().unwrap();
 
         let cargo_out_dir = cargo_dir.join("target").join(
             if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {

@@ -34,7 +34,7 @@ pub mod build;
 mod format;
 pub use format::format;
 
-use crate::build::{BuildFileError, BuildOrdering};
+use crate::build::{standard_load_config, BuildFileError, BuildOrdering};
 
 const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
@@ -417,8 +417,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let target_info = TargetInfo::from(target);
 
     // Step 1: compile the app and generate the .o file
-    let subs_by_module = Default::default();
-
     let load_config = LoadConfig {
         target_info,
         // TODO: expose this from CLI?
@@ -430,7 +428,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let load_result = roc_load::load_and_monomorphize(
         arena,
         path.to_path_buf(),
-        subs_by_module,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         load_config,
     );
@@ -675,6 +672,8 @@ pub fn build(
         emit_debug_info,
     };
 
+    let load_config = standard_load_config(&triple, build_ordering, threading);
+
     let res_binary_path = build_file(
         &arena,
         &triple,
@@ -684,10 +683,9 @@ pub fn build(
         link_type,
         linking_strategy,
         prebuilt,
-        threading,
         wasm_dev_stack_bytes,
         roc_cache_dir,
-        build_ordering,
+        load_config,
     );
 
     match res_binary_path {

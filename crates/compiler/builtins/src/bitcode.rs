@@ -27,7 +27,7 @@ pub fn host_wasm_tempfile() -> std::io::Result<NamedTempFile> {
 }
 
 #[cfg(unix)]
-pub fn host_unix_tempfile() -> std::io::Result<NamedTempFile> {
+fn host_unix_tempfile() -> std::io::Result<NamedTempFile> {
     let tempfile = tempfile::Builder::new()
         .prefix("host_bitcode")
         .suffix(".o")
@@ -40,7 +40,7 @@ pub fn host_unix_tempfile() -> std::io::Result<NamedTempFile> {
 }
 
 #[cfg(windows)]
-pub fn host_windows_tempfile() -> std::io::Result<NamedTempFile> {
+fn host_windows_tempfile() -> std::io::Result<NamedTempFile> {
     let tempfile = tempfile::Builder::new()
         .prefix("host_bitcode")
         .suffix(".obj")
@@ -50,6 +50,23 @@ pub fn host_windows_tempfile() -> std::io::Result<NamedTempFile> {
     std::fs::write(tempfile.path(), HOST_WINDOWS)?;
 
     Ok(tempfile)
+}
+
+pub fn host_tempfile() -> std::io::Result<NamedTempFile> {
+    #[cfg(unix)]
+    {
+        host_unix_tempfile()
+    }
+
+    #[cfg(windows)]
+    {
+        host_windows_tempfile()
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    {
+        unreachable!()
+    }
 }
 
 #[derive(Debug, Default, Copy, Clone)]

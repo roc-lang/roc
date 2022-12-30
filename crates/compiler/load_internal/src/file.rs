@@ -1148,6 +1148,51 @@ impl ModuleTiming {
     }
 }
 
+fn report_timing(
+    buf: &mut impl std::fmt::Write,
+    label: &str,
+    duration: Duration,
+) -> std::fmt::Result {
+    writeln!(
+        buf,
+        "        {:9.3} ms   {}",
+        duration.as_secs_f64() * 1000.0,
+        label,
+    )
+}
+
+impl std::fmt::Display for ModuleTiming {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let module_timing = self;
+
+        report_timing(f, "Read .roc file from disk", module_timing.read_roc_file)?;
+        report_timing(f, "Parse header", module_timing.parse_header)?;
+        report_timing(f, "Parse body", module_timing.parse_body)?;
+        report_timing(f, "Canonicalize", module_timing.canonicalize)?;
+        report_timing(f, "Constrain", module_timing.constrain)?;
+        report_timing(f, "Solve", module_timing.solve)?;
+        report_timing(
+            f,
+            "Find Specializations",
+            module_timing.find_specializations,
+        )?;
+        let multiple_make_specializations_passes = module_timing.make_specializations.len() > 1;
+        for (i, pass_time) in module_timing.make_specializations.iter().enumerate() {
+            let suffix = if multiple_make_specializations_passes {
+                format!(" (Pass {})", i)
+            } else {
+                String::new()
+            };
+            report_timing(f, &format!("Make Specializations{}", suffix), *pass_time)?;
+        }
+        report_timing(f, "Other", module_timing.other())?;
+        f.write_str("\n")?;
+        report_timing(f, "Total", module_timing.total())?;
+
+        Ok(())
+    }
+}
+
 /// A message sent _to_ a worker thread, describing the work to be done
 #[derive(Debug)]
 #[allow(dead_code)]

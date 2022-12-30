@@ -109,7 +109,6 @@ mod test_reporting {
             promote_expr_to_module(src)
         };
 
-        let exposed_types = Default::default();
         let loaded = {
             // Use a deterministic temporary directory.
             // We can't have all tests use "tmp" because tests run in parallel,
@@ -132,7 +131,6 @@ mod test_reporting {
             let result = roc_load::load_and_typecheck(
                 arena,
                 full_file_path,
-                exposed_types,
                 RocCacheDir::Disallowed,
                 load_config,
             );

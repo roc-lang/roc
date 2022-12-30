@@ -96,7 +96,6 @@ mod solve_expr {
             module_src = &temp;
         }
 
-        let exposed_types = Default::default();
         let loaded = {
             let dir = tempdir()?;
             let filename = PathBuf::from("Test.roc");
@@ -106,7 +105,6 @@ mod solve_expr {
                 file_path,
                 module_src,
                 dir.path().to_path_buf(),
-                exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
                 roc_reporting::report::RenderTarget::Generic,
                 RocCacheDir::Disallowed,

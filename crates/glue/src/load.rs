@@ -84,7 +84,6 @@ pub fn load_types(
 ) -> Result<Vec<(Types, TargetInfo)>, io::Error> {
     let target_info = (&Triple::host()).into();
     let arena = &Bump::new();
-    let subs_by_module = Default::default();
     let LoadedModule {
         module_id: home,
         mut can_problems,
@@ -96,7 +95,6 @@ pub fn load_types(
     } = roc_load::load_and_typecheck(
         arena,
         full_file_path,
-        subs_by_module,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         LoadConfig {
             target_info,

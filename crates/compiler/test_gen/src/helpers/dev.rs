@@ -64,7 +64,6 @@ pub fn helper(
         filename,
         module_src,
         src_dir,
-        Default::default(),
         RocCacheDir::Disallowed,
         load_config,
     );
@@ -209,7 +208,7 @@ pub fn helper(
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
     let builtins_host_tempfile =
-        bitcode::host_unix_tempfile().expect("failed to write host builtins object to tempfile");
+        bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
     let (mut child, dylib_path) = link(
         &target,
