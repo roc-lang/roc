@@ -4,7 +4,7 @@ use roc_build::{
         legacy_host_filename, link, preprocess_host_wasm32, preprocessed_host_filename,
         rebuild_host, LinkType, LinkingStrategy,
     },
-    program::{self, CodeGenOptions},
+    program::{self, CodeGenBackend, CodeGenOptions},
 };
 use roc_builtins::bitcode;
 use roc_load::{
@@ -18,7 +18,10 @@ use roc_reporting::{
     report::{RenderTarget, DEFAULT_PALETTE},
 };
 use roc_target::TargetInfo;
-use std::time::{Duration, Instant};
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 use std::{path::PathBuf, thread::JoinHandle};
 use target_lexicon::Triple;
 
@@ -130,7 +133,7 @@ pub fn build_file<'a>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_loaded_file<'a>(
+pub fn build_loaded_file<'a>(
     arena: &'a Bump,
     target: &Triple,
     app_module_path: PathBuf,
@@ -569,4 +572,57 @@ pub fn check_file<'a>(
         program::report_problems_typechecked(&mut loaded),
         compilation_end,
     ))
+}
+
+pub fn build_str_test<'a>(
+    arena: &'a Bump,
+    app_module_path: &Path,
+    app_module_source: &'a str,
+    assume_prebuild: bool,
+) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
+    let triple = target_lexicon::Triple::host();
+
+    let code_gen_options = CodeGenOptions {
+        backend: CodeGenBackend::Llvm,
+        opt_level: OptLevel::Normal,
+        emit_debug_info: false,
+    };
+
+    let emit_timings = false;
+    let link_type = LinkType::Executable;
+    let linking_strategy = LinkingStrategy::Surgical;
+    let wasm_dev_stack_bytes = None;
+
+    let roc_cache_dir = roc_packaging::cache::RocCacheDir::Disallowed;
+    let build_ordering = BuildOrdering::AlwaysBuild;
+    let threading = Threading::AtMost(2);
+
+    let load_config = standard_load_config(&triple, build_ordering, threading);
+
+    let compilation_start = std::time::Instant::now();
+
+    // Step 1: compile the app and generate the .o file
+    let loaded = roc_load::load_and_monomorphize_from_str(
+        arena,
+        PathBuf::from("valgrind_test.roc"),
+        app_module_source,
+        app_module_path.to_path_buf(),
+        roc_cache_dir,
+        load_config,
+    )
+    .map_err(|e| BuildFileError::from_mono_error(e, compilation_start))?;
+
+    build_loaded_file(
+        arena,
+        &triple,
+        app_module_path.to_path_buf(),
+        code_gen_options,
+        emit_timings,
+        link_type,
+        linking_strategy,
+        assume_prebuild,
+        wasm_dev_stack_bytes,
+        loaded,
+        compilation_start,
+    )
 }

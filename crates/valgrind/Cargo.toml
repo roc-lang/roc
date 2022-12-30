@@ -27,3 +27,5 @@ roc_reporting = { path = "../reporting" }
 roc_packaging = { path = "../packaging" }
 bumpalo.workspace = true
 target-lexicon.workspace = true
+tempfile.workspace = true
+indoc.workspace = true

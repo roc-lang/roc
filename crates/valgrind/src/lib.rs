@@ -1,53 +1,46 @@
 #![cfg(test)]
 
-use std::{
-    ffi::OsStr,
-    path::{Path, PathBuf},
-};
+use indoc::indoc;
 
 use cli_utils::helpers::{extract_valgrind_errors, ValgrindError, ValgrindErrorXWhat};
-use roc_build::{
-    link::{LinkType, LinkingStrategy},
-    program::{CodeGenBackend, CodeGenOptions},
-};
-use roc_cli::build::{BuildOrdering, BuiltFile};
-use roc_load::Threading;
-use roc_mono::ir::OptLevel;
+use roc_cli::build::BuiltFile;
 
-fn run_example(app_module_path: impl AsRef<Path>) {
-    let app_module_path = app_module_path.as_ref();
+fn valgrind_test(source: &str) {
+    let pf = std::env::current_dir()
+        .unwrap()
+        .join("zig-platform/main.roc");
+
+    assert!(pf.exists(), "{:?}", &pf);
+
+    let mut app_module_source = format!(
+        indoc::indoc!(
+            r#"
+                app "test"
+                    packages {{ pf: "{}" }}
+                    imports []
+                    provides [main] to pf
+
+                main =
+            "#
+        ),
+        pf.to_str().unwrap()
+    );
+
+    for line in source.lines() {
+        app_module_source.push_str("    ");
+        app_module_source.push_str(line);
+    }
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let app_module_path = temp_dir.path().join("app.roc");
 
     let arena = bumpalo::Bump::new();
-    let triple = target_lexicon::Triple::host();
-
-    let code_gen_options = CodeGenOptions {
-        backend: CodeGenBackend::Llvm,
-        opt_level: OptLevel::Normal,
-        emit_debug_info: false,
-    };
-
-    let emit_timings = false;
-    let link_type = LinkType::Executable;
-    let linking_strategy = LinkingStrategy::Surgical;
-    let prebuilt_requested = true;
-    let wasm_dev_stack_bytes = None;
-
-    let roc_cache_dir = roc_packaging::cache::RocCacheDir::Disallowed;
-    let build_ordering = BuildOrdering::AlwaysBuild;
-
-    let res_binary_path = roc_cli::build::build_file(
+    let assume_prebuilt = true;
+    let res_binary_path = roc_cli::build::build_str_test(
         &arena,
-        &triple,
-        PathBuf::from(app_module_path),
-        code_gen_options,
-        emit_timings,
-        link_type,
-        linking_strategy,
-        prebuilt_requested,
-        Threading::AtMost(2),
-        wasm_dev_stack_bytes,
-        roc_cache_dir,
-        build_ordering,
+        &app_module_path,
+        &app_module_source,
+        assume_prebuilt,
     );
 
     match res_binary_path {
@@ -106,70 +99,36 @@ fn run_example(app_module_path: impl AsRef<Path>) {
         }
         Err(e) => panic!("{:?}", e),
     }
-}
 
-#[test]
-fn run_valgrind_tests() {
-    for dir_entry in std::fs::read_dir("tests").unwrap() {
-        let path = dir_entry.unwrap().path();
-
-        if path.extension() != Some(OsStr::new("roc")) {
-            continue;
-        }
-
-        println!("test file: {:?}\n", &path);
-
-        run_example(path);
-    }
-}
-
-macro_rules! valgrind_test {
-    ($source:expr) => {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let app_roc = temp_dir.path().join("app.roc");
-
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .open(&app_roc)
-            .unwrap();
-
-        use std::io::Write;
-
-        let pf = std::env::current_dir()
-            .unwrap()
-            .join("zig-platform/main.roc");
-
-        assert!(pf.exists(), "{:?}", &pf);
-
-        write!(
-            &mut file,
-            indoc::indoc!(
-                r#"
-                app "test"
-                    packages {{ pf: "{}" }}
-                    imports []
-                    provides [main] to pf
-
-                main =
-            "#
-            ),
-            pf.to_str().unwrap()
-        )
-        .unwrap();
-
-        for line in $source.lines() {
-            write!(&mut file, "    {}", line).unwrap();
-        }
-
-        run_example(app_roc);
-
-        drop(file);
-        drop(temp_dir)
-    };
+    drop(temp_dir)
 }
 
 #[test]
 fn list_concat_consumes_first_argument() {
-    valgrind_test!("List.concat (List.withCapacity 1024) [1,2,3] |> List.len |> Num.toStr");
+    valgrind_test("List.concat (List.withCapacity 1024) [1,2,3] |> List.len |> Num.toStr");
+}
+
+#[test]
+fn str_capacity_concat() {
+    valgrind_test(r#"Str.withCapacity 42 |> Str.concat "foobar""#);
+}
+
+#[test]
+fn append_scalar() {
+    valgrind_test(indoc!(
+        r#"
+        Str.appendScalar "abcd" 'A'
+            |> Result.withDefault ""
+        "#
+    ));
+}
+
+#[test]
+fn split_not_present() {
+    valgrind_test(indoc!(
+        r#"
+        Str.split (Str.concat "a string that is stored on the heap" "!") "\n"
+            |> Str.joinWith "" 
+        "#
+    ));
 }
