@@ -234,7 +234,7 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH_SCALAR)
             }
             StrEndsWith => self.load_args_and_call_zig(backend, bitcode::STR_ENDS_WITH),
-            StrSplit => self.load_args_and_call_zig(backend, bitcode::STR_STR_SPLIT),
+            StrSplit => self.load_args_and_call_zig(backend, bitcode::STR_SPLIT),
             StrCountGraphemes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
             }
