@@ -595,7 +595,7 @@ impl<'a, 'i> Context<'a, 'i> {
                 ..
             } => {
                 let top_level =
-                    ProcLayout::new(self.arena, arg_layouts, name.captures_niche(), **ret_layout);
+                    ProcLayout::new(self.arena, arg_layouts, name.niche(), **ret_layout);
 
                 // get the borrow signature
                 let ps = self
@@ -645,7 +645,7 @@ impl<'a, 'i> Context<'a, 'i> {
         let function_layout = ProcLayout {
             arguments: passed_function.argument_layouts,
             result: passed_function.return_layout,
-            captures_niche: passed_function.name.captures_niche(),
+            niche: passed_function.name.niche(),
         };
 
         let function_ps = match self

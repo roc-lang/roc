@@ -35,9 +35,7 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs, ProcsBase,
     UpdateModeIds,
 };
-use roc_mono::layout::{
-    CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, STLayoutInterner,
-};
+use roc_mono::layout::{LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner};
 use roc_packaging::cache::{self, RocCacheDir};
 #[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::PackageMetadata;
@@ -3426,7 +3424,7 @@ fn proc_layout_for<'a>(
             roc_mono::ir::ProcLayout {
                 arguments: &[],
                 result: Layout::struct_no_name_order(&[]),
-                captures_niche: CapturesNiche::no_niche(),
+                niche: Niche::NONE,
             }
         }
     }

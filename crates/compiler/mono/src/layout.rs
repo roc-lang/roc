@@ -1221,14 +1221,42 @@ impl std::fmt::Debug for LambdaSet<'_> {
     }
 }
 
-/// Sometimes we can end up with lambdas of the same name and different captures in the same
-/// lambda set, like `fun` having lambda set `[[thunk U64, thunk U8]]` due to the following program:
+/// See [Niche].
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+enum NichePriv<'a> {
+    /// Distinguishes captures this proc takes, when it is a part of a lambda set that has multiple
+    /// lambdas of the same name, but different captures.
+    Captures(&'a [InLayout<'a>]),
+}
+
+/// Niches identify lambdas (including thunks) in ways that are not distinguishable solely by their
+/// [runtime function layout][RawFunctionLayout].
+///
+/// Currently, there are two kinds of niches.
+///
+/// # Captures niches
+///
+/// Captures niches identify a procedure's set of captured symbols. This is relevant when a
+/// procedure is part of a lambda set that has multiple lambdas of the procedure's name, but each
+/// has a different set of captures.
+///
+/// The capture set is identified only in the body of a procedure and not in its runtime layout.
+/// Any capturing lambda takes the whole lambda set as an argument, rather than just its captures.
+/// A captures niche can be attached to a [lambda name][LambdaName] to uniquely identify lambdas
+/// in these scenarios.
+///
+/// Procedure names with captures niches are typically produced by [find_lambda_name][LambdaSet::find_lambda_name].
+/// Captures niches are irrelevant for thunks.
+///
+/// ## Example
+///
+/// `fun` has lambda set `[[forcer U64, forcer U8]]` in the following program:
 ///
 /// ```roc
 /// capture : _ -> ({} -> Str)
 /// capture = \val ->
-///     thunk = \{} -> Num.toStr val
-///     thunk
+///     forcer = \{} -> Num.toStr val
+///     forcer
 ///
 /// fun = \x ->
 ///     when x is
@@ -1236,23 +1264,44 @@ impl std::fmt::Debug for LambdaSet<'_> {
 ///         False -> capture 18u8
 /// ```
 ///
-/// By recording the captures layouts this lambda expects in its identifier, we can distinguish
-/// between such differences when constructing closure capture data.
+/// By recording the captures layouts each `forcer` expects, we can distinguish
+/// between such differences when constructing the closure capture data that is
+/// return value of `fun`.
 ///
 /// See also https://github.com/roc-lang/roc/issues/3336.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct CapturesNiche<'a>(pub(crate) &'a [InLayout<'a>]);
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct Niche<'a>(NichePriv<'a>);
 
-impl CapturesNiche<'_> {
-    pub fn no_niche() -> Self {
-        Self(&[])
+impl<'a> Niche<'a> {
+    pub const NONE: Niche<'a> = Niche(NichePriv::Captures(&[]));
+
+    pub fn to_doc<'b, D, A, I>(self, alloc: &'b D, interner: &I) -> DocBuilder<'b, D, A>
+    where
+        D: DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+        I: Interner<'a, Layout<'a>>,
+    {
+        match self.0 {
+            NichePriv::Captures(captures) => alloc.concat([
+                alloc.reflow("(niche {"),
+                alloc.intersperse(
+                    captures
+                        .iter()
+                        .map(|c| interner.get(*c).to_doc(alloc, interner, Parens::NotNeeded)),
+                    alloc.reflow(", "),
+                ),
+                alloc.reflow("})"),
+            ]),
+        }
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct LambdaName<'a> {
     name: Symbol,
-    captures_niche: CapturesNiche<'a>,
+    niche: Niche<'a>,
 }
 
 impl<'a> LambdaName<'a> {
@@ -1262,29 +1311,28 @@ impl<'a> LambdaName<'a> {
     }
 
     #[inline(always)]
-    pub fn captures_niche(&self) -> CapturesNiche<'a> {
-        self.captures_niche
+    pub fn niche(&self) -> Niche<'a> {
+        self.niche
     }
 
     #[inline(always)]
-    pub fn no_captures(&self) -> bool {
-        self.captures_niche.0.is_empty()
+    pub(crate) fn no_captures(&self) -> bool {
+        match self.niche.0 {
+            NichePriv::Captures(captures) => captures.is_empty(),
+        }
     }
 
     #[inline(always)]
     pub fn no_niche(name: Symbol) -> Self {
         Self {
             name,
-            captures_niche: CapturesNiche::no_niche(),
+            niche: Niche::NONE,
         }
     }
 
     #[inline(always)]
-    pub fn replace_name(&self, name: Symbol) -> Self {
-        Self {
-            name,
-            captures_niche: self.captures_niche,
-        }
+    pub(crate) fn replace_name(&self, name: Symbol) -> Self {
+        Self { name, ..*self }
     }
 }
 
@@ -1377,9 +1425,12 @@ impl<'a> LambdaSet<'a> {
     }
 
     pub fn iter_set(&self) -> impl ExactSizeIterator<Item = LambdaName<'a>> {
-        self.set.iter().map(|(name, captures_layouts)| LambdaName {
-            name: *name,
-            captures_niche: CapturesNiche(captures_layouts),
+        self.set.iter().map(|(name, captures_layouts)| {
+            let niche = match captures_layouts {
+                [] => Niche::NONE,
+                _ => Niche(NichePriv::Captures(captures_layouts)),
+            };
+            LambdaName { name: *name, niche }
         })
     }
 
@@ -1403,12 +1454,14 @@ impl<'a> LambdaSet<'a> {
     {
         debug_assert!(self.contains(lambda_name.name));
 
+        let NichePriv::Captures(captures) = lambda_name.niche.0;
+
         let comparator = |other_name: Symbol, other_captures_layouts: &[InLayout]| {
             other_name == lambda_name.name
                 // Make sure all captures are equal
                 && other_captures_layouts
                     .iter()
-                    .eq(lambda_name.captures_niche.0)
+                    .eq(captures)
         };
 
         self.layout_for_member(interner, comparator)
@@ -1455,7 +1508,7 @@ impl<'a> LambdaSet<'a> {
 
         LambdaName {
             name: *name,
-            captures_niche: CapturesNiche(layouts),
+            niche: Niche(NichePriv::Captures(layouts)),
         }
     }
 
@@ -1658,6 +1711,7 @@ impl<'a> LambdaSet<'a> {
         lambda_name: LambdaName<'a>,
         argument_layouts: &'a [Layout<'a>],
     ) -> &'a [Layout<'a>] {
+        let Niche(NichePriv::Captures(captures)) = lambda_name.niche;
         // TODO(https://github.com/roc-lang/roc/issues/4831): we should turn on this debug-assert;
         // however, currently it causes false-positives, because host-exposed functions that are
         // function pointers to platform-exposed functions are compiled as if they are proper
@@ -1674,7 +1728,7 @@ impl<'a> LambdaSet<'a> {
         // );
 
         // If we don't capture, there is nothing to extend.
-        if lambda_name.captures_niche.0.is_empty() {
+        if captures.is_empty() {
             argument_layouts
         } else {
             let mut arguments = Vec::with_capacity_in(argument_layouts.len() + 1, arena);

@@ -513,7 +513,7 @@ impl<'a> BorrowInfState<'a> {
                 ..
             } => {
                 let top_level =
-                    ProcLayout::new(self.arena, arg_layouts, name.captures_niche(), **ret_layout);
+                    ProcLayout::new(self.arena, arg_layouts, name.niche(), **ret_layout);
 
                 // get the borrow signature of the applied function
                 let ps = param_map
@@ -556,7 +556,7 @@ impl<'a> BorrowInfState<'a> {
                 let closure_layout = ProcLayout {
                     arguments: passed_function.argument_layouts,
                     result: passed_function.return_layout,
-                    captures_niche: passed_function.name.captures_niche(),
+                    niche: passed_function.name.niche(),
                 };
 
                 let function_ps =
@@ -739,8 +739,7 @@ impl<'a> BorrowInfState<'a> {
             Stmt::Ret(z),
         ) = (v, b)
         {
-            let top_level =
-                ProcLayout::new(self.arena, arg_layouts, g.captures_niche(), **ret_layout);
+            let top_level = ProcLayout::new(self.arena, arg_layouts, g.niche(), **ret_layout);
 
             if self.current_proc == g.name() && x == *z {
                 // anonymous functions (for which the ps may not be known)

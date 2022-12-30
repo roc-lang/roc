@@ -1249,7 +1249,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
                 let proc_layout = ProcLayout {
                     arguments: arg_layouts,
                     result: **result,
-                    captures_niche: func_sym.captures_niche(),
+                    niche: func_sym.niche(),
                 };
                 self.expr_call_by_name(
                     func_sym.name(),

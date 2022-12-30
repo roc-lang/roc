@@ -6,7 +6,7 @@ use ven_pretty::{Arena, DocAllocator, DocBuilder};
 
 use crate::{
     ir::{Parens, ProcLayout},
-    layout::{CapturesNiche, Layout},
+    layout::Layout,
 };
 
 use super::{
@@ -465,7 +465,7 @@ where
     let ProcLayout {
         arguments,
         result,
-        captures_niche,
+        niche: captures_niche,
     } = proc_layout;
     let args = f.intersperse(
         arguments
@@ -478,21 +478,9 @@ where
         f.reflow(" -> "),
         result.to_doc(f, interner, Parens::NotNeeded),
     ]);
-    let niche = if captures_niche == CapturesNiche::no_niche() {
-        f.reflow("(no niche)")
-    } else {
-        f.concat([
-            f.reflow("(niche {"),
-            f.intersperse(
-                captures_niche
-                    .0
-                    .iter()
-                    .map(|&c| interner.get(c).to_doc(f, interner, Parens::NotNeeded)),
-                f.reflow(", "),
-            ),
-            f.reflow("})"),
-        ])
-    };
+    let niche = (f.text("("))
+        .append(captures_niche.to_doc(f, interner))
+        .append(f.text(")"));
     f.concat([fun, f.space(), niche])
 }
 
