@@ -964,6 +964,14 @@ macro_rules! define_builtins {
                 $(
                     $(
                         $(
+                            // All types should be exposed, and all non-types
+                            // should not be exposed. (Types are uppercase.)
+                            //
+                            // We only check this in debug builds so that in
+                            // release builds, this condition is either `if true`
+                            // or `if false` and will get optimized out.
+                            debug_assert_eq!($exposed_apply_type, $ident_name.chars().next().unwrap().is_uppercase());
+
                             if $exposed_apply_type {
                                 scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
                             }
