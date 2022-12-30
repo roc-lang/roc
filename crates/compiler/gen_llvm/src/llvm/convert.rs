@@ -11,12 +11,13 @@ use roc_target::TargetInfo;
 
 fn basic_type_from_record<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_interner: &mut STLayoutInterner<'a>,
     fields: &[Layout<'_>],
 ) -> BasicTypeEnum<'ctx> {
     let mut field_types = Vec::with_capacity_in(fields.len(), env.arena);
 
     for field_layout in fields.iter() {
-        field_types.push(basic_type_from_layout(env, field_layout));
+        field_types.push(basic_type_from_layout(env, layout_interner, field_layout));
     }
 
     env.context
@@ -26,6 +27,7 @@ fn basic_type_from_record<'a, 'ctx, 'env>(
 
 pub fn basic_type_from_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_interner: &'env mut STLayoutInterner<'a>,
     layout: &Layout<'_>,
 ) -> BasicTypeEnum<'ctx> {
     use Layout::*;
@@ -34,17 +36,19 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
         Struct {
             field_layouts: sorted_fields,
             ..
-        } => basic_type_from_record(env, sorted_fields),
-        LambdaSet(lambda_set) => {
-            basic_type_from_layout(env, &lambda_set.runtime_representation(env.layout_interner))
-        }
+        } => basic_type_from_record(env, layout_interner, sorted_fields),
+        LambdaSet(lambda_set) => basic_type_from_layout(
+            env,
+            layout_interner,
+            &lambda_set.runtime_representation(layout_interner),
+        ),
         Boxed(inner_layout) => {
-            let inner_layout = env.layout_interner.get(*inner_layout);
-            let inner_type = basic_type_from_layout(env, inner_layout);
+            let inner_layout = layout_interner.get(*inner_layout);
+            let inner_type = basic_type_from_layout(env, layout_interner, inner_layout);
 
             inner_type.ptr_type(AddressSpace::Generic).into()
         }
-        Union(union_layout) => basic_type_from_union_layout(env, union_layout),
+        Union(union_layout) => basic_type_from_union_layout(env, layout_interner, union_layout),
         RecursivePointer => env
             .context
             .i64_type()
@@ -57,13 +61,14 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
 
 pub fn struct_type_from_union_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_interner: &mut STLayoutInterner<'a>,
     union_layout: &UnionLayout<'_>,
 ) -> StructType<'ctx> {
     use UnionLayout::*;
 
     match union_layout {
         NonRecursive(tags) => {
-            RocUnion::tagged_from_slices(env.layout_interner, env.context, tags, env.target_info)
+            RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info)
                 .struct_type()
         }
         Recursive(tags)
@@ -71,47 +76,35 @@ pub fn struct_type_from_union_layout<'a, 'ctx, 'env>(
             other_tags: tags, ..
         } => {
             if union_layout.stores_tag_id_as_data(env.target_info) {
-                RocUnion::tagged_from_slices(
-                    env.layout_interner,
-                    env.context,
-                    tags,
-                    env.target_info,
-                )
-                .struct_type()
+                RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info)
+                    .struct_type()
             } else {
-                RocUnion::untagged_from_slices(
-                    env.layout_interner,
-                    env.context,
-                    tags,
-                    env.target_info,
-                )
-                .struct_type()
+                RocUnion::untagged_from_slices(layout_interner, env.context, tags, env.target_info)
+                    .struct_type()
             }
         }
         NullableUnwrapped { other_fields, .. } => RocUnion::untagged_from_slices(
-            env.layout_interner,
+            layout_interner,
             env.context,
             &[other_fields],
             env.target_info,
         )
         .struct_type(),
-        NonNullableUnwrapped(fields) => RocUnion::untagged_from_slices(
-            env.layout_interner,
-            env.context,
-            &[fields],
-            env.target_info,
-        )
-        .struct_type(),
+        NonNullableUnwrapped(fields) => {
+            RocUnion::untagged_from_slices(layout_interner, env.context, &[fields], env.target_info)
+                .struct_type()
+        }
     }
 }
 
 pub fn basic_type_from_union_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_interner: &mut STLayoutInterner<'a>,
     union_layout: &UnionLayout<'_>,
 ) -> BasicTypeEnum<'ctx> {
     use UnionLayout::*;
 
-    let struct_type = struct_type_from_union_layout(env, union_layout);
+    let struct_type = struct_type_from_union_layout(env, layout_interner, union_layout);
 
     match union_layout {
         NonRecursive(_) => struct_type.into(),
@@ -153,34 +146,38 @@ pub fn basic_type_from_builtin<'a, 'ctx, 'env>(
 /// is not currently implemented
 pub fn argument_type_from_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_interner: &mut STLayoutInterner<'a>,
     layout: &Layout<'_>,
 ) -> BasicTypeEnum<'ctx> {
     use Layout::*;
 
     match layout {
-        LambdaSet(lambda_set) => {
-            argument_type_from_layout(env, &lambda_set.runtime_representation(env.layout_interner))
-        }
-        Union(union_layout) => argument_type_from_union_layout(env, union_layout),
+        LambdaSet(lambda_set) => argument_type_from_layout(
+            env,
+            layout_interner,
+            &lambda_set.runtime_representation(layout_interner),
+        ),
+        Union(union_layout) => argument_type_from_union_layout(env, layout_interner, union_layout),
         Builtin(_) => {
-            let base = basic_type_from_layout(env, layout);
+            let base = basic_type_from_layout(env, layout_interner, layout);
 
-            if layout.is_passed_by_reference(env.layout_interner, env.target_info) {
+            if layout.is_passed_by_reference(layout_interner, env.target_info) {
                 base.ptr_type(AddressSpace::Generic).into()
             } else {
                 base
             }
         }
-        other => basic_type_from_layout(env, other),
+        other => basic_type_from_layout(env, layout_interner, other),
     }
 }
 
 /// Non-recursive tag unions are stored on the stack, but passed by-reference
 pub fn argument_type_from_union_layout<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_interner: &mut STLayoutInterner<'a>,
     union_layout: &UnionLayout<'_>,
 ) -> BasicTypeEnum<'ctx> {
-    let heap_type = basic_type_from_union_layout(env, union_layout);
+    let heap_type = basic_type_from_union_layout(env, layout_interner, union_layout);
 
     if let UnionLayout::NonRecursive(_) = union_layout {
         heap_type.ptr_type(AddressSpace::Generic).into()

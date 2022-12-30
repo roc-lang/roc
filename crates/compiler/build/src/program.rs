@@ -102,7 +102,7 @@ pub fn gen_from_mono_module<'a>(
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
 fn gen_from_mono_module_llvm<'a>(
     arena: &'a bumpalo::Bump,
-    loaded: MonomorphizedModule<'a>,
+    mut loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
     target: &target_lexicon::Triple,
     code_gen_options: CodeGenOptions,
@@ -168,7 +168,6 @@ fn gen_from_mono_module_llvm<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
-        layout_interner: &loaded.layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -204,6 +203,7 @@ fn gen_from_mono_module_llvm<'a>(
 
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
+        &mut loaded.layout_interner,
         opt_level,
         loaded.procedures,
         entry_point,

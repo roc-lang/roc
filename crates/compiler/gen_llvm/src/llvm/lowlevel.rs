@@ -9,10 +9,11 @@ use inkwell::{
 use morphic_lib::{FuncSpec, UpdateMode};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
+use roc_intern::Interner;
 use roc_module::{low_level::LowLevel, symbol::Symbol};
 use roc_mono::{
     ir::HigherOrderLowLevel,
-    layout::{Builtin, LambdaSet, Layout, LayoutIds},
+    layout::{Builtin, LambdaSet, Layout, LayoutIds, STLayoutInterner},
 };
 use roc_target::PtrWidth;
 
@@ -52,15 +53,15 @@ use super::{
 macro_rules! list_element_layout {
     ($list_layout:expr) => {
         match $list_layout {
-            Layout::Builtin(Builtin::List(list_layout)) => *list_layout,
+            Layout::Builtin(Builtin::List(list_layout)) => list_layout,
             _ => unreachable!("invalid list layout"),
         }
     };
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     parent: FunctionValue<'ctx>,
@@ -255,7 +256,8 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                             );
 
                             let roc_return_type =
-                                basic_type_from_layout(env, layout).ptr_type(AddressSpace::Generic);
+                                basic_type_from_layout(env, layout_interner, layout)
+                                    .ptr_type(AddressSpace::Generic);
 
                             let roc_return_alloca = env.builder.build_pointer_cast(
                                 zig_return_alloca,
@@ -263,7 +265,13 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                                 "cast_to_roc",
                             );
 
-                            load_roc_value(env, *layout, roc_return_alloca, "str_to_num_result")
+                            load_roc_value(
+                                env,
+                                layout_interner,
+                                *layout,
+                                roc_return_alloca,
+                                "str_to_num_result",
+                            )
                         }
                     }
                 }
@@ -285,6 +293,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
 
                         call_bitcode_fn_fixing_for_convention(
                             env,
+                            layout_interner,
                             bitcode_return_type,
                             &[string],
                             layout,
@@ -297,7 +306,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             };
 
             // zig passes the result as a packed integer sometimes, instead of a struct. So we cast
-            let expected_type = basic_type_from_layout(env, layout);
+            let expected_type = basic_type_from_layout(env, layout_interner, layout);
             let actual_type = result.get_type();
 
             if expected_type != actual_type {
@@ -486,7 +495,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                         bitcode::STR_GET_SCALAR_UNSAFE,
                     );
 
-                    let return_type = basic_type_from_layout(env, layout);
+                    let return_type = basic_type_from_layout(env, layout_interner, layout);
                     let cast_result = env.builder.build_pointer_cast(
                         result,
                         return_type.ptr_type(AddressSpace::Generic),
@@ -509,7 +518,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                     match env.target_info.ptr_width() {
                         PtrWidth::Bytes8 => result,
                         PtrWidth::Bytes4 => {
-                            let to = basic_type_from_layout(env, layout);
+                            let to = basic_type_from_layout(env, layout_interner, layout);
                             complex_bitcast_check_size(env, result, to, "to_roc_record")
                         }
                     }
@@ -644,8 +653,9 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             let result_layout = *layout;
             list_with_capacity(
                 env,
+                layout_interner,
                 list_len.into_int_value(),
-                &list_element_layout!(result_layout),
+                list_element_layout!(result_layout),
             )
         }
         ListConcat => {
@@ -657,7 +667,13 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
 
             let element_layout = list_element_layout!(list_layout);
 
-            list_concat(env, first_list, second_list, element_layout)
+            list_concat(
+                env,
+                layout_interner,
+                first_list,
+                second_list,
+                *element_layout,
+            )
         }
         ListAppendUnsafe => {
             // List.appendUnsafe : List elem, elem -> List elem
@@ -666,7 +682,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_append_unsafe(env, original_wrapper, elem, elem_layout)
+            list_append_unsafe(env, layout_interner, original_wrapper, elem, elem_layout)
         }
         ListPrepend => {
             // List.prepend : List elem, elem -> List elem
@@ -675,7 +691,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             let original_wrapper = load_symbol(scope, &args[0]).into_struct_value();
             let (elem, elem_layout) = load_symbol_and_layout(scope, &args[1]);
 
-            list_prepend(env, original_wrapper, elem, elem_layout)
+            list_prepend(env, layout_interner, original_wrapper, elem, elem_layout)
         }
         ListReserve => {
             // List.reserve : List elem, Nat -> List elem
@@ -685,7 +701,14 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             let element_layout = list_element_layout!(list_layout);
             let spare = load_symbol(scope, &args[1]);
 
-            list_reserve(env, list, spare, element_layout, update_mode)
+            list_reserve(
+                env,
+                layout_interner,
+                list,
+                spare,
+                *element_layout,
+                update_mode,
+            )
         }
         ListSwap => {
             // List.swap : List elem, Nat, Nat -> List elem
@@ -700,10 +723,11 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             let element_layout = list_element_layout!(list_layout);
             list_swap(
                 env,
+                layout_interner,
                 original_wrapper,
                 index_1.into_int_value(),
                 index_2.into_int_value(),
-                element_layout,
+                *element_layout,
                 update_mode,
             )
         }
@@ -719,11 +743,12 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             let element_layout = list_element_layout!(list_layout);
             list_sublist(
                 env,
+                layout_interner,
                 layout_ids,
                 original_wrapper,
                 start.into_int_value(),
                 len.into_int_value(),
-                element_layout,
+                *element_layout,
             )
         }
         ListDropAt => {
@@ -738,10 +763,11 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             let element_layout = list_element_layout!(list_layout);
             list_drop_at(
                 env,
+                layout_interner,
                 layout_ids,
                 original_wrapper,
                 count.into_int_value(),
-                element_layout,
+                *element_layout,
             )
         }
         StrGetUnsafe => {
@@ -762,8 +788,9 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
 
             list_get_unsafe(
                 env,
+                layout_interner,
                 layout_ids,
-                list_element_layout!(list_layout),
+                *list_element_layout!(list_layout),
                 element_index.into_int_value(),
                 wrapper_struct.into_struct_value(),
             )
@@ -773,6 +800,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
 
             list_replace_unsafe(
                 env,
+                layout_interner,
                 layout_ids,
                 list,
                 index.into_int_value(),
@@ -843,6 +871,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                             let int_type = convert::int_type_from_int_width(env, *int_width);
                             build_int_unary_op(
                                 env,
+                                layout_interner,
                                 parent,
                                 arg.into_int_value(),
                                 *int_width,
@@ -1032,7 +1061,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
         NumIntCast => {
             arguments!(arg);
 
-            let to = basic_type_from_layout(env, layout).into_int_type();
+            let to = basic_type_from_layout(env, layout_interner, layout).into_int_type();
             let to_signed = intwidth_from_layout(*layout).is_signed();
 
             env.builder
@@ -1046,7 +1075,8 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::Int(width)) => {
                     // Converting from int to float
                     let int_val = arg.into_int_value();
-                    let dest = basic_type_from_layout(env, layout).into_float_type();
+                    let dest =
+                        basic_type_from_layout(env, layout_interner, layout).into_float_type();
 
                     if width.is_signed() {
                         env.builder
@@ -1060,7 +1090,8 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 }
                 Layout::Builtin(Builtin::Float(_)) => {
                     // Converting from float to float - e.g. F64 to F32, or vice versa
-                    let dest = basic_type_from_layout(env, layout).into_float_type();
+                    let dest =
+                        basic_type_from_layout(env, layout_interner, layout).into_float_type();
 
                     env.builder
                         .build_float_cast(arg.into_float_value(), dest, "cast_float_to_float")
@@ -1082,12 +1113,28 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
         Eq => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 
-            generic_eq(env, layout_ids, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
+            generic_eq(
+                env,
+                layout_interner,
+                layout_ids,
+                lhs_arg,
+                rhs_arg,
+                lhs_layout,
+                rhs_layout,
+            )
         }
         NotEq => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 
-            generic_neq(env, layout_ids, lhs_arg, rhs_arg, lhs_layout, rhs_layout)
+            generic_neq(
+                env,
+                layout_interner,
+                layout_ids,
+                lhs_arg,
+                rhs_arg,
+                lhs_layout,
+                rhs_layout,
+            )
         }
         And => {
             // The (&&) operator
@@ -1136,13 +1183,13 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
             unreachable!("Not used in LLVM backend: {:?}", op);
         }
 
-        Unreachable => match RocReturn::from_layout(env, layout) {
+        Unreachable => match RocReturn::from_layout(env, layout_interner, layout) {
             RocReturn::Return => {
-                let basic_type = basic_type_from_layout(env, layout);
+                let basic_type = basic_type_from_layout(env, layout_interner, layout);
                 basic_type.const_zero()
             }
             RocReturn::ByPointer => {
-                let basic_type = basic_type_from_layout(env, layout);
+                let basic_type = basic_type_from_layout(env, layout_interner, layout);
                 let ptr = env.builder.build_alloca(basic_type, "unreachable_alloca");
                 env.builder.build_store(ptr, basic_type.const_zero());
 
@@ -1816,6 +1863,7 @@ fn int_type_signed_min(int_type: IntType) -> IntValue {
 
 fn build_int_unary_op<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_interner: &mut STLayoutInterner<'a>,
     parent: FunctionValue<'ctx>,
     arg: IntValue<'ctx>,
     arg_width: IntWidth,
@@ -1886,8 +1934,8 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                 || // Or if the two types are the same, they trivially fit.
                 arg_width == target_int_width;
 
-            let return_type =
-                convert::basic_type_from_layout(env, return_layout).into_struct_type();
+            let return_type = convert::basic_type_from_layout(env, layout_interner, return_layout)
+                .into_struct_type();
 
             if arg_always_fits_in_target {
                 // This is guaranteed to succeed so we can just make it an int cast and let LLVM
@@ -1957,8 +2005,9 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                     intrinsic,
                                 );
 
-                                let roc_return_type = basic_type_from_layout(env, return_layout)
-                                    .ptr_type(AddressSpace::Generic);
+                                let roc_return_type =
+                                    basic_type_from_layout(env, layout_interner, return_layout)
+                                        .ptr_type(AddressSpace::Generic);
 
                                 let roc_return_alloca = env.builder.build_pointer_cast(
                                     zig_return_alloca,
@@ -1966,7 +2015,13 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
                                     "cast_to_roc",
                                 );
 
-                                load_roc_value(env, *return_layout, roc_return_alloca, "num_to_int")
+                                load_roc_value(
+                                    env,
+                                    layout_interner,
+                                    *return_layout,
+                                    roc_return_alloca,
+                                    "num_to_int",
+                                )
                             }
                         }
                     }
@@ -1977,6 +2032,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
 
                             call_bitcode_fn_fixing_for_convention(
                                 env,
+                                layout_interner,
                                 bitcode_return_type,
                                 &[arg.into()],
                                 return_layout,
@@ -2217,9 +2273,9 @@ fn build_float_unary_op<'a, 'ctx, 'env>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
+    layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     scope: &Scope<'a, 'ctx>,
     return_layout: &Layout<'a>,
@@ -2275,20 +2331,31 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     Layout::Builtin(Builtin::List(element_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let argument_layouts = &[**element_layout];
+                    let element_layout = layout_interner.get(*element_layout);
+                    let result_layout = layout_interner.get(*result_layout);
+
+                    let argument_layouts = &[*element_layout];
 
                     let roc_function_call = roc_function_call(
                         env,
+                        layout_interner,
                         layout_ids,
                         function,
                         closure,
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        **result_layout,
+                        *result_layout,
                     );
 
-                    list_map(env, roc_function_call, list, element_layout, result_layout)
+                    list_map(
+                        env,
+                        layout_interner,
+                        roc_function_call,
+                        list,
+                        element_layout,
+                        result_layout,
+                    )
                 }
                 _ => unreachable!("invalid list layout"),
             }
@@ -2305,21 +2372,27 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     Layout::Builtin(Builtin::List(element2_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let argument_layouts = &[**element1_layout, **element2_layout];
+                    let element1_layout = layout_interner.get(*element1_layout);
+                    let element2_layout = layout_interner.get(*element2_layout);
+                    let result_layout = layout_interner.get(*result_layout);
+
+                    let argument_layouts = &[*element1_layout, *element2_layout];
 
                     let roc_function_call = roc_function_call(
                         env,
+                        layout_interner,
                         layout_ids,
                         function,
                         closure,
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        **result_layout,
+                        *result_layout,
                     );
 
                     list_map2(
                         env,
+                        layout_interner,
                         layout_ids,
                         roc_function_call,
                         list1,
@@ -2346,22 +2419,28 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     Layout::Builtin(Builtin::List(element3_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
-                    let argument_layouts =
-                        &[**element1_layout, **element2_layout, **element3_layout];
+                    let element1_layout = layout_interner.get(*element1_layout);
+                    let element2_layout = layout_interner.get(*element2_layout);
+                    let element3_layout = layout_interner.get(*element3_layout);
+                    let result_layout = layout_interner.get(*result_layout);
+
+                    let argument_layouts = &[*element1_layout, *element2_layout, *element3_layout];
 
                     let roc_function_call = roc_function_call(
                         env,
+                        layout_interner,
                         layout_ids,
                         function,
                         closure,
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        **result_layout,
+                        *result_layout,
                     );
 
                     list_map3(
                         env,
+                        layout_interner,
                         layout_ids,
                         roc_function_call,
                         list1,
@@ -2398,26 +2477,34 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     Layout::Builtin(Builtin::List(element4_layout)),
                     Layout::Builtin(Builtin::List(result_layout)),
                 ) => {
+                    let element1_layout = layout_interner.get(*element1_layout);
+                    let element2_layout = layout_interner.get(*element2_layout);
+                    let element3_layout = layout_interner.get(*element3_layout);
+                    let element4_layout = layout_interner.get(*element4_layout);
+                    let result_layout = layout_interner.get(*result_layout);
+
                     let argument_layouts = &[
-                        **element1_layout,
-                        **element2_layout,
-                        **element3_layout,
-                        **element4_layout,
+                        *element1_layout,
+                        *element2_layout,
+                        *element3_layout,
+                        *element4_layout,
                     ];
 
                     let roc_function_call = roc_function_call(
                         env,
+                        layout_interner,
                         layout_ids,
                         function,
                         closure,
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        **result_layout,
+                        *result_layout,
                     );
 
                     list_map4(
                         env,
+                        layout_interner,
                         layout_ids,
                         roc_function_call,
                         list1,
@@ -2444,15 +2531,23 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                 Layout::Builtin(Builtin::List(element_layout)) => {
                     use crate::llvm::bitcode::build_compare_wrapper;
 
-                    let argument_layouts = &[**element_layout, **element_layout];
+                    let element_layout = layout_interner.get(*element_layout);
 
-                    let compare_wrapper =
-                        build_compare_wrapper(env, function, closure_layout, element_layout)
-                            .as_global_value()
-                            .as_pointer_value();
+                    let argument_layouts = &[*element_layout, *element_layout];
+
+                    let compare_wrapper = build_compare_wrapper(
+                        env,
+                        layout_interner,
+                        function,
+                        closure_layout,
+                        element_layout,
+                    )
+                    .as_global_value()
+                    .as_pointer_value();
 
                     let roc_function_call = roc_function_call(
                         env,
+                        layout_interner,
                         layout_ids,
                         function,
                         closure,
@@ -2464,6 +2559,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
                     list_sort_with(
                         env,
+                        layout_interner,
                         roc_function_call,
                         compare_wrapper,
                         list,

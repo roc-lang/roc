@@ -2,11 +2,12 @@ use crate::ir::{
     build_list_index_probe, BranchInfo, Call, CallType, DestructType, Env, Expr, JoinPointId,
     ListIndex, Literal, Param, Pattern, Procs, Stmt,
 };
-use crate::layout::{Builtin, Layout, LayoutCache, TagIdIntType, UnionLayout};
+use crate::layout::{Builtin, Layout, LayoutCache, LayoutInterner, TagIdIntType, UnionLayout};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
 use roc_exhaustive::{Ctor, CtorName, ListArity, RenderAs, TagId, Union};
+use roc_intern::Interner;
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
@@ -1358,6 +1359,7 @@ enum PathInstruction {
 
 fn path_to_expr_help<'a>(
     env: &mut Env<'a, '_>,
+    layout_interner: &LayoutInterner<'a>,
     mut symbol: Symbol,
     path: &[PathInstruction],
     mut layout: Layout<'a>,
@@ -1442,6 +1444,8 @@ fn path_to_expr_help<'a>(
                             arguments: env.arena.alloc([list_sym, index_sym]),
                         });
 
+                        let elem_layout = layout_interner.get(elem_layout);
+
                         stores.push((load_sym, *elem_layout, load_expr));
 
                         layout = *elem_layout;
@@ -1458,13 +1462,14 @@ fn path_to_expr_help<'a>(
 
 fn test_to_comparison<'a>(
     env: &mut Env<'a, '_>,
+    layout_interner: &LayoutInterner<'a>,
     cond_symbol: Symbol,
     cond_layout: &Layout<'a>,
     path: &[PathInstruction],
     test: Test<'a>,
 ) -> (StoresVec<'a>, Comparison, Option<ConstructorKnown<'a>>) {
     let (rhs_symbol, mut stores, test_layout) =
-        path_to_expr_help(env, cond_symbol, path, *cond_layout);
+        path_to_expr_help(env, layout_interner, cond_symbol, path, *cond_layout);
 
     match test {
         Test::IsCtor { tag_id, union, .. } => {
@@ -1614,6 +1619,7 @@ type Tests<'a> = std::vec::Vec<(
 
 fn stores_and_condition<'a>(
     env: &mut Env<'a, '_>,
+    layout_interner: &LayoutInterner<'a>,
     cond_symbol: Symbol,
     cond_layout: &Layout<'a>,
     test_chain: Vec<(Vec<PathInstruction>, Test<'a>)>,
@@ -1624,6 +1630,7 @@ fn stores_and_condition<'a>(
     for (path, test) in test_chain {
         tests.push(test_to_comparison(
             env,
+            layout_interner,
             cond_symbol,
             cond_layout,
             &path,
@@ -1942,7 +1949,13 @@ fn decide_to_branching<'a>(
             let chain_branch_info =
                 ConstructorKnown::from_test_chain(cond_symbol, &cond_layout, &test_chain);
 
-            let tests = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
+            let tests = stores_and_condition(
+                env,
+                &layout_cache.interner,
+                cond_symbol,
+                &cond_layout,
+                test_chain,
+            );
 
             let number_of_tests = tests.len() as i64;
 
@@ -1990,7 +2003,7 @@ fn decide_to_branching<'a>(
             // switch on the tag discriminant (currently an i64 value)
             // NOTE the tag discriminant is not actually loaded, `cond` can point to a tag
             let (inner_cond_symbol, cond_stores_vec, inner_cond_layout) =
-                path_to_expr_help(env, cond_symbol, &path, cond_layout);
+                path_to_expr_help(env, &layout_cache.interner, cond_symbol, &path, cond_layout);
 
             let default_branch = decide_to_branching(
                 env,

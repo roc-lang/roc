@@ -134,15 +134,15 @@ fn bytes_as_ascii(bytes: &[u8]) -> String {
     buf
 }
 
-pub fn spec_program<'a, I>(
+pub fn spec_program<'a, 'r, I>(
     arena: &'a Bump,
-    interner: &STLayoutInterner<'a>,
+    interner: &'r mut STLayoutInterner<'a>,
     opt_level: OptLevel,
     entry_point: roc_mono::ir::EntryPoint<'a>,
     procs: I,
 ) -> Result<morphic_lib::Solutions>
 where
-    I: Iterator<Item = &'a Proc<'a>>,
+    I: Iterator<Item = &'r Proc<'a>>,
 {
     let main_module = {
         let mut m = ModDefBuilder::new();
@@ -449,7 +449,7 @@ fn build_entry_point<'a>(
 
 fn proc_spec<'a>(
     arena: &'a Bump,
-    interner: &STLayoutInterner<'a>,
+    interner: &mut STLayoutInterner<'a>,
     proc: &Proc<'a>,
 ) -> Result<(FuncDef, MutSet<UnionLayout<'a>>)> {
     let mut builder = FuncDefBuilder::new();
@@ -546,7 +546,7 @@ fn apply_refcount_operation<'a>(
 
 fn stmt_spec<'a>(
     builder: &mut FuncDefBuilder,
-    interner: &STLayoutInterner<'a>,
+    interner: &mut STLayoutInterner<'a>,
     env: &mut Env<'a>,
     block: BlockId,
     layout: &Layout<'a>,
@@ -788,7 +788,7 @@ fn add_loop(
 
 fn call_spec<'a>(
     builder: &mut FuncDefBuilder,
-    interner: &STLayoutInterner<'a>,
+    interner: &mut STLayoutInterner<'a>,
     env: &mut Env<'a>,
     block: BlockId,
     layout: &Layout<'a>,
@@ -909,6 +909,8 @@ fn call_spec<'a>(
                         &WhenRecursive::Unreachable,
                     )?;
 
+                    let return_layout = interner.insert(return_layout);
+
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
                         env,
@@ -940,7 +942,9 @@ fn call_spec<'a>(
                         with_new_heap_cell(builder, block, bag)
                     };
 
-                    let state_layout = Layout::Builtin(Builtin::List(&argument_layouts[0]));
+                    let arg0_layout = interner.insert(&argument_layouts[0]);
+
+                    let state_layout = Layout::Builtin(Builtin::List(arg0_layout));
                     let state_type = layout_spec(
                         env,
                         builder,
@@ -978,6 +982,8 @@ fn call_spec<'a>(
                         return_layout,
                         &WhenRecursive::Unreachable,
                     )?;
+
+                    let return_layout = interner.insert(return_layout);
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
@@ -1023,6 +1029,8 @@ fn call_spec<'a>(
                         return_layout,
                         &WhenRecursive::Unreachable,
                     )?;
+
+                    let return_layout = interner.insert(return_layout);
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
@@ -1074,6 +1082,8 @@ fn call_spec<'a>(
                         return_layout,
                         &WhenRecursive::Unreachable,
                     )?;
+
+                    let return_layout = interner.insert(return_layout);
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
@@ -1245,6 +1255,7 @@ fn lowlevel_spec<'a>(
 
             match layout {
                 Layout::Builtin(Builtin::List(element_layout)) => {
+                    let element_layout = interner.get(*element_layout);
                     let type_id = layout_spec(
                         env,
                         builder,
@@ -1413,7 +1424,7 @@ fn worst_case_type(context: &mut impl TypeContext) -> Result<TypeId> {
 
 fn expr_spec<'a>(
     builder: &mut FuncDefBuilder,
-    interner: &STLayoutInterner<'a>,
+    interner: &mut STLayoutInterner<'a>,
     env: &mut Env<'a>,
     block: BlockId,
     layout: &Layout<'a>,
@@ -1583,6 +1594,7 @@ fn expr_spec<'a>(
 
         EmptyArray => match layout {
             Layout::Builtin(Builtin::List(element_layout)) => {
+                let element_layout = interner.get(*element_layout);
                 let type_id = layout_spec(
                     env,
                     builder,
@@ -1772,6 +1784,7 @@ fn builtin_spec<'a>(
         Decimal | Float(_) => builder.add_tuple_type(&[]),
         Str => str_type(builder),
         List(element_layout) => {
+            let element_layout = interner.get(*element_layout);
             let element_type =
                 layout_spec_help(env, builder, interner, element_layout, when_recursive)?;
 

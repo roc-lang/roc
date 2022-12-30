@@ -2046,7 +2046,7 @@ pub enum Builtin<'a> {
     Bool,
     Decimal,
     Str,
-    List(&'a Layout<'a>),
+    List(InLayout<'a>),
 }
 
 pub struct Env<'a, 'b> {
@@ -2909,6 +2909,7 @@ impl<'a> Builtin<'a> {
 
             Str => alloc.text("Str"),
             List(layout) => {
+                let layout = interner.get(layout);
                 alloc
                     .text("List ")
                     .append(layout.to_doc(alloc, interner, Parens::InTypeParam))
@@ -2924,7 +2925,10 @@ impl<'a> Builtin<'a> {
 
         let allocation = match self {
             Builtin::Str => ptr_width,
-            Builtin::List(e) => e.alignment_bytes(interner, target_info).max(ptr_width),
+            Builtin::List(e) => {
+                let e = interner.get(*e);
+                e.alignment_bytes(interner, target_info).max(ptr_width)
+            }
             // The following are usually not heap-allocated, but they might be when inside a Box.
             Builtin::Int(int_width) => int_width.alignment_bytes(target_info).max(ptr_width),
             Builtin::Float(float_width) => float_width.alignment_bytes(target_info).max(ptr_width),
@@ -4174,12 +4178,9 @@ pub(crate) fn list_layout_from_elem<'a>(
         cached!(Layout::from_var(env, element_var), criteria)
     };
 
-    Cacheable(
-        Ok(Layout::Builtin(Builtin::List(
-            env.arena.alloc(element_layout),
-        ))),
-        criteria,
-    )
+    let element_layout = env.cache.put_in(env.arena.alloc(element_layout));
+
+    Cacheable(Ok(Layout::Builtin(Builtin::List(element_layout))), criteria)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
