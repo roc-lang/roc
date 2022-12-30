@@ -58,9 +58,11 @@ impl<'a> Formattable for Pattern<'a> {
             Pattern::OptionalField(_, expr) => expr.is_multiline(),
 
             Pattern::As(pattern, pattern_as) => pattern.is_multiline() || pattern_as.is_multiline(),
-            Pattern::ListRest (opt_pattern_as) => match opt_pattern_as { 
+            Pattern::ListRest(opt_pattern_as) => match opt_pattern_as {
                 None => false,
-                Some((list_rest_spaces, pattern_as)) => list_rest_spaces.iter().any(|s| s.is_comment()) || pattern_as.is_multiline(),
+                Some((list_rest_spaces, pattern_as)) => {
+                    list_rest_spaces.iter().any(|s| s.is_comment()) || pattern_as.is_multiline()
+                }
             },
 
             Pattern::Identifier(_)
@@ -75,7 +77,7 @@ impl<'a> Formattable for Pattern<'a> {
             | Pattern::Underscore(_)
             | Pattern::Malformed(_)
             | Pattern::MalformedIdent(_, _)
-            | Pattern::QualifiedIdentifier { .. }=> false,
+            | Pattern::QualifiedIdentifier { .. } => false,
 
             Pattern::Tuple(patterns) | Pattern::List(patterns) => {
                 patterns.iter().any(|p| p.is_multiline())
