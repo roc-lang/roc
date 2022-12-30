@@ -46,15 +46,22 @@ RenderedTree state : {
 RenderedNode : [
     RenderedNone,
     RenderedText Str,
-    RenderedElement Str (List RenderedAttribute) (List NodeId),
+    RenderedElement Str RenderedAttributes (List NodeId),
 ]
 
-RenderedAttribute : [
-    RenderedEventListener Str (List CyclicStructureAccessor) HandlerId,
-    RenderedHtmlAttr Str Str,
-    RenderedDomProp Str (List U8),
-    RenderedStyle Str Str,
-]
+RenderedAttributes : {
+    eventListeners : Dict Str { accessors : List CyclicStructureAccessor, handlerId : HandlerId },
+    htmlAttrs : Dict Str Str,
+    domProps : Dict Str (List U8),
+    styles : Dict Str Str,
+}
+
+emptyRenderedAttrs = {
+    eventListeners: Dict.empty,
+    htmlAttrs: Dict.empty,
+    domProps: Dict.empty,
+    styles: Dict.empty,
+}
 
 Patch : [
     CreateElement NodeId TagName,
@@ -137,12 +144,12 @@ indexNodes = \{ nodes, siblingIds }, unrendered ->
             { nodes: listWithChildren, siblingIds: childIds } =
                 List.walk children { nodes, siblingIds: [] } indexNodes
             renderedAttrs =
-                List.walk attrs [] \walkedAttrs, attr ->
+                List.walk attrs emptyRenderedAttrs \walkedAttrs, attr ->
                     when attr is
                         EventListener _ _ _ -> walkedAttrs # Dropped! Server-rendered HTML has no listeners
-                        HtmlAttr k v -> List.append walkedAttrs (RenderedHtmlAttr k v)
-                        DomProp k v -> List.append walkedAttrs (RenderedDomProp k v)
-                        Style k v -> List.append walkedAttrs (RenderedStyle k v)
+                        HtmlAttr k v -> { walkedAttrs & htmlAttrs: Dict.insert walkedAttrs.htmlAttrs k v }
+                        DomProp k v -> { walkedAttrs & domProps: Dict.insert walkedAttrs.domProps k v }
+                        Style k v -> { walkedAttrs & styles: Dict.insert walkedAttrs.styles k v }
 
             {
                 nodes: List.append listWithChildren (RenderedElement name renderedAttrs childIds),
@@ -252,10 +259,6 @@ insertHandler = \rendered, newHandler ->
                 },
             }
 
-# replaceHandler : RenderedTree state, Nat, Handler state -> RenderedTree state
-# replaceHandler = \rendered, index, newHandler ->
-#     { list } = List.replace rendered.handlers index (Ok newHandler)
-#     { rendered & handlers: list }
 # -------------------------------
 #   DIFF
 # -------------------------------
@@ -281,9 +284,24 @@ diff = \{ rendered, patches }, newNode ->
             else
                 { rendered, patches }
 
-        { oldNode: RenderedElement _oldName _oldAttrs _oldChildren, newNode: Element _newName _newSize _newAttrs _newChildren } ->
-            # TODO: actual diffing! LOL This is just to get something up and running
-            replaceNode { rendered, patches } rendered.root newNode
+        { oldNode: RenderedElement oldName oldAttrs oldChildren, newNode: Element newName newSize newAttrs newChildren } ->
+            if newName != oldName then
+                replaceNode { rendered, patches } rendered.root newNode
+            else
+                stateAttrs =
+                    diffAttrs { rendered, patches } rendered.root oldAttrs newAttrs
+                stateChildPairs =
+                    List.map2 oldChildren newChildren (\oldChild, newChild -> { oldChild, newChild })
+                    |> List.walk stateAttrs diffChildPair
+
+                if List.len oldChildren > List.len newChildren then
+                    # TODO: delete old nodeIDs
+                    stateChildPairs
+                else if List.len oldChildren < List.len newChildren then
+                    # TODO: render new nodes
+                    stateChildPairs
+                else
+                    stateChildPairs
 
         { oldNode: RenderedNone, newNode: None } ->
             { rendered, patches }
@@ -291,6 +309,9 @@ diff = \{ rendered, patches }, newNode ->
         _ ->
             # old node has been replaced with a totally different variant. There's no point in diffing, just replace.
             replaceNode { rendered, patches } rendered.root newNode
+
+# TODO
+diffChildPair : DiffState state, { oldChild : Nat, newChild : Html state } -> DiffState state
 
 replaceNode : DiffState state, NodeId, Html state -> DiffState state
 replaceNode = \diffState, oldNodeId, newNode ->
@@ -324,12 +345,8 @@ deleteNode = \diffState, id ->
     patchesRemoveListeners =
         when List.get rendered.nodes id is
             Ok (Ok (RenderedElement _ attrs _)) ->
-                List.walk attrs patches \p, attr ->
-                    when attr is
-                        RenderedEventListener _ _ handlerId ->
-                            List.append p (RemoveListener id handlerId)
-
-                        _ -> p
+                Dict.walk attrs.eventListeners patches \p, _, { handlerId } ->
+                    List.append p (RemoveListener id handlerId)
 
             _ -> patches
 
@@ -385,43 +402,209 @@ createNode = \{ rendered, patches }, newNode ->
                 id: nodeId,
             }
 
-renderAttrs : List (Attribute state), RenderedTree state, List Patch, NodeId -> { renderedAttrs : List RenderedAttribute, rendered : RenderedTree state, patches : List Patch }
+AttrDiffState state : {
+    nodeId : NodeId,
+    attrs : RenderedAttributes,
+    patches : List Patch,
+    handlers : List (Result (Handler state) [DeletedHandler]),
+    deletedHandlerCache : List HandlerId,
+}
+
+diffAttrs : DiffState state, NodeId, RenderedAttributes, List (Attribute state) -> DiffState state
+diffAttrs = \{ rendered, patches }, nodeId, attrs, newAttrs ->
+    initState = {
+        nodeId,
+        attrs,
+        patches,
+        handlers: rendered.handlers,
+        deletedHandlerCache: rendered.deletedHandlerCache,
+    }
+    finalState =
+        List.walk newAttrs initState diffAttr
+    newRendered =
+        { rendered &
+            handlers: finalState.handlers,
+            deletedHandlerCache: finalState.deletedHandlerCache,
+        }
+
+    {
+        rendered: newRendered,
+        patches: finalState.patches,
+    }
+
+diffAttr : AttrDiffState state, Attribute state -> AttrDiffState state
+diffAttr = \{ nodeId, attrs, patches, handlers, deletedHandlerCache }, attr ->
+    when attr is
+        EventListener eventName newAccessors newHandler ->
+            when Dict.get attrs.eventListeners eventName is
+                Ok { accessors, handlerId } ->
+                    (Tuple newAttrs newPatches) =
+                        if accessors == newAccessors then
+                            Tuple attrs patches
+                        else
+                            json = newAccessors |> Encode.toBytes Json.toUtf8
+
+                            Tuple
+                                { attrs & eventListeners: Dict.insert attrs.eventListeners eventName { accessors, handlerId } }
+                                (
+                                    patches
+                                    |> List.append (RemoveListener nodeId handlerId)
+                                    |> List.append (SetListener nodeId eventName json handlerId)
+                                )
+
+                    {
+                        nodeId,
+                        attrs: newAttrs,
+                        patches: newPatches,
+                        handlers: List.set handlers handlerId (Ok newHandler),
+                        deletedHandlerCache,
+                    }
+
+                Err KeyNotFound ->
+                    renderAttr { nodeId, attrs, patches, handlers, deletedHandlerCache } attr
+
+        HtmlAttr k v ->
+            when Dict.get attrs.htmlAttrs k is
+                Ok oldVal ->
+                    (Tuple newAttrs newPatches) =
+                        if oldVal == v then
+                            Tuple attrs patches
+                        else
+                            Tuple
+                                { attrs & htmlAttrs: Dict.insert attrs.htmlAttrs k v }
+                                (patches |> List.append (SetAttribute nodeId k v))
+                    {
+                        nodeId,
+                        attrs: newAttrs,
+                        patches: newPatches,
+                        handlers,
+                        deletedHandlerCache,
+                    }
+
+                Err KeyNotFound ->
+                    renderAttr { nodeId, attrs, patches, handlers, deletedHandlerCache } attr
+
+        DomProp k v ->
+            when Dict.get attrs.domProps k is
+                Ok oldVal ->
+                    (Tuple newAttrs newPatches) =
+                        if oldVal == v then
+                            Tuple attrs patches
+                        else
+                            Tuple
+                                { attrs & domProps: Dict.insert attrs.domProps k v }
+                                (patches |> List.append (SetProperty nodeId k v))
+                    {
+                        nodeId,
+                        attrs: newAttrs,
+                        patches: newPatches,
+                        handlers,
+                        deletedHandlerCache,
+                    }
+
+                Err KeyNotFound ->
+                    renderAttr { nodeId, attrs, patches, handlers, deletedHandlerCache } attr
+
+        Style k v ->
+            when Dict.get attrs.styles k is
+                Ok oldVal ->
+                    (Tuple newAttrs newPatches) =
+                        if oldVal == v then
+                            Tuple attrs patches
+                        else
+                            Tuple
+                                { attrs & styles: Dict.insert attrs.styles k v }
+                                (patches |> List.append (SetStyle nodeId k v))
+                    {
+                        nodeId,
+                        attrs: newAttrs,
+                        patches: newPatches,
+                        handlers,
+                        deletedHandlerCache,
+                    }
+
+                Err KeyNotFound ->
+                    renderAttr { nodeId, attrs, patches, handlers, deletedHandlerCache } attr
+
+renderAttrs : List (Attribute state), RenderedTree state, List Patch, NodeId -> { renderedAttrs : RenderedAttributes, rendered : RenderedTree state, patches : List Patch }
 renderAttrs = \attrs, rendered, patches, nodeId ->
-    List.walk attrs { renderedAttrs: [], rendered, patches } \walkState, attr ->
-        when attr is
-            HtmlAttr k v ->
-                { walkState &
-                    renderedAttrs: List.append walkState.renderedAttrs (RenderedHtmlAttr k v),
-                    patches: List.append walkState.patches (SetAttribute nodeId k v),
-                }
+    initState = {
+        nodeId,
+        attrs: emptyRenderedAttrs,
+        patches,
+        handlers: rendered.handlers,
+        deletedHandlerCache: rendered.deletedHandlerCache,
+    }
+    finalState =
+        List.walk attrs initState renderAttr
 
-            DomProp k v ->
-                { walkState &
-                    renderedAttrs: List.append walkState.renderedAttrs (RenderedDomProp k v),
-                    patches: List.append walkState.patches (SetProperty nodeId k v),
-                }
+    {
+        renderedAttrs: finalState.attrs,
+        rendered: { rendered &
+            handlers: finalState.handlers,
+            deletedHandlerCache: finalState.deletedHandlerCache,
+        },
+        patches: finalState.patches,
+    }
 
-            Style k v ->
-                { walkState &
-                    renderedAttrs: List.append walkState.renderedAttrs (RenderedStyle k v),
-                    patches: List.append walkState.patches (SetStyle nodeId k v),
-                }
+renderAttr : AttrDiffState state, Attribute state -> AttrDiffState state
+renderAttr = \{ nodeId, attrs, patches, handlers, deletedHandlerCache }, attr ->
+    when attr is
+        HtmlAttr k v ->
+            {
+                nodeId,
+                handlers,
+                deletedHandlerCache,
+                attrs: { attrs & htmlAttrs: Dict.insert attrs.htmlAttrs k v },
+                patches: List.append patches (SetAttribute nodeId k v),
+            }
 
-            EventListener eventType accessors handler ->
-                { handlerId, rendered: renderedWithHandler } =
-                    insertHandler walkState.rendered handler
-                accessorsJson =
-                    accessors |> Encode.toBytes Json.toUtf8
-                listener =
-                    RenderedEventListener eventType accessors handlerId
-                patch =
-                    SetListener nodeId eventType accessorsJson handlerId
+        DomProp k v ->
+            {
+                nodeId,
+                handlers,
+                deletedHandlerCache,
+                attrs: { attrs & domProps: Dict.insert attrs.domProps k v },
+                patches: List.append patches (SetProperty nodeId k v),
+            }
 
-                {
-                    renderedAttrs: List.append walkState.renderedAttrs listener,
-                    rendered: renderedWithHandler,
-                    patches: List.append walkState.patches patch,
-                }
+        Style k v ->
+            {
+                nodeId,
+                handlers,
+                deletedHandlerCache,
+                attrs: { attrs & styles: Dict.insert attrs.styles k v },
+                patches: List.append patches (SetStyle nodeId k v),
+            }
+
+        EventListener eventType accessors handler ->
+            { handlerId, newHandlers, newDeletedHandlerCache } =
+                when List.last deletedHandlerCache is
+                    Ok id ->
+                        {
+                            handlerId: id,
+                            newHandlers: List.set handlers id (Ok handler),
+                            newDeletedHandlerCache: List.dropLast deletedHandlerCache,
+                        }
+
+                    Err _ ->
+                        {
+                            handlerId: List.len handlers,
+                            newHandlers: List.append handlers (Ok handler),
+                            newDeletedHandlerCache: deletedHandlerCache,
+                        }
+            accessorsJson =
+                accessors |> Encode.toBytes Json.toUtf8
+            patch =
+                SetListener nodeId eventType accessorsJson handlerId
+
+            {
+                nodeId,
+                attrs: { attrs & eventListeners: Dict.insert attrs.eventListeners eventType { accessors, handlerId } },
+                handlers: newHandlers,
+                deletedHandlerCache: newDeletedHandlerCache,
+                patches: List.append patches patch,
+            }
 
 createChildNode :
     { rendered : RenderedTree state, patches : List Patch, ids : List NodeId },
@@ -468,13 +651,51 @@ nextNodeId = \rendered ->
 # -------------------------------
 #   TESTS
 # -------------------------------
-eqRendered : RenderedTree state, RenderedTree state -> Bool
-eqRendered = \a, b ->
+eqRenderedTree : RenderedTree state, RenderedTree state -> Bool
+eqRenderedTree = \a, b ->
     (a.root == b.root)
-    && (a.nodes == b.nodes)
+    && eqRenderedNodes a.nodes b.nodes
     && (List.len a.handlers == List.len b.handlers)
     && (a.deletedNodeCache == b.deletedNodeCache)
     && (a.deletedHandlerCache == b.deletedHandlerCache)
+
+eqRenderedNodes : List (Result RenderedNode [DeletedNode]), List (Result RenderedNode [DeletedNode]) -> Bool
+eqRenderedNodes = \a, b ->
+    List.map2 a b Tuple
+    |> List.all
+        (\t ->
+            when t is
+                Tuple (Ok x) (Ok y) -> eqRenderedNode x y
+                Tuple (Err x) (Err y) -> x == y
+                _ -> Bool.false)
+
+eqRenderedNode : RenderedNode, RenderedNode -> Bool
+eqRenderedNode = \a, b ->
+    when { a, b } is
+        { a: RenderedNone, b: RenderedNone } ->
+            Bool.true
+
+        { a: RenderedText aStr, b: RenderedText bStr } ->
+            aStr == bStr
+
+        { a: RenderedElement aName aAttrs aChildren, b: RenderedElement bName bAttrs bChildren } ->
+            (aName == bName)
+            && (aChildren == bChildren) # good enough for testing!
+            && eqRenderedAttrs aAttrs bAttrs
+
+        _ -> Bool.false
+
+eqRenderedAttrs : RenderedAttributes, RenderedAttributes -> Bool
+eqRenderedAttrs = \a, b ->
+    eqAttrDict a.eventListeners b.eventListeners
+    && eqAttrDict a.htmlAttrs b.htmlAttrs
+    && eqAttrDict a.domProps b.domProps
+    && eqAttrDict a.styles b.styles
+
+eqAttrDict : Dict Str v, Dict Str v -> Bool | v has Eq
+eqAttrDict = \a, b ->
+    Dict.keys a
+    |> List.all \k -> Dict.get a k == Dict.get b k
 
 # indexNodes
 expect
@@ -490,12 +711,13 @@ expect
     expected = {
         nodes: [
             RenderedText "Roc",
-            RenderedElement "a" [RenderedHtmlAttr "href" "https://www.roc-lang.org/"] [0],
+            RenderedElement "a" { emptyRenderedAttrs & htmlAttrs: Dict.fromList [T "href" "https://www.roc-lang.org/"] } [0],
         ],
         siblingIds: [1],
     }
 
-    actual == expected
+    (List.map2 actual.nodes expected.nodes eqRenderedNode |> List.walk Bool.true Bool.and)
+    && (actual.siblingIds == expected.siblingIds)
 
 # diff
 expect
@@ -507,10 +729,10 @@ expect
             root: 4,
             nodes: [
                 Ok (RenderedText "The app"),
-                Ok (RenderedElement "h1" [] [0]),
+                Ok (RenderedElement "h1" emptyRenderedAttrs [0]),
                 Ok (RenderedText "The answer is 42"),
-                Ok (RenderedElement "div" [] [2]),
-                Ok (RenderedElement "body" [] [1, 3]),
+                Ok (RenderedElement "div" emptyRenderedAttrs [2]),
+                Ok (RenderedElement "body" emptyRenderedAttrs [1, 3]),
             ],
             deletedNodeCache: [],
             handlers: [],
@@ -533,10 +755,10 @@ expect
             root: 4,
             nodes: [
                 Ok (RenderedText "The app"),
-                Ok (RenderedElement "h1" [] [0]),
+                Ok (RenderedElement "h1" emptyRenderedAttrs [0]),
                 Ok (RenderedText "The answer is 111"),
-                Ok (RenderedElement "div" [] [2]),
-                Ok (RenderedElement "body" [] [1, 3]),
+                Ok (RenderedElement "div" emptyRenderedAttrs [2]),
+                Ok (RenderedElement "body" emptyRenderedAttrs [1, 3]),
             ],
             deletedNodeCache: [],
             handlers: [],
@@ -552,7 +774,7 @@ expect
         expected # TODO: tests that actually test things
 
     (actual.patches == expected.patches)
-    && eqRendered actual.rendered expected.rendered
+    && eqRenderedTree actual.rendered expected.rendered
 
 # initClientAppHelp
 expect
@@ -600,10 +822,10 @@ expect
             root: 4,
             nodes: [
                 Ok (RenderedText "The app"),
-                Ok (RenderedElement "h1" [] [0]),
+                Ok (RenderedElement "h1" emptyRenderedAttrs [0]),
                 Ok (RenderedText "The answer is 42"),
-                Ok (RenderedElement "div" [RenderedEventListener "click" [] 0] [2]),
-                Ok (RenderedElement "body" [] [1, 3]),
+                Ok (RenderedElement "div" { emptyRenderedAttrs & eventListeners: Dict.fromList [T "click" { accessors: [], handlerId: 0 }] } [2]),
+                Ok (RenderedElement "body" emptyRenderedAttrs [1, 3]),
             ],
             deletedNodeCache: [],
             handlers: [Ok onClickHandler],
@@ -619,5 +841,5 @@ expect
         expected # TODO: tests that actually test things
 
     (actual.state == expected.state)
-    && eqRendered actual.rendered expected.rendered
+    && eqRenderedTree actual.rendered expected.rendered
     && (actual.patches == expected.patches)
