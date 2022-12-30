@@ -17,12 +17,14 @@ When(
                                 ),
                             ],
                         ),
-                        [
-                            LineComment(
-                                " barfoo",
-                            ),
-                        ],
-                        @53-54 "n",
+                        PatternAs {
+                            spaces_before: [
+                                LineComment(
+                                    " barfoo",
+                                ),
+                            ],
+                            identifier: @53-54 "n",
+                        },
                     ),
                     [
                         Newline,

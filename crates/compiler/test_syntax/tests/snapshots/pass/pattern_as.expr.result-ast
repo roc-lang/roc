@@ -13,8 +13,10 @@ When(
                             ),
                             [],
                         ),
-                        [],
-                        @19-20 "n",
+                        PatternAs {
+                            spaces_before: [],
+                            identifier: @19-20 "n",
+                        },
                     ),
                     [
                         Newline,
