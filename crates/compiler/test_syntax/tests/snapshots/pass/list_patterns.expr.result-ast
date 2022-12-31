@@ -24,7 +24,9 @@ When(
                 @24-28 SpaceBefore(
                     List(
                         [
-                            @25-27 ListRest,
+                            @25-27 ListRest(
+                                None,
+                            ),
                         ],
                     ),
                     [
@@ -45,11 +47,15 @@ When(
                             @38-39 Underscore(
                                 "",
                             ),
-                            @41-43 ListRest,
+                            @41-43 ListRest(
+                                None,
+                            ),
                             @45-46 Underscore(
                                 "",
                             ),
-                            @48-50 ListRest,
+                            @48-50 ListRest(
+                                None,
+                            ),
                         ],
                     ),
                     [
@@ -102,7 +108,9 @@ When(
                             @85-86 Identifier(
                                 "b",
                             ),
-                            @88-90 ListRest,
+                            @88-90 ListRest(
+                                None,
+                            ),
                         ],
                     ),
                     [
@@ -120,7 +128,9 @@ When(
                 @100-110 SpaceBefore(
                     List(
                         [
-                            @101-103 ListRest,
+                            @101-103 ListRest(
+                                None,
+                            ),
                             @105-106 Identifier(
                                 "c",
                             ),
@@ -153,7 +163,9 @@ When(
                             ),
                             @125-129 List(
                                 [
-                                    @126-128 ListRest,
+                                    @126-128 ListRest(
+                                        None,
+                                    ),
                                 ],
                             ),
                             @131-134 List(

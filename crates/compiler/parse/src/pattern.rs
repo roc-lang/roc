@@ -1,10 +1,11 @@
-use crate::ast::{Has, Pattern};
+use crate::ast::{Has, Pattern, PatternAs, Spaceable};
 use crate::blankspace::{space0_before_e, space0_e};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
+use crate::keyword;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    backtrackable, fail_when, optional, specialize, specialize_ref, then, word1, word2, word3,
-    EPattern, PInParens, PList, PRecord, Parser,
+    self, backtrackable, fail_when, optional, specialize, specialize_ref, then, word1, word2,
+    word3, EPattern, PInParens, PList, PRecord, Parser,
 };
 use crate::state::State;
 use bumpalo::collections::string::String;
@@ -42,6 +43,36 @@ pub fn closure_param<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
 }
 
 pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
+    move |arena, state: State<'a>, min_indent| {
+        let (_, pattern, state) = loc_pattern_help_help().parse(arena, state, min_indent)?;
+
+        let pattern_state = state.clone();
+
+        let (pattern_spaces, state) =
+            match space0_e(EPattern::AsKeyword).parse(arena, state, min_indent) {
+                Err(_) => return Ok((MadeProgress, pattern, pattern_state)),
+                Ok((_, pattern_spaces, state)) => (pattern_spaces, state),
+            };
+
+        match pattern_as().parse(arena, state, min_indent) {
+            Err((progress, e)) => match progress {
+                MadeProgress => Err((MadeProgress, e)),
+                NoProgress => Ok((MadeProgress, pattern, pattern_state)),
+            },
+            Ok((_, pattern_as, state)) => {
+                let region = Region::span_across(&pattern.region, &pattern_as.identifier.region);
+                let pattern = arena
+                    .alloc(pattern.value)
+                    .with_spaces_after(pattern_spaces, pattern.region);
+                let as_pattern = Pattern::As(arena.alloc(pattern), pattern_as);
+
+                Ok((MadeProgress, Loc::at(region, as_pattern), state))
+            }
+        }
+    }
+}
+
+fn loc_pattern_help_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>> {
     one_of!(
         specialize(EPattern::PInParens, loc_pattern_in_parens_help()),
         loc!(underscore_pattern_help()),
@@ -55,6 +86,30 @@ pub fn loc_pattern_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>>
         loc!(string_pattern_help()),
         loc!(single_quote_pattern_help()),
     )
+}
+
+fn pattern_as<'a>() -> impl Parser<'a, PatternAs<'a>, EPattern<'a>> {
+    move |arena, state: State<'a>, min_indent| {
+        let (_, _, state) =
+            parser::keyword_e(keyword::AS, EPattern::AsKeyword).parse(arena, state, min_indent)?;
+
+        let (_, spaces, state) =
+            space0_e(EPattern::AsIdentifier).parse(arena, state, min_indent)?;
+
+        let position = state.pos();
+
+        match loc!(lowercase_ident()).parse(arena, state, min_indent) {
+            Ok((_, identifier, state)) => Ok((
+                MadeProgress,
+                PatternAs {
+                    spaces_before: spaces,
+                    identifier,
+                },
+                state,
+            )),
+            Err((_, ())) => Err((MadeProgress, EPattern::AsIdentifier(position))),
+        }
+    }
 }
 
 fn loc_tag_pattern_args_help<'a>() -> impl Parser<'a, Vec<'a, Loc<Pattern<'a>>>, EPattern<'a>> {
@@ -228,9 +283,35 @@ fn three_list_rest_pattern_error<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PLis
 }
 
 fn list_rest_pattern<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PList<'a>> {
-    map!(loc!(word2(b'.', b'.', PList::Open)), |loc_word: Loc<_>| {
-        loc_word.map(|_| Pattern::ListRest)
-    })
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        let (_, loc_word, state) =
+            loc!(word2(b'.', b'.', PList::Open)).parse(arena, state, min_indent)?;
+
+        let no_as = Loc::at(loc_word.region, Pattern::ListRest(None));
+
+        let pattern_state = state.clone();
+
+        let (pattern_spaces, state) =
+            match space0_e(EPattern::AsKeyword).parse(arena, state, min_indent) {
+                Err(_) => return Ok((MadeProgress, no_as, pattern_state)),
+                Ok((_, pattern_spaces, state)) => (pattern_spaces, state),
+            };
+
+        let position = state.pos();
+        match pattern_as().parse(arena, state, min_indent) {
+            Err((progress, e)) => match progress {
+                MadeProgress => Err((MadeProgress, PList::Pattern(arena.alloc(e), position))),
+                NoProgress => Ok((MadeProgress, no_as, pattern_state)),
+            },
+            Ok((_, pattern_as, state)) => {
+                let region = Region::span_across(&loc_word.region, &pattern_as.identifier.region);
+
+                let as_pattern = Pattern::ListRest(Some((pattern_spaces, pattern_as)));
+
+                Ok((MadeProgress, Loc::at(region, as_pattern), state))
+            }
+        }
+    }
 }
 
 fn loc_ident_pattern_help<'a>(

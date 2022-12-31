@@ -69,7 +69,11 @@ impl<'a> Buf<'a> {
     }
 
     pub fn push_str_allow_spaces(&mut self, s: &str) {
-        debug_assert!(!self.beginning_of_line);
+        debug_assert!(
+            !self.beginning_of_line,
+            "push_str: `{s}` with text:\n{}",
+            self.text
+        );
 
         self.flush_spaces();
 
@@ -77,8 +81,13 @@ impl<'a> Buf<'a> {
     }
 
     pub fn push_str(&mut self, s: &str) {
-        debug_assert!(!self.beginning_of_line);
-        debug_assert!(!s.contains('\n') && !s.ends_with(' '));
+        debug_assert!(
+            !self.beginning_of_line,
+            "push_str: `{s}` with text:\n{}",
+            self.text
+        );
+        debug_assert!(!s.contains('\n'));
+        debug_assert!(!s.ends_with(' '));
 
         if !s.is_empty() {
             self.flush_spaces();

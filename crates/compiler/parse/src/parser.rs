@@ -555,6 +555,8 @@ pub enum EExpect<'a> {
 pub enum EPattern<'a> {
     Record(PRecord<'a>, Position),
     List(PList<'a>, Position),
+    AsKeyword(Position),
+    AsIdentifier(Position),
     Underscore(Position),
     NotAPattern(Position),
 

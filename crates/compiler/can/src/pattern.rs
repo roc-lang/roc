@@ -689,7 +689,7 @@ pub fn canonicalize_pattern<'a>(
 
             for (i, loc_pattern) in patterns.iter().enumerate() {
                 match &loc_pattern.value {
-                    ListRest => match rest_index {
+                    ListRest(_opt_pattern_as) => match rest_index {
                         None => {
                             rest_index = Some(i);
                         }
@@ -731,11 +731,15 @@ pub fn canonicalize_pattern<'a>(
                 },
             })
         }
-        ListRest => {
+        ListRest(_opt_pattern_as) => {
             // Parsing should make sure these only appear in list patterns, where we will generate
             // better contextual errors.
             let problem = MalformedPatternProblem::Unknown;
             malformed_pattern(env, problem, region)
+        }
+
+        As(_pattern, _pattern_as) => {
+            todo!();
         }
 
         Malformed(_str) => {
