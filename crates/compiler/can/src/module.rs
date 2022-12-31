@@ -929,6 +929,14 @@ fn fix_values_captured_in_closure_pattern(
                 );
             }
         }
+        As(subpattern, _) => {
+            fix_values_captured_in_closure_pattern(
+                &mut subpattern.value,
+                no_capture_symbols,
+                closure_captures,
+            );
+        }
+
         Identifier(_)
         | NumLiteral(..)
         | IntLiteral(..)

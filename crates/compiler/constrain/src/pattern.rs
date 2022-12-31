@@ -60,16 +60,31 @@ fn headers_from_annotation_help(
     match pattern {
         Identifier(symbol)
         | Shadowed(_, _, symbol)
-        // TODO(abilities): handle linking the member def to the specialization ident
         | AbilityMemberSpecialization {
             ident: symbol,
+            // TODO(abilities): handle linking the member def to the specialization ident
             specializes: _,
         } => {
-            let annotation_index = { let typ = types.from_old_type(annotation.value); constraints.push_type(types, typ) };
+            let annotation_index = {
+                let typ = types.from_old_type(annotation.value);
+                constraints.push_type(types, typ)
+            };
             let typ = Loc::at(annotation.region, annotation_index);
             headers.insert(*symbol, typ);
             true
         }
+
+        As(subpattern, symbol) => {
+            let annotation_index = {
+                let typ = types.from_old_type(annotation.value);
+                constraints.push_type(types, typ)
+            };
+            let typ = Loc::at(annotation.region, annotation_index);
+            headers.insert(*symbol, typ);
+
+            headers_from_annotation_help(types, constraints, &subpattern.value, annotation, headers)
+        }
+
         Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)
@@ -93,7 +108,10 @@ fn headers_from_annotation_help(
                     // `{ x ? 0 } = rec` or `{ x: 5 } -> ...` in all cases
                     // the type of `x` within the binding itself is the same.
                     if let Some(field_type) = fields.get(&destruct.label) {
-                        let field_type_index = { let typ = types.from_old_type(&field_type.as_inner().clone()); constraints.push_type(types, typ) };
+                        let field_type_index = {
+                            let typ = types.from_old_type(&field_type.as_inner().clone());
+                            constraints.push_type(types, typ)
+                        };
                         headers.insert(
                             destruct.symbol,
                             Loc::at(annotation.region, field_type_index),
@@ -114,7 +132,7 @@ fn headers_from_annotation_help(
             //   \[..] -> <body>
             // which does not introduce any symbols.
             false
-        },
+        }
 
         AppliedTag {
             tag_name,
@@ -165,7 +183,10 @@ fn headers_from_annotation_help(
                 && type_arguments.len() == pat_type_arguments.len()
                 && lambda_set_variables.len() == pat_lambda_set_variables.len() =>
             {
-                let annotation_index = { let typ = types.from_old_type(annotation.value); constraints.push_type(types, typ) };
+                let annotation_index = {
+                    let typ = types.from_old_type(annotation.value);
+                    constraints.push_type(types, typ)
+                };
                 let typ = Loc::at(annotation.region, annotation_index);
                 headers.insert(*opaque, typ);
 
@@ -181,6 +202,32 @@ fn headers_from_annotation_help(
             _ => false,
         },
     }
+}
+
+fn constrain_pattern_symbol(
+    types: &mut Types,
+    constraints: &mut Constraints,
+    region: Region,
+    expected: PExpectedTypeIndex,
+    state: &mut PatternState,
+    symbol: Symbol,
+) {
+    let expected = &constraints[expected];
+    let type_index = *expected.get_type_ref();
+
+    if could_be_a_tag_union(types, type_index) {
+        state
+            .delayed_is_open_constraints
+            .push(constraints.is_open_type(type_index));
+    }
+
+    state.headers.insert(
+        symbol,
+        Loc {
+            region,
+            value: type_index,
+        },
+    );
 }
 
 /// This accepts PatternState (rather than returning it) so that the caller can
@@ -215,22 +262,21 @@ pub fn constrain_pattern(
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
-            let expected = &constraints[expected];
-            let type_index = *expected.get_type_ref();
+            constrain_pattern_symbol(types, constraints, region, expected, state, *symbol);
+        }
 
-            if could_be_a_tag_union(types, type_index) {
-                state
-                    .delayed_is_open_constraints
-                    .push(constraints.is_open_type(type_index));
-            }
+        As(subpattern, symbol) => {
+            constrain_pattern_symbol(types, constraints, region, expected, state, *symbol);
 
-            state.headers.insert(
-                *symbol,
-                Loc {
-                    region,
-                    value: type_index,
-                },
-            );
+            constrain_pattern(
+                types,
+                constraints,
+                env,
+                &subpattern.value,
+                subpattern.region,
+                expected,
+                state,
+            )
         }
 
         AbilityMemberSpecialization {

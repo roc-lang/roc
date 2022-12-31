@@ -22,6 +22,7 @@ use roc_types::types::{LambdaSet, OptAbleVar, PatternCategory, Type};
 #[derive(Clone, Debug)]
 pub enum Pattern {
     Identifier(Symbol),
+    As(Box<Loc<Pattern>>, Symbol),
     AppliedTag {
         whole_var: Variable,
         ext_var: Variable,
@@ -94,6 +95,7 @@ impl Pattern {
         use Pattern::*;
         match self {
             Identifier(_) => None,
+            As(pattern, _) => pattern.value.opt_var(),
 
             AppliedTag { whole_var, .. } => Some(*whole_var),
             UnwrappedOpaque { whole_var, .. } => Some(*whole_var),
@@ -129,6 +131,7 @@ impl Pattern {
             | MalformedPattern(..)
             | AbilityMemberSpecialization { .. } => true,
             RecordDestructure { destructs, .. } => destructs.is_empty(),
+            As(pattern, _identifier) => pattern.value.surely_exhaustive(),
             List { patterns, .. } => patterns.surely_exhaustive(),
             AppliedTag { .. }
             | NumLiteral(..)
@@ -151,6 +154,7 @@ impl Pattern {
 
         match self {
             Identifier(_) => C::PatternDefault,
+            As(pattern, _) => pattern.value.category(),
 
             AppliedTag { tag_name, .. } => C::Ctor(tag_name.clone()),
             UnwrappedOpaque { opaque, .. } => C::Opaque(*opaque),
@@ -830,6 +834,10 @@ impl<'a> BindingsFromPattern<'a> {
                             ident: symbol,
                             specializes: _,
                         } => {
+                            return Some((*symbol, loc_pattern.region));
+                        }
+                        As(pattern, symbol) => {
+                            stack.push(Pattern(pattern));
                             return Some((*symbol, loc_pattern.region));
                         }
                         AppliedTag {
