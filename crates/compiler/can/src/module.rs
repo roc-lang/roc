@@ -341,9 +341,6 @@ pub fn canonicalize_module_defs<'a>(
                     panic!("TODO gracefully handle shadowing in imports.")
                 }
             }
-        } else if [Symbol::LIST_LIST, Symbol::STR_STR, Symbol::BOX_BOX_TYPE].contains(&symbol) {
-            unreachable!("This branch seems unreachable and should probably be deleted.");
-            // These are not aliases but Apply's and we make sure they are always in scope
         } else {
             // This is a type alias or ability
 
