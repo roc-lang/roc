@@ -433,7 +433,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                 &[string, delimiter],
                 &[],
                 BitcodeReturns::List,
-                bitcode::STR_STR_SPLIT,
+                bitcode::STR_SPLIT,
             )
         }
         StrIsEmpty => {
