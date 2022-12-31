@@ -186,18 +186,18 @@ pub struct ListPatterns {
     ///   [ .., A, B ] -> patterns = [A, B], rest = 0
     ///   [ A, .., B ] -> patterns = [A, B], rest = 1
     ///   [ A, B, .. ] -> patterns = [A, B], rest = 2
-    pub opt_rest: Option<usize>,
+    pub opt_rest: Option<(usize, Option<Symbol>)>,
 }
 
 impl ListPatterns {
     /// Is this list pattern the trivially-exhaustive pattern `[..]`?
     fn surely_exhaustive(&self) -> bool {
-        self.patterns.is_empty() && matches!(self.opt_rest, Some(0))
+        self.patterns.is_empty() && matches!(self.opt_rest, Some((0, _)))
     }
 
     pub fn arity(&self) -> ListArity {
         match self.opt_rest {
-            Some(i) => {
+            Some((i, _)) => {
                 let before = i;
                 let after = self.patterns.len() - before;
                 ListArity::Slice(before, after)
@@ -293,6 +293,43 @@ pub fn canonicalize_def_header_pattern<'a>(
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub struct PermitShadows(pub bool);
 
+fn canonicalize_pattern_symbol<'a>(
+    env: &mut Env<'a>,
+    scope: &mut Scope,
+    output: &mut Output,
+    region: Region,
+    permit_shadows: PermitShadows,
+    name: &str,
+) -> Result<Symbol, Pattern> {
+    match scope.introduce_str(name, region) {
+        Ok(symbol) => {
+            output.references.insert_bound(symbol);
+
+            Ok(symbol)
+        }
+        Err((shadowed_symbol, shadow, new_symbol)) => {
+            if permit_shadows.0 {
+                output.references.insert_bound(shadowed_symbol.value);
+
+                Ok(shadowed_symbol.value)
+            } else {
+                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                    original_region: shadowed_symbol.region,
+                    shadow: shadow.clone(),
+                    kind: ShadowKind::Variable,
+                }));
+                output.references.insert_bound(new_symbol);
+
+                Err(Pattern::Shadowed(
+                    shadowed_symbol.region,
+                    shadow,
+                    new_symbol,
+                ))
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_pattern<'a>(
     env: &mut Env<'a>,
@@ -308,29 +345,12 @@ pub fn canonicalize_pattern<'a>(
     use PatternType::*;
 
     let can_pattern = match pattern {
-        Identifier(name) => match scope.introduce_str(name, region) {
-            Ok(symbol) => {
-                output.references.insert_bound(symbol);
-
-                Pattern::Identifier(symbol)
+        Identifier(name) => {
+            match canonicalize_pattern_symbol(env, scope, output, region, permit_shadows, name) {
+                Ok(symbol) => Pattern::Identifier(symbol),
+                Err(pattern) => pattern,
             }
-            Err((shadowed_symbol, shadow, new_symbol)) => {
-                if permit_shadows.0 {
-                    output.references.insert_bound(shadowed_symbol.value);
-
-                    Pattern::Identifier(shadowed_symbol.value)
-                } else {
-                    env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                        original_region: shadowed_symbol.region,
-                        shadow: shadow.clone(),
-                        kind: ShadowKind::Variable,
-                    }));
-                    output.references.insert_bound(new_symbol);
-
-                    Pattern::Shadowed(shadowed_symbol.region, shadow, new_symbol)
-                }
-            }
-        },
+        }
         Tag(name) => {
             // Canonicalize the tag's name.
             Pattern::AppliedTag {
@@ -688,14 +708,33 @@ pub fn canonicalize_pattern<'a>(
             let list_var = var_store.fresh();
 
             let mut rest_index = None;
+            let mut rest_name = None;
             let mut can_pats = Vec::with_capacity(patterns.len());
             let mut opt_erroneous = None;
 
             for (i, loc_pattern) in patterns.iter().enumerate() {
                 match &loc_pattern.value {
-                    ListRest(_opt_pattern_as) => match rest_index {
+                    ListRest(opt_pattern_as) => match rest_index {
                         None => {
                             rest_index = Some(i);
+
+                            if let Some((_, pattern_as)) = opt_pattern_as {
+                                match canonicalize_pattern_symbol(
+                                    env,
+                                    scope,
+                                    output,
+                                    region,
+                                    permit_shadows,
+                                    pattern_as.identifier.value,
+                                ) {
+                                    Ok(symbol) => {
+                                        rest_name = Some(symbol);
+                                    }
+                                    Err(pattern) => {
+                                        opt_erroneous = Some(pattern);
+                                    }
+                                }
+                            }
                         }
                         Some(_) => {
                             env.problem(Problem::MultipleListRestPattern {
@@ -731,7 +770,7 @@ pub fn canonicalize_pattern<'a>(
                 elem_var,
                 patterns: ListPatterns {
                     patterns: can_pats,
-                    opt_rest: rest_index,
+                    opt_rest: rest_index.map(|i| (i, rest_name)),
                 },
             })
         }
