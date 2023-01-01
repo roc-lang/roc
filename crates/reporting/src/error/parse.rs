@@ -20,14 +20,6 @@ fn note_for_record_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuil
     alloc.note("I may be confused by indentation")
 }
 
-fn note_for_record_pattern_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
-    alloc.note("I may be confused by indentation")
-}
-
-fn note_for_list_pattern_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
-    alloc.note("I may be confused by indentation")
-}
-
 fn note_for_tag_union_type_indent<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'a> {
     alloc.note("I may be confused by indentation")
 }
@@ -1084,7 +1076,7 @@ fn to_expr_in_parens_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        EInParens::End(pos) | EInParens::IndentEnd(pos) => {
+        EInParens::End(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -1108,7 +1100,7 @@ fn to_expr_in_parens_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        EInParens::Open(pos) | EInParens::IndentOpen(pos) => {
+        EInParens::Open(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -1216,32 +1208,6 @@ fn to_list_report<'a>(
                         severity: Severity::RuntimeError,
                     }
                 }
-            }
-        }
-
-        EList::IndentOpen(pos) | EList::IndentEnd(pos) => {
-            let surroundings = Region::new(start, pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-            let doc = alloc.stack([
-                alloc.reflow(r"I cannot find the end of this list:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                alloc.concat([
-                    alloc.reflow(r"You could change it to something like "),
-                    alloc.parser_suggestion("[1, 2, 3]"),
-                    alloc.reflow(" or even just "),
-                    alloc.parser_suggestion("[]"),
-                    alloc.reflow(". Anything where there is an open and a close square bracket, "),
-                    alloc.reflow("and where the elements of the list are separated by commas."),
-                ]),
-                note_for_tag_union_type_indent(alloc),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "UNFINISHED LIST".to_string(),
-                severity: Severity::RuntimeError,
             }
         }
     }
@@ -1905,84 +1871,6 @@ fn to_precord_report<'a>(
             pos,
         ),
 
-        PRecord::IndentOpen(pos) => {
-            let surroundings = Region::new(start, pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-            let doc = alloc.stack([
-                alloc.reflow(r"I just started parsing a record pattern, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                record_patterns_look_like(alloc),
-                note_for_record_pattern_indent(alloc),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "UNFINISHED RECORD PATTERN".to_string(),
-                severity: Severity::RuntimeError,
-            }
-        }
-
-        PRecord::IndentEnd(pos) => {
-            match next_line_starts_with_close_curly(alloc.src_lines, lines.convert_pos(pos)) {
-                Some(curly_pos) => {
-                    let surroundings = LineColumnRegion::new(lines.convert_pos(start), curly_pos);
-                    let region = LineColumnRegion::from_pos(curly_pos);
-
-                    let doc = alloc.stack([
-                        alloc.reflow(
-                            "I am partway through parsing a record pattern, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(surroundings, region),
-                        alloc.concat([
-                            alloc.reflow("I need this curly brace to be indented more. Try adding more spaces before it!"),
-                        ]),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "NEED MORE INDENTATION".to_string(),
-                        severity: Severity::RuntimeError,
-                    }
-                }
-                None => {
-                    let surroundings = Region::new(start, pos);
-                    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-                    let doc = alloc.stack([
-                        alloc.reflow(
-                            r"I am partway through parsing a record pattern, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                        alloc.concat([
-                            alloc.reflow("I was expecting to see a closing curly "),
-                            alloc.reflow("brace before this, so try adding a "),
-                            alloc.parser_suggestion("}"),
-                            alloc.reflow(" and see if that helps?"),
-                        ]),
-                        note_for_record_pattern_indent(alloc),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "UNFINISHED RECORD PATTERN".to_string(),
-                        severity: Severity::RuntimeError,
-                    }
-                }
-            }
-        }
-
-        PRecord::IndentColon(_) => {
-            unreachable!("because `foo` is a valid field; the colon is not required")
-        }
-
-        PRecord::IndentOptional(_) => {
-            unreachable!("because `foo` is a valid field; the question mark is not required")
-        }
-
         PRecord::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
     }
 }
@@ -2058,79 +1946,6 @@ fn to_plist_report<'a>(
         }
 
         PList::Pattern(pattern, pos) => to_pattern_report(alloc, lines, filename, pattern, pos),
-
-        PList::IndentOpen(pos) => {
-            let surroundings = Region::new(start, pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-            let doc = alloc.stack([
-                alloc.reflow(r"I just started parsing a list pattern, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                record_patterns_look_like(alloc),
-                note_for_list_pattern_indent(alloc),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "UNFINISHED LIST PATTERN".to_string(),
-                severity: Severity::RuntimeError,
-            }
-        }
-
-        PList::IndentEnd(pos) => {
-            match next_line_starts_with_close_square_bracket(
-                alloc.src_lines,
-                lines.convert_pos(pos),
-            ) {
-                Some(curly_pos) => {
-                    let surroundings = LineColumnRegion::new(lines.convert_pos(start), curly_pos);
-                    let region = LineColumnRegion::from_pos(curly_pos);
-
-                    let doc = alloc.stack([
-                        alloc.reflow(
-                            "I am partway through parsing a list pattern, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(surroundings, region),
-                        alloc.concat([
-                            alloc.reflow("I need this square brace to be indented more. Try adding more spaces before it!"),
-                        ]),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "NEED MORE INDENTATION".to_string(),
-                        severity: Severity::RuntimeError,
-                    }
-                }
-                None => {
-                    let surroundings = Region::new(start, pos);
-                    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-                    let doc = alloc.stack([
-                        alloc.reflow(
-                            r"I am partway through parsing a list pattern, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                        alloc.concat([
-                            alloc.reflow("I was expecting to see a closing square "),
-                            alloc.reflow("brace before this, so try adding a "),
-                            alloc.parser_suggestion("]"),
-                            alloc.reflow(" and see if that helps?"),
-                        ]),
-                        note_for_list_pattern_indent(alloc),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "UNFINISHED LIST PATTERN".to_string(),
-                        severity: Severity::RuntimeError,
-                    }
-                }
-            }
-        }
 
         PList::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
     }
@@ -2219,78 +2034,6 @@ fn to_pattern_in_parens_report<'a>(
         }
 
         PInParens::Pattern(pattern, pos) => to_pattern_report(alloc, lines, filename, pattern, pos),
-
-        PInParens::IndentOpen(pos) => {
-            let surroundings = Region::new(start, pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-            let doc = alloc.stack([
-                alloc.reflow(
-                    r"I just started parsing a pattern in parentheses, but I got stuck here:",
-                ),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                record_patterns_look_like(alloc),
-                note_for_record_pattern_indent(alloc),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "UNFINISHED PARENTHESES".to_string(),
-                severity: Severity::RuntimeError,
-            }
-        }
-
-        PInParens::IndentEnd(pos) => {
-            match next_line_starts_with_close_parenthesis(alloc.src_lines, lines.convert_pos(pos)) {
-                Some(close_pos) => {
-                    let surroundings = LineColumnRegion::new(lines.convert_pos(start), close_pos);
-                    let region = LineColumnRegion::from_pos(close_pos);
-
-                    let doc = alloc.stack([
-                        alloc.reflow(
-                            "I am partway through parsing a pattern in parentheses, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(surroundings, region),
-                        alloc.concat([
-                            alloc.reflow("I need this parenthesis to be indented more. Try adding more spaces before it!"),
-                        ]),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "NEED MORE INDENTATION".to_string(),
-                        severity: Severity::RuntimeError,
-                    }
-                }
-                None => {
-                    let surroundings = Region::new(start, pos);
-                    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-                    let doc = alloc.stack([
-                        alloc.reflow(
-                            r"I am partway through parsing a pattern in parentheses, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                        alloc.concat([
-                            alloc.reflow("I was expecting to see a closing parenthesis "),
-                            alloc.reflow("before this, so try adding a "),
-                            alloc.parser_suggestion(")"),
-                            alloc.reflow(" and see if that helps?"),
-                        ]),
-                        note_for_record_pattern_indent(alloc),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "UNFINISHED PARENTHESES".to_string(),
-                        severity: Severity::RuntimeError,
-                    }
-                }
-            }
-        }
 
         PInParens::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
     }
@@ -2830,83 +2573,6 @@ fn to_ttag_union_report<'a>(
         }
 
         ETypeTagUnion::Type(tipe, pos) => to_type_report(alloc, lines, filename, tipe, pos),
-
-        ETypeTagUnion::IndentOpen(pos) => {
-            let surroundings = Region::new(start, pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-            let doc = alloc.stack([
-                alloc.reflow(r"I just started parsing a tag union type, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                alloc.concat([
-                    alloc.reflow(r"Tag unions look like "),
-                    alloc.parser_suggestion("[Many I64, None],"),
-                    alloc.reflow(" so I was expecting to see a tag name next."),
-                ]),
-                note_for_tag_union_type_indent(alloc),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "UNFINISHED TAG UNION TYPE".to_string(),
-                severity: Severity::RuntimeError,
-            }
-        }
-
-        ETypeTagUnion::IndentEnd(pos) => {
-            match next_line_starts_with_close_square_bracket(
-                alloc.src_lines,
-                lines.convert_pos(pos),
-            ) {
-                Some(curly_pos) => {
-                    let surroundings = LineColumnRegion::new(lines.convert_pos(start), curly_pos);
-                    let region = LineColumnRegion::from_pos(curly_pos);
-
-                    let doc = alloc.stack([
-                        alloc.reflow(
-                            "I am partway through parsing a tag union type, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(surroundings, region),
-                        alloc.concat([
-                            alloc.reflow("I need this square bracket to be indented more. Try adding more spaces before it!"),
-                        ]),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "NEED MORE INDENTATION".to_string(),
-                        severity: Severity::RuntimeError,
-                    }
-                }
-                None => {
-                    let surroundings = Region::new(start, pos);
-                    let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
-
-                    let doc = alloc.stack([
-                        alloc.reflow(
-                            r"I am partway through parsing a tag union type, but I got stuck here:",
-                        ),
-                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
-                        alloc.concat([
-                            alloc.reflow("I was expecting to see a closing square "),
-                            alloc.reflow("bracket before this, so try adding a "),
-                            alloc.parser_suggestion("]"),
-                            alloc.reflow(" and see if that helps?"),
-                        ]),
-                        note_for_tag_union_type_indent(alloc),
-                    ]);
-
-                    Report {
-                        filename,
-                        doc,
-                        title: "UNFINISHED TAG UNION TYPE".to_string(),
-                        severity: Severity::RuntimeError,
-                    }
-                }
-            }
-        }
 
         ETypeTagUnion::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
     }
@@ -4184,13 +3850,6 @@ fn next_line_starts_with_close_parenthesis(
     pos: LineColumn,
 ) -> Option<LineColumn> {
     next_line_starts_with_char(source_lines, pos, ')')
-}
-
-fn next_line_starts_with_close_square_bracket(
-    source_lines: &[&str],
-    pos: LineColumn,
-) -> Option<LineColumn> {
-    next_line_starts_with_char(source_lines, pos, ']')
 }
 
 fn next_line_starts_with_char(

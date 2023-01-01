@@ -20,27 +20,27 @@ Defs(
                     "a",
                 ),
                 @4-17 List(
-                    Collection {
-                        items: [
-                            @8-9 SpaceBefore(
-                                Num(
-                                    "1",
-                                ),
-                                [
-                                    Newline,
-                                ],
+                    [
+                        @8-9 SpaceBefore(
+                            Num(
+                                "1",
                             ),
-                            @11-12 Num(
-                                "2",
-                            ),
-                            @14-15 Num(
+                            [
+                                Newline,
+                            ],
+                        ),
+                        @11-12 Num(
+                            "2",
+                        ),
+                        @14-15 SpaceAfter(
+                            Num(
                                 "3",
                             ),
-                        ],
-                        final_comments: [
-                            Newline,
-                        ],
-                    },
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ],
                 ),
             ),
         ],

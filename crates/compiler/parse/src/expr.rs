@@ -81,7 +81,6 @@ fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>
             specialize_ref(EInParens::Expr, loc_expr(false)),
             word1(b',', EInParens::End),
             word1(b')', EInParens::End),
-            EInParens::IndentEnd,
             Expr::SpaceBefore
         )),
         move |arena, state, _, loc_elements| {
@@ -2459,7 +2458,6 @@ fn list_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EList<'a>> {
             specialize_ref(EList::Expr, loc_expr(false)),
             word1(b',', EList::End),
             word1(b']', EList::End),
-            EList::IndentEnd,
             Expr::SpaceBefore
         ),
         |arena, elements: Collection<'a, _>| {

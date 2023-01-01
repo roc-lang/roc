@@ -142,7 +142,6 @@ pub enum EProvides<'a> {
     IndentProvides(Position),
     IndentTo(Position),
     IndentListStart(Position),
-    IndentListEnd(Position),
     IndentPackage(Position),
     ListStart(Position),
     ListEnd(Position),
@@ -157,7 +156,6 @@ pub enum EExposes {
     Open(Position),
     IndentExposes(Position),
     IndentListStart(Position),
-    IndentListEnd(Position),
     ListStart(Position),
     ListEnd(Position),
     Identifier(Position),
@@ -170,7 +168,6 @@ pub enum ERequires<'a> {
     Open(Position),
     IndentRequires(Position),
     IndentListStart(Position),
-    IndentListEnd(Position),
     ListStart(Position),
     ListEnd(Position),
     TypedIdent(ETypedIdent<'a>, Position),
@@ -234,7 +231,6 @@ pub enum EImports {
     ModuleName(Position),
     Space(BadInputError, Position),
     IndentSetStart(Position),
-    IndentSetEnd(Position),
     SetStart(Position),
     SetEnd(Position),
 }
@@ -457,9 +453,6 @@ pub enum EInParens<'a> {
 
     ///
     Space(BadInputError, Position),
-    ///
-    IndentOpen(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -484,9 +477,6 @@ pub enum EList<'a> {
     Space(BadInputError, Position),
 
     Expr(&'a EExpr<'a>, Position),
-
-    IndentOpen(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -585,11 +575,6 @@ pub enum PRecord<'a> {
     Expr(&'a EExpr<'a>, Position),
 
     Space(BadInputError, Position),
-
-    IndentOpen(Position),
-    IndentColon(Position),
-    IndentOptional(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -601,9 +586,6 @@ pub enum PList<'a> {
     Pattern(&'a EPattern<'a>, Position),
 
     Space(BadInputError, Position),
-
-    IndentOpen(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -614,8 +596,6 @@ pub enum PInParens<'a> {
     Pattern(&'a EPattern<'a>, Position),
 
     Space(BadInputError, Position),
-    IndentOpen(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -670,9 +650,6 @@ pub enum ETypeTagUnion<'a> {
     Type(&'a EType<'a>, Position),
 
     Space(BadInputError, Position),
-
-    IndentOpen(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1318,29 +1295,20 @@ macro_rules! collection {
 
 #[macro_export]
 macro_rules! collection_trailing_sep_e {
-    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $indent_problem:expr, $space_before:expr) => {
+    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $space_before:expr) => {
         map_with_arena!(
             skip_first!(
                 $opening_brace,
-                and!(
+                $crate::parser::reset_min_indent(and!(
                     and!(
-                        space0_e($indent_problem),
+                        $crate::blankspace::spaces(),
                         $crate::parser::trailing_sep_by0(
                             $delimiter,
-                            $crate::blankspace::space0_before_optional_after(
-                                $elem,
-                                $indent_problem,
-                                $indent_problem
-                            )
+                            $crate::blankspace::spaces_before_optional_after($elem,)
                         )
                     ),
-                    skip_second!(
-                        $crate::parser::reset_min_indent($crate::blankspace::space0_e(
-                            $indent_problem
-                        )),
-                        $closing_brace
-                    )
-                )
+                    skip_second!($crate::blankspace::spaces(), $closing_brace)
+                ))
             ),
             |arena: &'a bumpalo::Bump,
              ((spaces, mut parsed_elems), mut final_comments): (

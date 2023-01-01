@@ -67,6 +67,24 @@ where
     )
 }
 
+pub fn spaces_before_optional_after<'a, P, S, E>(parser: P) -> impl Parser<'a, Loc<S>, E>
+where
+    S: 'a + Spaceable<'a>,
+    P: 'a + Parser<'a, Loc<S>, E>,
+    E: 'a + SpaceProblem,
+{
+    parser::map_with_arena(
+        and(
+            spaces(),
+            and(
+                parser,
+                one_of![backtrackable(spaces()), succeed!(&[] as &[_]),],
+            ),
+        ),
+        spaces_around_help,
+    )
+}
+
 fn spaces_around_help<'a, S>(
     arena: &'a Bump,
     tuples: (
@@ -100,6 +118,26 @@ where
             .alloc(wrapped_expr.value)
             .with_spaces_before(spaces_before, wrapped_expr.region)
     }
+}
+
+pub fn spaces_before<'a, P, S, E>(parser: P) -> impl Parser<'a, Loc<S>, E>
+where
+    S: 'a + Spaceable<'a>,
+    P: 'a + Parser<'a, Loc<S>, E>,
+    E: 'a + SpaceProblem,
+{
+    parser::map_with_arena(
+        and!(spaces(), parser),
+        |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
+            if space_list.is_empty() {
+                loc_expr
+            } else {
+                arena
+                    .alloc(loc_expr.value)
+                    .with_spaces_before(space_list, loc_expr.region)
+            }
+        },
+    )
 }
 
 pub fn space0_before_e<'a, P, S, E>(
@@ -331,7 +369,7 @@ where
     }
 }
 
-fn spaces<'a, E>() -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
+pub fn spaces<'a, E>() -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
 where
     E: 'a + SpaceProblem,
 {
