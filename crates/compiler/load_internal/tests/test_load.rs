@@ -592,16 +592,19 @@ fn parse_problem() {
                 "
                     ── UNFINISHED LIST ──────────────────────────────────── tmp/parse_problem/Main ─
 
-                    I cannot find the end of this list:
+                    I am partway through started parsing a list, but I got stuck here:
 
                     3│  main = [
-                                ^
+                    4│
+                    5│
+                        ^
 
-                    You could change it to something like [1, 2, 3] or even just [].
-                    Anything where there is an open and a close square bracket, and where
-                    the elements of the list are separated by commas.
+                    I was expecting to see a closing square bracket before this, so try
+                    adding a ] and see if that helps?
 
-                    Note: I may be confused by indentation"
+                    Note: When I get stuck like this, it usually means that there is a
+                    missing parenthesis or bracket somewhere earlier. It could also be a
+                    stray keyword or operator."
             )
         ),
         Ok(_) => unreachable!("we expect failure here"),

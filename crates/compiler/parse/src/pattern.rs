@@ -1,5 +1,5 @@
 use crate::ast::{Has, Pattern, PatternAs, Spaceable};
-use crate::blankspace::{space0_before_e, space0_e};
+use crate::blankspace::{space0_e, spaces, spaces_before};
 use crate::ident::{lowercase_ident, parse_ident, Ident};
 use crate::keyword;
 use crate::parser::Progress::{self, *};
@@ -190,7 +190,6 @@ fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PInPare
             specialize_ref(PInParens::Pattern, loc_pattern_help()),
             word1(b',', PInParens::End),
             word1(b')', PInParens::End),
-            PInParens::IndentOpen,
             Pattern::SpaceBefore
         )),
         move |_arena, state, _, loc_elements| {
@@ -263,7 +262,6 @@ fn list_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PList<'a>> {
             list_element_pattern(),
             word1(b',', PList::End),
             word1(b']', PList::End),
-            PList::IndentEnd,
             Pattern::SpaceBefore
         ),
         Pattern::List
@@ -459,7 +457,6 @@ fn record_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
             record_pattern_field(),
             word1(b',', PRecord::End),
             word1(b'}', PRecord::End),
-            PRecord::IndentEnd,
             Pattern::SpaceBefore
         ),
         Pattern::RecordDestructure
@@ -480,7 +477,7 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         .parse(arena, state, min_indent)?;
         debug_assert_eq!(progress, MadeProgress);
 
-        let (_, spaces, state) = space0_e(PRecord::IndentEnd).parse(arena, state, min_indent)?;
+        let (_, spaces, state) = spaces().parse(arena, state, min_indent)?;
 
         // Having a value is optional; both `{ email }` and `{ email: blah }` work.
         // (This is true in both literals and types.)
@@ -493,8 +490,8 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
         match opt_loc_val {
             Some(First(_)) => {
                 let val_parser = specialize_ref(PRecord::Pattern, loc_pattern_help());
-                let (_, loc_val, state) = space0_before_e(val_parser, PRecord::IndentColon)
-                    .parse(arena, state, min_indent)?;
+                let (_, loc_val, state) =
+                    spaces_before(val_parser).parse(arena, state, min_indent)?;
 
                 let Loc {
                     value: label,
@@ -520,8 +517,8 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
             Some(Second(_)) => {
                 let val_parser = specialize_ref(PRecord::Expr, crate::expr::loc_expr(false));
 
-                let (_, loc_val, state) = space0_before_e(val_parser, PRecord::IndentColon)
-                    .parse(arena, state, min_indent)?;
+                let (_, loc_val, state) =
+                    spaces_before(val_parser).parse(arena, state, min_indent)?;
 
                 let Loc {
                     value: label,

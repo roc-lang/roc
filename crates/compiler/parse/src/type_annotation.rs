@@ -43,7 +43,6 @@ fn tag_union_type<'a>(
             loc!(tag_type(false)),
             word1(b',', ETypeTagUnion::End),
             word1(b']', ETypeTagUnion::End),
-            ETypeTagUnion::IndentEnd,
             Tag::SpaceBefore
         )
         .parse(arena, state, min_indent)?;
@@ -236,7 +235,6 @@ fn loc_type_in_parens<'a>(
                 specialize_ref(ETypeInParens::Type, expression(true, false)),
                 word1(b',', ETypeInParens::End),
                 word1(b')', ETypeInParens::End),
-                ETypeInParens::IndentEnd,
                 TypeAnnotation::SpaceBefore
             ),
             optional(allocated(specialize_ref(
@@ -376,7 +374,6 @@ fn record_type<'a>(
             loc!(record_type_field()),
             word1(b',', ETypeRecord::End),
             word1(b'}', ETypeRecord::End),
-            ETypeRecord::IndentEnd,
             AssignedField::SpaceBefore
         ),
         ext: optional(allocated(specialize_ref(
@@ -522,7 +519,6 @@ pub fn has_abilities<'a>() -> impl Parser<'a, Loc<HasAbilities<'a>>, EType<'a>> 
                     loc!(parse_has_ability()),
                     word1(b',', EType::TEnd),
                     word1(b']', EType::TEnd),
-                    EType::TIndentEnd,
                     HasAbility::SpaceBefore
                 ),
                 HasAbilities::Has
@@ -544,7 +540,6 @@ fn parse_has_ability<'a>() -> impl Parser<'a, HasAbility<'a>, EType<'a>> {
                         specialize(|e: ERecord<'_>, _| e.into(), loc!(record_value_field())),
                         word1(b',', ETypeAbilityImpl::End),
                         word1(b'}', ETypeAbilityImpl::End),
-                        ETypeAbilityImpl::IndentEnd,
                         AssignedField::SpaceBefore
                     )
                 ),
