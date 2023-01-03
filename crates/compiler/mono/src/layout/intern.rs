@@ -1,15 +1,18 @@
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
 
-use roc_builtins::bitcode::IntWidth;
+use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_intern::{GlobalInterner, Interned, Interner, SingleThreadedInterner, ThreadLocalInterner};
+use roc_target::TargetInfo;
 
 use super::{Builtin, Layout};
 
+pub struct InternedLayouts(PhantomData<()>);
+
 macro_rules! cache_interned_layouts {
     ($($i:literal, $name:ident, $layout:expr)*; $total_constants:literal) => {
-        pub trait LayoutInterner<'a>: Interner<'a, Layout<'a>> {
+        impl InternedLayouts {
             $(
-            const $name: Interned<Layout<'a>> = unsafe { Interned::from_reserved_index($i) };
+            pub const $name: Interned<Layout<'static>> = unsafe { Interned::from_reserved_index($i) };
             )*
         }
 
@@ -49,8 +52,40 @@ cache_interned_layouts! {
     10, I32,  Layout::Builtin(Builtin::Int(IntWidth::I32))
     11, I64,  Layout::Builtin(Builtin::Int(IntWidth::I64))
     12, I128, Layout::Builtin(Builtin::Int(IntWidth::I128))
+    13, F32,  Layout::Builtin(Builtin::Float(FloatWidth::F32))
+    14, F64,  Layout::Builtin(Builtin::Float(FloatWidth::F64))
+    15, DEC,  Layout::Builtin(Builtin::Float(FloatWidth::Dec))
 
-    ; 13
+    ; 16
+}
+
+impl InternedLayouts {
+    pub const fn from_int_width(w: IntWidth) -> Interned<Layout<'static>> {
+        match w {
+            IntWidth::U8 => Self::U8,
+            IntWidth::U16 => Self::U16,
+            IntWidth::U32 => Self::U32,
+            IntWidth::U64 => Self::U64,
+            IntWidth::U128 => Self::U128,
+            IntWidth::I8 => Self::I8,
+            IntWidth::I16 => Self::I16,
+            IntWidth::I32 => Self::I32,
+            IntWidth::I64 => Self::I64,
+            IntWidth::I128 => Self::I128,
+        }
+    }
+    pub const fn from_float_width(w: FloatWidth) -> Interned<Layout<'static>> {
+        match w {
+            FloatWidth::F32 => Self::F32,
+            FloatWidth::F64 => Self::F64,
+        }
+    }
+}
+
+pub trait LayoutInterner<'a>: Interner<'a, Layout<'a>> {
+    fn alignment_bytes(&self, target_info: TargetInfo, layout: Interned<Layout<'a>>) -> u32 {
+        self.get(layout).alignment_bytes(self, target_info)
+    }
 }
 
 #[derive(Debug)]
