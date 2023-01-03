@@ -82,7 +82,7 @@ impl InternedLayouts {
     }
 }
 
-pub trait LayoutInterner<'a>: Interner<'a, Layout<'a>> {
+pub trait LayoutInterner<'a>: Interner<'a, Layout<'a>> + Sized {
     fn alignment_bytes(&self, target_info: TargetInfo, layout: Interned<Layout<'a>>) -> u32 {
         self.get(layout).alignment_bytes(self, target_info)
     }
