@@ -3592,7 +3592,7 @@ fn specialize_proc_help<'a>(
                             let ordered_field_layouts = Vec::from_iter_in(
                                 combined
                                     .iter()
-                                    .map(|(_, layout)| *layout_cache.get_in(**layout)),
+                                    .map(|(_, layout)| layout_cache.get_in(**layout)),
                                 env.arena,
                             );
                             let ordered_field_layouts = ordered_field_layouts.into_bump_slice();
@@ -3618,7 +3618,7 @@ fn specialize_proc_help<'a>(
                                 specialized_body = Stmt::Let(
                                     symbol,
                                     expr,
-                                    *layout_cache.get_in(**layout),
+                                    layout_cache.get_in(**layout),
                                     env.arena.alloc(specialized_body),
                                 );
                             }
@@ -4634,7 +4634,7 @@ pub fn with_hole<'a>(
                 Ok(elem_layout) => {
                     let expr = Expr::EmptyArray;
                     // TODO don't alloc once elem_layout is interned
-                    let elem_layout = layout_cache.put_in(env.arena.alloc(elem_layout));
+                    let elem_layout = layout_cache.put_in(elem_layout);
                     Stmt::Let(
                         assigned,
                         expr,
@@ -4645,7 +4645,7 @@ pub fn with_hole<'a>(
                 Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                     let expr = Expr::EmptyArray;
                     // TODO don't alloc once elem_layout is interned
-                    let elem_layout = layout_cache.put_in(env.arena.alloc(Layout::VOID));
+                    let elem_layout = layout_cache.put_in(Layout::VOID);
                     Stmt::Let(
                         assigned,
                         expr,
@@ -4694,7 +4694,7 @@ pub fn with_hole<'a>(
                 elems: elements.into_bump_slice(),
             };
 
-            let elem_layout = layout_cache.put_in(env.arena.alloc(elem_layout));
+            let elem_layout = layout_cache.put_in(elem_layout);
 
             let stmt = Stmt::Let(
                 assigned,
@@ -5791,7 +5791,7 @@ where
             let symbols =
                 Vec::from_iter_in(combined.iter().map(|(a, _)| *a), env.arena).into_bump_slice();
             let field_layouts = Vec::from_iter_in(
-                combined.iter().map(|(_, b)| *layout_cache.get_in(**b)),
+                combined.iter().map(|(_, b)| layout_cache.get_in(**b)),
                 env.arena,
             )
             .into_bump_slice();

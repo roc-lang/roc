@@ -176,10 +176,6 @@ struct Ctx<'a, 'r> {
 }
 
 impl<'a, 'r> Ctx<'a, 'r> {
-    fn alloc<T>(&self, v: T) -> &'a T {
-        self.arena.alloc(v)
-    }
-
     fn problem(&mut self, problem_kind: ProblemKind<'a>) {
         self.problems.push(Problem {
             proc: self.arena.alloc(self.proc.clone()),
@@ -428,7 +424,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                         }
                     }
                 }
-                let elem_layout = self.interner.insert(self.alloc(*elem_layout));
+                let elem_layout = self.interner.insert(*elem_layout);
                 Some(Layout::Builtin(Builtin::List(elem_layout)))
             }
             Expr::EmptyArray => {
@@ -436,12 +432,12 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 None
             }
             &Expr::ExprBox { symbol } => self.with_sym_layout(symbol, |ctx, _def_line, layout| {
-                let inner = ctx.interner.insert(ctx.alloc(layout));
+                let inner = ctx.interner.insert(layout);
                 Some(Layout::Boxed(inner))
             }),
             &Expr::ExprUnbox { symbol } => {
                 self.with_sym_layout(symbol, |ctx, def_line, layout| match ctx.resolve(layout) {
-                    Layout::Boxed(inner) => Some(*ctx.interner.get(inner)),
+                    Layout::Boxed(inner) => Some(ctx.interner.get(inner)),
                     _ => {
                         ctx.problem(ProblemKind::UnboxNotABox { symbol, def_line });
                         None
@@ -675,8 +671,8 @@ fn resolve_recursive_layout<'a>(
             }
         },
         Layout::Boxed(inner) => {
-            let inner = go!(*interner.get(inner));
-            Layout::Boxed(interner.insert(arena.alloc(inner)))
+            let inner = go!(interner.get(inner));
+            Layout::Boxed(interner.insert(inner))
         }
         Layout::Struct {
             field_order_hash,
@@ -693,13 +689,9 @@ fn resolve_recursive_layout<'a>(
         }
         Layout::Builtin(builtin) => match builtin {
             Builtin::List(inner) => {
-                let inner = arena.alloc(resolve_recursive_layout(
-                    arena,
-                    interner,
-                    *interner.get(inner),
-                    when_recursive,
-                ));
-                let inner = interner.insert(arena.alloc(inner));
+                let inner =
+                    resolve_recursive_layout(arena, interner, interner.get(inner), when_recursive);
+                let inner = interner.insert(inner);
                 Layout::Builtin(Builtin::List(inner))
             }
             Builtin::Int(_)
@@ -714,8 +706,8 @@ fn resolve_recursive_layout<'a>(
         }) => {
             let set = set.iter().map(|(symbol, captures)| {
                 let captures = captures.iter().map(|lay_in| {
-                    let new_lay = go!(*interner.get(*lay_in));
-                    interner.insert(arena.alloc(new_lay))
+                    let new_lay = go!(interner.get(*lay_in));
+                    interner.insert(new_lay)
                 });
                 let captures = &*arena.alloc_slice_fill_iter(captures);
                 (*symbol, captures)

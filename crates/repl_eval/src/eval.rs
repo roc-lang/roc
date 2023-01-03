@@ -859,7 +859,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 env,
                 mem,
                 addr_of_inner,
-                inner_layout,
+                &inner_layout,
                 WhenRecursive::Unreachable,
                 inner_var,
             );
@@ -911,7 +911,7 @@ fn list_to_ast<'a, M: ReplAppMemory>(
 
     let arena = env.arena;
     let mut output = Vec::with_capacity_in(len, arena);
-    let elem_layout = *env.layout_cache.get_in(elem_layout);
+    let elem_layout = env.layout_cache.get_in(elem_layout);
     let elem_size = elem_layout.stack_size(&env.layout_cache.interner, env.target_info) as usize;
 
     for index in 0..len {

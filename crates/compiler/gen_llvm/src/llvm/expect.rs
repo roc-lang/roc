@@ -353,7 +353,7 @@ fn build_clone<'a, 'ctx, 'env>(
 
             let source = value.into_pointer_value();
             let inner_layout = layout_interner.get(inner_layout);
-            let value = load_roc_value(env, layout_interner, *inner_layout, source, "inner");
+            let value = load_roc_value(env, layout_interner, inner_layout, source, "inner");
 
             let inner_width = env.ptr_int().const_int(
                 inner_layout.stack_size(layout_interner, env.target_info) as u64,
@@ -376,7 +376,7 @@ fn build_clone<'a, 'ctx, 'env>(
                 ptr,
                 cursors,
                 value,
-                *inner_layout,
+                inner_layout,
                 when_recursive,
             )
         }
@@ -1063,7 +1063,7 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                 // We cloned the elements into the extra_offset address.
                 let elements_start_offset = cursors.extra_offset;
 
-                let element_type = basic_type_from_layout(env, layout_interner, elem);
+                let element_type = basic_type_from_layout(env, layout_interner, &elem);
                 let elements = bd.build_pointer_cast(
                     elements,
                     element_type.ptr_type(AddressSpace::Generic),
@@ -1107,7 +1107,7 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                         ptr,
                         cursors,
                         element,
-                        *elem,
+                        elem,
                         when_recursive,
                     );
 
@@ -1124,7 +1124,7 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                     env,
                     layout_interner,
                     parent,
-                    *elem,
+                    elem,
                     elements,
                     len,
                     "index",

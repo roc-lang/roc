@@ -27,7 +27,7 @@ macro_rules! cache_interned_layouts {
         fn fill_reserved_layouts<'a>(interner: &mut STLayoutInterner<'a>) {
             assert!(interner.is_empty());
             $(
-            interner.insert(&$layout);
+            interner.insert($layout);
             )*
         }
 
@@ -100,10 +100,10 @@ pub trait LayoutInterner<'a>: Sized {
     /// must live at least as long as the interner lives.
     // TODO: we should consider maintaining our own arena in the interner, to avoid redundant
     // allocations when values already have interned representations.
-    fn insert(&mut self, value: &'a Layout<'a>) -> InLayout<'a>;
+    fn insert(&mut self, value: Layout<'a>) -> InLayout<'a>;
 
     /// Retrieves a value from the interner.
-    fn get(&self, key: InLayout<'a>) -> &'a Layout<'a>;
+    fn get(&self, key: InLayout<'a>) -> Layout<'a>;
 
     fn alignment_bytes(&self, target_info: TargetInfo, layout: InLayout<'a>) -> u32 {
         self.get(layout).alignment_bytes(self, target_info)
@@ -158,8 +158,8 @@ pub struct GlobalLayoutInterner<'a>(Arc<GlobalLayoutInternerInner<'a>>);
 
 #[derive(Debug)]
 struct GlobalLayoutInternerInner<'a> {
-    map: Mutex<BumpMap<&'a Layout<'a>, InLayout<'a>>>,
-    vec: RwLock<Vec<&'a Layout<'a>>>,
+    map: Mutex<BumpMap<Layout<'a>, InLayout<'a>>>,
+    vec: RwLock<Vec<Layout<'a>>>,
 }
 
 /// A derivative of a [GlobalLayoutInterner] interner that provides caching desirable for
@@ -174,9 +174,9 @@ struct GlobalLayoutInternerInner<'a> {
 #[derive(Debug)]
 pub struct TLLayoutInterner<'a> {
     parent: GlobalLayoutInterner<'a>,
-    map: BumpMap<&'a Layout<'a>, InLayout<'a>>,
+    map: BumpMap<Layout<'a>, InLayout<'a>>,
     /// Cache of interned values from the parent for local access.
-    vec: RefCell<Vec<Option<&'a Layout<'a>>>>,
+    vec: RefCell<Vec<Option<Layout<'a>>>>,
 }
 
 /// A single-threaded interner, with no concurrency properties.
@@ -185,8 +185,8 @@ pub struct TLLayoutInterner<'a> {
 /// a [STLayoutInterner], via [GlobalLayoutInterner::unwrap].
 #[derive(Debug)]
 pub struct STLayoutInterner<'a> {
-    map: BumpMap<&'a Layout<'a>, InLayout<'a>>,
-    vec: Vec<&'a Layout<'a>>,
+    map: BumpMap<Layout<'a>, InLayout<'a>>,
+    vec: Vec<Layout<'a>>,
 }
 
 /// Generic hasher for a value, to be used by all interners.
@@ -229,7 +229,7 @@ impl<'a> GlobalLayoutInterner<'a> {
     /// Interns a value with a pre-computed hash.
     /// Prefer calling this when possible, especially from [TLLayoutInterner], to avoid
     /// re-computing hashes.
-    fn insert_hashed(&self, value: &'a Layout<'a>, hash: u64) -> InLayout<'a> {
+    fn insert_hashed(&self, value: Layout<'a>, hash: u64) -> InLayout<'a> {
         let mut map = self.0.map.lock();
         let (_, interned) = map
             .raw_entry_mut()
@@ -243,7 +243,7 @@ impl<'a> GlobalLayoutInterner<'a> {
         *interned
     }
 
-    fn get(&self, interned: InLayout<'a>) -> &'a Layout<'a> {
+    fn get(&self, interned: InLayout<'a>) -> Layout<'a> {
         let InLayout(index, _) = interned;
         self.0.vec.read()[index]
     }
@@ -255,7 +255,7 @@ impl<'a> GlobalLayoutInterner<'a> {
 
 impl<'a> TLLayoutInterner<'a> {
     /// Records an interned value in thread-specific storage, for faster access on lookups.
-    fn record(&self, key: &'a Layout<'a>, interned: InLayout<'a>) {
+    fn record(&self, key: Layout<'a>, interned: InLayout<'a>) {
         let mut vec = self.vec.borrow_mut();
         let len = vec.len().max(interned.0 + 1);
         vec.resize(len, None);
@@ -264,7 +264,7 @@ impl<'a> TLLayoutInterner<'a> {
 }
 
 impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
-    fn insert(&mut self, value: &'a Layout<'a>) -> InLayout<'a> {
+    fn insert(&mut self, value: Layout<'a>) -> InLayout<'a> {
         let global = &self.parent;
         let hash = hash(value);
         let (&mut value, &mut interned) = self
@@ -279,9 +279,9 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
         interned
     }
 
-    fn get(&self, key: InLayout<'a>) -> &'a Layout<'a> {
+    fn get(&self, key: InLayout<'a>) -> Layout<'a> {
         if let Some(Some(value)) = self.vec.borrow().get(key.0) {
-            return value;
+            return *value;
         }
         let value = self.parent.get(key);
         self.record(value, key);
@@ -318,12 +318,12 @@ impl<'a> STLayoutInterner<'a> {
 }
 
 impl<'a> LayoutInterner<'a> for STLayoutInterner<'a> {
-    fn insert(&mut self, value: &'a Layout<'a>) -> InLayout<'a> {
+    fn insert(&mut self, value: Layout<'a>) -> InLayout<'a> {
         let hash = hash(value);
         let (_, interned) = self
             .map
             .raw_entry_mut()
-            .from_key_hashed_nocheck(hash, value)
+            .from_key_hashed_nocheck(hash, &value)
             .or_insert_with(|| {
                 let interned = InLayout(self.vec.len(), Default::default());
                 self.vec.push(value);
@@ -332,7 +332,7 @@ impl<'a> LayoutInterner<'a> for STLayoutInterner<'a> {
         *interned
     }
 
-    fn get(&self, key: InLayout<'a>) -> &'a Layout<'a> {
+    fn get(&self, key: InLayout<'a>) -> Layout<'a> {
         let InLayout(index, _) = key;
         self.vec[index]
     }

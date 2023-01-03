@@ -312,11 +312,11 @@ impl<'a> LayoutCache<'a> {
         }
     }
 
-    pub fn get_in(&self, interned: InLayout<'a>) -> &Layout<'a> {
+    pub fn get_in(&self, interned: InLayout<'a>) -> Layout<'a> {
         self.interner.get(interned)
     }
 
-    pub fn put_in(&mut self, layout: &'a Layout<'a>) -> InLayout<'a> {
+    pub fn put_in(&mut self, layout: Layout<'a>) -> InLayout<'a> {
         self.interner.insert(layout)
     }
 
@@ -1393,7 +1393,7 @@ impl<'a> LambdaSet<'a> {
     where
         I: LayoutInterner<'a>,
     {
-        *interner.get(self.representation)
+        interner.get(self.representation)
     }
 
     /// Does the lambda set contain the given symbol?
@@ -1407,7 +1407,7 @@ impl<'a> LambdaSet<'a> {
     {
         if self.has_unwrapped_capture_repr() {
             let repr = interner.get(self.representation);
-            Some(*repr)
+            Some(repr)
         } else if self.has_enum_dispatch_repr() {
             None
         } else {
@@ -1416,7 +1416,7 @@ impl<'a> LambdaSet<'a> {
                 Layout::Struct {
                     field_layouts: &[], ..
                 } => None,
-                repr => Some(*repr),
+                repr => Some(repr),
             }
         }
     }
@@ -1516,11 +1516,11 @@ impl<'a> LambdaSet<'a> {
         I: LayoutInterner<'a>,
     {
         let left = interner.get(*left);
-        if left == right {
+        if &left == right {
             return true;
         }
 
-        let left = if left == &Layout::RecursivePointer {
+        let left = if left == Layout::RecursivePointer {
             let runtime_repr = self.runtime_representation(interner);
             debug_assert!(matches!(
                 runtime_repr,
@@ -1528,7 +1528,7 @@ impl<'a> LambdaSet<'a> {
             ));
             Layout::LambdaSet(*self)
         } else {
-            *left
+            left
         };
 
         let right = if right == &Layout::RecursivePointer {
@@ -1578,7 +1578,7 @@ impl<'a> LambdaSet<'a> {
                             tag_id: index as TagIdIntType,
                             alphabetic_order_fields: fields,
                             closure_name,
-                            union_layout: *union,
+                            union_layout: union,
                         }
                     }
                     UnionLayout::Recursive(_) => {
@@ -1595,7 +1595,7 @@ impl<'a> LambdaSet<'a> {
                             tag_id: index as TagIdIntType,
                             alphabetic_order_fields: fields,
                             closure_name,
-                            union_layout: *union,
+                            union_layout: union,
                         }
                     }
                     UnionLayout::NullableUnwrapped {
@@ -1615,7 +1615,7 @@ impl<'a> LambdaSet<'a> {
                             tag_id: index as TagIdIntType,
                             alphabetic_order_fields: fields,
                             closure_name,
-                            union_layout: *union,
+                            union_layout: union,
                         }
                     }
                     UnionLayout::NonNullableUnwrapped(_) => todo!("recursive closures"),
@@ -1665,16 +1665,16 @@ impl<'a> LambdaSet<'a> {
         let repr = interner.get(self.representation);
 
         if self.has_unwrapped_capture_repr() {
-            return ClosureCallOptions::UnwrappedCapture(*repr);
+            return ClosureCallOptions::UnwrappedCapture(repr);
         }
 
         match repr {
             Layout::Union(union_layout) => {
-                if repr == &Layout::VOID {
+                if repr == Layout::VOID {
                     debug_assert!(self.set.is_empty());
                     return ClosureCallOptions::Void;
                 }
-                ClosureCallOptions::Union(*union_layout)
+                ClosureCallOptions::Union(union_layout)
             }
             Layout::Struct {
                 field_layouts,
@@ -1683,7 +1683,7 @@ impl<'a> LambdaSet<'a> {
                 debug_assert_eq!(self.set.len(), 1);
                 ClosureCallOptions::Struct {
                     field_layouts,
-                    field_order_hash: *field_order_hash,
+                    field_order_hash,
                 }
             }
             layout => {
@@ -1806,7 +1806,7 @@ impl<'a> LambdaSet<'a> {
                         // representation, so here the criteria doesn't matter.
                         let mut criteria = CACHEABLE;
                         let arg = cached!(Layout::from_var(env, *var), criteria);
-                        let arg_in = env.cache.interner.insert(env.arena.alloc(arg));
+                        let arg_in = env.cache.interner.insert(arg);
                         arguments.push(arg_in);
                     }
 
@@ -1862,7 +1862,7 @@ impl<'a> LambdaSet<'a> {
                     set_with_variables,
                     opt_recursion_var.into_variable(),
                 );
-                let representation = env.cache.interner.insert(env.arena.alloc(representation));
+                let representation = env.cache.interner.insert(representation);
 
                 Cacheable(
                     Ok(LambdaSet {
@@ -1877,7 +1877,7 @@ impl<'a> LambdaSet<'a> {
                 // See also https://github.com/roc-lang/roc/issues/3163.
                 cacheable(Ok(LambdaSet {
                     set: &[],
-                    representation: env.cache.interner.insert(env.arena.alloc(Layout::UNIT)),
+                    representation: env.cache.interner.insert(Layout::UNIT),
                 }))
             }
         }
@@ -3119,7 +3119,7 @@ fn layout_from_flat_type<'a>(
 
                     let inner_var = args[0];
                     let inner_layout = cached!(Layout::from_var(env, inner_var), criteria);
-                    let inner_layout = env.cache.put_in(env.arena.alloc(inner_layout));
+                    let inner_layout = env.cache.put_in(inner_layout);
 
                     Cacheable(Ok(Layout::Boxed(inner_layout)), criteria)
                 }
@@ -4229,7 +4229,7 @@ pub(crate) fn list_layout_from_elem<'a>(
         cached!(Layout::from_var(env, element_var), criteria)
     };
 
-    let element_layout = env.cache.put_in(env.arena.alloc(element_layout));
+    let element_layout = env.cache.put_in(element_layout);
 
     Cacheable(Ok(Layout::Builtin(Builtin::List(element_layout))), criteria)
 }
@@ -4392,7 +4392,7 @@ mod test {
 
         let lambda_set = LambdaSet {
             set: &[(Symbol::LIST_MAP, &[])],
-            representation: interner.insert(&Layout::UNIT),
+            representation: interner.insert(Layout::UNIT),
         };
 
         let a = &[Layout::UNIT] as &[_];

@@ -592,7 +592,7 @@ fn eq_boxed<'a>(
             ident_ids,
             ctx,
             layout_interner,
-            *inner_layout,
+            inner_layout,
             root.arena.alloc([a, b]),
         )
         .unwrap();
@@ -600,13 +600,13 @@ fn eq_boxed<'a>(
     Stmt::Let(
         a,
         a_expr,
-        *inner_layout,
+        inner_layout,
         root.arena.alloc(
             //
             Stmt::Let(
                 b,
                 b_expr,
-                *inner_layout,
+                inner_layout,
                 root.arena.alloc(
                     //
                     Stmt::Let(
@@ -641,7 +641,7 @@ fn eq_list<'a>(
     let elem_layout = layout_interner.get(elem_layout);
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_union_layout = UnionLayout::NonNullableUnwrapped(root.arena.alloc([*elem_layout]));
+    let box_union_layout = UnionLayout::NonNullableUnwrapped(root.arena.alloc([elem_layout]));
     let box_layout = Layout::Union(box_union_layout);
 
     // Compare lengths
@@ -754,14 +754,14 @@ fn eq_list<'a>(
         tag_id: 0,
         index: 0,
     };
-    let elem1_stmt = |next| Stmt::Let(elem1, elem1_expr, *elem_layout, next);
-    let elem2_stmt = |next| Stmt::Let(elem2, elem2_expr, *elem_layout, next);
+    let elem1_stmt = |next| Stmt::Let(elem1, elem1_expr, elem_layout, next);
+    let elem2_stmt = |next| Stmt::Let(elem2, elem2_expr, elem_layout, next);
 
     // Compare the two current elements
     let eq_elems = root.create_symbol(ident_ids, "eq_elems");
     let eq_elems_args = root.arena.alloc([elem1, elem2]);
     let eq_elems_expr = root
-        .call_specialized_op(ident_ids, ctx, layout_interner, *elem_layout, eq_elems_args)
+        .call_specialized_op(ident_ids, ctx, layout_interner, elem_layout, eq_elems_args)
         .unwrap();
 
     let eq_elems_stmt = |next| Stmt::Let(eq_elems, eq_elems_expr, LAYOUT_BOOL, next);

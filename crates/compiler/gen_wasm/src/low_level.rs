@@ -415,7 +415,7 @@ impl<'a> LowLevelCall<'a> {
                     Layout::Struct {
                         field_layouts: &[Layout::Builtin(Builtin::List(list_elem)), value_layout],
                         ..
-                    } if value_layout == *backend.layout_interner.get(list_elem) => {
+                    } if value_layout == backend.layout_interner.get(list_elem) => {
                         let list_offset = 0;
                         let elem_offset = Layout::Builtin(Builtin::List(list_elem))
                             .stack_size(backend.layout_interner, TARGET_INFO);
@@ -424,7 +424,7 @@ impl<'a> LowLevelCall<'a> {
                     Layout::Struct {
                         field_layouts: &[value_layout, Layout::Builtin(Builtin::List(list_elem))],
                         ..
-                    } if value_layout == *backend.layout_interner.get(list_elem) => {
+                    } if value_layout == backend.layout_interner.get(list_elem) => {
                         let list_offset =
                             value_layout.stack_size(backend.layout_interner, TARGET_INFO);
                         let elem_offset = 0;
@@ -591,7 +591,7 @@ impl<'a> LowLevelCall<'a> {
                 let elem_layout = backend.layout_interner.get(elem_layout);
                 let elem_width = elem_layout.stack_size(backend.layout_interner, TARGET_INFO);
                 let (elem_local, elem_offset, _) =
-                    ensure_symbol_is_in_memory(backend, elem, *elem_layout, backend.env.arena);
+                    ensure_symbol_is_in_memory(backend, elem, elem_layout, backend.env.arena);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -630,7 +630,7 @@ impl<'a> LowLevelCall<'a> {
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
                 let (elem_local, elem_offset, _) =
-                    ensure_symbol_is_in_memory(backend, elem, *elem_layout, backend.env.arena);
+                    ensure_symbol_is_in_memory(backend, elem, elem_layout, backend.env.arena);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -677,7 +677,7 @@ impl<'a> LowLevelCall<'a> {
                 // This is the same as a Struct containing the element
                 let in_memory_layout = Layout::Struct {
                     field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
-                    field_layouts: backend.env.arena.alloc([*elem_layout]),
+                    field_layouts: backend.env.arena.alloc([elem_layout]),
                 };
                 let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
                 let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
@@ -723,7 +723,7 @@ impl<'a> LowLevelCall<'a> {
                 // This is the same as a Struct containing the element
                 let in_memory_layout = Layout::Struct {
                     field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
-                    field_layouts: backend.env.arena.alloc([*elem_layout]),
+                    field_layouts: backend.env.arena.alloc([elem_layout]),
                 };
                 let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
                 let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
@@ -2233,7 +2233,7 @@ pub fn call_higher_order_lowlevel<'a>(
 
         let boxed_closure_arg_layouts =
             argument_layouts.iter().take(n_non_closure_args).map(|lay| {
-                let lay_in = backend.layout_interner.insert(lay);
+                let lay_in = backend.layout_interner.insert(*lay);
                 Layout::Boxed(lay_in)
             });
 
@@ -2243,7 +2243,7 @@ pub fn call_higher_order_lowlevel<'a>(
         match helper_proc_source {
             ProcSource::HigherOrderMapper(_) => {
                 // Our convention for mappers is that they write to the heap via the last argument
-                let result_layout = backend.layout_interner.insert(result_layout);
+                let result_layout = backend.layout_interner.insert(*result_layout);
                 wrapper_arg_layouts.push(Layout::Boxed(result_layout));
                 ProcLayout {
                     arguments: wrapper_arg_layouts.into_bump_slice(),
@@ -2392,7 +2392,7 @@ fn list_map_n<'a>(
     let arg_elem_layouts = Vec::from_iter_in(
         arg_symbols.iter().map(|sym| {
             let lay = unwrap_list_elem_layout(backend.storage.symbol_layouts[sym]);
-            *backend.layout_interner.get(lay)
+            backend.layout_interner.get(lay)
         }),
         backend.env.arena,
     );

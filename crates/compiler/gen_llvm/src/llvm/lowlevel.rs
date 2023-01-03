@@ -2333,7 +2333,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     let element_layout = layout_interner.get(*element_layout);
                     let result_layout = layout_interner.get(*result_layout);
 
-                    let argument_layouts = &[*element_layout];
+                    let argument_layouts = &[element_layout];
 
                     let roc_function_call = roc_function_call(
                         env,
@@ -2344,7 +2344,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        *result_layout,
+                        result_layout,
                     );
 
                     list_map(
@@ -2352,8 +2352,8 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         layout_interner,
                         roc_function_call,
                         list,
-                        element_layout,
-                        result_layout,
+                        &element_layout,
+                        &result_layout,
                     )
                 }
                 _ => unreachable!("invalid list layout"),
@@ -2375,7 +2375,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     let element2_layout = layout_interner.get(*element2_layout);
                     let result_layout = layout_interner.get(*result_layout);
 
-                    let argument_layouts = &[*element1_layout, *element2_layout];
+                    let argument_layouts = &[element1_layout, element2_layout];
 
                     let roc_function_call = roc_function_call(
                         env,
@@ -2386,7 +2386,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        *result_layout,
+                        result_layout,
                     );
 
                     list_map2(
@@ -2396,9 +2396,9 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         roc_function_call,
                         list1,
                         list2,
-                        element1_layout,
-                        element2_layout,
-                        result_layout,
+                        &element1_layout,
+                        &element2_layout,
+                        &result_layout,
                     )
                 }
                 _ => unreachable!("invalid list layout"),
@@ -2423,7 +2423,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     let element3_layout = layout_interner.get(*element3_layout);
                     let result_layout = layout_interner.get(*result_layout);
 
-                    let argument_layouts = &[*element1_layout, *element2_layout, *element3_layout];
+                    let argument_layouts = &[element1_layout, element2_layout, element3_layout];
 
                     let roc_function_call = roc_function_call(
                         env,
@@ -2434,7 +2434,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        *result_layout,
+                        result_layout,
                     );
 
                     list_map3(
@@ -2445,10 +2445,10 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         list1,
                         list2,
                         list3,
-                        element1_layout,
-                        element2_layout,
-                        element3_layout,
-                        result_layout,
+                        &element1_layout,
+                        &element2_layout,
+                        &element3_layout,
+                        &result_layout,
                     )
                 }
                 _ => unreachable!("invalid list layout"),
@@ -2483,10 +2483,10 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                     let result_layout = layout_interner.get(*result_layout);
 
                     let argument_layouts = &[
-                        *element1_layout,
-                        *element2_layout,
-                        *element3_layout,
-                        *element4_layout,
+                        element1_layout,
+                        element2_layout,
+                        element3_layout,
+                        element4_layout,
                     ];
 
                     let roc_function_call = roc_function_call(
@@ -2498,7 +2498,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         closure_layout,
                         function_owns_closure_data,
                         argument_layouts,
-                        *result_layout,
+                        result_layout,
                     );
 
                     list_map4(
@@ -2510,11 +2510,11 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         list2,
                         list3,
                         list4,
-                        element1_layout,
-                        element2_layout,
-                        element3_layout,
-                        element4_layout,
-                        result_layout,
+                        &element1_layout,
+                        &element2_layout,
+                        &element3_layout,
+                        &element4_layout,
+                        &result_layout,
                     )
                 }
                 _ => unreachable!("invalid list layout"),
@@ -2532,14 +2532,14 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
 
                     let element_layout = layout_interner.get(*element_layout);
 
-                    let argument_layouts = &[*element_layout, *element_layout];
+                    let argument_layouts = &[element_layout, element_layout];
 
                     let compare_wrapper = build_compare_wrapper(
                         env,
                         layout_interner,
                         function,
                         closure_layout,
-                        element_layout,
+                        &element_layout,
                     )
                     .as_global_value()
                     .as_pointer_value();
@@ -2562,7 +2562,7 @@ pub(crate) fn run_higher_order_low_level<'a, 'ctx, 'env>(
                         roc_function_call,
                         compare_wrapper,
                         list,
-                        element_layout,
+                        &element_layout,
                     )
                 }
                 _ => unreachable!("invalid list layout"),

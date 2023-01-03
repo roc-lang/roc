@@ -506,7 +506,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
         let heap_return_ptr_id = LocalId(wrapper_arg_layouts.len() as u32 - 1);
         let inner_ret_layout = match wrapper_arg_layouts.last() {
             Some(Layout::Boxed(inner)) => {
-                WasmLayout::new(self.layout_interner, self.layout_interner.get(*inner))
+                WasmLayout::new(self.layout_interner, &self.layout_interner.get(*inner))
             }
             x => internal_error!("Higher-order wrapper: invalid return layout {:?}", x),
         };
@@ -548,7 +548,7 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             // Load the argument pointer. If it's a primitive value, dereference it too.
             n_inner_wasm_args += 1;
             self.code_builder.get_local(LocalId(i as u32));
-            self.dereference_boxed_value(inner_layout);
+            self.dereference_boxed_value(&inner_layout);
         }
 
         // If the inner function has closure data, it's the last arg of the inner fn
@@ -638,9 +638,9 @@ impl<'a, 'r> WasmBackend<'a, 'r> {
             x => internal_error!("Expected a Boxed layout, got {:?}", x),
         };
         self.code_builder.get_local(LocalId(1));
-        self.dereference_boxed_value(inner_layout);
+        self.dereference_boxed_value(&inner_layout);
         self.code_builder.get_local(LocalId(2));
-        self.dereference_boxed_value(inner_layout);
+        self.dereference_boxed_value(&inner_layout);
 
         // Call the wrapped inner function
         let inner_wasm_fn_index = self.fn_index_offset + inner_lookup_idx as u32;
