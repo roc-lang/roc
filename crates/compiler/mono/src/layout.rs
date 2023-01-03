@@ -1,4 +1,5 @@
 use crate::ir::Parens;
+use crate::layout::intern::InLayouts;
 use bitvec::vec::BitVec;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -1336,9 +1337,12 @@ impl<'a> LambdaName<'a> {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LambdaSet<'a> {
     /// collection of function names and their closure arguments
-    pub(crate) set: &'a [(Symbol, &'a [InLayout<'a>])],
+    // Double reference to cut from fat slice (16 bytes) to 8 bytes
+    pub(crate) set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
     /// how the closure will be represented at runtime
     pub(crate) representation: InLayout<'a>,
+    /// The interned [Layout] representation of the lambda set, as `Layout::LambdaSet(self)`.
+    pub(crate) full_layout: InLayout<'a>,
 }
 
 #[derive(Debug)]
@@ -1864,21 +1868,21 @@ impl<'a> LambdaSet<'a> {
                 );
                 let representation = env.cache.interner.insert(representation);
 
-                Cacheable(
-                    Ok(LambdaSet {
-                        set: set.into_bump_slice(),
-                        representation,
-                    }),
-                    criteria,
-                )
+                let lambda_set = env
+                    .cache
+                    .interner
+                    .insert_lambda_set(env.arena.alloc(set.into_bump_slice()), representation);
+
+                Cacheable(Ok(lambda_set), criteria)
             }
             ResolvedLambdaSet::Unbound => {
                 // The lambda set is unbound which means it must be unused. Just give it the empty lambda set.
                 // See also https://github.com/roc-lang/roc/issues/3163.
-                cacheable(Ok(LambdaSet {
-                    set: &[],
-                    representation: env.cache.interner.insert(Layout::UNIT),
-                }))
+                let lambda_set = env
+                    .cache
+                    .interner
+                    .insert_lambda_set(&(&[] as &[(Symbol, &[InLayout])]), InLayouts::UNIT);
+                cacheable(Ok(lambda_set))
             }
         }
     }
@@ -4384,6 +4388,8 @@ where
 
 #[cfg(test)]
 mod test {
+    use crate::layout::intern::InLayouts;
+
     use super::*;
 
     #[test]
@@ -4391,8 +4397,9 @@ mod test {
         let mut interner = STLayoutInterner::with_capacity(4);
 
         let lambda_set = LambdaSet {
-            set: &[(Symbol::LIST_MAP, &[])],
+            set: &(&[(Symbol::LIST_MAP, &[] as &[InLayout])] as &[(Symbol, &[InLayout])]),
             representation: interner.insert(Layout::UNIT),
+            full_layout: InLayouts::VOID,
         };
 
         let a = &[Layout::UNIT] as &[_];

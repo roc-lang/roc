@@ -703,6 +703,7 @@ fn resolve_recursive_layout<'a>(
         Layout::LambdaSet(LambdaSet {
             set,
             representation,
+            full_layout,
         }) => {
             let set = set.iter().map(|(symbol, captures)| {
                 let captures = captures.iter().map(|lay_in| {
@@ -714,8 +715,9 @@ fn resolve_recursive_layout<'a>(
             });
             let set = arena.alloc_slice_fill_iter(set);
             Layout::LambdaSet(LambdaSet {
-                set,
+                set: arena.alloc(&*set),
                 representation,
+                full_layout,
             })
         }
     }
