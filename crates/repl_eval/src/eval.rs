@@ -11,7 +11,7 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
-    self, union_sorted_tags_pub, Builtin, InLayout, Layout, LayoutCache, LayoutInterner,
+    self, union_sorted_tags_pub, Builtin, InLayout, Layout, LayoutCache, TLLayoutInterner,
     UnionLayout, UnionVariant, WrappedVariant,
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, Pattern, StrLiteral};
@@ -47,7 +47,7 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
     var: Variable,
     subs: &Subs,
     interns: &'a Interns,
-    layout_interner: LayoutInterner<'a>,
+    layout_interner: TLLayoutInterner<'a>,
     target_info: TargetInfo,
 ) -> Expr<'a> {
     let mut env = Env {

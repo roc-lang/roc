@@ -5,7 +5,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, FnvMap, MutMap};
 use roc_error_macros::{internal_error, todo_abilities};
-use roc_intern::{Interner, SingleThreadedInterner, ThreadLocalInterner};
+use roc_intern::Interner;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
@@ -21,6 +21,9 @@ use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use ven_pretty::{DocAllocator, DocBuilder};
+
+mod intern;
+pub use intern::{STLayoutInterner, TLLayoutInterner};
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
@@ -97,9 +100,6 @@ macro_rules! inc_stat {
     };
 }
 
-pub type LayoutInterner<'a> = ThreadLocalInterner<'a, Layout<'a>>;
-pub type STLayoutInterner<'a> = SingleThreadedInterner<'a, Layout<'a>>;
-
 /// Layout cache to avoid recomputing [Layout] from a [Variable] multiple times.
 #[derive(Debug)]
 pub struct LayoutCache<'a> {
@@ -107,7 +107,7 @@ pub struct LayoutCache<'a> {
     cache: std::vec::Vec<CacheLayer<LayoutResult<'a>>>,
     raw_function_cache: std::vec::Vec<CacheLayer<RawFunctionLayoutResult<'a>>>,
 
-    pub interner: LayoutInterner<'a>,
+    pub interner: TLLayoutInterner<'a>,
 
     /// Statistics on the usage of the layout cache.
     #[cfg(debug_assertions)]
@@ -117,7 +117,7 @@ pub struct LayoutCache<'a> {
 }
 
 impl<'a> LayoutCache<'a> {
-    pub fn new(interner: LayoutInterner<'a>, target_info: TargetInfo) -> Self {
+    pub fn new(interner: TLLayoutInterner<'a>, target_info: TargetInfo) -> Self {
         let mut cache = std::vec::Vec::with_capacity(4);
         cache.push(CacheLayer::default());
         let mut raw_cache = std::vec::Vec::with_capacity(4);
@@ -4391,7 +4391,7 @@ mod test {
 
     #[test]
     fn width_and_alignment_union_empty_struct() {
-        let mut interner = SingleThreadedInterner::with_capacity(4);
+        let mut interner = STLayoutInterner::with_capacity(4);
 
         let lambda_set = LambdaSet {
             set: &[(Symbol::LIST_MAP, &[])],
@@ -4411,7 +4411,7 @@ mod test {
 
     #[test]
     fn memcpy_size_result_u32_unit() {
-        let interner = SingleThreadedInterner::with_capacity(4);
+        let interner = STLayoutInterner::with_capacity(4);
 
         let ok_tag = &[Layout::Builtin(Builtin::Int(IntWidth::U32))];
         let err_tag = &[Layout::UNIT];
@@ -4428,7 +4428,7 @@ mod test {
 
     #[test]
     fn void_stack_size() {
-        let interner = SingleThreadedInterner::with_capacity(4);
+        let interner = STLayoutInterner::with_capacity(4);
         let target_info = TargetInfo::default_x86_64();
         assert_eq!(Layout::VOID.stack_size(&interner, target_info), 0);
     }
