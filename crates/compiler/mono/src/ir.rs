@@ -2,8 +2,8 @@
 
 use crate::layout::{
     self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, LambdaName, LambdaSet,
-    Layout, LayoutCache, LayoutProblem, Niche, RawFunctionLayout, STLayoutInterner, TagIdIntType,
-    UnionLayout, WrappedVariant,
+    Layout, LayoutCache, LayoutInterner, LayoutProblem, Niche, RawFunctionLayout, STLayoutInterner,
+    TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -22,7 +22,6 @@ use roc_debug_flags::{
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_exhaustive::{Ctor, CtorName, ListArity, RenderAs, TagId};
-use roc_intern::Interner;
 use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -339,7 +338,7 @@ impl<'a> Proc<'a> {
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let args_doc = self.args.iter().map(|(layout, symbol)| {
             let arg_doc = symbol_to_doc(alloc, *symbol, pretty);
@@ -382,7 +381,7 @@ impl<'a> Proc<'a> {
 
     pub fn to_pretty<I>(&self, interner: &I, width: usize, pretty: bool) -> String
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
@@ -2173,7 +2172,7 @@ impl<'a> Stmt<'a> {
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         use Stmt::*;
 
@@ -2329,7 +2328,7 @@ impl<'a> Stmt<'a> {
 
     pub fn to_pretty<I>(&self, interner: &I, width: usize, pretty: bool) -> String
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
