@@ -1,17 +1,15 @@
 //! Supports evaluating `expect` and printing contextual information when they fail.
 #[cfg(not(windows))]
 use {
-    roc_intern::GlobalInterner,
     roc_module::symbol::Interns,
     roc_mono::{
         ir::ProcLayout,
-        layout::{Layout, LayoutCache, Niche},
+        layout::{GlobalLayoutInterner, LayoutCache, Niche},
     },
     roc_parse::ast::Expr,
     roc_repl_eval::{eval::jit_to_ast, ReplAppMemory},
     roc_target::TargetInfo,
     roc_types::subs::{Subs, Variable},
-    std::sync::Arc,
 };
 
 #[cfg(not(windows))]
@@ -29,7 +27,7 @@ pub fn get_values<'a>(
     arena: &'a bumpalo::Bump,
     subs: &Subs,
     interns: &'a Interns,
-    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    layout_interner: &GlobalLayoutInterner<'a>,
     start: *const u8,
     start_offset: usize,
     number_of_lookups: usize,

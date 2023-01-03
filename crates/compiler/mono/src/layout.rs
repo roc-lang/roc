@@ -23,7 +23,7 @@ use std::hash::{Hash, Hasher};
 use ven_pretty::{DocAllocator, DocBuilder};
 
 mod intern;
-pub use intern::{STLayoutInterner, TLLayoutInterner};
+pub use intern::{GlobalLayoutInterner, LayoutInterner, STLayoutInterner, TLLayoutInterner};
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.

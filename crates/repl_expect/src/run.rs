@@ -18,10 +18,12 @@ use roc_gen_llvm::{
     run_roc::RocCallResult,
     run_roc_dylib,
 };
-use roc_intern::{GlobalInterner, SingleThreadedInterner};
 use roc_load::{Expectations, MonomorphizedModule};
 use roc_module::symbol::{Interns, ModuleId, Symbol};
-use roc_mono::{ir::OptLevel, layout::Layout};
+use roc_mono::{
+    ir::OptLevel,
+    layout::{GlobalLayoutInterner, STLayoutInterner},
+};
 use roc_region::all::Region;
 use roc_reporting::{error::expect::Renderer, report::RenderTarget};
 use roc_target::TargetInfo;
@@ -129,7 +131,7 @@ pub fn run_inline_expects<'a, W: std::io::Write>(
     render_target: RenderTarget,
     arena: &'a Bump,
     interns: &'a Interns,
-    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    layout_interner: &GlobalLayoutInterner<'a>,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     expects: ExpectFunctions<'_>,
@@ -156,7 +158,7 @@ pub fn run_toplevel_expects<'a, W: std::io::Write>(
     render_target: RenderTarget,
     arena: &'a Bump,
     interns: &'a Interns,
-    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    layout_interner: &GlobalLayoutInterner<'a>,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     expects: ExpectFunctions<'_>,
@@ -183,7 +185,7 @@ pub(crate) fn run_expects_with_memory<'a, W: std::io::Write>(
     render_target: RenderTarget,
     arena: &'a Bump,
     interns: &'a Interns,
-    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    layout_interner: &GlobalLayoutInterner<'a>,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     expects: ExpectFunctions<'_>,
@@ -241,7 +243,7 @@ fn run_expect_pure<'a, W: std::io::Write>(
     render_target: RenderTarget,
     arena: &'a Bump,
     interns: &'a Interns,
-    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    layout_interner: &GlobalLayoutInterner<'a>,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     shared_memory: &mut ExpectMemory,
@@ -299,7 +301,7 @@ fn run_expect_fx<'a, W: std::io::Write>(
     render_target: RenderTarget,
     arena: &'a Bump,
     interns: &'a Interns,
-    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    layout_interner: &GlobalLayoutInterner<'a>,
     lib: &libloading::Library,
     expectations: &mut VecMap<ModuleId, Expectations>,
     parent_memory: &mut ExpectMemory,
@@ -399,7 +401,7 @@ pub fn render_expects_in_memory<'a>(
     arena: &'a Bump,
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
-    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    layout_interner: &GlobalLayoutInterner<'a>,
     memory: &ExpectMemory,
 ) -> std::io::Result<usize> {
     let shared_ptr = memory.ptr;
@@ -438,7 +440,7 @@ pub fn render_dbgs_in_memory<'a>(
     arena: &'a Bump,
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
-    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    layout_interner: &GlobalLayoutInterner<'a>,
     memory: &ExpectMemory,
 ) -> std::io::Result<usize> {
     let shared_ptr = memory.ptr;
@@ -499,7 +501,7 @@ fn render_dbg_failure<'a>(
     arena: &'a Bump,
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
-    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    layout_interner: &GlobalLayoutInterner<'a>,
     start: *const u8,
     offset: usize,
 ) -> std::io::Result<usize> {
@@ -547,7 +549,7 @@ fn render_expect_failure<'a>(
     expect: Option<ToplevelExpect>,
     expectations: &mut VecMap<ModuleId, Expectations>,
     interns: &'a Interns,
-    layout_interner: &Arc<GlobalInterner<'a, Layout<'a>>>,
+    layout_interner: &GlobalLayoutInterner<'a>,
     start: *const u8,
     offset: usize,
 ) -> std::io::Result<usize> {
@@ -706,7 +708,7 @@ pub fn expect_mono_module_to_dylib<'a>(
     (
         libloading::Library,
         ExpectFunctions<'a>,
-        SingleThreadedInterner<'a, Layout<'a>>,
+        STLayoutInterner<'a>,
     ),
     libloading::Error,
 > {

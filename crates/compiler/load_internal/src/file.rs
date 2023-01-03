@@ -24,7 +24,6 @@ use roc_debug_flags::{
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
-use roc_intern::{GlobalInterner, SingleThreadedInterner};
 use roc_late_solve::{AbilitiesView, WorldAbilities};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
@@ -35,7 +34,9 @@ use roc_mono::ir::{
     CapturedSymbols, ExternalSpecializations, PartialProc, Proc, ProcLayout, Procs, ProcsBase,
     UpdateModeIds,
 };
-use roc_mono::layout::{LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner};
+use roc_mono::layout::{
+    GlobalLayoutInterner, LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner,
+};
 use roc_packaging::cache::{self, RocCacheDir};
 #[cfg(not(target_family = "wasm"))]
 use roc_packaging::https::PackageMetadata;
@@ -749,7 +750,7 @@ pub struct MonomorphizedModule<'a> {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub subs: Subs,
-    pub layout_interner: SingleThreadedInterner<'a, Layout<'a>>,
+    pub layout_interner: STLayoutInterner<'a>,
     pub output_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
@@ -766,7 +767,7 @@ pub struct MonomorphizedModule<'a> {
 /// Values used to render expect output
 pub struct ExpectMetadata<'a> {
     pub interns: Interns,
-    pub layout_interner: SingleThreadedInterner<'a, Layout<'a>>,
+    pub layout_interner: STLayoutInterner<'a>,
     pub expectations: VecMap<ModuleId, Expectations>,
 }
 
@@ -1013,7 +1014,7 @@ struct State<'a> {
     // cached types (used for builtin modules, could include packages in the future too)
     cached_types: CachedTypeState,
 
-    layout_interner: Arc<GlobalInterner<'a, Layout<'a>>>,
+    layout_interner: GlobalLayoutInterner<'a>,
 }
 
 type CachedTypeState = Arc<Mutex<MutMap<ModuleId, TypeState>>>;
@@ -1071,7 +1072,7 @@ impl<'a> State<'a> {
             exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
-            layout_interner: GlobalInterner::with_capacity(128),
+            layout_interner: GlobalLayoutInterner::with_capacity(128),
         }
     }
 }
@@ -3071,7 +3072,7 @@ fn update<'a>(
                     }
 
                     let layout_interner = {
-                        let mut taken = GlobalInterner::with_capacity(0);
+                        let mut taken = GlobalLayoutInterner::with_capacity(0);
                         std::mem::swap(&mut state.layout_interner, &mut taken);
                         taken
                     };
