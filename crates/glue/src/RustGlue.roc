@@ -162,8 +162,107 @@ generateEnumTagsDebug = \name ->
     \accum, tagName ->
         Str.concat accum "\(indent)\(indent)\(indent)Self::\(tagName) => f.write_str(\"\(name)::\(tagName)\"),\n"
 
-generateTagUnion = \buf, _types, _id, _name, _tags, _discriminantSize, _discriminantOffset, _recursiveness, _nullTagIndex ->
-    Str.concat buf "// TODO: TagUnion\n\n"
+generateTagUnion = \buf, types, id, name, tags, discriminantSize, _discriminantOffset, recursiveness, _nullTagIndex ->
+    escapedName = escapeKW name
+    discriminantName = "discriminant_\(escapedName)"
+    tagNames = List.map tags \{ name: n } -> n
+    accessors =
+        when recursiveness is
+            Recursive ->
+                {
+                    self: "(&*self.union_pointer())",
+                    selfMut: "(&mut *self.union_pointer())",
+                    other: "(&*other.union_pointer())",
+                    unionName: "union_\(escapedName)",
+                }
+
+            NonRecursive ->
+                {
+                    self: "self",
+                    selfMut: "self",
+                    other: "other",
+                    unionName: escapedName,
+                }
+
+    buf
+    |> \b -> if discriminantSize > 0 then
+            generateDiscriminant b types discriminantName tagNames discriminantSize
+        else
+            b
+    |> \b ->
+        # No #[derive(...)] for unions; we have to generate each impl ourselves!
+        when recursiveness is
+            Recursive ->
+                Str.concat
+                    b
+                    """
+                    #[repr(transparent)]
+                    pub struct \(escapedName) {
+                        pointer: *mut \(accessors.unionName),
+                    }
+
+                    #[repr(C)]\nunion \(accessors.unionName) {
+                    """
+
+            NonRecursive ->
+                Str.concat b "#[repr(C)]\npub union \(accessors.unionName) {\n"
+    |> \b -> List.walk tags b (generateUnionField types)
+    |> \b ->
+        if List.len tags > 1 then
+            # When there's a discriminant (so, multiple tags) and there is
+            # no alignment padding after the largest variant,
+            # the compiler will make extra room for the discriminant.
+            # We need that to be reflected in the overall size of the enum,
+            # so add an extra variant with the appropriate size.
+            #
+            # (Do this even if theoretically shouldn't be necessary, since
+            # there's no runtime cost and it more explicitly syncs the
+            # union's size with what we think it should be.)
+            size = getSizeRoundedToAlignment types id
+            sizeStr = Num.toStr size
+
+            Str.concat b "\(indent)_sizer: [u8; \(sizeStr)],\n"
+        else
+            b
+    |> Str.concat "}\n\n"
+    |> Str.concat "// TODO: TagUnion impls\n\n"
+
+generateDiscriminant = \buf, types, name, tags, size ->
+    enumType =
+        TagUnion
+            (
+                Enumeration {
+                    name,
+                    tags,
+                    size,
+                }
+            )
+
+    buf
+    |> generateEnumeration types enumType name tags size
+
+generateUnionField = \types ->
+    \accum, { name: fieldName, payload } ->
+        when payload is
+            Some id ->
+                typeStr = typeName types id
+                escapedFieldName = escapeKW fieldName
+
+                type = getType types id
+                fullTypeStr =
+                    if cannotDeriveCopy types type then
+                        # types with pointers need ManuallyDrop
+                        # because rust unions don't (and can't)
+                        # know how to drop them automatically!
+                        "core::mem::ManuallyDrop<\(typeStr)>"
+                    else
+                        typeStr
+
+                Str.concat accum "\(indent)\(escapedFieldName): \(fullTypeStr),\n"
+
+            None ->
+                # If there's no payload, we don't need a discriminant for it.
+                accum
 
 generateNullableUnwrapped = \buf, _types, _id, _name, _nullTag, _nonNullTag, _nonNullPayload, _whichTagIsNull ->
     Str.concat buf "// TODO: TagUnion NullableUnwrapped\n\n"
@@ -273,7 +372,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
                 \(indent)    \(retExpr)
                 \(indent)}
 
-                 
+                
                 """,
             fieldTypes,
             fieldAccesses,
@@ -570,6 +669,32 @@ getType = \types, id ->
     when List.get types.types id is
         Ok type -> type
         Err _ -> crash "unreachable"
+
+getSizeRoundedToAlignment = \types, id ->
+    alignment = getAlignment types id
+
+    getSizeIgnoringAlignment types id
+    |> roundUpToAlignment alignment
+
+getSizeIgnoringAlignment = \types, id ->
+    when List.get types.sizes id is
+        Ok size -> size
+        Err _ -> crash "unreachable"
+
+getAlignment = \types, id ->
+    when List.get types.aligns id is
+        Ok align -> align
+        Err _ -> crash "unreachable"
+
+roundUpToAlignment = \width, alignment ->
+    when alignment is
+        0 -> width
+        1 -> width
+        _ ->
+            if width % alignment > 0 then
+                width + alignment - (width % alignment)
+            else
+                width
 
 walkWithIndex = \list, originalState, f ->
     stateWithId =
