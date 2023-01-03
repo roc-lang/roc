@@ -162,12 +162,13 @@ generateEnumTagsDebug = \name ->
     \accum, tagName ->
         Str.concat accum "\(indent)\(indent)\(indent)Self::\(tagName) => f.write_str(\"\(name)::\(tagName)\"),\n"
 
-generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _discriminantOffset, _nullTagIndex ->
+generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, discriminantOffset, _nullTagIndex ->
     escapedName = escapeKW name
     discriminantName = "discriminant_\(escapedName)"
+    discriminantOffsetStr = Num.toStr discriminantOffset
     tagNames = List.map tags \{ name: n } -> n
     # self = "self"
-    # selfMut = "self"
+    selfMut = "self"
     # other = "other"
     unionName = escapedName
 
@@ -176,8 +177,55 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _d
     |> Str.concat "#[repr(C)]\npub union \(unionName) {\n"
     |> \b -> List.walk tags b (generateUnionField types)
     |> generateTagUnionSizer types id tags
-    |> Str.concat "}\n\n"
-    |> Str.concat "// TODO: NonRecursive TagUnion impls\n\n"
+    |> Str.concat
+        """
+        }
+
+        impl \(escapedName) {
+            \(discriminantDocComment)
+            pub fn discriminant(&self) -> \(discriminantName) {
+                unsafe {
+                    let bytes = core::mem::transmute::<&Self, &[u8; core::mem::size_of::<Self>()]>(self);
+
+                    core::mem::transmute::<u8, \(discriminantName)>(*bytes.as_ptr().add(\(discriminantOffsetStr)))
+                }
+            }
+
+            /// Internal helper
+            fn set_discriminant(&mut self, discriminant: \(discriminantName)) {
+                let discriminant_ptr: *mut \(discriminantName) = (self as *mut \(escapedName)).cast();
+
+                unsafe {
+                    *(discriminant_ptr.add(\(discriminantOffsetStr))) = discriminant;
+                }
+            }
+        }
+
+        
+        """
+    |> Str.concat "// TODO: NonRecursive TagUnion constructor impls\n\n"
+    |> \b ->
+        type = getType types id
+        if cannotDeriveCopy types type then
+            # A custom drop impl is only needed when we can't derive copy.
+            b
+            |> Str.concat
+                """
+                impl Drop for \(escapedName) {
+                    fn drop(&mut self) {
+                        // Drop the payloads
+                
+                """
+            |> generateTagUnionDropPayload types selfMut tags discriminantName discriminantSize 2
+            |> Str.concat
+                """
+                    }
+                }
+
+                
+                """
+        else
+            b
 
 generateRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _discriminantOffset, _nullTagIndex ->
     escapedName = escapeKW name
@@ -204,6 +252,50 @@ generateRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _disc
     |> generateTagUnionSizer types id tags
     |> Str.concat "}\n\n"
     |> Str.concat "// TODO: Recursive TagUnion impls\n\n"
+
+generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, discriminantSize, indents ->
+    if discriminantSize == 0 then
+        when List.first tags is
+            Ok { name } ->
+                # There's only one tag, so there's no discriminant and no need to match;
+                # just drop the pointer.
+                buf
+                |> writeIndents indents
+                |> Str.concat "unsafe { core::mem::ManuallyDrop::drop(&mut core::ptr::read(self.pointer).\(name)); }"
+
+            Err ListWasEmpty ->
+                crash "unreachable"
+    else
+        buf
+        |> writeTagImpls tags discriminantName indents \name, payload ->
+            when payload is
+                Some id if cannotDeriveCopy types (getType types id) ->
+                    "unsafe {{ core::mem::ManuallyDrop::drop(&mut \(selfMut).\(name)) }},"
+
+                _ ->
+                    # If it had no payload, or if the payload had no pointers,
+                    # there's nothing to clean up, so do `=> {}` for the branch.
+                    "{}"
+
+writeIndents = \buf, indents ->
+    if indents <= 0 then
+        buf
+    else
+        buf
+        |> Str.concat indent
+        |> writeIndents (indents - 1)
+
+writeTagImpls = \buf, tags, discriminantName, indents, f ->
+    buf
+    |> writeIndents indents
+    |> Str.concat "match self.discriminant() {\n"
+    |> \b -> List.walk tags b \accum, { name, payload } ->
+            branchStr = f name payload
+            accum
+            |> writeIndents (indents + 1)
+            |> Str.concat "\(discriminantName)::\(name) => \(branchStr)\n"
+    |> writeIndents indents
+    |> Str.concat "}\n"
 
 generateTagUnionSizer = \buf, types, id, tags ->
     if List.len tags > 1 then
@@ -746,6 +838,7 @@ fileHeader =
     """
 
 indent = "    "
+discriminantDocComment = "/// Returns which variant this tag union holds. Note that this never includes a payload!"
 
 reservedKeywords = Set.fromList [
     "try",
