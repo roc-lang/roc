@@ -1,12 +1,13 @@
 use bumpalo::collections::vec::Vec;
-use roc_intern::Interner;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, Symbol};
 
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, Param, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, InLayout, Layout, STLayoutInterner, TagIdIntType, UnionLayout};
+use crate::layout::{
+    Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+};
 
 use super::{let_lowlevel, CodeGenHelp, Context, LAYOUT_BOOL};
 

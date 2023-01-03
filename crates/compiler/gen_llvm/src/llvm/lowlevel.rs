@@ -9,11 +9,10 @@ use inkwell::{
 use morphic_lib::{FuncSpec, UpdateMode};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
-use roc_intern::Interner;
 use roc_module::{low_level::LowLevel, symbol::Symbol};
 use roc_mono::{
     ir::HigherOrderLowLevel,
-    layout::{Builtin, LambdaSet, Layout, LayoutIds, STLayoutInterner},
+    layout::{Builtin, LambdaSet, Layout, LayoutIds, LayoutInterner, STLayoutInterner},
 };
 use roc_target::PtrWidth;
 

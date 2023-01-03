@@ -2,12 +2,11 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_error_macros::internal_error;
-use roc_intern::Interner;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 use roc_mono::code_gen_help::HelperOp;
 use roc_mono::ir::{HigherOrderLowLevel, PassedFunction, ProcLayout};
-use roc_mono::layout::{Builtin, FieldOrderHash, InLayout, Layout, UnionLayout};
+use roc_mono::layout::{Builtin, FieldOrderHash, InLayout, Layout, LayoutInterner, UnionLayout};
 use roc_mono::low_level::HigherOrder;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};

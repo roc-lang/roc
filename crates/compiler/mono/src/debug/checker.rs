@@ -2,7 +2,6 @@
 
 use bumpalo::Bump;
 use roc_collections::{MutMap, VecMap, VecSet};
-use roc_intern::Interner;
 use roc_module::symbol::Symbol;
 
 use crate::{
@@ -10,7 +9,9 @@ use crate::{
         Call, CallSpecId, CallType, Expr, HigherOrderLowLevel, JoinPointId, ListLiteralElement,
         ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
-    layout::{Builtin, LambdaSet, Layout, STLayoutInterner, TagIdIntType, UnionLayout},
+    layout::{
+        Builtin, LambdaSet, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+    },
 };
 
 pub enum UseKind {

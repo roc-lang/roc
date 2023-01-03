@@ -10,9 +10,8 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, Str
 use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::UpdateMode;
 use roc_builtins::bitcode;
-use roc_intern::Interner;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, InLayout, Layout, LayoutIds, STLayoutInterner};
+use roc_mono::layout::{Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner};
 
 use super::bitcode::{call_list_bitcode_fn, BitcodeReturns};
 use super::build::{

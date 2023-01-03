@@ -2,7 +2,6 @@
 
 use bumpalo::collections::vec::Vec;
 use roc_builtins::bitcode::IntWidth;
-use roc_intern::Interner;
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::{IdentIds, Symbol};
 use roc_target::PtrWidth;

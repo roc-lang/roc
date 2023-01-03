@@ -12,9 +12,10 @@ use inkwell::values::{
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_builtins::bitcode;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_intern::Interner;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, InLayout, Layout, LayoutIds, STLayoutInterner, UnionLayout};
+use roc_mono::layout::{
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, UnionLayout,
+};
 
 use super::build::{load_roc_value, use_roc_value, BuilderExt};
 use super::convert::argument_type_from_union_layout;

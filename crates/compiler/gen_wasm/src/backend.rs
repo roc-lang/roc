@@ -4,7 +4,6 @@ use bumpalo::collections::{String, Vec};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
-use roc_intern::Interner;
 use roc_module::low_level::{LowLevel, LowLevelWrapperType};
 use roc_module::symbol::{Interns, Symbol};
 use roc_mono::code_gen_help::{CodeGenHelp, HelperOp, REFCOUNT_MAX};
@@ -12,7 +11,9 @@ use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, Expr, JoinPointId, ListLiteralElement, Literal, ModifyRc,
     Param, Proc, ProcLayout, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, LayoutIds, STLayoutInterner, TagIdIntType, UnionLayout};
+use roc_mono::layout::{
+    Builtin, Layout, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+};
 use roc_std::RocDec;
 
 use roc_wasm_module::linking::{DataSymbol, WasmObjectSymbol};

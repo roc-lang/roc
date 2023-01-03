@@ -5,7 +5,6 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, FnvMap, MutMap};
 use roc_error_macros::{internal_error, todo_abilities};
-use roc_intern::Interner;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
@@ -23,7 +22,9 @@ use std::hash::{Hash, Hasher};
 use ven_pretty::{DocAllocator, DocBuilder};
 
 mod intern;
-pub use intern::{GlobalLayoutInterner, LayoutInterner, STLayoutInterner, TLLayoutInterner};
+pub use intern::{
+    GlobalLayoutInterner, InLayout, LayoutInterner, STLayoutInterner, TLLayoutInterner,
+};
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
@@ -660,10 +661,6 @@ impl FieldOrderHash {
         Self(hasher.finish())
     }
 }
-
-/// An interned layout.
-// One day I would like to take over `LayoutId` as the name here, but that is currently used elsewhere.
-pub type InLayout<'a> = roc_intern::Interned<Layout<'a>>;
 
 /// Types for code gen must be monomorphic. No type variables allowed!
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

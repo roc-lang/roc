@@ -1,6 +1,5 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
-use roc_intern::Interner;
 use roc_types::types::AliasKind;
 use std::cmp::{max_by_key, min_by_key};
 
@@ -11,8 +10,8 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
-    self, union_sorted_tags_pub, Builtin, InLayout, Layout, LayoutCache, TLLayoutInterner,
-    UnionLayout, UnionVariant, WrappedVariant,
+    self, union_sorted_tags_pub, Builtin, InLayout, Layout, LayoutCache, LayoutInterner,
+    TLLayoutInterner, UnionLayout, UnionVariant, WrappedVariant,
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, Pattern, StrLiteral};
 use roc_region::all::{Loc, Region};

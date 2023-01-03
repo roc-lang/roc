@@ -1,6 +1,5 @@
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use roc_intern::Interner;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 use roc_target::TargetInfo;
@@ -9,7 +8,9 @@ use crate::ir::{
     Call, CallSpecId, CallType, Expr, HostExposedLayouts, JoinPointId, ModifyRc, Proc, ProcLayout,
     SelfRecursive, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, LambdaName, Layout, Niche, STLayoutInterner, UnionLayout};
+use crate::layout::{
+    Builtin, LambdaName, Layout, LayoutInterner, Niche, STLayoutInterner, UnionLayout,
+};
 
 mod equality;
 mod refcount;

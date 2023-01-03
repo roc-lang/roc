@@ -15,10 +15,11 @@ use inkwell::values::{
     BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
 };
 use inkwell::{AddressSpace, IntPredicate};
-use roc_intern::Interner;
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, InLayout, Layout, LayoutIds, STLayoutInterner, UnionLayout};
+use roc_mono::layout::{
+    Builtin, InLayout, Layout, LayoutIds, LayoutInterner, STLayoutInterner, UnionLayout,
+};
 
 use super::build::{cast_if_necessary_for_opaque_recursive_pointers, load_roc_value, FunctionSpec};
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};

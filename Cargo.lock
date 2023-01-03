@@ -3273,7 +3273,6 @@ dependencies = [
  "morphic_lib",
  "roc_collections",
  "roc_debug_flags",
- "roc_intern",
  "roc_module",
  "roc_mono",
 ]
@@ -3404,7 +3403,6 @@ dependencies = [
  "roc_fmt",
  "roc_gen_llvm",
  "roc_glue",
- "roc_intern",
  "roc_linker",
  "roc_load",
  "roc_module",
@@ -3621,7 +3619,6 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_error_macros",
- "roc_intern",
  "roc_module",
  "roc_mono",
  "roc_parse",
@@ -3647,7 +3644,6 @@ dependencies = [
  "roc_collections",
  "roc_debug_flags",
  "roc_error_macros",
- "roc_intern",
  "roc_module",
  "roc_mono",
  "roc_region",
@@ -3665,7 +3661,6 @@ dependencies = [
  "roc_builtins",
  "roc_collections",
  "roc_error_macros",
- "roc_intern",
  "roc_module",
  "roc_mono",
  "roc_std",
@@ -3689,7 +3684,6 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_error_macros",
- "roc_intern",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -3717,14 +3711,6 @@ dependencies = [
 [[package]]
 name = "roc_ident"
 version = "0.0.1"
-
-[[package]]
-name = "roc_intern"
-version = "0.0.1"
-dependencies = [
- "parking_lot 0.12.1",
- "roc_collections",
-]
 
 [[package]]
 name = "roc_late_solve"
@@ -3799,7 +3785,6 @@ dependencies = [
  "roc_derive",
  "roc_derive_key",
  "roc_error_macros",
- "roc_intern",
  "roc_late_solve",
  "roc_module",
  "roc_mono",
@@ -3839,6 +3824,7 @@ dependencies = [
  "bitvec 1.0.1",
  "bumpalo",
  "hashbrown 0.12.3",
+ "parking_lot 0.12.1",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -3847,7 +3833,6 @@ dependencies = [
  "roc_derive_key",
  "roc_error_macros",
  "roc_exhaustive",
- "roc_intern",
  "roc_late_solve",
  "roc_module",
  "roc_problem",
@@ -3928,7 +3913,6 @@ dependencies = [
  "roc_builtins",
  "roc_collections",
  "roc_gen_llvm",
- "roc_intern",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -3954,7 +3938,6 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_fmt",
- "roc_intern",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -3984,7 +3967,6 @@ dependencies = [
  "roc_collections",
  "roc_error_macros",
  "roc_gen_llvm",
- "roc_intern",
  "roc_load",
  "roc_module",
  "roc_mono",
