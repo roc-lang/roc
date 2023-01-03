@@ -54,7 +54,7 @@ cache_interned_layouts! {
     12, I128, Layout::Builtin(Builtin::Int(IntWidth::I128))
     13, F32,  Layout::Builtin(Builtin::Float(FloatWidth::F32))
     14, F64,  Layout::Builtin(Builtin::Float(FloatWidth::F64))
-    15, DEC,  Layout::Builtin(Builtin::Float(FloatWidth::Dec))
+    15, DEC,  Layout::Builtin(Builtin::Decimal)
 
     ; 16
 }
