@@ -39,18 +39,18 @@ convertTypesToFile = \types ->
 
                 TagUnion (NonRecursive { name, tags, discriminantSize, discriminantOffset }) ->
                     if !(List.isEmpty tags) then
-                        generateTagUnion buf types id name tags discriminantSize discriminantOffset NonRecursive None
+                        generateNonRecursiveTagUnion buf types id name tags discriminantSize discriminantOffset None
                     else
                         buf
 
                 TagUnion (Recursive { name, tags, discriminantSize, discriminantOffset }) ->
                     if !(List.isEmpty tags) then
-                        generateTagUnion buf types id name tags discriminantSize discriminantOffset Recursive None
+                        generateRecursiveTagUnion buf types id name tags discriminantSize discriminantOffset None
                     else
                         buf
 
                 TagUnion (NullableWrapped { name, indexOfNullTag, tags, discriminantSize, discriminantOffset }) ->
-                    generateTagUnion buf types id name tags discriminantSize discriminantOffset Recursive (Some indexOfNullTag)
+                    generateRecursiveTagUnion buf types id name tags discriminantSize discriminantOffset (Some indexOfNullTag)
 
                 TagUnion (NullableUnwrapped { name, nullTag, nonNullTag, nonNullPayload, whichTagIsNull }) ->
                     generateNullableUnwrapped buf types id name nullTag nonNullTag nonNullPayload whichTagIsNull
@@ -59,7 +59,7 @@ convertTypesToFile = \types ->
                     generateSingleTagStruct buf types name tagName payloadFields
 
                 TagUnion (NonNullableUnwrapped { name, tagName, payload }) ->
-                    generateTagUnion buf types id name [{ name: tagName, payload: Some payload }] 0 0 Recursive None
+                    generateRecursiveTagUnion buf types id name [{ name: tagName, payload: Some payload }] 0 0 None
 
                 Function _ ->
                     # TODO: actually generate glue functions.
@@ -162,84 +162,83 @@ generateEnumTagsDebug = \name ->
     \accum, tagName ->
         Str.concat accum "\(indent)\(indent)\(indent)Self::\(tagName) => f.write_str(\"\(name)::\(tagName)\"),\n"
 
-generateTagUnion = \buf, types, id, name, tags, discriminantSize, _discriminantOffset, recursiveness, _nullTagIndex ->
+generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _discriminantOffset, _nullTagIndex ->
     escapedName = escapeKW name
     discriminantName = "discriminant_\(escapedName)"
     tagNames = List.map tags \{ name: n } -> n
-    accessors =
-        when recursiveness is
-            Recursive ->
-                {
-                    self: "(&*self.union_pointer())",
-                    selfMut: "(&mut *self.union_pointer())",
-                    other: "(&*other.union_pointer())",
-                    unionName: "union_\(escapedName)",
-                }
-
-            NonRecursive ->
-                {
-                    self: "self",
-                    selfMut: "self",
-                    other: "other",
-                    unionName: escapedName,
-                }
+    # self = "self"
+    # selfMut = "self"
+    # other = "other"
+    unionName = escapedName
 
     buf
-    |> \b -> if discriminantSize > 0 then
-            generateDiscriminant b types discriminantName tagNames discriminantSize
-        else
-            b
-    |> \b ->
-        # No #[derive(...)] for unions; we have to generate each impl ourselves!
-        when recursiveness is
-            Recursive ->
-                Str.concat
-                    b
-                    """
-                    #[repr(transparent)]
-                    pub struct \(escapedName) {
-                        pointer: *mut \(accessors.unionName),
-                    }
-
-                    #[repr(C)]\nunion \(accessors.unionName) {
-                    """
-
-            NonRecursive ->
-                Str.concat b "#[repr(C)]\npub union \(accessors.unionName) {\n"
+    |> generateDiscriminant types discriminantName tagNames discriminantSize
+    |> Str.concat "#[repr(C)]\npub union \(unionName) {\n"
     |> \b -> List.walk tags b (generateUnionField types)
-    |> \b ->
-        if List.len tags > 1 then
-            # When there's a discriminant (so, multiple tags) and there is
-            # no alignment padding after the largest variant,
-            # the compiler will make extra room for the discriminant.
-            # We need that to be reflected in the overall size of the enum,
-            # so add an extra variant with the appropriate size.
-            #
-            # (Do this even if theoretically shouldn't be necessary, since
-            # there's no runtime cost and it more explicitly syncs the
-            # union's size with what we think it should be.)
-            size = getSizeRoundedToAlignment types id
-            sizeStr = Num.toStr size
-
-            Str.concat b "\(indent)_sizer: [u8; \(sizeStr)],\n"
-        else
-            b
+    |> generateTagUnionSizer types id tags
     |> Str.concat "}\n\n"
-    |> Str.concat "// TODO: TagUnion impls\n\n"
+    |> Str.concat "// TODO: NonRecursive TagUnion impls\n\n"
+
+generateRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, _discriminantOffset, _nullTagIndex ->
+    escapedName = escapeKW name
+    discriminantName = "discriminant_\(escapedName)"
+    tagNames = List.map tags \{ name: n } -> n
+    # self = "(&*self.union_pointer())"
+    # selfMut = "(&mut *self.union_pointer())"
+    # other = "(&*other.union_pointer())"
+    unionName = "union_\(escapedName)"
+
+    buf
+    |> generateDiscriminant types discriminantName tagNames discriminantSize
+    |> Str.concat
+        """
+        #[repr(transparent)]
+        pub struct \(escapedName) {
+            pointer: *mut \(unionName),
+        }
+
+        #[repr(C)]
+        union \(unionName) {
+        """
+    |> \b -> List.walk tags b (generateUnionField types)
+    |> generateTagUnionSizer types id tags
+    |> Str.concat "}\n\n"
+    |> Str.concat "// TODO: Recursive TagUnion impls\n\n"
+
+generateTagUnionSizer = \buf, types, id, tags ->
+    if List.len tags > 1 then
+        # When there's a discriminant (so, multiple tags) and there is
+        # no alignment padding after the largest variant,
+        # the compiler will make extra room for the discriminant.
+        # We need that to be reflected in the overall size of the enum,
+        # so add an extra variant with the appropriate size.
+        #
+        # (Do this even if theoretically shouldn't be necessary, since
+        # there's no runtime cost and it more explicitly syncs the
+        # union's size with what we think it should be.)
+        size = getSizeRoundedToAlignment types id
+        sizeStr = Num.toStr size
+
+        Str.concat buf "\(indent)_sizer: [u8; \(sizeStr)],\n"
+    else
+        buf
 
 generateDiscriminant = \buf, types, name, tags, size ->
-    enumType =
-        TagUnion
-            (
-                Enumeration {
-                    name,
-                    tags,
-                    size,
-                }
-            )
+    if size > 0 then
+        enumType =
+            TagUnion
+                (
+                    Enumeration {
+                        name,
+                        tags,
+                        size,
+                    }
+                )
 
-    buf
-    |> generateEnumeration types enumType name tags size
+        buf
+        |> generateEnumeration types enumType name tags size
+    else
+        buf
 
 generateUnionField = \types ->
     \accum, { name: fieldName, payload } ->
