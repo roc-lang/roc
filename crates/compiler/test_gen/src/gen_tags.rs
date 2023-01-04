@@ -22,7 +22,7 @@ fn width_and_alignment_u8_u8() {
     let target_info = roc_target::TargetInfo::default_x86_64();
     let interner = STLayoutInterner::with_capacity(4, target_info);
 
-    let t = &[Layout::u8()] as &[_];
+    let t = &[Layout::U8] as &[_];
     let tt = [t, t];
 
     let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
