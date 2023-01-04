@@ -220,7 +220,11 @@ impl<'a> ParamMap<'a> {
     fn init_borrow_params(arena: &'a Bump, ps: &'a [Param<'a>]) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|p| Param {
-                borrow: p.layout.is_refcounted(),
+                ownership: if p.layout.is_refcounted() {
+                    Ownership::Borrowed
+                } else {
+                    Ownership::Owned
+                },
                 layout: p.layout,
                 symbol: p.symbol,
             }),
@@ -232,7 +236,11 @@ impl<'a> ParamMap<'a> {
     fn init_borrow_args(arena: &'a Bump, ps: &'a [(Layout<'a>, Symbol)]) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
-                borrow: should_borrow_layout(layout),
+                ownership: if should_borrow_layout(layout) {
+                    Ownership::Borrowed
+                } else {
+                    Ownership::Owned
+                },
                 layout: *layout,
                 symbol: *symbol,
             }),
@@ -247,7 +255,7 @@ impl<'a> ParamMap<'a> {
     ) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
-                borrow: false,
+                ownership: Ownership::Owned,
                 layout: *layout,
                 symbol: *symbol,
             }),

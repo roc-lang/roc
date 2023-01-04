@@ -1,7 +1,7 @@
 use crate::borrow::{ParamMap, BORROWED, OWNED};
 use crate::ir::{
-    CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt,
-    UpdateModeIds,
+    CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Ownership, Param, Proc, ProcLayout,
+    Stmt, UpdateModeIds,
 };
 use crate::layout::{Layout, STLayoutInterner};
 use bumpalo::collections::Vec;
@@ -296,13 +296,16 @@ where
 {
     ys.iter()
         .enumerate()
-        .any(|(i, y)| x == *y && !consume_param_pred(i))
+        .any(|(i, y)| x == *y && consume_param_pred(i))
 }
 
 fn is_borrow_param(x: Symbol, ys: &[Symbol], ps: &[Param]) -> bool {
     // default to owned arguments
     let is_owned = |i: usize| match ps.get(i) {
-        Some(param) => !param.borrow,
+        Some(param) => match param.ownership {
+            Ownership::Owned => true,
+            Ownership::Borrowed => false,
+        },
         None => unreachable!("or?"),
     };
     is_borrow_param_help(x, ys, is_owned)
@@ -473,7 +476,10 @@ impl<'a, 'i> Context<'a, 'i> {
     ) -> &'a Stmt<'a> {
         // default to owned arguments
         let pred = |i: usize| match ps.get(i) {
-            Some(param) => !param.borrow,
+            Some(param) => match param.ownership {
+                Ownership::Owned => true,
+                Ownership::Borrowed => false,
+            },
             None => unreachable!("or?"),
         };
         self.add_inc_before_help(xs, pred, b, live_vars_after)
@@ -1519,7 +1525,7 @@ fn visit_proc<'a, 'i>(
         None => Vec::from_iter_in(
             proc.args.iter().cloned().map(|(layout, symbol)| Param {
                 symbol,
-                borrow: false,
+                ownership: Ownership::Owned,
                 layout,
             }),
             arena,

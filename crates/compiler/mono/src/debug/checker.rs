@@ -346,7 +346,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     for Param {
                         symbol,
                         layout,
-                        borrow: _,
+                        ownership: _,
                     } in parameters
                     {
                         ctx.insert(*symbol, *layout);
@@ -368,7 +368,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     for (arg, param) in symbols.iter().zip(parameters.iter()) {
                         let Param {
                             symbol: _,
-                            borrow: _,
+                            ownership: _,
                             layout,
                         } = param;
                         self.check_sym_layout(*arg, *layout, UseKind::JumpArg);

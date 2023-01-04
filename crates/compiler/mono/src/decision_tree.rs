@@ -1905,7 +1905,7 @@ fn decide_to_branching<'a>(
             let param = Param {
                 symbol: test_symbol,
                 layout: Layout::Builtin(Builtin::Bool),
-                borrow: false,
+                ownership: Ownership::Owned,
             };
 
             let join = Stmt::Join {

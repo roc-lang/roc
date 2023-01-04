@@ -943,7 +943,7 @@ fn refcount_list_elems<'a>(
 
     let param_addr = Param {
         symbol: addr,
-        borrow: false,
+        ownership: Ownership::Owned,
         layout: layout_isize,
     };
 
@@ -1601,7 +1601,7 @@ fn refcount_union_tailrec<'a>(
 
         let jp_param = Param {
             symbol: next_ptr,
-            borrow: true,
+            ownership: Ownership::Borrowed,
             layout,
         };
 
@@ -1621,7 +1621,7 @@ fn refcount_union_tailrec<'a>(
     let loop_init = Stmt::Jump(tailrec_loop, root.arena.alloc([initial_structure]));
     let loop_param = Param {
         symbol: current,
-        borrow: true,
+        ownership: Ownership::Borrowed,
         layout: Layout::Union(union_layout),
     };
 

@@ -1012,11 +1012,11 @@ impl<
         param_storage.reserve(params.len());
         for Param {
             symbol,
-            borrow,
+            ownership,
             layout,
         } in params
         {
-            if *borrow {
+            if *ownership == Ownership::Borrowed {
                 // These probably need to be passed by pointer/reference?
                 // Otherwise, we probably need to copy back to the param at the end of the joinpoint.
                 todo!("joinpoints with borrowed parameters");
