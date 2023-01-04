@@ -4,15 +4,15 @@ use crate::ast::{
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
-    space0_before_optional_after, space0_e,
+    space0_e, spaces, spaces_around, spaces_before,
 };
 use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
 use crate::parser::{
     self, backtrackable, increment_min_indent, line_min_indent, optional, reset_min_indent,
-    sep_by1, sep_by1_e, set_min_indent, specialize, specialize_ref, then, trailing_sep_by0, word1,
-    word1_indent, word2, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern,
-    ERecord, EString, ETuple, EType, EWhen, Either, ParseResult, Parser,
+    sep_by1, sep_by1_e, set_min_indent, specialize, specialize_ref, then, word1, word1_indent,
+    word2, EClosure, EExpect, EExpr, EIf, EInParens, EList, ENumber, EPattern, ERecord, EString,
+    EType, EWhen, Either, ParseResult, Parser,
 };
 use crate::pattern::{closure_param, loc_has_parser};
 use crate::state::State;
@@ -2468,61 +2468,45 @@ fn list_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EList<'a>> {
     .trace("list_literal")
 }
 
-pub fn tuple_value_field<'a>() -> impl Parser<'a, Loc<Expr<'a>>, ETuple<'a>> {
-    space0_before_e(
-        specialize_ref(ETuple::Expr, loc_expr(false)),
-        ETuple::IndentEnd,
-    )
-}
-
 pub fn record_value_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
     use AssignedField::*;
 
-    move |arena, state: State<'a>, min_indent| {
-        // You must have a field name, e.g. "email"
-        let (progress, loc_label, state) =
-            specialize(|_, pos| ERecord::Field(pos), loc!(lowercase_ident()))
-                .parse(arena, state, min_indent)?;
-        debug_assert_eq!(progress, MadeProgress);
-
-        let (_, spaces, state) = space0_e(ERecord::IndentColon).parse(arena, state, min_indent)?;
-
-        // Having a value is optional; both `{ email }` and `{ email: blah }` work.
-        // (This is true in both literals and types.)
-        let (_, opt_loc_val, state) = optional(and!(
-            either!(
-                word1(b':', ERecord::Colon),
-                word1(b'?', ERecord::QuestionMark)
-            ),
-            space0_before_e(
-                specialize_ref(ERecord::Expr, loc_expr(false)),
-                ERecord::IndentEnd,
+    map_with_arena!(
+        and!(
+            specialize(|_, pos| ERecord::Field(pos), loc!(lowercase_ident())),
+            and!(
+                spaces(),
+                optional(and!(
+                    either!(
+                        word1(b':', ERecord::Colon),
+                        word1(b'?', ERecord::QuestionMark)
+                    ),
+                    spaces_before(specialize_ref(ERecord::Expr, loc_expr(false)))
+                ))
             )
-        ))
-        .parse(arena, state, min_indent)?;
+        ),
+        |arena: &'a bumpalo::Bump, (loc_label, (spaces, opt_loc_val))| {
+            match opt_loc_val {
+                Some((Either::First(_), loc_val)) => {
+                    RequiredValue(loc_label, spaces, arena.alloc(loc_val))
+                }
 
-        let answer = match opt_loc_val {
-            Some((Either::First(_), loc_val)) => {
-                RequiredValue(loc_label, spaces, arena.alloc(loc_val))
-            }
+                Some((Either::Second(_), loc_val)) => {
+                    OptionalValue(loc_label, spaces, arena.alloc(loc_val))
+                }
 
-            Some((Either::Second(_), loc_val)) => {
-                OptionalValue(loc_label, spaces, arena.alloc(loc_val))
-            }
-
-            // If no value was provided, record it as a Var.
-            // Canonicalize will know what to do with a Var later.
-            None => {
-                if !spaces.is_empty() {
-                    SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
-                } else {
-                    LabelOnly(loc_label)
+                // If no value was provided, record it as a Var.
+                // Canonicalize will know what to do with a Var later.
+                None => {
+                    if !spaces.is_empty() {
+                        SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
+                    } else {
+                        LabelOnly(loc_label)
+                    }
                 }
             }
-        };
-
-        Ok((MadeProgress, answer, state))
-    }
+        }
+    )
 }
 
 fn record_updateable_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> {
@@ -2532,84 +2516,52 @@ fn record_updateable_identifier<'a>() -> impl Parser<'a, Expr<'a>, ERecord<'a>> 
     )
 }
 
-fn record_help<'a>() -> impl Parser<
-    'a,
-    (
-        Option<Loc<Expr<'a>>>,
-        Loc<(
-            Vec<'a, Loc<AssignedField<'a, Expr<'a>>>>,
-            &'a [CommentOrNewline<'a>],
-        )>,
-    ),
-    ERecord<'a>,
-> {
-    skip_first!(
+struct RecordHelp<'a> {
+    update: Option<Loc<Expr<'a>>>,
+    fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+}
+
+fn record_help<'a>() -> impl Parser<'a, RecordHelp<'a>, ERecord<'a>> {
+    between!(
         word1(b'{', ERecord::Open),
-        and!(
+        reset_min_indent(record!(RecordHelp {
             // You can optionally have an identifier followed by an '&' to
             // make this a record update, e.g. { Foo.user & username: "blah" }.
-            optional(backtrackable(skip_second!(
-                space0_around_ee(
+            update: optional(backtrackable(skip_second!(
+                spaces_around(
                     // We wrap the ident in an Expr here,
                     // so that we have a Spaceable value to work with,
                     // and then in canonicalization verify that it's an Expr::Var
                     // (and not e.g. an `Expr::Access`) and extract its string.
                     loc!(record_updateable_identifier()),
-                    ERecord::IndentEnd,
-                    ERecord::IndentAmpersand,
                 ),
                 word1(b'&', ERecord::Ampersand)
             ))),
-            loc!(skip_first!(
-                // We specifically allow space characters inside here, so that
-                // `{  }` can be successfully parsed as an empty record, and then
-                // changed by the formatter back into `{}`.
-                zero_or_more!(word1(b' ', ERecord::End)),
-                skip_second!(
-                    and!(
-                        trailing_sep_by0(
-                            word1(b',', ERecord::End),
-                            space0_before_optional_after(
-                                loc!(record_value_field()),
-                                ERecord::IndentEnd,
-                                ERecord::IndentEnd
-                            ),
-                        ),
-                        // Allow outdented closing braces
-                        reset_min_indent(space0_e(ERecord::IndentEnd))
-                    ),
-                    word1(b'}', ERecord::End)
-                )
-            ))
-        )
+            fields: collection_inner!(
+                loc!(record_value_field()),
+                word1(b',', ERecord::End),
+                AssignedField::SpaceBefore
+            ),
+        })),
+        word1(b'}', ERecord::End)
     )
 }
 
 fn record_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EExpr<'a>> {
     then(
         and!(
-            loc!(specialize(EExpr::Record, record_help())),
+            specialize(EExpr::Record, record_help()),
             // there can be field access, e.g. `{ x : 4 }.x`
             record_field_access_chain()
         ),
-        move |arena, state, _, (loc_record, accessors)| {
-            let (opt_update, loc_assigned_fields_with_comments) = loc_record.value;
-
+        move |arena, state, _, (record, accessors)| {
             // This is a record literal, not a destructure.
-            let value = match opt_update {
+            let value = match record.update {
                 Some(update) => Expr::RecordUpdate {
                     update: &*arena.alloc(update),
-                    fields: Collection::with_items_and_comments(
-                        arena,
-                        loc_assigned_fields_with_comments.value.0.into_bump_slice(),
-                        arena.alloc(loc_assigned_fields_with_comments.value.1),
-                    ),
+                    fields: record.fields,
                 },
-                None => Expr::Record(Collection::with_items_and_comments(
-                    arena,
-                    loc_assigned_fields_with_comments.value.0.into_bump_slice(),
-                    loc_assigned_fields_with_comments.value.1,
-                )),
+                None => Expr::Record(record.fields),
             };
 
             let value = apply_expr_access_chain(arena, value, accessors);
