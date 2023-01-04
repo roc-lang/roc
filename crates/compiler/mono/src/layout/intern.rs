@@ -67,6 +67,43 @@ cache_interned_layouts! {
     ; 18
 }
 
+macro_rules! impl_to_from_int_width {
+    ($($int_width:path => $layout:path,)*) => {
+        impl<'a> Layout<'a> {
+            pub const fn int_width(w: IntWidth) -> InLayout<'static> {
+                match w {
+                    $($int_width => $layout,)*
+                }
+            }
+        }
+
+        impl<'a> InLayout<'a> {
+            /// # Panics
+            ///
+            /// Panics if the layout is not an integer
+            pub fn to_int_width(&self) -> IntWidth {
+                match self {
+                    $(&$layout => $int_width,)*
+                    _ => roc_error_macros::internal_error!("not an integer layout!")
+                }
+            }
+        }
+    };
+}
+
+impl_to_from_int_width! {
+    IntWidth::U8 => Layout::U8,
+    IntWidth::U16 => Layout::U16,
+    IntWidth::U32 => Layout::U32,
+    IntWidth::U64 => Layout::U64,
+    IntWidth::U128 => Layout::U128,
+    IntWidth::I8 => Layout::I8,
+    IntWidth::I16 => Layout::I16,
+    IntWidth::I32 => Layout::I32,
+    IntWidth::I64 => Layout::I64,
+    IntWidth::I128 => Layout::I128,
+}
+
 impl<'a> Layout<'a> {
     pub(super) const VOID_NAKED: Self = Layout::Union(UnionLayout::NonRecursive(&[]));
     pub(super) const UNIT_NAKED: Self = Layout::Struct {
@@ -74,20 +111,6 @@ impl<'a> Layout<'a> {
         field_order_hash: FieldOrderHash::ZERO_FIELD_HASH,
     };
 
-    pub const fn int_width(w: IntWidth) -> InLayout<'static> {
-        match w {
-            IntWidth::U8 => Self::U8,
-            IntWidth::U16 => Self::U16,
-            IntWidth::U32 => Self::U32,
-            IntWidth::U64 => Self::U64,
-            IntWidth::U128 => Self::U128,
-            IntWidth::I8 => Self::I8,
-            IntWidth::I16 => Self::I16,
-            IntWidth::I32 => Self::I32,
-            IntWidth::I64 => Self::I64,
-            IntWidth::I128 => Self::I128,
-        }
-    }
     pub const fn float_width(w: FloatWidth) -> InLayout<'static> {
         match w {
             FloatWidth::F32 => Self::F32,
@@ -148,12 +171,21 @@ pub trait LayoutInterner<'a>: Sized {
         self.get(layout).is_refcounted()
     }
 
+    fn is_passed_by_reference(&self, layout: InLayout<'a>) -> bool {
+        self.get(layout)
+            .is_passed_by_reference(self, self.target_info())
+    }
+
     fn runtime_representation(&self, layout: InLayout<'a>) -> Layout<'a> {
         self.get(layout).runtime_representation(self)
     }
 
     fn runtime_representation_in(&self, layout: InLayout<'a>) -> InLayout<'a> {
         Layout::runtime_representation_in(layout, self)
+    }
+
+    fn safe_to_memcpy(&self, layout: InLayout<'a>) -> bool {
+        self.get(layout).safe_to_memcpy(self)
     }
 
     fn to_doc<'b, D, A>(
