@@ -59,8 +59,8 @@ pub fn pretty_print_ir_symbols() -> bool {
 
 roc_error_macros::assert_sizeof_wasm!(Literal, 24);
 roc_error_macros::assert_sizeof_wasm!(Expr, 48);
-roc_error_macros::assert_sizeof_wasm!(Stmt, 120);
-roc_error_macros::assert_sizeof_wasm!(ProcLayout, 40);
+roc_error_macros::assert_sizeof_wasm!(Stmt, 72);
+roc_error_macros::assert_sizeof_wasm!(ProcLayout, 20);
 roc_error_macros::assert_sizeof_wasm!(Call, 44);
 roc_error_macros::assert_sizeof_wasm!(CallType, 36);
 
