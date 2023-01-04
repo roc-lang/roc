@@ -36,6 +36,9 @@ jobs:
       - name: zig version
         run: zig version
 
+      - name: install rust nightly 1.64
+        run: rustup install nightly-2022-08-06
+
       - name: set up llvm 13
         run: |
           curl.exe -L -O https://github.com/roc-lang/llvm-package-windows/releases/download/v13.0.1/LLVM-13.0.1-win64.7z
@@ -46,7 +49,7 @@ jobs:
 
       # Why are these tests not build with previous command? => fingerprint error. Use `CARGO_LOG=cargo::core::compiler::fingerprint=info` to investigate
       - name: Build specific tests without running. Twice for zig lld-link error.
-        run: cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker || cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker
+        run: cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker -p roc_cli || cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker -p roc_cli
 
       - name: Actually run the tests.
-        run: cargo test --locked --release -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker
+        run: cargo test --locked --release -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_editor -p roc_linker -p roc_cli

@@ -2810,22 +2810,6 @@ fn cleanup_because_exception() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn list_range() {
-    assert_evals_to!(
-        "List.range 0 -1",
-        RocList::<i64>::from_slice(&[]),
-        RocList<i64>
-    );
-    assert_evals_to!("List.range 0 0", RocList::from_slice(&[0]), RocList<i64>);
-    assert_evals_to!(
-        "List.range 0 5",
-        RocList::from_slice(&[0, 1, 2, 3, 4]),
-        RocList<i64>
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_sort_with() {
     assert_evals_to!(
         "List.sortWith [] Num.compare",
@@ -3563,6 +3547,27 @@ fn list_walk_from_until_sum() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn concat_unique_to_nonunique_overlapping_issue_4697() {
+    assert_evals_to!(
+        r#"
+        # originalList is shared, but others is unique.
+        # When we concat originalList with others, others should be re-used.
+
+        originalList = [1u8]
+        others = [2u8, 3u8, 4u8]
+        new = List.concat originalList others
+        {a: originalList, b: new}
+        "#,
+        (
+            RocList::from_slice(&[1u8]),
+            RocList::from_slice(&[1u8, 2, 3, 4]),
+        ),
+        (RocList<u8>, RocList<u8>)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn list_walk_from_even_prefix_sum() {
     assert_evals_to!(
         r#"
@@ -3707,6 +3712,53 @@ mod pattern_match {
                 210, 210, 210, //
             ]),
             RocList<u16>
+        )
+    }
+
+    #[test]
+    fn order_list_size_tests_issue_4732() {
+        assert_evals_to!(
+            r#"
+            helper : List U8 -> U8
+            helper = \l -> when l is
+                [1, ..]          -> 1
+                [2, 1, ..]       -> 2
+                [3, 2, 1, ..]    -> 3
+                [4, 3, 2, 1, ..] -> 4
+                [4, 3, 2, ..]    -> 5
+                [4, 3, ..]       -> 6
+                [4, ..]          -> 7
+                _                -> 8
+
+            [
+                helper [1], helper [1, 2],
+
+                helper [2, 1], helper [2, 1, 3],
+
+                helper [3, 2, 1], helper [3, 2, 1, 4],
+
+                helper [4, 3, 2, 1], helper [4, 3, 2, 1, 5],
+
+                helper [4, 3, 2], helper [4, 3, 2, 5],
+
+                helper [4, 3], helper [4, 3, 5],
+
+                helper [4], helper [4, 5],
+
+                helper [], helper [7],
+            ]
+            "#,
+            RocList::from_slice(&[
+                1, 1, //
+                2, 2, //
+                3, 3, //
+                4, 4, //
+                5, 5, //
+                6, 6, //
+                7, 7, //
+                8, 8, //
+            ]),
+            RocList<u8>
         )
     }
 }

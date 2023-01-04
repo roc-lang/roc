@@ -12,7 +12,7 @@ use roc_error_macros::internal_error;
 use roc_module::symbol;
 use roc_module::symbol::Interns;
 use roc_mono::ir::{Proc, ProcLayout};
-use roc_mono::layout::LayoutIds;
+use roc_mono::layout::{LayoutIds, STLayoutInterner};
 use roc_target::TargetInfo;
 use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Triple};
 
@@ -22,9 +22,10 @@ use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Tripl
 
 /// build_module is the high level builder/delegator.
 /// It takes the request to build a module and output the object file for the module.
-pub fn build_module<'a>(
-    env: &'a Env,
-    interns: &'a mut Interns,
+pub fn build_module<'a, 'r>(
+    env: &'r Env<'a>,
+    interns: &'r mut Interns,
+    layout_interner: &'r mut STLayoutInterner<'a>,
     target: &Triple,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Object<'a> {
@@ -39,7 +40,7 @@ pub fn build_module<'a>(
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            >(env, TargetInfo::default_x86_64(), interns);
+            >(env, TargetInfo::default_x86_64(), interns, layout_interner);
             build_object(
                 procedures,
                 backend,
@@ -56,7 +57,7 @@ pub fn build_module<'a>(
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            >(env, TargetInfo::default_x86_64(), interns);
+            >(env, TargetInfo::default_x86_64(), interns, layout_interner);
             build_object(
                 procedures,
                 backend,
@@ -72,12 +73,13 @@ pub fn build_module<'a>(
             binary_format: TargetBF::Elf,
             ..
         } if cfg!(feature = "target-aarch64") => {
-            let backend = new_backend_64bit::<
-                aarch64::AArch64GeneralReg,
-                aarch64::AArch64FloatReg,
-                aarch64::AArch64Assembler,
-                aarch64::AArch64Call,
-            >(env, TargetInfo::default_aarch64(), interns);
+            let backend =
+                new_backend_64bit::<
+                    aarch64::AArch64GeneralReg,
+                    aarch64::AArch64FloatReg,
+                    aarch64::AArch64Assembler,
+                    aarch64::AArch64Call,
+                >(env, TargetInfo::default_aarch64(), interns, layout_interner);
             build_object(
                 procedures,
                 backend,
@@ -89,12 +91,13 @@ pub fn build_module<'a>(
             binary_format: TargetBF::Macho,
             ..
         } if cfg!(feature = "target-aarch64") => {
-            let backend = new_backend_64bit::<
-                aarch64::AArch64GeneralReg,
-                aarch64::AArch64FloatReg,
-                aarch64::AArch64Assembler,
-                aarch64::AArch64Call,
-            >(env, TargetInfo::default_aarch64(), interns);
+            let backend =
+                new_backend_64bit::<
+                    aarch64::AArch64GeneralReg,
+                    aarch64::AArch64FloatReg,
+                    aarch64::AArch64Assembler,
+                    aarch64::AArch64Call,
+                >(env, TargetInfo::default_aarch64(), interns, layout_interner);
             build_object(
                 procedures,
                 backend,
@@ -243,13 +246,11 @@ fn build_object<'a, B: Backend<'a>>(
 
     // Generate IR for specialized helper procs (refcounting & equality)
     let helper_procs = {
-        let module_id = backend.env().module_id;
-
-        let (env, interns, helper_proc_gen) = backend.env_interns_helpers_mut();
+        let (module_id, _interner, interns, helper_proc_gen) = backend.module_interns_helpers_mut();
 
         let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
         let helper_procs = helper_proc_gen.take_procs();
-        env.module_id.register_debug_idents(ident_ids);
+        module_id.register_debug_idents(ident_ids);
 
         helper_procs
     };

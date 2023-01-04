@@ -1,0 +1,1 @@
+f : [Good, bad]

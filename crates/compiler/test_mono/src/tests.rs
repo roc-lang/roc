@@ -13,16 +13,18 @@ extern crate indoc;
 #[allow(dead_code)]
 const EXPANDED_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+use bumpalo::Bump;
+use roc_collections::all::MutMap;
 use roc_load::ExecutionMode;
 use roc_load::LoadConfig;
-use test_mono_macros::*;
-
-use roc_collections::all::MutMap;
+use roc_load::LoadMonomorphizedError;
 use roc_load::Threading;
+use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::Proc;
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::STLayoutInterner;
+use test_mono_macros::*;
 
 const TARGET_INFO: roc_target::TargetInfo = roc_target::TargetInfo::default_x86_64();
 
@@ -74,9 +76,15 @@ fn promote_expr_to_module(src: &str) -> String {
     buffer
 }
 
-fn compiles_to_ir(test_name: &str, src: &str) {
-    use bumpalo::Bump;
+fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
+    use roc_packaging::cache::RocCacheDir;
     use std::path::PathBuf;
+
+    let exec_mode = match mode {
+        "exec" => ExecutionMode::Executable,
+        "test" => ExecutionMode::Test,
+        _ => panic!("Invalid test_mono exec mode {mode}"),
+    };
 
     let arena = &Bump::new();
 
@@ -85,7 +93,7 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     let module_src;
     let temp;
-    if src.starts_with("app") {
+    if src.starts_with("app") || src.starts_with("interface") {
         // this is already a module
         module_src = src;
     } else {
@@ -99,20 +107,22 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         threading: Threading::Single,
         render: roc_reporting::report::RenderTarget::Generic,
         palette: roc_reporting::report::DEFAULT_PALETTE,
-        exec_mode: ExecutionMode::Executable,
+        exec_mode,
     };
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         src_dir,
-        Default::default(),
+        RocCacheDir::Disallowed,
         load_config,
     );
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
+        Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
+            report,
+        ))) => {
             println!("{}", report);
             panic!();
         }
@@ -124,7 +134,8 @@ fn compiles_to_ir(test_name: &str, src: &str) {
         module_id: home,
         procedures,
         exposed_to_host,
-        layout_interner,
+        mut layout_interner,
+        interns,
         ..
     } = loaded;
 
@@ -137,33 +148,54 @@ fn compiles_to_ir(test_name: &str, src: &str) {
 
     assert!(type_problems.is_empty());
 
-    debug_assert_eq!(exposed_to_host.values.len(), 1);
+    let main_fn_symbol = exposed_to_host.values.keys().copied().next();
 
-    let main_fn_symbol = exposed_to_host.values.keys().copied().next().unwrap();
+    if !no_check {
+        check_procedures(arena, &interns, &mut layout_interner, &procedures);
+    }
 
     verify_procedures(test_name, layout_interner, procedures, main_fn_symbol);
+}
+
+fn check_procedures<'a>(
+    arena: &'a Bump,
+    interns: &Interns,
+    interner: &mut STLayoutInterner<'a>,
+    procedures: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+) {
+    use roc_mono::debug::{check_procs, format_problems};
+    let problems = check_procs(arena, interner, procedures);
+    if problems.is_empty() {
+        return;
+    }
+    let formatted = format_problems(interns, interner, problems);
+    panic!("IR problems found:\n{formatted}");
 }
 
 fn verify_procedures<'a>(
     test_name: &str,
     interner: STLayoutInterner<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
-    main_fn_symbol: Symbol,
+    opt_main_fn_symbol: Option<Symbol>,
 ) {
-    let index = procedures
-        .keys()
-        .position(|(s, _)| *s == main_fn_symbol)
-        .unwrap();
-
     let mut procs_string = procedures
         .values()
-        .map(|proc| proc.to_pretty(&interner, 200))
+        .map(|proc| proc.to_pretty(&interner, 200, false))
         .collect::<Vec<_>>();
 
-    let main_fn = procs_string.swap_remove(index);
+    let opt_main_fn = opt_main_fn_symbol.map(|main_fn_symbol| {
+        let index = procedures
+            .keys()
+            .position(|(s, _)| *s == main_fn_symbol)
+            .unwrap();
+        procs_string.swap_remove(index)
+    });
 
     procs_string.sort();
-    procs_string.push(main_fn);
+
+    if let Some(main_fn) = opt_main_fn {
+        procs_string.push(main_fn);
+    }
 
     let result = procs_string.join("\n");
 
@@ -560,7 +592,7 @@ fn record_optional_field_function_use_default() {
     "#
 }
 
-#[mono_test]
+#[mono_test(no_check = "https://github.com/roc-lang/roc/issues/4694")]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r#"
@@ -1498,6 +1530,34 @@ fn encode_derived_record() {
 }
 
 #[mono_test]
+fn choose_correct_recursion_var_under_record() {
+    indoc!(
+        r#"
+        Parser : [
+            Specialize Parser,
+            Record (List {parser: Parser}),
+        ]
+
+        printCombinatorParser : Parser -> Str
+        printCombinatorParser = \parser ->
+            when parser is
+                Specialize p ->
+                    printed = printCombinatorParser p
+                    if Bool.false then printed else "foo"
+                Record fields ->
+                    fields
+                        |> List.map \f ->
+                            printed = printCombinatorParser f.parser
+                            if Bool.false then printed else "foo"
+                        |> List.first
+                        |> Result.withDefault ("foo")
+
+        printCombinatorParser (Record [])
+        "#
+    )
+}
+
+#[mono_test]
 fn tail_call_elimination() {
     indoc!(
         r#"
@@ -1865,6 +1925,28 @@ fn encode_derived_tag_one_field_string() {
 }
 
 #[mono_test]
+fn polymorphic_expression_unification() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        RenderTree : [
+            Text Str,
+            Indent (List RenderTree),
+        ]
+        parseFunction : Str -> RenderTree
+        parseFunction = \name ->
+            last = Indent [Text ".trace(\"\(name)\")" ]
+            Indent [last]
+
+        values = parseFunction "interface_header"
+
+        main = values == Text ""
+        "#
+    )
+}
+
+#[mono_test]
 fn encode_derived_tag_two_payloads_string() {
     indoc!(
         r#"
@@ -1945,7 +2027,7 @@ fn unreachable_void_constructor() {
 
         x : []
 
-        main = if Bool.true then Ok x else Err "abc" 
+        main = if Bool.true then Ok x else Err "abc"
         "#
     )
 }
@@ -2001,5 +2083,259 @@ fn match_list() {
             [A, B, ..] -> "D"
             [B, ..] -> "E"
         "#
+    )
+}
+
+#[mono_test]
+#[ignore = "https://github.com/roc-lang/roc/issues/4561"]
+fn recursive_function_and_union_with_inference_hole() {
+    let _tracing_guards = roc_tracing::setup_tracing!();
+
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        Html state : [
+            Element (List (Html state)),
+        ]
+
+        translateStatic : Html _ -> Html _
+        translateStatic = \node ->
+            when node is
+                Element children ->
+                    newChildren = List.map children translateStatic
+
+                    Element newChildren
+
+        main = when translateStatic (Element []) is
+            _ -> ""
+        "#
+    )
+}
+
+#[mono_test]
+fn crash() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        getInfallible = \result -> when result is
+            Ok x -> x
+            _ -> crash "turns out this was fallible"
+
+        main =
+            x : [Ok U64, Err Str]
+            x = Ok 78
+            getInfallible x
+        "#
+    )
+}
+
+#[mono_test]
+fn function_pointer_lambda_set() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        number = \{} -> 1u64
+
+        parse = \parser -> parser {}
+
+        main =
+            parser = number
+            parse parser
+        "#
+    )
+}
+
+#[mono_test]
+fn anonymous_closure_lifted_to_named_issue_2403() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main =
+            f =
+                n = 1
+                \{} -> n
+            g = f {}
+            g
+        "#
+    )
+}
+
+#[mono_test]
+fn toplevel_accessor_fn_thunk() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        ra = .field
+
+        main =
+            ra { field : 15u8 }
+        "#
+    )
+}
+
+#[mono_test]
+fn list_one_vs_one_spread_issue_4685() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = when [""] is
+            [] -> "A"
+            [_] -> "B"
+            [_, ..] -> "C"
+        "#
+    )
+}
+
+#[mono_test(mode = "test")]
+fn issue_4705() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports []
+
+        go : {} -> Bool
+        go = \{} -> Bool.true
+
+        expect
+            input = {}
+            x = go input
+            x
+        "###
+    )
+}
+
+#[mono_test(mode = "test")]
+fn issue_4749() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports [Json]
+
+        expect
+            input = [82, 111, 99]
+            got = Decode.fromBytes input Json.fromUtf8 
+            got == Ok "Roc"
+        "###
+    )
+}
+
+#[mono_test(mode = "test")]
+fn lambda_set_with_imported_toplevels_issue_4733() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports []
+
+        fn = \{} ->
+            instr : [ Op (U64, U64 -> U64) ]
+            instr = if Bool.true then (Op Num.mul) else (Op Num.add)
+
+            Op op = instr
+
+            \a -> op a a
+
+        expect ((fn {}) 3) == 9
+        "###
+    )
+}
+
+#[mono_test]
+fn order_list_size_tests_issue_4732() {
+    indoc!(
+        r###"
+        when [] is 
+            [1, ..]          -> "B1"
+            [2, 1, ..]       -> "B2"
+            [3, 2, 1, ..]    -> "B3"
+            [4, 3, 2, 1, ..] -> "B4"
+            _                -> "Catchall"
+        "###
+    )
+}
+
+#[mono_test]
+fn anonymous_closure_in_polymorphic_expression_issue_4717() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "platform"
+
+        chompWhile : (List U8) -> (List U8)
+        chompWhile = \input ->
+                index = List.walkUntil input 0 \i, _ -> Break i
+
+                if index == 0 then
+                    input
+                else
+                    List.drop input index
+
+        main = chompWhile [1u8, 2u8, 3u8]
+        "###
+    )
+}
+
+#[mono_test]
+fn list_map_take_capturing_or_noncapturing() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "platform"
+
+        main =
+            x = 1u8
+            y = 2u8
+            f = when "" is
+                "A" ->
+                    g = \n -> n + x
+                    g
+                "B" ->
+                    h = \n -> n + y
+                    h
+                _   ->
+                    k = \n -> n + n
+                    k
+            List.map [1u8, 2u8, 3u8] f
+        "###
+    )
+}
+
+#[mono_test]
+fn issue_4557() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        isEqQ = \q1, q2 -> when T q1 q2 is
+            T (U f1) (U f2) -> Bool.or (isEqQ (U f2) (U f1)) (f1 {} == f2 {})
+
+        main = isEqQ (U \{} -> "a") (U \{} -> "a")
+        "###
+    )
+}
+
+#[mono_test]
+fn nullable_wrapped_with_non_nullable_singleton_tags() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        F : [
+            A F,
+            B,
+            C,
+        ]
+
+        g : F -> Str
+        g = \f -> when f is
+                A _ -> "A"
+                B -> "B"
+                C -> "C"
+
+        main =
+            g (A (B))
+            |> Str.concat (g B)
+            |> Str.concat (g C)
+        "###
     )
 }

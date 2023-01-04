@@ -1,36 +1,5 @@
 # Development backend for WebAssembly
 
-## Plan
-
-- Initial bringup
-  - [x] Get a wasm backend working for some of the number tests.
-  - [x] Use a separate `gen_wasm` directory for now, to avoid trying to do bringup and integration at the same time.
-- Get the fundamentals working
-
-  - [x] Come up with a way to do control flow
-  - [x] Flesh out the details of value representations between local variables and stack memory
-  - [x] Set up a way to write tests with any return value rather than just i64 and f64
-  - [x] Implement stack memory
-    - [x] Push and pop stack frames
-    - [x] Deal with returning structs
-    - [x] Distinguish which variables go in locals, own stack frame, caller stack frame, etc.
-    - [x] Ensure early Return statements don't skip stack cleanup
-  - [x] Model the stack machine as a storage mechanism, to make generated code "less bad"
-  - [x] Switch vectors to `bumpalo::Vec` where possible
-  - [ ] Implement relocations
-    - Requires knowing the _byte_ offset of each call site. This is awkward as the backend builds a `Vec<Instruction>` rather than a `Vec<u8>`. It may be worth serialising each instruction as it is inserted.
-
-- Refactor for code sharing with CPU backends
-
-  - [ ] Extract a trait from `WasmBackend` that looks as similar as possible to `Backend`, to prepare for code sharing
-  - [ ] Refactor to actually share code between `WasmBackend` and `Backend` if it seems feasible
-
-- Integration
-  - Move wasm files to `gen_dev/src/wasm`
-  - Share tests between wasm and x64, with some way of saying which tests work on which backends, and dispatching to different eval helpers based on that.
-  - Get `build_module` in object_builder.rs to dispatch to the wasm generator (adding some Wasm options to the `Triple` struct)
-  - Get `build_module` to write to a file, or maybe return `Vec<u8>`, instead of returning an Object structure
-
 ## Structured control flow
 
 One of the security features of WebAssembly is that it does not allow unrestricted "jumps" to anywhere you like. It does not have an instruction for that. All of the [control instructions][control-inst] can only implement "structured" control flow, and have names like `if`, `loop`, `block` that you'd normally associate with high-level languages. There are branch (`br`) instructions that can jump to labelled blocks within the same function, but the blocks have to be nested in sensible ways.
@@ -40,19 +9,6 @@ One of the security features of WebAssembly is that it does not allow unrestrict
 This way of representing control flow is similar to parts of the Roc AST like `When`, `If` and `LetRec`. But Mono IR converts this to jumps and join points, which are more of a Control Flow Graph than a tree. We need to map back from graph to a tree again in the Wasm backend.
 
 Our solution is to wrap all joinpoint/jump graphs in an outer `loop`, with nested `block`s inside it.
-
-### Possible future optimisations
-
-There are other algorithms available that may result in more optimised control flow. We are not focusing on that for our development backend, but here are some notes for future reference.
-
-The WebAssembly compiler toolkit `binaryen` has an [API for control-flow graphs][cfg-api]. We're not using `binaryen` right now. It's a C++ library, though it does have a (very thin and somewhat hard-to-use) [Rust wrapper][binaryen-rs]. Binaryen's control-flow graph API implements the "Relooper" algorithm developed by the Emscripten project and described in [this paper](https://github.com/emscripten-core/emscripten/blob/main/docs/paper.pdf).
-
-> By the way, apparently "binaryen" rhymes with "Targaryen", the family name from the "Game of Thrones" TV series
-
-There is also an improvement on Relooper called ["Stackifier"](https://medium.com/leaningtech/solving-the-structured-control-flow-problem-once-and-for-all-5123117b1ee2). It can reorder the joinpoints and jumps to make code more efficient. (It is also has things Roc wouldn't need but C++ does, like support for "irreducible" graphs that include `goto`).
-
-[cfg-api]: https://github.com/WebAssembly/binaryen/wiki/Compiling-to-WebAssembly-with-Binaryen#cfg-api
-[binaryen-rs]: https://crates.io/crates/binaryen
 
 ## Stack machine vs register machine
 
@@ -252,3 +208,18 @@ The diagram below illustrates this process.
 &nbsp;
 
 ![Diagram showing how host-to-app calls are linked.](./docs/host-to-app-calls.svg)
+
+## Tips for debugging Wasm code generation
+
+In general, WebAssembly runtimes often have terrible error messages. Especially command-line ones. And most especially Wasm3, which we use nonetheless because it's fast.
+
+- Install the WABT (WebAssembly Binary Toolkit)
+  - We have a debug setting to dump out the test binary. In `gen_wasm/src/lib.rs`, set `DEBUG_LOG_SETTINGS.keep_test_binary` to `true`
+  - Run `wasm-validate` to make sure the module is valid WebAssembly
+  - Use `wasm-objdump` with options `-d`, `-x`, or `-s` depending on the issue
+- Browsers are **much** better for debugging Wasm than any of the command line tools.
+  - I highly recommend this, even if you are more comfortable with the command line than the browser!
+  - Browsers have by far the best error messages and debugging tools. There is nothing comparable on the command line.
+  - We have a web page that can run gen_wasm unit tests:
+      crates/compiler/test_gen/src/helpers/debug-wasm-test.html
+  - The page itself contains instructions explaining how to open the browser debug tools. No web dev background should be required. If there's something useful missing, let Brian Carroll know or add him as a reviewer on a PR.

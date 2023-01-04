@@ -13,20 +13,14 @@ rm -rf build/
 cp -r public/ build/
 
 # download fonts just-in-time so we don't have to bloat the repo with them.
-mkdir build/fonts
-pushd build/fonts
+DESIGN_ASSETS_COMMIT="4d949642ebc56ca455cf270b288382788bce5873"
+DESIGN_ASSETS_TARFILE="roc-lang-design-assets-4d94964.tar.gz"
+DESIGN_ASSETS_DIR="roc-lang-design-assets-4d94964"
 
-wget -O PermanentMarker.woff2 https://fonts.gstatic.com/s/permanentmarker/v16/Fh4uPib9Iyv2ucM6pGQMWimMp004La2Cf5b6jlg.woff2
-wget -O MerriweatherExt.woff2 https://fonts.gstatic.com/s/merriweather/v30/u-440qyriQwlOrhSvowK_l5-ciZMdeX3rsHo.woff2
-wget -O Merriweather.woff2 https://fonts.gstatic.com/s/merriweather/v30/u-440qyriQwlOrhSvowK_l5-fCZMdeX3rg.woff2
-wget -O MerriweatherSansExt.woff https://fonts.gstatic.com/s/merriweathersans/v22/2-cO9IRs1JiJN1FRAMjTN5zd9vgsFF_5asQTb6hZ2JKZou4Vh-sBzRRXnKOrnx4.woff
-wget -O MerriweatherSans.woff  https://fonts.gstatic.com/s/merriweathersans/v22/2-cO9IRs1JiJN1FRAMjTN5zd9vgsFF_5asQTb6hZ2JKZou4ViesBzRRXnKOr.woff 
-wget -O LatoExt.woff2 https://fonts.gstatic.com/s/lato/v23/S6uyw4BMUTPHjxAwXiWtFCfQ7A.woff2
-wget -O Lato.woff2 https://fonts.gstatic.com/s/lato/v23/S6uyw4BMUTPHjx4wXiWtFCc.woff2
-wget -O SourceCodeProExt.woff https://fonts.gstatic.com/s/sourcecodepro/v22/HI_diYsKILxRpg3hIP6sJ7fM7PqPMcMnZFqUwX28DMyQtMdrSlcZZJmOpwVS.woff
-wget -O SourceCodePro.woff https://fonts.gstatic.com/s/sourcecodepro/v22/HI_diYsKILxRpg3hIP6sJ7fM7PqPMcMnZFqUwX28DMyQtMlrSlcZZJmOpw.woff
-
-popd
+wget -O $DESIGN_ASSETS_TARFILE https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT
+tar -xzf $DESIGN_ASSETS_TARFILE
+mv $DESIGN_ASSETS_DIR/fonts build/
+rm -rf $DESIGN_ASSETS_TARFILE $DESIGN_ASSETS_DIR
 
 # grab the source code and copy it to Netlify's server; if it's not there, fail the build.
 pushd build
@@ -51,24 +45,50 @@ rustc --version
 # is set up to serve them.
 export ROC_DOCS_URL_ROOT=/builtins
 
-cargo run --bin roc-docs crates/compiler/builtins/roc/*.roc
+cargo run --release --bin roc-docs crates/compiler/builtins/roc/main.roc
 mv generated-docs/*.* www/build # move all the .js, .css, etc. files to build/
 mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
 
 # Manually add this tip to all the builtin docs.
-find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div style="padding: 1em;font-style: italic;line-height: 1.3em;"><strong>Tip:</strong> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
+find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div class="builtins-tip"><b>Tip:</b> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
+
+
+echo 'Fetching latest roc nightly...'
+curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
+# get the url of the latest release
+export ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh linux_x86_64)
+# get roc release archive
+curl -OL $ROC_RELEASE_URL
+# extract archive
+ls | grep "roc_nightly" | xargs tar --one-top-level=roc_nightly -xzvf
+# delete archive
+ls | grep "roc_nightly.*tar.gz" | xargs rm
+
+echo 'Building tutorial.html from tutorial.md...'
+mkdir www/build/tutorial
+./roc_nightly/roc version
+./roc_nightly/roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
+mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
+
+# cleanup roc
+rm -rf roc_nightly roc_releases.json
 
 echo 'Generating CLI example platform docs...'
 # Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
-# "/examples/cli/" rather than "/builtins/"
-export ROC_DOCS_URL_ROOT=/examples/cli
+# "/packages/basic-cli/" rather than "/builtins/"
+export ROC_DOCS_URL_ROOT=/packages/basic-cli
 
-# Until https://github.com/roc-lang/roc/issues/3280 is done,
-# manually exclude the Internal* modules and `main.roc`.
-ls examples/cli/cli-platform/*.roc | grep -v Internal | grep -v main.roc | grep -v Effect.roc | xargs cargo run --bin roc-docs
+rm -rf ./downloaded-basic-cli
 
-mkdir www/build/examples
+git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
+
+cargo run --bin roc-docs downloaded-basic-cli/src/main.roc
+
+rm -rf ./downloaded-basic-cli
+
+BASIC_CLI_PACKAGE_DIR="www/build/packages/basic-cli"
+mkdir -p $BASIC_CLI_PACKAGE_DIR
 rm generated-docs/*.* # we already copied over the *.js and *.css files earlier, so just drop these.
-mv generated-docs/ www/build/examples/cli # move all the folders to build/examples/cli
+mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
 
 popd

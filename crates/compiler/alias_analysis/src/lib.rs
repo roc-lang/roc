@@ -1,5 +1,4 @@
-//! Performs analysis and optimizations to remove unneeded [reference counts](https://en.wikipedia.org/wiki/Reference_counting)
-//! at runtime, and supports in-place mutation.
+use bumpalo::Bump;
 use morphic_lib::TypeContext;
 use morphic_lib::{
     BlockExpr, BlockId, CalleeSpecVar, ConstDefBuilder, ConstName, EntryPointName, ExprContext,
@@ -7,18 +6,17 @@ use morphic_lib::{
     TypeDefBuilder, TypeId, TypeName, UpdateModeVar, ValueId,
 };
 use roc_collections::all::{MutMap, MutSet};
+use roc_intern::Interner;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
 use roc_mono::ir::{
-    Call, CallType, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement, Literal,
-    ModifyRc, OptLevel, Proc, Stmt,
+    Call, CallType, EntryPoint, Expr, HigherOrderLowLevel, HostExposedLayouts, ListLiteralElement,
+    Literal, ModifyRc, OptLevel, Proc, ProcLayout, SingleEntryPoint, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, CapturesNiche, Layout, RawFunctionLayout, STLayoutInterner, UnionLayout,
+    Builtin, FieldOrderHash, Layout, Niche, RawFunctionLayout, STLayoutInterner, UnionLayout,
 };
-
-use roc_error_macros::internal_error;
 
 // just using one module for now
 pub const MOD_APP: ModName = ModName(b"UserApp");
@@ -32,7 +30,7 @@ pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     let bytes = func_name_bytes_help(
         proc.name.name(),
         proc.args.iter().map(|x| x.0),
-        proc.name.captures_niche(),
+        proc.name.niche(),
         &proc.ret_layout,
     );
     bytes
@@ -76,7 +74,7 @@ impl TagUnionId {
 pub fn func_name_bytes_help<'a, I>(
     symbol: Symbol,
     argument_layouts: I,
-    captures_niche: CapturesNiche<'a>,
+    niche: Niche<'a>,
     return_layout: &Layout<'a>,
 ) -> [u8; SIZE]
 where
@@ -95,7 +93,7 @@ where
             layout.hash(&mut hasher);
         }
 
-        captures_niche.hash(&mut hasher);
+        niche.hash(&mut hasher);
 
         return_layout.hash(&mut hasher);
 
@@ -135,14 +133,15 @@ fn bytes_as_ascii(bytes: &[u8]) -> String {
     buf
 }
 
-pub fn spec_program<'a, I>(
-    interner: &STLayoutInterner,
+pub fn spec_program<'a, 'r, I>(
+    arena: &'a Bump,
+    interner: &'r mut STLayoutInterner<'a>,
     opt_level: OptLevel,
-    opt_entry_point: Option<roc_mono::ir::EntryPoint<'a>>,
+    entry_point: roc_mono::ir::EntryPoint<'a>,
     procs: I,
 ) -> Result<morphic_lib::Solutions>
 where
-    I: Iterator<Item = &'a Proc<'a>>,
+    I: Iterator<Item = &'r Proc<'a>>,
 {
     let main_module = {
         let mut m = ModDefBuilder::new();
@@ -189,22 +188,14 @@ where
                     match layout {
                         RawFunctionLayout::Function(_, _, _) => {
                             let it = top_level.arguments.iter().copied();
-                            let bytes = func_name_bytes_help(
-                                *symbol,
-                                it,
-                                CapturesNiche::no_niche(),
-                                &top_level.result,
-                            );
+                            let bytes =
+                                func_name_bytes_help(*symbol, it, Niche::NONE, &top_level.result);
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
-                            let bytes = func_name_bytes_help(
-                                *symbol,
-                                [],
-                                CapturesNiche::no_niche(),
-                                &top_level.result,
-                            );
+                            let bytes =
+                                func_name_bytes_help(*symbol, [], Niche::NONE, &top_level.result);
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
@@ -221,31 +212,72 @@ where
                 );
             }
 
-            let (spec, type_names) = proc_spec(interner, proc)?;
+            let (spec, type_names) = proc_spec(arena, interner, proc)?;
 
             type_definitions.extend(type_names);
 
             m.add_func(func_name, spec)?;
         }
 
-        if let Some(entry_point) = opt_entry_point {
-            // the entry point wrapper
-            let roc_main_bytes = func_name_bytes_help(
-                entry_point.symbol,
-                entry_point.layout.arguments.iter().copied(),
-                CapturesNiche::no_niche(),
-                &entry_point.layout.result,
-            );
-            let roc_main = FuncName(&roc_main_bytes);
+        match entry_point {
+            EntryPoint::Single(SingleEntryPoint {
+                symbol: entry_point_symbol,
+                layout: entry_point_layout,
+            }) => {
+                // the entry point wrapper
+                let roc_main_bytes = func_name_bytes_help(
+                    entry_point_symbol,
+                    entry_point_layout.arguments.iter().copied(),
+                    Niche::NONE,
+                    &entry_point_layout.result,
+                );
+                let roc_main = FuncName(&roc_main_bytes);
 
-            let entry_point_function = build_entry_point(
-                interner,
-                entry_point.layout,
-                roc_main,
-                &host_exposed_functions,
-            )?;
-            let entry_point_name = FuncName(ENTRY_POINT_NAME);
-            m.add_func(entry_point_name, entry_point_function)?;
+                let mut env = Env::new(arena);
+
+                let entry_point_function = build_entry_point(
+                    &mut env,
+                    interner,
+                    entry_point_layout,
+                    Some(roc_main),
+                    &host_exposed_functions,
+                )?;
+
+                type_definitions.extend(env.type_names);
+
+                let entry_point_name = FuncName(ENTRY_POINT_NAME);
+                m.add_func(entry_point_name, entry_point_function)?;
+            }
+            EntryPoint::Expects { symbols } => {
+                // construct a big pattern match picking one of the expects at random
+                let layout: ProcLayout<'a> = ProcLayout {
+                    arguments: &[],
+                    result: Layout::Struct {
+                        field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
+                        field_layouts: &[],
+                    },
+                    niche: Niche::NONE,
+                };
+
+                let host_exposed: Vec<_> = symbols
+                    .iter()
+                    .map(|symbol| {
+                        (
+                            func_name_bytes_help(*symbol, [], Niche::NONE, &layout.result),
+                            [].as_slice(),
+                        )
+                    })
+                    .collect();
+
+                let mut env = Env::new(arena);
+                let entry_point_function =
+                    build_entry_point(&mut env, interner, layout, None, &host_exposed)?;
+
+                type_definitions.extend(env.type_names);
+
+                let entry_point_name = FuncName(ENTRY_POINT_NAME);
+                m.add_func(entry_point_name, entry_point_function)?;
+            }
         }
 
         for union_layout in type_definitions {
@@ -254,7 +286,12 @@ where
 
             let mut builder = TypeDefBuilder::new();
 
-            let variant_types = recursive_variant_types(&mut builder, interner, &union_layout)?;
+            let mut env = Env::new(arena);
+            let variant_types =
+                recursive_variant_types(&mut env, &mut builder, interner, &union_layout)?;
+
+            // FIXME: dropping additional env.type_names here!
+
             let root_type = if let UnionLayout::NonNullableUnwrapped(_) = union_layout {
                 debug_assert_eq!(variant_types.len(), 1);
                 variant_types[0]
@@ -277,10 +314,11 @@ where
         let mut p = ProgramBuilder::new();
         p.add_mod(MOD_APP, main_module)?;
 
-        if opt_entry_point.is_some() {
-            let entry_point_name = FuncName(ENTRY_POINT_NAME);
-            p.add_entry_point(EntryPointName(ENTRY_POINT_NAME), MOD_APP, entry_point_name)?;
-        }
+        p.add_entry_point(
+            EntryPointName(ENTRY_POINT_NAME),
+            MOD_APP,
+            FuncName(ENTRY_POINT_NAME),
+        )?;
 
         p.build()?
     };
@@ -311,22 +349,24 @@ fn terrible_hack(builder: &mut FuncDefBuilder, block: BlockId, type_id: TypeId) 
     builder.add_unwrap_union(block, value, 1)
 }
 
-fn build_entry_point(
-    interner: &STLayoutInterner,
-    layout: roc_mono::ir::ProcLayout,
-    func_name: FuncName,
-    host_exposed_functions: &[([u8; SIZE], &[Layout])],
+fn build_entry_point<'a>(
+    env: &mut Env<'a>,
+    interner: &STLayoutInterner<'a>,
+    layout: roc_mono::ir::ProcLayout<'a>,
+    entry_point_function: Option<FuncName>,
+    host_exposed_functions: &[([u8; SIZE], &'a [Layout<'a>])],
 ) -> Result<FuncDef> {
     let mut builder = FuncDefBuilder::new();
     let outer_block = builder.add_block();
 
     let mut cases = Vec::new();
 
-    {
+    if let Some(entry_point_function) = entry_point_function {
         let block = builder.add_block();
 
         // to the modelling language, the arguments appear out of thin air
         let argument_type = build_tuple_type(
+            env,
             &mut builder,
             interner,
             layout.arguments,
@@ -341,7 +381,7 @@ fn build_entry_point(
 
         let name_bytes = [0; 16];
         let spec_var = CalleeSpecVar(&name_bytes);
-        let result = builder.add_call(block, spec_var, MOD_APP, func_name, argument)?;
+        let result = builder.add_call(block, spec_var, MOD_APP, entry_point_function, argument)?;
 
         // to the modelling language, the result disappears into the void
         let unit_type = builder.add_tuple_type(&[])?;
@@ -354,16 +394,17 @@ fn build_entry_point(
     for (name_bytes, layouts) in host_exposed_functions {
         let host_exposed_func_name = FuncName(name_bytes);
 
-        if host_exposed_func_name == func_name {
+        if Some(host_exposed_func_name) == entry_point_function {
             continue;
         }
 
         let block = builder.add_block();
 
         let type_id = layout_spec(
+            env,
             &mut builder,
             interner,
-            &Layout::struct_no_name_order(layouts),
+            env.arena.alloc(Layout::struct_no_name_order(layouts)),
             &WhenRecursive::Unreachable,
         )?;
 
@@ -380,7 +421,11 @@ fn build_entry_point(
     }
 
     let unit_type = builder.add_tuple_type(&[])?;
-    let unit_value = builder.add_choice(outer_block, &cases)?;
+    let unit_value = if cases.is_empty() {
+        builder.add_make_tuple(outer_block, &[])?
+    } else {
+        builder.add_choice(outer_block, &cases)?
+    };
 
     let root = BlockExpr(outer_block, unit_value);
     let spec = builder.build(unit_type, unit_type, root)?;
@@ -389,16 +434,17 @@ fn build_entry_point(
 }
 
 fn proc_spec<'a>(
-    interner: &STLayoutInterner<'a>,
+    arena: &'a Bump,
+    interner: &mut STLayoutInterner<'a>,
     proc: &Proc<'a>,
 ) -> Result<(FuncDef, MutSet<UnionLayout<'a>>)> {
     let mut builder = FuncDefBuilder::new();
-    let mut env = Env::default();
+    let mut env = Env::new(arena);
 
     let block = builder.add_block();
 
     // introduce the arguments
-    let mut argument_layouts = Vec::new();
+    let mut argument_layouts = bumpalo::collections::Vec::with_capacity_in(proc.args.len(), arena);
     for (i, (layout, symbol)) in proc.args.iter().enumerate() {
         let value_id = builder.add_get_tuple_field(block, builder.get_argument(), i as u32)?;
         env.symbols.insert(*symbol, value_id);
@@ -417,12 +463,16 @@ fn proc_spec<'a>(
 
     let root = BlockExpr(block, value_id);
     let arg_type_id = layout_spec(
+        &mut env,
         &mut builder,
         interner,
-        &Layout::struct_no_name_order(&argument_layouts),
+        arena.alloc(Layout::struct_no_name_order(
+            argument_layouts.into_bump_slice(),
+        )),
         &WhenRecursive::Unreachable,
     )?;
     let ret_type_id = layout_spec(
+        &mut env,
         &mut builder,
         interner,
         &proc.ret_layout,
@@ -434,11 +484,22 @@ fn proc_spec<'a>(
     Ok((spec, env.type_names))
 }
 
-#[derive(Default)]
 struct Env<'a> {
+    arena: &'a Bump,
     symbols: MutMap<Symbol, ValueId>,
     join_points: MutMap<roc_mono::ir::JoinPointId, morphic_lib::ContinuationId>,
     type_names: MutSet<UnionLayout<'a>>,
+}
+
+impl<'a> Env<'a> {
+    fn new(arena: &'a Bump) -> Self {
+        Self {
+            arena,
+            symbols: Default::default(),
+            join_points: Default::default(),
+            type_names: Default::default(),
+        }
+    }
 }
 
 fn apply_refcount_operation<'a>(
@@ -458,25 +519,23 @@ fn apply_refcount_operation<'a>(
 
         ModifyRc::Dec(symbol) => {
             let argument = env.symbols[symbol];
-
             builder.add_recursive_touch(block, argument)?;
         }
         ModifyRc::DecRef(symbol) => {
             let argument = env.symbols[symbol];
-
             builder.add_recursive_touch(block, argument)?;
         }
-    };
+    }
 
     Ok(())
 }
 
 fn stmt_spec<'a>(
     builder: &mut FuncDefBuilder,
-    interner: &STLayoutInterner<'a>,
+    interner: &mut STLayoutInterner<'a>,
     env: &mut Env<'a>,
     block: BlockId,
-    layout: &Layout,
+    layout: &Layout<'a>,
     stmt: &Stmt<'a>,
 ) -> Result<ValueId> {
     use Stmt::*;
@@ -539,6 +598,7 @@ fn stmt_spec<'a>(
 
             builder.add_choice(block, &cases)
         }
+        Dbg { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         Expect { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         ExpectFx { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         Ret(symbol) => Ok(env.symbols[symbol]),
@@ -557,6 +617,7 @@ fn stmt_spec<'a>(
 
             for p in parameters.iter() {
                 type_ids.push(layout_spec(
+                    env,
                     builder,
                     interner,
                     &p.layout,
@@ -564,7 +625,8 @@ fn stmt_spec<'a>(
                 )?);
             }
 
-            let ret_type_id = layout_spec(builder, interner, layout, &WhenRecursive::Unreachable)?;
+            let ret_type_id =
+                layout_spec(env, builder, interner, layout, &WhenRecursive::Unreachable)?;
 
             let jp_arg_type_id = builder.add_tuple_type(&type_ids)?;
 
@@ -605,16 +667,20 @@ fn stmt_spec<'a>(
             builder.add_sub_block(block, BlockExpr(cont_block, cont_value_id))
         }
         Jump(id, symbols) => {
-            let ret_type_id = layout_spec(builder, interner, layout, &WhenRecursive::Unreachable)?;
+            let ret_type_id =
+                layout_spec(env, builder, interner, layout, &WhenRecursive::Unreachable)?;
             let argument = build_tuple_value(builder, env, block, symbols)?;
 
             let jpid = env.join_points[id];
             builder.add_jump(block, jpid, argument, ret_type_id)
         }
-        RuntimeError(_) => {
-            let type_id = layout_spec(builder, interner, layout, &WhenRecursive::Unreachable)?;
+        Crash(msg, _) => {
+            // Model this as a foreign call rather than TERMINATE because
+            // we want ownership of the message.
+            let result_type =
+                layout_spec(env, builder, interner, layout, &WhenRecursive::Unreachable)?;
 
-            builder.add_terminate(block, type_id)
+            builder.add_unknown_with(block, &[env.symbols[msg]], result_type)
         }
     }
 }
@@ -629,10 +695,9 @@ fn build_tuple_value(
 
     for field in symbols.iter() {
         let value_id = match env.symbols.get(field) {
-            None => internal_error!(
+            None => panic!(
                 "Symbol {:?} is not defined in environment {:?}",
-                field,
-                &env.symbols
+                field, &env.symbols
             ),
             Some(x) => *x,
         };
@@ -648,32 +713,34 @@ enum WhenRecursive<'a> {
     Loop(UnionLayout<'a>),
 }
 
-fn build_recursive_tuple_type(
+fn build_recursive_tuple_type<'a>(
+    env: &mut Env<'a>,
     builder: &mut impl TypeContext,
-    interner: &STLayoutInterner,
-    layouts: &[Layout],
+    interner: &STLayoutInterner<'a>,
+    layouts: &[Layout<'a>],
     when_recursive: &WhenRecursive,
 ) -> Result<TypeId> {
     let mut field_types = Vec::new();
 
     for field in layouts.iter() {
-        let type_id = layout_spec_help(builder, interner, field, when_recursive)?;
+        let type_id = layout_spec_help(env, builder, interner, field, when_recursive)?;
         field_types.push(type_id);
     }
 
     builder.add_tuple_type(&field_types)
 }
 
-fn build_tuple_type(
+fn build_tuple_type<'a>(
+    env: &mut Env<'a>,
     builder: &mut impl TypeContext,
-    interner: &STLayoutInterner,
-    layouts: &[Layout],
+    interner: &STLayoutInterner<'a>,
+    layouts: &[Layout<'a>],
     when_recursive: &WhenRecursive,
 ) -> Result<TypeId> {
     let mut field_types = Vec::new();
 
     for field in layouts.iter() {
-        field_types.push(layout_spec(builder, interner, field, when_recursive)?);
+        field_types.push(layout_spec(env, builder, interner, field, when_recursive)?);
     }
 
     builder.add_tuple_type(&field_types)
@@ -705,13 +772,13 @@ fn add_loop(
     builder.add_sub_block(block, BlockExpr(sub_block, unreachable))
 }
 
-fn call_spec(
+fn call_spec<'a>(
     builder: &mut FuncDefBuilder,
-    interner: &STLayoutInterner,
-    env: &Env,
+    interner: &mut STLayoutInterner<'a>,
+    env: &mut Env<'a>,
     block: BlockId,
-    layout: &Layout,
-    call: &Call,
+    layout: &Layout<'a>,
+    call: &Call<'a>,
 ) -> Result<ValueId> {
     use CallType::*;
 
@@ -727,7 +794,7 @@ fn call_spec(
 
             let arg_value_id = build_tuple_value(builder, env, block, call.arguments)?;
             let args_it = arg_layouts.iter().copied();
-            let captures_niche = name.captures_niche();
+            let captures_niche = name.niche();
             let bytes = func_name_bytes_help(name.name(), args_it, captures_niche, ret_layout);
             let name = FuncName(&bytes);
             let module = MOD_APP;
@@ -743,8 +810,13 @@ fn call_spec(
                 .map(|symbol| env.symbols[symbol])
                 .collect();
 
-            let result_type =
-                layout_spec(builder, interner, ret_layout, &WhenRecursive::Unreachable)?;
+            let result_type = layout_spec(
+                env,
+                builder,
+                interner,
+                ret_layout,
+                &WhenRecursive::Unreachable,
+            )?;
 
             builder.add_unknown_with(block, &arguments, result_type)
         }
@@ -774,7 +846,7 @@ fn call_spec(
             let update_mode_var = UpdateModeVar(&mode);
 
             let args_it = passed_function.argument_layouts.iter().copied();
-            let captures_niche = passed_function.name.captures_niche();
+            let captures_niche = passed_function.name.niche();
             let bytes = func_name_bytes_help(
                 passed_function.name.name(),
                 args_it,
@@ -816,14 +888,18 @@ fn call_spec(
                     };
 
                     let output_element_type = layout_spec(
+                        env,
                         builder,
                         interner,
                         return_layout,
                         &WhenRecursive::Unreachable,
                     )?;
 
+                    let return_layout = interner.insert(return_layout);
+
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
+                        env,
                         builder,
                         interner,
                         &state_layout,
@@ -852,8 +928,11 @@ fn call_spec(
                         with_new_heap_cell(builder, block, bag)
                     };
 
-                    let state_layout = Layout::Builtin(Builtin::List(&argument_layouts[0]));
+                    let arg0_layout = interner.insert(&argument_layouts[0]);
+
+                    let state_layout = Layout::Builtin(Builtin::List(arg0_layout));
                     let state_type = layout_spec(
+                        env,
                         builder,
                         interner,
                         &state_layout,
@@ -883,14 +962,18 @@ fn call_spec(
                     };
 
                     let output_element_type = layout_spec(
+                        env,
                         builder,
                         interner,
                         return_layout,
                         &WhenRecursive::Unreachable,
                     )?;
 
+                    let return_layout = interner.insert(return_layout);
+
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
+                        env,
                         builder,
                         interner,
                         &state_layout,
@@ -926,14 +1009,18 @@ fn call_spec(
                     };
 
                     let output_element_type = layout_spec(
+                        env,
                         builder,
                         interner,
                         return_layout,
                         &WhenRecursive::Unreachable,
                     )?;
 
+                    let return_layout = interner.insert(return_layout);
+
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
+                        env,
                         builder,
                         interner,
                         &state_layout,
@@ -975,14 +1062,18 @@ fn call_spec(
                     };
 
                     let output_element_type = layout_spec(
+                        env,
                         builder,
                         interner,
                         return_layout,
                         &WhenRecursive::Unreachable,
                     )?;
 
+                    let return_layout = interner.insert(return_layout);
+
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
+                        env,
                         builder,
                         interner,
                         &state_layout,
@@ -1030,19 +1121,19 @@ fn list_clone(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn lowlevel_spec(
+fn lowlevel_spec<'a>(
     builder: &mut FuncDefBuilder,
-    interner: &STLayoutInterner,
-    env: &Env,
+    interner: &STLayoutInterner<'a>,
+    env: &mut Env<'a>,
     block: BlockId,
-    layout: &Layout,
+    layout: &Layout<'a>,
     op: &LowLevel,
     update_mode: roc_mono::ir::UpdateModeId,
     arguments: &[Symbol],
 ) -> Result<ValueId> {
     use LowLevel::*;
 
-    let type_id = layout_spec(builder, interner, layout, &WhenRecursive::Unreachable)?;
+    let type_id = layout_spec(env, builder, interner, layout, &WhenRecursive::Unreachable)?;
     let mode = update_mode.to_bytes();
     let update_mode_var = UpdateModeVar(&mode);
 
@@ -1150,7 +1241,9 @@ fn lowlevel_spec(
 
             match layout {
                 Layout::Builtin(Builtin::List(element_layout)) => {
+                    let element_layout = interner.get(*element_layout);
                     let type_id = layout_spec(
+                        env,
                         builder,
                         interner,
                         element_layout,
@@ -1198,28 +1291,31 @@ fn lowlevel_spec(
             // TODO overly pessimstic
             let arguments: Vec<_> = arguments.iter().map(|symbol| env.symbols[symbol]).collect();
 
-            let result_type = layout_spec(builder, interner, layout, &WhenRecursive::Unreachable)?;
+            let result_type =
+                layout_spec(env, builder, interner, layout, &WhenRecursive::Unreachable)?;
 
             builder.add_unknown_with(block, &arguments, result_type)
         }
     }
 }
 
-fn recursive_tag_variant(
+fn recursive_tag_variant<'a>(
+    env: &mut Env<'a>,
     builder: &mut impl TypeContext,
-    interner: &STLayoutInterner,
+    interner: &STLayoutInterner<'a>,
     union_layout: &UnionLayout,
-    fields: &[Layout],
+    fields: &[Layout<'a>],
 ) -> Result<TypeId> {
     let when_recursive = WhenRecursive::Loop(*union_layout);
 
-    build_recursive_tuple_type(builder, interner, fields, &when_recursive)
+    build_recursive_tuple_type(env, builder, interner, fields, &when_recursive)
 }
 
-fn recursive_variant_types(
+fn recursive_variant_types<'a>(
+    env: &mut Env<'a>,
     builder: &mut impl TypeContext,
-    interner: &STLayoutInterner,
-    union_layout: &UnionLayout,
+    interner: &STLayoutInterner<'a>,
+    union_layout: &UnionLayout<'a>,
 ) -> Result<Vec<TypeId>> {
     use UnionLayout::*;
 
@@ -1233,11 +1329,18 @@ fn recursive_variant_types(
             result = Vec::with_capacity(tags.len());
 
             for tag in tags.iter() {
-                result.push(recursive_tag_variant(builder, interner, union_layout, tag)?);
+                result.push(recursive_tag_variant(
+                    env,
+                    builder,
+                    interner,
+                    union_layout,
+                    tag,
+                )?);
             }
         }
         NonNullableUnwrapped(fields) => {
             result = vec![recursive_tag_variant(
+                env,
                 builder,
                 interner,
                 union_layout,
@@ -1253,21 +1356,39 @@ fn recursive_variant_types(
             let cutoff = *nullable_id as usize;
 
             for tag in tags[..cutoff].iter() {
-                result.push(recursive_tag_variant(builder, interner, union_layout, tag)?);
+                result.push(recursive_tag_variant(
+                    env,
+                    builder,
+                    interner,
+                    union_layout,
+                    tag,
+                )?);
             }
 
-            result.push(recursive_tag_variant(builder, interner, union_layout, &[])?);
+            result.push(recursive_tag_variant(
+                env,
+                builder,
+                interner,
+                union_layout,
+                &[],
+            )?);
 
             for tag in tags[cutoff..].iter() {
-                result.push(recursive_tag_variant(builder, interner, union_layout, tag)?);
+                result.push(recursive_tag_variant(
+                    env,
+                    builder,
+                    interner,
+                    union_layout,
+                    tag,
+                )?);
             }
         }
         NullableUnwrapped {
             nullable_id,
             other_fields: fields,
         } => {
-            let unit = recursive_tag_variant(builder, interner, union_layout, &[])?;
-            let other_type = recursive_tag_variant(builder, interner, union_layout, fields)?;
+            let unit = recursive_tag_variant(env, builder, interner, union_layout, &[])?;
+            let other_type = recursive_tag_variant(env, builder, interner, union_layout, fields)?;
 
             if *nullable_id {
                 // nullable_id == 1
@@ -1289,7 +1410,7 @@ fn worst_case_type(context: &mut impl TypeContext) -> Result<TypeId> {
 
 fn expr_spec<'a>(
     builder: &mut FuncDefBuilder,
-    interner: &STLayoutInterner,
+    interner: &mut STLayoutInterner<'a>,
     env: &mut Env<'a>,
     block: BlockId,
     layout: &Layout<'a>,
@@ -1316,6 +1437,7 @@ fn expr_spec<'a>(
             let value_id = match tag_layout {
                 UnionLayout::NonRecursive(tags) => {
                     let variant_types = non_recursive_variant_types(
+                        env,
                         builder,
                         interner,
                         tags,
@@ -1339,7 +1461,7 @@ fn expr_spec<'a>(
                 UnionLayout::NullableUnwrapped { .. } => data_id,
             };
 
-            let variant_types = recursive_variant_types(builder, interner, tag_layout)?;
+            let variant_types = recursive_variant_types(env, builder, interner, tag_layout)?;
 
             let union_id =
                 builder.add_make_union(block, &variant_types, *tag_id as u32, value_id)?;
@@ -1425,7 +1547,13 @@ fn expr_spec<'a>(
             builder.add_get_tuple_field(block, value_id, *index as u32)
         }
         Array { elem_layout, elems } => {
-            let type_id = layout_spec(builder, interner, elem_layout, &WhenRecursive::Unreachable)?;
+            let type_id = layout_spec(
+                env,
+                builder,
+                interner,
+                elem_layout,
+                &WhenRecursive::Unreachable,
+            )?;
 
             let list = new_list(builder, block, type_id)?;
 
@@ -1452,7 +1580,9 @@ fn expr_spec<'a>(
 
         EmptyArray => match layout {
             Layout::Builtin(Builtin::List(element_layout)) => {
+                let element_layout = interner.get(*element_layout);
                 let type_id = layout_spec(
+                    env,
                     builder,
                     interner,
                     element_layout,
@@ -1462,14 +1592,35 @@ fn expr_spec<'a>(
             }
             _ => unreachable!("empty array does not have a list layout"),
         },
-        Reset { symbol, .. } => {
-            let type_id = layout_spec(builder, interner, layout, &WhenRecursive::Unreachable)?;
-            let value_id = env.symbols[symbol];
+        Reset {
+            symbol,
+            update_mode,
+        } => {
+            let tag_value_id = env.symbols[symbol];
 
-            builder.add_unknown_with(block, &[value_id], type_id)
+            let union_layout = match layout {
+                Layout::Union(ul) => ul,
+                _ => unreachable!(),
+            };
+
+            let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
+            let type_name = TypeName(&type_name_bytes);
+
+            // unwrap the named wrapper
+            let union_id = builder.add_unwrap_named(block, MOD_APP, type_name, tag_value_id)?;
+
+            let heap_cell = builder.add_get_tuple_field(block, union_id, TAG_CELL_INDEX)?;
+            let union_data = builder.add_get_tuple_field(block, union_id, TAG_DATA_INDEX)?;
+
+            let mode = update_mode.to_bytes();
+            let update_mode_var = UpdateModeVar(&mode);
+
+            let _unit = builder.add_update(block, update_mode_var, heap_cell)?;
+
+            with_new_heap_cell(builder, block, union_data)
         }
         RuntimeErrorFunction(_) => {
-            let type_id = layout_spec(builder, interner, layout, &WhenRecursive::Unreachable)?;
+            let type_id = layout_spec(env, builder, interner, layout, &WhenRecursive::Unreachable)?;
 
             builder.add_terminate(block, type_id)
         }
@@ -1496,45 +1647,55 @@ fn literal_spec(
     }
 }
 
-fn layout_spec(
+fn layout_spec<'a>(
+    env: &mut Env<'a>,
     builder: &mut impl TypeContext,
-    interner: &STLayoutInterner,
-    layout: &Layout,
+    interner: &STLayoutInterner<'a>,
+    layout: &Layout<'a>,
     when_recursive: &WhenRecursive,
 ) -> Result<TypeId> {
-    layout_spec_help(builder, interner, layout, when_recursive)
+    layout_spec_help(env, builder, interner, layout, when_recursive)
 }
 
-fn non_recursive_variant_types(
+fn non_recursive_variant_types<'a>(
+    env: &mut Env<'a>,
     builder: &mut impl TypeContext,
-    interner: &STLayoutInterner,
-    tags: &[&[Layout]],
+    interner: &STLayoutInterner<'a>,
+    tags: &[&[Layout<'a>]],
     // If there is a recursive pointer latent within this layout, coming from a containing layout.
     when_recursive: &WhenRecursive,
 ) -> Result<Vec<TypeId>> {
     let mut result = Vec::with_capacity(tags.len());
 
     for tag in tags.iter() {
-        result.push(build_tuple_type(builder, interner, tag, when_recursive)?);
+        result.push(build_tuple_type(
+            env,
+            builder,
+            interner,
+            tag,
+            when_recursive,
+        )?);
     }
 
     Ok(result)
 }
 
-fn layout_spec_help(
+fn layout_spec_help<'a>(
+    env: &mut Env<'a>,
     builder: &mut impl TypeContext,
-    interner: &STLayoutInterner,
-    layout: &Layout,
+    interner: &STLayoutInterner<'a>,
+    layout: &Layout<'a>,
     when_recursive: &WhenRecursive,
 ) -> Result<TypeId> {
     use Layout::*;
 
     match layout {
-        Builtin(builtin) => builtin_spec(builder, interner, builtin, when_recursive),
+        Builtin(builtin) => builtin_spec(env, builder, interner, builtin, when_recursive),
         Struct { field_layouts, .. } => {
-            build_recursive_tuple_type(builder, interner, field_layouts, when_recursive)
+            build_recursive_tuple_type(env, builder, interner, field_layouts, when_recursive)
         }
         LambdaSet(lambda_set) => layout_spec_help(
+            env,
             builder,
             interner,
             &lambda_set.runtime_representation(interner),
@@ -1550,7 +1711,7 @@ fn layout_spec_help(
                 }
                 UnionLayout::NonRecursive(tags) => {
                     let variant_types =
-                        non_recursive_variant_types(builder, interner, tags, when_recursive)?;
+                        non_recursive_variant_types(env, builder, interner, tags, when_recursive)?;
                     builder.add_union_type(&variant_types)
                 }
                 UnionLayout::Recursive(_)
@@ -1560,13 +1721,17 @@ fn layout_spec_help(
                     let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
                     let type_name = TypeName(&type_name_bytes);
 
+                    env.type_names.insert(*union_layout);
+
                     Ok(builder.add_named_type(MOD_APP, type_name))
                 }
             }
         }
 
         Boxed(inner_layout) => {
-            let inner_type = layout_spec_help(builder, interner, inner_layout, when_recursive)?;
+            let inner_layout = interner.get(*inner_layout);
+            let inner_type =
+                layout_spec_help(env, builder, interner, inner_layout, when_recursive)?;
             let cell_type = builder.add_heap_cell_type();
 
             builder.add_tuple_type(&[cell_type, inner_type])
@@ -1591,10 +1756,11 @@ fn layout_spec_help(
     }
 }
 
-fn builtin_spec(
+fn builtin_spec<'a>(
+    env: &mut Env<'a>,
     builder: &mut impl TypeContext,
-    interner: &STLayoutInterner,
-    builtin: &Builtin,
+    interner: &STLayoutInterner<'a>,
+    builtin: &Builtin<'a>,
     when_recursive: &WhenRecursive,
 ) -> Result<TypeId> {
     use Builtin::*;
@@ -1604,7 +1770,9 @@ fn builtin_spec(
         Decimal | Float(_) => builder.add_tuple_type(&[]),
         Str => str_type(builder),
         List(element_layout) => {
-            let element_type = layout_spec_help(builder, interner, element_layout, when_recursive)?;
+            let element_layout = interner.get(*element_layout);
+            let element_type =
+                layout_spec_help(env, builder, interner, element_layout, when_recursive)?;
 
             let cell = builder.add_heap_cell_type();
             let bag = builder.add_bag_type(element_type)?;

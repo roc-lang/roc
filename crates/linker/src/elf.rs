@@ -85,7 +85,6 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
             // for expects
             "roc_mmap" => Some("mmap"),
             "roc_getppid" => Some("getppid"),
-            "roc_send_signal" => Some("kill"),
             "roc_shm_open" => Some("shm_open"),
 
             _ => None,
@@ -1517,6 +1516,7 @@ mod tests {
     use super::*;
 
     use indoc::indoc;
+    use roc_build::link::preprocessed_host_filename;
     use target_lexicon::Triple;
 
     const ELF64_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_elf64") as &[_];
@@ -1575,7 +1575,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn zig_host_app_help(dir: &Path) {
+    fn zig_host_app_help(dir: &Path, target: &Triple) {
         let host_zig = indoc!(
             r#"
             const std = @import("std");
@@ -1669,17 +1669,19 @@ mod tests {
             panic!("zig build-exe failed");
         }
 
+        let preprocessed_host_filename = dir.join(preprocessed_host_filename(target).unwrap());
+
         preprocess_elf(
             target_lexicon::Endianness::Little,
             &dir.join("host"),
             &dir.join("metadata"),
-            &dir.join("preprocessedhost"),
+            &preprocessed_host_filename,
             &dir.join("libapp.so"),
             false,
             false,
         );
 
-        std::fs::copy(&dir.join("preprocessedhost"), &dir.join("final")).unwrap();
+        std::fs::copy(&preprocessed_host_filename, &dir.join("final")).unwrap();
 
         surgery_elf(
             &roc_app,
@@ -1693,10 +1695,12 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn zig_host_app() {
+        use std::str::FromStr;
+
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
 
-        zig_host_app_help(dir);
+        zig_host_app_help(dir, &Triple::from_str("x86_64-unknown-linux-musl").unwrap());
 
         let output = std::process::Command::new(&dir.join("final"))
             .current_dir(dir)

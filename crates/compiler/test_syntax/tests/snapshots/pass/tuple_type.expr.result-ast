@@ -1,0 +1,138 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483649),
+        ],
+        regions: [
+            @0-39,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-1 Identifier(
+                    "f",
+                ),
+                @3-27 Function(
+                    [
+                        @3-13 Tuple {
+                            fields: [
+                                @4-7 Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                                @9-12 Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                            ],
+                            ext: None,
+                        },
+                    ],
+                    @17-27 Tuple {
+                        fields: [
+                            @18-21 Apply(
+                                "",
+                                "Str",
+                                [],
+                            ),
+                            @23-26 Apply(
+                                "",
+                                "Str",
+                                [],
+                            ),
+                        ],
+                        ext: None,
+                    },
+                ),
+            ),
+            AnnotatedBody {
+                ann_pattern: @0-1 Identifier(
+                    "f",
+                ),
+                ann_type: @3-27 Function(
+                    [
+                        @3-13 Tuple {
+                            fields: [
+                                @4-7 Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                                @9-12 Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                            ],
+                            ext: None,
+                        },
+                    ],
+                    @17-27 Tuple {
+                        fields: [
+                            @18-21 Apply(
+                                "",
+                                "Str",
+                                [],
+                            ),
+                            @23-26 Apply(
+                                "",
+                                "Str",
+                                [],
+                            ),
+                        ],
+                        ext: None,
+                    },
+                ),
+                comment: None,
+                body_pattern: @28-29 Identifier(
+                    "f",
+                ),
+                body_expr: @32-39 Closure(
+                    [
+                        @33-34 Identifier(
+                            "x",
+                        ),
+                    ],
+                    @38-39 Var {
+                        module_name: "",
+                        ident: "x",
+                    },
+                ),
+            },
+        ],
+    },
+    @41-49 SpaceBefore(
+        Apply(
+            @41-42 Var {
+                module_name: "",
+                ident: "f",
+            },
+            [
+                @43-49 Tuple(
+                    [
+                        @44-45 Num(
+                            "1",
+                        ),
+                        @47-48 Num(
+                            "2",
+                        ),
+                    ],
+                ),
+            ],
+            Space,
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

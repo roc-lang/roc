@@ -10,6 +10,7 @@ members = [
     "crates/highlight",
     "crates/error_macros",
     "crates/reporting",
+    "crates/packaging",
     "crates/repl_cli",
     "crates/repl_eval",
     "crates/repl_test",
@@ -22,6 +23,8 @@ members = [
     "crates/docs_cli",
     "crates/linker",
     "crates/wasi-libc-sys",
+    "crates/wasm_module",
+    "crates/wasm_interp",
 ]
 exclude = [
     "ci/benchmarks/bench-runner",
@@ -76,6 +79,7 @@ distance = "0.4.0"
 encode_unicode = "1.0.0"
 errno = "0.2.8"
 fnv = "1.0.7"
+fs_extra = "1.2.0"
 hashbrown = { version = "0.12.3", features = [ "bumpalo" ] }
 iced-x86 = { version = "1.15.0", default-features = false, features = ["std", "decoder", "op_code_info", "instr_info"] }
 im    = "15.0.0"
@@ -109,7 +113,6 @@ target-lexicon = "0.12.3"
 tempfile = "3.2.0"
 unicode-segmentation = "1.10.0"
 walkdir = "2.3.2"
-wasm3 = { git = "https://github.com/roc-lang/wasm3-rs", rev = "f0f807d1fc0a50d1d68e5799e54ee62c05af00f5" }
 wyhash = "0.5.0"
 
 # TODO: Deal with the update of object to 0.27.

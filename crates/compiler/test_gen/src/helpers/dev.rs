@@ -2,6 +2,8 @@ use libloading::Library;
 use roc_build::link::{link, LinkType};
 use roc_builtins::bitcode;
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
+use roc_mono::ir::SingleEntryPoint;
+use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
 use tempfile::tempdir;
 
@@ -62,7 +64,7 @@ pub fn helper(
         filename,
         module_src,
         src_dir,
-        Default::default(),
+        RocCacheDir::Disallowed,
         load_config,
     );
 
@@ -74,7 +76,7 @@ pub fn helper(
         procedures,
         mut interns,
         exposed_to_host,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
@@ -103,8 +105,15 @@ pub fn helper(
 
     debug_assert_eq!(exposed_to_host.values.len(), 1);
     let entry_point = match loaded.entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
-            roc_mono::ir::EntryPoint { symbol, layout }
+        EntryPoint::Executable {
+            exposed_to_host,
+            platform_path: _,
+        } => {
+            // TODO support multiple of these!
+            debug_assert_eq!(exposed_to_host.len(), 1);
+            let (symbol, layout) = exposed_to_host[0];
+
+            SingleEntryPoint { symbol, layout }
         }
         EntryPoint::Test => {
             unreachable!()
@@ -178,7 +187,6 @@ pub fn helper(
 
     let env = roc_gen_dev::Env {
         arena,
-        layout_interner: &layout_interner,
         module_id,
         exposed_to_host: exposed_to_host.values.keys().copied().collect(),
         lazy_literals,
@@ -186,14 +194,21 @@ pub fn helper(
     };
 
     let target = target_lexicon::Triple::host();
-    let module_object = roc_gen_dev::build_module(&env, &mut interns, &target, procedures);
+    let module_object = roc_gen_dev::build_module(
+        &env,
+        &mut interns,
+        &mut layout_interner,
+        &target,
+        procedures,
+    );
 
     let module_out = module_object
         .write()
         .expect("failed to build output object");
     std::fs::write(&app_o_file, module_out).expect("failed to write object to file");
 
-    // std::fs::copy(&app_o_file, "/tmp/app.o").unwrap();
+    let builtins_host_tempfile =
+        bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
     let (mut child, dylib_path) = link(
         &target,
@@ -202,13 +217,17 @@ pub fn helper(
         // With the current method all methods are kept and it adds about 100k to all outputs.
         &[
             app_o_file.to_str().unwrap(),
-            &bitcode::get_builtins_host_obj_path(),
+            builtins_host_tempfile.path().to_str().unwrap(),
         ],
         LinkType::Dylib,
     )
     .expect("failed to link dynamic library");
 
     child.wait().unwrap();
+
+    // Extend the lifetime of the tempfile so it doesn't get dropped
+    // (and thus deleted) before the linking process is done using it!
+    let _ = builtins_host_tempfile;
 
     // Load the dylib
     let path = dylib_path.as_path().to_str().unwrap();

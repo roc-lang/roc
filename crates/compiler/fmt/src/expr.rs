@@ -43,7 +43,8 @@ impl<'a> Formattable for Expr<'a> {
             | MalformedIdent(_, _)
             | MalformedClosure
             | Tag(_)
-            | OpaqueRef(_) => false,
+            | OpaqueRef(_)
+            | Crash => false,
 
             // These expressions always have newlines
             Defs(_, _) | When(_, _) => true,
@@ -54,13 +55,18 @@ impl<'a> Formattable for Expr<'a> {
                 use roc_parse::ast::StrLiteral::*;
 
                 match literal {
-                    PlainLine(_) | Line(_) => {
+                    PlainLine(string) => {
+                        // When a PlainLine contains '\n' or '"', format as a block string
+                        string.contains('"') || string.contains('\n')
+                    }
+                    Line(_) => {
                         // If this had any newlines, it'd have parsed as Block.
                         false
                     }
-                    Block(lines) => {
-                        // Block strings don't *have* to be multiline!
-                        lines.len() > 1
+                    Block(_) => {
+                        // Block strings are always formatted on multiple lines,
+                        // even if the string is only a single line.
+                        true
                     }
                 }
             }
@@ -71,6 +77,7 @@ impl<'a> Formattable for Expr<'a> {
             Expect(condition, continuation) => {
                 condition.is_multiline() || continuation.is_multiline()
             }
+            Dbg(condition, continuation) => condition.is_multiline() || continuation.is_multiline(),
 
             If(branches, final_else) => {
                 final_else.is_multiline()
@@ -190,6 +197,10 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push('_');
                 buf.push_str(name);
             }
+            Crash => {
+                buf.indent(indent);
+                buf.push_str("crash");
+            }
             Apply(loc_expr, loc_args, _) => {
                 buf.indent(indent);
                 if apply_needs_parens && !loc_args.is_empty() {
@@ -292,17 +303,7 @@ impl<'a> Formattable for Expr<'a> {
             }
             SingleQuote(string) => {
                 buf.indent(indent);
-                buf.push('\'');
-                for c in string.chars() {
-                    if c == '"' {
-                        buf.push_char_literal('"')
-                    } else {
-                        for escaped in c.escape_default() {
-                            buf.push_char_literal(escaped);
-                        }
-                    }
-                }
-                buf.push('\'');
+                format_sq_literal(buf, string);
             }
             &NonBase10Int {
                 base,
@@ -325,9 +326,6 @@ impl<'a> Formattable for Expr<'a> {
             }
             Record(fields) => {
                 fmt_record(buf, None, *fields, indent);
-            }
-            Tuple(_fields) => {
-                todo!("format tuple");
             }
             RecordUpdate { update, fields } => {
                 fmt_record(buf, Some(*update), *fields, indent);
@@ -365,14 +363,12 @@ impl<'a> Formattable for Expr<'a> {
                                 indent,
                             );
                         } else {
-                            if !empty_line_before_return {
-                                buf.newline();
-                            }
-
                             ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
                         }
                     }
                     _ => {
+                        buf.ensure_ends_with_newline();
+                        buf.indent(indent);
                         // Even if there were no defs, which theoretically should never happen,
                         // still print the return value.
                         ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
@@ -382,10 +378,14 @@ impl<'a> Formattable for Expr<'a> {
             Expect(condition, continuation) => {
                 fmt_expect(buf, condition, continuation, self.is_multiline(), indent);
             }
+            Dbg(condition, continuation) => {
+                fmt_dbg(buf, condition, continuation, self.is_multiline(), indent);
+            }
             If(branches, final_else) => {
                 fmt_if(buf, branches, final_else, self.is_multiline(), indent);
             }
             When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
+            Tuple(items) => fmt_collection(buf, indent, Braces::Round, *items, Newlines::No),
             List(items) => fmt_collection(buf, indent, Braces::Square, *items, Newlines::No),
             BinOps(lefts, right) => fmt_binops(buf, lefts, right, false, parens, indent),
             UnaryOp(sub_expr, unary_op) => {
@@ -421,11 +421,28 @@ impl<'a> Formattable for Expr<'a> {
                 buf.push('.');
                 buf.push_str(key);
             }
-            MalformedIdent(_, _) => {}
+            MalformedIdent(str, _) => {
+                buf.indent(indent);
+                buf.push_str(str)
+            }
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}
         }
     }
+}
+
+pub(crate) fn format_sq_literal(buf: &mut Buf, s: &str) {
+    buf.push('\'');
+    for c in s.chars() {
+        if c == '"' {
+            buf.push_char_literal('"')
+        } else {
+            for escaped in c.escape_default() {
+                buf.push_char_literal(escaped);
+            }
+        }
+    }
+    buf.push('\'');
 }
 
 fn starts_with_newline(expr: &Expr) -> bool {
@@ -505,13 +522,13 @@ fn push_op(buf: &mut Buf, op: BinOp) {
 pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u16) {
     use roc_parse::ast::StrLiteral::*;
 
-    buf.indent(indent);
-    buf.push('"');
     match literal {
         PlainLine(string) => {
             // When a PlainLine contains '\n' or '"', format as a block string
             if string.contains('"') || string.contains('\n') {
-                buf.push_str("\"\"");
+                buf.ensure_ends_with_newline();
+                buf.indent(indent);
+                buf.push_str("\"\"\"");
                 buf.newline();
                 for line in string.split('\n') {
                     buf.indent(indent);
@@ -519,34 +536,46 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
                     buf.newline();
                 }
                 buf.indent(indent);
-                buf.push_str("\"\"");
+                buf.push_str("\"\"\"");
             } else {
+                buf.indent(indent);
+                buf.push('"');
                 buf.push_str_allow_spaces(string);
+                buf.push('"');
             };
         }
         Line(segments) => {
+            buf.indent(indent);
+            buf.push('"');
             for seg in segments.iter() {
                 format_str_segment(seg, buf, 0)
             }
+            buf.push('"');
         }
         Block(lines) => {
             // Block strings will always be formatted with """ on new lines
-            buf.push_str("\"\"");
+            buf.ensure_ends_with_newline();
+            buf.indent(indent);
+            buf.push_str("\"\"\"");
             buf.newline();
 
             for segments in lines.iter() {
                 for seg in segments.iter() {
-                    buf.indent(indent);
-                    format_str_segment(seg, buf, indent);
+                    // only add indent if the line isn't empty
+                    if *seg != StrSegment::Plaintext("\n") {
+                        buf.indent(indent);
+                        format_str_segment(seg, buf, indent);
+                    } else {
+                        buf.newline();
+                    }
                 }
 
                 buf.newline();
             }
             buf.indent(indent);
-            buf.push_str("\"\"");
+            buf.push_str("\"\"\"");
         }
     }
-    buf.push('"');
 }
 
 fn fmt_binops<'a, 'buf>(
@@ -660,11 +689,9 @@ fn fmt_when<'a, 'buf>(
     indent: u16,
 ) {
     let is_multiline_condition = loc_condition.is_multiline();
+    buf.ensure_ends_with_newline();
     buf.indent(indent);
-    buf.push_str(
-        "\
-         when",
-    );
+    buf.push_str("when");
     if is_multiline_condition {
         let condition_indent = indent + INDENT;
 
@@ -835,6 +862,33 @@ fn fmt_when<'a, 'buf>(
 
         prev_branch_was_multiline = is_multiline_expr || is_multiline_patterns;
     }
+}
+
+fn fmt_dbg<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    condition: &'a Loc<Expr<'a>>,
+    continuation: &'a Loc<Expr<'a>>,
+    is_multiline: bool,
+    indent: u16,
+) {
+    buf.ensure_ends_with_newline();
+    buf.indent(indent);
+    buf.push_str("dbg");
+
+    let return_indent = if is_multiline {
+        buf.newline();
+        indent + INDENT
+    } else {
+        buf.spaces(1);
+        indent
+    };
+
+    condition.format(buf, return_indent);
+
+    // Always put a blank line after the `dbg` line(s)
+    buf.ensure_ends_with_blank_line();
+
+    continuation.format(buf, indent);
 }
 
 fn fmt_expect<'a, 'buf>(

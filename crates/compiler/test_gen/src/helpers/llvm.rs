@@ -7,8 +7,9 @@ use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
-use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
-use roc_mono::ir::OptLevel;
+use roc_load::{EntryPoint, ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
+use roc_mono::ir::{CrashTag, OptLevel, SingleEntryPoint};
+use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_utils::zig;
@@ -79,13 +80,15 @@ fn create_llvm_module<'a>(
         filename,
         module_src,
         src_dir,
-        Default::default(),
+        RocCacheDir::Disallowed,
         load_config,
     );
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
+        Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
+            report,
+        ))) => {
             println!("{}", report);
             panic!();
         }
@@ -95,9 +98,8 @@ fn create_llvm_module<'a>(
     use roc_load::MonomorphizedModule;
     let MonomorphizedModule {
         procedures,
-        entry_point,
         interns,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
@@ -214,7 +216,6 @@ fn create_llvm_module<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
-        layout_interner: &layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -234,9 +235,16 @@ fn create_llvm_module<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let entry_point = match entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
-            roc_mono::ir::EntryPoint { symbol, layout }
+    let entry_point = match loaded.entry_point {
+        EntryPoint::Executable {
+            exposed_to_host,
+            platform_path: _,
+        } => {
+            // TODO support multiple of these!
+            debug_assert_eq!(exposed_to_host.len(), 1);
+            let (symbol, layout) = exposed_to_host[0];
+
+            SingleEntryPoint { symbol, layout }
         }
         EntryPoint::Test => {
             unreachable!()
@@ -248,12 +256,14 @@ fn create_llvm_module<'a>(
         LlvmBackendMode::CliTest => unreachable!(),
         LlvmBackendMode::WasmGenTest => roc_gen_llvm::llvm::build::build_wasm_test_wrapper(
             &env,
+            &mut layout_interner,
             config.opt_level,
             procedures,
             entry_point,
         ),
         LlvmBackendMode::GenTest => roc_gen_llvm::llvm::build::build_procedures_return_main(
             &env,
+            &mut layout_interner,
             config.opt_level,
             procedures,
             entry_point,
@@ -544,7 +554,10 @@ macro_rules! assert_wasm_evals_to {
 }
 
 #[allow(dead_code)]
-pub fn try_run_lib_function<T>(main_fn_name: &str, lib: &libloading::Library) -> Result<T, String> {
+pub fn try_run_lib_function<T>(
+    main_fn_name: &str,
+    lib: &libloading::Library,
+) -> Result<T, (String, CrashTag)> {
     unsafe {
         let main: libloading::Symbol<unsafe extern "C" fn(*mut RocCallResult<T>)> = lib
             .get(main_fn_name.as_bytes())
@@ -565,6 +578,7 @@ macro_rules! assert_llvm_evals_to {
         use bumpalo::Bump;
         use inkwell::context::Context;
         use roc_gen_llvm::llvm::build::LlvmBackendMode;
+        use roc_mono::ir::CrashTag;
 
         let arena = Bump::new();
         let context = Context::create();
@@ -594,11 +608,11 @@ macro_rules! assert_llvm_evals_to {
                 #[cfg(windows)]
                 std::mem::forget(given);
             }
-            Err(msg) => panic!("Roc failed with message: \"{}\"", msg),
+            Err((msg, tag)) => match tag {
+                CrashTag::Roc => panic!(r#"Roc failed with message: "{}""#, msg),
+                CrashTag::User => panic!(r#"User crash with message: "{}""#, msg),
+            },
         }
-
-        // artificially extend the lifetime of `lib`
-        lib.close().unwrap();
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {
@@ -655,29 +669,6 @@ macro_rules! assert_evals_to {
     }};
 }
 
-#[allow(unused_macros)]
-macro_rules! expect_runtime_error_panic {
-    ($src:expr) => {{
-        #[cfg(feature = "gen-llvm-wasm")]
-        $crate::helpers::llvm::assert_wasm_evals_to!(
-            $src,
-            false, // fake value/type for eval
-            bool,
-            $crate::helpers::llvm::identity,
-            true // ignore problems
-        );
-
-        #[cfg(not(feature = "gen-llvm-wasm"))]
-        $crate::helpers::llvm::assert_llvm_evals_to!(
-            $src,
-            false, // fake value/type for eval
-            bool,
-            $crate::helpers::llvm::identity,
-            true // ignore problems
-        );
-    }};
-}
-
 #[allow(dead_code)]
 pub fn identity<T>(value: T) -> T {
     value
@@ -689,5 +680,3 @@ pub(crate) use assert_evals_to;
 pub(crate) use assert_llvm_evals_to;
 #[allow(unused_imports)]
 pub(crate) use assert_wasm_evals_to;
-#[allow(unused_imports)]
-pub(crate) use expect_runtime_error_panic;

@@ -12,7 +12,7 @@ target-lexicon.workspace = true
 libloading.workspace = true
 signal-hook.workspace = true
 libc.workspace = true
-inkwell.workspace = true 
+inkwell.workspace = true
 
 roc_builtins = {path = "../compiler/builtins"}
 roc_can = {path = "../compiler/can"}
@@ -23,6 +23,7 @@ roc_mono = {path = "../compiler/mono"}
 roc_parse = {path = "../compiler/parse"}
 roc_module = {path = "../compiler/module"}
 roc_repl_eval = {path = "../repl_eval"}
+roc_packaging = {path = "../packaging"}
 roc_reporting = {path = "../reporting"}
 roc_std = {path = "../roc_std"}
 roc_target = {path = "../compiler/roc_target"}

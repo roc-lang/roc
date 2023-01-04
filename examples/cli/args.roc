@@ -1,10 +1,11 @@
 app "args"
     packages { pf: "cli-platform/main.roc" }
-    imports [pf.Stdout, pf.Arg, pf.Program.{ Program }]
+    imports [pf.Stdout, pf.Arg, pf.Task.{ Task }, pf.Process]
     provides [main] to pf
 
-main : Program
-main = Program.withArgs \args ->
+main : Task {} []
+main =
+    args <- Arg.list |> Task.await
     parser =
         divCmd =
             Arg.succeed (\dividend -> \divisor -> Div (Num.toF64 dividend) (Num.toF64 divisor))
@@ -53,11 +54,10 @@ main = Program.withArgs \args ->
             runCmd cmd
             |> Num.toStr
             |> Stdout.line
-            |> Program.exit 0
 
         Err helpMenu ->
-            Stdout.line helpMenu
-            |> Program.exit 1
+            {} <- Stdout.line helpMenu |> Task.await
+            Process.exit 1
 
 runCmd = \cmd ->
     when cmd is

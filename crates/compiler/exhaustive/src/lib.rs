@@ -7,6 +7,7 @@ use roc_module::{
     ident::{Lowercase, TagIdIntType, TagName},
     symbol::Symbol,
 };
+use roc_problem::Severity;
 use roc_region::all::Region;
 
 use self::Pattern::*;
@@ -147,6 +148,17 @@ pub enum Error {
         branch_region: Region,
         index: HumanIndex,
     },
+}
+
+impl Error {
+    pub fn severity(&self) -> Severity {
+        use Severity::*;
+        match self {
+            Error::Incomplete(..) => RuntimeError,
+            Error::Redundant { .. } => Warning,
+            Error::Unmatchable { .. } => Warning,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

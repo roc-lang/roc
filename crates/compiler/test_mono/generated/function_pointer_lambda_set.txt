@@ -1,0 +1,13 @@
+procedure Test.1 (Test.5):
+    let Test.9 : U64 = 1i64;
+    ret Test.9;
+
+procedure Test.2 (Test.3):
+    let Test.8 : {} = Struct {};
+    let Test.7 : U64 = CallByName Test.1 Test.8;
+    ret Test.7;
+
+procedure Test.0 ():
+    let Test.4 : {} = Struct {};
+    let Test.6 : U64 = CallByName Test.2 Test.4;
+    ret Test.6;

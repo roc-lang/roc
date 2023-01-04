@@ -4,7 +4,7 @@ const math = std.math;
 const RocList = @import("list.zig").RocList;
 const RocStr = @import("str.zig").RocStr;
 const WithOverflow = @import("utils.zig").WithOverflow;
-const roc_panic = @import("utils.zig").panic;
+const roc_panic = @import("panic.zig").panic_help;
 
 pub fn NumParseResult(comptime T: type) type {
     // on the roc side we sort by alignment; putting the errorcode last
@@ -284,7 +284,7 @@ pub fn exportAddOrPanic(comptime T: type, comptime name: []const u8) void {
         fn func(self: T, other: T) callconv(.C) T {
             const result = addWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                roc_panic("integer addition overflowed!", 1);
+                roc_panic("integer addition overflowed!", 0);
                 unreachable;
             } else {
                 return result.value;
@@ -343,7 +343,7 @@ pub fn exportSubOrPanic(comptime T: type, comptime name: []const u8) void {
         fn func(self: T, other: T) callconv(.C) T {
             const result = subWithOverflow(T, self, other);
             if (result.has_overflowed) {
-                roc_panic("integer subtraction overflowed!", 1);
+                roc_panic("integer subtraction overflowed!", 0);
                 unreachable;
             } else {
                 return result.value;
@@ -451,7 +451,7 @@ pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []con
         fn func(self: T, other: T) callconv(.C) T {
             const result = @call(.{ .modifier = always_inline }, mulWithOverflow, .{ T, W, self, other });
             if (result.has_overflowed) {
-                roc_panic("integer multiplication overflowed!", 1);
+                roc_panic("integer multiplication overflowed!", 0);
                 unreachable;
             } else {
                 return result.value;

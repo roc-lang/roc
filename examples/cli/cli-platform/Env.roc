@@ -4,7 +4,7 @@ interface Env
 
 ## Reads the [current working directory](https://en.wikipedia.org/wiki/Working_directory)
 ## from the environment. File operations on relative [Path]s are relative to this directory.
-cwd : Task Path [CwdUnavailable] [Read [Env]]
+cwd : Task Path [CwdUnavailable]
 cwd =
     effect = Effect.map Effect.cwd \bytes ->
         if List.isEmpty bytes then
@@ -17,14 +17,14 @@ cwd =
 ## Sets the [current working directory](https://en.wikipedia.org/wiki/Working_directory)
 ## in the environment. After changing it, file operations on relative [Path]s will be relative
 ## to this directory.
-setCwd : Path -> Task {} [InvalidCwd] [Write [Env]]
+setCwd : Path -> Task {} [InvalidCwd]
 setCwd = \path ->
     Effect.setCwd (InternalPath.toBytes path)
     |> Effect.map (\result -> Result.mapErr result \{} -> InvalidCwd)
     |> InternalTask.fromEffect
 
 ## Gets the path to the currently-running executable.
-exePath : Task Path [ExePathUnavailable] [Read [Env]]
+exePath : Task Path [ExePathUnavailable]
 exePath =
     effect =
         Effect.map Effect.exePath \result ->
@@ -39,7 +39,7 @@ exePath =
 ## If the value is invalid Unicode, the invalid parts will be replaced with the
 ## [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
 ## (`�`).
-var : Str -> Task Str [VarNotFound] [Read [Env]]
+var : Str -> Task Str [VarNotFound]
 var = \name ->
     Effect.envVar name
     |> Effect.map (\result -> Result.mapErr result \{} -> VarNotFound)
@@ -65,7 +65,7 @@ var = \name ->
 ## - comma-separated lists (of either strings or numbers), as long as there are no spaces after the commas
 ##
 ## Trying to decode into any other types will always fail with a `DecodeErr`.
-decode : Str -> Task val [VarNotFound, DecodeErr DecodeError] [Read [Env]] | val has Decoding
+decode : Str -> Task val [VarNotFound, DecodeErr DecodeError] | val has Decoding
 decode = \name ->
     Effect.envVar name
     |> Effect.map
@@ -83,7 +83,7 @@ decode = \name ->
 ##
 ## If any key or value contains invalid Unicode, the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
 ## (`�`) will be used in place of any parts of keys or values that are invalid Unicode.
-dict : Task (Dict Str Str) * [Read [Env]]
+dict : Task (Dict Str Str) *
 dict =
     Effect.envDict
     |> Effect.map Ok

@@ -1,7 +1,4 @@
 zig-cache
 src/zig-cache
 benchmark/zig-cache
-builtins.ll
-builtins.bc
-builtins.o
 dec

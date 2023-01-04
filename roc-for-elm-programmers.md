@@ -1240,6 +1240,14 @@ If you put these into a hypothetical Roc REPL, here's what you'd see:
 28 : Int *
 ```
 
+## Testing
+
+Instead of a separate testing tool, Roc has a built-in `expect` keyword, which
+you can use in conjunction with `roc test` to run tests.
+
+See [the tutorial section on testing](https://www.roc-lang.org/tutorial#tests-and-expectations)
+for details.
+
 ## Abilities
 
 `comparable`, `appendable`, and `number` don't exist in Roc.
@@ -1249,7 +1257,7 @@ If you put these into a hypothetical Roc REPL, here's what you'd see:
 - `comparable` is used in Elm for comparison operators (like `<` and such), plus `List.sort`, `Dict`, and `Set`. Roc's comparison operators (like `<`) only accept numbers; `"foo" < "bar"` is valid Elm, but will not compile in Roc. Roc's dictionaries and sets are hashmaps behind the scenes (rather than ordered trees), so their keys need to be hashable but not necessarily comparable.
 
 That said, Roc's `Dict` and `Set` do have a restriction on their keys, just not `comparable`.
-See the section on Abilities in [the tutorial](TUTORIAL.md) for details.
+See the section on Abilities in [the tutorial](https://roc-lang.org/tutorial) for details.
 
 ## Standard library
 
@@ -1299,6 +1307,7 @@ Some differences to note:
 - No `Tuple`. Roc doesn't have tuple syntax. As a convention, `Pair` can be used to represent tuples (e.g. `List.zip : List a, List b -> List [Pair a b]*`), but this comes up infrequently compared to languages that have dedicated syntax for it.
 - No `Task`. By design, platform authors implement `Task` (or don't; it's up to them) - it's not something that really *could* be usefully present in Roc's standard library.
 - No `Process`, `Platform`, `Cmd`, or `Sub` - similarly to `Task`, these are things platform authors would include, or not.
+- No `Debug`. Roc has a [built-in `dbg` keyword](https://www.roc-lang.org/tutorial#debugging) instead of `Debug.log` and a [`crash` keyword](https://www.roc-lang.org/tutorial#crashing) instead of `Debug.todo`.
 - No `Maybe`. This is by design. If a function returns a potential error, use `Result` with an error type that uses a zero-arg tag to describe what went wrong. (For example, `List.first : List a -> Result a [ListWasEmpty]*` instead of `List.first : List a -> Maybe a`.) If you want to have a record field be optional, use an Optional Record Field directly (see earlier). If you want to describe something that's neither an operation that can fail nor an optional field, use a more descriptive tag - e.g. for a nullable JSON decoder, instead of `nullable : Decoder a -> Decoder (Maybe a)`, make a self-documenting API like `nullable : Decoder a -> Decoder [Null, NonNull a]*`.
 
 ## Operator Desugaring Table

@@ -9,6 +9,7 @@ pub mod gen_compare;
 pub mod gen_dict;
 pub mod gen_list;
 pub mod gen_num;
+pub mod gen_panic;
 pub mod gen_primitives;
 pub mod gen_records;
 pub mod gen_refcount;

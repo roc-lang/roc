@@ -203,6 +203,9 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             let (fn_var, loc_fn, _closure_var, _ret_var) = &**f;
             walk_call(visitor, *fn_var, loc_fn, args);
         }
+        Expr::Crash { msg, .. } => {
+            visitor.visit_expr(&msg.value, msg.region, Variable::STR);
+        }
         Expr::RunLowLevel {
             op: _,
             args,
@@ -268,8 +271,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             loc_continuation,
             lookups_in_cond: _,
         } => {
-            // TODO: what type does an expect have? bool
-            visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::NULL);
+            visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
             visitor.visit_expr(
                 &loc_continuation.value,
                 loc_continuation.region,
@@ -281,8 +283,20 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             loc_continuation,
             lookups_in_cond: _,
         } => {
-            // TODO: what type does an expect have? bool
-            visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::NULL);
+            visitor.visit_expr(&loc_condition.value, loc_condition.region, Variable::BOOL);
+            visitor.visit_expr(
+                &loc_continuation.value,
+                loc_continuation.region,
+                Variable::NULL,
+            );
+        }
+        Expr::Dbg {
+            variable,
+            loc_condition,
+            loc_continuation,
+            symbol: _,
+        } => {
+            visitor.visit_expr(&loc_condition.value, loc_condition.region, *variable);
             visitor.visit_expr(
                 &loc_continuation.value,
                 loc_continuation.region,

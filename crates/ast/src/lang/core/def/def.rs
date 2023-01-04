@@ -278,6 +278,7 @@ fn to_pending_def<'a>(
         Type(TypeDef::Opaque { .. }) => internal_error!("opaques not implemented"),
         Type(TypeDef::Ability { .. }) => todo_abilities!(),
 
+        Value(AstValueDef::Dbg { .. }) => todo!(),
         Value(AstValueDef::Expect { .. }) => todo!(),
         Value(AstValueDef::ExpectFx { .. }) => todo!(),
 

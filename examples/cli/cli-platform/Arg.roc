@@ -14,8 +14,16 @@ interface Arg
         choice,
         withParser,
         program,
+        list,
     ]
-    imports []
+    imports [Effect, InternalTask, Task.{ Task }]
+
+## Gives a list of the program's command-line arguments.
+list : Task (List Str) *
+list =
+    Effect.args
+    |> Effect.map Ok
+    |> InternalTask.fromEffect
 
 ## A parser for a command-line application.
 ## A [NamedParser] is usually built from a [Parser] using [program].
@@ -124,8 +132,7 @@ toHelp = \parser ->
 succeed : a -> Parser a
 succeed = \val -> @Parser (Succeed val)
 
-# TODO: check overflows when this annotation is included
-# toHelpHelper : Parser *, List Config -> Help
+toHelpHelper : Parser *, List Config -> Help
 toHelpHelper = \@Parser parser, configs ->
     when parser is
         Succeed _ -> Config configs
@@ -567,7 +574,7 @@ formatHelpHelp = \n, cmdHelp ->
                     "\n\n"
 
             """
-            
+
             \(indented)COMMANDS:
             \(fmtCmdHelp)
             """
@@ -599,7 +606,7 @@ formatHelpHelp = \n, cmdHelp ->
                         |> Str.joinWith "\n"
 
                     """
-                    
+
                     \(indented)OPTIONS:
                     \(helpStr)
                     """
@@ -614,7 +621,7 @@ formatHelpHelp = \n, cmdHelp ->
                         |> Str.joinWith "\n"
 
                     """
-                    
+
                     \(indented)ARGS:
                     \(helpStr)
                     """
@@ -696,7 +703,7 @@ formatError = \err ->
                 |> Str.joinWith ", "
 
             """
-            The \(fmtFound) subcommand was found, but it's not expected in this context! 
+            The \(fmtFound) subcommand was found, but it's not expected in this context!
             The available subcommands are:
             \t\(fmtChoices)
             """
@@ -902,7 +909,7 @@ expect
     ==
     """
     test
-    
+
     OPTIONS:
         --foo    the foo option  (string)
         --bar, -B  (string)
@@ -929,13 +936,13 @@ expect
     ==
     """
     test
-    
+
     COMMANDS:
         login
             OPTIONS:
                 --user  (string)
                 --pw  (string)
-    
+
         publish
             OPTIONS:
                 --file  (string)
@@ -953,7 +960,7 @@ expect
     """
     test
     a test cli app
-    
+
     COMMANDS:
         login
     """
@@ -1026,7 +1033,7 @@ expect
             err
             ==
             """
-            The "logs" subcommand was found, but it's not expected in this context! 
+            The "logs" subcommand was found, but it's not expected in this context!
             The available subcommands are:
             \t"auth", "publish"
             """

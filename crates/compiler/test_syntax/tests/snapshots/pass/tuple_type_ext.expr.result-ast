@@ -1,0 +1,154 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483649),
+        ],
+        regions: [
+            @0-41,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-1 Identifier(
+                    "f",
+                ),
+                @3-29 Function(
+                    [
+                        @3-14 Tuple {
+                            fields: [
+                                @4-7 Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                                @9-12 Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                            ],
+                            ext: Some(
+                                @13-14 BoundVariable(
+                                    "a",
+                                ),
+                            ),
+                        },
+                    ],
+                    @18-29 Tuple {
+                        fields: [
+                            @19-22 Apply(
+                                "",
+                                "Str",
+                                [],
+                            ),
+                            @24-27 Apply(
+                                "",
+                                "Str",
+                                [],
+                            ),
+                        ],
+                        ext: Some(
+                            @28-29 BoundVariable(
+                                "a",
+                            ),
+                        ),
+                    },
+                ),
+            ),
+            AnnotatedBody {
+                ann_pattern: @0-1 Identifier(
+                    "f",
+                ),
+                ann_type: @3-29 Function(
+                    [
+                        @3-14 Tuple {
+                            fields: [
+                                @4-7 Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                                @9-12 Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                            ],
+                            ext: Some(
+                                @13-14 BoundVariable(
+                                    "a",
+                                ),
+                            ),
+                        },
+                    ],
+                    @18-29 Tuple {
+                        fields: [
+                            @19-22 Apply(
+                                "",
+                                "Str",
+                                [],
+                            ),
+                            @24-27 Apply(
+                                "",
+                                "Str",
+                                [],
+                            ),
+                        ],
+                        ext: Some(
+                            @28-29 BoundVariable(
+                                "a",
+                            ),
+                        ),
+                    },
+                ),
+                comment: None,
+                body_pattern: @30-31 Identifier(
+                    "f",
+                ),
+                body_expr: @34-41 Closure(
+                    [
+                        @35-36 Identifier(
+                            "x",
+                        ),
+                    ],
+                    @40-41 Var {
+                        module_name: "",
+                        ident: "x",
+                    },
+                ),
+            },
+        ],
+    },
+    @43-51 SpaceBefore(
+        Apply(
+            @43-44 Var {
+                module_name: "",
+                ident: "f",
+            },
+            [
+                @45-51 Tuple(
+                    [
+                        @46-47 Num(
+                            "1",
+                        ),
+                        @49-50 Num(
+                            "2",
+                        ),
+                    ],
+                ),
+            ],
+            Space,
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

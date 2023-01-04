@@ -1,0 +1,94 @@
+Module {
+    comments: [],
+    header: Platform(
+        PlatformHeader {
+            before_name: [],
+            name: @9-21 PackageName(
+                "test/types",
+            ),
+            requires: KeywordItem {
+                keyword: Spaces {
+                    before: [
+                        Newline,
+                    ],
+                    item: RequiresKeyword,
+                    after: [],
+                },
+                item: PlatformRequires {
+                    rigids: [
+                        @37-42 UppercaseIdent(
+                            "Flags",
+                        ),
+                        @44-49 UppercaseIdent(
+                            "Model",
+                        ),
+                    ],
+                    signature: @55-77 TypedIdent {
+                        ident: @55-59 "main",
+                        spaces_before_colon: [],
+                        ann: @62-77 Apply(
+                            "",
+                            "App",
+                            [
+                                @66-71 Apply(
+                                    "",
+                                    "Flags",
+                                    [],
+                                ),
+                                @72-77 Apply(
+                                    "",
+                                    "Model",
+                                    [],
+                                ),
+                            ],
+                        ),
+                    },
+                },
+            },
+            exposes: KeywordItem {
+                keyword: Spaces {
+                    before: [
+                        Newline,
+                    ],
+                    item: ExposesKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+            packages: KeywordItem {
+                keyword: Spaces {
+                    before: [
+                        Newline,
+                    ],
+                    item: PackagesKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+            imports: KeywordItem {
+                keyword: Spaces {
+                    before: [
+                        Newline,
+                    ],
+                    item: ImportsKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+            provides: KeywordItem {
+                keyword: Spaces {
+                    before: [
+                        Newline,
+                    ],
+                    item: ProvidesKeyword,
+                    after: [],
+                },
+                item: [
+                    @141-152 ExposedName(
+                        "mainForHost",
+                    ),
+                ],
+            },
+        },
+    ),
+}

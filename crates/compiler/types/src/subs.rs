@@ -798,8 +798,10 @@ fn subs_fmt_content(this: &Content, subs: &Subs, f: &mut fmt::Formatter) -> fmt:
             };
             write!(f, "FlexAble({}, {:?})", name, subs.get_subs_slice(*symbols))
         }
-        Content::RigidVar(name) => write!(f, "Rigid({:?})", name),
-        Content::RigidAbleVar(name, symbol) => write!(f, "RigidAble({:?}, {:?})", name, symbol),
+        Content::RigidVar(name) => write!(f, "Rigid({})", subs[*name].as_str()),
+        Content::RigidAbleVar(name, symbol) => {
+            write!(f, "RigidAble({}, {:?})", subs[*name].as_str(), symbol)
+        }
         Content::RecursionVar {
             structure,
             opt_name,
@@ -1586,7 +1588,7 @@ fn float_type(
                 num_binary64,
                 AliasVariables::default(),
                 Variable::EMPTY_TAG_UNION,
-                AliasKind::Structural,
+                AliasKind::Opaque,
             )
         });
     }
@@ -1665,6 +1667,8 @@ impl Subs {
     pub const TAG_NAME_BAD_UTF_8: SubsIndex<TagName> = SubsIndex::new(3);
     pub const TAG_NAME_OUT_OF_BOUNDS: SubsIndex<TagName> = SubsIndex::new(4);
 
+    pub const STR_SLICE: VariableSubsSlice = SubsSlice::new(0, 1);
+
     #[rustfmt::skip]
     pub const AB_ENCODING: SubsSlice<Symbol> = SubsSlice::new(0, 1);
     #[rustfmt::skip]
@@ -1702,14 +1706,18 @@ impl Subs {
 
         let mut subs = Subs {
             utable: UnificationTable::default(),
-            variables: Vec::new(),
+            variables: vec![
+                // Used for STR_SLICE
+                Variable::STR,
+            ],
             tag_names,
             symbol_names,
             field_names: Vec::new(),
             record_fields: Vec::new(),
-            // store an empty slice at the first position
-            // used for "TagOrFunction"
-            variable_slices: vec![VariableSubsSlice::default()],
+            variable_slices: vec![
+                // used for "TagOrFunction"
+                VariableSubsSlice::default(),
+            ],
             unspecialized_lambda_sets: Vec::new(),
             tag_name_cache: Default::default(),
             uls_of_var: Default::default(),
@@ -1951,7 +1959,10 @@ impl Subs {
     /// This ignores [Content::RecursionVar]s that occur recursively, because those are
     /// already priced in and expected to occur.
     pub fn occurs(&self, var: Variable) -> Result<(), (Variable, Vec<Variable>)> {
-        occurs(self, &[], var)
+        let mut scratchpad = take_occurs_scratchpad();
+        let result = occurs(self, &mut scratchpad, var);
+        put_occurs_scratchpad(scratchpad);
+        result
     }
 
     pub fn mark_tag_union_recursive(
@@ -2124,6 +2135,8 @@ impl Subs {
         is_inhabited(self, var)
     }
 
+    /// Is the ground constructor (in the layout-determination sense) of this type a function?
+    /// That is, is this a function modulo aliases and opaques?
     pub fn is_function(&self, mut var: Variable) -> bool {
         loop {
             match self.get_content_without_compacting(var) {
@@ -2141,6 +2154,22 @@ impl Subs {
                     var = *real_var;
                 }
             }
+        }
+    }
+
+    pub fn dbg(&self, var: Variable) -> impl std::fmt::Debug + '_ {
+        SubsFmtContent(self.get_content_without_compacting(var), self)
+    }
+
+    /// Is this variable involved in an error?
+    pub fn is_error_var(&self, var: Variable) -> bool {
+        match self.get_content_without_compacting(var) {
+            Content::Error => true,
+            Content::FlexVar(Some(index)) => {
+                // Generated names for errors start with `#`
+                self[*index].as_str().starts_with('#')
+            }
+            _ => false,
         }
     }
 }
@@ -3196,9 +3225,24 @@ fn is_empty_record(subs: &Subs, mut var: Variable) -> bool {
     }
 }
 
+std::thread_local! {
+    static SCRATCHPAD_FOR_OCCURS: RefCell<Option<Vec<Variable>>> = RefCell::new(Some(Vec::with_capacity(1024)));
+}
+
+fn take_occurs_scratchpad() -> Vec<Variable> {
+    SCRATCHPAD_FOR_OCCURS.with(|f| f.take().unwrap())
+}
+
+fn put_occurs_scratchpad(mut scratchpad: Vec<Variable>) {
+    SCRATCHPAD_FOR_OCCURS.with(|f| {
+        scratchpad.clear();
+        f.replace(Some(scratchpad));
+    });
+}
+
 fn occurs(
     subs: &Subs,
-    seen: &[Variable],
+    seen: &mut Vec<Variable>,
     input_var: Variable,
 ) -> Result<(), (Variable, Vec<Variable>)> {
     use self::Content::*;
@@ -3207,9 +3251,10 @@ fn occurs(
     let root_var = subs.get_root_key_without_compacting(input_var);
 
     if seen.contains(&root_var) {
-        Err((root_var, vec![]))
+        Err((root_var, Vec::with_capacity(0)))
     } else {
-        match subs.get_content_without_compacting(root_var) {
+        seen.push(root_var);
+        let result = (|| match subs.get_content_without_compacting(root_var) {
             FlexVar(_)
             | RigidVar(_)
             | FlexAbleVar(_, _)
@@ -3217,51 +3262,45 @@ fn occurs(
             | RecursionVar { .. }
             | Error => Ok(()),
 
-            Structure(flat_type) => {
-                let mut new_seen = seen.to_owned();
-
-                new_seen.push(root_var);
-
-                match flat_type {
-                    Apply(_, args) => {
-                        short_circuit(subs, root_var, &new_seen, subs.get_subs_slice(*args).iter())
-                    }
-                    Func(arg_vars, closure_var, ret_var) => {
-                        let it = once(ret_var)
-                            .chain(once(closure_var))
-                            .chain(subs.get_subs_slice(*arg_vars).iter());
-                        short_circuit(subs, root_var, &new_seen, it)
-                    }
-                    Record(vars_by_field, ext_var) => {
-                        let slice =
-                            SubsSlice::new(vars_by_field.variables_start, vars_by_field.length);
-                        let it = once(ext_var).chain(subs.get_subs_slice(slice).iter());
-                        short_circuit(subs, root_var, &new_seen, it)
-                    }
-                    TagUnion(tags, ext_var) => {
-                        occurs_union(subs, root_var, &new_seen, tags)?;
-
-                        short_circuit_help(subs, root_var, &new_seen, *ext_var)
-                    }
-                    FunctionOrTagUnion(_, _, ext_var) => {
-                        let it = once(ext_var);
-                        short_circuit(subs, root_var, &new_seen, it)
-                    }
-                    RecursiveTagUnion(_, tags, ext_var) => {
-                        occurs_union(subs, root_var, &new_seen, tags)?;
-
-                        short_circuit_help(subs, root_var, &new_seen, *ext_var)
-                    }
-                    EmptyRecord | EmptyTagUnion => Ok(()),
+            Structure(flat_type) => match flat_type {
+                Apply(_, args) => {
+                    short_circuit(subs, root_var, seen, subs.get_subs_slice(*args).iter())
                 }
-            }
-            Alias(_, args, _, _) => {
-                let mut new_seen = seen.to_owned();
-                new_seen.push(root_var);
+                Func(arg_vars, closure_var, ret_var) => {
+                    let it = once(ret_var)
+                        .chain(once(closure_var))
+                        .chain(subs.get_subs_slice(*arg_vars).iter());
+                    short_circuit(subs, root_var, seen, it)
+                }
+                Record(vars_by_field, ext_var) => {
+                    let slice = SubsSlice::new(vars_by_field.variables_start, vars_by_field.length);
+                    let it = once(ext_var).chain(subs.get_subs_slice(slice).iter());
+                    short_circuit(subs, root_var, seen, it)
+                }
+                TagUnion(tags, ext_var) => {
+                    occurs_union(subs, root_var, seen, tags)?;
 
+                    short_circuit_help(subs, root_var, seen, *ext_var)
+                }
+                FunctionOrTagUnion(_, _, ext_var) => {
+                    let it = once(ext_var);
+                    short_circuit(subs, root_var, seen, it)
+                }
+                RecursiveTagUnion(_, tags, ext_var) => {
+                    occurs_union(subs, root_var, seen, tags)?;
+
+                    short_circuit_help(subs, root_var, seen, *ext_var)
+                }
+                EmptyRecord | EmptyTagUnion => Ok(()),
+            },
+            Alias(_, args, real_var, _) => {
                 for var_index in args.into_iter() {
                     let var = subs[var_index];
-                    short_circuit_help(subs, root_var, &new_seen, var)?;
+                    if short_circuit_help(subs, root_var, seen, var).is_err() {
+                        // Pay the cost and figure out what the actual recursion point is
+
+                        return short_circuit_help(subs, root_var, seen, *real_var);
+                    }
                 }
 
                 Ok(())
@@ -3272,16 +3311,15 @@ fn occurs(
                 unspecialized: _,
                 ambient_function: _,
             }) => {
-                let mut new_seen = seen.to_owned();
-                new_seen.push(root_var);
-
                 // unspecialized lambda vars excluded because they are not explicitly part of the
                 // type (they only matter after being resolved).
 
-                occurs_union(subs, root_var, &new_seen, solved)
+                occurs_union(subs, root_var, seen, solved)
             }
             RangedNumber(_range_vars) => Ok(()),
-        }
+        })();
+        seen.pop();
+        result
     }
 }
 
@@ -3289,7 +3327,7 @@ fn occurs(
 fn occurs_union<L: Label>(
     subs: &Subs,
     root_var: Variable,
-    seen: &[Variable],
+    seen: &mut Vec<Variable>,
     tags: &UnionLabels<L>,
 ) -> Result<(), (Variable, Vec<Variable>)> {
     for slice_index in tags.variables() {
@@ -3306,7 +3344,7 @@ fn occurs_union<L: Label>(
 fn short_circuit<'a, T>(
     subs: &Subs,
     root_key: Variable,
-    seen: &[Variable],
+    seen: &mut Vec<Variable>,
     iter: T,
 ) -> Result<(), (Variable, Vec<Variable>)>
 where
@@ -3323,7 +3361,7 @@ where
 fn short_circuit_help(
     subs: &Subs,
     root_key: Variable,
-    seen: &[Variable],
+    seen: &mut Vec<Variable>,
     var: Variable,
 ) -> Result<(), (Variable, Vec<Variable>)> {
     if let Err((v, mut vec)) = occurs(subs, seen, var) {
@@ -3929,6 +3967,8 @@ fn flat_type_to_err_type(
                     ErrorType::Record(err_fields, TypeExt::RigidOpen(var))
                 }
 
+                ErrorType::Error => ErrorType::Record(err_fields, TypeExt::Closed),
+
                 other =>
                     panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {:?}", other)
             }
@@ -3952,6 +3992,8 @@ fn flat_type_to_err_type(
                 ErrorType::RigidVar(var) | ErrorType::RigidAbleVar(var, _)=> {
                     ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var), pol)
                 }
+
+                ErrorType::Error => ErrorType::TagUnion(err_tags, TypeExt::Closed, pol),
 
                 other =>
                     panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
@@ -3980,6 +4022,8 @@ fn flat_type_to_err_type(
                 ErrorType::RigidVar(var) | ErrorType::RigidAbleVar(var, _)=> {
                     ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var), pol)
                 }
+
+                ErrorType::Error => ErrorType::TagUnion(err_tags, TypeExt::Closed, pol),
 
                 other =>
                     panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
@@ -4010,6 +4054,8 @@ fn flat_type_to_err_type(
                 ErrorType::RigidVar(var) => {
                     ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::RigidOpen(var), pol)
                 }
+
+                ErrorType::Error => ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::Closed, pol),
 
                 other =>
                     panic!("Tried to convert a recursive tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
@@ -4301,8 +4347,12 @@ impl StorageSubs {
         match content {
             FlexVar(opt_name) => FlexVar(*opt_name),
             RigidVar(name) => RigidVar(*name),
-            FlexAbleVar(opt_name, ability) => FlexAbleVar(*opt_name, *ability),
-            RigidAbleVar(name, ability) => RigidAbleVar(*name, *ability),
+            FlexAbleVar(opt_name, abilities) => {
+                FlexAbleVar(*opt_name, Self::offset_ability_slice(offsets, *abilities))
+            }
+            RigidAbleVar(name, abilities) => {
+                RigidAbleVar(*name, Self::offset_ability_slice(offsets, *abilities))
+            }
             RecursionVar {
                 structure,
                 opt_name,
@@ -4347,6 +4397,15 @@ impl StorageSubs {
         union_tags.values_start += offsets.variable_slices;
 
         union_tags
+    }
+
+    fn offset_ability_slice(
+        offsets: &StorageSubsOffsets,
+        mut ability_names: SubsSlice<Symbol>,
+    ) -> SubsSlice<Symbol> {
+        ability_names.start += offsets.symbol_names;
+
+        ability_names
     }
 
     fn offset_lambda_set(

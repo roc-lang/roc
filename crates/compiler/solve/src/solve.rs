@@ -621,6 +621,7 @@ fn run_in_place(
     state.env
 }
 
+#[derive(Debug)]
 enum Work<'a> {
     Constraint {
         env: &'a Env,
@@ -896,7 +897,6 @@ fn solve(
                 let category = &constraints.categories[category_index.index()];
 
                 let actual = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -910,7 +910,6 @@ fn solve(
 
                 let expectation = &constraints.expectations[expectation_index.index()];
                 let expected = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -980,7 +979,6 @@ fn solve(
                 // a special version of Eq that is used to store types in the AST.
                 // IT DOES NOT REPORT ERRORS!
                 let actual = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -1024,7 +1022,6 @@ fn solve(
                         let expectation = &constraints.expectations[expectation_index.index()];
 
                         let expected = either_type_index_to_var(
-                            constraints,
                             subs,
                             rank,
                             pools,
@@ -1119,7 +1116,6 @@ fn solve(
                 let category = &constraints.pattern_categories[category_index.index()];
 
                 let actual = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -1133,7 +1129,6 @@ fn solve(
 
                 let expectation = &constraints.pattern_expectations[expectation_index.index()];
                 let expected = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -1300,7 +1295,6 @@ fn solve(
             }
             IsOpenType(type_index) => {
                 let actual = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -1330,7 +1324,6 @@ fn solve(
                 let pattern_category = &constraints.pattern_categories[pattern_category.index()];
 
                 let actual = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -1464,7 +1457,6 @@ fn solve(
                 };
 
                 let real_var = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -1477,7 +1469,6 @@ fn solve(
                 );
 
                 let branches_var = either_type_index_to_var(
-                    constraints,
                     subs,
                     rank,
                     pools,
@@ -2182,7 +2173,6 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
 
         for (&(symbol, region), typ_index) in (loc_symbols_slice.iter()).zip(type_indices_slice) {
             let var = either_type_index_to_var(
-                constraints,
                 subs,
                 rank,
                 pools,
@@ -2201,7 +2191,7 @@ impl LocalDefVarsVec<(Symbol, Loc<Variable>)> {
     }
 }
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::ops::ControlFlow;
 std::thread_local! {
     /// Scratchpad arena so we don't need to allocate a new one all the time
@@ -2219,7 +2209,6 @@ fn put_scratchpad(scratchpad: bumpalo::Bump) {
 }
 
 fn either_type_index_to_var(
-    constraints: &Constraints,
     subs: &mut Subs,
     rank: Rank,
     pools: &mut Pools,
@@ -2232,9 +2221,8 @@ fn either_type_index_to_var(
 ) -> Variable {
     match either_type_index.split() {
         Ok(type_index) => {
-            let typ_cell = &constraints.types[type_index.index()];
-
-            type_cell_to_var(
+            // Converts the celled type to a variable, emplacing the new variable for re-use.
+            let var = type_to_var(
                 subs,
                 rank,
                 problems,
@@ -2243,45 +2231,23 @@ fn either_type_index_to_var(
                 pools,
                 types,
                 aliases,
-                typ_cell,
-            )
+                type_index,
+            );
+
+            debug_assert!(
+                matches!(types[type_index], TypeTag::Variable(v) if v == var)
+                    || matches!(
+                        types[type_index],
+                        TypeTag::EmptyRecord | TypeTag::EmptyTagUnion
+                    )
+            );
+            var
         }
         Err(var_index) => {
             // we cheat, and  store the variable directly in the index
             unsafe { Variable::from_index(var_index.index() as _) }
         }
     }
-}
-
-/// Converts a type in a cell to a variable, leaving the converted variable behind for re-use.
-fn type_cell_to_var(
-    subs: &mut Subs,
-    rank: Rank,
-    problems: &mut Vec<TypeError>,
-    abilities_store: &mut AbilitiesStore,
-    obligation_cache: &mut ObligationCache,
-    pools: &mut Pools,
-    types: &mut Types,
-    aliases: &mut Aliases,
-    typ_cell: &Cell<Index<TypeTag>>,
-) -> Variable {
-    let typ = typ_cell.get();
-    let var = type_to_var(
-        subs,
-        rank,
-        problems,
-        abilities_store,
-        obligation_cache,
-        pools,
-        types,
-        aliases,
-        typ,
-    );
-    unsafe {
-        types.set_variable(typ, var);
-    }
-
-    var
 }
 
 pub(crate) fn type_to_var(
@@ -2350,14 +2316,17 @@ impl RegisterVariable {
             | TypeTag::HostExposedAlias { shared, .. } => {
                 let AliasShared { symbol, .. } = types[shared];
                 if let Some(reserved) = Variable::get_reserved(symbol) {
-                    if rank.is_none() {
+                    let direct_var = if rank.is_none() {
                         // reserved variables are stored with rank NONE
-                        return Direct(reserved);
+                        reserved
                     } else {
                         // for any other rank, we need to copy; it takes care of adjusting the rank
-                        let copied = deep_copy_var_in(subs, rank, pools, reserved, arena);
-                        return Direct(copied);
-                    }
+                        deep_copy_var_in(subs, rank, pools, reserved, arena)
+                    };
+                    // Safety: the `destination` will become the source-of-truth for the type index, since it
+                    // was not already transformed before (if it was, we'd be in the Variable branch!)
+                    let _old_typ = unsafe { types.emplace_variable(typ, direct_var) };
+                    return Direct(direct_var);
                 }
 
                 Deferred
@@ -2373,15 +2342,19 @@ impl RegisterVariable {
         pools: &mut Pools,
         arena: &'_ bumpalo::Bump,
         types: &mut Types,
-        typ: Index<TypeTag>,
+        typ_index: Index<TypeTag>,
         stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
     ) -> Variable {
-        match Self::from_type(subs, rank, pools, arena, types, typ) {
+        match Self::from_type(subs, rank, pools, arena, types, typ_index) {
             Self::Direct(var) => var,
             Self::Deferred => {
                 let var = subs.fresh_unnamed_flex_var();
+                // Safety: the `destination` will become the source-of-truth for the type index, since it
+                // was not already transformed before (if it was, it wouldn't be deferred!)
+                let typ = unsafe { types.emplace_variable(typ_index, var) };
                 stack.push(TypeToVar::Defer {
                     typ,
+                    typ_index,
                     destination: var,
                     ambient_function: AmbientFunctionPolicy::NoFunction,
                 });
@@ -2444,7 +2417,8 @@ impl AmbientFunctionPolicy {
 #[derive(Debug)]
 enum TypeToVar {
     Defer {
-        typ: Index<TypeTag>,
+        typ: TypeTag,
+        typ_index: Index<TypeTag>,
         destination: Variable,
         ambient_function: AmbientFunctionPolicy,
     },
@@ -2482,11 +2456,18 @@ fn type_to_variable<'a>(
                 }
                 RegisterVariable::Deferred => {
                     let var = subs.fresh_unnamed_flex_var();
+
+                    // Safety: the `destination` will become the source-of-truth for the type index, since it
+                    // was not already transformed before (if it was, it wouldn't be deferred!)
+                    let typ = unsafe { types.emplace_variable($typ, var) };
+
                     stack.push(TypeToVar::Defer {
-                        typ: $typ,
+                        typ,
+                        typ_index: $typ,
                         destination: var,
                         ambient_function: $ambient_function_policy,
                     });
+
                     var
                 }
             }
@@ -2499,15 +2480,16 @@ fn type_to_variable<'a>(
     let result = helper!(typ);
 
     while let Some(TypeToVar::Defer {
+        typ_index,
         typ,
         destination,
         ambient_function,
     }) = stack.pop()
     {
         use TypeTag::*;
-        match types[typ] {
+        match typ {
             Variable(_) | EmptyRecord | EmptyTagUnion => {
-                unreachable!("This variant should never be deferred!")
+                unreachable!("This variant should never be deferred!",)
             }
             RangedNumber(range) => {
                 let content = Content::RangedNumber(range);
@@ -2519,7 +2501,7 @@ fn type_to_variable<'a>(
                 type_argument_regions: _,
                 region: _,
             } => {
-                let arguments = types.get_type_arguments(typ);
+                let arguments = types.get_type_arguments(typ_index);
                 let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
                 for (target_index, var_index) in
                     (new_arguments.indices()).zip(arguments.into_iter())
@@ -2538,7 +2520,7 @@ fn type_to_variable<'a>(
                 name,
                 ambient_function,
             } => {
-                let captures = types.get_type_arguments(typ);
+                let captures = types.get_type_arguments(typ_index);
                 let union_lambdas = create_union_lambda(
                     subs, rank, pools, arena, types, name, captures, &mut stack,
                 );
@@ -2585,7 +2567,7 @@ fn type_to_variable<'a>(
             }
             // This case is important for the rank of boolean variables
             Function(closure_type, ret_type) => {
-                let arguments = types.get_type_arguments(typ);
+                let arguments = types.get_type_arguments(typ_index);
                 let new_arguments = VariableSubsSlice::reserve_into_subs(subs, arguments.len());
                 for (target_index, var_index) in
                     (new_arguments.indices()).zip(arguments.into_iter())
@@ -2603,7 +2585,7 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
             Record(fields) => {
-                let ext_slice = types.get_type_arguments(typ);
+                let ext_slice = types.get_type_arguments(typ_index);
 
                 // An empty fields is inefficient (but would be correct)
                 // If hit, try to turn the value into an EmptyRecord in canonicalization
@@ -2650,7 +2632,7 @@ fn type_to_variable<'a>(
             }
 
             TagUnion(tags) => {
-                let ext_slice = types.get_type_arguments(typ);
+                let ext_slice = types.get_type_arguments(typ_index);
 
                 // An empty tags is inefficient (but would be correct)
                 // If hit, try to turn the value into an EmptyTagUnion in canonicalization
@@ -2664,8 +2646,8 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
             FunctionOrTagUnion(symbol) => {
-                let ext_slice = types.get_type_arguments(typ);
-                let tag_name = types.get_tag_name(&typ).clone();
+                let ext_slice = types.get_type_arguments(typ_index);
+                let tag_name = types.get_tag_name(&typ_index).clone();
 
                 debug_assert!(ext_slice.len() <= 1);
                 let temp_ext_var = match ext_slice.into_iter().next() {
@@ -2693,7 +2675,7 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
             RecursiveTagUnion(rec_var, tags) => {
-                let ext_slice = types.get_type_arguments(typ);
+                let ext_slice = types.get_type_arguments(typ_index);
 
                 // An empty tags is inefficient (but would be correct)
                 // If hit, try to turn the value into an EmptyTagUnion in canonicalization
@@ -2731,7 +2713,7 @@ fn type_to_variable<'a>(
                     infer_ext_in_output_variables,
                 } = types[shared];
 
-                let type_arguments = types.get_type_arguments(typ);
+                let type_arguments = types.get_type_arguments(typ_index);
 
                 let alias_variables = {
                     let all_vars_length = type_arguments.len()
@@ -2812,7 +2794,7 @@ fn type_to_variable<'a>(
             }
 
             StructuralAlias { shared, actual } | OpaqueAlias { shared, actual } => {
-                let kind = match types[typ] {
+                let kind = match typ {
                     StructuralAlias { .. } => AliasKind::Structural,
                     OpaqueAlias { .. } => AliasKind::Opaque,
                     _ => internal_error!(),
@@ -2828,7 +2810,7 @@ fn type_to_variable<'a>(
 
                 debug_assert!(roc_types::subs::Variable::get_reserved(symbol).is_none());
 
-                let type_arguments = types.get_type_arguments(typ);
+                let type_arguments = types.get_type_arguments(typ_index);
 
                 let alias_variables = {
                     let all_vars_length = type_arguments.len()
@@ -2899,7 +2881,7 @@ fn type_to_variable<'a>(
                     infer_ext_in_output_variables: _, // TODO
                 } = types[shared];
 
-                let type_arguments = types.get_type_arguments(typ);
+                let type_arguments = types.get_type_arguments(typ_index);
 
                 let alias_variables = {
                     let length = type_arguments.len() + lambda_set_variables.len();
@@ -2999,12 +2981,13 @@ fn type_to_variable<'a>(
             _ => {
                 let abilities_slice =
                     SubsSlice::extend_new(&mut subs.symbol_names, abilities.sorted_iter().copied());
-                let flex_ability = subs.fresh(Descriptor {
-                    content: Content::FlexAbleVar(None, abilities_slice),
+
+                let flex_ability = register(
+                    subs,
                     rank,
-                    mark: Mark::NONE,
-                    copy: OptVariable::NONE,
-                });
+                    pools,
+                    Content::FlexAbleVar(None, abilities_slice),
+                );
 
                 let category = Category::OpaqueArg;
                 match unify(

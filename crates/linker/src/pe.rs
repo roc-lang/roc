@@ -1358,6 +1358,8 @@ mod test {
     use object::{pe, LittleEndian as LE, Object};
 
     use indoc::indoc;
+    use roc_build::link::preprocessed_host_filename;
+    use target_lexicon::Triple;
 
     use super::*;
 
@@ -1708,17 +1710,20 @@ mod test {
             panic!("zig build-exe failed: {}", command_str);
         }
 
+        let preprocessed_host_filename =
+            dir.join(preprocessed_host_filename(&Triple::host()).unwrap());
+
         preprocess_windows(
             &dir.join("host.exe"),
             &dir.join("metadata"),
-            &dir.join("preprocessedhost"),
+            &preprocessed_host_filename,
             &names,
             false,
             false,
         )
         .unwrap();
 
-        std::fs::copy(&dir.join("preprocessedhost"), &dir.join("app.exe")).unwrap();
+        std::fs::copy(&preprocessed_host_filename, &dir.join("app.exe")).unwrap();
 
         surgery_pe(&dir.join("app.exe"), &dir.join("metadata"), &roc_app);
     }

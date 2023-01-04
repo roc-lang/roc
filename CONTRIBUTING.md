@@ -64,7 +64,8 @@ This command will generate the documentation in the [`generated-docs`](generated
 
 ### Forgot to sign commits?
 
-You can find which commits need to be signed by running `git log --show-signature`.
+You can view your commits on github, those without the "Verified" badge still need to be signed.
+If any of those is a merge commit, follow [these steps](https://stackoverflow.com/a/9958215/4200103) instead of the ones below.
 
 If you have only one commit, running `git commit --amend --no-edit -S` would sign the latest commit 🚀.
 
@@ -76,7 +77,7 @@ In case you have multiple commits, you can sign them in two ways:
            pick hash2 commit message 2
            pick hash1 commit message 1
            ```
-       - After every commit you want to sign, add `exec git commit --amend --no-edit -S`.
+       - On a new line below a commit you want to sign, add `exec git commit --amend --no-edit -S`. Do this for all your unsigned commits.
  2. Or run git rebase recursively:
        - Find the oldest commit you want to sign, using the `git log --show-signature` command. 
        - Run the command `git rebase --exec 'git commit --amend --no-edit -n -S' -i HASH` which would sign all commits up to commit `HASH`.

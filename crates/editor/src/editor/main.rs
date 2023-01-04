@@ -28,6 +28,7 @@ use roc_ast::mem_pool::pool::Pool;
 use roc_ast::module::load_module;
 use roc_load::Threading;
 use roc_module::symbol::IdentIds;
+use roc_packaging::cache::{self, RocCacheDir};
 use roc_types::subs::VarStore;
 use std::collections::HashSet;
 use std::env;
@@ -127,8 +128,11 @@ fn run_event_loop(project_dir_path_opt: Option<&Path>) -> Result<(), Box<dyn Err
     println!("Loading file {:?}...", file_path_str);
 
     let file_path = Path::new(&file_path_str);
-
-    let loaded_module = load_module(file_path, Threading::AllAvailable);
+    let loaded_module = load_module(
+        file_path,
+        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        Threading::AllAvailable,
+    );
 
     let mut var_store = VarStore::default();
     let dep_idents = IdentIds::exposed_builtins(8);

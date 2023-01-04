@@ -34,12 +34,26 @@
 //! there to avoid maintaining a separate script.
 
 #[macro_export]
+macro_rules! dbg_set {
+    ($flag:path) => {{
+        #[cfg(not(debug_assertions))]
+        {
+            false
+        }
+        #[cfg(debug_assertions)]
+        {
+            let flag = std::env::var($flag);
+            flag.is_ok() && flag.as_deref() != Ok("0")
+        }
+    }};
+}
+
+#[macro_export]
 macro_rules! dbg_do {
     ($flag:path, $expr:expr) => {
         #[cfg(debug_assertions)]
         {
-            let flag = std::env::var($flag);
-            if !flag.is_err() && flag.as_deref() != Ok("0") {
+            if $crate::dbg_set!($flag) {
                 $expr
             }
         }
@@ -64,6 +78,9 @@ flags! {
     /// Prints type unifications, before and after they happen.
     /// Only use this in single-threaded mode!
     ROC_PRINT_UNIFICATIONS
+
+    /// Prints types whose ability impls failed to be derived.
+    ROC_PRINT_UNDERIVABLE
 
     /// Prints traces of unspecialized lambda set compaction
     ROC_TRACE_COMPACTION
@@ -91,7 +108,19 @@ flags! {
     /// chainging how defs are constrained.
     ROC_VERIFY_RIGID_LET_GENERALIZED
 
+    /// Verifies that an `occurs` check indeed only contains non-recursive types that need to be
+    /// fixed-up.
+    ///
+    /// This flag is disabled by default because an occurs check may pass through an inferred
+    /// partially-recursive structure if a part of that structure also has type errors. However, in
+    /// the presence of programs without type errors, occurs checks should always consist of only
+    /// non-recursive types, and this flag should pass.
+    ROC_VERIFY_OCCURS_RECURSION
+
     // ===Mono===
+
+    /// Type-checks the mono IR after specialization.
+    ROC_CHECK_MONO_IR
 
     /// Writes a pretty-printed mono IR to stderr after function specialization.
     ROC_PRINT_IR_AFTER_SPECIALIZATION
@@ -123,6 +152,9 @@ flags! {
 
     /// Writes a `final.wasm` file to /tmp
     ROC_WRITE_FINAL_WASM
+
+    /// Prints Wasm interpreter debug log in test_gen
+    ROC_LOG_WASM_INTERP
 
     // ===Load===
 

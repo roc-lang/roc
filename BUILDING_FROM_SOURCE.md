@@ -82,7 +82,6 @@ To build the compiler, you need these installed:
 - On Debian/Ubuntu `sudo apt-get install pkg-config`
 - LLVM, see below for version
 - [rust](https://rustup.rs/)
-- Also run `cargo install bindgen` after installing rust. You may need to open a new terminal.
 
 To run the test suite (via `cargo test`), you additionally need to install:
 

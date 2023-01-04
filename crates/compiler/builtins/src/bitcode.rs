@@ -1,39 +1,72 @@
 use roc_module::symbol::Symbol;
 use roc_target::TargetInfo;
-use roc_utils::get_lib_path;
 use std::ops::Index;
+use tempfile::NamedTempFile;
 
-const LIB_DIR_ERROR: &str = "Failed to find the lib directory. Did you copy the roc binary without also copying the lib directory?\nIf you built roc from source, the lib dir should be in target/release.\nIf not, the lib dir should be included in the release tar.gz file.";
+pub const HOST_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bitcode/builtins-wasm32.o"));
+// TODO: in the future, we should use Zig's cross-compilation to generate and store these
+// for all targets, so that we can do cross-compilation!
+#[cfg(unix)]
+pub const HOST_UNIX: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bitcode/builtins-host.o"));
+#[cfg(windows)]
+pub const HOST_WINDOWS: &[u8] = include_bytes!(concat!(
+    env!("OUT_DIR"),
+    "/bitcode/builtins-windows-x86_64.obj"
+));
 
-pub fn get_builtins_host_obj_path() -> String {
-    let builtins_host_path = get_lib_path().expect(LIB_DIR_ERROR).join("builtins-host.o");
+pub fn host_wasm_tempfile() -> std::io::Result<NamedTempFile> {
+    let tempfile = tempfile::Builder::new()
+        .prefix("host_bitcode")
+        .suffix(".wasm")
+        .rand_bytes(8)
+        .tempfile()?;
 
-    builtins_host_path
-        .into_os_string()
-        .into_string()
-        .expect("Failed to convert builtins_host_path to str")
+    std::fs::write(tempfile.path(), HOST_WASM)?;
+
+    Ok(tempfile)
 }
 
-pub fn get_builtins_windows_obj_path() -> String {
-    let builtins_host_path = get_lib_path()
-        .expect(LIB_DIR_ERROR)
-        .join("builtins-windows-x86_64.obj");
+#[cfg(unix)]
+fn host_unix_tempfile() -> std::io::Result<NamedTempFile> {
+    let tempfile = tempfile::Builder::new()
+        .prefix("host_bitcode")
+        .suffix(".o")
+        .rand_bytes(8)
+        .tempfile()?;
 
-    builtins_host_path
-        .into_os_string()
-        .into_string()
-        .expect("Failed to convert builtins_host_path to str")
+    std::fs::write(tempfile.path(), HOST_UNIX)?;
+
+    Ok(tempfile)
 }
 
-pub fn get_builtins_wasm32_obj_path() -> String {
-    let builtins_wasm32_path = get_lib_path()
-        .expect(LIB_DIR_ERROR)
-        .join("builtins-wasm32.o");
+#[cfg(windows)]
+fn host_windows_tempfile() -> std::io::Result<NamedTempFile> {
+    let tempfile = tempfile::Builder::new()
+        .prefix("host_bitcode")
+        .suffix(".obj")
+        .rand_bytes(8)
+        .tempfile()?;
 
-    builtins_wasm32_path
-        .into_os_string()
-        .into_string()
-        .expect("Failed to convert builtins_wasm32_path to str")
+    std::fs::write(tempfile.path(), HOST_WINDOWS)?;
+
+    Ok(tempfile)
+}
+
+pub fn host_tempfile() -> std::io::Result<NamedTempFile> {
+    #[cfg(unix)]
+    {
+        host_unix_tempfile()
+    }
+
+    #[cfg(windows)]
+    {
+        host_windows_tempfile()
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    {
+        unreachable!()
+    }
 }
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -57,7 +90,6 @@ pub enum DecWidth {
 pub enum FloatWidth {
     F32,
     F64,
-    F128,
 }
 
 impl FloatWidth {
@@ -70,7 +102,6 @@ impl FloatWidth {
         match self {
             F32 => 4,
             F64 => 8,
-            F128 => 16,
         }
     }
 
@@ -83,7 +114,7 @@ impl FloatWidth {
         // the compiler is targeting (e.g. what the Roc code will be compiled to).
         match self {
             F32 => 4,
-            F64 | F128 => match target_info.architecture {
+            F64 => match target_info.architecture {
                 X86_64 | Aarch64 | Wasm32 => 8,
                 X86_32 | Aarch32 => 4,
             },
@@ -209,7 +240,6 @@ impl Index<FloatWidth> for IntrinsicName {
         match index {
             FloatWidth::F32 => self.options[1],
             FloatWidth::F64 => self.options[2],
-            FloatWidth::F128 => self.options[3],
         }
     }
 }
@@ -240,7 +270,6 @@ macro_rules! float_intrinsic {
 
         output.options[1] = concat!($name, ".f32");
         output.options[2] = concat!($name, ".f64");
-        output.options[3] = concat!($name, ".f128");
 
         output
     }};
@@ -334,7 +363,7 @@ pub const STR_INIT: &str = "roc_builtins.str.init";
 pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
 pub const STR_CONCAT: &str = "roc_builtins.str.concat";
 pub const STR_JOIN_WITH: &str = "roc_builtins.str.joinWith";
-pub const STR_STR_SPLIT: &str = "roc_builtins.str.str_split";
+pub const STR_SPLIT: &str = "roc_builtins.str.str_split";
 pub const STR_TO_SCALARS: &str = "roc_builtins.str.to_scalars";
 pub const STR_COUNT_GRAPEHEME_CLUSTERS: &str = "roc_builtins.str.count_grapheme_clusters";
 pub const STR_COUNT_UTF8_BYTES: &str = "roc_builtins.str.count_utf8_bytes";
@@ -408,8 +437,9 @@ pub const UTILS_EXPECT_FAILED_START_SHARED_BUFFER: &str =
     "roc_builtins.utils.expect_failed_start_shared_buffer";
 pub const UTILS_EXPECT_FAILED_START_SHARED_FILE: &str =
     "roc_builtins.utils.expect_failed_start_shared_file";
-pub const UTILS_EXPECT_FAILED_FINALIZE: &str = "roc_builtins.utils.expect_failed_finalize";
 pub const UTILS_EXPECT_READ_ENV_SHARED_BUFFER: &str = "roc_builtins.utils.read_env_shared_buffer";
+pub const NOTIFY_PARENT_EXPECT: &str = "roc_builtins.utils.notify_parent_expect";
+pub const NOTIFY_PARENT_DBG: &str = "roc_builtins.utils.notify_parent_dbg";
 
 pub const UTILS_LONGJMP: &str = "longjmp";
 pub const UTILS_SETJMP: &str = "setjmp";

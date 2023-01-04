@@ -4,16 +4,17 @@ use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
         AbilityMember, AssignedField, Collection, CommentOrNewline, Defs, Expr, Has, HasAbilities,
-        HasAbility, HasClause, HasImpls, Module, Pattern, Spaced, StrLiteral, StrSegment, Tag,
-        TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
+        HasAbility, HasClause, HasImpls, Header, Module, Pattern, Spaced, Spaces, StrLiteral,
+        StrSegment, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
     },
     header::{
-        AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, ModuleName,
-        PackageEntry, PackageName, PlatformHeader, PlatformRequires, To, TypedIdent,
+        AppHeader, ExposedName, HostedHeader, ImportsEntry, InterfaceHeader, KeywordItem,
+        ModuleName, PackageEntry, PackageHeader, PackageName, PlatformHeader, PlatformRequires,
+        ProvidesTo, To, TypedIdent,
     },
-    ident::UppercaseIdent,
+    ident::{BadIdent, UppercaseIdent},
 };
-use roc_region::all::{Loc, Region};
+use roc_region::all::{Loc, Position, Region};
 
 use crate::{Ast, Buf};
 
@@ -27,6 +28,17 @@ pub fn fmt_default_spaces<'a, 'buf>(
 ) {
     if spaces.is_empty() {
         buf.spaces(1);
+    } else {
+        fmt_spaces(buf, spaces.iter(), indent);
+    }
+}
+pub fn fmt_default_newline<'a, 'buf>(
+    buf: &mut Buf<'buf>,
+    spaces: &[CommentOrNewline<'a>],
+    indent: u16,
+) {
+    if spaces.is_empty() {
+        buf.newline();
     } else {
         fmt_spaces(buf, spaces.iter(), indent);
     }
@@ -242,83 +254,80 @@ impl<'a> RemoveSpaces<'a> for Defs<'a> {
     }
 }
 
+impl<'a, V: RemoveSpaces<'a>> RemoveSpaces<'a> for Spaces<'a, V> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        Spaces {
+            before: &[],
+            item: self.item.remove_spaces(arena),
+            after: &[],
+        }
+    }
+}
+
+impl<'a, K: RemoveSpaces<'a>, V: RemoveSpaces<'a>> RemoveSpaces<'a> for KeywordItem<'a, K, V> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        KeywordItem {
+            keyword: self.keyword.remove_spaces(arena),
+            item: self.item.remove_spaces(arena),
+        }
+    }
+}
+
+impl<'a> RemoveSpaces<'a> for ProvidesTo<'a> {
+    fn remove_spaces(&self, arena: &'a Bump) -> Self {
+        ProvidesTo {
+            provides_keyword: self.provides_keyword.remove_spaces(arena),
+            entries: self.entries.remove_spaces(arena),
+            types: self.types.remove_spaces(arena),
+            to_keyword: self.to_keyword.remove_spaces(arena),
+            to: self.to.remove_spaces(arena),
+        }
+    }
+}
+
 impl<'a> RemoveSpaces<'a> for Module<'a> {
     fn remove_spaces(&self, arena: &'a Bump) -> Self {
-        match self {
-            Module::Interface { header } => Module::Interface {
-                header: InterfaceHeader {
-                    name: header.name.remove_spaces(arena),
-                    exposes: header.exposes.remove_spaces(arena),
-                    imports: header.imports.remove_spaces(arena),
-                    before_header: &[],
-                    after_interface_keyword: &[],
-                    before_exposes: &[],
-                    after_exposes: &[],
-                    before_imports: &[],
-                    after_imports: &[],
-                },
-            },
-            Module::App { header } => Module::App {
-                header: AppHeader {
-                    name: header.name.remove_spaces(arena),
-                    packages: header.packages.remove_spaces(arena),
-                    imports: header.imports.remove_spaces(arena),
-                    provides: header.provides.remove_spaces(arena),
-                    provides_types: header.provides_types.map(|ts| ts.remove_spaces(arena)),
-                    to: header.to.remove_spaces(arena),
-                    before_header: &[],
-                    after_app_keyword: &[],
-                    before_packages: &[],
-                    after_packages: &[],
-                    before_imports: &[],
-                    after_imports: &[],
-                    before_provides: &[],
-                    after_provides: &[],
-                    before_to: &[],
-                    after_to: &[],
-                },
-            },
-            Module::Platform { header } => Module::Platform {
-                header: PlatformHeader {
-                    name: header.name.remove_spaces(arena),
-                    requires: header.requires.remove_spaces(arena),
-                    exposes: header.exposes.remove_spaces(arena),
-                    packages: header.packages.remove_spaces(arena),
-                    imports: header.imports.remove_spaces(arena),
-                    provides: header.provides.remove_spaces(arena),
-                    before_header: &[],
-                    after_platform_keyword: &[],
-                    before_requires: &[],
-                    after_requires: &[],
-                    before_exposes: &[],
-                    after_exposes: &[],
-                    before_packages: &[],
-                    after_packages: &[],
-                    before_imports: &[],
-                    after_imports: &[],
-                    before_provides: &[],
-                    after_provides: &[],
-                },
-            },
-            Module::Hosted { header } => Module::Hosted {
-                header: HostedHeader {
-                    name: header.name.remove_spaces(arena),
-                    exposes: header.exposes.remove_spaces(arena),
-                    imports: header.imports.remove_spaces(arena),
-                    generates: header.generates.remove_spaces(arena),
-                    generates_with: header.generates_with.remove_spaces(arena),
-                    before_header: &[],
-                    after_hosted_keyword: &[],
-                    before_exposes: &[],
-                    after_exposes: &[],
-                    before_imports: &[],
-                    after_imports: &[],
-                    before_generates: &[],
-                    after_generates: &[],
-                    before_with: &[],
-                    after_with: &[],
-                },
-            },
+        let header = match &self.header {
+            Header::Interface(header) => Header::Interface(InterfaceHeader {
+                before_name: &[],
+                name: header.name.remove_spaces(arena),
+                exposes: header.exposes.remove_spaces(arena),
+                imports: header.imports.remove_spaces(arena),
+            }),
+            Header::App(header) => Header::App(AppHeader {
+                before_name: &[],
+                name: header.name.remove_spaces(arena),
+                packages: header.packages.remove_spaces(arena),
+                imports: header.imports.remove_spaces(arena),
+                provides: header.provides.remove_spaces(arena),
+            }),
+            Header::Package(header) => Header::Package(PackageHeader {
+                before_name: &[],
+                name: header.name.remove_spaces(arena),
+                exposes: header.exposes.remove_spaces(arena),
+                packages: header.packages.remove_spaces(arena),
+            }),
+            Header::Platform(header) => Header::Platform(PlatformHeader {
+                before_name: &[],
+                name: header.name.remove_spaces(arena),
+                requires: header.requires.remove_spaces(arena),
+                exposes: header.exposes.remove_spaces(arena),
+                packages: header.packages.remove_spaces(arena),
+                imports: header.imports.remove_spaces(arena),
+                provides: header.provides.remove_spaces(arena),
+            }),
+            Header::Hosted(header) => Header::Hosted(HostedHeader {
+                before_name: &[],
+                name: header.name.remove_spaces(arena),
+                exposes: header.exposes.remove_spaces(arena),
+                imports: header.imports.remove_spaces(arena),
+                generates: header.generates.remove_spaces(arena),
+                generates_with: header.generates_with.remove_spaces(arena),
+            }),
+        };
+        Module {
+            comments: &[],
+            header,
         }
     }
 }
@@ -540,6 +549,13 @@ impl<'a> RemoveSpaces<'a> for ValueDef<'a> {
                 body_pattern: arena.alloc(body_pattern.remove_spaces(arena)),
                 body_expr: arena.alloc(body_expr.remove_spaces(arena)),
             },
+            Dbg {
+                condition,
+                preceding_comment: _,
+            } => Dbg {
+                condition: arena.alloc(condition.remove_spaces(arena)),
+                preceding_comment: Region::zero(),
+            },
             Expect {
                 condition,
                 preceding_comment: _,
@@ -659,6 +675,7 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 arena.alloc(a.remove_spaces(arena)),
                 arena.alloc(b.remove_spaces(arena)),
             ),
+            Expr::Crash => Expr::Crash,
             Expr::Defs(a, b) => {
                 let mut defs = a.clone();
                 defs.space_before = vec![Default::default(); defs.len()];
@@ -685,6 +702,10 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 arena.alloc(a.remove_spaces(arena)),
                 arena.alloc(b.remove_spaces(arena)),
             ),
+            Expr::Dbg(a, b) => Expr::Dbg(
+                arena.alloc(a.remove_spaces(arena)),
+                arena.alloc(b.remove_spaces(arena)),
+            ),
             Expr::Apply(a, b, c) => Expr::Apply(
                 arena.alloc(a.remove_spaces(arena)),
                 b.remove_spaces(arena),
@@ -704,13 +725,27 @@ impl<'a> RemoveSpaces<'a> for Expr<'a> {
                 // The formatter can remove redundant parentheses, so also remove these when normalizing for comparison.
                 a.remove_spaces(arena)
             }
-            Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, b),
+            Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Expr::MalformedClosure => Expr::MalformedClosure,
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::SpaceBefore(a, _) => a.remove_spaces(arena),
             Expr::SpaceAfter(a, _) => a.remove_spaces(arena),
             Expr::SingleQuote(a) => Expr::Num(a),
         }
+    }
+}
+
+fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
+    match ident {
+        BadIdent::Start(_) => BadIdent::Start(Position::zero()),
+        BadIdent::Space(e, _) => BadIdent::Space(e, Position::zero()),
+        BadIdent::Underscore(_) => BadIdent::Underscore(Position::zero()),
+        BadIdent::QualifiedTag(_) => BadIdent::QualifiedTag(Position::zero()),
+        BadIdent::WeirdAccessor(_) => BadIdent::WeirdAccessor(Position::zero()),
+        BadIdent::WeirdDotAccess(_) => BadIdent::WeirdDotAccess(Position::zero()),
+        BadIdent::WeirdDotQualified(_) => BadIdent::WeirdDotQualified(Position::zero()),
+        BadIdent::StrayDot(_) => BadIdent::StrayDot(Position::zero()),
+        BadIdent::BadOpaqueRef(_) => BadIdent::BadOpaqueRef(Position::zero()),
     }
 }
 
@@ -731,6 +766,9 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::OptionalField(a, b) => {
                 Pattern::OptionalField(a, arena.alloc(b.remove_spaces(arena)))
             }
+            Pattern::As(pattern, pattern_as) => {
+                Pattern::As(arena.alloc(pattern.remove_spaces(arena)), pattern_as)
+            }
             Pattern::NumLiteral(a) => Pattern::NumLiteral(a),
             Pattern::NonBase10Literal {
                 string,
@@ -745,7 +783,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::StrLiteral(a) => Pattern::StrLiteral(a),
             Pattern::Underscore(a) => Pattern::Underscore(a),
             Pattern::Malformed(a) => Pattern::Malformed(a),
-            Pattern::MalformedIdent(a, b) => Pattern::MalformedIdent(a, b),
+            Pattern::MalformedIdent(a, b) => Pattern::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Pattern::QualifiedIdentifier { module_name, ident } => {
                 Pattern::QualifiedIdentifier { module_name, ident }
             }
@@ -754,7 +792,7 @@ impl<'a> RemoveSpaces<'a> for Pattern<'a> {
             Pattern::SingleQuote(a) => Pattern::SingleQuote(a),
             Pattern::List(pats) => Pattern::List(pats.remove_spaces(arena)),
             Pattern::Tuple(pats) => Pattern::Tuple(pats.remove_spaces(arena)),
-            Pattern::ListRest => Pattern::ListRest,
+            Pattern::ListRest(opt_pattern_as) => Pattern::ListRest(opt_pattern_as),
         }
     }
 }
@@ -776,6 +814,10 @@ impl<'a> RemoveSpaces<'a> for TypeAnnotation<'a> {
                     vars: vars.remove_spaces(arena),
                 },
             ),
+            TypeAnnotation::Tuple { fields, ext } => TypeAnnotation::Tuple {
+                fields: fields.remove_spaces(arena),
+                ext: ext.remove_spaces(arena),
+            },
             TypeAnnotation::Record { fields, ext } => TypeAnnotation::Record {
                 fields: fields.remove_spaces(arena),
                 ext: ext.remove_spaces(arena),

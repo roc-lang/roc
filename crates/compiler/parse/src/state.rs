@@ -58,9 +58,9 @@ impl<'a> State<'a> {
         &self,
         indent: u32,
         e: impl Fn(Position) -> E,
-    ) -> Result<u32, (Progress, E, State<'a>)> {
+    ) -> Result<u32, (Progress, E)> {
         if self.column() < indent {
-            Err((Progress::NoProgress, e(self.pos()), self.clone()))
+            Err((Progress::NoProgress, e(self.pos())))
         } else {
             Ok(std::cmp::max(indent, self.line_indent()))
         }
@@ -98,7 +98,7 @@ impl<'a> State<'a> {
         self.offset += 1;
         self.line_start = self.pos();
 
-        // WARNING! COULD CAUSE BUGS IF WE FORGET TO CALL mark_current_ident LATER!
+        // WARNING! COULD CAUSE BUGS IF WE FORGET TO CALL mark_current_indent LATER!
         // We really need to be stricter about this.
         self.line_start_after_whitespace = self.line_start;
 

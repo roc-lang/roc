@@ -5,11 +5,12 @@ extern crate roc_module;
 extern crate tempfile;
 
 use roc_utils::cargo;
+use roc_utils::pretty_command_string;
 use roc_utils::root_dir;
 use serde::Deserialize;
 use serde_xml_rs::from_str;
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
@@ -19,6 +20,7 @@ use tempfile::NamedTempFile;
 
 #[derive(Debug)]
 pub struct Out {
+    pub cmd_str: OsString, // command with all its arguments, for easy debugging
     pub stdout: String,
     pub stderr: String,
     pub status: ExitStatus,
@@ -157,7 +159,7 @@ where
         roc_cmd.env(k, v);
     }
 
-    let roc_cmd_str = format!("{:?}", roc_cmd);
+    let roc_cmd_str = pretty_command_string(&roc_cmd);
 
     let mut roc_cmd_child = roc_cmd
         .stdin(Stdio::piped())
@@ -165,7 +167,7 @@ where
         .stderr(Stdio::piped())
         .spawn()
         .unwrap_or_else(|err| {
-            panic!("Failed to execute command\n\n  {roc_cmd_str}\n\nwith error:\n\n  {err}",)
+            panic!("Failed to execute command\n\n  {roc_cmd_str:?}\n\nwith error:\n\n  {err}",)
         });
 
     {
@@ -176,17 +178,18 @@ where
                 .write_all(stdin_str.as_bytes())
                 .unwrap_or_else(|err| {
                     panic!(
-                        "Failed to write to stdin for command\n\n  {roc_cmd_str}\n\nwith error:\n\n  {err}",
+                        "Failed to write to stdin for command\n\n  {roc_cmd_str:?}\n\nwith error:\n\n  {err}",
                     )
                 });
         }
     }
 
     let roc_cmd_output = roc_cmd_child.wait_with_output().unwrap_or_else(|err| {
-        panic!("Failed to get output for command\n\n  {roc_cmd_str}\n\nwith error:\n\n  {err}",)
+        panic!("Failed to get output for command\n\n  {roc_cmd_str:?}\n\nwith error:\n\n  {err}",)
     });
 
     Out {
+        cmd_str: roc_cmd_str,
         stdout: String::from_utf8(roc_cmd_output.stdout).unwrap(),
         stderr: String::from_utf8(roc_cmd_output.stderr).unwrap(),
         status: roc_cmd_output.status,
@@ -208,6 +211,8 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
     for (env, val) in env.into_iter() {
         cmd.env(env, val);
     }
+
+    let cmd_str = pretty_command_string(&cmd);
 
     let mut child = cmd
         .stdin(Stdio::piped())
@@ -231,6 +236,7 @@ pub fn run_cmd<'a, I: IntoIterator<Item = &'a str>, E: IntoIterator<Item = (&'a 
         .unwrap_or_else(|_| panic!("failed to execute cmd `{}` in CLI test", cmd_name));
 
     Out {
+        cmd_str,
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),
         status: output.status,
@@ -274,6 +280,8 @@ pub fn run_with_valgrind<'a, I: IntoIterator<Item = &'a str>>(
         cmd.arg(arg);
     }
 
+    let cmd_str = pretty_command_string(&cmd);
+
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -303,6 +311,7 @@ pub fn run_with_valgrind<'a, I: IntoIterator<Item = &'a str>>(
 
     (
         Out {
+            cmd_str,
             stdout: String::from_utf8(output.stdout).unwrap(),
             stderr: String::from_utf8(output.stderr).unwrap(),
             status: output.status,

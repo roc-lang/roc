@@ -1,0 +1,32 @@
+Module {
+    comments: [],
+    header: App(
+        AppHeader {
+            before_name: [],
+            name: @4-14 PlainLine(
+                "test-app",
+            ),
+            packages: None,
+            imports: None,
+            provides: ProvidesTo {
+                provides_keyword: Spaces {
+                    before: [],
+                    item: ProvidesKeyword,
+                    after: [],
+                },
+                entries: [],
+                types: None,
+                to_keyword: Spaces {
+                    before: [],
+                    item: ToKeyword,
+                    after: [],
+                },
+                to: @30-38 NewPackage(
+                    PackageName(
+                        "./blah",
+                    ),
+                ),
+            },
+        },
+    ),
+}

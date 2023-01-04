@@ -1,5 +1,6 @@
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
+use roc_intern::Interner;
 use roc_types::types::AliasKind;
 use std::cmp::{max_by_key, min_by_key};
 
@@ -10,8 +11,8 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
-    self, union_sorted_tags_pub, Builtin, Layout, LayoutCache, LayoutInterner, UnionLayout,
-    UnionVariant, WrappedVariant,
+    self, union_sorted_tags_pub, Builtin, InLayout, Layout, LayoutCache, LayoutInterner,
+    UnionLayout, UnionVariant, WrappedVariant,
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, Pattern, StrLiteral};
 use roc_region::all::{Loc, Region};
@@ -61,7 +62,7 @@ pub fn jit_to_ast<'a, A: ReplApp<'a>>(
         ProcLayout {
             arguments: [],
             result,
-            captures_niche: _,
+            niche: _,
         } => {
             // This is a thunk, which cannot be defined in userspace, so we know
             // it's `main` and can be executed.
@@ -172,7 +173,7 @@ fn unroll_newtypes_and_aliases<'a, 'env>(
                 var = field.into_inner();
             }
             Content::Alias(name, _, real_var, kind) => {
-                if *name == Symbol::BOOL_BOOL {
+                if *name == Symbol::BOOL_BOOL || name.module_id() == ModuleId::NUM {
                     return (newtype_containers, alias_content, var);
                 }
                 // We need to pass through aliases too, because their underlying types may have
@@ -185,7 +186,7 @@ fn unroll_newtypes_and_aliases<'a, 'env>(
                 //
                 // At the end of the day what we should show to the user is the alias content, not
                 // what's inside, so keep that around too.
-                if *kind == AliasKind::Opaque && name.module_id() != ModuleId::NUM {
+                if *kind == AliasKind::Opaque {
                     newtype_containers.push(NewtypeKind::Opaque(*name));
                 }
                 alias_content = Some(content);
@@ -361,10 +362,11 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             use Content::*;
             use IntWidth::*;
 
-            match (alias_content, int_width) {
-                (Some(Alias(Symbol::NUM_UNSIGNED8, ..)), U8) => num_helper!(u8),
+            match (env.subs.get_content_without_compacting(raw_var), int_width) {
+                (Alias(Symbol::NUM_UNSIGNED8 | Symbol::NUM_U8, ..), U8) => num_helper!(u8),
                 (_, U8) => {
                     // This is not a number, it's a tag union or something else
+                    dbg!(&alias_content);
                     app.call_function(main_fn_name, |_mem: &A::Memory, num: u8| {
                         byte_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
                     })
@@ -387,7 +389,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
             match float_width {
                 F32 => num_helper!(f32),
                 F64 => num_helper!(f64),
-                F128 => todo!("F128 not implemented"),
             }
         }
         Layout::Builtin(Builtin::Decimal) => num_helper!(RocDec),
@@ -408,7 +409,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                     mem,
                     addr,
                     len,
-                    elem_layout,
+                    *elem_layout,
                     env.subs.get_content_without_compacting(raw_var),
                 )
             },
@@ -565,7 +566,13 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             use IntWidth::*;
 
             match int_width {
-                U8 => helper!(deref_u8, u8),
+                U8 => {
+                    if matches!(raw_content, Content::Alias(name, ..) if name.module_id() == ModuleId::NUM) {
+                        helper!(deref_u8, u8)
+                    } else {
+                        byte_to_ast(env, mem.deref_u8(addr), raw_content)
+                    }
+                },
                 U16 => helper!(deref_u16, u16),
                 U32 => helper!(deref_u32, u32),
                 U64 => helper!(deref_u64, u64),
@@ -583,7 +590,6 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             match float_width {
                 F32 => helper!(deref_f32, f32),
                 F64 => helper!(deref_f64, f64),
-                F128 => todo!("F128 not implemented"),
             }
         }
         (_, Layout::Builtin(Builtin::List(elem_layout))) => {
@@ -591,7 +597,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             let len = mem.deref_usize(addr + env.target_info.ptr_width() as usize);
             let _cap = mem.deref_usize(addr + 2 * env.target_info.ptr_width() as usize);
 
-            list_to_ast(env, mem, elem_addr, len, elem_layout, raw_content)
+            list_to_ast(env, mem, elem_addr, len, *elem_layout, raw_content)
         }
         (_, Layout::Builtin(Builtin::Str)) => {
             let string = mem.deref_str(addr);
@@ -849,6 +855,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
             let inner_var = env.subs[inner_var_index];
 
             let addr_of_inner = mem.deref_usize(addr);
+            let inner_layout = env.layout_cache.interner.get(*inner_layout);
             let inner_expr = addr_to_ast(
                 env,
                 mem,
@@ -885,7 +892,7 @@ fn list_to_ast<'a, M: ReplAppMemory>(
     mem: &'a M,
     addr: usize,
     len: usize,
-    elem_layout: &Layout<'a>,
+    elem_layout: InLayout<'a>,
     content: &Content,
 ) -> Expr<'a> {
     let elem_var = match content {
@@ -905,6 +912,7 @@ fn list_to_ast<'a, M: ReplAppMemory>(
 
     let arena = env.arena;
     let mut output = Vec::with_capacity_in(len, arena);
+    let elem_layout = *env.layout_cache.get_in(elem_layout);
     let elem_size = elem_layout.stack_size(&env.layout_cache.interner, env.target_info) as usize;
 
     for index in 0..len {
@@ -916,7 +924,7 @@ fn list_to_ast<'a, M: ReplAppMemory>(
             env,
             mem,
             elem_addr,
-            elem_layout,
+            &elem_layout,
             WhenRecursive::Unreachable,
             elem_content,
         );

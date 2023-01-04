@@ -5,17 +5,19 @@ The user needs to analyse the Wasm module's memory to decode the result.
 */
 
 use bumpalo::{collections::Vec, Bump};
+
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_intern::Interner;
 use roc_mono::layout::{Builtin, Layout, UnionLayout};
-use roc_target::TargetInfo;
-
-use crate::wasm32_sized::Wasm32Sized;
-use crate::wasm_module::{
-    linking::SymInfo, linking::WasmObjectSymbol, Align, CodeBuilder, Export, ExportType, LocalId,
-    Signature, ValueType, WasmModule,
-};
 use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
+use roc_target::TargetInfo;
+use roc_wasm_module::{
+    linking::SymInfo, linking::WasmObjectSymbol, Align, Export, ExportType, LocalId, Signature,
+    ValueType, WasmModule,
+};
+
+use crate::code_builder::CodeBuilder;
+use crate::wasm32_sized::Wasm32Sized;
 
 /// Type-driven wrapper generation
 pub trait Wasm32Result {
@@ -28,7 +30,7 @@ pub trait Wasm32Result {
         insert_wrapper_metadata(arena, module, wrapper_name);
         let mut code_builder = CodeBuilder::new(arena);
         Self::build_wrapper_body(&mut code_builder, main_function_index);
-        module.code.code_builders.push(code_builder);
+        code_builder.insert_into_module(module);
     }
 
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32);
@@ -51,7 +53,7 @@ pub fn insert_wrapper_for_layout<'a>(
             insert_wrapper_metadata(arena, module, wrapper_name);
             let mut code_builder = CodeBuilder::new(arena);
             build_wrapper_body_stack_memory(&mut code_builder, main_fn_index, size as usize);
-            module.code.code_builders.push(code_builder);
+            code_builder.insert_into_module(module);
         }
     };
 
@@ -92,8 +94,7 @@ fn insert_wrapper_metadata<'a>(
 ) {
     let index = (module.import.function_count() as u32)
         + module.code.dead_import_dummy_count
-        + module.code.preloaded_count
-        + module.code.code_builders.len() as u32;
+        + module.code.function_count;
 
     module.add_function_signature(Signature {
         param_types: Vec::with_capacity_in(0, arena),

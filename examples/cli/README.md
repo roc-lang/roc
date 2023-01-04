@@ -2,8 +2,8 @@
 
 These are examples of how to make basic CLI (command-line interface) and TUI (terminal user interface) apps in Roc.
 
-The  platform is a work in progress, but you can look at [the docs for its modules](https://www.roc-lang.org/examples/cli/Http),
-and [its source code](cli-platform) if you'd like to build your own CLI apps, perhaps using
+The [`basic-cli` platform](https://github.com/roc-lang/basic-cli) is a work in progress, but you can look at [the docs for its modules](https://www.roc-lang.org/packages/basic-cli/Http),
+and [its source code](https://github.com/roc-lang/basic-cli) if you'd like to build your own CLI apps, perhaps using
 the examples in this directory as starting points!
 
 Feel free to ask [on Zulip](https://roc.zulipchat.com) in the `#beginners` channel if you have questions about making

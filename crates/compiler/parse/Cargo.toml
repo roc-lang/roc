@@ -19,6 +19,7 @@ encode_unicode.workspace = true
 
 [dev-dependencies]
 roc_test_utils = { path = "../../test_utils" }
+proptest = "1.0.0"
 
 criterion.workspace = true
 pretty_assertions.workspace = true

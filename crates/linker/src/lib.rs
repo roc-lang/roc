@@ -5,10 +5,11 @@
 //! practical to use a regular linker.
 use memmap2::{Mmap, MmapMut};
 use object::Object;
-use roc_build::link::{rebuild_host, LinkType};
+use roc_build::link::{get_target_triple_str, rebuild_host, LinkType};
 use roc_error_macros::internal_error;
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::OptLevel;
+use roc_packaging::cache::RocCacheDir;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use std::cmp::Ordering;
 use std::mem;
@@ -56,28 +57,29 @@ pub fn supported(link_type: LinkType, target: &Triple) -> bool {
 pub fn build_and_preprocess_host(
     opt_level: OptLevel,
     target: &Triple,
-    host_input_path: &Path,
+    platform_main_roc: &Path,
     preprocessed_host_path: &Path,
     exposed_to_host: Vec<String>,
     exported_closure_types: Vec<String>,
 ) {
     let stub_lib = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
-        host_input_path.with_file_name("libapp.dll")
+        platform_main_roc.with_file_name("libapp.dll")
     } else {
-        host_input_path.with_file_name("libapp.so")
+        platform_main_roc.with_file_name("libapp.so")
     };
 
     let dynhost = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
-        host_input_path.with_file_name("dynhost.exe")
+        platform_main_roc.with_file_name("dynhost.exe")
     } else {
-        host_input_path.with_file_name("dynhost")
+        platform_main_roc.with_file_name("dynhost")
     };
 
     let stub_dll_symbols = make_stub_dll_symbols(exposed_to_host, exported_closure_types);
     generate_dynamic_lib(target, &stub_dll_symbols, &stub_lib);
-    rebuild_host(opt_level, target, host_input_path, Some(&stub_lib));
-    let metadata = host_input_path.with_file_name("metadata");
-    // let prehost = host_input_path.with_file_name("preprocessedhost");
+    rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
+
+    let metadata = platform_main_roc.with_file_name(metadata_file_name(target));
+    // let prehost = host_input_path.with_file_name(preprocessed_host_filename(target).unwrap());
 
     preprocess(
         target,
@@ -91,29 +93,38 @@ pub fn build_and_preprocess_host(
     )
 }
 
+fn metadata_file_name(target: &Triple) -> String {
+    let target_triple_str = get_target_triple_str(target);
+
+    format!("metadata_{}.rm1", target_triple_str.unwrap_or("unknown"))
+}
+
 pub fn link_preprocessed_host(
     target: &Triple,
-    host_input_path: &Path,
+    platform_path: &Path,
     roc_app_bytes: &[u8],
     binary_path: &Path,
 ) {
-    let metadata = host_input_path.with_file_name("metadata");
+    let metadata = platform_path.with_file_name(metadata_file_name(target));
     surgery(roc_app_bytes, &metadata, binary_path, false, false, target)
 }
 
 // Exposed function to load a platform file and generate a stub lib for it.
-pub fn generate_stub_lib(input_path: &Path, triple: &Triple) -> std::io::Result<i32> {
+pub fn generate_stub_lib(
+    input_path: &Path,
+    roc_cache_dir: RocCacheDir<'_>,
+    triple: &Triple,
+) -> std::io::Result<i32> {
     // Note: this should theoretically just be able to load the host, I think.
     // Instead, I am loading an entire app because that was simpler and had example code.
     // If this was expected to stay around for the the long term, we should change it.
     // But hopefully it will be removable once we have surgical linking on all platforms.
     let target_info = triple.into();
     let arena = &bumpalo::Bump::new();
-    let subs_by_module = Default::default();
     let loaded = roc_load::load_and_monomorphize(
         arena,
         input_path.to_path_buf(),
-        subs_by_module,
+        roc_cache_dir,
         LoadConfig {
             target_info,
             render: RenderTarget::Generic,
@@ -145,11 +156,6 @@ pub fn generate_stub_lib(input_path: &Path, triple: &Triple) -> std::io::Result<
         .collect();
 
     if let EntryPoint::Executable { platform_path, .. } = &loaded.entry_point {
-        let platform_path = input_path
-            .to_path_buf()
-            .parent()
-            .unwrap()
-            .join(platform_path);
         let stub_lib = if let target_lexicon::OperatingSystem::Windows = triple.operating_system {
             platform_path.with_file_name("libapp.obj")
         } else {
@@ -198,7 +204,9 @@ fn generate_dynamic_lib(target: &Triple, stub_dll_symbols: &[String], stub_lib_p
         let bytes = crate::generate_dylib::generate(target, stub_dll_symbols)
             .unwrap_or_else(|e| internal_error!("{e}"));
 
-        std::fs::write(stub_lib_path, &bytes).unwrap_or_else(|e| internal_error!("{e}"));
+        if let Err(e) = std::fs::write(stub_lib_path, &bytes) {
+            internal_error!("failed to write stub lib to {:?}: {e}", stub_lib_path)
+        }
 
         if let target_lexicon::OperatingSystem::Windows = target.operating_system {
             generate_import_library(stub_lib_path, stub_dll_symbols);
@@ -212,8 +220,9 @@ fn generate_import_library(stub_lib_path: &Path, custom_names: &[String]) {
     let mut def_path = stub_lib_path.to_owned();
     def_path.set_extension("def");
 
-    std::fs::write(def_path, def_file_content.as_bytes())
-        .unwrap_or_else(|e| internal_error!("{e}"));
+    if let Err(e) = std::fs::write(&def_path, def_file_content.as_bytes()) {
+        internal_error!("failed to write import library to {:?}: {e}", def_path)
+    }
 
     let mut def_filename = PathBuf::from(generate_dylib::APP_DLL);
     def_filename.set_extension("def");
@@ -499,7 +508,7 @@ pub(crate) fn open_mmap(path: &Path) -> Mmap {
     let in_file = std::fs::OpenOptions::new()
         .read(true)
         .open(path)
-        .unwrap_or_else(|e| internal_error!("{e}"));
+        .unwrap_or_else(|e| internal_error!("failed to open file {path:?}: {e}"));
 
     unsafe { Mmap::map(&in_file).unwrap_or_else(|e| internal_error!("{e}")) }
 }
@@ -510,7 +519,7 @@ pub(crate) fn open_mmap_mut(path: &Path, length: usize) -> MmapMut {
         .write(true)
         .create(true)
         .open(path)
-        .unwrap_or_else(|e| internal_error!("{e}"));
+        .unwrap_or_else(|e| internal_error!("failed to create or open file {path:?}: {e}"));
     out_file
         .set_len(length as u64)
         .unwrap_or_else(|e| internal_error!("{e}"));

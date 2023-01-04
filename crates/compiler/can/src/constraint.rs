@@ -12,7 +12,6 @@ use roc_types::types::{Category, PatternCategory, TypeTag, Types};
 
 pub struct Constraints {
     pub constraints: Vec<Constraint>,
-    pub types: Vec<Cell<Index<TypeTag>>>,
     pub type_slices: Vec<TypeOrVar>,
     pub variables: Vec<Variable>,
     pub loc_symbols: Vec<(Symbol, Region)>,
@@ -60,12 +59,11 @@ impl Default for Constraints {
 
 pub type ExpectedTypeIndex = Index<Expected<TypeOrVar>>;
 pub type PExpectedTypeIndex = Index<PExpected<TypeOrVar>>;
-pub type TypeOrVar = EitherIndex<Cell<Index<TypeTag>>, Variable>;
+pub type TypeOrVar = EitherIndex<TypeTag, Variable>;
 
 impl Constraints {
     pub fn new() -> Self {
         let constraints = Vec::new();
-        let mut types = Vec::new();
         let type_slices = Vec::with_capacity(16);
         let variables = Vec::new();
         let loc_symbols = Vec::new();
@@ -80,12 +78,6 @@ impl Constraints {
         let eq = Vec::new();
         let pattern_eq = Vec::new();
         let cycles = Vec::new();
-
-        types.extend([
-            Cell::new(Types::EMPTY_RECORD),
-            Cell::new(Types::EMPTY_TAG_UNION),
-            Cell::new(Types::STR),
-        ]);
 
         categories.extend([
             Category::Record,
@@ -120,7 +112,6 @@ impl Constraints {
 
         Self {
             constraints,
-            types,
             type_slices,
             variables,
             loc_symbols,
@@ -170,24 +161,11 @@ impl Constraints {
     pub const PCATEGORY_CHARACTER: Index<PatternCategory> = Index::new(10);
 
     #[inline(always)]
-    pub fn push_type(
-        &mut self,
-        types: &Types,
-        typ: Index<TypeTag>,
-    ) -> EitherIndex<Cell<Index<TypeTag>>, Variable> {
-        match types[typ] {
-            TypeTag::EmptyRecord => EitherIndex::from_left(Self::EMPTY_RECORD),
-            TypeTag::EmptyTagUnion => EitherIndex::from_left(Self::EMPTY_TAG_UNION),
-            TypeTag::Apply {
-                symbol: Symbol::STR_STR,
-                ..
-            } => EitherIndex::from_left(Self::STR),
-            TypeTag::Variable(var) => Self::push_type_variable(var),
-            _ => {
-                let index: Index<Cell<Index<TypeTag>>> =
-                    Index::push_new(&mut self.types, Cell::new(typ));
-                EitherIndex::from_left(index)
-            }
+    pub fn push_type(&mut self, types: &Types, typ: Index<TypeTag>) -> TypeOrVar {
+        if let TypeTag::Variable(var) = types[typ] {
+            Self::push_type_variable(var)
+        } else {
+            EitherIndex::from_left(typ)
         }
     }
 
@@ -199,7 +177,6 @@ impl Constraints {
         writeln!(buf, "Constraints statistics for module {:?}:", module_id)?;
 
         writeln!(buf, "   constraints length: {}:", self.constraints.len())?;
-        writeln!(buf, "   types length: {}:", self.types.len())?;
         writeln!(
             buf,
             "   let_constraints length: {}:",
@@ -511,17 +488,19 @@ impl Constraints {
     /// then need to find their way to the pool, and a convenient approach turned out to be to
     /// tag them onto the `Let` that we used to add the imported values.
     #[inline(always)]
-    pub fn let_import_constraint<I1, I2>(
+    pub fn let_import_constraint<I1, I2, I3>(
         &mut self,
         rigid_vars: I1,
-        def_types: I2,
+        flex_vars: I2,
+        def_types: I3,
         module_constraint: Constraint,
         pool_variables: &[Variable],
     ) -> Constraint
     where
         I1: IntoIterator<Item = Variable>,
-        I2: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
-        I2::IntoIter: ExactSizeIterator,
+        I2: IntoIterator<Item = Variable>,
+        I3: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
+        I3::IntoIter: ExactSizeIterator,
     {
         // defs and ret constraint are stored consequtively, so we only need to store one index
         let defs_and_ret_constraint = Index::new(self.constraints.len() as _);
@@ -531,7 +510,7 @@ impl Constraints {
 
         let let_contraint = LetConstraint {
             rigid_vars: self.variable_slice(rigid_vars),
-            flex_vars: Slice::default(),
+            flex_vars: self.variable_slice(flex_vars),
             def_types: self.def_types_slice(def_types),
             defs_and_ret_constraint,
         };

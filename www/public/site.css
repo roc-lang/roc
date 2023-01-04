@@ -8,11 +8,11 @@
     --header-link-hover: #222;
     --link-color: hsl(258, 73%, 58%);
     --h1-color: hsl(258, 73%, 70%);
-    --repl-prompt: #0ff4f4;
+    --repl-prompt: #0064ff;
     --body-bg: #fff;
     --code-bg: #e7e7e7;
-    --snippet-bg: #fcfcfc;
-    --snippet-border: #bbb;
+    --code-snippet-bg: #fcfcfc;
+    --code-snippet-border: #bbb;
     --code-color: #303030;
     --toc-background: #f3f3f3;
     --toc-border: #ddd;
@@ -21,10 +21,13 @@
 }
 
 html {
-    font-family: 'Lato', sans-serif;
     line-height: 1.5rem;
     background: var(--body-bg);
     color: var(--text-color);
+}
+
+html, #tutorial-toc-toggle-label {
+    font-family: 'Lato', sans-serif;
 }
 
 html, body {
@@ -72,7 +75,6 @@ li {
 }
 
 #top-bar nav {
-    min-width: var(--body-max-width);
     max-width: 1024px;
     margin: 0 auto;
     display: flex;
@@ -90,7 +92,9 @@ li {
     display: flex;
 }
 
-#top-bar-links a {
+#top-bar-links a,
+#top-bar-links label {
+    box-sizing: border-box;
     color: var(--top-bar-fg);
     font-size: 1.1rem;
     display: block;
@@ -99,16 +103,14 @@ li {
     margin: 0 2px;
 }
 
-@media only screen and (min-device-width: 900px) {
-    main {
-        width: var(--body-max-width);
-        margin: 36px auto;
-    }
+main {
+    max-width: var(--body-max-width);
+    margin: 36px auto;
+    padding: 0 12px;
 }
 
 code {
     margin: 0 0.2rem;
-    white-space: nowrap;
     background: var(--code-bg);
     padding: 0.1rem 0.5rem;
     border-radius: 4px;
@@ -119,16 +121,20 @@ code, samp {
     color: var(--code-color);
 }
 
-code.snippet, samp {
+.code-snippet, samp {
     display: block;
     overflow: auto;
     white-space: pre;
     padding: 10px 16px;
-    background-color: var(--snippet-bg);
+    background-color: var(--code-snippet-bg);
     margin-bottom: 16px;
     font-size: 1.2rem;
     line-height: 1.76rem;
-    border: 1px solid var(--snippet-border);
+    border: 1px solid var(--code-snippet-border);
+}
+
+pre {
+    white-space: pre-wrap;
 }
 
 .repl-prompt:before {
@@ -138,7 +144,7 @@ code.snippet, samp {
 }
 
 .repl-err {
-    color: #ff5f5f;
+    color: #c20000;
 }
 
 samp .ann {
@@ -148,32 +154,32 @@ samp .ann {
 
 samp .autovar {
     /* automatic variable names in the repl, e.g. # val1 */
-    color: #3dbd0f;
+    color: #338545;
 }
 
-samp .kw, samp .op {
-    /* language keywords, e.g. `if`, or operators, e.g. `+` */
-    color: #3474db;
+samp .kw {
+    /* language keywords, e.g. `if`*/
+    color: #004cc2;
 }
 
-samp .paren, samp .brace, samp .comma {
-    /* square braces, parens, commas */
-    color: #3474db;
+samp .op, samp .paren, samp .brace, samp .comma, samp .colon {
+    /* operators, e.g. `+` */
+    color: #c20000;
 }
 
-samp .str, samp .number {
+samp .number {
+  /* number literals */
+  color: #158086;
+}
+
+samp .str {
     /* string literals */
     color: #158086;
 }
 
-samp .str-esc {
+samp .str-esc, samp .str-interp {
     /* escapes inside string literals, e.g. \t */
     color: #3474db;
-}
-
-samp .str-interp {
-    /* interpolated variables inside string literals */
-    color: var(--text-color);
 }
 
 samp .dim {
@@ -181,12 +187,7 @@ samp .dim {
 }
 
 samp .comment {
-    color: green;
-}
-samp .comment .kw,
-samp .comment .str,
-samp .comment .number {
-    color: inherit;
+    color: #338545;
 }
 
 /* Tables */
@@ -294,6 +295,62 @@ td:last-child {
     font-size: inherit;
 }
 
+#tutorial-toc-toggle, #tutorial-toc-toggle-label, #close-tutorial-toc {
+    display: none; /* This may be overridden on mobile-friendly screen widths */
+}
+
+#tutorial-toc-toggle, #tutorial-toc-toggle-label {
+    font-size: 1.1rem;
+    float: right;
+}
+
+#close-tutorial-toc {
+    position: absolute;
+    top: 20px;
+    right: 8px;
+    font-size: 18px;
+    padding: 12px 24px;
+}
+
+/* Mobile-friendly screen width */
+@media only screen and (max-device-width: 480px) and (orientation: portrait) {
+    p, code, samp, .code-snippet {
+        font-size: 16px;
+    }
+
+    #tutorial-toc-toggle-label,
+    #close-tutorial-toc {
+        display: block;
+    }
+    #tutorial-toc-toggle:checked + #tutorial-toc {
+        display: block;
+    }
+    #tutorial-toc {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        overflow-y: auto;
+        margin: 0;
+        padding-right: 120px;
+        border: 0;
+    }
+    h1, h2, h3, h4, h5, h6, p, code {
+        word-break: break-word !important;
+    }
+    h1, h2, h3, h4, h5 {
+        line-height: 1.2em !important;
+        font-size: 2rem !important;
+    }
+    #top-bar-links a,
+    #top-bar-links label {
+        padding: 12px 8px;
+        margin: 0;
+    }
+}
+
 /* Used on on the different-names page. */
 
 th, td {
@@ -327,14 +384,29 @@ h1, h2, h3, h4, h5 {
     margin-bottom: 0;
 }
 
+#tutorial-toc-toggle-label, #close-tutorial-toc {
+    color: var(--header-link-color);
+}
+
+#tutorial-toc-toggle-label:hover, #close-tutorial-toc:hover {
+    color: var(--header-link-hover);
+    cursor: pointer;
+}
+
 h1 a, h2 a, h3 a, h4 a, h5 a {
     color: var(--header-link-color);
 }
 
-
 h1 a:hover, h2 a:hover, h3 a:hover, h4 a:hover, h5 a:hover {
     text-decoration: none;
     color: var(--header-link-hover);
+}
+
+h1 code, h2 code, h3 code, h4 code, h5 code {
+    color: inherit;
+    background-color: inherit;
+    padding: 0;
+    margin: 0;
 }
 
 h1 {
@@ -343,19 +415,19 @@ h1 {
     color: var(--h1-color);
     margin-top: 0;
     margin-bottom: 1.75rem;
-    text-shadow: 2px 2px 2px #010101;
+    text-shadow: 1px 1px 1px #010101;
 }
 
 h2 {
     font-size: 4rem;
     line-height: 4rem;
-    text-shadow: 2px 2px 2px #010101;
+    text-shadow: 1px 1px 1px #010101;
 }
 
 h3 {
     font-size: 3rem;
     line-height: 3rem;
-    text-shadow: 2px 2px 1px #010101;
+    text-shadow: 1px 1px 1px #010101;
 }
 
 h4 {
@@ -367,7 +439,8 @@ h4 {
   font-family: 'Permanent Marker';
   font-style: normal;
   font-weight: 400;
-  src: url("fonts/PermanentMarker.woff2") format('woff2');
+  src: url('/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2') format('woff2'),
+       url('/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff') format('woff');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
@@ -376,7 +449,8 @@ h4 {
   font-family: 'Merriweather';
   font-style: normal;
   font-weight: 400;
-  src: url("fonts/MerriweatherExt.woff2") format('woff2');
+  src: url('/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff2') format('woff2'),
+       url('/fonts/merriweather-v30-latin-ext_latin/merriweather-v30-latin-ext_latin-regular.woff') format('woff');
   unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
@@ -385,7 +459,8 @@ h4 {
   font-family: 'Merriweather';
   font-style: normal;
   font-weight: 400;
-  src: url("fonts/Merriweather.woff2") format('woff2');
+  src: url('/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff2') format('woff2'),
+       url('/fonts/merriweather-v30-latin/merriweather-v30-latin-regular.woff') format('woff');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
@@ -394,7 +469,8 @@ h4 {
   font-family: 'Merriweather Sans';
   font-style: normal;
   font-weight: 400;
-  src: url("fonts/MerriweatherSansExt.woff") format('woff');
+  src: url('/fonts/merriweather-sans-v22-latin-ext_latin/merriweather-sans-v22-latin-ext_latin-regular.woff2') format('woff2'),
+       url('/fonts/merriweather-sans-v22-latin-ext_latin/merriweather-sans-v22-latin-ext_latin-regular.woff') format('woff');
   unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 /* latin */
@@ -402,7 +478,8 @@ h4 {
   font-family: 'Merriweather Sans';
   font-style: normal;
   font-weight: 400;
-  src: url("fonts/MerriweatherSans.woff") format('woff');
+  src: url('/fonts/merriweather-sans-v22-latin/merriweather-sans-v22-latin-regular.woff2') format('woff2'),
+       url('/fonts/merriweather-sans-v22-latin/merriweather-sans-v22-latin-regular.woff') format('woff');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
@@ -411,7 +488,8 @@ h4 {
   font-family: 'Lato';
   font-style: normal;
   font-weight: 400;
-  src: src("fonts/LatoExt.woff2") format("woff2");
+  src: url('/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff2') format('woff2'),
+       url('/fonts/lato-v23-latin-ext_latin/lato-v23-latin-ext_latin-regular.woff') format('woff');
   unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 /* latin */
@@ -419,7 +497,8 @@ h4 {
   font-family: 'Lato';
   font-style: normal;
   font-weight: 400;
-  src: url("fonts/Lato.woff2") format('woff2');
+  src: url('/fonts/lato-v23-latin/lato-v23-latin-regular.woff2') format('woff2'),
+       url('/fonts/lato-v23-latin/lato-v23-latin-regular.woff') format('woff');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
@@ -428,7 +507,8 @@ h4 {
   font-family: 'Source Code Pro';
   font-style: normal;
   font-weight: 400;
-  src: url("fonts/SourceCodeProExt.woff") format('woff');
+  src: url('/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff2') format('woff2'),
+       url('/fonts/source-code-pro-v22-latin-ext_latin/source-code-pro-v22-latin-ext_latin-regular.woff') format('woff');
   unicode-range: U+0100-024F, U+0259, U+1E00-1EFF, U+2020, U+20A0-20AB, U+20AD-20CF, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 /* latin */
@@ -436,7 +516,8 @@ h4 {
   font-family: 'Source Code Pro';
   font-style: normal;
   font-weight: 400;
-  src: url("fonts/SourceCodePro.woff") format('woff');
+  src: url('/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2') format('woff2'),
+       url('/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff') format('woff');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
@@ -448,14 +529,14 @@ h4 {
         --header-link-hover: #ddd;
         --h1-color: #1bc6bd;
         --link-color: #1bc6bd;
-        --repl-prompt: #0ff4f4;
+        --repl-prompt: var(--link-color);
         --body-bg: #0e0e0f;
         --code-bg: #303030;
-        --snippet-bg: #1a1a1a;
-        --snippet-border: #444;
+        --code-snippet-bg: #1a1a1a;
+        --code-snippet-border: #444;
         --code-color: #cdcdcd;
-        --toc-background: var(--snippet-bg);
-        --toc-border: var(--snippet-border);
+        --toc-background: var(--code-snippet-bg);
+        --toc-border: var(--code-snippet-border);
         --toc-search-bg: #333;
         --toc-search-border: #555;
     }
@@ -468,18 +549,32 @@ h4 {
         scrollbar-color: #444444 #2f2f2f;
     }
 
-    samp .paren, samp .brace, samp .comma {
-        /* square braces, parens, commas */
-        color: #67a0fb;
+    samp .kw {
+        /* language keywords, e.g. `if` */
+        color: #00c3ff;
     }
 
-    samp .kw, samp .op {
-        /* language keywords, e.g. `if`, or operators, e.g. `+` */
-        color: #67a0fb;
+    samp .colon, samp .op, samp .paren, samp .brace, samp .comma, .repl-err {
+        /* operators, e.g. `+` */
+        color: #ff3966;
     }
 
     samp .str {
         /* string literals */
-        color: #26b2b9;
+        color: var(--link-color);
+    }
+
+    code .str {
+        /* string literals */
+        color: var(--link-color);
+    }
+
+    /* autovar = automatic variable names in the repl, e.g. # val1 */
+    samp .comment, samp .autovar {
+        color: #4ed86c;
+    }
+
+    samp .number {
+        color: #00c3ff;
     }
 }

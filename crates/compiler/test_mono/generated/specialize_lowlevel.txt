@@ -41,8 +41,8 @@ procedure Test.0 ():
     in
     let Test.20 : Int1 = CallByName Bool.2;
     if Test.20 then
-        let Test.6 : [C I64, C I64] = TagId(0) Test.4;
-        jump Test.18 Test.6;
+        let Test.17 : [C I64, C I64] = TagId(0) Test.4;
+        jump Test.18 Test.17;
     else
-        let Test.7 : [C I64, C I64] = TagId(1) Test.5;
-        jump Test.18 Test.7;
+        let Test.17 : [C I64, C I64] = TagId(1) Test.5;
+        jump Test.18 Test.17;

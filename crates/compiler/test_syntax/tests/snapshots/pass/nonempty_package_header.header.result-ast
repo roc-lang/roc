@@ -1,0 +1,46 @@
+Module {
+    comments: [],
+    header: Package(
+        PackageHeader {
+            before_name: [],
+            name: @8-20 PackageName(
+                "foo/barbaz",
+            ),
+            exposes: KeywordItem {
+                keyword: Spaces {
+                    before: [
+                        Newline,
+                    ],
+                    item: ExposesKeyword,
+                    after: [],
+                },
+                item: [
+                    @34-37 ModuleName(
+                        "Foo",
+                    ),
+                    @39-42 ModuleName(
+                        "Bar",
+                    ),
+                ],
+            },
+            packages: KeywordItem {
+                keyword: Spaces {
+                    before: [
+                        Newline,
+                    ],
+                    item: PackagesKeyword,
+                    after: [],
+                },
+                item: [
+                    @59-71 PackageEntry {
+                        shorthand: "foo",
+                        spaces_after_shorthand: [],
+                        package_name: @64-71 PackageName(
+                            "./foo",
+                        ),
+                    },
+                ],
+            },
+        },
+    ),
+}

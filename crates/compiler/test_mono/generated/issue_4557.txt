@@ -1,0 +1,56 @@
+procedure Bool.11 (#Attr.2, #Attr.3):
+    let Bool.24 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.24;
+
+procedure Bool.4 (#Attr.2, #Attr.3):
+    let Bool.23 : Int1 = lowlevel Or #Attr.2 #Attr.3;
+    ret Bool.23;
+
+procedure Test.1 (Test.2, Test.3):
+    let Test.17 : {Int1, Int1} = Struct {Test.2, Test.3};
+    let Test.34 : Int1 = StructAtIndex 0 Test.17;
+    let Test.33 : Int1 = StructAtIndex 1 Test.17;
+    let Test.19 : Int1 = CallByName Test.1 Test.33 Test.34;
+    let Test.27 : {} = Struct {};
+    joinpoint Test.28 Test.21:
+        let Test.23 : {} = Struct {};
+        joinpoint Test.24 Test.22:
+            let Test.20 : Int1 = CallByName Bool.11 Test.21 Test.22;
+            dec Test.22;
+            dec Test.21;
+            let Test.18 : Int1 = CallByName Bool.4 Test.19 Test.20;
+            ret Test.18;
+        in
+        switch Test.33:
+            case 0:
+                let Test.25 : Str = CallByName Test.9 Test.23;
+                jump Test.24 Test.25;
+        
+            default:
+                let Test.26 : Str = CallByName Test.11 Test.23;
+                jump Test.24 Test.26;
+        
+    in
+    switch Test.34:
+        case 0:
+            let Test.29 : Str = CallByName Test.9 Test.27;
+            jump Test.28 Test.29;
+    
+        default:
+            let Test.30 : Str = CallByName Test.11 Test.27;
+            jump Test.28 Test.30;
+    
+
+procedure Test.11 (Test.36):
+    let Test.37 : Str = "a";
+    ret Test.37;
+
+procedure Test.9 (Test.39):
+    let Test.40 : Str = "a";
+    ret Test.40;
+
+procedure Test.0 ():
+    let Test.38 : Int1 = false;
+    let Test.35 : Int1 = true;
+    let Test.13 : Int1 = CallByName Test.1 Test.38 Test.35;
+    ret Test.13;

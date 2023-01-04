@@ -1,9 +1,9 @@
 //! Provides the WASM backend to generate Roc binaries.
 mod backend;
+mod code_builder;
 mod layout;
 mod low_level;
 mod storage;
-pub mod wasm_module;
 
 // Helpers for interfacing to a Wasm module from outside
 pub mod wasm32_result;
@@ -19,10 +19,11 @@ use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::{LayoutIds, STLayoutInterner};
 use roc_target::TargetInfo;
-use wasm_module::parse::ParseError;
+use roc_wasm_module::parse::ParseError;
+use roc_wasm_module::{Align, LocalId, ValueType, WasmModule};
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
-use crate::wasm_module::{Align, CodeBuilder, LocalId, ValueType, WasmModule};
+use crate::code_builder::CodeBuilder;
 
 const TARGET_INFO: TargetInfo = TargetInfo::default_wasm32();
 const PTR_SIZE: u32 = {
@@ -36,15 +37,12 @@ const PTR_SIZE: u32 = {
 };
 const PTR_TYPE: ValueType = ValueType::I32;
 
-pub const STACK_POINTER_GLOBAL_ID: u32 = 0;
-pub const FRAME_ALIGNMENT_BYTES: i32 = 16;
 pub const MEMORY_NAME: &str = "memory";
 pub const BUILTINS_IMPORT_MODULE_NAME: &str = "env";
 pub const STACK_POINTER_NAME: &str = "__stack_pointer";
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
-    pub layout_interner: &'a STLayoutInterner<'a>,
     pub module_id: ModuleId,
     pub exposed_to_host: MutSet<Symbol>,
     pub stack_bytes: u32,
@@ -57,7 +55,8 @@ impl Env<'_> {
 /// Parse the preprocessed host binary
 /// If successful, the module can be passed to build_app_binary
 pub fn parse_host<'a>(arena: &'a Bump, host_bytes: &[u8]) -> Result<WasmModule<'a>, ParseError> {
-    WasmModule::preload(arena, host_bytes)
+    let require_relocatable = true;
+    WasmModule::preload(arena, host_bytes, require_relocatable)
 }
 
 /// Generate a Wasm module in binary form, ready to write to a file. Entry point from roc_build.
@@ -65,16 +64,17 @@ pub fn parse_host<'a>(arena: &'a Bump, host_bytes: &[u8]) -> Result<WasmModule<'
 ///   interns        names of functions and variables (as memory-efficient interned strings)
 ///   host_module    parsed module from a Wasm object file containing all of the non-Roc code
 ///   procedures     Roc code in monomorphized intermediate representation
-pub fn build_app_binary<'a>(
-    env: &'a Env<'a>,
-    interns: &'a mut Interns,
+pub fn build_app_binary<'a, 'r>(
+    env: &'r Env<'a>,
+    layout_interner: &'r mut STLayoutInterner<'a>,
+    interns: &'r mut Interns,
     host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> std::vec::Vec<u8> {
-    let (mut wasm_module, called_preload_fns, _) =
-        build_app_module(env, interns, host_module, procedures);
+    let (mut wasm_module, called_fns, _) =
+        build_app_module(env, layout_interner, interns, host_module, procedures);
 
-    wasm_module.eliminate_dead_code(env.arena, called_preload_fns);
+    wasm_module.eliminate_dead_code(env.arena, called_fns);
 
     let mut buffer = std::vec::Vec::with_capacity(wasm_module.size());
     wasm_module.serialize(&mut buffer);
@@ -85,9 +85,10 @@ pub fn build_app_binary<'a>(
 /// Shared by all consumers of gen_wasm: roc_build, roc_repl_wasm, and test_gen
 /// (roc_repl_wasm and test_gen will add more generated code for a wrapper function
 /// that defines a common interface to `main`, independent of return type.)
-pub fn build_app_module<'a>(
-    env: &'a Env<'a>,
-    interns: &'a mut Interns,
+pub fn build_app_module<'a, 'r>(
+    env: &'r Env<'a>,
+    layout_interner: &'r mut STLayoutInterner<'a>,
+    interns: &'r mut Interns,
     host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> (WasmModule<'a>, BitVec<usize>, u32) {
@@ -99,7 +100,7 @@ pub fn build_app_module<'a>(
 
     // Adjust Wasm function indices to account for functions from the object file
     let fn_index_offset: u32 =
-        host_module.import.function_count() as u32 + host_module.code.preloaded_count;
+        host_module.import.function_count() as u32 + host_module.code.function_count;
 
     // Pre-pass over the procedure names & layouts
     // Create a lookup to tell us the final index of each proc in the output file
@@ -127,24 +128,20 @@ pub fn build_app_module<'a>(
 
     let mut backend = WasmBackend::new(
         env,
+        layout_interner,
         interns,
         layout_ids,
         proc_lookup,
         host_to_app_map,
         host_module,
         fn_index_offset,
-        CodeGenHelp::new(
-            env.arena,
-            env.layout_interner,
-            TargetInfo::default_wasm32(),
-            env.module_id,
-        ),
+        CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
     );
 
     if DEBUG_SETTINGS.user_procs_ir {
         println!("## procs");
         for proc in procs.iter() {
-            println!("{}", proc.to_pretty(env.layout_interner, 200));
+            println!("{}", proc.to_pretty(backend.layout_interner, 200, true));
             // println!("{:?}", proc);
         }
     }
@@ -162,7 +159,7 @@ pub fn build_app_module<'a>(
     if DEBUG_SETTINGS.helper_procs_ir {
         println!("## helper_procs");
         for proc in helper_procs.iter() {
-            println!("{}", proc.to_pretty(env.layout_interner, 200));
+            println!("{}", proc.to_pretty(backend.layout_interner, 200, true));
             // println!("{:#?}", proc);
         }
     }
@@ -186,11 +183,11 @@ pub fn build_app_module<'a>(
         }
     }
 
-    let (module, called_preload_fns) = backend.finalize();
+    let (module, called_fns) = backend.finalize();
     let main_function_index =
         maybe_main_fn_index.expect("The app must expose at least one value to the host");
 
-    (module, called_preload_fns, main_function_index)
+    (module, called_fns, main_function_index)
 }
 
 pub struct CopyMemoryConfig {
@@ -235,26 +232,6 @@ pub fn copy_memory(code_builder: &mut CodeBuilder, config: CopyMemoryConfig) {
     }
 }
 
-/// Round up to alignment_bytes (which must be a power of 2)
-#[macro_export]
-macro_rules! round_up_to_alignment {
-    ($unaligned: expr, $alignment_bytes: expr) => {
-        if $alignment_bytes <= 1 {
-            $unaligned
-        } else if $alignment_bytes.count_ones() != 1 {
-            internal_error!(
-                "Cannot align to {} bytes. Not a power of 2.",
-                $alignment_bytes
-            );
-        } else {
-            let mut aligned = $unaligned;
-            aligned += $alignment_bytes - 1; // if lower bits are non-zero, push it over the next boundary
-            aligned &= !$alignment_bytes + 1; // mask with a flag that has upper bits 1, lower bits 0
-            aligned
-        }
-    };
-}
-
 pub struct WasmDebugSettings {
     proc_start_end: bool,
     user_procs_ir: bool,
@@ -263,7 +240,6 @@ pub struct WasmDebugSettings {
     instructions: bool,
     storage_map: bool,
     pub keep_test_binary: bool,
-    pub skip_dead_code_elim: bool,
 }
 
 pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
@@ -273,8 +249,7 @@ pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
     let_stmt_ir: false && cfg!(debug_assertions),
     instructions: false && cfg!(debug_assertions),
     storage_map: false && cfg!(debug_assertions),
-    keep_test_binary: false && cfg!(debug_assertions),
-    skip_dead_code_elim: false && cfg!(debug_assertions),
+    keep_test_binary: false && cfg!(debug_assertions), // see also ROC_WRITE_FINAL_WASM
 };
 
 #[cfg(test)]

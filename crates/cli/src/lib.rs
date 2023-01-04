@@ -7,10 +7,13 @@ use build::BuiltFile;
 use bumpalo::Bump;
 use clap::{Arg, ArgMatches, Command, ValueSource};
 use roc_build::link::{LinkType, LinkingStrategy};
-use roc_build::program::{CodeGenBackend, CodeGenOptions, Problems};
+use roc_build::program::{CodeGenBackend, CodeGenOptions};
 use roc_error_macros::{internal_error, user_error};
 use roc_load::{ExpectMetadata, LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
+use roc_packaging::cache::RocCacheDir;
+use roc_packaging::tarball::Compression;
+use roc_reporting::cli::Problems;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
@@ -18,6 +21,7 @@ use std::mem::ManuallyDrop;
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::process;
+use std::time::Instant;
 use strum::{EnumIter, IntoEnumIterator, IntoStaticStr};
 use target_lexicon::BinaryFormat;
 use target_lexicon::{
@@ -30,7 +34,7 @@ pub mod build;
 mod format;
 pub use format::format;
 
-use crate::build::{BuildFileError, BuildOrdering};
+use crate::build::{standard_load_config, BuildFileError, BuildOrdering};
 
 const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
@@ -48,6 +52,7 @@ pub const CMD_GLUE: &str = "glue";
 pub const CMD_GEN_STUB_LIB: &str = "gen-stub-lib";
 
 pub const FLAG_DEBUG: &str = "debug";
+pub const FLAG_BUNDLE: &str = "bundle";
 pub const FLAG_DEV: &str = "dev";
 pub const FLAG_OPTIMIZE: &str = "optimize";
 pub const FLAG_MAX_THREADS: &str = "max-threads";
@@ -165,6 +170,14 @@ pub fn build_app<'a>() -> Command<'a> {
                     .required(false),
             )
             .arg(
+                Arg::new(FLAG_BUNDLE)
+                    .long(FLAG_BUNDLE)
+                    .help("Create an archive of a package (for example, a .tar, .tar.gz, or .tar.br file), so others can add it as a HTTPS dependency.")
+                    .conflicts_with(FLAG_TARGET)
+                    .possible_values([".tar", ".tar.gz", ".tar.br"])
+                    .required(false),
+            )
+            .arg(
                 Arg::new(FLAG_NO_LINK)
                     .long(FLAG_NO_LINK)
                     .help("Do not link\n(Instead, just output the `.o` file.)")
@@ -257,12 +270,13 @@ pub fn build_app<'a>() -> Command<'a> {
             )
         .subcommand(
             Command::new(CMD_DOCS)
-                .about("Generate documentation for Roc modules (Work In Progress)")
-                .arg(Arg::new(DIRECTORY_OR_FILES)
+                .about("Generate documentation for a Roc package")
+                .arg(Arg::new(ROC_FILE)
                     .multiple_values(true)
-                    .required(false)
-                    .help("The directory or files to build documentation for")
+                    .help("The package's main .roc file")
                     .allow_invalid_utf8(true)
+                    .required(false)
+                    .default_value(DEFAULT_ROC_FILENAME),
                 )
         )
         .subcommand(Command::new(CMD_GLUE)
@@ -346,10 +360,11 @@ pub fn test(_matches: &ArgMatches, _triple: Triple) -> io::Result<i32> {
 
 #[cfg(not(windows))]
 pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
+    use roc_build::program::report_problems_monomorphized;
     use roc_gen_llvm::llvm::build::LlvmBackendMode;
-    use roc_load::{ExecutionMode, LoadConfig};
+    use roc_load::{ExecutionMode, LoadConfig, LoadMonomorphizedError};
+    use roc_packaging::cache;
     use roc_target::TargetInfo;
-    use std::time::Instant;
 
     let start_time = Instant::now();
     let arena = Bump::new();
@@ -402,8 +417,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let target_info = TargetInfo::from(target);
 
     // Step 1: compile the app and generate the .o file
-    let subs_by_module = Default::default();
-
     let load_config = LoadConfig {
         target_info,
         // TODO: expose this from CLI?
@@ -412,13 +425,25 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
         threading,
         exec_mode: ExecutionMode::Test,
     };
-    let loaded =
-        roc_load::load_and_monomorphize(arena, path.to_path_buf(), subs_by_module, load_config)
-            .unwrap();
+    let load_result = roc_load::load_and_monomorphize(
+        arena,
+        path.to_path_buf(),
+        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        load_config,
+    );
 
-    let mut loaded = loaded;
+    let mut loaded = match load_result {
+        Ok(loaded) => loaded,
+        Err(LoadMonomorphizedError::LoadingProblem(problem)) => {
+            return handle_loading_problem(problem);
+        }
+        Err(LoadMonomorphizedError::ErrorModule(module)) => {
+            return handle_error_module(module, start_time.elapsed(), filename, false);
+        }
+    };
+    let problems = report_problems_monomorphized(&mut loaded);
+
     let mut expectations = std::mem::take(&mut loaded.expectations);
-    let loaded = loaded;
 
     let interns = loaded.interns.clone();
 
@@ -431,6 +456,19 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     )
     .unwrap();
 
+    // Print warnings before running tests.
+    {
+        debug_assert_eq!(
+            problems.errors, 0,
+            "if there were errors, we would have already exited."
+        );
+        if problems.warnings > 0 {
+            print_problems(problems, start_time.elapsed());
+            println!(".\n\nRunning tests…\n\n\x1B[36m{}\x1B[39m", "─".repeat(80));
+        }
+    }
+
+    // Run the tests.
     let arena = &bumpalo::Bump::new();
     let interns = arena.alloc(interns);
 
@@ -480,10 +518,78 @@ pub fn build(
     matches: &ArgMatches,
     config: BuildConfig,
     triple: Triple,
+    roc_cache_dir: RocCacheDir<'_>,
     link_type: LinkType,
 ) -> io::Result<i32> {
     use build::build_file;
     use BuildConfig::*;
+
+    let filename = matches.value_of_os(ROC_FILE).unwrap();
+    let path_buf = {
+        let path = Path::new(filename);
+
+        // Spawn the root task
+        if !path.exists() {
+            let path_string = path.to_string_lossy();
+
+            // TODO these should use roc_reporting to display nicer error messages.
+            match matches.value_source(ROC_FILE) {
+                Some(ValueSource::DefaultValue) => {
+                    eprintln!(
+                        "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
+                        DEFAULT_ROC_FILENAME
+                    )
+                }
+                _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
+            }
+
+            process::exit(1);
+        }
+
+        if config == BuildConfig::BuildOnly && matches.is_present(FLAG_BUNDLE) {
+            let start_time = Instant::now();
+
+            let compression =
+                Compression::try_from(matches.value_of(FLAG_BUNDLE).unwrap()).unwrap();
+
+            // Print a note of advice. This is mainly here because brotli takes so long but produces
+            // such smaller output files; the idea is to encourage people to wait for brotli,
+            // so that downloads go faster. The compression only happens once, but the network
+            // transfer and decompression will happen many more times!
+            match compression {
+                Compression::Brotli => {
+                    println!("Compressing with Brotli at maximum quality level…\n\n(Note: Brotli compression can take awhile! Using --{FLAG_BUNDLE} .tar.gz takes less time, but usually produces a significantly larger output file. Brotli is generally worth the up-front wait if this is a file people will be downloading!)\n");
+                }
+                Compression::Gzip => {
+                    println!("Compressing with gzip at minimum quality…\n\n(Note: Gzip usually runs faster than Brotli but typically produces significantly larger output files. Consider using --{FLAG_BUNDLE} .tar.br if this is a file people will be downloading!)\n");
+                }
+                Compression::Uncompressed => {
+                    println!("Building .tar archive without compression…\n\n(Note: Compression takes more time to run but typically produces much smaller output files. Consider using --{FLAG_BUNDLE} .tar.br if this is a file people will be downloading!)\n");
+                }
+            }
+
+            // Rather than building an executable or library, we're building
+            // a tarball so this code can be distributed via a HTTPS
+            let filename = roc_packaging::tarball::build(path, compression)?;
+            let total_time_ms = start_time.elapsed().as_millis();
+            let total_time = if total_time_ms > 1000 {
+                format!("{}s {}ms", total_time_ms / 1000, total_time_ms % 1000)
+            } else {
+                format!("{total_time_ms} ms")
+            };
+            let created_path = path.with_file_name(&filename);
+
+            println!(
+                "\nBundled \x1B[33m{}\x1B[39m and its dependent files into the following archive in {total_time}:\n\n\t\x1B[33m{}\x1B[39m\n\nTo distribute this archive as a package, upload this to some URL and then add it as a dependency with:\n\n\t\x1B[32m\"https://your-url-goes-here/{filename}\"\x1B[39m\n",
+                path.to_string_lossy(),
+                created_path.to_string_lossy()
+            );
+
+            return Ok(0);
+        }
+
+        path.to_path_buf()
+    };
 
     // the process will end after this function,
     // so we don't want to spend time freeing these values
@@ -548,27 +654,6 @@ pub fn build(
         triple != Triple::host() && !matches!(triple.architecture, Architecture::Wasm32)
     };
 
-    let filename = matches.value_of_os(ROC_FILE).unwrap();
-    let path = Path::new(filename);
-
-    // Spawn the root task
-    if !path.exists() {
-        let path_string = path.to_string_lossy();
-
-        // TODO these should use roc_reporting to display nicer error messages.
-        match matches.value_source(ROC_FILE) {
-                    Some(ValueSource::DefaultValue) => {
-                        eprintln!(
-                            "\nNo `.roc` file was specified, and the current directory does not contain a {} file to use as a default.\n\nYou can run `roc help` for more information on how to provide a .roc file.\n",
-                            DEFAULT_ROC_FILENAME
-                        )
-                    }
-                    _ => eprintln!("\nThis file was not found: {}\n\nYou can run `roc help` for more information on how to provide a .roc file.\n", path_string),
-                }
-
-        process::exit(1);
-    }
-
     let wasm_dev_stack_bytes: Option<u32> = matches
         .try_get_one::<&str>(FLAG_WASM_STACK_SIZE_KB)
         .ok()
@@ -587,18 +672,20 @@ pub fn build(
         emit_debug_info,
     };
 
+    let load_config = standard_load_config(&triple, build_ordering, threading);
+
     let res_binary_path = build_file(
         &arena,
         &triple,
-        path.to_path_buf(),
+        path_buf,
         code_gen_options,
         emit_timings,
         link_type,
         linking_strategy,
         prebuilt,
-        threading,
         wasm_dev_stack_bytes,
-        build_ordering,
+        roc_cache_dir,
+        load_config,
     );
 
     match res_binary_path {
@@ -645,8 +732,8 @@ pub fn build(
                     roc_run(&arena, opt_level, triple, args, bytes, expect_metadata)
                 }
                 BuildAndRunIfNoErrors => {
-                    debug_assert!(
-                        problems.errors == 0,
+                    debug_assert_eq!(
+                        problems.errors, 0,
                         "if there are errors, they should have been returned as an error variant"
                     );
                     if problems.warnings > 0 {
@@ -667,35 +754,51 @@ pub fn build(
                 }
             }
         }
-        Err(BuildFileError::ErrorModule {
-            mut module,
-            total_time,
-        }) => {
-            debug_assert!(module.total_problems() > 0);
-
-            let problems = roc_build::program::report_problems_typechecked(&mut module);
-
-            print_problems(problems, total_time);
-
-            print!(".\n\nYou can run the program anyway with \x1B[32mroc run");
-
-            // If you're running "main.roc" then you can just do `roc run`
-            // to re-run the program.
-            if filename != DEFAULT_ROC_FILENAME {
-                print!(" {}", &filename.to_string_lossy());
-            }
-
-            println!("\x1B[39m");
-
-            Ok(problems.exit_code())
+        Err(BuildFileError::ErrorModule { module, total_time }) => {
+            handle_error_module(module, total_time, filename, true)
         }
-        Err(BuildFileError::LoadingProblem(LoadingProblem::FormattedReport(report))) => {
-            print!("{}", report);
+        Err(BuildFileError::LoadingProblem(problem)) => handle_loading_problem(problem),
+    }
+}
 
+fn handle_error_module(
+    mut module: roc_load::LoadedModule,
+    total_time: std::time::Duration,
+    filename: &OsStr,
+    print_run_anyway_hint: bool,
+) -> io::Result<i32> {
+    debug_assert!(module.total_problems() > 0);
+
+    let problems = roc_build::program::report_problems_typechecked(&mut module);
+
+    print_problems(problems, total_time);
+
+    if print_run_anyway_hint {
+        // If you're running "main.roc" then you can just do `roc run`
+        // to re-run the program.
+        print!(".\n\nYou can run the program anyway with \x1B[32mroc run");
+
+        if filename != DEFAULT_ROC_FILENAME {
+            print!(" {}", &filename.to_string_lossy());
+        }
+
+        println!("\x1B[39m");
+    }
+
+    Ok(problems.exit_code())
+}
+
+fn handle_loading_problem(problem: LoadingProblem) -> io::Result<i32> {
+    match problem {
+        LoadingProblem::FormattedReport(report) => {
+            print!("{}", report);
             Ok(1)
         }
-        Err(other) => {
-            panic!("build_file failed with error:\n{:?}", other);
+        _ => {
+            // TODO: tighten up the types here, we should always end up with a
+            // formatted report from load.
+            print!("Failed with error: {:?}", problem);
+            Ok(1)
         }
     }
 }
@@ -749,7 +852,7 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
             {
                 use std::os::unix::ffi::OsStrExt;
 
-                run_with_wasmer(
+                run_wasm(
                     generated_filename,
                     args.into_iter().map(|os_str| os_str.as_bytes()),
                 );
@@ -757,11 +860,11 @@ fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(
 
             #[cfg(not(target_family = "unix"))]
             {
-                run_with_wasmer(
+                run_wasm(
                     generated_filename,
                     args.into_iter().map(|os_str| {
                         os_str.to_str().expect(
-                            "Roc does not currently support passing non-UTF8 arguments to Wasmer.",
+                            "Roc does not currently support passing non-UTF8 arguments to Wasm.",
                         )
                     }),
                 );
@@ -938,8 +1041,9 @@ fn roc_dev_native(
     envp: bumpalo::collections::Vec<*const c_char>,
     expect_metadata: ExpectMetadata,
 ) -> ! {
-    use roc_repl_expect::run::ExpectMemory;
-    use signal_hook::{consts::signal::SIGCHLD, consts::signal::SIGUSR1, iterator::Signals};
+    use std::sync::{atomic::AtomicBool, Arc};
+
+    use roc_repl_expect::run::{ChildProcessMsg, ExpectMemory};
 
     let ExpectMetadata {
         mut expectations,
@@ -947,11 +1051,9 @@ fn roc_dev_native(
         layout_interner,
     } = expect_metadata;
 
-    let mut signals = Signals::new(&[SIGCHLD, SIGUSR1]).unwrap();
-
     // let shm_name =
     let shm_name = format!("/roc_expect_buffer_{}", std::process::id());
-    let memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
+    let mut memory = ExpectMemory::create_or_reuse_mmap(&shm_name);
 
     let layout_interner = layout_interner.into_global();
 
@@ -977,12 +1079,14 @@ fn roc_dev_native(
             std::process::exit(1)
         }
         1.. => {
-            for sig in &mut signals {
-                match sig {
-                    SIGCHLD => break,
-                    SIGUSR1 => {
-                        // this is the signal we use for an expect failure. Let's see what the child told us
+            let sigchld = Arc::new(AtomicBool::new(false));
+            signal_hook::flag::register(signal_hook::consts::SIGCHLD, Arc::clone(&sigchld))
+                .unwrap();
 
+            loop {
+                match memory.wait_for_child(sigchld.clone()) {
+                    ChildProcessMsg::Terminate => break,
+                    ChildProcessMsg::Expect => {
                         roc_repl_expect::run::render_expects_in_memory(
                             &mut writer,
                             arena,
@@ -992,8 +1096,22 @@ fn roc_dev_native(
                             &memory,
                         )
                         .unwrap();
+
+                        memory.reset();
                     }
-                    _ => println!("received signal {}", sig),
+                    ChildProcessMsg::Dbg => {
+                        roc_repl_expect::run::render_dbgs_in_memory(
+                            &mut writer,
+                            arena,
+                            &mut expectations,
+                            &interns,
+                            &layout_interner,
+                            &memory,
+                        )
+                        .unwrap();
+
+                        memory.reset();
+                    }
                 }
             }
 
@@ -1120,38 +1238,33 @@ fn roc_run_native<I: IntoIterator<Item = S>, S: AsRef<OsStr>>(
 }
 
 #[cfg(feature = "run-wasm32")]
-fn run_with_wasmer<I: Iterator<Item = S>, S: AsRef<[u8]>>(wasm_path: &std::path::Path, args: I) {
-    use wasmer::{Instance, Module, Store};
+fn run_wasm<I: Iterator<Item = S>, S: AsRef<[u8]>>(wasm_path: &std::path::Path, args: I) {
+    use bumpalo::collections::Vec;
+    use roc_wasm_interp::{DefaultImportDispatcher, Instance};
 
-    let store = Store::default();
-    let module = Module::from_file(&store, &wasm_path).unwrap();
+    let bytes = std::fs::read(wasm_path).unwrap();
+    let arena = Bump::new();
 
-    // First, we create the `WasiEnv`
-    use wasmer_wasi::WasiState;
-    let mut wasi_env = WasiState::new("hello").args(args).finalize().unwrap();
-
-    // Then, we get the import object related to our WASI
-    // and attach it to the Wasm instance.
-    let import_object = wasi_env.import_object(&module).unwrap();
-
-    let instance = Instance::new(&module, &import_object).unwrap();
-
-    let start = instance.exports.get_function("_start").unwrap();
-
-    use wasmer_wasi::WasiError;
-    match start.call(&[]) {
-        Ok(_) => {}
-        Err(e) => match e.downcast::<WasiError>() {
-            Ok(WasiError::Exit(0)) => {
-                // we run the `_start` function, so exit(0) is expected
-            }
-            other => panic!("Wasmer error: {:?}", other),
-        },
+    let mut argv = Vec::<&[u8]>::new_in(&arena);
+    for arg in args {
+        let mut arg_copy = Vec::<u8>::new_in(&arena);
+        arg_copy.extend_from_slice(arg.as_ref());
+        argv.push(arg_copy.into_bump_slice());
     }
+    let import_dispatcher = DefaultImportDispatcher::new(&argv);
+
+    let mut instance = Instance::from_bytes(&arena, &bytes, import_dispatcher, false).unwrap();
+
+    instance
+        .call_export("_start", [])
+        .unwrap()
+        .unwrap()
+        .expect_i32()
+        .unwrap();
 }
 
 #[cfg(not(feature = "run-wasm32"))]
-fn run_with_wasmer<I: Iterator<Item = S>, S: AsRef<[u8]>>(_wasm_path: &std::path::Path, _args: I) {
+fn run_wasm<I: Iterator<Item = S>, S: AsRef<[u8]>>(_wasm_path: &std::path::Path, _args: I) {
     println!("Running wasm files is not supported on this target.");
 }
 

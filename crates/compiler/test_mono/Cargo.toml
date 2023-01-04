@@ -18,6 +18,7 @@ roc_load = { path = "../load" }
 roc_can = { path = "../can" }
 roc_mono = { path = "../mono" }
 roc_target = { path = "../roc_target" }
+roc_packaging = { path = "../../packaging" }
 roc_reporting = { path = "../../reporting" }
 roc_tracing = { path = "../../tracing" }
 

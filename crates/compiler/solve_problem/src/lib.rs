@@ -1,7 +1,7 @@
 //! Provides types to describe problems that can occur during solving.
 use roc_can::expected::{Expected, PExpected};
 use roc_module::{ident::Lowercase, symbol::Symbol};
-use roc_problem::can::CycleEntry;
+use roc_problem::{can::CycleEntry, Severity};
 use roc_region::all::Region;
 
 use roc_types::types::{Category, ErrorType, PatternCategory};
@@ -29,6 +29,27 @@ pub enum TypeError {
         expected_opaque: Symbol,
         found_opaque: Symbol,
     },
+}
+
+impl TypeError {
+    pub fn severity(&self) -> Severity {
+        use Severity::*;
+        match self {
+            TypeError::BadExpr(..) => RuntimeError,
+            TypeError::BadPattern(..) => RuntimeError,
+            TypeError::CircularType(..) => RuntimeError,
+            TypeError::CircularDef(_) => RuntimeError,
+            TypeError::UnexposedLookup(_) => RuntimeError,
+            TypeError::UnfulfilledAbility(_) => RuntimeError,
+            TypeError::BadExprMissingAbility(_, _, _, _) => RuntimeError,
+            TypeError::BadPatternMissingAbility(_, _, _, _) => RuntimeError,
+            // NB: if bidirectional exhaustiveness checking is implemented, the other direction
+            // is also not a runtime error.
+            TypeError::Exhaustive(exhtv) => exhtv.severity(),
+            TypeError::StructuralSpecialization { .. } => RuntimeError,
+            TypeError::WrongSpecialization { .. } => RuntimeError,
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]

@@ -6,12 +6,12 @@ use bumpalo::collections::Vec;
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{
     BranchInfo, JoinPointId, ListLiteralElement, Literal, Param, ProcLayout, SelfRecursive, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, TagIdIntType, UnionLayout};
+use roc_mono::layout::{Builtin, Layout, STLayoutInterner, TagIdIntType, UnionLayout};
 use roc_target::TargetInfo;
 use std::marker::PhantomData;
 
@@ -69,9 +69,10 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
     );
 
     /// load_args updates the storage manager to know where every arg is stored.
-    fn load_args<'a>(
+    fn load_args<'a, 'r>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
+        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, Self>,
+        layout_interner: &mut STLayoutInterner<'a>,
         args: &'a [(Layout<'a>, Symbol)],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
         ret_layout: &Layout<'a>,
@@ -79,9 +80,10 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
 
     /// store_args stores the args in registers and on the stack for function calling.
     /// It also updates the amount of temporary stack space needed in the storage manager.
-    fn store_args<'a>(
+    fn store_args<'a, 'r>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
+        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, Self>,
+        layout_interner: &mut STLayoutInterner<'a>,
         dst: &Symbol,
         args: &[Symbol],
         arg_layouts: &[Layout<'a>],
@@ -91,18 +93,20 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
 
     /// return_complex_symbol returns the specified complex/non-primative symbol.
     /// It uses the layout to determine how the data should be returned.
-    fn return_complex_symbol<'a>(
+    fn return_complex_symbol<'a, 'r>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
+        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, Self>,
+        layout_interner: &mut STLayoutInterner<'a>,
         sym: &Symbol,
         layout: &Layout<'a>,
     );
 
     /// load_returned_complex_symbol loads a complex symbol that was returned from a function call.
     /// It uses the layout to determine how the data should be loaded into the symbol.
-    fn load_returned_complex_symbol<'a>(
+    fn load_returned_complex_symbol<'a, 'r>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, Self>,
+        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, Self>,
+        layout_interner: &mut STLayoutInterner<'a>,
         sym: &Symbol,
         layout: &Layout<'a>,
     );
@@ -261,9 +265,9 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         src1: GeneralReg,
         src2: GeneralReg,
     );
-    fn umul_reg64_reg64_reg64<'a, ASM, CC>(
+    fn umul_reg64_reg64_reg64<'a, 'r, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
@@ -271,18 +275,18 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         ASM: Assembler<GeneralReg, FloatReg>,
         CC: CallConv<GeneralReg, FloatReg, ASM>;
 
-    fn idiv_reg64_reg64_reg64<'a, ASM, CC>(
+    fn idiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
     ) where
         ASM: Assembler<GeneralReg, FloatReg>,
         CC: CallConv<GeneralReg, FloatReg, ASM>;
-    fn udiv_reg64_reg64_reg64<'a, ASM, CC>(
+    fn udiv_reg64_reg64_reg64<'a, 'r, ASM, CC>(
         buf: &mut Vec<'a, u8>,
-        storage_manager: &mut StorageManager<'a, GeneralReg, FloatReg, ASM, CC>,
+        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
         dst: GeneralReg,
         src1: GeneralReg,
         src2: GeneralReg,
@@ -354,6 +358,7 @@ pub trait RegTrait:
 
 pub struct Backend64Bit<
     'a,
+    'r,
     GeneralReg: RegTrait,
     FloatReg: RegTrait,
     ASM: Assembler<GeneralReg, FloatReg>,
@@ -364,8 +369,9 @@ pub struct Backend64Bit<
     phantom_asm: PhantomData<ASM>,
     phantom_cc: PhantomData<CC>,
     target_info: TargetInfo,
-    env: &'a Env<'a>,
-    interns: &'a mut Interns,
+    env: &'r Env<'a>,
+    layout_interner: &'r mut STLayoutInterner<'a>,
+    interns: &'r mut Interns,
     helper_proc_gen: CodeGenHelp<'a>,
     helper_proc_symbols: Vec<'a, (Symbol, ProcLayout<'a>)>,
     buf: Vec<'a, u8>,
@@ -380,33 +386,31 @@ pub struct Backend64Bit<
     literal_map: MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)>,
     join_map: MutMap<JoinPointId, Vec<'a, (u64, u64)>>,
 
-    storage_manager: StorageManager<'a, GeneralReg, FloatReg, ASM, CC>,
+    storage_manager: StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
 }
 
 /// new creates a new backend that will output to the specific Object.
 pub fn new_backend_64bit<
     'a,
+    'r,
     GeneralReg: RegTrait,
     FloatReg: RegTrait,
     ASM: Assembler<GeneralReg, FloatReg>,
     CC: CallConv<GeneralReg, FloatReg, ASM>,
 >(
-    env: &'a Env,
+    env: &'r Env<'a>,
     target_info: TargetInfo,
-    interns: &'a mut Interns,
-) -> Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC> {
+    interns: &'r mut Interns,
+    layout_interner: &'r mut STLayoutInterner<'a>,
+) -> Backend64Bit<'a, 'r, GeneralReg, FloatReg, ASM, CC> {
     Backend64Bit {
         phantom_asm: PhantomData,
         phantom_cc: PhantomData,
         target_info,
         env,
         interns,
-        helper_proc_gen: CodeGenHelp::new(
-            env.arena,
-            env.layout_interner,
-            target_info,
-            env.module_id,
-        ),
+        layout_interner,
+        helper_proc_gen: CodeGenHelp::new(env.arena, target_info, env.module_id),
         helper_proc_symbols: bumpalo::vec![in env.arena],
         proc_name: None,
         is_self_recursive: None,
@@ -436,11 +440,12 @@ macro_rules! quadword_and_smaller {
 
 impl<
         'a,
+        'r,
         GeneralReg: RegTrait,
         FloatReg: RegTrait,
         ASM: Assembler<GeneralReg, FloatReg>,
         CC: CallConv<GeneralReg, FloatReg, ASM>,
-    > Backend<'a> for Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC>
+    > Backend<'a> for Backend64Bit<'a, 'r, GeneralReg, FloatReg, ASM, CC>
 {
     fn env(&self) -> &Env<'a> {
         self.env
@@ -448,8 +453,20 @@ impl<
     fn interns(&self) -> &Interns {
         self.interns
     }
-    fn env_interns_helpers_mut(&mut self) -> (&Env<'a>, &mut Interns, &mut CodeGenHelp<'a>) {
-        (self.env, self.interns, &mut self.helper_proc_gen)
+    fn module_interns_helpers_mut(
+        &mut self,
+    ) -> (
+        ModuleId,
+        &mut STLayoutInterner<'a>,
+        &mut Interns,
+        &mut CodeGenHelp<'a>,
+    ) {
+        (
+            self.env.module_id,
+            self.layout_interner,
+            self.interns,
+            &mut self.helper_proc_gen,
+        )
     }
     fn helper_proc_gen_mut(&mut self) -> &mut CodeGenHelp<'a> {
         &mut self.helper_proc_gen
@@ -587,7 +604,13 @@ impl<
     }
 
     fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)], ret_layout: &Layout<'a>) {
-        CC::load_args(&mut self.buf, &mut self.storage_manager, args, ret_layout);
+        CC::load_args(
+            &mut self.buf,
+            &mut self.storage_manager,
+            self.layout_interner,
+            args,
+            ret_layout,
+        );
     }
 
     /// Used for generating wrappers for malloc/realloc/free
@@ -619,6 +642,7 @@ impl<
         CC::store_args(
             &mut self.buf,
             &mut self.storage_manager,
+            self.layout_interner,
             dst,
             args,
             arg_layouts,
@@ -642,6 +666,7 @@ impl<
                 CC::load_returned_complex_symbol(
                     &mut self.buf,
                     &mut self.storage_manager,
+                    self.layout_interner,
                     dst,
                     ret_layout,
                 );
@@ -732,7 +757,7 @@ impl<
         // Ensure all the joinpoint parameters have storage locations.
         // On jumps to the joinpoint, we will overwrite those locations as a way to "pass parameters" to the joinpoint.
         self.storage_manager
-            .setup_joinpoint(&mut self.buf, id, parameters);
+            .setup_joinpoint(self.layout_interner, &mut self.buf, id, parameters);
 
         self.join_map.insert(*id, bumpalo::vec![in self.env.arena]);
 
@@ -764,7 +789,7 @@ impl<
         _ret_layout: &Layout<'a>,
     ) {
         self.storage_manager
-            .setup_jump(&mut self.buf, id, args, arg_layouts);
+            .setup_jump(self.layout_interner, &mut self.buf, id, args, arg_layouts);
 
         let jmp_location = self.buf.len();
         let start_offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678);
@@ -832,7 +857,7 @@ impl<
 
         let buf = &mut self.buf;
 
-        let struct_size = return_layout.stack_size(self.env.layout_interner, self.target_info);
+        let struct_size = return_layout.stack_size(self.layout_interner, self.target_info);
 
         let base_offset = self.storage_manager.claim_stack_area(dst, struct_size);
 
@@ -1170,7 +1195,7 @@ impl<
             .storage_manager
             .load_to_general_reg(&mut self.buf, index);
         let ret_stack_size =
-            ret_layout.stack_size(self.env.layout_interner, self.storage_manager.target_info());
+            ret_layout.stack_size(self.layout_interner, self.storage_manager.target_info());
         // TODO: This can be optimized with smarter instructions.
         // Also can probably be moved into storage manager at least partly.
         self.storage_manager.with_tmp_general_reg(
@@ -1212,8 +1237,8 @@ impl<
         let elem_layout = arg_layouts[2];
 
         let u32_layout = &Layout::Builtin(Builtin::Int(IntWidth::U32));
-        let list_alignment = list_layout
-            .alignment_bytes(self.env.layout_interner, self.storage_manager.target_info());
+        let list_alignment =
+            list_layout.alignment_bytes(self.layout_interner, self.storage_manager.target_info());
         self.load_literal(
             &Symbol::DEV_TMP,
             u32_layout,
@@ -1233,7 +1258,7 @@ impl<
 
         // Load the elements size.
         let elem_stack_size =
-            elem_layout.stack_size(self.env.layout_interner, self.storage_manager.target_info());
+            elem_layout.stack_size(self.layout_interner, self.storage_manager.target_info());
         self.load_literal(
             &Symbol::DEV_TMP3,
             u64_layout,
@@ -1243,7 +1268,7 @@ impl<
         // Setup the return location.
         let base_offset = self.storage_manager.claim_stack_area(
             dst,
-            ret_layout.stack_size(self.env.layout_interner, self.storage_manager.target_info()),
+            ret_layout.stack_size(self.layout_interner, self.storage_manager.target_info()),
         );
 
         let ret_fields = if let Layout::Struct { field_layouts, .. } = ret_layout {
@@ -1262,7 +1287,7 @@ impl<
             (
                 base_offset
                     + ret_fields[0]
-                        .stack_size(self.env.layout_interner, self.storage_manager.target_info())
+                        .stack_size(self.layout_interner, self.storage_manager.target_info())
                         as i32,
                 base_offset,
             )
@@ -1271,7 +1296,7 @@ impl<
                 base_offset,
                 base_offset
                     + ret_fields[0]
-                        .stack_size(self.env.layout_interner, self.storage_manager.target_info())
+                        .stack_size(self.layout_interner, self.storage_manager.target_info())
                         as i32,
             )
         };
@@ -1315,6 +1340,7 @@ impl<
 
         // Copy from list to the output record.
         self.storage_manager.copy_symbol_to_stack_offset(
+            self.layout_interner,
             &mut self.buf,
             out_list_offset,
             &Symbol::DEV_TMP5,
@@ -1354,14 +1380,13 @@ impl<
         let allocation_alignment = std::cmp::max(
             8,
             elem_layout.allocation_alignment_bytes(
-                self.env.layout_interner,
+                self.layout_interner,
                 self.storage_manager.target_info(),
             ) as u64,
         );
 
-        let elem_size = elem_layout
-            .stack_size(self.env.layout_interner, self.storage_manager.target_info())
-            as u64;
+        let elem_size =
+            elem_layout.stack_size(self.layout_interner, self.storage_manager.target_info()) as u64;
         let allocation_size = elem_size * elems.len() as u64 + allocation_alignment /* add space for refcount */;
         let u64_layout = Layout::Builtin(Builtin::Int(IntWidth::U64));
         self.load_literal(
@@ -1465,8 +1490,13 @@ impl<
     }
 
     fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
-        self.storage_manager
-            .create_struct(&mut self.buf, sym, layout, fields);
+        self.storage_manager.create_struct(
+            self.layout_interner,
+            &mut self.buf,
+            sym,
+            layout,
+            fields,
+        );
     }
 
     fn load_struct_at_index(
@@ -1476,8 +1506,13 @@ impl<
         index: u64,
         field_layouts: &'a [Layout<'a>],
     ) {
-        self.storage_manager
-            .load_field_at_index(sym, structure, index, field_layouts);
+        self.storage_manager.load_field_at_index(
+            self.layout_interner,
+            sym,
+            structure,
+            index,
+            field_layouts,
+        );
     }
 
     fn load_union_at_index(
@@ -1491,6 +1526,7 @@ impl<
         match union_layout {
             UnionLayout::NonRecursive(tag_layouts) | UnionLayout::Recursive(tag_layouts) => {
                 self.storage_manager.load_field_at_index(
+                    self.layout_interner,
                     sym,
                     structure,
                     index,
@@ -1502,8 +1538,13 @@ impl<
     }
 
     fn get_tag_id(&mut self, sym: &Symbol, structure: &Symbol, union_layout: &UnionLayout<'a>) {
-        self.storage_manager
-            .load_union_tag_id(&mut self.buf, sym, structure, union_layout);
+        self.storage_manager.load_union_tag_id(
+            self.layout_interner,
+            &mut self.buf,
+            sym,
+            structure,
+            union_layout,
+        );
     }
 
     fn tag(
@@ -1513,8 +1554,14 @@ impl<
         union_layout: &UnionLayout<'a>,
         tag_id: TagIdIntType,
     ) {
-        self.storage_manager
-            .create_union(&mut self.buf, sym, union_layout, fields, tag_id)
+        self.storage_manager.create_union(
+            self.layout_interner,
+            &mut self.buf,
+            sym,
+            union_layout,
+            fields,
+            tag_id,
+        )
     }
 
     fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>) {
@@ -1611,7 +1658,13 @@ impl<
                 }
             }
         } else {
-            CC::return_complex_symbol(&mut self.buf, &mut self.storage_manager, sym, layout)
+            CC::return_complex_symbol(
+                &mut self.buf,
+                &mut self.storage_manager,
+                self.layout_interner,
+                sym,
+                layout,
+            )
         }
         let inst_loc = self.buf.len() as u64;
         let offset = ASM::jmp_imm32(&mut self.buf, 0x1234_5678) as u64;
@@ -1687,11 +1740,12 @@ impl<
 /// For example, loading a symbol for doing a computation.
 impl<
         'a,
+        'r,
         FloatReg: RegTrait,
         GeneralReg: RegTrait,
         ASM: Assembler<GeneralReg, FloatReg>,
         CC: CallConv<GeneralReg, FloatReg, ASM>,
-    > Backend64Bit<'a, GeneralReg, FloatReg, ASM, CC>
+    > Backend64Bit<'a, 'r, GeneralReg, FloatReg, ASM, CC>
 {
     /// Updates a jump instruction to a new offset and returns the number of bytes written.
     fn update_jmp_imm32_offset(

@@ -3,7 +3,7 @@ app "countdown"
     imports [pf.Stdin, pf.Stdout, pf.Task.{ await, loop, succeed }]
     provides [main] to pf
 
-main = \_args ->
+main =
     _ <- await (Stdout.line "\nLet's count down from 10 together - all you have to do is press <ENTER>.")
     _ <- await Stdin.line
     loop 10 tick

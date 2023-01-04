@@ -1,13 +1,14 @@
 use roc_parse::ast::{Collection, CommentOrNewline, ExtractSpaces};
 
 use crate::{
-    annotation::{Formattable, Newlines},
+    annotation::{is_collection_multiline, Formattable, Newlines},
     spaces::{fmt_comments_only, NewlineAt, INDENT},
     Buf,
 };
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Braces {
+    Round,
     Square,
     Curly,
 }
@@ -22,16 +23,18 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
     <T as ExtractSpaces<'a>>::Item: Formattable,
 {
     let start = match braces {
+        Braces::Round => '(',
         Braces::Curly => '{',
         Braces::Square => '[',
     };
 
     let end = match braces {
+        Braces::Round => ')',
         Braces::Curly => '}',
         Braces::Square => ']',
     };
 
-    if items.is_multiline() {
+    if is_collection_multiline(&items) {
         let braces_indent = indent;
         let item_indent = braces_indent + INDENT;
         if newline == Newlines::Yes {

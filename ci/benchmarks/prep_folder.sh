@@ -14,12 +14,10 @@ cd crates/cli && cargo criterion --no-run && cd ../..
 mkdir -p bench-folder/crates/cli_testing_examples/benchmarks
 mkdir -p bench-folder/crates/compiler/builtins/bitcode/src
 mkdir -p bench-folder/target/release/deps
-mkdir -p bench-folder/target/release/lib
 cp "crates/cli_testing_examples/benchmarks/"*".roc" bench-folder/crates/cli_testing_examples/benchmarks/
 cp -r crates/cli_testing_examples/benchmarks/platform bench-folder/crates/cli_testing_examples/benchmarks/
 cp crates/compiler/builtins/bitcode/src/str.zig bench-folder/crates/compiler/builtins/bitcode/src
 cp target/release/roc bench-folder/target/release
-cp -r target/release/lib bench-folder/target/release
 
 # copy the most recent time bench to bench-folder
 cp target/release/deps/`ls -t target/release/deps/ | grep time_bench | head -n 1` bench-folder/target/release/deps/time_bench

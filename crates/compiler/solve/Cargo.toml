@@ -10,6 +10,7 @@ description = "The entry point of Roc's type inference system. Implements type i
 roc_collections = { path = "../collections" }
 roc_error_macros = { path = "../../error_macros" }
 roc_exhaustive = { path = "../exhaustive" }
+roc_packaging = { path = "../../packaging" }
 roc_region = { path = "../region" }
 roc_module = { path = "../module" }
 roc_types = { path = "../types" }

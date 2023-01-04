@@ -23,6 +23,7 @@ hosted Effect
         fileDelete,
         fileWriteUtf8,
         fileWriteBytes,
+        processExit,
     ]
     imports [InternalHttp.{ Request, Response }, InternalFile, InternalDir]
     generates Effect with [after, map, always, forever, loop]
@@ -42,6 +43,8 @@ envDict : Effect (Dict Str Str)
 envVar : Str -> Effect (Result Str {})
 exePath : Effect (Result (List U8) {})
 setCwd : List U8 -> Effect (Result {} {})
+
+processExit : U8 -> Effect {}
 
 # If we encounter a Unicode error in any of the args, it will be replaced with
 # the Unicode replacement char where necessary.

@@ -19,7 +19,7 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
                 buf.push(byte as char);
             } else if buf.is_empty() {
                 // We didn't find any hex digits!
-                return Err((NoProgress, EString::CodePtEnd(state.pos()), state));
+                return Err((NoProgress, EString::CodePtEnd(state.pos())));
             } else {
                 state.advance_mut(buf.len());
 
@@ -27,7 +27,7 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
             }
         }
 
-        Err((NoProgress, EString::CodePtEnd(state.pos()), state))
+        Err((NoProgress, EString::CodePtEnd(state.pos())))
     }
 }
 
@@ -36,7 +36,7 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
         if state.consume_mut("\'") {
             // we will be parsing a single-quote-string
         } else {
-            return Err((NoProgress, EString::Open(state.pos()), state));
+            return Err((NoProgress, EString::Open(state.pos())));
         }
 
         // Handle back slaches in byte literal
@@ -64,18 +64,18 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
                             return Ok((MadeProgress, &*arena.alloc_str(&test.to_string()), state));
                         }
                         // invalid error, backslah escaping something we do not recognize
-                        return Err((NoProgress, EString::CodePtEnd(state.pos()), state));
+                        return Err((NoProgress, EString::CodePtEnd(state.pos())));
                     }
                     None => {
                         // no close quote found
-                        return Err((NoProgress, EString::CodePtEnd(state.pos()), state));
+                        return Err((NoProgress, EString::CodePtEnd(state.pos())));
                     }
                 }
             }
             Some(_) => {
                 // do nothing for other characters, handled below
             }
-            None => return Err((NoProgress, EString::CodePtEnd(state.pos()), state)),
+            None => return Err((NoProgress, EString::CodePtEnd(state.pos()))),
         }
 
         let mut bytes = state.bytes().iter();
@@ -90,7 +90,7 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
                 }
                 Some(_) => end_index += 1,
                 None => {
-                    return Err((NoProgress, EString::Open(state.pos()), state));
+                    return Err((NoProgress, EString::Open(state.pos())));
                 }
             }
         }
@@ -99,12 +99,12 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
             // no progress was made
             // this case is a double single quote, ex: ''
             // not supporting empty single quotes
-            return Err((NoProgress, EString::Open(state.pos()), state));
+            return Err((NoProgress, EString::Open(state.pos())));
         }
 
         if end_index > (std::mem::size_of::<u32>() + 1) {
             // bad case: too big to fit into u32
-            return Err((NoProgress, EString::Open(state.pos()), state));
+            return Err((NoProgress, EString::Open(state.pos())));
         }
 
         // happy case -> we have some bytes that will fit into a u32
@@ -116,13 +116,13 @@ pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
             Ok(string) => Ok((MadeProgress, string, state)),
             Err(_) => {
                 // invalid UTF-8
-                return Err((NoProgress, EString::CodePtEnd(state.pos()), state));
+                return Err((NoProgress, EString::CodePtEnd(state.pos())));
             }
         }
     }
 }
 
-fn consume_indent(mut state: State, mut indent: u32) -> Result<State, (Progress, EString, State)> {
+fn consume_indent(mut state: State, mut indent: u32) -> Result<State, (Progress, EString)> {
     while indent > 0 {
         match state.bytes().first() {
             Some(b' ') => {
@@ -136,7 +136,6 @@ fn consume_indent(mut state: State, mut indent: u32) -> Result<State, (Progress,
                 return Err((
                     MadeProgress,
                     EString::MultilineInsufficientIndent(state.pos()),
-                    state,
                 ));
             }
         }
@@ -145,10 +144,7 @@ fn consume_indent(mut state: State, mut indent: u32) -> Result<State, (Progress,
     Ok(state)
 }
 
-fn utf8<'a>(
-    state: State<'a>,
-    string_bytes: &'a [u8],
-) -> Result<&'a str, (Progress, EString<'a>, State<'a>)> {
+fn utf8<'a>(state: State<'a>, string_bytes: &'a [u8]) -> Result<&'a str, (Progress, EString<'a>)> {
     std::str::from_utf8(string_bytes).map_err(|_| {
         // Note Based on where this `utf8` function is used, the fact that we know the whole string
         // in the parser is valid utf8, and barring bugs in the parser itself
@@ -156,7 +152,6 @@ fn utf8<'a>(
         (
             MadeProgress,
             EString::Space(BadInputError::BadUtf8, state.pos()),
-            state,
         )
     })
 }
@@ -186,7 +181,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
             // we will be parsing a single-line string
             is_multiline = false;
         } else {
-            return Err((NoProgress, EString::Open(state.pos()), state));
+            return Err((NoProgress, EString::Open(state.pos())));
         }
 
         let mut bytes = state.bytes().iter();
@@ -227,7 +222,6 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             return Err((
                                 MadeProgress,
                                 EString::Space(BadInputError::BadUtf8, state.pos()),
-                                state,
                             ));
                         }
                     }
@@ -336,11 +330,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                         // all remaining chars. This will mask all other errors, but
                         // it should make it easiest to debug; the file will be a giant
                         // error starting from where the open quote appeared.
-                        return Err((
-                            MadeProgress,
-                            EString::EndlessSingle(start_state.pos()),
-                            start_state,
-                        ));
+                        return Err((MadeProgress, EString::EndlessSingle(start_state.pos())));
                     }
                 }
                 b'\\' => {
@@ -432,7 +422,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             // Invalid escape! A backslash must be followed
                             // by either an open paren or else one of the
                             // escapable characters (\n, \t, \", \\, etc)
-                            return Err((MadeProgress, EString::UnknownEscape(state.pos()), state));
+                            return Err((MadeProgress, EString::UnknownEscape(state.pos())));
                         }
                     }
                 }
@@ -450,7 +440,6 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
             } else {
                 EString::EndlessSingle(start_state.pos())
             },
-            start_state,
         ))
     }
 }

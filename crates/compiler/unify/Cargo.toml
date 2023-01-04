@@ -29,3 +29,6 @@ path = "../can"
 
 [dependencies.roc_solve_problem]
 path = "../solve_problem"
+
+[dependencies.roc_tracing]
+path = "../../tracing"

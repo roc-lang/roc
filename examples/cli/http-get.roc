@@ -1,13 +1,10 @@
 app "http-get"
     packages { pf: "cli-platform/main.roc" }
-    imports [pf.Http, pf.Task, pf.Stdin, pf.Stdout, pf.Program.{ Program, ExitCode }]
+    imports [pf.Http, pf.Task.{ Task }, pf.Stdin, pf.Stdout]
     provides [main] to pf
 
-main : Program
-main = Program.noArgs mainTask
-
-mainTask : Task.Task ExitCode [] [Read [Stdin], Write [Stdout], Network [Http]]
-mainTask =
+main : Task {} []
+main =
     _ <- Task.await (Stdout.line "Please enter a URL to fetch")
 
     url <- Task.await Stdin.line
@@ -25,4 +22,3 @@ mainTask =
         |> Task.await
 
     Stdout.line output
-    |> Program.exit 0

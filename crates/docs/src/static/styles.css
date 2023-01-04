@@ -468,6 +468,12 @@ pre {
   line-height: 15px;
 }
 
+.builtins-tip {
+  padding: 1em;
+  font-style: italic;
+  line-height: 1.3em;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
     --body-bg-color: var(--purple-8);

@@ -157,9 +157,7 @@ fn parse_all<'a>(arena: &'a Bump, src: &'a str) -> Result<Ast<'a>, SyntaxError<'
     let (module, state) = module::parse_header(arena, State::new(src.as_bytes()))
         .map_err(|e| SyntaxError::Header(e.problem))?;
 
-    let (_, defs, _) = module_defs()
-        .parse(arena, state, 0)
-        .map_err(|(_, e, _)| e)?;
+    let (_, defs, _) = module_defs().parse(arena, state, 0).map_err(|(_, e)| e)?;
 
     Ok(Ast { module, defs })
 }

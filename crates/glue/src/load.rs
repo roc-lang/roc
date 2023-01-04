@@ -6,6 +6,7 @@ use roc_intern::GlobalInterner;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_mono::ir::{generate_glue_procs, GlueProc};
 use roc_mono::layout::LayoutCache;
+use roc_packaging::cache::{self, RocCacheDir};
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::{Architecture, TargetInfo};
 use std::fs::File;
@@ -85,9 +86,7 @@ pub fn load_types(
     ignore_errors: IgnoreErrors,
 ) -> Result<Vec<(Types, TargetInfo)>, io::Error> {
     let target_info = (&Triple::host()).into();
-
     let arena = &Bump::new();
-    let subs_by_module = Default::default();
     let LoadedModule {
         module_id: home,
         mut can_problems,
@@ -100,7 +99,7 @@ pub fn load_types(
     } = roc_load::load_and_typecheck(
         arena,
         full_file_path,
-        subs_by_module,
+        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         LoadConfig {
             target_info,
             render: RenderTarget::Generic,
@@ -170,7 +169,7 @@ pub fn load_types(
                     &mut interns,
                     arena,
                     &mut layout_interner.fork(),
-                    layout,
+                    arena.alloc(layout),
                 );
 
                 // Even though generate_glue_procs does more work than we need it to,

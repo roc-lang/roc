@@ -1,0 +1,61 @@
+Tuple(
+    [
+        @20-21 SpaceBefore(
+            SpaceAfter(
+                Num(
+                    "1",
+                ),
+                [
+                    Newline,
+                    LineComment(
+                        "after 1",
+                    ),
+                ],
+            ),
+            [
+                Newline,
+                LineComment(
+                    "before 1",
+                ),
+            ],
+        ),
+        @59-60 SpaceBefore(
+            SpaceAfter(
+                Num(
+                    "2",
+                ),
+                [
+                    Newline,
+                    LineComment(
+                        "after 2",
+                    ),
+                ],
+            ),
+            [
+                Newline,
+                LineComment(
+                    "before 2",
+                ),
+            ],
+        ),
+        @98-99 SpaceBefore(
+            SpaceAfter(
+                Num(
+                    "3",
+                ),
+                [
+                    Newline,
+                    LineComment(
+                        " after 3",
+                    ),
+                ],
+            ),
+            [
+                Newline,
+                LineComment(
+                    "before 3",
+                ),
+            ],
+        ),
+    ],
+)

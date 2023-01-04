@@ -1,0 +1,87 @@
+Module {
+    comments: [],
+    header: Platform(
+        PlatformHeader {
+            before_name: [],
+            name: @9-21 PackageName(
+                "foo/barbaz",
+            ),
+            requires: KeywordItem {
+                keyword: Spaces {
+                    before: [
+                        Newline,
+                    ],
+                    item: RequiresKeyword,
+                    after: [],
+                },
+                item: PlatformRequires {
+                    rigids: [
+                        @36-41 UppercaseIdent(
+                            "Model",
+                        ),
+                    ],
+                    signature: @45-54 TypedIdent {
+                        ident: @45-49 "main",
+                        spaces_before_colon: [],
+                        ann: @52-54 Record {
+                            fields: [],
+                            ext: None,
+                        },
+                    },
+                },
+            },
+            exposes: KeywordItem {
+                keyword: Spaces {
+                    before: [
+                        Newline,
+                    ],
+                    item: ExposesKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+            packages: KeywordItem {
+                keyword: Spaces {
+                    before: [
+                        Newline,
+                    ],
+                    item: PackagesKeyword,
+                    after: [],
+                },
+                item: [
+                    @87-99 PackageEntry {
+                        shorthand: "foo",
+                        spaces_after_shorthand: [],
+                        package_name: @92-99 PackageName(
+                            "./foo",
+                        ),
+                    },
+                ],
+            },
+            imports: KeywordItem {
+                keyword: Spaces {
+                    before: [
+                        Newline,
+                    ],
+                    item: ImportsKeyword,
+                    after: [],
+                },
+                item: [],
+            },
+            provides: KeywordItem {
+                keyword: Spaces {
+                    before: [
+                        Newline,
+                    ],
+                    item: ProvidesKeyword,
+                    after: [],
+                },
+                item: [
+                    @132-143 ExposedName(
+                        "mainForHost",
+                    ),
+                ],
+            },
+        },
+    ),
+}

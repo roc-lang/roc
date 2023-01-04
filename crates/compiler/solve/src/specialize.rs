@@ -605,6 +605,7 @@ enum SpecializationTypeKey {
     SingleLambdaSetImmediate(Symbol),
 }
 
+#[derive(Debug)]
 enum SpecializeDecision {
     Specialize(SpecializationTypeKey),
     Drop,

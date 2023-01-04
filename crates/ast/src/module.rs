@@ -1,12 +1,15 @@
 use bumpalo::Bump;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, Threading};
+use roc_packaging::cache::RocCacheDir;
 use roc_reporting::report::DEFAULT_PALETTE;
 use roc_target::TargetInfo;
 use std::path::Path;
 
-pub fn load_module(src_file: &Path, threading: Threading) -> LoadedModule {
-    let subs_by_module = Default::default();
-
+pub fn load_module(
+    src_file: &Path,
+    roc_cache_dir: RocCacheDir<'_>,
+    threading: Threading,
+) -> LoadedModule {
     let load_config = LoadConfig {
         target_info: TargetInfo::default_x86_64(), // editor only needs type info, so this is unused
         render: roc_reporting::report::RenderTarget::ColorTerminal,
@@ -17,7 +20,7 @@ pub fn load_module(src_file: &Path, threading: Threading) -> LoadedModule {
 
     let arena = Bump::new();
     let loaded =
-        roc_load::load_and_typecheck(&arena, src_file.to_path_buf(), subs_by_module, load_config);
+        roc_load::load_and_typecheck(&arena, src_file.to_path_buf(), roc_cache_dir, load_config);
 
     match loaded {
         Ok(x) => x,

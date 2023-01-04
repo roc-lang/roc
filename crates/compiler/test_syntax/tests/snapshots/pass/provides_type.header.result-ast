@@ -1,0 +1,83 @@
+Module {
+    comments: [],
+    header: App(
+        AppHeader {
+            before_name: [],
+            name: @4-10 PlainLine(
+                "test",
+            ),
+            packages: Some(
+                KeywordItem {
+                    keyword: Spaces {
+                        before: [
+                            Newline,
+                        ],
+                        item: PackagesKeyword,
+                        after: [],
+                    },
+                    item: [
+                        @26-42 PackageEntry {
+                            shorthand: "pf",
+                            spaces_after_shorthand: [],
+                            package_name: @30-42 PackageName(
+                                "./platform",
+                            ),
+                        },
+                    ],
+                },
+            ),
+            imports: Some(
+                KeywordItem {
+                    keyword: Spaces {
+                        before: [
+                            Newline,
+                        ],
+                        item: ImportsKeyword,
+                        after: [],
+                    },
+                    item: [
+                        @59-70 Package(
+                            "foo",
+                            ModuleName(
+                                "Bar.Baz",
+                            ),
+                            [],
+                        ),
+                    ],
+                },
+            ),
+            provides: ProvidesTo {
+                provides_keyword: Spaces {
+                    before: [
+                        Newline,
+                    ],
+                    item: ProvidesKeyword,
+                    after: [],
+                },
+                entries: [
+                    @88-97 ExposedName(
+                        "quicksort",
+                    ),
+                ],
+                types: Some(
+                    [
+                        @102-107 UppercaseIdent(
+                            "Flags",
+                        ),
+                        @109-114 UppercaseIdent(
+                            "Model",
+                        ),
+                    ],
+                ),
+                to_keyword: Spaces {
+                    before: [],
+                    item: ToKeyword,
+                    after: [],
+                },
+                to: @121-123 ExistingPackage(
+                    "pf",
+                ),
+            },
+        },
+    ),
+}

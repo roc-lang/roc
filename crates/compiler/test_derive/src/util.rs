@@ -2,12 +2,13 @@ use std::fmt::Write as _; // import without risk of name clashing
 use std::path::PathBuf;
 
 use bumpalo::Bump;
+use roc_packaging::cache::RocCacheDir;
 use ven_pretty::DocAllocator;
 
-use crate::pretty_print::{pretty_print_def, Ctx};
 use roc_can::{
     abilities::{AbilitiesStore, SpecializationLambdaSets},
     constraint::Constraints,
+    debug::{pretty_print_def, PPCtx},
     def::Def,
     expr::Declarations,
     module::{
@@ -377,6 +378,7 @@ fn check_derived_typechecks_and_golden(
     );
     let mut def_types = Default::default();
     let mut rigid_vars = Default::default();
+    let mut flex_vars = Default::default();
     let (import_variables, abilities_store) = add_imports(
         test_module,
         &mut constraints,
@@ -385,9 +387,15 @@ fn check_derived_typechecks_and_golden(
         &exposed_for_module,
         &mut def_types,
         &mut rigid_vars,
+        &mut flex_vars,
     );
-    let constr =
-        constraints.let_import_constraint(rigid_vars, def_types, constr, &import_variables);
+    let constr = constraints.let_import_constraint(
+        rigid_vars,
+        flex_vars,
+        def_types,
+        constr,
+        &import_variables,
+    );
 
     // run the solver, print and fail if we have errors
     dbg_do!(
@@ -490,6 +498,7 @@ where
         target_info,
         roc_reporting::report::RenderTarget::ColorTerminal,
         roc_reporting::report::DEFAULT_PALETTE,
+        RocCacheDir::Disallowed,
         Threading::AllAvailable,
     )
     .unwrap();
@@ -520,8 +529,12 @@ where
     interns.all_ident_ids.insert(DERIVED_MODULE, ident_ids);
     DERIVED_MODULE.register_debug_idents(interns.all_ident_ids.get(&DERIVED_MODULE).unwrap());
 
-    let ctx = Ctx { interns: &interns };
-    let derived_program = pretty_print_def(&ctx, &derived_def);
+    let pp_ctx = PPCtx {
+        interns: &interns,
+        print_lambda_names: false,
+        home: builtin_module,
+    };
+    let derived_program = pretty_print_def(&pp_ctx, &derived_def);
 
     check_derived_typechecks_and_golden(
         derived_def,

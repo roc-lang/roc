@@ -15,9 +15,14 @@ mod test_reporting {
     use roc_can::expr::PendingDerives;
     use roc_load::{self, ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
     use roc_module::symbol::{Interns, ModuleId};
+    use roc_packaging::cache::RocCacheDir;
+    use roc_parse::module::parse_header;
+    use roc_parse::state::State;
+    use roc_parse::test_helpers::parse_expr_with;
+    use roc_problem::Severity;
     use roc_region::all::LineInfo;
     use roc_reporting::report::{
-        can_problem, parse_problem, type_problem, RenderTarget, Report, Severity, ANSI_STYLE_CODES,
+        can_problem, parse_problem, type_problem, RenderTarget, Report, ANSI_STYLE_CODES,
         DEFAULT_PALETTE,
     };
     use roc_reporting::report::{RocDocAllocator, RocDocBuilder};
@@ -54,6 +59,38 @@ mod test_reporting {
         buffer
     }
 
+    fn maybe_save_parse_test_case(test_name: &str, src: &str, is_expr: bool) {
+        // First check if the env var indicates we should migrate tests
+        if std::env::var("ROC_MIGRATE_REPORTING_TESTS").is_err() {
+            return;
+        }
+
+        // Check if we have parse errors
+        let arena = Bump::new();
+        let has_error = if is_expr {
+            parse_expr_with(&arena, src).is_err()
+        } else {
+            parse_header(&arena, State::new(src.trim().as_bytes())).is_err()
+            // TODO: also parse the module defs
+        };
+
+        if !has_error {
+            return;
+        }
+
+        let mut path = PathBuf::from(std::env!("ROC_WORKSPACE_DIR"));
+        path.push("crates");
+        path.push("compiler");
+        path.push("parse");
+        path.push("tests");
+        path.push("snapshots");
+        path.push("fail");
+        let kind = if is_expr { "expr" } else { "header" };
+        path.push(format!("{}.{}.roc", test_name, kind));
+
+        std::fs::write(path, src).unwrap();
+    }
+
     fn run_load_and_infer<'a>(
         subdir: &str,
         arena: &'a Bump,
@@ -63,14 +100,15 @@ mod test_reporting {
         use std::io::Write;
 
         let module_src = if src.starts_with("app") {
+            maybe_save_parse_test_case(subdir, src, false);
             // this is already a module
             src.to_string()
         } else {
+            maybe_save_parse_test_case(subdir, src, true);
             // this is an expression, promote it to a module
             promote_expr_to_module(src)
         };
 
-        let exposed_types = Default::default();
         let loaded = {
             // Use a deterministic temporary directory.
             // We can't have all tests use "tmp" because tests run in parallel,
@@ -90,8 +128,12 @@ mod test_reporting {
                 threading: Threading::Single,
                 exec_mode: ExecutionMode::Check,
             };
-            let result =
-                roc_load::load_and_typecheck(arena, full_file_path, exposed_types, load_config);
+            let result = roc_load::load_and_typecheck(
+                arena,
+                full_file_path,
+                RocCacheDir::Disallowed,
+                load_config,
+            );
             drop(file);
 
             result
@@ -307,8 +349,6 @@ mod test_reporting {
     {
         use ven_pretty::DocAllocator;
 
-        use roc_parse::state::State;
-
         let state = State::new(src.as_bytes());
 
         let filename = filename_from_string(r"/code/proj/Main.roc");
@@ -380,7 +420,7 @@ mod test_reporting {
     }
 
     /// Do not call this directly! Use the test_report macro below!
-    fn __new_report_problem_as(subdir: &str, src: &str, check_render: impl FnOnce(&str)) {
+    fn __new_report_problem_as(test_name: &str, src: &str, check_render: impl FnOnce(&str)) {
         let arena = Bump::new();
 
         let finalize_render = |doc: RocDocBuilder<'_>, buf: &mut String| {
@@ -389,7 +429,7 @@ mod test_reporting {
                 .expect("list_reports")
         };
 
-        let buf = list_reports_new(subdir, &arena, src, finalize_render);
+        let buf = list_reports_new(test_name, &arena, src, finalize_render);
 
         check_render(buf.as_str());
     }
@@ -4186,12 +4226,12 @@ mod test_reporting {
     I am partway through parsing a tag union type, but I got stuck here:
 
     4│      f : [
-                 ^
+    5│
+    6│
+        ^
 
     I was expecting to see a closing square bracket before this, so try
     adding a ] and see if that helps?
-
-    Note: I may be confused by indentation
     "###
     );
 
@@ -4272,12 +4312,12 @@ mod test_reporting {
     I am partway through parsing a record type, but I got stuck here:
 
     4│      f : {
-                 ^
+    5│
+    6│
+        ^
 
     I was expecting to see a closing curly brace before this, so try
     adding a } and see if that helps?
-
-    Note: I may be confused by indentation
     "###
     );
 
@@ -4295,12 +4335,13 @@ mod test_reporting {
     I am partway through parsing a record type, but I got stuck here:
 
     4│      f : {
-                 ^
+    5│      foo : I64,
+    6│
+    7│
+        ^
 
     I was expecting to see a closing curly brace before this, so try
     adding a } and see if that helps?
-
-    Note: I may be confused by indentation
     "###
     );
 
@@ -4387,16 +4428,20 @@ mod test_reporting {
     test_report!(
         comment_with_tab,
         "# comment with a \t\n4",
-        @r###"
-    ── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            &format!(
+                r###"── TAB CHARACTER ─────────────────────────────── tmp/comment_with_tab/Test.roc ─
 
-    I encountered a tab character
+I encountered a tab character
 
-    4│      # comment with a 	
-                             ^
+4│      # comment with a {}
+                         ^
 
-    Tab characters are not allowed.
-    "###
+Tab characters are not allowed."###,
+                "\t"
+            )
+        )
     );
 
     // TODO bad error message
@@ -4410,15 +4455,16 @@ mod test_reporting {
         @r###"
     ── UNFINISHED PARENTHESES ────────────────── tmp/type_in_parens_start/Test.roc ─
 
-    I just started parsing a type in parentheses, but I got stuck here:
+    I am partway through parsing a type in parentheses, but I got stuck
+    here:
 
     4│      f : (
-                 ^
+    5│
+    6│
+        ^
 
-    Tag unions look like [Many I64, None], so I was expecting to see a tag
-    name next.
-
-    Note: I may be confused by indentation
+    I was expecting to see a closing parenthesis before this, so try
+    adding a ) and see if that helps?
     "###
     );
 
@@ -4436,12 +4482,12 @@ mod test_reporting {
     here:
 
     4│      f : ( I64
-                     ^
+    5│
+    6│
+        ^
 
-    I was expecting to see a parenthesis before this, so try adding a )
-    and see if that helps?
-
-    Note: I may be confused by indentation
+    I was expecting to see a closing parenthesis before this, so try
+    adding a ) and see if that helps?
     "###
     );
 
@@ -5011,12 +5057,13 @@ mod test_reporting {
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    5│          5 -> 2
     6│           _ -> 2
                    ^^
 
     It makes sense to see arrows around here, so I suspect it is something
-    earlier.Maybe this pattern is indented a bit farther from the previous
-    patterns?
+    earlier. Maybe this pattern is indented a bit farther from the
+    previous patterns?
 
     Note: Here is an example of a valid `when` expression for reference.
 
@@ -5047,12 +5094,13 @@ mod test_reporting {
     I am parsing a `when` expression right now, but this arrow is confusing
     me:
 
+    5│          5 -> Num.neg
     6│           2 -> 2
                    ^^
 
     It makes sense to see arrows around here, so I suspect it is something
-    earlier.Maybe this pattern is indented a bit farther from the previous
-    patterns?
+    earlier. Maybe this pattern is indented a bit farther from the
+    previous patterns?
 
     Note: Here is an example of a valid `when` expression for reference.
 
@@ -5295,12 +5343,58 @@ mod test_reporting {
 
     This multiline string is not sufficiently indented:
 
+    4│          """
     5│        testing
               ^
 
     Lines in a multi-line string must be indented at least as much as the
     beginning """. This extra indentation is automatically removed from
     the string during compilation.
+    "###
+    );
+
+    test_report!(
+        dbg_without_final_expression,
+        indoc!(
+            r#"
+            dbg 42
+            "#
+        ),
+        @r###"
+    ── INDENT ENDS AFTER EXPRESSION ──── tmp/dbg_without_final_expression/Test.roc ─
+
+    I am partway through parsing a dbg statement, but I got stuck here:
+
+    4│      dbg 42
+                  ^
+
+    I was expecting a final expression, like so
+
+        dbg 42
+        "done"
+    "###
+    );
+
+    test_report!(
+        expect_without_final_expression,
+        indoc!(
+            r#"
+            expect 1 + 1 == 2
+            "#
+        ),
+        @r###"
+    ── INDENT ENDS AFTER EXPRESSION ─ tmp/expect_without_final_expression/Test.roc ─
+
+    I am partway through parsing an expect statement, but I got stuck
+    here:
+
+    4│      expect 1 + 1 == 2
+                             ^
+
+    I was expecting a final expression, like so
+
+        expect 1 + 1 == 2
+        "done"
     "###
     );
 
@@ -5550,11 +5644,17 @@ All branches in an `if` must have the same type!
     5│          1 -> True
                   ^^
 
-    The arrow -> is only used to define cases in a `when`.
+    The arrow -> is used to define cases in a `when` expression:
 
         when color is
             Red -> "stop!"
             Green -> "go!"
+
+    And to define a function:
+
+        increment : I64 -> I64
+        increment = \n -> n + 1
+
     "###
     );
 
@@ -5671,23 +5771,27 @@ All branches in an `if` must have the same type!
             main = 5 -> 3
             "#
         ),
-        @r###"
-    ── UNKNOWN OPERATOR ───────────────────────────── tmp/wild_case_arrow/Test.roc ─
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            &format!(
+                r###"── UNKNOWN OPERATOR ───────────────────────────── tmp/wild_case_arrow/Test.roc ─
 
-    This looks like an operator, but it's not one I recognize!
+This looks like an operator, but it's not one I recognize!
 
-    1│  app "test" provides [main] to "./platform"
-    2│
-    3│  main =
-    4│      main = 5 -> 3
-                     ^^
+1│  app "test" provides [main] to "./platform"
+2│
+3│  main =
+4│      main = 5 -> 3
+                 ^^
 
-    Looks like you are trying to define a function. 
+Looks like you are trying to define a function.{}
 
-    In roc, functions are always written as a lambda, like 
+In roc, functions are always written as a lambda, like{}
 
-        increment = \n -> n + 1
-    "###
+    increment = \n -> n + 1"###,
+                ' ', ' '
+            )
+        )
     );
 
     #[test]
@@ -6034,42 +6138,16 @@ All branches in an `if` must have the same type!
         @r###"
     ── UNFINISHED PARENTHESES ───────── tmp/pattern_in_parens_indent_open/Test.roc ─
 
-    I just started parsing a pattern in parentheses, but I got stuck here:
-
-    4│      \(
-              ^
-
-    Record pattern look like { name, age: currentAge }, so I was expecting
-    to see a field name next.
-
-    Note: I may be confused by indentation
-    "###
-    );
-
-    test_report!(
-        outdented_in_parens,
-        indoc!(
-            r#"
-            Box : (
-                Str
-            )
-
-            4
-            "#
-        ),
-        @r###"
-    ── NEED MORE INDENTATION ──────────────────── tmp/outdented_in_parens/Test.roc ─
-
-    I am partway through parsing a type in parentheses, but I got stuck
+    I am partway through parsing a pattern in parentheses, but I got stuck
     here:
 
-    4│      Box : (
-    5│          Str
-    6│      )
-            ^
+    4│      \(
+    5│
+    6│
+        ^
 
-    I need this parenthesis to be indented more. Try adding more spaces
-    before it!
+    I was expecting to see a closing parenthesis before this, so try
+    adding a ) and see if that helps?
     "###
     );
 
@@ -8069,6 +8147,7 @@ All branches in an `if` must have the same type!
         I was partway through parsing an ability definition, but I got stuck
         here:
 
+        4│      MEq has
         5│          eq b c : a, a -> U64 | a has MEq
                        ^
 
@@ -8641,38 +8720,23 @@ All branches in an `if` must have the same type!
             hash = \@Id n -> n
             "#
         ),
-        @r#"
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
-        Something is off with the body of the `hash` definition:
+    Something is off with the body of the `hash` definition:
 
-        8│  hash : Id -> U32
-        9│  hash = \@Id n -> n
-                             ^
+    8│  hash : Id -> U32
+    9│  hash = \@Id n -> n
+                         ^
 
-        This `n` value is a:
+    This `n` value is a:
 
-            U64
+        U64
 
-        But the type annotation on `hash` says it should be:
+    But the type annotation on `hash` says it should be:
 
-            U32
-
-        ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
-
-        Something is off with this specialization of `hash`:
-
-        9│  hash = \@Id n -> n
-                   ^^^^^^^^^^^
-
-        This value is a declared specialization of type:
-
-            Id -> U32
-
-        But the type annotation on `hash` says it must match:
-
-            Id -> U64
-        "#
+        U32
+    "###
     );
 
     test_report!(
@@ -9970,16 +10034,21 @@ All branches in an `if` must have the same type!
             f 1 _ 1
             "#
         ),
-        @r###"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
+        |golden| pretty_assertions::assert_eq!(
+            golden,
+            &format!(
+                r###"── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
 
-    Underscores are not allowed in identifier names:
+Underscores are not allowed in identifier names:
 
-    6│      f 1 _ 1
-      
+6│      f 1 _ 1
+{}
 
-    I recommend using camelCase, it is the standard in the Roc ecosystem.
-    "###
+I recommend using camelCase. It's the standard style in Roc code!
+"###,
+                "  " // TODO make the reporter not insert extraneous spaces here in the first place!
+            ),
+        )
     );
 
     test_report!(
@@ -10392,7 +10461,7 @@ All branches in an `if` must have the same type!
 
             u8 : [Good (List U8), Bad [DecodeProblem]]
 
-            fromBytes = 
+            fromBytes =
                 when u8 is
                     Good _ _ ->
                         Ok "foo"
@@ -10409,7 +10478,7 @@ All branches in an `if` must have the same type!
      6│>      when u8 is
      7│           Good _ _ ->
      8│               Ok "foo"
-     9│ 
+     9│
     10│           Bad _ ->
     11│               Ok "foo"
 
@@ -11101,7 +11170,7 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             digits : List U8
-            digits = List.range '0' '9'
+            digits = List.range { start: At '0', end: At '9' }
 
             List.contains digits '☃'
             "#
@@ -11152,7 +11221,7 @@ All branches in an `if` must have the same type!
         indoc!(
             r#"
             x : U8
-            
+
             when x is
                 '☃' -> ""
                 _ -> ""
@@ -11699,7 +11768,7 @@ All branches in an `if` must have the same type!
         list_pattern_not_terminated,
         indoc!(
             r#"
-            when [] is 
+            when [] is
                 [1, 2, -> ""
             "#
         ),
@@ -11710,29 +11779,6 @@ All branches in an `if` must have the same type!
 
     5│          [1, 2, -> ""
                        ^
-
-    I was expecting to see a closing square brace before this, so try
-    adding a ] and see if that helps?
-    "###
-    );
-
-    test_report!(
-        list_pattern_weird_indent,
-        indoc!(
-            r#"
-            when [] is 
-                [1, 2,
-            3] -> ""
-            "#
-        ),
-    @r###"
-    ── UNFINISHED LIST PATTERN ──────────── tmp/list_pattern_weird_indent/Test.roc ─
-
-    I am partway through parsing a list pattern, but I got stuck here:
-
-    5│          [1, 2,
-    6│      3] -> ""
-            ^
 
     I was expecting to see a closing square brace before this, so try
     adding a ] and see if that helps?
@@ -11772,14 +11818,19 @@ All branches in an `if` must have the same type!
     @r###"
     ── UNNECESSARY WILDCARD ────────────────────────────────── /code/proj/Main.roc ─
 
-    I see you annotated a wildcard in a place where it's not needed:
+    This type annotation has a wildcard type variable (`*`) that isn't
+    needed.
 
     4│      f : {} -> [A, B]*
                             ^
 
-    Tag unions that are constants, or the return values of functions, are
-    always inferred to be open by default! You can remove this annotation
-    safely.
+    Annotations for tag unions which are constants, or which are returned
+    from functions, work the same way with or without a `*` at the end. (The
+    `*` means something different when the tag union is an argument to a
+    function, though!)
+
+    You can safely remove this to make the code more concise without
+    changing what it means.
     "###
     );
 
@@ -12450,6 +12501,303 @@ All branches in an `if` must have the same type!
     it will only produce a `Str` value of a single specific type. Maybe
     change the type annotation to be more specific? Maybe change the code
     to be more general?
+    "###
+    );
+
+    test_report!(
+        suggest_binding_rigid_var_to_ability,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./p"
+
+            f : List e -> List e
+            f = \l -> if l == l then l else l
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    4│  f = \l -> if l == l then l else l
+                     ^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        List e
+
+    In particular, an implementation for
+
+        e
+
+    cannot be generated.
+
+    Tip: This type variable is not bound to `Eq`. Consider adding a `has`
+    clause to bind the type variable, like `| e has Bool.Eq`
+    "###
+    );
+
+    test_report!(
+        crash_given_non_string,
+        indoc!(
+            r#"
+            crash {}
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This value passed to `crash` is not a string:
+
+    4│      crash {}
+                  ^^
+
+    The value is a record of type:
+
+        {}
+
+    But I can only `crash` with messages of type
+
+        Str
+    "###
+    );
+
+    test_report!(
+        crash_unapplied,
+        indoc!(
+            r#"
+            crash
+            "#
+        ),
+    @r###"
+    ── UNAPPLIED CRASH ─────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `crash` doesn't have a message given to it:
+
+    4│      crash
+            ^^^^^
+
+    `crash` must be passed a message to crash with at the exact place it's
+    used. `crash` can't be used as a value that's passed around, like
+    functions can be - it must be applied immediately!
+    "###
+    );
+
+    test_report!(
+        crash_overapplied,
+        indoc!(
+            r#"
+            crash "" ""
+            "#
+        ),
+    @r###"
+    ── OVERAPPLIED CRASH ───────────────────────────────────── /code/proj/Main.roc ─
+
+    This `crash` has too many values given to it:
+
+    4│      crash "" ""
+                  ^^^^^
+
+    `crash` must be given exacly one message to crash with.
+    "###
+    );
+
+    test_no_problem!(
+        resolve_eq_for_unbound_num,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            n : Num *
+
+            main = n == 1
+            "#
+        )
+    );
+
+    test_report!(
+        resolve_eq_for_unbound_num_float,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            n : Num *
+
+            main = n == 1f64
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = n == 1f64
+                    ^^^^
+
+    I can't generate an implementation of the `Eq` ability for
+
+        FloatingPoint ?
+
+    Note: I can't derive `Bool.isEq` for floating-point types. That's
+    because Roc's floating-point numbers cannot be compared for total
+    equality - in Roc, `NaN` is never comparable to `NaN`. If a type
+    doesn't support total equality, it cannot support the `Eq` ability!
+    "###
+    );
+
+    test_no_problem!(
+        resolve_hash_for_unbound_num,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            n : Num *
+
+            main = \hasher -> Hash.hash hasher n
+            "#
+        )
+    );
+
+    test_report!(
+        self_recursive_not_reached,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+            f = h {}
+            h = \{} -> 1
+            g = \{} -> if Bool.true then "" else g {}
+            "#
+        ),
+    @r###"
+    ── DEFINITION ONLY USED IN RECURSION ───────────────────── /code/proj/Main.roc ─
+
+    This definition is only used in recursion with itself:
+
+    4│  g = \{} -> if Bool.true then "" else g {}
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    If you don't intend to use or export this definition, it should be
+    removed!
+    "###
+    );
+
+    test_no_problem!(
+        self_recursive_not_reached_but_exposed,
+        indoc!(
+            r#"
+            app "test" provides [g] to "./platform"
+            g = \{} -> if Bool.true then "" else g {}
+            "#
+        )
+    );
+
+    test_report!(
+        mutual_recursion_not_reached,
+        indoc!(
+            r#"
+            app "test" provides [h] to "./platform"
+            h = ""
+            f = \{} -> if Bool.true then "" else g {}
+            g = \{} -> if Bool.true then "" else f {}
+            "#
+        ),
+    @r###"
+    ── DEFINITIONs ONLY USED IN RECURSION ──────────────────── /code/proj/Main.roc ─
+
+    These 2 definitions are only used in mutual recursion with themselves:
+
+    3│>  f = \{} -> if Bool.true then "" else g {}
+    4│>  g = \{} -> if Bool.true then "" else f {}
+
+    If you don't intend to use or export any of them, they should all be
+    removed!
+    "###
+    );
+
+    test_report!(
+        mutual_recursion_not_reached_but_exposed,
+        indoc!(
+            r#"
+            app "test" provides [f] to "./platform"
+            f = \{} -> if Bool.true then "" else g {}
+            g = \{} -> if Bool.true then "" else f {}
+            "#
+        ),
+    @r###"
+    "###
+    );
+
+    test_report!(
+        self_recursive_not_reached_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main =
+                g = \{} -> if Bool.true then "" else g {}
+                ""
+            "#
+        ),
+    @r###"
+    ── DEFINITION ONLY USED IN RECURSION ───────────────────── /code/proj/Main.roc ─
+
+    This definition is only used in recursion with itself:
+
+    3│      g = \{} -> if Bool.true then "" else g {}
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+    If you don't intend to use or export this definition, it should be
+    removed!
+    "###
+    );
+
+    test_no_problem!(
+        self_recursive_not_reached_but_exposed_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main =
+                g = \{} -> if Bool.true then "" else g {}
+                g
+            "#
+        )
+    );
+
+    test_report!(
+        mutual_recursion_not_reached_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main =
+                f = \{} -> if Bool.true then "" else g {}
+                g = \{} -> if Bool.true then "" else f {}
+                ""
+            "#
+        ),
+    @r###"
+    ── DEFINITIONs ONLY USED IN RECURSION ──────────────────── /code/proj/Main.roc ─
+
+    These 2 definitions are only used in mutual recursion with themselves:
+
+    3│>      f = \{} -> if Bool.true then "" else g {}
+    4│>      g = \{} -> if Bool.true then "" else f {}
+
+    If you don't intend to use or export any of them, they should all be
+    removed!
+    "###
+    );
+
+    test_report!(
+        mutual_recursion_not_reached_but_exposed_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+            main =
+                f = \{} -> if Bool.true then "" else g {}
+                g = \{} -> if Bool.true then "" else f {}
+                f
+            "#
+        ),
+    @r###"
     "###
     );
 }

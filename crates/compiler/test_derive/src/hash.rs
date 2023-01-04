@@ -178,7 +178,7 @@ fn one_field_record() {
         # Specialization lambda sets:
         #   @<1>: [[hash_{a}(0)]]
         #Derived.hash_{a} =
-          \#Derived.hasher, #Derived.rcd -> Hash.hash #Derived.hasher #Derived.rcd.a
+          \#Derived.hasher, #Derived.rcd -> hash #Derived.hasher #Derived.rcd.a
         "###
         )
     })
@@ -195,7 +195,7 @@ fn two_field_record() {
         #   @<1>: [[hash_{a,b}(0)]]
         #Derived.hash_{a,b} =
           \#Derived.hasher, #Derived.rcd ->
-            Hash.hash (Hash.hash #Derived.hasher #Derived.rcd.a) #Derived.rcd.b
+            hash (hash #Derived.hasher #Derived.rcd.a) #Derived.rcd.b
         "###
         )
     })
@@ -227,7 +227,7 @@ fn tag_one_label_newtype() {
         #   @<1>: [[hash_[A 2](0)]]
         #Derived.hash_[A 2] =
           \#Derived.hasher, A #Derived.2 #Derived.3 ->
-            Hash.hash (Hash.hash #Derived.hasher #Derived.2) #Derived.3
+            hash (hash #Derived.hasher #Derived.2) #Derived.3
         "###
         )
     })
@@ -246,12 +246,10 @@ fn tag_two_labels() {
           \#Derived.hasher, #Derived.union ->
             when #Derived.union is
               A #Derived.3 #Derived.4 #Derived.5 ->
-                Hash.hash
-                  (Hash.hash
-                    (Hash.hash (Hash.addU8 #Derived.hasher 0) #Derived.3)
-                    #Derived.4)
+                hash
+                  (hash (hash (addU8 #Derived.hasher 0) #Derived.3) #Derived.4)
                   #Derived.5
-              B #Derived.6 -> Hash.hash (Hash.addU8 #Derived.hasher 1) #Derived.6
+              B #Derived.6 -> hash (addU8 #Derived.hasher 1) #Derived.6
         "###
         )
     })
@@ -269,8 +267,8 @@ fn tag_two_labels_no_payloads() {
         #Derived.hash_[A 0,B 0] =
           \#Derived.hasher, #Derived.union ->
             when #Derived.union is
-              A -> Hash.addU8 #Derived.hasher 0
-              B -> Hash.addU8 #Derived.hasher 1
+              A -> addU8 #Derived.hasher 0
+              B -> addU8 #Derived.hasher 1
         "###
         )
     })
@@ -289,10 +287,8 @@ fn recursive_tag_union() {
           \#Derived.hasher, #Derived.union ->
             when #Derived.union is
               Cons #Derived.3 #Derived.4 ->
-                Hash.hash
-                  (Hash.hash (Hash.addU8 #Derived.hasher 0) #Derived.3)
-                  #Derived.4
-              Nil -> Hash.addU8 #Derived.hasher 1
+                hash (hash (addU8 #Derived.hasher 0) #Derived.3) #Derived.4
+              Nil -> addU8 #Derived.hasher 1
         "###
         )
     })

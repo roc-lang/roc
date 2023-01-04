@@ -1,0 +1,56 @@
+Defs(
+    Defs {
+        tags: [
+            Index(2147483649),
+        ],
+        regions: [
+            @0-17,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-3 Identifier(
+                    "foo",
+                ),
+                @6-9 Apply(
+                    "",
+                    "Int",
+                    [],
+                ),
+            ),
+            AnnotatedBody {
+                ann_pattern: @0-3 Identifier(
+                    "foo",
+                ),
+                ann_type: @6-9 Apply(
+                    "",
+                    "Int",
+                    [],
+                ),
+                comment: None,
+                body_pattern: @10-13 Identifier(
+                    "foo",
+                ),
+                body_expr: @16-17 Num(
+                    "4",
+                ),
+            },
+        ],
+    },
+    @19-21 SpaceBefore(
+        Num(
+            "42",
+        ),
+        [
+            Newline,
+            Newline,
+        ],
+    ),
+)

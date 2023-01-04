@@ -3,7 +3,7 @@
 Roc is not ready for a 0.1 release yet, but we do have:
 
 - [**installation** guide](https://github.com/roc-lang/roc/tree/main/getting_started)
-- [**tutorial**](https://github.com/roc-lang/roc/blob/main/TUTORIAL.md)
+- [**tutorial**](https://roc-lang.org/tutorial)
 - [**docs** for the standard library](https://www.roc-lang.org/builtins/Str)
 - [frequently asked questions](https://github.com/roc-lang/roc/blob/main/FAQ.md)
 - [Zulip chat](https://roc.zulipchat.com) for help, questions and discussions

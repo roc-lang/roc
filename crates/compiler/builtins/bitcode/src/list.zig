@@ -4,6 +4,8 @@ const UpdateMode = utils.UpdateMode;
 const mem = std.mem;
 const math = std.math;
 
+const expect = std.testing.expect;
+
 const EqFn = fn (?[*]u8, ?[*]u8) callconv(.C) bool;
 const CompareFn = fn (?[*]u8, ?[*]u8, ?[*]u8) callconv(.C) u8;
 const Opaque = ?[*]u8;
@@ -738,9 +740,11 @@ fn swapElements(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2
 }
 
 pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_width: usize) callconv(.C) RocList {
-    if (list_a.isEmpty()) {
-        return list_b;
-    } else if (list_b.isEmpty()) {
+    // NOTE we always use list_a! because it is owned, we must consume it, and it may have unused capacity
+    if (list_b.isEmpty()) {
+        // we must consume this list. Even though it has no elements, it could still have capacity
+        list_b.deinit(usize);
+
         return list_a;
     } else if (list_a.isUnique()) {
         const total_length: usize = list_a.len() + list_b.len();
@@ -770,7 +774,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         // This first call must use mem.copy because the slices might overlap.
         const byte_count_a = list_a.len() * element_width;
         const byte_count_b = list_b.len() * element_width;
-        mem.copy(u8, source_b[byte_count_a .. byte_count_a + byte_count_b], source_b[0..byte_count_b]);
+        mem.copyBackwards(u8, source_b[byte_count_a .. byte_count_a + byte_count_b], source_b[0..byte_count_b]);
         @memcpy(source_b, source_a, byte_count_a);
 
         // decrement list a.
@@ -853,4 +857,22 @@ pub fn listIsUnique(
     list: RocList,
 ) callconv(.C) bool {
     return list.isEmpty() or list.isUnique();
+}
+
+test "listConcat: non-unique with unique overlapping" {
+    var nonUnique = RocList.fromSlice(u8, ([_]u8{1})[0..]);
+    var bytes: [*]u8 = @ptrCast([*]u8, nonUnique.bytes);
+    const ptr_width = @sizeOf(usize);
+    const refcount_ptr = @ptrCast([*]isize, @alignCast(ptr_width, bytes) - ptr_width);
+    utils.increfC(&refcount_ptr[0], 1);
+    defer nonUnique.deinit(u8); // listConcat will dec the other refcount
+
+    var unique = RocList.fromSlice(u8, ([_]u8{ 2, 3, 4 })[0..]);
+    defer unique.deinit(u8);
+
+    var concatted = listConcat(nonUnique, unique, 1, 1);
+    var wanted = RocList.fromSlice(u8, ([_]u8{ 1, 2, 3, 4 })[0..]);
+    defer wanted.deinit(u8);
+
+    try expect(concatted.eql(wanted));
 }

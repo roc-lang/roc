@@ -1,6 +1,8 @@
 use bumpalo::Bump;
-use roc_load::{ExecutionMode, LoadConfig, Threading};
-use roc_reporting::report::{Palette, Severity};
+use roc_load::{ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
+use roc_packaging::cache::{self, RocCacheDir};
+use roc_problem::Severity;
+use roc_reporting::report::Palette;
 use std::path::PathBuf;
 
 use roc_fmt::annotation::Formattable;
@@ -52,13 +54,12 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
     let filename = PathBuf::from("");
     let src_dir = PathBuf::from("fake/test/path");
     let (bytes_before_expr, module_src) = promote_expr_to_module(arena, defs, expr);
-    let exposed_types = Default::default();
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         src_dir,
-        exposed_types,
+        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         LoadConfig {
             target_info,
             render: roc_reporting::report::RenderTarget::ColorTerminal,
@@ -70,7 +71,13 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
 
     let mut loaded = match loaded {
         Ok(v) => v,
-        Err(LoadingProblem::FormattedReport(report)) => {
+        Err(LoadMonomorphizedError::ErrorModule(m)) => {
+            todo!(
+                "error while loading module: {:?}",
+                (m.can_problems, m.type_problems)
+            );
+        }
+        Err(LoadMonomorphizedError::LoadingProblem(LoadingProblem::FormattedReport(report))) => {
             return (
                 None,
                 Problems {
