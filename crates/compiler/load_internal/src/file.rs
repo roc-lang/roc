@@ -3092,6 +3092,7 @@ fn update<'a>(
 
                     Proc::insert_reset_reuse_operations(
                         arena,
+                        &mut layout_interner,
                         module_id,
                         ident_ids,
                         &mut update_mode_ids,
@@ -3430,7 +3431,7 @@ fn proc_layout_for<'a>(
             // is a function value
             roc_mono::ir::ProcLayout {
                 arguments: &[],
-                result: Layout::struct_no_name_order(&[]),
+                result: Layout::UNIT,
                 niche: Niche::NONE,
             }
         }

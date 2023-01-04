@@ -4,7 +4,7 @@ use std::hash::Hash;
 use crate::ir::{
     Expr, HigherOrderLowLevel, JoinPointId, Param, PassedFunction, Proc, ProcLayout, Stmt,
 };
-use crate::layout::Layout;
+use crate::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
@@ -33,6 +33,7 @@ impl Ownership {
 }
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
+    interner: &STLayoutInterner<'a>,
     procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     host_exposed_procs: &[Symbol],
 ) -> ParamMap<'a> {
@@ -49,7 +50,7 @@ pub fn infer_borrow<'a>(
     };
 
     for (key, proc) in procs {
-        param_map.visit_proc(arena, proc, *key);
+        param_map.visit_proc(arena, interner, proc, *key);
     }
 
     let mut env = BorrowInfState {
@@ -232,10 +233,14 @@ impl<'a> ParamMap<'a> {
 }
 
 impl<'a> ParamMap<'a> {
-    fn init_borrow_params(arena: &'a Bump, ps: &'a [Param<'a>]) -> &'a [Param<'a>] {
+    fn init_borrow_params(
+        arena: &'a Bump,
+        interner: &STLayoutInterner<'a>,
+        ps: &'a [Param<'a>],
+    ) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|p| Param {
-                ownership: Ownership::from_layout(&p.layout),
+                ownership: Ownership::from_layout(&interner.get(p.layout)),
                 layout: p.layout,
                 symbol: p.symbol,
             }),
@@ -244,10 +249,14 @@ impl<'a> ParamMap<'a> {
         .into_bump_slice()
     }
 
-    fn init_borrow_args(arena: &'a Bump, ps: &'a [(Layout<'a>, Symbol)]) -> &'a [Param<'a>] {
+    fn init_borrow_args(
+        arena: &'a Bump,
+        interner: &STLayoutInterner<'a>,
+        ps: &'a [(InLayout<'a>, Symbol)],
+    ) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
-                ownership: Ownership::from_layout(layout),
+                ownership: Ownership::from_layout(&interner.get(*layout)),
                 layout: *layout,
                 symbol: *symbol,
             }),
@@ -258,7 +267,7 @@ impl<'a> ParamMap<'a> {
 
     fn init_borrow_args_always_owned(
         arena: &'a Bump,
-        ps: &'a [(Layout<'a>, Symbol)],
+        ps: &'a [(InLayout<'a>, Symbol)],
     ) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
@@ -271,15 +280,21 @@ impl<'a> ParamMap<'a> {
         .into_bump_slice()
     }
 
-    fn visit_proc(&mut self, arena: &'a Bump, proc: &Proc<'a>, key: (Symbol, ProcLayout<'a>)) {
+    fn visit_proc(
+        &mut self,
+        arena: &'a Bump,
+        interner: &STLayoutInterner<'a>,
+        proc: &Proc<'a>,
+        key: (Symbol, ProcLayout<'a>),
+    ) {
         if proc.must_own_arguments {
-            self.visit_proc_always_owned(arena, proc, key);
+            self.visit_proc_always_owned(arena, interner, proc, key);
             return;
         }
 
         let index: usize = self.get_param_offset(key.0, key.1).into();
 
-        for (i, param) in Self::init_borrow_args(arena, proc.args)
+        for (i, param) in Self::init_borrow_args(arena, interner, proc.args)
             .iter()
             .copied()
             .enumerate()
@@ -287,12 +302,13 @@ impl<'a> ParamMap<'a> {
             self.declarations[index + i] = param;
         }
 
-        self.visit_stmt(arena, proc.name.name(), &proc.body);
+        self.visit_stmt(arena, interner, proc.name.name(), &proc.body);
     }
 
     fn visit_proc_always_owned(
         &mut self,
         arena: &'a Bump,
+        interner: &STLayoutInterner<'a>,
         proc: &Proc<'a>,
         key: (Symbol, ProcLayout<'a>),
     ) {
@@ -306,10 +322,16 @@ impl<'a> ParamMap<'a> {
             self.declarations[index + i] = param;
         }
 
-        self.visit_stmt(arena, proc.name.name(), &proc.body);
+        self.visit_stmt(arena, interner, proc.name.name(), &proc.body);
     }
 
-    fn visit_stmt(&mut self, arena: &'a Bump, _fnid: Symbol, stmt: &Stmt<'a>) {
+    fn visit_stmt(
+        &mut self,
+        arena: &'a Bump,
+        interner: &STLayoutInterner<'a>,
+        _fnid: Symbol,
+        stmt: &Stmt<'a>,
+    ) {
         use Stmt::*;
 
         let mut stack = bumpalo::vec![in arena; stmt];
@@ -323,7 +345,7 @@ impl<'a> ParamMap<'a> {
                     body: b,
                 } => {
                     self.join_points
-                        .insert(*j, Self::init_borrow_params(arena, xs));
+                        .insert(*j, Self::init_borrow_params(arena, interner, xs));
 
                     stack.push(v);
                     stack.push(b);
@@ -527,8 +549,7 @@ impl<'a> BorrowInfState<'a> {
                 arg_layouts,
                 ..
             } => {
-                let top_level =
-                    ProcLayout::new(self.arena, arg_layouts, name.niche(), **ret_layout);
+                let top_level = ProcLayout::new(self.arena, arg_layouts, name.niche(), *ret_layout);
 
                 // get the borrow signature of the applied function
                 let ps = param_map
@@ -756,7 +777,7 @@ impl<'a> BorrowInfState<'a> {
             Stmt::Ret(z),
         ) = (v, b)
         {
-            let top_level = ProcLayout::new(self.arena, arg_layouts, g.niche(), **ret_layout);
+            let top_level = ProcLayout::new(self.arena, arg_layouts, g.niche(), *ret_layout);
 
             if self.current_proc == g.name() && x == *z {
                 // anonymous functions (for which the ps may not be known)

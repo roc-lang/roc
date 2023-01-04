@@ -11,14 +11,11 @@ use roc_collections::{default_hasher, BumpMap};
 use roc_module::symbol::Symbol;
 use roc_target::TargetInfo;
 
-use super::{Builtin, LambdaSet, Layout};
-
-#[allow(unused)] // for now
-pub struct InLayouts(PhantomData<()>);
+use super::{Builtin, FieldOrderHash, LambdaSet, Layout, UnionLayout};
 
 macro_rules! cache_interned_layouts {
     ($($i:literal, $name:ident, $layout:expr)*; $total_constants:literal) => {
-        impl InLayouts {
+        impl<'a> Layout<'a> {
             $(
             #[allow(unused)] // for now
             pub const $name: InLayout<'static> = unsafe { InLayout::from_reserved_index($i) };
@@ -48,8 +45,8 @@ macro_rules! cache_interned_layouts {
 }
 
 cache_interned_layouts! {
-    0,  VOID, Layout::VOID
-    1,  UNIT, Layout::UNIT
+    0,  VOID, Layout::VOID_NAKED
+    1,  UNIT, Layout::UNIT_NAKED
     2,  BOOL, Layout::Builtin(Builtin::Bool)
     3,  U8,   Layout::Builtin(Builtin::Int(IntWidth::U8))
     4,  U16,  Layout::Builtin(Builtin::Int(IntWidth::U16))
@@ -64,13 +61,20 @@ cache_interned_layouts! {
     13, F32,  Layout::Builtin(Builtin::Float(FloatWidth::F32))
     14, F64,  Layout::Builtin(Builtin::Float(FloatWidth::F64))
     15, DEC,  Layout::Builtin(Builtin::Decimal)
+    16, STR,  Layout::Builtin(Builtin::Str)
+    17, RECURSIVE_PTR,  Layout::RecursivePointer
 
-    ; 16
+    ; 18
 }
 
-impl InLayouts {
-    #[allow(unused)] // for now
-    pub const fn from_int_width(w: IntWidth) -> InLayout<'static> {
+impl<'a> Layout<'a> {
+    pub(super) const VOID_NAKED: Self = Layout::Union(UnionLayout::NonRecursive(&[]));
+    pub(super) const UNIT_NAKED: Self = Layout::Struct {
+        field_layouts: &[],
+        field_order_hash: FieldOrderHash::ZERO_FIELD_HASH,
+    };
+
+    pub const fn int_width(w: IntWidth) -> InLayout<'static> {
         match w {
             IntWidth::U8 => Self::U8,
             IntWidth::U16 => Self::U16,
@@ -84,8 +88,7 @@ impl InLayouts {
             IntWidth::I128 => Self::I128,
         }
     }
-    #[allow(unused)] // for now
-    pub const fn from_float_width(w: FloatWidth) -> InLayout<'static> {
+    pub const fn float_width(w: FloatWidth) -> InLayout<'static> {
         match w {
             FloatWidth::F32 => Self::F32,
             FloatWidth::F64 => Self::F64,
@@ -114,6 +117,9 @@ pub trait LayoutInterner<'a>: Sized {
     /// Retrieves a value from the interner.
     fn get(&self, key: InLayout<'a>) -> Layout<'a>;
 
+    //
+    // Convenience methods
+
     fn target_info(&self) -> TargetInfo;
 
     fn alignment_bytes(&self, layout: InLayout<'a>) -> u32 {
@@ -122,6 +128,28 @@ pub trait LayoutInterner<'a>: Sized {
 
     fn stack_size(&self, layout: InLayout<'a>) -> u32 {
         self.get(layout).stack_size(self, self.target_info())
+    }
+
+    fn contains_refcounted(&self, layout: InLayout<'a>) -> bool {
+        self.get(layout).contains_refcounted(self)
+    }
+
+    fn is_refcounted(&self, layout: InLayout<'a>) -> bool {
+        self.get(layout).is_refcounted()
+    }
+
+    fn to_doc<'b, D, A>(
+        &self,
+        layout: InLayout<'a>,
+        alloc: &'b D,
+        parens: crate::ir::Parens,
+    ) -> ven_pretty::DocBuilder<'b, D, A>
+    where
+        D: ven_pretty::DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        self.get(layout).to_doc(alloc, self, parens)
     }
 }
 
@@ -227,7 +255,7 @@ fn make_normalized_lamdba_set<'a>(
     LambdaSet {
         set,
         representation,
-        full_layout: InLayouts::VOID,
+        full_layout: Layout::VOID,
     }
 }
 
