@@ -5804,7 +5804,7 @@ where
 
             debug_assert_eq!(
                 Layout::struct_no_name_order(field_layouts),
-                lambda_set.runtime_representation(&layout_cache.interner)
+                layout_cache.get_in(lambda_set.runtime_representation())
             );
 
             let expr = Expr::Struct(symbols);

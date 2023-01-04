@@ -1395,11 +1395,8 @@ pub enum ClosureCallOptions<'a> {
 }
 
 impl<'a> LambdaSet<'a> {
-    pub fn runtime_representation<I>(&self, interner: &I) -> Layout<'a>
-    where
-        I: LayoutInterner<'a>,
-    {
-        interner.get(self.representation)
+    pub fn runtime_representation(&self) -> InLayout<'a> {
+        self.representation
     }
 
     /// Does the lambda set contain the given symbol?
@@ -1528,9 +1525,9 @@ impl<'a> LambdaSet<'a> {
         let right = interner.get(*right);
 
         let left = if left == Layout::RecursivePointer {
-            let runtime_repr = self.runtime_representation(interner);
+            let runtime_repr = self.runtime_representation();
             debug_assert!(matches!(
-                runtime_repr,
+                interner.get(runtime_repr),
                 Layout::Union(UnionLayout::Recursive(_) | UnionLayout::NullableUnwrapped { .. })
             ));
             Layout::LambdaSet(*self)
@@ -1539,9 +1536,9 @@ impl<'a> LambdaSet<'a> {
         };
 
         let right = if right == Layout::RecursivePointer {
-            let runtime_repr = self.runtime_representation(interner);
+            let runtime_repr = self.runtime_representation();
             debug_assert!(matches!(
-                runtime_repr,
+                interner.get(runtime_repr),
                 Layout::Union(UnionLayout::Recursive(_) | UnionLayout::NullableUnwrapped { .. })
             ));
             Layout::LambdaSet(*self)
@@ -2424,8 +2421,8 @@ impl<'a> Layout<'a> {
                     }
                 }
             }
-            LambdaSet(lambda_set) => lambda_set
-                .runtime_representation(interner)
+            LambdaSet(lambda_set) => interner
+                .get(lambda_set.runtime_representation())
                 .safe_to_memcpy(interner),
             Boxed(_) | RecursivePointer => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
@@ -2461,8 +2458,8 @@ impl<'a> Layout<'a> {
                 }
             }
             Layout::Union(UnionLayout::NonRecursive(_)) => true,
-            Layout::LambdaSet(lambda_set) => lambda_set
-                .runtime_representation(interner)
+            Layout::LambdaSet(lambda_set) => interner
+                .get(lambda_set.runtime_representation())
                 .is_passed_by_reference(interner, target_info),
             _ => false,
         }
@@ -2510,8 +2507,8 @@ impl<'a> Layout<'a> {
                 sum
             }
             Union(variant) => variant.stack_size_without_alignment(interner, target_info),
-            LambdaSet(lambda_set) => lambda_set
-                .runtime_representation(interner)
+            LambdaSet(lambda_set) => interner
+                .get(lambda_set.runtime_representation())
                 .stack_size_without_alignment(interner, target_info),
             RecursivePointer => target_info.ptr_width() as u32,
             Boxed(_) => target_info.ptr_width() as u32,
@@ -2561,8 +2558,8 @@ impl<'a> Layout<'a> {
                     | NonNullableUnwrapped(_) => target_info.ptr_width() as u32,
                 }
             }
-            Layout::LambdaSet(lambda_set) => lambda_set
-                .runtime_representation(interner)
+            Layout::LambdaSet(lambda_set) => interner
+                .get(lambda_set.runtime_representation())
                 .alignment_bytes(interner, target_info),
             Layout::Builtin(builtin) => builtin.alignment_bytes(target_info),
             Layout::RecursivePointer => target_info.ptr_width() as u32,
@@ -2582,8 +2579,8 @@ impl<'a> Layout<'a> {
             Layout::Union(union_layout) => {
                 union_layout.allocation_alignment_bytes(interner, target_info)
             }
-            Layout::LambdaSet(lambda_set) => lambda_set
-                .runtime_representation(interner)
+            Layout::LambdaSet(lambda_set) => interner
+                .get(lambda_set.runtime_representation())
                 .allocation_alignment_bytes(interner, target_info),
             Layout::RecursivePointer => unreachable!("should be looked up to get an actual layout"),
             Layout::Boxed(inner) => interner
@@ -2666,8 +2663,8 @@ impl<'a> Layout<'a> {
                     | NonNullableUnwrapped(_) => true,
                 }
             }
-            LambdaSet(lambda_set) => lambda_set
-                .runtime_representation(interner)
+            LambdaSet(lambda_set) => interner
+                .get(lambda_set.runtime_representation())
                 .contains_refcounted(interner),
             RecursivePointer => true,
             Boxed(_) => true,
@@ -2701,8 +2698,8 @@ impl<'a> Layout<'a> {
                     .append(alloc.text("}"))
             }
             Union(union_layout) => union_layout.to_doc(alloc, interner, parens),
-            LambdaSet(lambda_set) => lambda_set
-                .runtime_representation(interner)
+            LambdaSet(lambda_set) => interner
+                .get(lambda_set.runtime_representation())
                 .to_doc(alloc, interner, parens),
             RecursivePointer => alloc.text("*self"),
             Boxed(inner) => alloc
@@ -2729,7 +2726,7 @@ impl<'a> Layout<'a> {
         I: LayoutInterner<'a>,
     {
         match self {
-            Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation(interner),
+            Layout::LambdaSet(lambda_set) => interner.get(lambda_set.runtime_representation()),
             other => *other,
         }
     }
