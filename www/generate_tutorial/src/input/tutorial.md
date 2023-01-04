@@ -190,7 +190,7 @@ So far we've called functions like `Num.toStr`, `Str.concat`, and `Stdout.line`.
 
 iguanas <span class="kw">=</span> 2
 
-total <span class="kw">=</span> Num.toStr <span class="paren">(</span>birds <span class="op">+</span> iguanas<span class="paren">)</span>
+total <span class="kw">=</span> addAndStringify <span class="paren"></span>birds iguanas<span class="paren"></span>
 
 main <span class="kw">=</span>
     Stdout.line <span class="str">"There are <span class="str-esc">\(</span><span class="str-interp">total</span><span class="str-esc">)</span> animals."</span>
