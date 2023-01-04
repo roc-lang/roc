@@ -163,6 +163,11 @@ pub trait LayoutInterner<'a>: Sized {
             .stack_size_and_alignment(self, self.target_info())
     }
 
+    fn stack_size_without_alignment(&self, layout: InLayout<'a>) -> u32 {
+        self.get(layout)
+            .stack_size_without_alignment(self, self.target_info())
+    }
+
     fn contains_refcounted(&self, layout: InLayout<'a>) -> bool {
         self.get(layout).contains_refcounted(self)
     }
