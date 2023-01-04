@@ -1217,6 +1217,7 @@ impl std::fmt::Debug for LambdaSet<'_> {
         f.debug_struct("LambdaSet")
             .field("set", &Helper { set: self.set })
             .field("representation", &self.representation)
+            .field("full_layout", &self.full_layout)
             .finish()
     }
 }
@@ -1767,7 +1768,7 @@ impl<'a> LambdaSet<'a> {
 
         let Cacheable(result, criteria) = env.cached_or(closure_var, |env| {
             let Cacheable(result, criteria) = Self::from_var_help(env, closure_var);
-            let result = result.map(Layout::LambdaSet).map(|l| env.cache.put_in(l));
+            let result = result.map(|l| l.full_layout);
             Cacheable(result, criteria)
         });
 
@@ -3100,7 +3101,7 @@ fn layout_from_flat_type<'a>(
                     ),
                     criteria
                 );
-                let lambda_set = env.cache.put_in(Layout::LambdaSet(lambda_set));
+                let lambda_set = lambda_set.full_layout;
 
                 Cacheable(Ok(lambda_set), criteria)
             }
