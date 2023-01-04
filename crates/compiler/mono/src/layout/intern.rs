@@ -114,8 +114,14 @@ pub trait LayoutInterner<'a>: Sized {
     /// Retrieves a value from the interner.
     fn get(&self, key: InLayout<'a>) -> Layout<'a>;
 
-    fn alignment_bytes(&self, target_info: TargetInfo, layout: InLayout<'a>) -> u32 {
-        self.get(layout).alignment_bytes(self, target_info)
+    fn target_info(&self) -> TargetInfo;
+
+    fn alignment_bytes(&self, layout: InLayout<'a>) -> u32 {
+        self.get(layout).alignment_bytes(self, self.target_info())
+    }
+
+    fn stack_size(&self, layout: InLayout<'a>) -> u32 {
+        self.get(layout).stack_size(self, self.target_info())
     }
 }
 
@@ -189,6 +195,7 @@ pub struct TLLayoutInterner<'a> {
     normalized_lambda_set_map: BumpMap<LambdaSet<'a>, LambdaSet<'a>>,
     /// Cache of interned values from the parent for local access.
     vec: RefCell<Vec<Option<Layout<'a>>>>,
+    target_info: TargetInfo,
 }
 
 /// A single-threaded interner, with no concurrency properties.
@@ -237,6 +244,7 @@ impl<'a> GlobalLayoutInterner<'a> {
             map: Default::default(),
             normalized_lambda_set_map: Default::default(),
             vec: Default::default(),
+            target_info: self.0.target_info,
         }
     }
 
@@ -404,6 +412,10 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
         self.record(value, key);
         value
     }
+
+    fn target_info(&self) -> TargetInfo {
+        self.target_info
+    }
 }
 
 impl<'a> STLayoutInterner<'a> {
@@ -492,5 +504,9 @@ impl<'a> LayoutInterner<'a> for STLayoutInterner<'a> {
     fn get(&self, key: InLayout<'a>) -> Layout<'a> {
         let InLayout(index, _) = key;
         self.vec[index]
+    }
+
+    fn target_info(&self) -> TargetInfo {
+        self.target_info
     }
 }
