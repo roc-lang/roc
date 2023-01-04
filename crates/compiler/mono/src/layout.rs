@@ -2730,6 +2730,16 @@ impl<'a> Layout<'a> {
             other => *other,
         }
     }
+
+    pub fn runtime_representation_in<I>(layout: InLayout<'a>, interner: &I) -> InLayout<'a>
+    where
+        I: LayoutInterner<'a>,
+    {
+        match interner.get(layout) {
+            Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation(),
+            _ => layout,
+        }
+    }
 }
 
 impl<'a> Layout<'a> {

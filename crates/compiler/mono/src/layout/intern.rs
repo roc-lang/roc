@@ -135,12 +135,25 @@ pub trait LayoutInterner<'a>: Sized {
         self.get(layout).stack_size(self, self.target_info())
     }
 
+    fn stack_size_and_alignment(&self, layout: InLayout<'a>) -> (u32, u32) {
+        self.get(layout)
+            .stack_size_and_alignment(self, self.target_info())
+    }
+
     fn contains_refcounted(&self, layout: InLayout<'a>) -> bool {
         self.get(layout).contains_refcounted(self)
     }
 
     fn is_refcounted(&self, layout: InLayout<'a>) -> bool {
         self.get(layout).is_refcounted()
+    }
+
+    fn runtime_representation(&self, layout: InLayout<'a>) -> Layout<'a> {
+        self.get(layout).runtime_representation(self)
+    }
+
+    fn runtime_representation_in(&self, layout: InLayout<'a>) -> InLayout<'a> {
+        Layout::runtime_representation_in(layout, self)
     }
 
     fn to_doc<'b, D, A>(
