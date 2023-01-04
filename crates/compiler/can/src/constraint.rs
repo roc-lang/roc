@@ -390,6 +390,8 @@ impl Constraints {
         }
     }
 
+    /// A constraint that some type variables exist and should be introduced into the environment
+    /// at a given rank.
     #[inline(always)]
     pub fn exists<I>(&mut self, flex_vars: I, defs_constraint: Constraint) -> Constraint
     where
@@ -405,6 +407,10 @@ impl Constraints {
             flex_vars: self.variable_slice(flex_vars),
             def_types: DefTypes::default(),
             defs_and_ret_constraint,
+
+            // We're just marking that the variables exist, not that they should be generalized
+            // (in fact there is no return constraint, so nothing to generalize at this level)
+            generalizable: Generalizable(false),
         };
 
         let let_index = Index::new(self.let_constraints.len() as _);
@@ -431,6 +437,7 @@ impl Constraints {
             flex_vars: self.variable_slice(flex_vars),
             def_types: DefTypes::default(),
             defs_and_ret_constraint,
+            generalizable: Generalizable(false),
         };
 
         let let_index = Index::new(self.let_constraints.len() as _);
@@ -447,6 +454,7 @@ impl Constraints {
         def_types: I3,
         defs_constraint: Constraint,
         ret_constraint: Constraint,
+        generalizable: Generalizable,
     ) -> Constraint
     where
         I1: IntoIterator<Item = Variable>,
@@ -465,6 +473,7 @@ impl Constraints {
             flex_vars: self.variable_slice(flex_vars),
             def_types: self.def_types_slice(def_types),
             defs_and_ret_constraint,
+            generalizable,
         };
 
         let let_index = Index::new(self.let_constraints.len() as _);
@@ -513,6 +522,9 @@ impl Constraints {
             flex_vars: self.variable_slice(flex_vars),
             def_types: self.def_types_slice(def_types),
             defs_and_ret_constraint,
+            // If the module these variables were solved in solved them as generalized,
+            // they should be generalized here too.
+            generalizable: Generalizable(true),
         };
 
         let let_index = Index::new(self.let_constraints.len() as _);
@@ -769,12 +781,22 @@ pub struct DefTypes {
     pub loc_symbols: Slice<(Symbol, Region)>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Generalizable(pub bool);
+
 #[derive(Debug, Clone)]
 pub struct LetConstraint {
     pub rigid_vars: Slice<Variable>,
     pub flex_vars: Slice<Variable>,
     pub def_types: DefTypes,
     pub defs_and_ret_constraint: Index<(Constraint, Constraint)>,
+
+    /// Whether the defs introduces in the let-binding can be generalized.
+    /// Only
+    ///   - syntactic functions
+    ///   - syntactic numbers
+    /// may be eligible for generalization, though there are other restrictions too.
+    pub generalizable: Generalizable,
 }
 
 #[derive(Debug, Clone)]
