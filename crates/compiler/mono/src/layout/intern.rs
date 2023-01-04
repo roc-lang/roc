@@ -126,6 +126,11 @@ pub trait LayoutInterner<'a>: Sized {
         self.get(layout).alignment_bytes(self, self.target_info())
     }
 
+    fn allocation_alignment_bytes(&self, layout: InLayout<'a>) -> u32 {
+        self.get(layout)
+            .allocation_alignment_bytes(self, self.target_info())
+    }
+
     fn stack_size(&self, layout: InLayout<'a>) -> u32 {
         self.get(layout).stack_size(self, self.target_info())
     }

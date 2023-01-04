@@ -4234,14 +4234,14 @@ impl LayoutId {
 }
 
 struct IdsByLayout<'a> {
-    by_id: MutMap<Layout<'a>, u32>,
+    by_id: MutMap<InLayout<'a>, u32>,
     toplevels_by_id: MutMap<crate::ir::ProcLayout<'a>, u32>,
     next_id: u32,
 }
 
 impl<'a> IdsByLayout<'a> {
     #[inline(always)]
-    fn insert_layout(&mut self, layout: Layout<'a>) -> LayoutId {
+    fn insert_layout(&mut self, layout: InLayout<'a>) -> LayoutId {
         match self.by_id.entry(layout) {
             Entry::Vacant(vacant) => {
                 let answer = self.next_id;
@@ -4255,7 +4255,7 @@ impl<'a> IdsByLayout<'a> {
     }
 
     #[inline(always)]
-    fn singleton_layout(layout: Layout<'a>) -> (Self, LayoutId) {
+    fn singleton_layout(layout: InLayout<'a>) -> (Self, LayoutId) {
         let mut by_id = HashMap::with_capacity_and_hasher(1, default_hasher());
         by_id.insert(layout, 1);
 
@@ -4306,7 +4306,7 @@ impl<'a> LayoutIds<'a> {
     /// Returns a LayoutId which is unique for the given symbol and layout.
     /// If given the same symbol and same layout, returns the same LayoutId.
     #[inline(always)]
-    pub fn get<'b>(&mut self, symbol: Symbol, layout: &'b Layout<'a>) -> LayoutId {
+    pub fn get<'b>(&mut self, symbol: Symbol, layout: &'b InLayout<'a>) -> LayoutId {
         match self.by_symbol.entry(symbol) {
             Entry::Vacant(vacant) => {
                 let (ids_by_layout, layout_id) = IdsByLayout::singleton_layout(*layout);
