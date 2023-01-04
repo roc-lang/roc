@@ -1,6 +1,6 @@
 #![allow(clippy::manual_map)]
 
-use crate::ir::{CallType, Expr, JoinPointId, Param, Stmt};
+use crate::ir::{CallType, Expr, JoinPointId, Ownership, Param, Stmt};
 use crate::layout::{LambdaName, Layout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;

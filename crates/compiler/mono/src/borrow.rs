@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use crate::ir::{
-    Expr, HigherOrderLowLevel, JoinPointId, Param, PassedFunction, Proc, ProcLayout, Stmt,
+    Expr, HigherOrderLowLevel, JoinPointId, Ownership, Param, PassedFunction, Proc, ProcLayout,
+    Stmt,
 };
 use crate::layout::Layout;
 use bumpalo::collections::Vec;

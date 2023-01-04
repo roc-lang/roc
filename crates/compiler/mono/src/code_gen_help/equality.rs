@@ -4,7 +4,7 @@ use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, Symbol};
 
 use crate::ir::{
-    BranchInfo, Call, CallType, Expr, JoinPointId, Literal, Param, Stmt, UpdateModeId,
+    BranchInfo, Call, CallType, Expr, JoinPointId, Literal, Ownership, Param, Stmt, UpdateModeId,
 };
 use crate::layout::{Builtin, InLayout, Layout, STLayoutInterner, TagIdIntType, UnionLayout};
 
