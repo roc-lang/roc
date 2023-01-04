@@ -4394,7 +4394,7 @@ mod test {
 
     #[test]
     fn width_and_alignment_union_empty_struct() {
-        let mut interner = STLayoutInterner::with_capacity(4);
+        let mut interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
 
         let lambda_set = LambdaSet {
             set: &(&[(Symbol::LIST_MAP, &[] as &[InLayout])] as &[(Symbol, &[InLayout])]),
@@ -4415,7 +4415,7 @@ mod test {
 
     #[test]
     fn memcpy_size_result_u32_unit() {
-        let interner = STLayoutInterner::with_capacity(4);
+        let interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
 
         let ok_tag = &[Layout::Builtin(Builtin::Int(IntWidth::U32))];
         let err_tag = &[Layout::UNIT];
@@ -4432,7 +4432,7 @@ mod test {
 
     #[test]
     fn void_stack_size() {
-        let interner = STLayoutInterner::with_capacity(4);
+        let interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
         let target_info = TargetInfo::default_x86_64();
         assert_eq!(Layout::VOID.stack_size(&interner, target_info), 0);
     }

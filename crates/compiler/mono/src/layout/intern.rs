@@ -170,6 +170,7 @@ struct GlobalLayoutInternerInner<'a> {
     map: Mutex<BumpMap<Layout<'a>, InLayout<'a>>>,
     normalized_lambda_set_map: Mutex<BumpMap<LambdaSet<'a>, LambdaSet<'a>>>,
     vec: RwLock<Vec<Layout<'a>>>,
+    target_info: TargetInfo,
 }
 
 /// A derivative of a [GlobalLayoutInterner] interner that provides caching desirable for
@@ -199,6 +200,7 @@ pub struct STLayoutInterner<'a> {
     map: BumpMap<Layout<'a>, InLayout<'a>>,
     normalized_lambda_set_map: BumpMap<LambdaSet<'a>, LambdaSet<'a>>,
     vec: Vec<Layout<'a>>,
+    target_info: TargetInfo,
 }
 
 /// Generic hasher for a value, to be used by all interners.
@@ -224,8 +226,8 @@ fn make_normalized_lamdba_set<'a>(
 
 impl<'a> GlobalLayoutInterner<'a> {
     /// Creates a new global interner with the given capacity.
-    pub fn with_capacity(cap: usize) -> Self {
-        STLayoutInterner::with_capacity(cap).into_global()
+    pub fn with_capacity(cap: usize, target_info: TargetInfo) -> Self {
+        STLayoutInterner::with_capacity(cap, target_info).into_global()
     }
 
     /// Creates a derivative [TLLayoutInterner] pointing back to this global interner.
@@ -246,6 +248,7 @@ impl<'a> GlobalLayoutInterner<'a> {
             map,
             normalized_lambda_set_map,
             vec,
+            target_info,
         } = match Arc::try_unwrap(self.0) {
             Ok(inner) => inner,
             Err(li) => return Err(Self(li)),
@@ -257,6 +260,7 @@ impl<'a> GlobalLayoutInterner<'a> {
             map,
             normalized_lambda_set_map,
             vec,
+            target_info,
         })
     }
 
@@ -404,11 +408,12 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
 
 impl<'a> STLayoutInterner<'a> {
     /// Creates a new single threaded interner with the given capacity.
-    pub fn with_capacity(cap: usize) -> Self {
+    pub fn with_capacity(cap: usize, target_info: TargetInfo) -> Self {
         let mut interner = Self {
             map: BumpMap::with_capacity_and_hasher(cap, default_hasher()),
             normalized_lambda_set_map: BumpMap::with_capacity_and_hasher(cap, default_hasher()),
             vec: Vec::with_capacity(cap),
+            target_info,
         };
         fill_reserved_layouts(&mut interner);
         interner
@@ -423,11 +428,13 @@ impl<'a> STLayoutInterner<'a> {
             map,
             normalized_lambda_set_map,
             vec,
+            target_info,
         } = self;
         GlobalLayoutInterner(Arc::new(GlobalLayoutInternerInner {
             map: Mutex::new(map),
             normalized_lambda_set_map: Mutex::new(normalized_lambda_set_map),
             vec: RwLock::new(vec),
+            target_info,
         }))
     }
 

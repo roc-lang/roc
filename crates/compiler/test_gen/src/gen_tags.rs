@@ -19,14 +19,14 @@ fn width_and_alignment_u8_u8() {
     use roc_mono::layout::Layout;
     use roc_mono::layout::UnionLayout;
 
-    let interner = STLayoutInterner::with_capacity(4);
+    let target_info = roc_target::TargetInfo::default_x86_64();
+    let interner = STLayoutInterner::with_capacity(4, target_info);
 
     let t = &[Layout::u8()] as &[_];
     let tt = [t, t];
 
     let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
 
-    let target_info = roc_target::TargetInfo::default_x86_64();
     assert_eq!(layout.alignment_bytes(&interner, target_info), 1);
     assert_eq!(layout.stack_size(&interner, target_info), 2);
 }

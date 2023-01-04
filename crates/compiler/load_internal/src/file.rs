@@ -1072,7 +1072,7 @@ impl<'a> State<'a> {
             exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
-            layout_interner: GlobalLayoutInterner::with_capacity(128),
+            layout_interner: GlobalLayoutInterner::with_capacity(128, target_info),
         }
     }
 }
@@ -3072,7 +3072,7 @@ fn update<'a>(
                     }
 
                     let layout_interner = {
-                        let mut taken = GlobalLayoutInterner::with_capacity(0);
+                        let mut taken = GlobalLayoutInterner::with_capacity(0, state.target_info);
                         std::mem::swap(&mut state.layout_interner, &mut taken);
                         taken
                     };
