@@ -332,6 +332,7 @@ mod solve_expr {
                     print_lambda_sets: true,
                     print_only_under_alias: options.print_only_under_alias,
                     ignore_polarity: true,
+                    print_weakened_vars: true,
                 },
             );
             subs.rollback_to(snapshot);

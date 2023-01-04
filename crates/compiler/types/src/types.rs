@@ -4095,13 +4095,16 @@ static THE_LETTER_A: u32 = 'a' as u32;
 
 /// Generates a fresh type variable name, composed of lowercase alphabetic characters in sequence.
 pub fn name_type_var<I, F: FnMut(&I, &str) -> bool>(
+    prefix: &str,
     letters_used: u32,
     taken: &mut impl Iterator<Item = I>,
     mut predicate: F,
 ) -> (Lowercase, u32) {
     // TODO we should arena-allocate this String,
     // so all the strings in the entire pass only require ~1 allocation.
-    let mut buf = String::with_capacity((letters_used as usize) / 26 + 1);
+    let mut buf = String::with_capacity(prefix.len() + (letters_used as usize) / 26 + 1);
+
+    buf.push_str(prefix);
 
     let is_taken = {
         let mut remaining = letters_used as i32;
@@ -4118,7 +4121,7 @@ pub fn name_type_var<I, F: FnMut(&I, &str) -> bool>(
 
     if is_taken {
         // If the generated name is already taken, try again.
-        name_type_var(letters_used + 1, taken, predicate)
+        name_type_var(prefix, letters_used + 1, taken, predicate)
     } else {
         (buf.into(), letters_used + 1)
     }
@@ -4127,18 +4130,19 @@ pub fn name_type_var<I, F: FnMut(&I, &str) -> bool>(
 /// Generates a fresh type variable name given a hint, composed of the hint as a prefix and a
 /// number as a suffix. For example, given hint `a` we'll name the variable `a`, `a1`, or `a27`.
 pub fn name_type_var_with_hint<I, F: FnMut(&I, &str) -> bool>(
+    prefix: &str,
     hint: &str,
     taken: &mut impl Iterator<Item = I>,
     mut predicate: F,
 ) -> Lowercase {
     if !taken.any(|item| predicate(&item, hint)) {
-        return hint.into();
+        return format!("{prefix}{hint}").into();
     }
 
     let mut i = 0;
     loop {
         i += 1;
-        let cand = format!("{}{}", hint, i);
+        let cand = format!("{prefix}{hint}{i}");
 
         if !taken.any(|item| predicate(&item, &cand)) {
             return cand.into();
