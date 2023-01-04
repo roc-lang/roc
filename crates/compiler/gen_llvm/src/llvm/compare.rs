@@ -155,7 +155,8 @@ fn build_eq<'a, 'ctx, 'env>(
     rhs_layout: InLayout<'a>,
     when_recursive: WhenRecursive<'a>,
 ) -> BasicValueEnum<'ctx> {
-    let lhs_layout_raw = &layout_interner.runtime_representation(lhs_layout);
+    let lhs_layout = &layout_interner.runtime_representation_in(lhs_layout);
+    let rhs_layout = &layout_interner.runtime_representation_in(rhs_layout);
     if lhs_layout != rhs_layout {
         panic!(
             "Equality of different layouts; did you have a type mismatch?\n{:?} == {:?}",
@@ -163,14 +164,14 @@ fn build_eq<'a, 'ctx, 'env>(
         );
     }
 
-    match lhs_layout_raw {
+    match layout_interner.get(*lhs_layout) {
         Layout::Builtin(builtin) => build_eq_builtin(
             env,
             layout_interner,
             layout_ids,
             lhs_val,
             rhs_val,
-            builtin,
+            &builtin,
             when_recursive,
         ),
 
@@ -191,7 +192,7 @@ fn build_eq<'a, 'ctx, 'env>(
             layout_interner,
             layout_ids,
             when_recursive,
-            union_layout,
+            &union_layout,
             lhs_val,
             rhs_val,
         ),
@@ -201,8 +202,8 @@ fn build_eq<'a, 'ctx, 'env>(
             layout_interner,
             layout_ids,
             when_recursive,
-            lhs_layout,
-            *inner_layout,
+            *lhs_layout,
+            inner_layout,
             lhs_val,
             rhs_val,
         ),
