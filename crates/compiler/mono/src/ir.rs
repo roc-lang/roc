@@ -1538,7 +1538,7 @@ pub struct Param<'a> {
 impl<'a> Param<'a> {
     pub const EMPTY: Self = Param {
         symbol: Symbol::EMPTY_PARAM,
-        ownership: Owned,
+        ownership: Ownership::Owned,
         layout: Layout::UNIT,
     };
 }
