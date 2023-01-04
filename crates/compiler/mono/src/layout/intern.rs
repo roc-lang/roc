@@ -242,7 +242,7 @@ impl<'a> InLayout<'a> {
     /// let inserted = interner.insert("something");
     /// assert_eq!(reserved_interned, inserted);
     /// ```
-    pub(crate) const unsafe fn from_reserved_index(index: usize) -> Self {
+    const unsafe fn from_reserved_index(index: usize) -> Self {
         Self(index, PhantomData)
     }
 }
@@ -403,6 +403,8 @@ impl<'a> GlobalLayoutInterner<'a> {
 
                 vec.push(lambda_set_layout);
 
+                // TODO: Is it helpful to persist the hash and give it back to the thread-local
+                // interner?
                 let _old = map.insert(lambda_set_layout, slot);
                 debug_assert!(_old.is_none());
 
