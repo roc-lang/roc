@@ -212,7 +212,7 @@ pub trait LayoutInterner<'a>: Sized {
 ///
 /// When possible, prefer comparing/hashing on the [InLayout] representation of a value, rather
 /// than the value itself.
-#[derive(Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InLayout<'a>(usize, std::marker::PhantomData<&'a ()>);
 impl<'a> Clone for InLayout<'a> {
     fn clone(&self) -> Self {
@@ -221,6 +221,12 @@ impl<'a> Clone for InLayout<'a> {
 }
 
 impl<'a> Copy for InLayout<'a> {}
+
+impl std::fmt::Debug for InLayout<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("InLayout").field(&self.0).finish()
+    }
+}
 
 impl<'a> InLayout<'a> {
     /// # Safety
@@ -236,7 +242,7 @@ impl<'a> InLayout<'a> {
     /// let inserted = interner.insert("something");
     /// assert_eq!(reserved_interned, inserted);
     /// ```
-    const unsafe fn from_reserved_index(index: usize) -> Self {
+    pub(crate) const unsafe fn from_reserved_index(index: usize) -> Self {
         Self(index, PhantomData)
     }
 }
@@ -385,13 +391,21 @@ impl<'a> GlobalLayoutInterner<'a> {
                 // We don't already have an entry for the lambda set, which means it must be new to
                 // the world. Reserve a slot, insert the lambda set, and that should fill the slot
                 // in.
+                let mut map = self.0.map.lock();
                 let mut vec = self.0.vec.write();
+
                 let slot = unsafe { InLayout::from_reserved_index(vec.len()) };
                 let lambda_set = LambdaSet {
                     full_layout: slot,
                     ..normalized
                 };
-                vec.push(Layout::LambdaSet(lambda_set));
+                let lambda_set_layout = Layout::LambdaSet(lambda_set);
+
+                vec.push(lambda_set_layout);
+
+                let _old = map.insert(lambda_set_layout, slot);
+                debug_assert!(_old.is_none());
+
                 (normalized, lambda_set)
             });
         let full_layout = self.0.vec.read()[full_lambda_set.full_layout.0];
@@ -591,5 +605,86 @@ impl<'a> LayoutInterner<'a> for STLayoutInterner<'a> {
 
     fn target_info(&self) -> TargetInfo {
         self.target_info
+    }
+}
+
+#[cfg(test)]
+mod insert_lambda_set {
+    use roc_module::symbol::Symbol;
+    use roc_target::TargetInfo;
+
+    use crate::layout::Layout;
+
+    use super::{GlobalLayoutInterner, InLayout, LayoutInterner};
+
+    const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
+    const TEST_SET: &&[(Symbol, &[InLayout])] =
+        &(&[(Symbol::ATTR_ATTR, &[Layout::UNIT] as &[_])] as &[_]);
+
+    #[test]
+    fn two_threads_write() {
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let set = TEST_SET;
+        let repr = Layout::UNIT;
+
+        for _ in 0..100 {
+            let mut handles = Vec::with_capacity(10);
+            for _ in 0..10 {
+                let mut interner = global.fork();
+                handles.push(std::thread::spawn(move || {
+                    interner.insert_lambda_set(set, repr)
+                }));
+            }
+            let ins: Vec<_> = handles.into_iter().map(|t| t.join().unwrap()).collect();
+            let interned = ins[0];
+            assert!(ins.iter().all(|in2| interned == *in2));
+        }
+    }
+
+    #[test]
+    fn insert_then_reintern() {
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let mut interner = global.fork();
+
+        let lambda_set = interner.insert_lambda_set(TEST_SET, Layout::UNIT);
+        let lambda_set_layout_in = interner.insert(Layout::LambdaSet(lambda_set));
+        assert_eq!(lambda_set.full_layout, lambda_set_layout_in);
+    }
+
+    #[test]
+    fn write_global_then_single_threaded() {
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let set = TEST_SET;
+        let repr = Layout::UNIT;
+
+        let in1 = {
+            let mut interner = global.fork();
+            interner.insert_lambda_set(set, repr)
+        };
+
+        let in2 = {
+            let mut st_interner = global.unwrap().unwrap();
+            st_interner.insert_lambda_set(set, repr)
+        };
+
+        assert_eq!(in1, in2);
+    }
+
+    #[test]
+    fn write_single_threaded_then_global() {
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let mut st_interner = global.unwrap().unwrap();
+
+        let set = TEST_SET;
+        let repr = Layout::UNIT;
+
+        let in1 = st_interner.insert_lambda_set(set, repr);
+
+        let global = st_interner.into_global();
+        let mut interner = global.fork();
+
+        let in2 = interner.insert_lambda_set(set, repr);
+
+        assert_eq!(in1, in2);
     }
 }
