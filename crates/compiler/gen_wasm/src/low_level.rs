@@ -111,10 +111,10 @@ impl From<&StoredValue> for CodeGenNumType {
 }
 
 fn layout_is_signed_int(layout: InLayout) -> bool {
-    match layout {
-        Layout::I8 | Layout::I16 | Layout::I32 | Layout::I64 | Layout::I128 => true,
-        _ => false,
-    }
+    matches!(
+        layout,
+        Layout::I8 | Layout::I16 | Layout::I32 | Layout::I64 | Layout::I128
+    )
 }
 
 fn symbol_is_signed_int(backend: &WasmBackend<'_, '_>, symbol: Symbol) -> bool {
@@ -2386,7 +2386,7 @@ pub fn call_higher_order_lowlevel<'a>(
     }
 }
 
-fn unwrap_list_elem_layout<'a>(list_layout: Layout<'a>) -> InLayout<'a> {
+fn unwrap_list_elem_layout(list_layout: Layout) -> InLayout {
     match list_layout {
         Layout::Builtin(Builtin::List(x)) => x,
         e => internal_error!("expected List layout, got {:?}", e),

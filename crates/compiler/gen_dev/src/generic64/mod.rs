@@ -454,7 +454,7 @@ impl<
         self.interns
     }
     fn interner(&self) -> &STLayoutInterner<'a> {
-        &self.layout_interner
+        self.layout_interner
     }
     fn module_interns_helpers_mut(
         &mut self,

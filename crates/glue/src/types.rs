@@ -1424,7 +1424,7 @@ fn add_tag_union<'a>(
         }
         Layout::Struct { field_layouts, .. } => {
             let (tag_name, payload_fields) =
-                single_tag_payload_fields(union_tags, subs, &field_layouts, env, types);
+                single_tag_payload_fields(union_tags, subs, field_layouts, env, types);
 
             // A recursive tag union with just one constructor
             // Optimization: No need to store a tag ID (the payload is "unwrapped")

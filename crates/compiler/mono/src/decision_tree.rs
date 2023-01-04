@@ -1402,7 +1402,7 @@ fn path_to_expr_help<'a>(
                             tag_id: *tag_id,
                             structure: symbol,
                             index,
-                            union_layout: union_layout,
+                            union_layout,
                         };
 
                         let inner_layout = union_layout.layout_at(

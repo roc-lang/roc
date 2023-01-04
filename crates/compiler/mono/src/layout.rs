@@ -2338,17 +2338,17 @@ impl<'a> Layout<'a> {
                 }
 
                 match symbol {
-                    Symbol::NUM_DECIMAL => return cacheable(Ok(Layout::DEC)),
+                    Symbol::NUM_DECIMAL => cacheable(Ok(Layout::DEC)),
 
                     Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
-                        return cacheable(Ok(Layout::usize(env.target_info)))
+                        cacheable(Ok(Layout::usize(env.target_info)))
                     }
 
                     Symbol::NUM_NUM | Symbol::NUM_INT | Symbol::NUM_INTEGER
                         if is_unresolved_var(env.subs, actual_var) =>
                     {
                         // default to i64
-                        return cacheable(Ok(Layout::default_integer()));
+                        cacheable(Ok(Layout::default_integer()))
                     }
 
                     Symbol::NUM_FRAC | Symbol::NUM_FLOATINGPOINT
@@ -2356,7 +2356,7 @@ impl<'a> Layout<'a> {
                             || is_any_float_range(env.subs, actual_var) =>
                     {
                         // default to f64
-                        return cacheable(Ok(Layout::default_float()));
+                        cacheable(Ok(Layout::default_float()))
                     }
 
                     _ => Self::from_var(env, actual_var),
