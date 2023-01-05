@@ -520,7 +520,7 @@ pub fn find_type_def_symbols(
 }
 
 fn find_fresh_var_name(introduced_variables: &IntroducedVariables) -> Lowercase {
-    name_type_var(0, &mut introduced_variables.iter_named(), |var, str| {
+    name_type_var("", 0, &mut introduced_variables.iter_named(), |var, str| {
         var.name().as_str() == str
     })
     .0

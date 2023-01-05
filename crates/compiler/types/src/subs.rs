@@ -2185,6 +2185,7 @@ pub struct Rank(u32);
 impl Rank {
     pub const NONE: Rank = Rank(0);
 
+    /// The generalized rank
     pub fn is_none(&self) -> bool {
         *self == Self::NONE
     }
@@ -4095,10 +4096,12 @@ fn get_fresh_error_var_name(state: &mut ErrorTypeState) -> Lowercase {
     //
     // We want to claim both the "#name" and "name" forms, because if "#name" appears multiple
     // times during error type reporting, we'll use "name" for display.
-    let (name, new_index) =
-        name_type_var(state.letters_used, &mut state.taken.iter(), |var, str| {
-            var.as_str() == str
-        });
+    let (name, new_index) = name_type_var(
+        "",
+        state.letters_used,
+        &mut state.taken.iter(),
+        |var, str| var.as_str() == str,
+    );
 
     state.letters_used = new_index;
 
