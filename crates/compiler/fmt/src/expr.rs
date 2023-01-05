@@ -1372,6 +1372,7 @@ fn format_field_multiline<'a, 'buf, T>(
 
             if !spaces.is_empty() {
                 fmt_spaces(buf, spaces.iter(), indent);
+                buf.indent(indent);
             }
 
             buf.push_str(separator_prefix);
@@ -1387,6 +1388,7 @@ fn format_field_multiline<'a, 'buf, T>(
 
             if !spaces.is_empty() {
                 fmt_spaces(buf, spaces.iter(), indent);
+                buf.indent(indent);
             }
 
             buf.push_str(separator_prefix);
