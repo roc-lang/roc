@@ -794,6 +794,7 @@ walkScalarsHelp = \string, state, step, index, length ->
     else
         state
 
+
 ## Walks over the unicode [U32] values for the given [Str] and calls a function
 ## to update state for each.
 ## ```

@@ -1412,6 +1412,9 @@ define_builtins! {
         79 LIST_WALK_FROM_UNTIL: "walkFromUntil"
         80 LIST_ITER_HELP: "iterHelp"
         81 LIST_RELEASE_EXCESS_CAPACITY: "releaseExcessCapacity"
+        82 LIST_APPEND2: "append2"
+        83 LIST_APPEND3: "append3"
+        84 LIST_APPEND4: "append4"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias

@@ -5,6 +5,9 @@ interface List
         set,
         replace,
         append,
+        append2,
+        append3,
+        append4,
         map,
         len,
         withCapacity,
@@ -247,8 +250,18 @@ replace = \list, index, newValue ->
 ##
 ## To drop the element at a given index, instead of replacing it, see [List.dropAt].
 set : List a, Nat, a -> List a
-set = \list, index, value ->
-    (List.replace list index value).list
+set = \list, index, elem ->
+    if index < List.len list then
+        setUnsafe list index elem
+    else
+        list
+
+## unsafe primitive that does not perform a bounds check.
+## TODO: should we decrement the refcount of the elem? If so, then shouldn't replace *not* increment it?
+## Or rather, shouldn't replace decrement the one being returned, and increment the one being inserted?
+## Shouldn't setUnsafe also increment the one being inserted?
+setUnsafe : List a, Nat, a -> List a
+setUnsafe = \list, index, elem -> (replaceUnsafe list index elem).list
 
 ## Add a single element to the end of a list.
 ## ```
@@ -258,10 +271,51 @@ set = \list, index, value ->
 ##     |> List.append 3
 ## ```
 append : List a, a -> List a
-append = \list, element ->
+append = \list, elem ->
+    length = List.len list
+
     list
     |> List.reserve 1
-    |> List.appendUnsafe element
+    |> List.setUnsafe (length - 1) elem
+
+## Add 2 elements to the end of a list.
+##
+## >>> List.append2 [1, 2, 3] 4 5
+append2 : List a, a, a -> List a
+append2 = \list, elem1, elem2 ->
+    length = List.len list
+
+    list
+    |> List.reserve 2
+    |> List.setUnsafe (length - 2) elem1
+    |> List.setUnsafe (length - 1) elem2
+
+## Add 3 elements to the end of a list.
+##
+## >>> List.append3 [1, 2, 3] 4 5 6
+append3 : List a, a, a, a -> List a
+append3 = \list, elem1, elem2, elem3 ->
+    length = List.len list
+
+    list
+    |> List.reserve 3
+    |> List.setUnsafe (length - 3) elem1
+    |> List.setUnsafe (length - 2) elem2
+    |> List.setUnsafe (length - 1) elem3
+
+## Add 4 elements to the end of a list.
+##
+## >>> List.append4 [1, 2, 3] 4 5 6 7
+append4 : List a, a, a, a, a -> List a
+append4 = \list, elem1, elem2, elem3, elem4 ->
+    length = List.len list
+
+    list
+    |> List.reserve 4
+    |> List.setUnsafe (length - 4) elem1
+    |> List.setUnsafe (length - 3) elem2
+    |> List.setUnsafe (length - 2) elem3
+    |> List.setUnsafe (length - 1) elem4
 
 ## Writes the element after the current last element unconditionally.
 ## In other words, it is assumed that
