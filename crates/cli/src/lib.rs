@@ -284,19 +284,19 @@ pub fn build_app<'a>() -> Command<'a> {
             .about("Generate glue code between a platform's Roc API and its host language")
             .arg(
                 Arg::new(ROC_FILE)
-                    .help("The .roc file for the platform module")
+                    .help("The .roc file containing the types to be glued.")
                     .allow_invalid_utf8(true)
                     .required(true)
             )
             .arg(
                 Arg::new(GLUE_DIR)
-                    .help("The directory for the generated glue code.\nNote: The implementation can write to any file in the directory.")
+                    .help("The directory for the generated files. (Anything in it may be overwritten.)")
                     .allow_invalid_utf8(true)
                     .required(true)
             )
             .arg(
                 Arg::new(GLUE_SPEC)
-                    .help("The specification for how to convert roc types into another programming language")
+                    .help("A .roc file which specifies how to generate output files given Roc types.")
                     .allow_invalid_utf8(true)
                     .required(true)
             )
