@@ -1,12 +1,9 @@
 app "rust-glue"
     packages { pf: "main.roc" }
-    imports []
+    imports [pf.Target.{ Architecture }, pf.OutputFile.{ OutputFile }]
     provides [makeGlue] to pf
 
-## TODO have the glue platform expose this from a module
-File : { path : Str, content : List U8 }
-
-makeGlue : List _ -> Result (List File) Str
+makeGlue : List _ -> Result (List OutputFile) Str
 makeGlue = \types ->
     modFile = {
         path: "mod.rs",
@@ -797,13 +794,14 @@ roundUpToAlignment = \width, alignment ->
 
 walkWithIndex = \list, originalState, f ->
     stateWithId =
-        List.walk list { id: 0nat, state: originalState } \{ id, state }, elem ->
+        List.walk list { id: 0, state: originalState } \{ id, state }, elem ->
             nextState = f state id elem
 
             { id: id + 1, state: nextState }
 
     stateWithId.state
 
+archName : Architecture -> Str
 archName = \arch ->
     when arch is
         Aarch32 -> "arm"
