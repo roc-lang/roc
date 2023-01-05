@@ -61,13 +61,13 @@ impl DataFunction {
         use DataFunction::*;
 
         let data_borrowed = !vars[&lowlevel_argument].consume;
-        let function_borrows = passed_function_argument.borrow;
+        let function_ownership = passed_function_argument.ownership;
 
-        match (data_borrowed, function_borrows) {
-            (BORROWED, BORROWED) => DataBorrowedFunctionBorrows,
-            (BORROWED, OWNED) => DataBorrowedFunctionOwns,
-            (OWNED, BORROWED) => DataOwnedFunctionBorrows,
-            (OWNED, OWNED) => DataOwnedFunctionOwns,
+        match (data_borrowed, function_ownership) {
+            (BORROWED, Ownership::Borrowed) => DataBorrowedFunctionBorrows,
+            (BORROWED, Ownership::Owned) => DataBorrowedFunctionOwns,
+            (OWNED, Ownership::Borrowed) => DataOwnedFunctionBorrows,
+            (OWNED, Ownership::Owned) => DataOwnedFunctionOwns,
         }
     }
 }
@@ -998,7 +998,10 @@ impl<'a, 'i> Context<'a, 'i> {
         for p in ps.iter() {
             let info = VarInfo {
                 reference: p.layout.contains_refcounted(self.layout_interner),
-                consume: !p.borrow,
+                consume: match p.ownership {
+                    Ownership::Owned => true,
+                    Ownership::Borrowed => false,
+                },
                 persistent: false,
                 reset: false,
             };
@@ -1020,7 +1023,7 @@ impl<'a, 'i> Context<'a, 'i> {
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
         for p in ps.iter() {
-            if !p.borrow
+            if p.ownership == Ownership::Owned
                 && p.layout.contains_refcounted(self.layout_interner)
                 && !b_live_vars.contains(&p.symbol)
             {
@@ -1340,7 +1343,7 @@ fn create_holl_call<'a>(
     arguments: &'a [Symbol],
 ) -> Expr<'a> {
     let call = crate::ir::Call {
-        call_type: if let Some(OWNED) = param.map(|p| p.borrow) {
+        call_type: if let Some(Ownership::Owned) = param.map(|p| p.ownership) {
             let mut passed_function = holl.passed_function;
             passed_function.owns_captured_environment = true;
 

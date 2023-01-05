@@ -1523,6 +1523,7 @@ impl<'a, 'i> Env<'a, 'i> {
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
 pub struct JoinPointId(pub Symbol);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ownership {
     Owned,
     Borrowed,
