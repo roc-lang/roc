@@ -26,8 +26,8 @@
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct File {
-    pub content: roc_std::RocStr,
-    pub name: roc_std::RocStr,
+    pub content: roc_std::RocList<u8>,
+    pub path: roc_std::RocStr,
 }
 
 #[cfg(any(
@@ -48,18 +48,13 @@ pub struct Types {
     pub target: Target,
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[repr(C)]
 #[derive(Clone, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 pub struct Tuple1 {
     f0: roc_std::RocStr,
     f1: u32,
 }
-
 
 #[cfg(any(
     target_arch = "arm",
@@ -110,11 +105,7 @@ impl core::fmt::Debug for discriminant_RocType {
     }
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[repr(C)]
 pub union RocType {
     Function: core::mem::ManuallyDrop<R1>,
@@ -131,11 +122,7 @@ pub union RocType {
     _sizer: [u8; 52],
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R15 {
@@ -157,11 +144,7 @@ pub struct R7 {
     pub payload: U1,
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R3 {
@@ -169,18 +152,13 @@ pub struct R3 {
     pub name: roc_std::RocStr,
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[repr(C)]
 #[derive(Clone, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 pub struct Tuple2 {
     f0: u32,
     f1: roc_std::RocList<u32>,
 }
-
 
 #[cfg(any(
     target_arch = "arm",
@@ -287,7 +265,9 @@ impl core::fmt::Debug for discriminant_RocTagUnion {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Enumeration => f.write_str("discriminant_RocTagUnion::Enumeration"),
-            Self::NonNullableUnwrapped => f.write_str("discriminant_RocTagUnion::NonNullableUnwrapped"),
+            Self::NonNullableUnwrapped => {
+                f.write_str("discriminant_RocTagUnion::NonNullableUnwrapped")
+            }
             Self::NonRecursive => f.write_str("discriminant_RocTagUnion::NonRecursive"),
             Self::NullableUnwrapped => f.write_str("discriminant_RocTagUnion::NullableUnwrapped"),
             Self::NullableWrapped => f.write_str("discriminant_RocTagUnion::NullableWrapped"),
@@ -297,11 +277,7 @@ impl core::fmt::Debug for discriminant_RocTagUnion {
     }
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[repr(C)]
 pub union RocTagUnion {
     Enumeration: core::mem::ManuallyDrop<R4>,
@@ -314,11 +290,7 @@ pub union RocTagUnion {
     _sizer: [u8; 48],
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R13 {
@@ -327,11 +299,7 @@ pub struct R13 {
     pub tagName: roc_std::RocStr,
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R9 {
@@ -342,11 +310,7 @@ pub struct R9 {
     pub indexOfNullTag: u16,
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R8 {
@@ -380,11 +344,7 @@ impl core::fmt::Debug for U2 {
     }
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R6 {
@@ -417,22 +377,14 @@ impl core::fmt::Debug for discriminant_U1 {
     }
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[repr(C)]
 pub union U1 {
     Some: u32,
     _sizer: [u8; 8],
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R5 {
@@ -441,11 +393,7 @@ pub struct R5 {
     pub tagName: roc_std::RocStr,
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R4 {
@@ -468,11 +416,7 @@ pub struct R2 {
     pub name: roc_std::RocStr,
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 struct RocType_RocDict {
@@ -525,11 +469,7 @@ impl core::fmt::Debug for RocNum {
     }
 }
 
-#[cfg(any(
-    target_arch = "arm",
-    target_arch = "wasm32",
-    target_arch = "x86"
-))]
+#[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R1 {
@@ -538,10 +478,7 @@ pub struct R1 {
     pub ret: u32,
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[repr(C)]
 #[derive(Clone, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 pub struct Tuple1 {
@@ -549,11 +486,7 @@ pub struct Tuple1 {
     f1: u64,
 }
 
-
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[repr(C)]
 pub union RocType {
     Function: core::mem::ManuallyDrop<R1>,
@@ -570,10 +503,7 @@ pub union RocType {
     _sizer: [u8; 104],
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R15 {
@@ -581,10 +511,7 @@ pub struct R15 {
     pub id: u64,
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R3 {
@@ -592,10 +519,7 @@ pub struct R3 {
     pub name: roc_std::RocStr,
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[repr(C)]
 #[derive(Clone, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 pub struct Tuple2 {
@@ -603,11 +527,7 @@ pub struct Tuple2 {
     f1: roc_std::RocList<u64>,
 }
 
-
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[repr(C)]
 pub union RocTagUnion {
     Enumeration: core::mem::ManuallyDrop<R4>,
@@ -620,10 +540,7 @@ pub union RocTagUnion {
     _sizer: [u8; 96],
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R13 {
@@ -632,10 +549,7 @@ pub struct R13 {
     pub tagName: roc_std::RocStr,
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R9 {
@@ -646,10 +560,7 @@ pub struct R9 {
     pub indexOfNullTag: u16,
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R8 {
@@ -660,10 +571,7 @@ pub struct R8 {
     pub whichTagIsNull: U2,
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R6 {
@@ -673,20 +581,14 @@ pub struct R6 {
     pub discriminantSize: u32,
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[repr(C)]
 pub union U1 {
     Some: u64,
     _sizer: [u8; 16],
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R5 {
@@ -695,10 +597,7 @@ pub struct R5 {
     pub tagName: roc_std::RocStr,
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R4 {
@@ -707,10 +606,7 @@ pub struct R4 {
     pub size: u32,
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 struct RocType_RocDict {
@@ -718,10 +614,7 @@ struct RocType_RocDict {
     pub f1: u64,
 }
 
-#[cfg(any(
-    target_arch = "aarch64",
-    target_arch = "x86_64"
-))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R1 {
@@ -731,67 +624,40 @@ pub struct R1 {
 }
 
 impl Tuple1 {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// A tag named T, with the given payload.
     pub fn T(f0: roc_std::RocStr, f1: u32) -> Self {
-        Self {
-            f0,
-            f1,
-        }
+        Self { f0, f1 }
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Since `T` only has one tag (namely, `T`),
     /// convert it to `T`'s payload.
     pub fn into_T(self) -> (roc_std::RocStr, u32) {
         (self.f0, self.f1)
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Since `T` only has one tag (namely, `T`),
     /// convert it to `T`'s payload.
     pub fn as_T(&self) -> (&roc_std::RocStr, &u32) {
         (&self.f0, &self.f1)
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// A tag named T, with the given payload.
     pub fn T(f0: roc_std::RocStr, f1: u64) -> Self {
-        Self {
-            f0,
-            f1,
-        }
+        Self { f0, f1 }
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Since `T` only has one tag (namely, `T`),
     /// convert it to `T`'s payload.
     pub fn into_T(self) -> (roc_std::RocStr, u64) {
         (self.f0, self.f1)
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Since `T` only has one tag (namely, `T`),
     /// convert it to `T`'s payload.
     pub fn as_T(&self) -> (&roc_std::RocStr, &u64) {
@@ -808,16 +674,15 @@ impl core::fmt::Debug for Tuple1 {
         target_arch = "x86_64"
     ))]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            f.debug_tuple("Tuple1::T")                .field(&self.f0)                .field(&self.f1)                .finish()    }
-
+        f.debug_tuple("Tuple1::T")
+            .field(&self.f0)
+            .field(&self.f1)
+            .finish()
+    }
 }
 
 impl RocType {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_RocType {
         unsafe {
@@ -827,11 +692,7 @@ impl RocType {
         }
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_RocType) {
         let discriminant_ptr: *mut discriminant_RocType = (self as *mut RocType).cast();
@@ -841,11 +702,7 @@ impl RocType {
         }
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// A tag named Bool, which has no payload.
     pub const Bool: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<RocType>()];
@@ -881,11 +738,7 @@ impl RocType {
         ()
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// A tag named EmptyTagUnion, which has no payload.
     pub const EmptyTagUnion: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<RocType>()];
@@ -930,13 +783,13 @@ impl RocType {
     ))]
     /// Construct a tag named `Function`, with the appropriate payload
     pub fn Function(arg0: R1) -> Self {
-            let mut answer = Self {
-                Function: core::mem::ManuallyDrop::new(arg0)
-            };
+        let mut answer = Self {
+            Function: core::mem::ManuallyDrop::new(arg0),
+        };
 
-            answer.set_discriminant(discriminant_RocType::Function);
+        answer.set_discriminant(discriminant_RocType::Function);
 
-            answer
+        answer
     }
 
     #[cfg(any(
@@ -947,10 +800,10 @@ impl RocType {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `Function` and convert it to `Function`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Function`.
-            pub unsafe fn into_Function(mut self) -> R1 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::Function);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Function`.
+    pub unsafe fn into_Function(mut self) -> R1 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::Function);
         let payload = {
             let mut uninitialized = core::mem::MaybeUninit::uninit();
             let swapped = unsafe {
@@ -965,7 +818,6 @@ impl RocType {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
         payload
     }
 
@@ -977,13 +829,12 @@ impl RocType {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `Function` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Function`.
-            pub unsafe fn as_Function(&self) -> &R1 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::Function);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Function`.
+    pub unsafe fn as_Function(&self) -> &R1 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::Function);
         let payload = &self.Function;
 
-        
         payload
     }
 
@@ -996,13 +847,11 @@ impl RocType {
     ))]
     /// Construct a tag named `Num`, with the appropriate payload
     pub fn Num(arg: RocNum) -> Self {
-            let mut answer = Self {
-                Num: arg
-            };
+        let mut answer = Self { Num: arg };
 
-            answer.set_discriminant(discriminant_RocType::Num);
+        answer.set_discriminant(discriminant_RocType::Num);
 
-            answer
+        answer
     }
 
     #[cfg(any(
@@ -1013,10 +862,10 @@ impl RocType {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `Num` and convert it to `Num`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Num`.
-            pub unsafe fn into_Num(self) -> RocNum {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::Num);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Num`.
+    pub unsafe fn into_Num(self) -> RocNum {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::Num);
         let payload = self.Num;
 
         payload
@@ -1030,314 +879,214 @@ impl RocType {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `Num` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Num`.
-            pub unsafe fn as_Num(&self) -> &RocNum {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::Num);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Num`.
+    pub unsafe fn as_Num(&self) -> &RocNum {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::Num);
         let payload = &self.Num;
 
         &payload
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Construct a tag named `RecursivePointer`, with the appropriate payload
     pub fn RecursivePointer(arg: u32) -> Self {
-            let mut answer = Self {
-                RecursivePointer: arg
-            };
+        let mut answer = Self {
+            RecursivePointer: arg,
+        };
 
-            answer.set_discriminant(discriminant_RocType::RecursivePointer);
+        answer.set_discriminant(discriminant_RocType::RecursivePointer);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RecursivePointer` and convert it to `RecursivePointer`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RecursivePointer`.
-            pub unsafe fn into_RecursivePointer(self) -> u32 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RecursivePointer);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RecursivePointer`.
+    pub unsafe fn into_RecursivePointer(self) -> u32 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RecursivePointer);
         let payload = self.RecursivePointer;
 
         payload
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RecursivePointer` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RecursivePointer`.
-            pub unsafe fn as_RecursivePointer(&self) -> &u32 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RecursivePointer);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RecursivePointer`.
+    pub unsafe fn as_RecursivePointer(&self) -> &u32 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RecursivePointer);
         let payload = &self.RecursivePointer;
 
         &payload
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Construct a tag named `RocBox`, with the appropriate payload
     pub fn RocBox(arg: u32) -> Self {
-            let mut answer = Self {
-                RocBox: arg
-            };
+        let mut answer = Self { RocBox: arg };
 
-            answer.set_discriminant(discriminant_RocType::RocBox);
+        answer.set_discriminant(discriminant_RocType::RocBox);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocBox` and convert it to `RocBox`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocBox`.
-            pub unsafe fn into_RocBox(self) -> u32 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocBox);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocBox`.
+    pub unsafe fn into_RocBox(self) -> u32 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocBox);
         let payload = self.RocBox;
 
         payload
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocBox` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocBox`.
-            pub unsafe fn as_RocBox(&self) -> &u32 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocBox);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocBox`.
+    pub unsafe fn as_RocBox(&self) -> &u32 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocBox);
         let payload = &self.RocBox;
 
         &payload
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Construct a tag named `RocDict`, with the appropriate payload
     pub fn RocDict(arg0: u32, arg1: u32) -> Self {
-            let mut answer = Self {
-                RocDict: RocType_RocDict {
-                    f0: arg0,
-                    f1: arg1,
-                }
-            };
+        let mut answer = Self {
+            RocDict: RocType_RocDict { f0: arg0, f1: arg1 },
+        };
 
-            answer.set_discriminant(discriminant_RocType::RocDict);
+        answer.set_discriminant(discriminant_RocType::RocDict);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocDict` and convert it to `RocDict`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocDict`.
-            pub unsafe fn into_RocDict(self) -> (u32, u32) {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocDict);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocDict`.
+    pub unsafe fn into_RocDict(self) -> (u32, u32) {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocDict);
         let payload = self.RocDict;
 
-        (
-            payload.f0, 
-            payload.f1
-        )
+        (payload.f0, payload.f1)
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocDict` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocDict`.
-            pub unsafe fn as_RocDict(&self) -> (&u32, &u32) {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocDict);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocDict`.
+    pub unsafe fn as_RocDict(&self) -> (&u32, &u32) {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocDict);
         let payload = &self.RocDict;
 
-        (
-            &payload.f0, 
-            &payload.f1
-        )
+        (&payload.f0, &payload.f1)
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Construct a tag named `RocList`, with the appropriate payload
     pub fn RocList(arg: u32) -> Self {
-            let mut answer = Self {
-                RocList: arg
-            };
+        let mut answer = Self { RocList: arg };
 
-            answer.set_discriminant(discriminant_RocType::RocList);
+        answer.set_discriminant(discriminant_RocType::RocList);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocList` and convert it to `RocList`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocList`.
-            pub unsafe fn into_RocList(self) -> u32 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocList);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocList`.
+    pub unsafe fn into_RocList(self) -> u32 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocList);
         let payload = self.RocList;
 
         payload
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocList` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocList`.
-            pub unsafe fn as_RocList(&self) -> &u32 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocList);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocList`.
+    pub unsafe fn as_RocList(&self) -> &u32 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocList);
         let payload = &self.RocList;
 
         &payload
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Construct a tag named `RocResult`, with the appropriate payload
     pub fn RocResult(arg0: u32, arg1: u32) -> Self {
-            let mut answer = Self {
-                RocResult: RocType_RocDict {
-                    f0: arg0,
-                    f1: arg1,
-                }
-            };
+        let mut answer = Self {
+            RocResult: RocType_RocDict { f0: arg0, f1: arg1 },
+        };
 
-            answer.set_discriminant(discriminant_RocType::RocResult);
+        answer.set_discriminant(discriminant_RocType::RocResult);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocResult` and convert it to `RocResult`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocResult`.
-            pub unsafe fn into_RocResult(self) -> (u32, u32) {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocResult);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocResult`.
+    pub unsafe fn into_RocResult(self) -> (u32, u32) {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocResult);
         let payload = self.RocResult;
 
-        (
-            payload.f0, 
-            payload.f1
-        )
+        (payload.f0, payload.f1)
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocResult` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocResult`.
-            pub unsafe fn as_RocResult(&self) -> (&u32, &u32) {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocResult);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocResult`.
+    pub unsafe fn as_RocResult(&self) -> (&u32, &u32) {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocResult);
         let payload = &self.RocResult;
 
-        (
-            &payload.f0, 
-            &payload.f1
-        )
+        (&payload.f0, &payload.f1)
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Construct a tag named `RocSet`, with the appropriate payload
     pub fn RocSet(arg: u32) -> Self {
-            let mut answer = Self {
-                RocSet: arg
-            };
+        let mut answer = Self { RocSet: arg };
 
-            answer.set_discriminant(discriminant_RocType::RocSet);
+        answer.set_discriminant(discriminant_RocType::RocSet);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocSet` and convert it to `RocSet`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocSet`.
-            pub unsafe fn into_RocSet(self) -> u32 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocSet);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocSet`.
+    pub unsafe fn into_RocSet(self) -> u32 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocSet);
         let payload = self.RocSet;
 
         payload
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocSet` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocSet`.
-            pub unsafe fn as_RocSet(&self) -> &u32 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocSet);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocSet`.
+    pub unsafe fn as_RocSet(&self) -> &u32 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocSet);
         let payload = &self.RocSet;
 
         &payload
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// A tag named RocStr, which has no payload.
     pub const RocStr: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<RocType>()];
@@ -1382,13 +1131,13 @@ impl RocType {
     ))]
     /// Construct a tag named `Struct`, with the appropriate payload
     pub fn Struct(arg0: R2) -> Self {
-            let mut answer = Self {
-                Struct: core::mem::ManuallyDrop::new(arg0)
-            };
+        let mut answer = Self {
+            Struct: core::mem::ManuallyDrop::new(arg0),
+        };
 
-            answer.set_discriminant(discriminant_RocType::Struct);
+        answer.set_discriminant(discriminant_RocType::Struct);
 
-            answer
+        answer
     }
 
     #[cfg(any(
@@ -1399,10 +1148,10 @@ impl RocType {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `Struct` and convert it to `Struct`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Struct`.
-            pub unsafe fn into_Struct(mut self) -> R2 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::Struct);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Struct`.
+    pub unsafe fn into_Struct(mut self) -> R2 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::Struct);
         let payload = {
             let mut uninitialized = core::mem::MaybeUninit::uninit();
             let swapped = unsafe {
@@ -1417,7 +1166,6 @@ impl RocType {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
         payload
     }
 
@@ -1429,13 +1177,12 @@ impl RocType {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `Struct` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Struct`.
-            pub unsafe fn as_Struct(&self) -> &R2 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::Struct);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Struct`.
+    pub unsafe fn as_Struct(&self) -> &R2 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::Struct);
         let payload = &self.Struct;
 
-        
         payload
     }
 
@@ -1448,13 +1195,13 @@ impl RocType {
     ))]
     /// Construct a tag named `TagUnion`, with the appropriate payload
     pub fn TagUnion(arg: RocTagUnion) -> Self {
-            let mut answer = Self {
-                TagUnion: core::mem::ManuallyDrop::new(arg)
-            };
+        let mut answer = Self {
+            TagUnion: core::mem::ManuallyDrop::new(arg),
+        };
 
-            answer.set_discriminant(discriminant_RocType::TagUnion);
+        answer.set_discriminant(discriminant_RocType::TagUnion);
 
-            answer
+        answer
     }
 
     #[cfg(any(
@@ -1465,10 +1212,10 @@ impl RocType {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `TagUnion` and convert it to `TagUnion`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `TagUnion`.
-            pub unsafe fn into_TagUnion(mut self) -> RocTagUnion {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::TagUnion);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `TagUnion`.
+    pub unsafe fn into_TagUnion(mut self) -> RocTagUnion {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::TagUnion);
         let payload = {
             let mut uninitialized = core::mem::MaybeUninit::uninit();
             let swapped = unsafe {
@@ -1494,10 +1241,10 @@ impl RocType {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `TagUnion` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `TagUnion`.
-            pub unsafe fn as_TagUnion(&self) -> &RocTagUnion {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::TagUnion);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `TagUnion`.
+    pub unsafe fn as_TagUnion(&self) -> &RocTagUnion {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::TagUnion);
         let payload = &self.TagUnion;
 
         &payload
@@ -1512,13 +1259,13 @@ impl RocType {
     ))]
     /// Construct a tag named `TagUnionPayload`, with the appropriate payload
     pub fn TagUnionPayload(arg0: R14) -> Self {
-            let mut answer = Self {
-                TagUnionPayload: core::mem::ManuallyDrop::new(arg0)
-            };
+        let mut answer = Self {
+            TagUnionPayload: core::mem::ManuallyDrop::new(arg0),
+        };
 
-            answer.set_discriminant(discriminant_RocType::TagUnionPayload);
+        answer.set_discriminant(discriminant_RocType::TagUnionPayload);
 
-            answer
+        answer
     }
 
     #[cfg(any(
@@ -1529,10 +1276,10 @@ impl RocType {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `TagUnionPayload` and convert it to `TagUnionPayload`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `TagUnionPayload`.
-            pub unsafe fn into_TagUnionPayload(mut self) -> R14 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::TagUnionPayload);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `TagUnionPayload`.
+    pub unsafe fn into_TagUnionPayload(mut self) -> R14 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::TagUnionPayload);
         let payload = {
             let mut uninitialized = core::mem::MaybeUninit::uninit();
             let swapped = unsafe {
@@ -1547,7 +1294,6 @@ impl RocType {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
         payload
     }
 
@@ -1559,21 +1305,16 @@ impl RocType {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `TagUnionPayload` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `TagUnionPayload`.
-            pub unsafe fn as_TagUnionPayload(&self) -> &R14 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::TagUnionPayload);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `TagUnionPayload`.
+    pub unsafe fn as_TagUnionPayload(&self) -> &R14 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::TagUnionPayload);
         let payload = &self.TagUnionPayload;
 
-        
         payload
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// A tag named Unit, which has no payload.
     pub const Unit: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<RocType>()];
@@ -1609,10 +1350,7 @@ impl RocType {
         ()
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_RocType {
         unsafe {
@@ -1622,10 +1360,7 @@ impl RocType {
         }
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_RocType) {
         let discriminant_ptr: *mut discriminant_RocType = (self as *mut RocType).cast();
@@ -1635,10 +1370,7 @@ impl RocType {
         }
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// A tag named Bool, which has no payload.
     pub const Bool: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<RocType>()];
@@ -1648,10 +1380,7 @@ impl RocType {
         core::mem::transmute::<[u8; core::mem::size_of::<RocType>()], RocType>(bytes)
     };
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// A tag named EmptyTagUnion, which has no payload.
     pub const EmptyTagUnion: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<RocType>()];
@@ -1661,286 +1390,205 @@ impl RocType {
         core::mem::transmute::<[u8; core::mem::size_of::<RocType>()], RocType>(bytes)
     };
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Construct a tag named `RecursivePointer`, with the appropriate payload
     pub fn RecursivePointer(arg: u64) -> Self {
-            let mut answer = Self {
-                RecursivePointer: arg
-            };
+        let mut answer = Self {
+            RecursivePointer: arg,
+        };
 
-            answer.set_discriminant(discriminant_RocType::RecursivePointer);
+        answer.set_discriminant(discriminant_RocType::RecursivePointer);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RecursivePointer` and convert it to `RecursivePointer`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RecursivePointer`.
-            pub unsafe fn into_RecursivePointer(self) -> u64 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RecursivePointer);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RecursivePointer`.
+    pub unsafe fn into_RecursivePointer(self) -> u64 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RecursivePointer);
         let payload = self.RecursivePointer;
 
         payload
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RecursivePointer` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RecursivePointer`.
-            pub unsafe fn as_RecursivePointer(&self) -> &u64 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RecursivePointer);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RecursivePointer`.
+    pub unsafe fn as_RecursivePointer(&self) -> &u64 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RecursivePointer);
         let payload = &self.RecursivePointer;
 
         &payload
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Construct a tag named `RocBox`, with the appropriate payload
     pub fn RocBox(arg: u64) -> Self {
-            let mut answer = Self {
-                RocBox: arg
-            };
+        let mut answer = Self { RocBox: arg };
 
-            answer.set_discriminant(discriminant_RocType::RocBox);
+        answer.set_discriminant(discriminant_RocType::RocBox);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocBox` and convert it to `RocBox`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocBox`.
-            pub unsafe fn into_RocBox(self) -> u64 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocBox);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocBox`.
+    pub unsafe fn into_RocBox(self) -> u64 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocBox);
         let payload = self.RocBox;
 
         payload
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocBox` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocBox`.
-            pub unsafe fn as_RocBox(&self) -> &u64 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocBox);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocBox`.
+    pub unsafe fn as_RocBox(&self) -> &u64 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocBox);
         let payload = &self.RocBox;
 
         &payload
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Construct a tag named `RocDict`, with the appropriate payload
     pub fn RocDict(arg0: u64, arg1: u64) -> Self {
-            let mut answer = Self {
-                RocDict: RocType_RocDict {
-                    f0: arg0,
-                    f1: arg1,
-                }
-            };
+        let mut answer = Self {
+            RocDict: RocType_RocDict { f0: arg0, f1: arg1 },
+        };
 
-            answer.set_discriminant(discriminant_RocType::RocDict);
+        answer.set_discriminant(discriminant_RocType::RocDict);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocDict` and convert it to `RocDict`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocDict`.
-            pub unsafe fn into_RocDict(self) -> (u64, u64) {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocDict);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocDict`.
+    pub unsafe fn into_RocDict(self) -> (u64, u64) {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocDict);
         let payload = self.RocDict;
 
-        (
-            payload.f0, 
-            payload.f1
-        )
+        (payload.f0, payload.f1)
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocDict` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocDict`.
-            pub unsafe fn as_RocDict(&self) -> (&u64, &u64) {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocDict);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocDict`.
+    pub unsafe fn as_RocDict(&self) -> (&u64, &u64) {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocDict);
         let payload = &self.RocDict;
 
-        (
-            &payload.f0, 
-            &payload.f1
-        )
+        (&payload.f0, &payload.f1)
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Construct a tag named `RocList`, with the appropriate payload
     pub fn RocList(arg: u64) -> Self {
-            let mut answer = Self {
-                RocList: arg
-            };
+        let mut answer = Self { RocList: arg };
 
-            answer.set_discriminant(discriminant_RocType::RocList);
+        answer.set_discriminant(discriminant_RocType::RocList);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocList` and convert it to `RocList`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocList`.
-            pub unsafe fn into_RocList(self) -> u64 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocList);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocList`.
+    pub unsafe fn into_RocList(self) -> u64 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocList);
         let payload = self.RocList;
 
         payload
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocList` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocList`.
-            pub unsafe fn as_RocList(&self) -> &u64 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocList);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocList`.
+    pub unsafe fn as_RocList(&self) -> &u64 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocList);
         let payload = &self.RocList;
 
         &payload
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Construct a tag named `RocResult`, with the appropriate payload
     pub fn RocResult(arg0: u64, arg1: u64) -> Self {
-            let mut answer = Self {
-                RocResult: RocType_RocDict {
-                    f0: arg0,
-                    f1: arg1,
-                }
-            };
+        let mut answer = Self {
+            RocResult: RocType_RocDict { f0: arg0, f1: arg1 },
+        };
 
-            answer.set_discriminant(discriminant_RocType::RocResult);
+        answer.set_discriminant(discriminant_RocType::RocResult);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocResult` and convert it to `RocResult`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocResult`.
-            pub unsafe fn into_RocResult(self) -> (u64, u64) {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocResult);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocResult`.
+    pub unsafe fn into_RocResult(self) -> (u64, u64) {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocResult);
         let payload = self.RocResult;
 
-        (
-            payload.f0, 
-            payload.f1
-        )
+        (payload.f0, payload.f1)
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocResult` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocResult`.
-            pub unsafe fn as_RocResult(&self) -> (&u64, &u64) {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocResult);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocResult`.
+    pub unsafe fn as_RocResult(&self) -> (&u64, &u64) {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocResult);
         let payload = &self.RocResult;
 
-        (
-            &payload.f0, 
-            &payload.f1
-        )
+        (&payload.f0, &payload.f1)
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Construct a tag named `RocSet`, with the appropriate payload
     pub fn RocSet(arg: u64) -> Self {
-            let mut answer = Self {
-                RocSet: arg
-            };
+        let mut answer = Self { RocSet: arg };
 
-            answer.set_discriminant(discriminant_RocType::RocSet);
+        answer.set_discriminant(discriminant_RocType::RocSet);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocSet` and convert it to `RocSet`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocSet`.
-            pub unsafe fn into_RocSet(self) -> u64 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocSet);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocSet`.
+    pub unsafe fn into_RocSet(self) -> u64 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocSet);
         let payload = self.RocSet;
 
         payload
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `RocType` has a `.discriminant()` of `RocSet` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `RocSet`.
-            pub unsafe fn as_RocSet(&self) -> &u64 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocType::RocSet);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `RocSet`.
+    pub unsafe fn as_RocSet(&self) -> &u64 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocType::RocSet);
         let payload = &self.RocSet;
 
         &payload
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// A tag named RocStr, which has no payload.
     pub const RocStr: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<RocType>()];
@@ -1950,10 +1598,7 @@ impl RocType {
         core::mem::transmute::<[u8; core::mem::size_of::<RocType>()], RocType>(bytes)
     };
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// A tag named Unit, which has no payload.
     pub const Unit: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<RocType>()];
@@ -1974,24 +1619,31 @@ impl Drop for RocType {
     ))]
     fn drop(&mut self) {
         // Drop the payloads
-                    match self.discriminant() {
-                discriminant_RocType::Bool => {}
-                discriminant_RocType::EmptyTagUnion => {}
-                discriminant_RocType::Function => unsafe { core::mem::ManuallyDrop::drop(&mut self.Function) },
-                discriminant_RocType::Num => {}
-                discriminant_RocType::RecursivePointer => {}
-                discriminant_RocType::RocBox => {}
-                discriminant_RocType::RocDict => {}
-                discriminant_RocType::RocList => {}
-                discriminant_RocType::RocResult => {}
-                discriminant_RocType::RocSet => {}
-                discriminant_RocType::RocStr => {}
-                discriminant_RocType::Struct => unsafe { core::mem::ManuallyDrop::drop(&mut self.Struct) },
-                discriminant_RocType::TagUnion => unsafe { core::mem::ManuallyDrop::drop(&mut self.TagUnion) },
-                discriminant_RocType::TagUnionPayload => unsafe { core::mem::ManuallyDrop::drop(&mut self.TagUnionPayload) },
-                discriminant_RocType::Unit => {}
-            }
-
+        match self.discriminant() {
+            discriminant_RocType::Bool => {}
+            discriminant_RocType::EmptyTagUnion => {}
+            discriminant_RocType::Function => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.Function)
+            },
+            discriminant_RocType::Num => {}
+            discriminant_RocType::RecursivePointer => {}
+            discriminant_RocType::RocBox => {}
+            discriminant_RocType::RocDict => {}
+            discriminant_RocType::RocList => {}
+            discriminant_RocType::RocResult => {}
+            discriminant_RocType::RocSet => {}
+            discriminant_RocType::RocStr => {}
+            discriminant_RocType::Struct => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.Struct)
+            },
+            discriminant_RocType::TagUnion => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.TagUnion)
+            },
+            discriminant_RocType::TagUnionPayload => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.TagUnionPayload)
+            },
+            discriminant_RocType::Unit => {}
+        }
     }
 }
 
@@ -2006,17 +1658,19 @@ impl PartialEq for RocType {
         target_arch = "x86_64"
     ))]
     fn eq(&self, other: &Self) -> bool {
-            if self.discriminant() != other.discriminant() {
-                return false;
-            }
+        if self.discriminant() != other.discriminant() {
+            return false;
+        }
 
-            unsafe {
+        unsafe {
             match self.discriminant() {
                 discriminant_RocType::Bool => true,
                 discriminant_RocType::EmptyTagUnion => true,
                 discriminant_RocType::Function => self.Function == other.Function,
                 discriminant_RocType::Num => self.Num == other.Num,
-                discriminant_RocType::RecursivePointer => self.RecursivePointer == other.RecursivePointer,
+                discriminant_RocType::RecursivePointer => {
+                    self.RecursivePointer == other.RecursivePointer
+                }
                 discriminant_RocType::RocBox => self.RocBox == other.RocBox,
                 discriminant_RocType::RocDict => self.RocDict == other.RocDict,
                 discriminant_RocType::RocList => self.RocList == other.RocList,
@@ -2025,7 +1679,9 @@ impl PartialEq for RocType {
                 discriminant_RocType::RocStr => true,
                 discriminant_RocType::Struct => self.Struct == other.Struct,
                 discriminant_RocType::TagUnion => self.TagUnion == other.TagUnion,
-                discriminant_RocType::TagUnionPayload => self.TagUnionPayload == other.TagUnionPayload,
+                discriminant_RocType::TagUnionPayload => {
+                    self.TagUnionPayload == other.TagUnionPayload
+                }
                 discriminant_RocType::Unit => true,
             }
         }
@@ -2052,7 +1708,9 @@ impl PartialOrd for RocType {
                 discriminant_RocType::EmptyTagUnion => Some(core::cmp::Ordering::Equal),
                 discriminant_RocType::Function => self.Function.partial_cmp(&other.Function),
                 discriminant_RocType::Num => self.Num.partial_cmp(&other.Num),
-                discriminant_RocType::RecursivePointer => self.RecursivePointer.partial_cmp(&other.RecursivePointer),
+                discriminant_RocType::RecursivePointer => {
+                    self.RecursivePointer.partial_cmp(&other.RecursivePointer)
+                }
                 discriminant_RocType::RocBox => self.RocBox.partial_cmp(&other.RocBox),
                 discriminant_RocType::RocDict => self.RocDict.partial_cmp(&other.RocDict),
                 discriminant_RocType::RocList => self.RocList.partial_cmp(&other.RocList),
@@ -2061,7 +1719,9 @@ impl PartialOrd for RocType {
                 discriminant_RocType::RocStr => Some(core::cmp::Ordering::Equal),
                 discriminant_RocType::Struct => self.Struct.partial_cmp(&other.Struct),
                 discriminant_RocType::TagUnion => self.TagUnion.partial_cmp(&other.TagUnion),
-                discriminant_RocType::TagUnionPayload => self.TagUnionPayload.partial_cmp(&other.TagUnionPayload),
+                discriminant_RocType::TagUnionPayload => {
+                    self.TagUnionPayload.partial_cmp(&other.TagUnionPayload)
+                }
                 discriminant_RocType::Unit => Some(core::cmp::Ordering::Equal),
             }
         }
@@ -2077,18 +1737,20 @@ impl Ord for RocType {
         target_arch = "x86_64"
     ))]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-            match self.discriminant().cmp(&other.discriminant()) {
-                core::cmp::Ordering::Equal => {}
-                not_eq => return not_eq,
-            }
+        match self.discriminant().cmp(&other.discriminant()) {
+            core::cmp::Ordering::Equal => {}
+            not_eq => return not_eq,
+        }
 
-            unsafe {
+        unsafe {
             match self.discriminant() {
                 discriminant_RocType::Bool => core::cmp::Ordering::Equal,
                 discriminant_RocType::EmptyTagUnion => core::cmp::Ordering::Equal,
                 discriminant_RocType::Function => self.Function.cmp(&other.Function),
                 discriminant_RocType::Num => self.Num.cmp(&other.Num),
-                discriminant_RocType::RecursivePointer => self.RecursivePointer.cmp(&other.RecursivePointer),
+                discriminant_RocType::RecursivePointer => {
+                    self.RecursivePointer.cmp(&other.RecursivePointer)
+                }
                 discriminant_RocType::RocBox => self.RocBox.cmp(&other.RocBox),
                 discriminant_RocType::RocDict => self.RocDict.cmp(&other.RocDict),
                 discriminant_RocType::RocList => self.RocList.cmp(&other.RocList),
@@ -2097,7 +1759,9 @@ impl Ord for RocType {
                 discriminant_RocType::RocStr => core::cmp::Ordering::Equal,
                 discriminant_RocType::Struct => self.Struct.cmp(&other.Struct),
                 discriminant_RocType::TagUnion => self.TagUnion.cmp(&other.TagUnion),
-                discriminant_RocType::TagUnionPayload => self.TagUnionPayload.cmp(&other.TagUnionPayload),
+                discriminant_RocType::TagUnionPayload => {
+                    self.TagUnionPayload.cmp(&other.TagUnionPayload)
+                }
                 discriminant_RocType::Unit => core::cmp::Ordering::Equal,
             }
         }
@@ -2119,10 +1783,11 @@ impl Clone for RocType {
                     core::mem::MaybeUninit<RocType>,
                     RocType,
                 >(core::mem::MaybeUninit::uninit()),
-                discriminant_RocType::EmptyTagUnion => core::mem::transmute::<
-                    core::mem::MaybeUninit<RocType>,
-                    RocType,
-                >(core::mem::MaybeUninit::uninit()),
+                discriminant_RocType::EmptyTagUnion => {
+                    core::mem::transmute::<core::mem::MaybeUninit<RocType>, RocType>(
+                        core::mem::MaybeUninit::uninit(),
+                    )
+                }
                 discriminant_RocType::Function => Self {
                     Function: self.Function.clone(),
                 },
@@ -2165,7 +1830,6 @@ impl Clone for RocType {
                     RocType,
                 >(core::mem::MaybeUninit::uninit()),
             }
-
         };
 
         answer.set_discriminant(self.discriminant());
@@ -2182,54 +1846,55 @@ impl core::hash::Hash for RocType {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {        match self.discriminant() {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        match self.discriminant() {
             discriminant_RocType::Bool => discriminant_RocType::Bool.hash(state),
             discriminant_RocType::EmptyTagUnion => discriminant_RocType::EmptyTagUnion.hash(state),
             discriminant_RocType::Function => unsafe {
-                    discriminant_RocType::Function.hash(state);
-                    self.Function.hash(state);
-                },
+                discriminant_RocType::Function.hash(state);
+                self.Function.hash(state);
+            },
             discriminant_RocType::Num => unsafe {
-                    discriminant_RocType::Num.hash(state);
-                    self.Num.hash(state);
-                },
+                discriminant_RocType::Num.hash(state);
+                self.Num.hash(state);
+            },
             discriminant_RocType::RecursivePointer => unsafe {
-                    discriminant_RocType::RecursivePointer.hash(state);
-                    self.RecursivePointer.hash(state);
-                },
+                discriminant_RocType::RecursivePointer.hash(state);
+                self.RecursivePointer.hash(state);
+            },
             discriminant_RocType::RocBox => unsafe {
-                    discriminant_RocType::RocBox.hash(state);
-                    self.RocBox.hash(state);
-                },
+                discriminant_RocType::RocBox.hash(state);
+                self.RocBox.hash(state);
+            },
             discriminant_RocType::RocDict => unsafe {
-                    discriminant_RocType::RocDict.hash(state);
-                    self.RocDict.hash(state);
-                },
+                discriminant_RocType::RocDict.hash(state);
+                self.RocDict.hash(state);
+            },
             discriminant_RocType::RocList => unsafe {
-                    discriminant_RocType::RocList.hash(state);
-                    self.RocList.hash(state);
-                },
+                discriminant_RocType::RocList.hash(state);
+                self.RocList.hash(state);
+            },
             discriminant_RocType::RocResult => unsafe {
-                    discriminant_RocType::RocResult.hash(state);
-                    self.RocResult.hash(state);
-                },
+                discriminant_RocType::RocResult.hash(state);
+                self.RocResult.hash(state);
+            },
             discriminant_RocType::RocSet => unsafe {
-                    discriminant_RocType::RocSet.hash(state);
-                    self.RocSet.hash(state);
-                },
+                discriminant_RocType::RocSet.hash(state);
+                self.RocSet.hash(state);
+            },
             discriminant_RocType::RocStr => discriminant_RocType::RocStr.hash(state),
             discriminant_RocType::Struct => unsafe {
-                    discriminant_RocType::Struct.hash(state);
-                    self.Struct.hash(state);
-                },
+                discriminant_RocType::Struct.hash(state);
+                self.Struct.hash(state);
+            },
             discriminant_RocType::TagUnion => unsafe {
-                    discriminant_RocType::TagUnion.hash(state);
-                    self.TagUnion.hash(state);
-                },
+                discriminant_RocType::TagUnion.hash(state);
+                self.TagUnion.hash(state);
+            },
             discriminant_RocType::TagUnionPayload => unsafe {
-                    discriminant_RocType::TagUnionPayload.hash(state);
-                    self.TagUnionPayload.hash(state);
-                },
+                discriminant_RocType::TagUnionPayload.hash(state);
+                self.TagUnionPayload.hash(state);
+            },
             discriminant_RocType::Unit => discriminant_RocType::Unit.hash(state),
         }
     }
@@ -2250,42 +1915,44 @@ impl core::fmt::Debug for RocType {
             match self.discriminant() {
                 discriminant_RocType::Bool => f.write_str("Bool"),
                 discriminant_RocType::EmptyTagUnion => f.write_str("EmptyTagUnion"),
-                discriminant_RocType::Function => f.debug_tuple("Function")
-        .field(&*self.Function)
-        .finish(),
-                discriminant_RocType::Num => f.debug_tuple("Num")
-        .field(&self.Num)
-        .finish(),
-                discriminant_RocType::RecursivePointer => f.debug_tuple("RecursivePointer")
-        .field(&self.RecursivePointer)
-        .finish(),
-                discriminant_RocType::RocBox => f.debug_tuple("RocBox")
-        .field(&self.RocBox)
-        .finish(),
-                discriminant_RocType::RocDict => f.debug_tuple("RocDict")
-        .field(&(&self.RocDict).f0)
-.field(&(&self.RocDict).f1)
-        .finish(),
-                discriminant_RocType::RocList => f.debug_tuple("RocList")
-        .field(&self.RocList)
-        .finish(),
-                discriminant_RocType::RocResult => f.debug_tuple("RocResult")
-        .field(&(&self.RocResult).f0)
-.field(&(&self.RocResult).f1)
-        .finish(),
-                discriminant_RocType::RocSet => f.debug_tuple("RocSet")
-        .field(&self.RocSet)
-        .finish(),
+                discriminant_RocType::Function => {
+                    f.debug_tuple("Function").field(&*self.Function).finish()
+                }
+                discriminant_RocType::Num => f.debug_tuple("Num").field(&self.Num).finish(),
+                discriminant_RocType::RecursivePointer => f
+                    .debug_tuple("RecursivePointer")
+                    .field(&self.RecursivePointer)
+                    .finish(),
+                discriminant_RocType::RocBox => {
+                    f.debug_tuple("RocBox").field(&self.RocBox).finish()
+                }
+                discriminant_RocType::RocDict => f
+                    .debug_tuple("RocDict")
+                    .field(&(&self.RocDict).f0)
+                    .field(&(&self.RocDict).f1)
+                    .finish(),
+                discriminant_RocType::RocList => {
+                    f.debug_tuple("RocList").field(&self.RocList).finish()
+                }
+                discriminant_RocType::RocResult => f
+                    .debug_tuple("RocResult")
+                    .field(&(&self.RocResult).f0)
+                    .field(&(&self.RocResult).f1)
+                    .finish(),
+                discriminant_RocType::RocSet => {
+                    f.debug_tuple("RocSet").field(&self.RocSet).finish()
+                }
                 discriminant_RocType::RocStr => f.write_str("RocStr"),
-                discriminant_RocType::Struct => f.debug_tuple("Struct")
-        .field(&*self.Struct)
-        .finish(),
-                discriminant_RocType::TagUnion => f.debug_tuple("TagUnion")
-        .field(&*self.TagUnion)
-        .finish(),
-                discriminant_RocType::TagUnionPayload => f.debug_tuple("TagUnionPayload")
-        .field(&*self.TagUnionPayload)
-        .finish(),
+                discriminant_RocType::Struct => {
+                    f.debug_tuple("Struct").field(&*self.Struct).finish()
+                }
+                discriminant_RocType::TagUnion => {
+                    f.debug_tuple("TagUnion").field(&*self.TagUnion).finish()
+                }
+                discriminant_RocType::TagUnionPayload => f
+                    .debug_tuple("TagUnionPayload")
+                    .field(&*self.TagUnionPayload)
+                    .finish(),
                 discriminant_RocType::Unit => f.write_str("Unit"),
             }
         }
@@ -2293,67 +1960,40 @@ impl core::fmt::Debug for RocType {
 }
 
 impl Tuple2 {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// A tag named T, with the given payload.
     pub fn T(f0: u32, f1: roc_std::RocList<u32>) -> Self {
-        Self {
-            f0,
-            f1,
-        }
+        Self { f0, f1 }
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Since `T` only has one tag (namely, `T`),
     /// convert it to `T`'s payload.
     pub fn into_T(self) -> (u32, roc_std::RocList<u32>) {
         (self.f0, self.f1)
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Since `T` only has one tag (namely, `T`),
     /// convert it to `T`'s payload.
     pub fn as_T(&self) -> (&u32, &roc_std::RocList<u32>) {
         (&self.f0, &self.f1)
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// A tag named T, with the given payload.
     pub fn T(f0: u64, f1: roc_std::RocList<u64>) -> Self {
-        Self {
-            f0,
-            f1,
-        }
+        Self { f0, f1 }
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Since `T` only has one tag (namely, `T`),
     /// convert it to `T`'s payload.
     pub fn into_T(self) -> (u64, roc_std::RocList<u64>) {
         (self.f0, self.f1)
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Since `T` only has one tag (namely, `T`),
     /// convert it to `T`'s payload.
     pub fn as_T(&self) -> (&u64, &roc_std::RocList<u64>) {
@@ -2370,16 +2010,15 @@ impl core::fmt::Debug for Tuple2 {
         target_arch = "x86_64"
     ))]
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            f.debug_tuple("Tuple2::T")                .field(&self.f0)                .field(&self.f1)                .finish()    }
-
+        f.debug_tuple("Tuple2::T")
+            .field(&self.f0)
+            .field(&self.f1)
+            .finish()
+    }
 }
 
 impl RocTagUnion {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_RocTagUnion {
         unsafe {
@@ -2389,11 +2028,7 @@ impl RocTagUnion {
         }
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_RocTagUnion) {
         let discriminant_ptr: *mut discriminant_RocTagUnion = (self as *mut RocTagUnion).cast();
@@ -2412,13 +2047,13 @@ impl RocTagUnion {
     ))]
     /// Construct a tag named `Enumeration`, with the appropriate payload
     pub fn Enumeration(arg0: R4) -> Self {
-            let mut answer = Self {
-                Enumeration: core::mem::ManuallyDrop::new(arg0)
-            };
+        let mut answer = Self {
+            Enumeration: core::mem::ManuallyDrop::new(arg0),
+        };
 
-            answer.set_discriminant(discriminant_RocTagUnion::Enumeration);
+        answer.set_discriminant(discriminant_RocTagUnion::Enumeration);
 
-            answer
+        answer
     }
 
     #[cfg(any(
@@ -2429,10 +2064,10 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `Enumeration` and convert it to `Enumeration`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Enumeration`.
-            pub unsafe fn into_Enumeration(mut self) -> R4 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::Enumeration);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Enumeration`.
+    pub unsafe fn into_Enumeration(mut self) -> R4 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::Enumeration);
         let payload = {
             let mut uninitialized = core::mem::MaybeUninit::uninit();
             let swapped = unsafe {
@@ -2447,7 +2082,6 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
         payload
     }
 
@@ -2459,13 +2093,12 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `Enumeration` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Enumeration`.
-            pub unsafe fn as_Enumeration(&self) -> &R4 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::Enumeration);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Enumeration`.
+    pub unsafe fn as_Enumeration(&self) -> &R4 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::Enumeration);
         let payload = &self.Enumeration;
 
-        
         payload
     }
 
@@ -2478,13 +2111,13 @@ impl RocTagUnion {
     ))]
     /// Construct a tag named `NonNullableUnwrapped`, with the appropriate payload
     pub fn NonNullableUnwrapped(arg0: R5) -> Self {
-            let mut answer = Self {
-                NonNullableUnwrapped: core::mem::ManuallyDrop::new(arg0)
-            };
+        let mut answer = Self {
+            NonNullableUnwrapped: core::mem::ManuallyDrop::new(arg0),
+        };
 
-            answer.set_discriminant(discriminant_RocTagUnion::NonNullableUnwrapped);
+        answer.set_discriminant(discriminant_RocTagUnion::NonNullableUnwrapped);
 
-            answer
+        answer
     }
 
     #[cfg(any(
@@ -2495,10 +2128,13 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `NonNullableUnwrapped` and convert it to `NonNullableUnwrapped`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `NonNullableUnwrapped`.
-            pub unsafe fn into_NonNullableUnwrapped(mut self) -> R5 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NonNullableUnwrapped);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `NonNullableUnwrapped`.
+    pub unsafe fn into_NonNullableUnwrapped(mut self) -> R5 {
+        debug_assert_eq!(
+            self.discriminant(),
+            discriminant_RocTagUnion::NonNullableUnwrapped
+        );
         let payload = {
             let mut uninitialized = core::mem::MaybeUninit::uninit();
             let swapped = unsafe {
@@ -2513,7 +2149,6 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
         payload
     }
 
@@ -2525,13 +2160,15 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `NonNullableUnwrapped` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `NonNullableUnwrapped`.
-            pub unsafe fn as_NonNullableUnwrapped(&self) -> &R5 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NonNullableUnwrapped);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `NonNullableUnwrapped`.
+    pub unsafe fn as_NonNullableUnwrapped(&self) -> &R5 {
+        debug_assert_eq!(
+            self.discriminant(),
+            discriminant_RocTagUnion::NonNullableUnwrapped
+        );
         let payload = &self.NonNullableUnwrapped;
 
-        
         payload
     }
 
@@ -2544,13 +2181,13 @@ impl RocTagUnion {
     ))]
     /// Construct a tag named `NonRecursive`, with the appropriate payload
     pub fn NonRecursive(arg0: R6) -> Self {
-            let mut answer = Self {
-                NonRecursive: core::mem::ManuallyDrop::new(arg0)
-            };
+        let mut answer = Self {
+            NonRecursive: core::mem::ManuallyDrop::new(arg0),
+        };
 
-            answer.set_discriminant(discriminant_RocTagUnion::NonRecursive);
+        answer.set_discriminant(discriminant_RocTagUnion::NonRecursive);
 
-            answer
+        answer
     }
 
     #[cfg(any(
@@ -2561,10 +2198,10 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `NonRecursive` and convert it to `NonRecursive`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `NonRecursive`.
-            pub unsafe fn into_NonRecursive(mut self) -> R6 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NonRecursive);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `NonRecursive`.
+    pub unsafe fn into_NonRecursive(mut self) -> R6 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NonRecursive);
         let payload = {
             let mut uninitialized = core::mem::MaybeUninit::uninit();
             let swapped = unsafe {
@@ -2579,7 +2216,6 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
         payload
     }
 
@@ -2591,13 +2227,12 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `NonRecursive` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `NonRecursive`.
-            pub unsafe fn as_NonRecursive(&self) -> &R6 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NonRecursive);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `NonRecursive`.
+    pub unsafe fn as_NonRecursive(&self) -> &R6 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NonRecursive);
         let payload = &self.NonRecursive;
 
-        
         payload
     }
 
@@ -2610,13 +2245,13 @@ impl RocTagUnion {
     ))]
     /// Construct a tag named `NullableUnwrapped`, with the appropriate payload
     pub fn NullableUnwrapped(arg0: R8) -> Self {
-            let mut answer = Self {
-                NullableUnwrapped: core::mem::ManuallyDrop::new(arg0)
-            };
+        let mut answer = Self {
+            NullableUnwrapped: core::mem::ManuallyDrop::new(arg0),
+        };
 
-            answer.set_discriminant(discriminant_RocTagUnion::NullableUnwrapped);
+        answer.set_discriminant(discriminant_RocTagUnion::NullableUnwrapped);
 
-            answer
+        answer
     }
 
     #[cfg(any(
@@ -2627,10 +2262,13 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `NullableUnwrapped` and convert it to `NullableUnwrapped`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `NullableUnwrapped`.
-            pub unsafe fn into_NullableUnwrapped(mut self) -> R8 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NullableUnwrapped);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `NullableUnwrapped`.
+    pub unsafe fn into_NullableUnwrapped(mut self) -> R8 {
+        debug_assert_eq!(
+            self.discriminant(),
+            discriminant_RocTagUnion::NullableUnwrapped
+        );
         let payload = {
             let mut uninitialized = core::mem::MaybeUninit::uninit();
             let swapped = unsafe {
@@ -2645,7 +2283,6 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
         payload
     }
 
@@ -2657,13 +2294,15 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `NullableUnwrapped` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `NullableUnwrapped`.
-            pub unsafe fn as_NullableUnwrapped(&self) -> &R8 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NullableUnwrapped);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `NullableUnwrapped`.
+    pub unsafe fn as_NullableUnwrapped(&self) -> &R8 {
+        debug_assert_eq!(
+            self.discriminant(),
+            discriminant_RocTagUnion::NullableUnwrapped
+        );
         let payload = &self.NullableUnwrapped;
 
-        
         payload
     }
 
@@ -2676,13 +2315,13 @@ impl RocTagUnion {
     ))]
     /// Construct a tag named `NullableWrapped`, with the appropriate payload
     pub fn NullableWrapped(arg0: R9) -> Self {
-            let mut answer = Self {
-                NullableWrapped: core::mem::ManuallyDrop::new(arg0)
-            };
+        let mut answer = Self {
+            NullableWrapped: core::mem::ManuallyDrop::new(arg0),
+        };
 
-            answer.set_discriminant(discriminant_RocTagUnion::NullableWrapped);
+        answer.set_discriminant(discriminant_RocTagUnion::NullableWrapped);
 
-            answer
+        answer
     }
 
     #[cfg(any(
@@ -2693,10 +2332,13 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `NullableWrapped` and convert it to `NullableWrapped`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `NullableWrapped`.
-            pub unsafe fn into_NullableWrapped(mut self) -> R9 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NullableWrapped);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `NullableWrapped`.
+    pub unsafe fn into_NullableWrapped(mut self) -> R9 {
+        debug_assert_eq!(
+            self.discriminant(),
+            discriminant_RocTagUnion::NullableWrapped
+        );
         let payload = {
             let mut uninitialized = core::mem::MaybeUninit::uninit();
             let swapped = unsafe {
@@ -2711,7 +2353,6 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
         payload
     }
 
@@ -2723,13 +2364,15 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `NullableWrapped` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `NullableWrapped`.
-            pub unsafe fn as_NullableWrapped(&self) -> &R9 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::NullableWrapped);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `NullableWrapped`.
+    pub unsafe fn as_NullableWrapped(&self) -> &R9 {
+        debug_assert_eq!(
+            self.discriminant(),
+            discriminant_RocTagUnion::NullableWrapped
+        );
         let payload = &self.NullableWrapped;
 
-        
         payload
     }
 
@@ -2742,13 +2385,13 @@ impl RocTagUnion {
     ))]
     /// Construct a tag named `Recursive`, with the appropriate payload
     pub fn Recursive(arg0: R6) -> Self {
-            let mut answer = Self {
-                Recursive: core::mem::ManuallyDrop::new(arg0)
-            };
+        let mut answer = Self {
+            Recursive: core::mem::ManuallyDrop::new(arg0),
+        };
 
-            answer.set_discriminant(discriminant_RocTagUnion::Recursive);
+        answer.set_discriminant(discriminant_RocTagUnion::Recursive);
 
-            answer
+        answer
     }
 
     #[cfg(any(
@@ -2759,10 +2402,10 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `Recursive` and convert it to `Recursive`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Recursive`.
-            pub unsafe fn into_Recursive(mut self) -> R6 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::Recursive);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Recursive`.
+    pub unsafe fn into_Recursive(mut self) -> R6 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::Recursive);
         let payload = {
             let mut uninitialized = core::mem::MaybeUninit::uninit();
             let swapped = unsafe {
@@ -2777,7 +2420,6 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
         payload
     }
 
@@ -2789,13 +2431,12 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `Recursive` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Recursive`.
-            pub unsafe fn as_Recursive(&self) -> &R6 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::Recursive);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Recursive`.
+    pub unsafe fn as_Recursive(&self) -> &R6 {
+        debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::Recursive);
         let payload = &self.Recursive;
 
-        
         payload
     }
 
@@ -2808,13 +2449,13 @@ impl RocTagUnion {
     ))]
     /// Construct a tag named `SingleTagStruct`, with the appropriate payload
     pub fn SingleTagStruct(arg0: R13) -> Self {
-            let mut answer = Self {
-                SingleTagStruct: core::mem::ManuallyDrop::new(arg0)
-            };
+        let mut answer = Self {
+            SingleTagStruct: core::mem::ManuallyDrop::new(arg0),
+        };
 
-            answer.set_discriminant(discriminant_RocTagUnion::SingleTagStruct);
+        answer.set_discriminant(discriminant_RocTagUnion::SingleTagStruct);
 
-            answer
+        answer
     }
 
     #[cfg(any(
@@ -2825,10 +2466,13 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `SingleTagStruct` and convert it to `SingleTagStruct`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `SingleTagStruct`.
-            pub unsafe fn into_SingleTagStruct(mut self) -> R13 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::SingleTagStruct);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `SingleTagStruct`.
+    pub unsafe fn into_SingleTagStruct(mut self) -> R13 {
+        debug_assert_eq!(
+            self.discriminant(),
+            discriminant_RocTagUnion::SingleTagStruct
+        );
         let payload = {
             let mut uninitialized = core::mem::MaybeUninit::uninit();
             let swapped = unsafe {
@@ -2843,7 +2487,6 @@ impl RocTagUnion {
             core::mem::ManuallyDrop::into_inner(swapped)
         };
 
-        
         payload
     }
 
@@ -2855,20 +2498,19 @@ impl RocTagUnion {
         target_arch = "x86_64"
     ))]
     /// Unsafely assume the given `RocTagUnion` has a `.discriminant()` of `SingleTagStruct` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `SingleTagStruct`.
-            pub unsafe fn as_SingleTagStruct(&self) -> &R13 {
-                debug_assert_eq!(self.discriminant(), discriminant_RocTagUnion::SingleTagStruct);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `SingleTagStruct`.
+    pub unsafe fn as_SingleTagStruct(&self) -> &R13 {
+        debug_assert_eq!(
+            self.discriminant(),
+            discriminant_RocTagUnion::SingleTagStruct
+        );
         let payload = &self.SingleTagStruct;
 
-        
         payload
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_RocTagUnion {
         unsafe {
@@ -2878,10 +2520,7 @@ impl RocTagUnion {
         }
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_RocTagUnion) {
         let discriminant_ptr: *mut discriminant_RocTagUnion = (self as *mut RocTagUnion).cast();
@@ -2902,16 +2541,29 @@ impl Drop for RocTagUnion {
     ))]
     fn drop(&mut self) {
         // Drop the payloads
-                    match self.discriminant() {
-                discriminant_RocTagUnion::Enumeration => unsafe { core::mem::ManuallyDrop::drop(&mut self.Enumeration) },
-                discriminant_RocTagUnion::NonNullableUnwrapped => unsafe { core::mem::ManuallyDrop::drop(&mut self.NonNullableUnwrapped) },
-                discriminant_RocTagUnion::NonRecursive => unsafe { core::mem::ManuallyDrop::drop(&mut self.NonRecursive) },
-                discriminant_RocTagUnion::NullableUnwrapped => unsafe { core::mem::ManuallyDrop::drop(&mut self.NullableUnwrapped) },
-                discriminant_RocTagUnion::NullableWrapped => unsafe { core::mem::ManuallyDrop::drop(&mut self.NullableWrapped) },
-                discriminant_RocTagUnion::Recursive => unsafe { core::mem::ManuallyDrop::drop(&mut self.Recursive) },
-                discriminant_RocTagUnion::SingleTagStruct => unsafe { core::mem::ManuallyDrop::drop(&mut self.SingleTagStruct) },
-            }
-
+        match self.discriminant() {
+            discriminant_RocTagUnion::Enumeration => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.Enumeration)
+            },
+            discriminant_RocTagUnion::NonNullableUnwrapped => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.NonNullableUnwrapped)
+            },
+            discriminant_RocTagUnion::NonRecursive => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.NonRecursive)
+            },
+            discriminant_RocTagUnion::NullableUnwrapped => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.NullableUnwrapped)
+            },
+            discriminant_RocTagUnion::NullableWrapped => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.NullableWrapped)
+            },
+            discriminant_RocTagUnion::Recursive => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.Recursive)
+            },
+            discriminant_RocTagUnion::SingleTagStruct => unsafe {
+                core::mem::ManuallyDrop::drop(&mut self.SingleTagStruct)
+            },
+        }
     }
 }
 
@@ -2926,19 +2578,27 @@ impl PartialEq for RocTagUnion {
         target_arch = "x86_64"
     ))]
     fn eq(&self, other: &Self) -> bool {
-            if self.discriminant() != other.discriminant() {
-                return false;
-            }
+        if self.discriminant() != other.discriminant() {
+            return false;
+        }
 
-            unsafe {
+        unsafe {
             match self.discriminant() {
                 discriminant_RocTagUnion::Enumeration => self.Enumeration == other.Enumeration,
-                discriminant_RocTagUnion::NonNullableUnwrapped => self.NonNullableUnwrapped == other.NonNullableUnwrapped,
+                discriminant_RocTagUnion::NonNullableUnwrapped => {
+                    self.NonNullableUnwrapped == other.NonNullableUnwrapped
+                }
                 discriminant_RocTagUnion::NonRecursive => self.NonRecursive == other.NonRecursive,
-                discriminant_RocTagUnion::NullableUnwrapped => self.NullableUnwrapped == other.NullableUnwrapped,
-                discriminant_RocTagUnion::NullableWrapped => self.NullableWrapped == other.NullableWrapped,
+                discriminant_RocTagUnion::NullableUnwrapped => {
+                    self.NullableUnwrapped == other.NullableUnwrapped
+                }
+                discriminant_RocTagUnion::NullableWrapped => {
+                    self.NullableWrapped == other.NullableWrapped
+                }
                 discriminant_RocTagUnion::Recursive => self.Recursive == other.Recursive,
-                discriminant_RocTagUnion::SingleTagStruct => self.SingleTagStruct == other.SingleTagStruct,
+                discriminant_RocTagUnion::SingleTagStruct => {
+                    self.SingleTagStruct == other.SingleTagStruct
+                }
             }
         }
     }
@@ -2960,13 +2620,25 @@ impl PartialOrd for RocTagUnion {
 
         unsafe {
             match self.discriminant() {
-                discriminant_RocTagUnion::Enumeration => self.Enumeration.partial_cmp(&other.Enumeration),
-                discriminant_RocTagUnion::NonNullableUnwrapped => self.NonNullableUnwrapped.partial_cmp(&other.NonNullableUnwrapped),
-                discriminant_RocTagUnion::NonRecursive => self.NonRecursive.partial_cmp(&other.NonRecursive),
-                discriminant_RocTagUnion::NullableUnwrapped => self.NullableUnwrapped.partial_cmp(&other.NullableUnwrapped),
-                discriminant_RocTagUnion::NullableWrapped => self.NullableWrapped.partial_cmp(&other.NullableWrapped),
+                discriminant_RocTagUnion::Enumeration => {
+                    self.Enumeration.partial_cmp(&other.Enumeration)
+                }
+                discriminant_RocTagUnion::NonNullableUnwrapped => self
+                    .NonNullableUnwrapped
+                    .partial_cmp(&other.NonNullableUnwrapped),
+                discriminant_RocTagUnion::NonRecursive => {
+                    self.NonRecursive.partial_cmp(&other.NonRecursive)
+                }
+                discriminant_RocTagUnion::NullableUnwrapped => {
+                    self.NullableUnwrapped.partial_cmp(&other.NullableUnwrapped)
+                }
+                discriminant_RocTagUnion::NullableWrapped => {
+                    self.NullableWrapped.partial_cmp(&other.NullableWrapped)
+                }
                 discriminant_RocTagUnion::Recursive => self.Recursive.partial_cmp(&other.Recursive),
-                discriminant_RocTagUnion::SingleTagStruct => self.SingleTagStruct.partial_cmp(&other.SingleTagStruct),
+                discriminant_RocTagUnion::SingleTagStruct => {
+                    self.SingleTagStruct.partial_cmp(&other.SingleTagStruct)
+                }
             }
         }
     }
@@ -2981,20 +2653,30 @@ impl Ord for RocTagUnion {
         target_arch = "x86_64"
     ))]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-            match self.discriminant().cmp(&other.discriminant()) {
-                core::cmp::Ordering::Equal => {}
-                not_eq => return not_eq,
-            }
+        match self.discriminant().cmp(&other.discriminant()) {
+            core::cmp::Ordering::Equal => {}
+            not_eq => return not_eq,
+        }
 
-            unsafe {
+        unsafe {
             match self.discriminant() {
                 discriminant_RocTagUnion::Enumeration => self.Enumeration.cmp(&other.Enumeration),
-                discriminant_RocTagUnion::NonNullableUnwrapped => self.NonNullableUnwrapped.cmp(&other.NonNullableUnwrapped),
-                discriminant_RocTagUnion::NonRecursive => self.NonRecursive.cmp(&other.NonRecursive),
-                discriminant_RocTagUnion::NullableUnwrapped => self.NullableUnwrapped.cmp(&other.NullableUnwrapped),
-                discriminant_RocTagUnion::NullableWrapped => self.NullableWrapped.cmp(&other.NullableWrapped),
+                discriminant_RocTagUnion::NonNullableUnwrapped => {
+                    self.NonNullableUnwrapped.cmp(&other.NonNullableUnwrapped)
+                }
+                discriminant_RocTagUnion::NonRecursive => {
+                    self.NonRecursive.cmp(&other.NonRecursive)
+                }
+                discriminant_RocTagUnion::NullableUnwrapped => {
+                    self.NullableUnwrapped.cmp(&other.NullableUnwrapped)
+                }
+                discriminant_RocTagUnion::NullableWrapped => {
+                    self.NullableWrapped.cmp(&other.NullableWrapped)
+                }
                 discriminant_RocTagUnion::Recursive => self.Recursive.cmp(&other.Recursive),
-                discriminant_RocTagUnion::SingleTagStruct => self.SingleTagStruct.cmp(&other.SingleTagStruct),
+                discriminant_RocTagUnion::SingleTagStruct => {
+                    self.SingleTagStruct.cmp(&other.SingleTagStruct)
+                }
             }
         }
     }
@@ -3033,7 +2715,6 @@ impl Clone for RocTagUnion {
                     SingleTagStruct: self.SingleTagStruct.clone(),
                 },
             }
-
         };
 
         answer.set_discriminant(self.discriminant());
@@ -3050,35 +2731,36 @@ impl core::hash::Hash for RocTagUnion {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {        match self.discriminant() {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        match self.discriminant() {
             discriminant_RocTagUnion::Enumeration => unsafe {
-                    discriminant_RocTagUnion::Enumeration.hash(state);
-                    self.Enumeration.hash(state);
-                },
+                discriminant_RocTagUnion::Enumeration.hash(state);
+                self.Enumeration.hash(state);
+            },
             discriminant_RocTagUnion::NonNullableUnwrapped => unsafe {
-                    discriminant_RocTagUnion::NonNullableUnwrapped.hash(state);
-                    self.NonNullableUnwrapped.hash(state);
-                },
+                discriminant_RocTagUnion::NonNullableUnwrapped.hash(state);
+                self.NonNullableUnwrapped.hash(state);
+            },
             discriminant_RocTagUnion::NonRecursive => unsafe {
-                    discriminant_RocTagUnion::NonRecursive.hash(state);
-                    self.NonRecursive.hash(state);
-                },
+                discriminant_RocTagUnion::NonRecursive.hash(state);
+                self.NonRecursive.hash(state);
+            },
             discriminant_RocTagUnion::NullableUnwrapped => unsafe {
-                    discriminant_RocTagUnion::NullableUnwrapped.hash(state);
-                    self.NullableUnwrapped.hash(state);
-                },
+                discriminant_RocTagUnion::NullableUnwrapped.hash(state);
+                self.NullableUnwrapped.hash(state);
+            },
             discriminant_RocTagUnion::NullableWrapped => unsafe {
-                    discriminant_RocTagUnion::NullableWrapped.hash(state);
-                    self.NullableWrapped.hash(state);
-                },
+                discriminant_RocTagUnion::NullableWrapped.hash(state);
+                self.NullableWrapped.hash(state);
+            },
             discriminant_RocTagUnion::Recursive => unsafe {
-                    discriminant_RocTagUnion::Recursive.hash(state);
-                    self.Recursive.hash(state);
-                },
+                discriminant_RocTagUnion::Recursive.hash(state);
+                self.Recursive.hash(state);
+            },
             discriminant_RocTagUnion::SingleTagStruct => unsafe {
-                    discriminant_RocTagUnion::SingleTagStruct.hash(state);
-                    self.SingleTagStruct.hash(state);
-                },
+                discriminant_RocTagUnion::SingleTagStruct.hash(state);
+                self.SingleTagStruct.hash(state);
+            },
         }
     }
 }
@@ -3096,38 +2778,40 @@ impl core::fmt::Debug for RocTagUnion {
 
         unsafe {
             match self.discriminant() {
-                discriminant_RocTagUnion::Enumeration => f.debug_tuple("Enumeration")
-        .field(&*self.Enumeration)
-        .finish(),
-                discriminant_RocTagUnion::NonNullableUnwrapped => f.debug_tuple("NonNullableUnwrapped")
-        .field(&*self.NonNullableUnwrapped)
-        .finish(),
-                discriminant_RocTagUnion::NonRecursive => f.debug_tuple("NonRecursive")
-        .field(&*self.NonRecursive)
-        .finish(),
-                discriminant_RocTagUnion::NullableUnwrapped => f.debug_tuple("NullableUnwrapped")
-        .field(&*self.NullableUnwrapped)
-        .finish(),
-                discriminant_RocTagUnion::NullableWrapped => f.debug_tuple("NullableWrapped")
-        .field(&*self.NullableWrapped)
-        .finish(),
-                discriminant_RocTagUnion::Recursive => f.debug_tuple("Recursive")
-        .field(&*self.Recursive)
-        .finish(),
-                discriminant_RocTagUnion::SingleTagStruct => f.debug_tuple("SingleTagStruct")
-        .field(&*self.SingleTagStruct)
-        .finish(),
+                discriminant_RocTagUnion::Enumeration => f
+                    .debug_tuple("Enumeration")
+                    .field(&*self.Enumeration)
+                    .finish(),
+                discriminant_RocTagUnion::NonNullableUnwrapped => f
+                    .debug_tuple("NonNullableUnwrapped")
+                    .field(&*self.NonNullableUnwrapped)
+                    .finish(),
+                discriminant_RocTagUnion::NonRecursive => f
+                    .debug_tuple("NonRecursive")
+                    .field(&*self.NonRecursive)
+                    .finish(),
+                discriminant_RocTagUnion::NullableUnwrapped => f
+                    .debug_tuple("NullableUnwrapped")
+                    .field(&*self.NullableUnwrapped)
+                    .finish(),
+                discriminant_RocTagUnion::NullableWrapped => f
+                    .debug_tuple("NullableWrapped")
+                    .field(&*self.NullableWrapped)
+                    .finish(),
+                discriminant_RocTagUnion::Recursive => {
+                    f.debug_tuple("Recursive").field(&*self.Recursive).finish()
+                }
+                discriminant_RocTagUnion::SingleTagStruct => f
+                    .debug_tuple("SingleTagStruct")
+                    .field(&*self.SingleTagStruct)
+                    .finish(),
             }
         }
     }
 }
 
 impl U1 {
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_U1 {
         unsafe {
@@ -3137,11 +2821,7 @@ impl U1 {
         }
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_U1) {
         let discriminant_ptr: *mut discriminant_U1 = (self as *mut U1).cast();
@@ -3151,11 +2831,7 @@ impl U1 {
         }
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// A tag named None, which has no payload.
     pub const None: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<U1>()];
@@ -3191,56 +2867,39 @@ impl U1 {
         ()
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Construct a tag named `Some`, with the appropriate payload
     pub fn Some(arg: u32) -> Self {
-            let mut answer = Self {
-                Some: arg
-            };
+        let mut answer = Self { Some: arg };
 
-            answer.set_discriminant(discriminant_U1::Some);
+        answer.set_discriminant(discriminant_U1::Some);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `U1` has a `.discriminant()` of `Some` and convert it to `Some`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Some`.
-            pub unsafe fn into_Some(self) -> u32 {
-                debug_assert_eq!(self.discriminant(), discriminant_U1::Some);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Some`.
+    pub unsafe fn into_Some(self) -> u32 {
+        debug_assert_eq!(self.discriminant(), discriminant_U1::Some);
         let payload = self.Some;
 
         payload
     }
 
-    #[cfg(any(
-        target_arch = "arm",
-        target_arch = "wasm32",
-        target_arch = "x86"
-    ))]
+    #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
     /// Unsafely assume the given `U1` has a `.discriminant()` of `Some` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Some`.
-            pub unsafe fn as_Some(&self) -> &u32 {
-                debug_assert_eq!(self.discriminant(), discriminant_U1::Some);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Some`.
+    pub unsafe fn as_Some(&self) -> &u32 {
+        debug_assert_eq!(self.discriminant(), discriminant_U1::Some);
         let payload = &self.Some;
 
         &payload
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Returns which variant this tag union holds. Note that this never includes a payload!
     pub fn discriminant(&self) -> discriminant_U1 {
         unsafe {
@@ -3250,10 +2909,7 @@ impl U1 {
         }
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Internal helper
     fn set_discriminant(&mut self, discriminant: discriminant_U1) {
         let discriminant_ptr: *mut discriminant_U1 = (self as *mut U1).cast();
@@ -3263,10 +2919,7 @@ impl U1 {
         }
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// A tag named None, which has no payload.
     pub const None: Self = unsafe {
         let mut bytes = [0; core::mem::size_of::<U1>()];
@@ -3276,44 +2929,33 @@ impl U1 {
         core::mem::transmute::<[u8; core::mem::size_of::<U1>()], U1>(bytes)
     };
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Construct a tag named `Some`, with the appropriate payload
     pub fn Some(arg: u64) -> Self {
-            let mut answer = Self {
-                Some: arg
-            };
+        let mut answer = Self { Some: arg };
 
-            answer.set_discriminant(discriminant_U1::Some);
+        answer.set_discriminant(discriminant_U1::Some);
 
-            answer
+        answer
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `U1` has a `.discriminant()` of `Some` and convert it to `Some`'s payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Some`.
-            pub unsafe fn into_Some(self) -> u64 {
-                debug_assert_eq!(self.discriminant(), discriminant_U1::Some);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Some`.
+    pub unsafe fn into_Some(self) -> u64 {
+        debug_assert_eq!(self.discriminant(), discriminant_U1::Some);
         let payload = self.Some;
 
         payload
     }
 
-    #[cfg(any(
-        target_arch = "aarch64",
-        target_arch = "x86_64"
-    ))]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
     /// Unsafely assume the given `U1` has a `.discriminant()` of `Some` and return its payload.
-            /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
-            /// Panics in debug builds if the `.discriminant()` doesn't return `Some`.
-            pub unsafe fn as_Some(&self) -> &u64 {
-                debug_assert_eq!(self.discriminant(), discriminant_U1::Some);
+    /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
+    /// Panics in debug builds if the `.discriminant()` doesn't return `Some`.
+    pub unsafe fn as_Some(&self) -> &u64 {
+        debug_assert_eq!(self.discriminant(), discriminant_U1::Some);
         let payload = &self.Some;
 
         &payload
@@ -3331,11 +2973,11 @@ impl PartialEq for U1 {
         target_arch = "x86_64"
     ))]
     fn eq(&self, other: &Self) -> bool {
-            if self.discriminant() != other.discriminant() {
-                return false;
-            }
+        if self.discriminant() != other.discriminant() {
+            return false;
+        }
 
-            unsafe {
+        unsafe {
             match self.discriminant() {
                 discriminant_U1::None => true,
                 discriminant_U1::Some => self.Some == other.Some,
@@ -3376,12 +3018,12 @@ impl Ord for U1 {
         target_arch = "x86_64"
     ))]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-            match self.discriminant().cmp(&other.discriminant()) {
-                core::cmp::Ordering::Equal => {}
-                not_eq => return not_eq,
-            }
+        match self.discriminant().cmp(&other.discriminant()) {
+            core::cmp::Ordering::Equal => {}
+            not_eq => return not_eq,
+        }
 
-            unsafe {
+        unsafe {
             match self.discriminant() {
                 discriminant_U1::None => core::cmp::Ordering::Equal,
                 discriminant_U1::Some => self.Some.cmp(&other.Some),
@@ -3403,15 +3045,13 @@ impl Clone for U1 {
     fn clone(&self) -> Self {
         let mut answer = unsafe {
             match self.discriminant() {
-                discriminant_U1::None => core::mem::transmute::<
-                    core::mem::MaybeUninit<U1>,
-                    U1,
-                >(core::mem::MaybeUninit::uninit()),
+                discriminant_U1::None => core::mem::transmute::<core::mem::MaybeUninit<U1>, U1>(
+                    core::mem::MaybeUninit::uninit(),
+                ),
                 discriminant_U1::Some => Self {
                     Some: self.Some.clone(),
                 },
             }
-
         };
 
         answer.set_discriminant(self.discriminant());
@@ -3428,12 +3068,13 @@ impl core::hash::Hash for U1 {
         target_arch = "x86",
         target_arch = "x86_64"
     ))]
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {        match self.discriminant() {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        match self.discriminant() {
             discriminant_U1::None => discriminant_U1::None.hash(state),
             discriminant_U1::Some => unsafe {
-                    discriminant_U1::Some.hash(state);
-                    self.Some.hash(state);
-                },
+                discriminant_U1::Some.hash(state);
+                self.Some.hash(state);
+            },
         }
     }
 }
@@ -3452,9 +3093,7 @@ impl core::fmt::Debug for U1 {
         unsafe {
             match self.discriminant() {
                 discriminant_U1::None => f.write_str("None"),
-                discriminant_U1::Some => f.debug_tuple("Some")
-        .field(&self.Some)
-        .finish(),
+                discriminant_U1::Some => f.debug_tuple("Some").field(&self.Some).finish(),
             }
         }
     }

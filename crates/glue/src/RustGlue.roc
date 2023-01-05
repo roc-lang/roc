@@ -1,29 +1,37 @@
 app "rust-glue"
-    packages { pf: "RocType.roc" }
+    packages { pf: "main.roc" }
     imports []
     provides [makeGlue] to pf
 
-makeGlue = \types ->
-    modFileContent =
-        List.walk types "" \content, { target } ->
-            archStr = archName target.architecture
+## TODO have the glue platform expose this from a module
+File : { path : Str, content : List U8 }
 
-            Str.concat
-                content
-                """
-                #[cfg(target_arch = "\(archStr)")]
-                mod \(archStr);
-                #[cfg(target_arch = "\(archStr)")]
-                pub use \(archStr)::*;
-                
-                """
+makeGlue : List _ -> Result (List File) Str
+makeGlue = \types ->
+    modFile = {
+        path: "mod.rs",
+        content:
+            List.walk types "" \content, { target } ->
+                archStr = archName target.architecture
+
+                Str.concat content
+                    """
+                    #[cfg(target_arch = "\(archStr)")]
+                    mod \(archStr);
+                    #[cfg(target_arch = "\(archStr)")]
+                    pub use \(archStr)::*;
+
+                    """
+            |> Str.toUtf8
+    }
 
     types
     |> List.map typesWithDict
     |> List.map convertTypesToFile
-    |> List.append { name: "mod.rs", content: modFileContent }
+    |> List.append modFile
     |> Ok
 
+# convertTypesToFile : List _ -> { path : List U8, content : List U8 }
 convertTypesToFile = \types ->
     content =
         walkWithIndex types.types fileHeader \buf, id, type ->
@@ -86,8 +94,8 @@ convertTypesToFile = \types ->
     archStr = archName types.target.architecture
 
     {
-        name: "\(archStr).rs",
-        content,
+        path: "\(archStr).rs",
+        content: Str.toUtf8 content,
     }
 
 generateStruct = \buf, types, id, name, fields, visibility ->
@@ -148,7 +156,7 @@ generateEnumeration = \buf, types, enumType, name, tags, tagBytes ->
         impl core::fmt::Debug for \(escapedName) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 match self {
-        
+
         """
     |> \b -> List.walk tags b (generateEnumTagsDebug name)
     |> Str.concat "\(indent)\(indent)}\n\(indent)}\n}\n\n"
@@ -201,7 +209,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
             }
         }
 
-        
+
         """
     |> Str.concat "// TODO: NonRecursive TagUnion constructor impls\n\n"
     |> \b ->
@@ -214,7 +222,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
                 impl Drop for \(escapedName) {
                     fn drop(&mut self) {
                         // Drop the payloads
-                
+
                 """
             |> generateTagUnionDropPayload types selfMut tags discriminantName discriminantSize 2
             |> Str.concat
@@ -222,7 +230,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
                     }
                 }
 
-                
+
                 """
         else
             b
@@ -397,7 +405,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
     |> Str.concat
         """
         impl \(name) {
-        
+
         """
     |> \b ->
         fieldTypes =
@@ -444,7 +452,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
                 \(indent)    }
                 \(indent)}
 
-                
+
                 """,
             fieldTypes,
             fieldAccesses,
@@ -463,7 +471,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
                 \(indent)    \(retExpr)
                 \(indent)}
 
-                
+
                 """,
             fieldTypes,
             fieldAccesses,
@@ -486,7 +494,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
             \(indent)pub fn as_\(tagName)(self) -> \(retType) {
             \(indent)    \(retExpr)
             \(indent)}
-            
+
             """
     |> Str.concat
         """
@@ -496,7 +504,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
         impl core::fmt::Dbg for \(name) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.debug_tuple("\(name)::\(tagName)")
-        
+
         """
     |> \b ->
         payloadFields
@@ -511,7 +519,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
             }
         }
 
-        
+
         """
 
 asRustTuple = \list ->
@@ -554,7 +562,7 @@ generateZeroElementSingleTagStruct = \buf, name, tagName ->
             }
         }
 
-        
+
         """
 
 generateDeriveStr = \buf, types, type, includeDebug ->
@@ -834,7 +842,7 @@ fileHeader =
     #![allow(clippy::clone_on_copy)]
 
 
-    
+
     """
 
 indent = "    "

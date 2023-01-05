@@ -60,16 +60,18 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
 
                 process::exit(1);
             });
-            for roc_type::File { name, content } in &files {
-                let valid_name = PathBuf::from(name.as_str())
+            for roc_type::File { path, content } in &files {
+                let is_path_valid = PathBuf::from(path.as_str())
                     .components()
                     .all(|comp| matches!(comp, Component::CurDir | Component::Normal(_)));
-                if !valid_name {
-                    eprintln!("File name was invalid: {}", &name);
+
+                if !is_path_valid {
+                    eprintln!("This file path was invalid:\n\n\t{}\n\nValid file paths must not escape the target directory, so for example they may not contain \"..\" or use absolute paths.", &path);
 
                     process::exit(1);
                 }
-                let full_path = output_path.join(name.as_str());
+
+                let full_path = output_path.join(path.as_str());
                 if let Some(dir_path) = full_path.parent() {
                     std::fs::create_dir_all(&dir_path).unwrap_or_else(|err| {
                         eprintln!(
@@ -91,7 +93,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
                     process::exit(1);
                 });
 
-                file.write_all(content.as_bytes()).unwrap_or_else(|err| {
+                file.write_all(content.as_slice()).unwrap_or_else(|err| {
                     eprintln!(
                         "Unable to write bindings to output file {} - {:?}",
                         full_path.display(),

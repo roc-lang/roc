@@ -1,6 +1,6 @@
 platform "roc-lang/glue"
-    requires {} { makeGlue : List Types -> Result (List File) Str }
-    exposes [File, Target, Architecture, OperatingSystem, Types, RocType, RocNum, RocTagUnion]
+    requires {} { makeGlue : List Types -> Result (List { path : Str, content : List U8 }) Str }
+    exposes []
     packages {}
     imports []
     provides [makeGlueForHost]
@@ -8,7 +8,7 @@ platform "roc-lang/glue"
 makeGlueForHost : List Types -> Result (List File) Str
 makeGlueForHost = \x -> makeGlue x
 
-File : { name : Str, content : Str }
+File : { path : Str, content : List U8 }
 
 # TODO move into separate Target.roc interface once glue works across interfaces.
 Target : {
