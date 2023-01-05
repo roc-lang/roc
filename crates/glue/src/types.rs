@@ -13,7 +13,7 @@ use roc_module::{
 };
 use roc_mono::layout::{
     cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
-    LayoutCache, LayoutInterner, UnionLayout,
+    LayoutCache, TLLayoutInterner, UnionLayout,
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -362,7 +362,7 @@ impl Types {
 
     pub fn add_named<'a>(
         &mut self,
-        interner: &LayoutInterner<'a>,
+        interner: &TLLayoutInterner<'a>,
         name: String,
         typ: RocType,
         layout: Layout<'a>,
@@ -390,7 +390,7 @@ impl Types {
 
     pub fn add_anonymous<'a>(
         &mut self,
-        interner: &LayoutInterner<'a>,
+        interner: &TLLayoutInterner<'a>,
         typ: RocType,
         layout: Layout<'a>,
     ) -> TypeId {
@@ -674,7 +674,7 @@ impl<'a> Env<'a> {
         arena: &'a Bump,
         subs: &'a Subs,
         interns: &'a Interns,
-        layout_interner: LayoutInterner<'a>,
+        layout_interner: TLLayoutInterner<'a>,
         target: TargetInfo,
     ) -> Self {
         Env {

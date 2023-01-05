@@ -2,7 +2,7 @@ use crate::ir::{
     build_list_index_probe, BranchInfo, Call, CallType, DestructType, Env, Expr, JoinPointId,
     ListIndex, Literal, Param, Pattern, Procs, Stmt,
 };
-use crate::layout::{Builtin, Layout, LayoutCache, LayoutInterner, TagIdIntType, UnionLayout};
+use crate::layout::{Builtin, Layout, LayoutCache, TLLayoutInterner, TagIdIntType, UnionLayout};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
@@ -1359,7 +1359,7 @@ enum PathInstruction {
 
 fn path_to_expr_help<'a>(
     env: &mut Env<'a, '_>,
-    layout_interner: &LayoutInterner<'a>,
+    layout_interner: &TLLayoutInterner<'a>,
     mut symbol: Symbol,
     path: &[PathInstruction],
     mut layout: Layout<'a>,
@@ -1462,7 +1462,7 @@ fn path_to_expr_help<'a>(
 
 fn test_to_comparison<'a>(
     env: &mut Env<'a, '_>,
-    layout_interner: &LayoutInterner<'a>,
+    layout_interner: &TLLayoutInterner<'a>,
     cond_symbol: Symbol,
     cond_layout: &Layout<'a>,
     path: &[PathInstruction],
@@ -1619,7 +1619,7 @@ type Tests<'a> = std::vec::Vec<(
 
 fn stores_and_condition<'a>(
     env: &mut Env<'a, '_>,
-    layout_interner: &LayoutInterner<'a>,
+    layout_interner: &TLLayoutInterner<'a>,
     cond_symbol: Symbol,
     cond_layout: &Layout<'a>,
     test_chain: Vec<(Vec<PathInstruction>, Test<'a>)>,

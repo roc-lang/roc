@@ -1,12 +1,11 @@
 use std::fmt::Display;
 
-use roc_intern::Interner;
 use roc_module::symbol::{Interns, Symbol};
 use ven_pretty::{Arena, DocAllocator, DocBuilder};
 
 use crate::{
     ir::{Parens, ProcLayout},
-    layout::Layout,
+    layout::{Layout, LayoutInterner},
 };
 
 use super::{
@@ -20,7 +19,7 @@ pub fn format_problems<'a, I>(
     problems: Problems<'a>,
 ) -> impl Display
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     let Problems(problems) = problems;
     let f = Arena::new();
@@ -44,7 +43,7 @@ fn format_problem<'a, 'd, I>(
 ) -> Doc<'d>
 where
     'a: 'd,
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     let Problem {
         proc,
@@ -118,7 +117,7 @@ fn format_kind<'a, 'd, I>(
     kind: ProblemKind<'a>,
 ) -> (&'static str, Vec<(usize, Doc<'d>)>, Doc<'d>)
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     let title;
     let docs_before;
@@ -445,7 +444,7 @@ fn format_proc_spec<'a, 'd, I>(
     proc_layout: ProcLayout<'a>,
 ) -> Doc<'d>
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     f.concat([
         f.as_string(symbol.as_str(interns)),
@@ -460,7 +459,7 @@ fn format_proc_layout<'a, 'd, I>(
     proc_layout: ProcLayout<'a>,
 ) -> Doc<'d>
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     let ProcLayout {
         arguments,

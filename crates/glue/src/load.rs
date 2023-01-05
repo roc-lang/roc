@@ -1,8 +1,8 @@
 use crate::rust_glue;
 use crate::types::{Env, Types};
 use bumpalo::Bump;
-use roc_intern::GlobalInterner;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
+use roc_mono::layout::GlobalLayoutInterner;
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::{Architecture, OperatingSystem, TargetInfo};
@@ -150,7 +150,7 @@ pub fn load_types(
         }
     });
 
-    let layout_interner = GlobalInterner::with_capacity(128);
+    let layout_interner = GlobalLayoutInterner::with_capacity(128);
 
     let architectures = Architecture::iter();
     let mut types_and_targets = Vec::with_capacity(architectures.len());

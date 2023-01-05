@@ -5,7 +5,7 @@ use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, FnvMap, MutMap};
 use roc_error_macros::{internal_error, todo_abilities};
-use roc_intern::{Interner, SingleThreadedInterner, ThreadLocalInterner};
+use roc_intern::Interner;
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
@@ -21,6 +21,9 @@ use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use ven_pretty::{DocAllocator, DocBuilder};
+
+mod intern;
+pub use intern::{GlobalLayoutInterner, LayoutInterner, STLayoutInterner, TLLayoutInterner};
 
 // if your changes cause this number to go down, great!
 // please change it to the lower number.
@@ -97,9 +100,6 @@ macro_rules! inc_stat {
     };
 }
 
-pub type LayoutInterner<'a> = ThreadLocalInterner<'a, Layout<'a>>;
-pub type STLayoutInterner<'a> = SingleThreadedInterner<'a, Layout<'a>>;
-
 /// Layout cache to avoid recomputing [Layout] from a [Variable] multiple times.
 #[derive(Debug)]
 pub struct LayoutCache<'a> {
@@ -107,7 +107,7 @@ pub struct LayoutCache<'a> {
     cache: std::vec::Vec<CacheLayer<LayoutResult<'a>>>,
     raw_function_cache: std::vec::Vec<CacheLayer<RawFunctionLayoutResult<'a>>>,
 
-    pub interner: LayoutInterner<'a>,
+    pub interner: TLLayoutInterner<'a>,
 
     /// Statistics on the usage of the layout cache.
     #[cfg(debug_assertions)]
@@ -117,7 +117,7 @@ pub struct LayoutCache<'a> {
 }
 
 impl<'a> LayoutCache<'a> {
-    pub fn new(interner: LayoutInterner<'a>, target_info: TargetInfo) -> Self {
+    pub fn new(interner: TLLayoutInterner<'a>, target_info: TargetInfo) -> Self {
         let mut cache = std::vec::Vec::with_capacity(4);
         cache.push(CacheLayer::default());
         let mut raw_cache = std::vec::Vec::with_capacity(4);
@@ -743,7 +743,7 @@ impl<'a> UnionLayout<'a> {
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         use UnionLayout::*;
 
@@ -982,7 +982,7 @@ impl<'a> UnionLayout<'a> {
         target_info: TargetInfo,
     ) -> u32
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         tags.iter()
             .map(|field_layouts| {
@@ -994,7 +994,7 @@ impl<'a> UnionLayout<'a> {
 
     pub fn allocation_alignment_bytes<I>(&self, interner: &I, target_info: TargetInfo) -> u32
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let allocation = match self {
             UnionLayout::NonRecursive(tags) => {
@@ -1019,7 +1019,7 @@ impl<'a> UnionLayout<'a> {
     /// Size of the data in memory, whether it's stack or heap (for non-null tag ids)
     pub fn data_size_and_alignment<I>(&self, interner: &I, target_info: TargetInfo) -> (u32, u32)
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let (data_width, data_align) =
             self.data_size_and_alignment_help_match(interner, target_info);
@@ -1052,7 +1052,7 @@ impl<'a> UnionLayout<'a> {
     /// Returns None if the tag_id is not stored as data in the layout.
     pub fn data_size_without_tag_id<I>(&self, interner: &I, target_info: TargetInfo) -> Option<u32>
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         if !self.stores_tag_id_as_data(target_info) {
             return None;
@@ -1070,7 +1070,7 @@ impl<'a> UnionLayout<'a> {
         target_info: TargetInfo,
     ) -> (u32, u32)
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         match self {
             Self::NonRecursive(tags) => {
@@ -1093,7 +1093,7 @@ impl<'a> UnionLayout<'a> {
 
     pub fn tag_id_offset<I>(&self, interner: &I, target_info: TargetInfo) -> Option<u32>
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         match self {
             UnionLayout::NonRecursive(tags)
@@ -1111,7 +1111,7 @@ impl<'a> UnionLayout<'a> {
         target_info: TargetInfo,
     ) -> u32
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let (data_width, data_align) =
             Layout::stack_size_and_alignment_slices(interner, layouts, target_info);
@@ -1122,7 +1122,7 @@ impl<'a> UnionLayout<'a> {
     /// Very important to use this when doing a memcpy!
     fn stack_size_without_alignment<I>(&self, interner: &I, target_info: TargetInfo) -> u32
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         match self {
             UnionLayout::NonRecursive(_) => {
@@ -1281,7 +1281,7 @@ impl<'a> Niche<'a> {
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         match self.0 {
             NichePriv::Captures(captures) => alloc.concat([
@@ -1394,7 +1394,7 @@ pub enum ClosureCallOptions<'a> {
 impl<'a> LambdaSet<'a> {
     pub fn runtime_representation<I>(&self, interner: &I) -> Layout<'a>
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         *interner.get(self.representation)
     }
@@ -1406,7 +1406,7 @@ impl<'a> LambdaSet<'a> {
 
     pub fn is_represented<I>(&self, interner: &I) -> Option<Layout<'a>>
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         if self.has_unwrapped_capture_repr() {
             let repr = interner.get(self.representation);
@@ -1450,7 +1450,7 @@ impl<'a> LambdaSet<'a> {
         lambda_name: LambdaName,
     ) -> ClosureRepresentation<'a>
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         debug_assert!(self.contains(lambda_name.name));
 
@@ -1475,7 +1475,7 @@ impl<'a> LambdaSet<'a> {
         captures_layouts: &[Layout],
     ) -> LambdaName<'a>
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         debug_assert!(
             self.contains(function_symbol),
@@ -1516,7 +1516,7 @@ impl<'a> LambdaSet<'a> {
     /// Resolves recursive pointers to the layout of the lambda set.
     fn capture_layouts_eq<I>(&self, interner: &I, left: &InLayout<'a>, right: &Layout) -> bool
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let left = interner.get(*left);
         if left == right {
@@ -1550,7 +1550,7 @@ impl<'a> LambdaSet<'a> {
 
     fn layout_for_member<I, F>(&self, interner: &I, comparator: F) -> ClosureRepresentation<'a>
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
         F: Fn(Symbol, &[InLayout]) -> bool,
     {
         if self.has_unwrapped_capture_repr() {
@@ -1663,7 +1663,7 @@ impl<'a> LambdaSet<'a> {
 
     pub fn call_by_name_options<I>(&self, interner: &I) -> ClosureCallOptions<'a>
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let repr = interner.get(self.representation);
 
@@ -1907,7 +1907,7 @@ impl<'a> LambdaSet<'a> {
 
     pub fn stack_size<I>(&self, interner: &I, target_info: TargetInfo) -> u32
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         interner
             .get(self.representation)
@@ -1915,7 +1915,7 @@ impl<'a> LambdaSet<'a> {
     }
     pub fn contains_refcounted<I>(&self, interner: &I) -> bool
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         interner
             .get(self.representation)
@@ -1923,14 +1923,14 @@ impl<'a> LambdaSet<'a> {
     }
     pub fn safe_to_memcpy<I>(&self, interner: &I) -> bool
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         interner.get(self.representation).safe_to_memcpy(interner)
     }
 
     pub fn alignment_bytes<I>(&self, interner: &I, target_info: TargetInfo) -> u32
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         interner
             .get(self.representation)
@@ -2399,7 +2399,7 @@ impl<'a> Layout<'a> {
 
     pub fn safe_to_memcpy<I>(&self, interner: &I) -> bool
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         use Layout::*;
 
@@ -2445,7 +2445,7 @@ impl<'a> Layout<'a> {
 
     pub fn is_passed_by_reference<I>(&self, interner: &I, target_info: TargetInfo) -> bool
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         match self {
             Layout::Builtin(builtin) => {
@@ -2472,7 +2472,7 @@ impl<'a> Layout<'a> {
 
     pub fn stack_size<I>(&self, interner: &I, target_info: TargetInfo) -> u32
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let width = self.stack_size_without_alignment(interner, target_info);
         let alignment = self.alignment_bytes(interner, target_info);
@@ -2482,7 +2482,7 @@ impl<'a> Layout<'a> {
 
     pub fn stack_size_and_alignment<I>(&self, interner: &I, target_info: TargetInfo) -> (u32, u32)
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let width = self.stack_size_without_alignment(interner, target_info);
         let alignment = self.alignment_bytes(interner, target_info);
@@ -2494,7 +2494,7 @@ impl<'a> Layout<'a> {
     /// Very important to use this when doing a memcpy!
     pub fn stack_size_without_alignment<I>(&self, interner: &I, target_info: TargetInfo) -> u32
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         use Layout::*;
 
@@ -2520,7 +2520,7 @@ impl<'a> Layout<'a> {
 
     pub fn alignment_bytes<I>(&self, interner: &I, target_info: TargetInfo) -> u32
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         match self {
             Layout::Struct { field_layouts, .. } => field_layouts
@@ -2572,7 +2572,7 @@ impl<'a> Layout<'a> {
 
     pub fn allocation_alignment_bytes<I>(&self, interner: &I, target_info: TargetInfo) -> u32
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let ptr_width = target_info.ptr_width() as u32;
 
@@ -2598,7 +2598,7 @@ impl<'a> Layout<'a> {
         target_info: TargetInfo,
     ) -> (u32, u32)
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let mut data_align = 1;
         let mut data_width = 0;
@@ -2642,7 +2642,7 @@ impl<'a> Layout<'a> {
     /// goes out of scope, the refcount on those values/fields must  be decremented.
     pub fn contains_refcounted<I>(&self, interner: &I) -> bool
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         use Layout::*;
 
@@ -2683,7 +2683,7 @@ impl<'a> Layout<'a> {
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         use Layout::*;
 
@@ -2725,7 +2725,7 @@ impl<'a> Layout<'a> {
 
     pub fn runtime_representation<I>(&self, interner: &I) -> Self
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         match self {
             Layout::LambdaSet(lambda_set) => lambda_set.runtime_representation(interner),
@@ -2927,7 +2927,7 @@ impl<'a> Builtin<'a> {
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         use Builtin::*;
 
@@ -2973,7 +2973,7 @@ impl<'a> Builtin<'a> {
 
     pub fn allocation_alignment_bytes<I>(&self, interner: &I, target_info: TargetInfo) -> u32
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let ptr_width = target_info.ptr_width() as u32;
 
@@ -4377,7 +4377,7 @@ pub fn cmp_fields<'a, L: Ord, I>(
     target_info: TargetInfo,
 ) -> Ordering
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     let size1 = layout1.alignment_bytes(interner, target_info);
     let size2 = layout2.alignment_bytes(interner, target_info);
@@ -4391,7 +4391,7 @@ mod test {
 
     #[test]
     fn width_and_alignment_union_empty_struct() {
-        let mut interner = SingleThreadedInterner::with_capacity(4);
+        let mut interner = STLayoutInterner::with_capacity(4);
 
         let lambda_set = LambdaSet {
             set: &[(Symbol::LIST_MAP, &[])],
@@ -4411,7 +4411,7 @@ mod test {
 
     #[test]
     fn memcpy_size_result_u32_unit() {
-        let interner = SingleThreadedInterner::with_capacity(4);
+        let interner = STLayoutInterner::with_capacity(4);
 
         let ok_tag = &[Layout::Builtin(Builtin::Int(IntWidth::U32))];
         let err_tag = &[Layout::UNIT];
@@ -4428,7 +4428,7 @@ mod test {
 
     #[test]
     fn void_stack_size() {
-        let interner = SingleThreadedInterner::with_capacity(4);
+        let interner = STLayoutInterner::with_capacity(4);
         let target_info = TargetInfo::default_x86_64();
         assert_eq!(Layout::VOID.stack_size(&interner, target_info), 0);
     }

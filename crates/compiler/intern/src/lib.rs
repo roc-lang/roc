@@ -3,6 +3,7 @@
 use std::{
     cell::RefCell,
     hash::{BuildHasher, Hash, Hasher},
+    marker::PhantomData,
     sync::Arc,
 };
 
@@ -22,6 +23,25 @@ impl<T> Clone for Interned<T> {
 }
 
 impl<T> Copy for Interned<T> {}
+
+impl<T> Interned<T> {
+    /// # Safety
+    ///
+    /// The index is not guaranteed to exist. Use this only when creating an interner with constant
+    /// indices, with the variant that `insert` returns a monotonically increasing index.
+    ///
+    /// For example:
+    ///
+    /// ```ignore(illustrative)
+    /// let reserved_interned = Interned::from_reserved_index(0);
+    /// let interner = GlobalInterner::with_capacity(1);
+    /// let inserted = interner.insert("something");
+    /// assert_eq!(reserved_interned, inserted);
+    /// ```
+    pub const unsafe fn from_reserved_index(index: usize) -> Self {
+        Self(index, PhantomData)
+    }
+}
 
 /// A concurrent interner, suitable for usage between threads.
 ///
@@ -143,6 +163,10 @@ impl<'a, K: Hash + Eq> GlobalInterner<'a, K> {
         let Interned(index, _) = interned;
         self.vec.read()[index]
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.vec.read().is_empty()
+    }
 }
 
 impl<'a, K: Hash + Eq> ThreadLocalInterner<'a, K> {
@@ -200,6 +224,10 @@ impl<'a, K> SingleThreadedInterner<'a, K> {
             map: Mutex::new(map),
             vec: RwLock::new(vec),
         })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.vec.is_empty()
     }
 }
 

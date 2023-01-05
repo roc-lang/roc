@@ -11,7 +11,9 @@ use crate::code_gen_help::let_lowlevel;
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, InLayout, Layout, STLayoutInterner, TagIdIntType, UnionLayout};
+use crate::layout::{
+    Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+};
 
 use super::{CodeGenHelp, Context, HelperOp};
 
@@ -420,7 +422,7 @@ pub fn refcount_reset_proc_body<'a>(
 // progress incrementally. Kept in sync with generate_procs using assertions.
 pub fn is_rc_implemented_yet<'a, I>(interner: &I, layout: &Layout<'a>) -> bool
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     use UnionLayout::*;
 
