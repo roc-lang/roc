@@ -288,15 +288,11 @@ diff = \{ rendered, patches }, newNode ->
                         }
                         { rendered: renderedAfterCreate, patches: patchesAfterCreate, ids: createdIds } =
                             List.walkFrom newChildren (List.len oldChildren) stateBeforeCreate createChildNode
-                        # Find the children again since they might have new node IDs!
-                        latestNode =
-                            List.get renderedAfterCreate.nodes root
-                            |> Result.withDefault (Ok RenderedNone)
-                            |> Result.withDefault (RenderedNone)
+                        # Look up the children again since they might have new node IDs!
                         nodeWithUpdatedChildren =
-                            when latestNode is
-                                RenderedElement n a c -> RenderedElement n a (List.concat c createdIds)
-                                _ -> latestNode # impossible
+                            when List.get renderedAfterCreate.nodes root is
+                                Ok (Ok (RenderedElement n a c)) -> RenderedElement n a (List.concat c createdIds)
+                                _ -> crash "Bug in virtual-dom framework: nodeWithUpdatedChildren not found"
                         updatedNodes =
                             List.set renderedAfterCreate.nodes root (Ok nodeWithUpdatedChildren)
 
