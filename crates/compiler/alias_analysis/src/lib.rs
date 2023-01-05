@@ -6,7 +6,6 @@ use morphic_lib::{
     TypeDefBuilder, TypeId, TypeName, UpdateModeVar, ValueId,
 };
 use roc_collections::all::{MutMap, MutSet};
-use roc_intern::Interner;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
 
@@ -15,7 +14,8 @@ use roc_mono::ir::{
     Literal, ModifyRc, OptLevel, Proc, ProcLayout, SingleEntryPoint, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, FieldOrderHash, Layout, Niche, RawFunctionLayout, STLayoutInterner, UnionLayout,
+    Builtin, FieldOrderHash, Layout, LayoutInterner, Niche, RawFunctionLayout, STLayoutInterner,
+    UnionLayout,
 };
 
 // just using one module for now

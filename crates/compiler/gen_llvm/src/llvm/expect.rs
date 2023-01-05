@@ -9,10 +9,9 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
-use roc_intern::Interner;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::LookupType;
-use roc_mono::layout::{Builtin, Layout, LayoutIds, STLayoutInterner, UnionLayout};
+use roc_mono::layout::{Builtin, Layout, LayoutIds, LayoutInterner, STLayoutInterner, UnionLayout};
 use roc_region::all::Region;
 
 use super::build::BuilderExt;

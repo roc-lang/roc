@@ -2,12 +2,13 @@ use crate::ir::{
     build_list_index_probe, BranchInfo, Call, CallType, DestructType, Env, Expr, JoinPointId,
     ListIndex, Literal, Param, Pattern, Procs, Stmt,
 };
-use crate::layout::{Builtin, Layout, LayoutCache, TLLayoutInterner, TagIdIntType, UnionLayout};
+use crate::layout::{
+    Builtin, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, TagIdIntType, UnionLayout,
+};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
 use roc_exhaustive::{Ctor, CtorName, ListArity, RenderAs, TagId, Union};
-use roc_intern::Interner;
 use roc_module::ident::TagName;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;

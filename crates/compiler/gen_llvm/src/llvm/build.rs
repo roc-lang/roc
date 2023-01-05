@@ -38,15 +38,14 @@ use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
 use roc_error_macros::internal_error;
-use roc_intern::Interner;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc,
     OptLevel, ProcLayout, SingleEntryPoint,
 };
 use roc_mono::layout::{
-    Builtin, LambdaName, LambdaSet, Layout, LayoutIds, Niche, RawFunctionLayout, STLayoutInterner,
-    TagIdIntType, UnionLayout,
+    Builtin, LambdaName, LambdaSet, Layout, LayoutIds, LayoutInterner, Niche, RawFunctionLayout,
+    STLayoutInterner, TagIdIntType, UnionLayout,
 };
 use roc_std::RocDec;
 use roc_target::{PtrWidth, TargetInfo};

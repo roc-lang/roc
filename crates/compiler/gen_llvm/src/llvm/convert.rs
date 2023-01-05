@@ -5,8 +5,9 @@ use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::values::StructValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_intern::Interner;
-use roc_mono::layout::{round_up_to_alignment, Builtin, Layout, STLayoutInterner, UnionLayout};
+use roc_mono::layout::{
+    round_up_to_alignment, Builtin, Layout, LayoutInterner, STLayoutInterner, UnionLayout,
+};
 use roc_target::TargetInfo;
 
 fn basic_type_from_record<'a, 'ctx, 'env>(
