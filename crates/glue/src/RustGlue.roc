@@ -903,7 +903,7 @@ escapeKW = \input ->
     else
         input
 
-# This is a temporary helper until roc_std::roc_dict is update.
+# This is a temporary helper until roc_std::roc_dict is updated.
 # after that point, Dict will be passed in directly.
 typesWithDict = \{ types, sizes, aligns, typesByName, deps, target } -> {
     types,
