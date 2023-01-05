@@ -6,7 +6,7 @@ interface Parser.Http
         # parseResponse,
     ]
     imports [
-        Parser.Core.{ Parser, ParseResult, map, apply, const, oneOrMore },
+        Parser.Core.{ Parser, ParseResult, map, apply, skip, const, oneOrMore },
         Parser.Str.{
             RawStr,
             oneOf,
@@ -74,21 +74,21 @@ digits = digit |> oneOrMore |> map strFromRaw
 
 httpVersion : Parser RawStr HttpVersion
 httpVersion =
-    const (\_ -> \major -> \dot -> \minor -> "\(major).\(minor)")
-    |> apply (string "HTTP/")
+    const (\major -> \minor -> "\(major).\(minor)")
+    |> skip (string "HTTP/")
     |> apply digits
-    |> apply (codeunit '.')
+    |> skip (codeunit '.')
     |> apply digits
 
 requestStartLine : Parser RawStr RequestStartLine
 requestStartLine =
-    const (\m -> \_ -> \u -> \_ -> \hv -> \_ -> { method: m, uri: u, httpVersion: hv })
+    const (\m -> \u -> \hv -> { method: m, uri: u, httpVersion: hv })
     |> apply method
-    |> apply sp
+    |> skip sp
     |> apply requestUri
-    |> apply sp
+    |> skip sp
     |> apply httpVersion
-    |> apply crlf
+    |> skip crlf
 
 expect
     actual = parseStr requestStartLine "GET / HTTP/1.1\r\n"

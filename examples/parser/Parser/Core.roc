@@ -8,6 +8,7 @@ interface Parser.Core
         const,
         alt,
         apply,
+        skip,
         oneOf,
         map,
         map2,
@@ -141,6 +142,24 @@ apply = \funParser, valParser ->
             { val: funVal val, input: rest2 }
 
     buildPrimitiveParser combined
+
+## Skip over a parsed item as part of a pipeline
+##
+## This is useful if you are using a pipeline of parsers with `apply` but
+## some parsed items are not part of the final result
+##
+## >>> const (\x -> \y -> \z -> Triple x y z)
+## >>> |> apply Parser.Str.nat
+## >>> |> skip (codeunit ',')
+## >>> |> apply Parser.Str.nat
+## >>> |> skip (codeunit ',')
+## >>> |> apply Parser.Str.nat
+##
+skip : Parser input kept, Parser input skipped -> Parser input kept
+skip = \kept, skipped ->
+    const (\k -> \_ -> k)
+    |> apply kept
+    |> apply skipped
 
 # Internal utility function. Not exposed to users, since usage is discouraged!
 #
