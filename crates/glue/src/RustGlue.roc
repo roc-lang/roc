@@ -767,33 +767,15 @@ getType = \types, id ->
         Err _ -> crash "unreachable"
 
 getSizeRoundedToAlignment = \types, id ->
-    alignment = getAlignment types id
+    alignment = RocType.alignment types id
 
     getSizeIgnoringAlignment types id
-    |> roundUpToAlignment alignment
+    |> RocType.roundUpToAlignment alignment
 
 getSizeIgnoringAlignment = \types, id ->
     when List.get types.sizes id is
         Ok size -> size
         Err _ -> crash "unreachable"
-
-# TODO: to reproduce Ability bug, uncomment this:
-#getAlignment : RocType.Types, RocType.TypeId -> U32
-getAlignment : _, RocType.TypeId -> U32
-getAlignment = \types, id ->
-    when List.get types.aligns id is
-        Ok align -> align
-        Err _ -> crash "unreachable"
-
-roundUpToAlignment = \width, alignment ->
-    when alignment is
-        0 -> width
-        1 -> width
-        _ ->
-            if width % alignment > 0 then
-                width + alignment - (width % alignment)
-            else
-                width
 
 walkWithIndex = \list, originalState, f ->
     stateWithId =
