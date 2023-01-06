@@ -1,9 +1,9 @@
 interface Parser.Http
     exposes [
         Request,
-        # Response,
-        # parseRequest,
-        # parseResponse,
+        Response,
+        request,
+        response,
     ]
     imports [
         Parser.Core.{ Parser, ParseResult, map, apply, skip, const, oneOrMore, many },
@@ -28,6 +28,14 @@ Request : {
     method : Method,
     uri : Str,
     httpVersion : HttpVersion,
+    headers : List [Header Str Str],
+    body : List U8,
+}
+
+Response : {
+    httpVersion : HttpVersion,
+    statusCode : Str,
+    status : Str,
     headers : List [Header Str Str],
     body : List U8,
 }
@@ -77,14 +85,14 @@ httpVersion =
 
 Header : [Header Str Str]
 
-headerKey : Parser RawStr Str
-headerKey =
+stringWithoutColon : Parser RawStr Str
+stringWithoutColon =
     codeunitSatisfies \c -> c != ':'
     |> oneOrMore
     |> map strFromRaw
 
-headerValue : Parser RawStr Str
-headerValue =
+stringWithoutCr : Parser RawStr Str
+stringWithoutCr =
     codeunitSatisfies \c -> c != '\r'
     |> oneOrMore
     |> map strFromRaw
@@ -92,9 +100,9 @@ headerValue =
 header : Parser RawStr Header
 header =
     const (\k -> \v -> Header k v)
-    |> apply headerKey
+    |> apply stringWithoutColon
     |> skip (string ": ")
-    |> apply headerValue
+    |> apply stringWithoutCr
     |> skip crlf
 
 expect
@@ -116,7 +124,7 @@ request =
     |> apply anyRawString
 
 expect
-    httpText =
+    requestText =
         """
         GET /things?id=1 HTTP/1.1\r
         Host: bar.example\r
@@ -124,8 +132,8 @@ expect
         \r
         Hello, world!
         """
-
-    actual = parseStr request httpText
+    actual =
+        parseStr request requestText
     expected = Ok {
         method: Get,
         uri: "/things?id=1",
@@ -136,11 +144,10 @@ expect
         ],
         body: "Hello, world!" |> Str.toUtf8,
     }
-
     actual == expected
 
 expect
-    httpText =
+    requestText =
         """
         OPTIONS /resources/post-here/ HTTP/1.1\r
         Host: bar.example\r
@@ -153,7 +160,8 @@ expect
         Access-Control-Request-Headers: X-PINGOTHER, Content-Type\r
         \r\n
         """
-    actual = parseStr request httpText
+    actual =
+        parseStr request requestText
     expected = Ok {
         method: Options,
         uri: "/resources/post-here/",
@@ -170,5 +178,80 @@ expect
         ],
         body: [],
     }
-
     actual == expected
+
+response : Parser RawStr Response
+response =
+    const (\hv -> \sc -> \s -> \hs -> \b -> { httpVersion: hv, statusCode: sc, status: s, headers: hs, body: b })
+    |> apply httpVersion
+    |> skip sp
+    |> apply digits
+    |> skip sp
+    |> apply stringWithoutCr
+    |> skip crlf
+    |> apply (many header)
+    |> skip crlf
+    |> apply anyRawString
+
+expect
+    body =
+        """
+        <!DOCTYPE html>\r
+        <html lang="en">\r
+        <head>\r
+        <meta charset="utf-8">\r
+        <title>A simple webpage</title>\r
+        </head>\r
+        <body>\r
+        <h1>Simple HTML webpage</h1>\r
+        <p>Hello, world!</p>\r
+        </body>\r
+        </html>\r\n
+        """
+    responseText =
+        """
+        HTTP/1.1 200 OK\r
+        Content-Type: text/html; charset=utf-8\r
+        Content-Length: 55743\r
+        Connection: keep-alive\r
+        Cache-Control: s-maxage=300, public, max-age=0\r
+        Content-Language: en-US\r
+        Date: Thu, 06 Dec 2018 17:37:18 GMT\r
+        ETag: "2e77ad1dc6ab0b53a2996dfd4653c1c3"\r
+        Server: meinheld/0.6.1\r
+        Strict-Transport-Security: max-age=63072000\r
+        X-Content-Type-Options: nosniff\r
+        X-Frame-Options: DENY\r
+        X-XSS-Protection: 1; mode=block\r
+        Vary: Accept-Encoding,Cookie\r
+        Age: 7\r
+        \r
+        \(body)
+        """
+    actual =
+        parseStr response responseText
+    expected =
+        Ok {
+            httpVersion: "1.1",
+            statusCode: "200",
+            status: "OK",
+            headers: [
+                Header "Content-Type" "text/html; charset=utf-8",
+                Header "Content-Length" "55743",
+                Header "Connection" "keep-alive",
+                Header "Cache-Control" "s-maxage=300, public, max-age=0",
+                Header "Content-Language" "en-US",
+                Header "Date" "Thu, 06 Dec 2018 17:37:18 GMT",
+                Header "ETag" "\"2e77ad1dc6ab0b53a2996dfd4653c1c3\"",
+                Header "Server" "meinheld/0.6.1",
+                Header "Strict-Transport-Security" "max-age=63072000",
+                Header "X-Content-Type-Options" "nosniff",
+                Header "X-Frame-Options" "DENY",
+                Header "X-XSS-Protection" "1; mode=block",
+                Header "Vary" "Accept-Encoding,Cookie",
+                Header "Age" "7",
+            ],
+            body: Str.toUtf8 body,
+        }
+    actual == expected
+
