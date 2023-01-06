@@ -160,23 +160,19 @@ RocTagUnion : [
         },
 ]
 
-# TODO: to reproduce an Ability bug, uncomment this:
-# type : Types, TypeId -> U32
+# TODO: to reproduce an Ability bug, replace this _ with Types:
 type : _, TypeId -> RocType
 type = \types, id -> getOrCrash types .types id
 
-# TODO: to reproduce an Ability bug, uncomment this:
-# alignment : Types, TypeId -> U32
+# TODO: to reproduce an Ability bug, replace this _ with Types:
 alignment : _, TypeId -> U32
 alignment = \types, id -> getOrCrash types .aligns id
 
-# TODO: to reproduce an Ability bug, uncomment this:
-# sizeIgnoringAlignment : Types, TypeId -> U32
+# TODO: to reproduce an Ability bug, replace this _ with Types:
 sizeIgnoringAlignment : _, TypeId -> U32
 sizeIgnoringAlignment = \types, id -> getOrCrash types .sizes id
 
-# TODO: to reproduce an Ability bug, uncomment this:
-# sizeRoundedToAlignment : Types, TypeId -> U32
+# TODO: to reproduce an Ability bug, replace this _ with Types:
 sizeRoundedToAlignment : _, TypeId -> U32
 sizeRoundedToAlignment = \types, id ->
     sizeIgnoringAlignment types id

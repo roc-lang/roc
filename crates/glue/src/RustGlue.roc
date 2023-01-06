@@ -1,6 +1,10 @@
 app "rust-glue"
     packages { pf: "main.roc" }
-    imports [pf.Target.{ Architecture }, pf.OutputFile.{ OutputFile }, pf.RocType.{ TypeId }]
+    imports [
+        pf.Target.{ Architecture },
+        pf.OutputFile.{ OutputFile },
+        pf.RocType.{ TypeId, RocType },
+    ]
     provides [makeGlue] to pf
 
 makeGlue : List _ -> Result (List OutputFile) Str
@@ -612,6 +616,8 @@ cannotDeriveCopy = \types, type ->
         TagUnionPayload { fields } ->
             List.any fields \{ id } -> cannotDeriveCopy types (RocType.type types id)
 
+# TODO: to reproduce an Ability bug, replace this _ with Types:
+cannotDeriveDefault : _, RocType -> Bool
 cannotDeriveDefault = \types, type ->
     when type is
         Unit | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
@@ -629,9 +635,12 @@ cannotDeriveDefault = \types, type ->
         TagUnionPayload { fields } ->
             List.any fields \{ id } -> cannotDeriveDefault types (RocType.type types id)
 
+# TODO: to reproduce an Ability bug, replace this _ with Types:
+hasFloat : _, RocType -> Bool
 hasFloat = \types, type ->
     hasFloatHelp types type Set.empty
 
+hasFloatHelp : _, RocType, Set TypeId -> Bool
 hasFloatHelp = \types, type, doNotRecurse ->
     # TODO: is doNotRecurse problematic? Do we need an updated doNotRecurse for calls up the tree?
     # I think there is a change it really only matters for RecursivePointer, so it may be fine.
@@ -702,7 +711,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
                 hasFloatHelp types (RocType.type types payload) nextDoNotRecurse
 
 # TODO: to reproduce an Ability bug, uncomment this:
-# typeName : Types, TypeId -> U32
+# typeName : Types, TypeId -> Str
 typeName : _, TypeId -> Str
 typeName = \types, id ->
     when RocType.type types id is
