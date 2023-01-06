@@ -626,9 +626,8 @@ impl<'a> BorrowInfState<'a> {
 
                 // own the closure environment if the function needs to own it
                 let function_env_position = op.function_arity();
-                if let Some(false) = function_ps
-                    .get(function_env_position)
-                    .map(|p| p.ownership == Ownership::Borrowed)
+                if let Some(Ownership::Owned) =
+                    function_ps.get(function_env_position).map(|p| p.ownership)
                 {
                     self.own_var(passed_function.captured_environment);
                 }
