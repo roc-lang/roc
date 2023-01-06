@@ -1,5 +1,5 @@
 interface RocType
-    exposes [TypeId, RocType, Types, RocNum, RocTagUnion, alignment, roundUpToAlignment]
+    exposes [TypeId, RocType, Types, RocNum, RocTagUnion]
     imports [Target.{ Target }]
 
 # TODO change this to an opaque type once glue supports abilities.
@@ -149,20 +149,3 @@ RocTagUnion : [
             whichTagIsNull : [FirstTagIsNull, SecondTagIsNull],
         },
 ]
-
-alignment : Types, TypeId -> U32
-alignment = \types, id ->
-    when List.get types.aligns id is
-        Ok align -> align
-        Err _ -> crash "unreachable"
-
-roundUpToAlignment : U32, U32 -> U32
-roundUpToAlignment = \width, align ->
-    when align is
-        0 -> width
-        1 -> width
-        _ ->
-            if width % align > 0 then
-                width + align - (width % align)
-            else
-                width
