@@ -1,5 +1,16 @@
 interface RocType
-    exposes [TypeId, RocType, Types, RocNum, RocTagUnion, roundUpToAlignment, alignment, type]
+    exposes [
+        TypeId,
+        RocType,
+        Types,
+        RocNum,
+        RocTagUnion,
+        roundUpToAlignment,
+        alignment,
+        type,
+        sizeRoundedToAlignment,
+        sizeIgnoringAlignment,
+    ]
     imports [Target.{ Target }]
 
 # TODO change this to an opaque type once glue supports abilities.
@@ -15,7 +26,6 @@ TypeId : Nat
 # isEqTypeId = \@TypeId lhs, @TypeId rhs -> lhs == rhs
 # hashTypeId = \hasher, @TypeId id -> Hash.hash hasher id
 # TODO: switch AssocList uses to Dict once roc_std is updated.
-
 Types : {
     # These are all indexed by TypeId
     types : List RocType,
@@ -150,6 +160,28 @@ RocTagUnion : [
         },
 ]
 
+# TODO: to reproduce an Ability bug, uncomment this:
+# type : Types, TypeId -> U32
+type : _, TypeId -> RocType
+type = \types, id -> getOrCrash types .types id
+
+# TODO: to reproduce an Ability bug, uncomment this:
+# alignment : Types, TypeId -> U32
+alignment : _, TypeId -> U32
+alignment = \types, id -> getOrCrash types .aligns id
+
+# TODO: to reproduce an Ability bug, uncomment this:
+# sizeIgnoringAlignment : Types, TypeId -> U32
+sizeIgnoringAlignment : _, TypeId -> U32
+sizeIgnoringAlignment = \types, id -> getOrCrash types .sizes id
+
+# TODO: to reproduce an Ability bug, uncomment this:
+# sizeRoundedToAlignment : Types, TypeId -> U32
+sizeRoundedToAlignment : _, TypeId -> U32
+sizeRoundedToAlignment = \types, id ->
+    sizeIgnoringAlignment types id
+    |> roundUpToAlignment (alignment types id)
+
 roundUpToAlignment : U32, U32 -> U32
 roundUpToAlignment = \width, align ->
     when align is
@@ -160,16 +192,6 @@ roundUpToAlignment = \width, align ->
                 width + align - (width % align)
             else
                 width
-
-# TODO: to reproduce an Ability bug, uncomment this:
-#type : Types, TypeId -> U32
-type : _, TypeId -> RocType
-type = \types, id -> getOrCrash types .types id
-
-# TODO: to reproduce an Ability bug, uncomment this:
-#alignment : Types, TypeId -> U32
-alignment : _, TypeId -> U32
-alignment = \types, id -> getOrCrash types .aligns id
 
 getOrCrash : _, _, TypeId -> _
 getOrCrash = \types, typesToList, id ->

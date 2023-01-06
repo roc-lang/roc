@@ -313,7 +313,7 @@ generateTagUnionSizer = \buf, types, id, tags ->
         # (Do this even if theoretically shouldn't be necessary, since
         # there's no runtime cost and it more explicitly syncs the
         # union's size with what we think it should be.)
-        size = getSizeRoundedToAlignment types id
+        size = RocType.sizeRoundedToAlignment types id
         sizeStr = Num.toStr size
 
         Str.concat buf "\(indent)_sizer: [u8; \(sizeStr)],\n"
@@ -761,18 +761,6 @@ typeName = \types, id ->
         TagUnion (SingleTagStruct { name }) -> escapeKW name
         Function { name } -> escapeKW name
 
-
-getSizeRoundedToAlignment = \types, id ->
-    alignment = RocType.alignment types id
-
-    getSizeIgnoringAlignment types id
-    |> RocType.roundUpToAlignment alignment
-
-getSizeIgnoringAlignment = \types, id ->
-    when List.get types.sizes id is
-        Ok size -> size
-        Err _ -> crash "unreachable"
-
 walkWithIndex = \list, originalState, f ->
     stateWithId =
         List.walk list { id: 0, state: originalState } \{ id, state }, elem ->
@@ -817,9 +805,13 @@ fileHeader =
 
     """
 
+indent : Str
 indent = "    "
+
+discriminantDocComment : Str
 discriminantDocComment = "/// Returns which variant this tag union holds. Note that this never includes a payload!"
 
+reservedKeywords : Set Str
 reservedKeywords = Set.fromList [
     "try",
     "abstract",
@@ -874,6 +866,9 @@ reservedKeywords = Set.fromList [
     "while",
 ]
 
+## When we would generate an identifier that's a reserved keyword, escape it so that Rust will
+## accept it.
+escapeKW : Str -> Str
 escapeKW = \input ->
     # use a raw identifier for this, to prevent a syntax error due to using a reserved keyword.
     # https://doc.rust-lang.org/rust-by-example/compatibility/raw_identifiers.html
