@@ -1,6 +1,6 @@
 app "rust-glue"
     packages { pf: "main.roc" }
-    imports [pf.Target.{ Architecture }, pf.OutputFile.{ OutputFile }]
+    imports [pf.Target.{ Architecture }, pf.OutputFile.{ OutputFile }, pf.RocType]
     provides [makeGlue] to pf
 
 makeGlue : List _ -> Result (List OutputFile) Str
@@ -777,6 +777,9 @@ getSizeIgnoringAlignment = \types, id ->
         Ok size -> size
         Err _ -> crash "unreachable"
 
+# TODO: to reproduce Ability bug, uncomment this:
+#getAlignment : RocType.Types, RocType.TypeId -> U32
+getAlignment : _, RocType.TypeId -> U32
 getAlignment = \types, id ->
     when List.get types.aligns id is
         Ok align -> align
