@@ -1,6 +1,6 @@
 app "rust-glue"
     packages { pf: "main.roc" }
-    imports [pf.Target.{ Architecture }, pf.OutputFile.{ OutputFile }, pf.RocType]
+    imports [pf.Target.{ Architecture }, pf.OutputFile.{ OutputFile }, pf.RocType.{ TypeId }]
     provides [makeGlue] to pf
 
 makeGlue : List _ -> Result (List OutputFile) Str
@@ -701,6 +701,9 @@ hasFloatHelp = \types, type, doNotRecurse ->
 
                 hasFloatHelp types (RocType.type types payload) nextDoNotRecurse
 
+# TODO: to reproduce an Ability bug, uncomment this:
+# typeName : Types, TypeId -> U32
+typeName : _, TypeId -> Str
 typeName = \types, id ->
     when RocType.type types id is
         Unit -> "()"
