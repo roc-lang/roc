@@ -296,7 +296,7 @@ where
 {
     ys.iter()
         .enumerate()
-        .any(|(i, y)| x == *y && consume_param_pred(i))
+        .any(|(i, y)| x == *y && !consume_param_pred(i))
 }
 
 fn is_borrow_param(x: Symbol, ys: &[Symbol], ps: &[Param]) -> bool {
