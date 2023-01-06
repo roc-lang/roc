@@ -24,12 +24,6 @@ Method : [Options, Get, Post, Put, Delete, Head, Trace, Connect, Patch]
 
 HttpVersion : Str
 
-RequestStartLine : {
-    method : Method,
-    uri : RequestUri,
-    httpVersion : HttpVersion,
-}
-
 Request : {
     method : Method,
     uri : Str,
@@ -80,36 +74,6 @@ httpVersion =
     |> apply digits
     |> skip (codeunit '.')
     |> apply digits
-
-requestStartLine : Parser RawStr RequestStartLine
-requestStartLine =
-    const (\m -> \u -> \hv -> { method: m, uri: u, httpVersion: hv })
-    |> apply method
-    |> skip sp
-    |> apply requestUri
-    |> skip sp
-    |> apply httpVersion
-    |> skip crlf
-
-expect
-    actual = parseStr requestStartLine "GET / HTTP/1.1\r\n"
-    expected = Ok { method: Get, uri: "/", httpVersion: "1.1" }
-    actual == expected
-
-expect
-    actual = parseStr requestStartLine "GET /things?id=1 HTTP/1.1\r\n"
-    expected = Ok { method: Get, uri: "/things?id=1", httpVersion: "1.1" }
-    actual == expected
-
-expect
-    actual = parseStr requestStartLine "POST /things HTTP/1.1\r\n"
-    expected = Ok { method: Post, uri: "/things", httpVersion: "1.1" }
-    actual == expected
-
-expect
-    actual = parseStr requestStartLine "OPTIONS * HTTP/1.1\r\n"
-    expected = Ok { method: Options, uri: "*", httpVersion: "1.1" }
-    actual == expected
 
 Header : [Header Str Str]
 
