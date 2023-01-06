@@ -277,8 +277,7 @@ generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, disc
             Err ListWasEmpty ->
                 crash "unreachable"
     else
-        buf
-        |> writeTagImpls tags discriminantName indents \name, payload ->
+        writeTagImpls buf tags discriminantName indents \name, payload ->
             when payload is
                 Some id if cannotDeriveCopy types (RocType.type types id) ->
                     "unsafe {{ core::mem::ManuallyDrop::drop(&mut \(selfMut).\(name)) }},"
