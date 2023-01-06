@@ -33,12 +33,12 @@ Types : {
     aligns : List U32,
 
     # Needed to check for duplicates
-    typesByName : List [T Str TypeId],
+    typesByName : Dict Str TypeId,
 
     ## Dependencies - that is, which type depends on which other type.
     ## This is important for declaration order in C; we need to output a
     ## type declaration earlier in the file than where it gets referenced by another type.
-    deps : List [T TypeId (List TypeId)],
+    deps : Dict TypeId (List TypeId),
     target : Target,
 }
 
@@ -160,20 +160,16 @@ RocTagUnion : [
         },
 ]
 
-# TODO: to reproduce an Ability bug, replace this _ with Types:
-type : _, TypeId -> RocType
+type : Types, TypeId -> RocType
 type = \types, id -> getOrCrash types .types id
 
-# TODO: to reproduce an Ability bug, replace this _ with Types:
-alignment : _, TypeId -> U32
+alignment : Types, TypeId -> U32
 alignment = \types, id -> getOrCrash types .aligns id
 
-# TODO: to reproduce an Ability bug, replace this _ with Types:
-sizeIgnoringAlignment : _, TypeId -> U32
+sizeIgnoringAlignment : Types, TypeId -> U32
 sizeIgnoringAlignment = \types, id -> getOrCrash types .sizes id
 
-# TODO: to reproduce an Ability bug, replace this _ with Types:
-sizeRoundedToAlignment : _, TypeId -> U32
+sizeRoundedToAlignment : Types, TypeId -> U32
 sizeRoundedToAlignment = \types, id ->
     sizeIgnoringAlignment types id
     |> roundUpToAlignment (alignment types id)

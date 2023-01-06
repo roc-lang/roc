@@ -1,13 +1,13 @@
 app "rust-glue"
     packages { pf: "main.roc" }
     imports [
-        pf.Target.{ Architecture },
+        pf.Target.{ Architecture, Target },
         pf.OutputFile.{ OutputFile },
-        pf.RocType.{ TypeId, RocType },
+        pf.RocType.{ TypeId, RocType, Types },
     ]
     provides [makeGlue] to pf
 
-makeGlue : List _ -> Result (List OutputFile) Str
+makeGlue : List Types -> Result (List OutputFile) Str
 makeGlue = \types ->
     modFile = {
         path: "mod.rs",
@@ -27,12 +27,11 @@ makeGlue = \types ->
     }
 
     types
-    |> List.map typesWithDict
     |> List.map convertTypesToFile
     |> List.append modFile
     |> Ok
 
-# convertTypesToFile : List _ -> { path : List U8, content : List U8 }
+convertTypesToFile : Types -> OutputFile
 convertTypesToFile = \types ->
     content =
         walkWithIndex types.types fileHeader \buf, id, type ->
@@ -99,6 +98,7 @@ convertTypesToFile = \types ->
         content: Str.toUtf8 content,
     }
 
+generateStruct : Str, Types, TypeId, Str, List { id : TypeId, name : Str }, [Public, Private] -> Str
 generateStruct = \buf, types, id, name, fields, visibility ->
     escapedName = escapeKW name
     repr =
@@ -119,6 +119,7 @@ generateStruct = \buf, types, id, name, fields, visibility ->
     |> \b -> List.walk fields b (generateStructFields types Public)
     |> Str.concat "}\n\n"
 
+generateStructFields : Types, [Public, Private] -> (Str, { name : Str, id : TypeId } -> Str)
 generateStructFields = \types, visibility ->
     \accum, { name: fieldName, id } ->
         typeStr = typeName types id
@@ -131,6 +132,7 @@ generateStructFields = \types, visibility ->
 
         Str.concat accum "\(indent)\(pub) \(escapedFieldName): \(typeStr),\n"
 
+nameTagUnionPayloadFields : List { discriminant : Num *, id : TypeId } -> List { id : TypeId, name : Str }
 nameTagUnionPayloadFields = \fields ->
     # Tag union payloads have numbered fields, so we prefix them
     # with an "f" because Rust doesn't allow struct fields to be numbers.
@@ -286,6 +288,7 @@ generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, disc
                     # there's nothing to clean up, so do `=> {}` for the branch.
                     "{}"
 
+writeIndents : Str, Num * -> Str
 writeIndents = \buf, indents ->
     if indents <= 0 then
         buf
@@ -336,8 +339,7 @@ generateDiscriminant = \buf, types, name, tags, size ->
                     }
                 )
 
-        buf
-        |> generateEnumeration types enumType name tags size
+        generateEnumeration buf types enumType name tags size
     else
         buf
 
@@ -383,6 +385,7 @@ generateSingleTagStruct = \buf, types, name, tagName, payloadFields ->
             indexStr = Num.toStr index
 
             { name: "f\(indexStr)", id }
+
     asStructType =
         Struct {
             name,
@@ -523,6 +526,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
 
         """
 
+asRustTuple : List Str -> Str
 asRustTuple = \list ->
     # If there is 1 element in the list we just return it
     # Otherwise, we make a proper tuple string.
@@ -566,33 +570,17 @@ generateZeroElementSingleTagStruct = \buf, name, tagName ->
 
         """
 
+generateDeriveStr : Str, Types, RocType, [ExcludeDebug, IncludeDebug] -> Str
 generateDeriveStr = \buf, types, type, includeDebug ->
     buf
     |> Str.concat "#[derive(Clone, "
-    |> \b ->
-        if !(cannotDeriveCopy types type) then
-            Str.concat b "Copy, "
-        else
-            b
-    |> \b ->
-        if !(cannotDeriveDefault types type) then
-            Str.concat b "Default, "
-        else
-            b
-    |> \b ->
-        when includeDebug is
-            IncludeDebug ->
-                Str.concat b "Debug, "
-
-            ExcludeDebug ->
-                b
-    |> \b ->
-        if !(hasFloat types type) then
-            Str.concat b "Eq, Ord, Hash, "
-        else
-            b
+    |> Str.concat (if cannotDeriveCopy types type then "" else "Copy, ")
+    |> Str.concat (if cannotDeriveDefault types type then "" else "Default, ")
+    |> Str.concat (if includeDebug == ExcludeDebug then "" else "Debug, ")
+    |> Str.concat (if hasFloat types type then "" else "Eq, Ord, Hash, ")
     |> Str.concat "PartialEq, PartialOrd)]\n"
 
+cannotDeriveCopy : Types, RocType -> Bool
 cannotDeriveCopy = \types, type ->
     when type is
         Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) | Function _ -> Bool.false
@@ -616,8 +604,7 @@ cannotDeriveCopy = \types, type ->
         TagUnionPayload { fields } ->
             List.any fields \{ id } -> cannotDeriveCopy types (RocType.type types id)
 
-# TODO: to reproduce an Ability bug, replace this _ with Types:
-cannotDeriveDefault : _, RocType -> Bool
+cannotDeriveDefault : Types, RocType -> Bool
 cannotDeriveDefault = \types, type ->
     when type is
         Unit | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
@@ -635,8 +622,7 @@ cannotDeriveDefault = \types, type ->
         TagUnionPayload { fields } ->
             List.any fields \{ id } -> cannotDeriveDefault types (RocType.type types id)
 
-# TODO: to reproduce an Ability bug, replace this _ with Types:
-hasFloat : _, RocType -> Bool
+hasFloat : Types, RocType -> Bool
 hasFloat = \types, type ->
     hasFloatHelp types type Set.empty
 
@@ -710,9 +696,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
 
                 hasFloatHelp types (RocType.type types payload) nextDoNotRecurse
 
-# TODO: to reproduce an Ability bug, uncomment this:
-# typeName : Types, TypeId -> Str
-typeName : _, TypeId -> Str
+typeName : Types, TypeId -> Str
 typeName = \types, id ->
     when RocType.type types id is
         Unit -> "()"
@@ -889,14 +873,3 @@ escapeKW = \input ->
         "r#\(input)"
     else
         input
-
-# This is a temporary helper until roc_std::roc_dict is updated.
-# after that point, Dict will be passed in directly.
-typesWithDict = \{ types, sizes, aligns, typesByName, deps, target } -> {
-    types,
-    sizes,
-    aligns,
-    typesByName: Dict.fromList typesByName,
-    deps: Dict.fromList deps,
-    target,
-}
