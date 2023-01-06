@@ -164,15 +164,17 @@ roundUpToAlignment = \width, align ->
 # TODO: to reproduce an Ability bug, uncomment this:
 #type : Types, TypeId -> U32
 type : _, TypeId -> RocType
-type = \types, id ->
-    when List.get types.types id is
-        Ok typ -> typ
-        Err _ -> crash "unreachable"
+type = \types, id -> getOrCrash types .types id
 
 # TODO: to reproduce an Ability bug, uncomment this:
 #alignment : Types, TypeId -> U32
 alignment : _, TypeId -> U32
-alignment = \types, id ->
-    when List.get types.aligns id is
-        Ok align -> align
-        Err _ -> crash "unreachable"
+alignment = \types, id -> getOrCrash types .aligns id
+
+getOrCrash : _, _, TypeId -> _
+getOrCrash = \types, typesToList, id ->
+    when List.get (typesToList types) id is
+        Ok answer -> answer
+        Err OutOfBounds ->
+            idStr = Num.toStr id
+            crash "TypeId \(idStr) was not found in Types. This should never happen!"
