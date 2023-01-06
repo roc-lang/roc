@@ -1,5 +1,5 @@
 interface RocType
-    exposes [TypeId, RocType, Types, RocNum, RocTagUnion, roundUpToAlignment, alignment]
+    exposes [TypeId, RocType, Types, RocNum, RocTagUnion, roundUpToAlignment, alignment, type]
     imports [Target.{ Target }]
 
 # TODO change this to an opaque type once glue supports abilities.
@@ -160,6 +160,14 @@ roundUpToAlignment = \width, align ->
                 width + align - (width % align)
             else
                 width
+
+# TODO: to reproduce an Ability bug, uncomment this:
+#type : Types, TypeId -> U32
+type : _, TypeId -> RocType
+type = \types, id ->
+    when List.get types.types id is
+        Ok typ -> typ
+        Err _ -> crash "unreachable"
 
 # TODO: to reproduce an Ability bug, uncomment this:
 #alignment : Types, TypeId -> U32

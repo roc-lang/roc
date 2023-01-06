@@ -107,7 +107,7 @@ generateStruct = \buf, types, id, name, fields, visibility ->
             Public -> "pub"
             Private -> ""
 
-    structType = getType types id
+    structType = RocType.type types id
 
     buf
     |> generateDeriveStr types structType IncludeDebug
@@ -210,7 +210,7 @@ generateNonRecursiveTagUnion = \buf, types, id, name, tags, discriminantSize, di
         """
     |> Str.concat "// TODO: NonRecursive TagUnion constructor impls\n\n"
     |> \b ->
-        type = getType types id
+        type = RocType.type types id
         if cannotDeriveCopy types type then
             # A custom drop impl is only needed when we can't derive copy.
             b
@@ -274,7 +274,7 @@ generateTagUnionDropPayload = \buf, types, selfMut, tags, discriminantName, disc
         buf
         |> writeTagImpls tags discriminantName indents \name, payload ->
             when payload is
-                Some id if cannotDeriveCopy types (getType types id) ->
+                Some id if cannotDeriveCopy types (RocType.type types id) ->
                     "unsafe {{ core::mem::ManuallyDrop::drop(&mut \(selfMut).\(name)) }},"
 
                 _ ->
@@ -344,7 +344,7 @@ generateUnionField = \types ->
                 typeStr = typeName types id
                 escapedFieldName = escapeKW fieldName
 
-                type = getType types id
+                type = RocType.type types id
                 fullTypeStr =
                     if cannotDeriveCopy types type then
                         # types with pointers need ManuallyDrop
@@ -594,40 +594,40 @@ cannotDeriveCopy = \types, type ->
         Unit | EmptyTagUnion | Bool | Num _ | TagUnion (Enumeration _) | Function _ -> Bool.false
         RocStr | RocList _ | RocDict _ _ | RocSet _ | RocBox _ | TagUnion (NullableUnwrapped _) | TagUnion (NullableWrapped _) | TagUnion (Recursive _) | TagUnion (NonNullableUnwrapped _) | RecursivePointer _ -> Bool.true
         TagUnion (SingleTagStruct { payloadFields }) ->
-            List.any payloadFields \id -> cannotDeriveCopy types (getType types id)
+            List.any payloadFields \id -> cannotDeriveCopy types (RocType.type types id)
 
         TagUnion (NonRecursive { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> cannotDeriveCopy types (getType types id)
+                    Some id -> cannotDeriveCopy types (RocType.type types id)
                     None -> Bool.false
 
         RocResult okId errId ->
-            cannotDeriveCopy types (getType types okId)
-            || cannotDeriveCopy types (getType types errId)
+            cannotDeriveCopy types (RocType.type types okId)
+            || cannotDeriveCopy types (RocType.type types errId)
 
         Struct { fields } ->
-            List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
+            List.any fields \{ id } -> cannotDeriveCopy types (RocType.type types id)
 
         TagUnionPayload { fields } ->
-            List.any fields \{ id } -> cannotDeriveCopy types (getType types id)
+            List.any fields \{ id } -> cannotDeriveCopy types (RocType.type types id)
 
 cannotDeriveDefault = \types, type ->
     when type is
         Unit | EmptyTagUnion | TagUnion _ | RocResult _ _ | RecursivePointer _ | Function _ -> Bool.true
         RocStr | Bool | Num _ -> Bool.false
         RocList id | RocSet id | RocBox id ->
-            cannotDeriveDefault types (getType types id)
+            cannotDeriveDefault types (RocType.type types id)
 
         RocDict keyId valId ->
-            cannotDeriveCopy types (getType types keyId)
-            || cannotDeriveCopy types (getType types valId)
+            cannotDeriveCopy types (RocType.type types keyId)
+            || cannotDeriveCopy types (RocType.type types valId)
 
         Struct { fields } ->
-            List.any fields \{ id } -> cannotDeriveDefault types (getType types id)
+            List.any fields \{ id } -> cannotDeriveDefault types (RocType.type types id)
 
         TagUnionPayload { fields } ->
-            List.any fields \{ id } -> cannotDeriveDefault types (getType types id)
+            List.any fields \{ id } -> cannotDeriveDefault types (RocType.type types id)
 
 hasFloat = \types, type ->
     hasFloatHelp types type Set.empty
@@ -644,37 +644,37 @@ hasFloatHelp = \types, type, doNotRecurse ->
 
         Unit | EmptyTagUnion | RocStr | Bool | TagUnion (Enumeration _) | Function _ -> Bool.false
         RocList id | RocSet id | RocBox id ->
-            hasFloatHelp types (getType types id) doNotRecurse
+            hasFloatHelp types (RocType.type types id) doNotRecurse
 
         RocDict id0 id1 | RocResult id0 id1 ->
-            hasFloatHelp types (getType types id0) doNotRecurse
-            || hasFloatHelp types (getType types id1) doNotRecurse
+            hasFloatHelp types (RocType.type types id0) doNotRecurse
+            || hasFloatHelp types (RocType.type types id1) doNotRecurse
 
         Struct { fields } ->
-            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (RocType.type types id) doNotRecurse
 
         TagUnionPayload { fields } ->
-            List.any fields \{ id } -> hasFloatHelp types (getType types id) doNotRecurse
+            List.any fields \{ id } -> hasFloatHelp types (RocType.type types id) doNotRecurse
 
         TagUnion (SingleTagStruct { payloadFields }) ->
-            List.any payloadFields \id -> hasFloatHelp types (getType types id) doNotRecurse
+            List.any payloadFields \id -> hasFloatHelp types (RocType.type types id) doNotRecurse
 
         TagUnion (Recursive { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> hasFloatHelp types (getType types id) doNotRecurse
+                    Some id -> hasFloatHelp types (RocType.type types id) doNotRecurse
                     None -> Bool.false
 
         TagUnion (NonRecursive { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> hasFloatHelp types (getType types id) doNotRecurse
+                    Some id -> hasFloatHelp types (RocType.type types id) doNotRecurse
                     None -> Bool.false
 
         TagUnion (NullableWrapped { tags }) ->
             List.any tags \{ payload } ->
                 when payload is
-                    Some id -> hasFloatHelp types (getType types id) doNotRecurse
+                    Some id -> hasFloatHelp types (RocType.type types id) doNotRecurse
                     None -> Bool.false
 
         TagUnion (NonNullableUnwrapped { payload }) ->
@@ -683,7 +683,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
             else
                 nextDoNotRecurse = Set.insert doNotRecurse payload
 
-                hasFloatHelp types (getType types payload) nextDoNotRecurse
+                hasFloatHelp types (RocType.type types payload) nextDoNotRecurse
 
         TagUnion (NullableUnwrapped { nonNullPayload }) ->
             if Set.contains doNotRecurse nonNullPayload then
@@ -691,7 +691,7 @@ hasFloatHelp = \types, type, doNotRecurse ->
             else
                 nextDoNotRecurse = Set.insert doNotRecurse nonNullPayload
 
-                hasFloatHelp types (getType types nonNullPayload) nextDoNotRecurse
+                hasFloatHelp types (RocType.type types nonNullPayload) nextDoNotRecurse
 
         RecursivePointer payload ->
             if Set.contains doNotRecurse payload then
@@ -699,10 +699,10 @@ hasFloatHelp = \types, type, doNotRecurse ->
             else
                 nextDoNotRecurse = Set.insert doNotRecurse payload
 
-                hasFloatHelp types (getType types payload) nextDoNotRecurse
+                hasFloatHelp types (RocType.type types payload) nextDoNotRecurse
 
 typeName = \types, id ->
-    when getType types id is
+    when RocType.type types id is
         Unit -> "()"
         EmptyTagUnion -> "std::convert::Infallible"
         RocStr -> "roc_std::RocStr"
@@ -761,10 +761,6 @@ typeName = \types, id ->
         TagUnion (SingleTagStruct { name }) -> escapeKW name
         Function { name } -> escapeKW name
 
-getType = \types, id ->
-    when List.get types.types id is
-        Ok type -> type
-        Err _ -> crash "unreachable"
 
 getSizeRoundedToAlignment = \types, id ->
     alignment = RocType.alignment types id
