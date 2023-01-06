@@ -486,7 +486,7 @@ generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields,
         }
 
 
-        impl core::fmt::Dbg for \(name) {
+        impl core::fmt::Debug for \(name) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.debug_tuple("\(name)::\(tagName)")
 
@@ -542,7 +542,7 @@ generateZeroElementSingleTagStruct = \buf, name, tagName ->
             }
         }
 
-        impl core::fmt::Dbg for \(name) {
+        impl core::fmt::Debug for \(name) {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 f.write_str("\(name)::\(tagName)")
             }
