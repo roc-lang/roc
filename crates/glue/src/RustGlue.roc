@@ -786,6 +786,7 @@ walkWithIndex = \list, originalState, f ->
 
     stateWithId.state
 
+## Returns the Rust #[cfg(target_arch = ____)] string corresponding to this Architecture.
 archName : Architecture -> Str
 archName = \arch ->
     when arch is
