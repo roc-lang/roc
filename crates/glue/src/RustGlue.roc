@@ -402,85 +402,67 @@ generateSingleTagStruct = \buf, types, name, tagName, payloadFields ->
             generateMultiElementSingleTagStruct b types escapedName tagName payloadFields asStructFields
 
 generateMultiElementSingleTagStruct = \buf, types, name, tagName, payloadFields, asStructFields ->
-    buf
-    |> Str.concat "{\n"
-    |> \b -> List.walk asStructFields b (generateStructFields types Private)
-    |> Str.concat "}\n\n"
+    fieldTypes =
+        payloadFields
+        |> List.map \id ->
+            typeName types id
+    args =
+        fieldTypes
+        |> List.mapWithIndex \fieldTypeName, index ->
+            indexStr = Num.toStr index
+
+            "f\(indexStr): \(fieldTypeName)"
+    fields =
+        payloadFields
+        |> List.mapWithIndex \_, index ->
+            indexStr = Num.toStr index
+
+            "f\(indexStr),"
+
+    fieldAccesses =
+        fields
+        |> List.map \field ->
+            "self.\(field)"
+
+    argsStr = Str.joinWith args ", "
+    fieldsStr = Str.joinWith fields "\n\(indent)\(indent)\(indent)"
+
+    asStructFields
+    |> List.walk "{\n\(buf)" (generateStructFields types Private)
     |> Str.concat
         """
+        }
+
         impl \(name) {
 
         """
+    |> Str.concat
+        """
+        \(indent)/// A tag named ``\(tagName)``, with the given payload.
+        \(indent)pub fn \(tagName)(\(argsStr)) -> Self {
+        \(indent)    Self {
+        \(indent)        \(fieldsStr)
+        \(indent)    }
+        \(indent)}
+
+
+        """
     |> \b ->
-        fieldTypes =
-            payloadFields
-            |> List.map \id ->
-                typeName types id
-        args =
-            fieldTypes
-            |> List.mapWithIndex \fieldTypeName, index ->
-                indexStr = Num.toStr index
-
-                "f\(indexStr): \(fieldTypeName)"
-        fields =
-            payloadFields
-            |> List.mapWithIndex \_, index ->
-                indexStr = Num.toStr index
-
-                "f\(indexStr),"
-
-        fieldAccesses =
-            fields
-            |> List.map \field ->
-                "self.\(field)"
-
-        {
-            b,
-            args,
-            fields,
-            fieldTypes,
-            fieldAccesses,
-        }
-    |> \{ b, args, fields, fieldTypes, fieldAccesses } ->
-        argsStr = Str.joinWith args ", "
-        fieldsStr = Str.joinWith fields "\n\(indent)\(indent)\(indent)"
-
-        {
-            b: Str.concat
-                b
-                """
-                \(indent)/// A tag named ``\(tagName)``, with the given payload.
-                \(indent)pub fn \(tagName)(\(argsStr)) -> Self {
-                \(indent)    Self {
-                \(indent)        \(fieldsStr)
-                \(indent)    }
-                \(indent)}
-
-
-                """,
-            fieldTypes,
-            fieldAccesses,
-        }
-    |> \{ b, fieldTypes, fieldAccesses } ->
         retType = asRustTuple fieldTypes
         retExpr = asRustTuple fieldAccesses
 
-        {
-            b: Str.concat
-                b
-                """
-                \(indent)/// Since `\(name)` only has one tag (namely, `\(tagName)`),
-                \(indent)/// convert it to `\(tagName)`'s payload.
-                \(indent)pub fn into_\(tagName)(self) -> \(retType) {
-                \(indent)    \(retExpr)
-                \(indent)}
+        Str.concat
+            b
+            """
+            \(indent)/// Since `\(name)` only has one tag (namely, `\(tagName)`),
+            \(indent)/// convert it to `\(tagName)`'s payload.
+            \(indent)pub fn into_\(tagName)(self) -> \(retType) {
+            \(indent)    \(retExpr)
+            \(indent)}
 
 
-                """,
-            fieldTypes,
-            fieldAccesses,
-        }
-    |> \{ b, fieldTypes, fieldAccesses } ->
+            """
+    |> \b ->
         retType =
             fieldTypes
             |> List.map \ft -> "&\(ft)"
