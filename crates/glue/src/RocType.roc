@@ -161,13 +161,30 @@ RocTagUnion : [
 ]
 
 type : Types, TypeId -> RocType
-type = \types, id -> getOrCrash types .types id
+type = \types, id ->
+    when List.get types.types id is
+        Ok answer -> answer
+        Err OutOfBounds ->
+            idStr = Num.toStr id
+            crash "TypeId \(idStr) was not found in Types. This should never happen!"
 
 alignment : Types, TypeId -> U32
-alignment = \types, id -> getOrCrash types .aligns id
+alignment = \types, id ->
+    when List.get types.aligns id is
+        Ok answer -> answer
+        Err OutOfBounds ->
+            idStr = Num.toStr id
+            crash "TypeId \(idStr) was not found in Types. This should never happen!"
+
 
 sizeIgnoringAlignment : Types, TypeId -> U32
-sizeIgnoringAlignment = \types, id -> getOrCrash types .sizes id
+sizeIgnoringAlignment = \types, id ->
+    when List.get types.sizes id is
+        Ok answer -> answer
+        Err OutOfBounds ->
+            idStr = Num.toStr id
+            crash "TypeId \(idStr) was not found in Types. This should never happen!"
+
 
 sizeRoundedToAlignment : Types, TypeId -> U32
 sizeRoundedToAlignment = \types, id ->
@@ -185,10 +202,11 @@ roundUpToAlignment = \width, align ->
             else
                 width
 
-getOrCrash : _, _, TypeId -> _
-getOrCrash = \types, typesToList, id ->
-    when List.get (typesToList types) id is
-        Ok answer -> answer
-        Err OutOfBounds ->
-            idStr = Num.toStr id
-            crash "TypeId \(idStr) was not found in Types. This should never happen!"
+# TODO using this leads to a compilation bug!
+# getOrCrash : _, _, TypeId -> _
+# getOrCrash = \types, typesToList, id ->
+#     when List.get (typesToList types) id is
+#         Ok answer -> answer
+#         Err OutOfBounds ->
+#             idStr = Num.toStr id
+#             crash "TypeId \(idStr) was not found in Types. This should never happen!"
