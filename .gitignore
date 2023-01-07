@@ -18,8 +18,15 @@ zig-cache
 *.ll
 *.bc
 
-#valgrind
+# valgrind
 vgcore.*
+
+# roc cache files
+*.rh1
+*.rm1
+preprocessedhost
+metadata
+roc-cheaty-lib.so
 
 #editors
 .idea/
@@ -60,3 +67,9 @@ roc_linux_x86_64.tar.gz
 *.roc-format-failed
 *.roc-format-failed-ast-after
 *.roc-format-failed-ast-before
+
+# nix
+result
+
+# tutorial
+www/src/roc-tutorial

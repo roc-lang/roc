@@ -14,12 +14,12 @@ procedure Test.16 (Test.54):
     ret Test.56;
 
 procedure Test.2 (Test.7, Test.8):
-    let Test.9 : [C {} {}, C {} {}] = TagId(0) Test.7 Test.8;
-    ret Test.9;
+    let Test.30 : [C {} {}, C {} {}] = TagId(1) Test.7 Test.8;
+    ret Test.30;
 
 procedure Test.2 (Test.7, Test.8):
-    let Test.9 : [C {} {}, C {} {}] = TagId(1) Test.7 Test.8;
-    ret Test.9;
+    let Test.44 : [C {} {}, C {} {}] = TagId(0) Test.7 Test.8;
+    ret Test.44;
 
 procedure Test.3 (Test.17):
     let Test.36 : {} = Struct {};
@@ -32,17 +32,6 @@ procedure Test.4 (Test.18):
 procedure Test.9 (Test.29, #Attr.12):
     let Test.8 : {} = UnionAtIndex (Id 0) (Index 1) #Attr.12;
     let Test.7 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let Test.35 : {} = Struct {};
-    let Test.34 : Str = CallByName Test.15 Test.35;
-    let Test.31 : {} = CallByName Test.3 Test.34;
-    dec Test.34;
-    let Test.33 : {} = Struct {};
-    let Test.32 : Str = CallByName Test.11 Test.33;
-    ret Test.32;
-
-procedure Test.9 (Test.29, #Attr.12):
-    let Test.8 : {} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
-    let Test.7 : {} = UnionAtIndex (Id 1) (Index 0) #Attr.12;
     let Test.49 : {} = Struct {};
     let Test.48 : Str = CallByName Test.16 Test.49;
     let Test.45 : Str = CallByName Test.4 Test.48;
@@ -50,6 +39,17 @@ procedure Test.9 (Test.29, #Attr.12):
     let Test.47 : {} = Struct {};
     let Test.46 : Str = CallByName Test.13 Test.47 Test.45;
     ret Test.46;
+
+procedure Test.9 (Test.29, #Attr.12):
+    let Test.8 : {} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
+    let Test.7 : {} = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    let Test.35 : {} = Struct {};
+    let Test.34 : Str = CallByName Test.15 Test.35;
+    let Test.31 : {} = CallByName Test.3 Test.34;
+    dec Test.34;
+    let Test.33 : {} = Struct {};
+    let Test.32 : Str = CallByName Test.11 Test.33;
+    ret Test.32;
 
 procedure Test.0 ():
     let Test.5 : Int1 = true;

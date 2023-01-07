@@ -33,7 +33,7 @@ roc_target = {path = "../compiler/roc_target"}
 roc_types = {path = "../compiler/types"}
 
 [features]
-wasmer = ["futures"]
+wasi_test = ["futures"]
 
 # Tell wasm-pack not to run wasm-opt automatically. We run it explicitly when we need to.
 # (Workaround for a CI install issue with wasm-pack https://github.com/rustwasm/wasm-pack/issues/864)

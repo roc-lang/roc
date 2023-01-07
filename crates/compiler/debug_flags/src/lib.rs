@@ -79,6 +79,9 @@ flags! {
     /// Only use this in single-threaded mode!
     ROC_PRINT_UNIFICATIONS
 
+    /// Prints types whose ability impls failed to be derived.
+    ROC_PRINT_UNDERIVABLE
+
     /// Prints traces of unspecialized lambda set compaction
     ROC_TRACE_COMPACTION
 
@@ -116,6 +119,9 @@ flags! {
 
     // ===Mono===
 
+    /// Type-checks the mono IR after specialization.
+    ROC_CHECK_MONO_IR
+
     /// Writes a pretty-printed mono IR to stderr after function specialization.
     ROC_PRINT_IR_AFTER_SPECIALIZATION
 
@@ -146,6 +152,9 @@ flags! {
 
     /// Writes a `final.wasm` file to /tmp
     ROC_WRITE_FINAL_WASM
+
+    /// Prints Wasm interpreter debug log in test_gen
+    ROC_LOG_WASM_INTERP
 
     // ===Load===
 

@@ -27,7 +27,7 @@ pub fn host_wasm_tempfile() -> std::io::Result<NamedTempFile> {
 }
 
 #[cfg(unix)]
-pub fn host_unix_tempfile() -> std::io::Result<NamedTempFile> {
+fn host_unix_tempfile() -> std::io::Result<NamedTempFile> {
     let tempfile = tempfile::Builder::new()
         .prefix("host_bitcode")
         .suffix(".o")
@@ -40,7 +40,7 @@ pub fn host_unix_tempfile() -> std::io::Result<NamedTempFile> {
 }
 
 #[cfg(windows)]
-pub fn host_windows_tempfile() -> std::io::Result<NamedTempFile> {
+fn host_windows_tempfile() -> std::io::Result<NamedTempFile> {
     let tempfile = tempfile::Builder::new()
         .prefix("host_bitcode")
         .suffix(".obj")
@@ -50,6 +50,23 @@ pub fn host_windows_tempfile() -> std::io::Result<NamedTempFile> {
     std::fs::write(tempfile.path(), HOST_WINDOWS)?;
 
     Ok(tempfile)
+}
+
+pub fn host_tempfile() -> std::io::Result<NamedTempFile> {
+    #[cfg(unix)]
+    {
+        host_unix_tempfile()
+    }
+
+    #[cfg(windows)]
+    {
+        host_windows_tempfile()
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    {
+        unreachable!()
+    }
 }
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -73,7 +90,6 @@ pub enum DecWidth {
 pub enum FloatWidth {
     F32,
     F64,
-    F128,
 }
 
 impl FloatWidth {
@@ -86,7 +102,6 @@ impl FloatWidth {
         match self {
             F32 => 4,
             F64 => 8,
-            F128 => 16,
         }
     }
 
@@ -99,7 +114,7 @@ impl FloatWidth {
         // the compiler is targeting (e.g. what the Roc code will be compiled to).
         match self {
             F32 => 4,
-            F64 | F128 => match target_info.architecture {
+            F64 => match target_info.architecture {
                 X86_64 | Aarch64 | Wasm32 => 8,
                 X86_32 | Aarch32 => 4,
             },
@@ -225,7 +240,6 @@ impl Index<FloatWidth> for IntrinsicName {
         match index {
             FloatWidth::F32 => self.options[1],
             FloatWidth::F64 => self.options[2],
-            FloatWidth::F128 => self.options[3],
         }
     }
 }
@@ -256,7 +270,6 @@ macro_rules! float_intrinsic {
 
         output.options[1] = concat!($name, ".f32");
         output.options[2] = concat!($name, ".f64");
-        output.options[3] = concat!($name, ".f128");
 
         output
     }};
@@ -350,7 +363,7 @@ pub const STR_INIT: &str = "roc_builtins.str.init";
 pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
 pub const STR_CONCAT: &str = "roc_builtins.str.concat";
 pub const STR_JOIN_WITH: &str = "roc_builtins.str.joinWith";
-pub const STR_STR_SPLIT: &str = "roc_builtins.str.str_split";
+pub const STR_SPLIT: &str = "roc_builtins.str.str_split";
 pub const STR_TO_SCALARS: &str = "roc_builtins.str.to_scalars";
 pub const STR_COUNT_GRAPEHEME_CLUSTERS: &str = "roc_builtins.str.count_grapheme_clusters";
 pub const STR_COUNT_UTF8_BYTES: &str = "roc_builtins.str.count_utf8_bytes";
@@ -424,9 +437,9 @@ pub const UTILS_EXPECT_FAILED_START_SHARED_BUFFER: &str =
     "roc_builtins.utils.expect_failed_start_shared_buffer";
 pub const UTILS_EXPECT_FAILED_START_SHARED_FILE: &str =
     "roc_builtins.utils.expect_failed_start_shared_file";
-pub const UTILS_EXPECT_FAILED_FINALIZE: &str = "roc_builtins.utils.expect_failed_finalize";
 pub const UTILS_EXPECT_READ_ENV_SHARED_BUFFER: &str = "roc_builtins.utils.read_env_shared_buffer";
-pub const UTILS_SEND_DBG: &str = "roc_builtins.utils.send_dbg";
+pub const NOTIFY_PARENT_EXPECT: &str = "roc_builtins.utils.notify_parent_expect";
+pub const NOTIFY_PARENT_DBG: &str = "roc_builtins.utils.notify_parent_dbg";
 
 pub const UTILS_LONGJMP: &str = "longjmp";
 pub const UTILS_SETJMP: &str = "setjmp";

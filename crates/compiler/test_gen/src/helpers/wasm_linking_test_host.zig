@@ -6,7 +6,7 @@ extern fn js_unused() i32;
 
 extern fn roc__app_proc_1_exposed() i32;
 
-export fn host_called_indirectly_from_roc() i32 {
+fn host_called_indirectly_from_roc() i32 {
     return 0x40;
 }
 
@@ -14,11 +14,11 @@ export fn host_called_directly_from_roc() i32 {
     return 0x80 | host_called_indirectly_from_roc() | js_called_indirectly_from_roc();
 }
 
-export fn host_called_indirectly_from_main() i32 {
+fn host_called_indirectly_from_main() i32 {
     return 0x100;
 }
 
-export fn host_called_directly_from_main() i32 {
+fn host_called_directly_from_main() i32 {
     return 0x200 | host_called_indirectly_from_main() | js_called_indirectly_from_main();
 }
 

@@ -255,3 +255,15 @@ fn check_command_available(command_name: &str) -> bool {
         true
     }
 }
+
+pub fn pretty_command_string(command: &Command) -> std::ffi::OsString {
+    let mut command_string = std::ffi::OsString::new();
+    command_string.push(command.get_program());
+
+    for arg in command.get_args() {
+        command_string.push(" ");
+        command_string.push(arg);
+    }
+
+    command_string
+}

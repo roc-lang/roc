@@ -15,7 +15,7 @@ use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentIds, IdentIdsByModule, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{Defs, TypeAnnotation};
-use roc_parse::header::HeaderFor;
+use roc_parse::header::HeaderType;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -149,6 +149,7 @@ pub struct ModuleOutput {
     pub rigid_variables: RigidVariables,
     pub declarations: Declarations,
     pub exposed_imports: MutMap<Symbol, Region>,
+    pub exposed_symbols: VecSet<Symbol>,
     pub problems: Vec<Problem>,
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
@@ -194,16 +195,18 @@ enum GeneratedInfo {
 }
 
 impl GeneratedInfo {
-    fn from_header_for<'a>(
+    fn from_header_type<'a>(
         env: &mut Env,
         scope: &mut Scope,
         var_store: &mut VarStore,
-        header_for: &HeaderFor<'a>,
+        header_type: &HeaderType<'a>,
     ) -> Self {
-        match header_for {
-            HeaderFor::Hosted {
+        match header_type {
+            HeaderType::Hosted {
                 generates,
                 generates_with,
+                name: _,
+                exposes: _,
             } => {
                 let name: &str = generates.into();
                 let (generated_functions, unknown_generated) =
@@ -236,7 +239,11 @@ impl GeneratedInfo {
                     generated_functions,
                 }
             }
-            HeaderFor::Builtin { generates_with } => {
+            HeaderType::Builtin {
+                generates_with,
+                name: _,
+                exposes: _,
+            } => {
                 debug_assert!(generates_with.is_empty());
                 GeneratedInfo::Builtin
             }
@@ -266,7 +273,7 @@ fn has_no_implementation(expr: &Expr) -> bool {
 pub fn canonicalize_module_defs<'a>(
     arena: &'a Bump,
     loc_defs: &'a mut Defs<'a>,
-    header_for: &roc_parse::header::HeaderFor,
+    header_type: &roc_parse::header::HeaderType,
     home: ModuleId,
     module_ids: &'a ModuleIds,
     exposed_ident_ids: IdentIds,
@@ -274,7 +281,7 @@ pub fn canonicalize_module_defs<'a>(
     aliases: MutMap<Symbol, Alias>,
     imported_abilities_state: PendingAbilitiesStore,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    exposed_symbols: &VecSet<Symbol>,
+    exposed_symbols: VecSet<Symbol>,
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
 ) -> ModuleOutput {
@@ -294,7 +301,7 @@ pub fn canonicalize_module_defs<'a>(
     }
 
     let generated_info =
-        GeneratedInfo::from_header_for(&mut env, &mut scope, var_store, header_for);
+        GeneratedInfo::from_header_type(&mut env, &mut scope, var_store, header_type);
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
@@ -334,8 +341,6 @@ pub fn canonicalize_module_defs<'a>(
                     panic!("TODO gracefully handle shadowing in imports.")
                 }
             }
-        } else if [Symbol::LIST_LIST, Symbol::STR_STR, Symbol::BOX_BOX_TYPE].contains(&symbol) {
-            // These are not aliases but Apply's and we make sure they are always in scope
         } else {
             // This is a type alias or ability
 
@@ -376,6 +381,9 @@ pub fn canonicalize_module_defs<'a>(
 
     // See if any of the new idents we defined went unused.
     // If any were unused and also not exposed, report it.
+    //
+    // We'll catch symbols that are only referenced due to (mutual) recursion later,
+    // when sorting the defs.
     for (symbol, region) in symbols_introduced {
         if !output.references.has_type_or_value_lookup(symbol)
             && !exposed_symbols.contains(&symbol)
@@ -427,8 +435,14 @@ pub fn canonicalize_module_defs<'a>(
         ..Default::default()
     };
 
-    let (mut declarations, mut output) =
-        crate::def::sort_can_defs_new(&mut scope, var_store, defs, new_output);
+    let (mut declarations, mut output) = crate::def::sort_can_defs_new(
+        &mut env,
+        &mut scope,
+        var_store,
+        defs,
+        new_output,
+        &exposed_symbols,
+    );
 
     debug_assert!(
         output.pending_derives.is_empty(),
@@ -795,6 +809,7 @@ pub fn canonicalize_module_defs<'a>(
         pending_derives,
         loc_expects: collected.expects,
         loc_dbgs: collected.dbgs,
+        exposed_symbols,
     }
 }
 

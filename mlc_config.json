@@ -23,6 +23,15 @@
         },
         {
             "pattern": "https://web.eecs.umich.edu"
+        },
+        {
+            "pattern": "http://0.0.0.0:8000"
+        },
+        {
+            "pattern": "/builtins"
+        },
+        {
+            "pattern": "https://www.10xeditor.com/"
         }
     ]
 }

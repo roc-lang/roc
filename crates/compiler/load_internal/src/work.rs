@@ -454,6 +454,8 @@ impl<'a> Dependencies<'a> {
     pub fn load_find_and_make_specializations_after_check(&mut self) -> MutSet<(ModuleId, Phase)> {
         let mut output = MutSet::default();
 
+        // Take out the specialization dependency graph, as this should not be modified as we
+        // reload the build graph. We'll make sure the state is unaffected at the end of this call.
         let mut make_specializations_dependents = MakeSpecializationsDependents::default();
         let default_make_specializations_dependents_len = make_specializations_dependents.0.len();
         std::mem::swap(
@@ -484,8 +486,9 @@ impl<'a> Dependencies<'a> {
                 self.add_dependency(module_dep, module, Phase::MakeSpecializations);
                 self.add_dependency(ModuleId::DERIVED_GEN, module, Phase::MakeSpecializations);
 
-                // `module_dep` can't make its specializations until the current module does.
-                info.has_pred = true;
+                // That `module_dep` can't make its specializations until the current module does
+                // should already be accounted for in `make_specializations_dependents`, which we
+                // populated when initially building the graph.
             }
 
             if module != ModuleId::DERIVED_GEN {

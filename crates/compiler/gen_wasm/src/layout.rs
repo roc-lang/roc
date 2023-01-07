@@ -21,7 +21,6 @@ pub enum StackMemoryFormat {
     /// Record, Str, List, etc.
     DataStructure,
     Int128,
-    Float128,
     Decimal,
 }
 
@@ -71,11 +70,6 @@ impl WasmLayout {
                 match float_width {
                     F32 => Self::Primitive(ValueType::F32, size),
                     F64 => Self::Primitive(ValueType::F64, size),
-                    F128 => Self::StackMemory {
-                        size,
-                        alignment_bytes,
-                        format: StackMemoryFormat::Float128,
-                    },
                 }
             }
 
@@ -156,7 +150,7 @@ impl CallConv {
         use ValueType::*;
 
         match format {
-            Int128 | Float128 | Decimal => &[I64, I64],
+            Int128 | Decimal => &[I64, I64],
 
             DataStructure => {
                 if size == 0 {
@@ -191,7 +185,7 @@ impl CallConv {
         use StackMemoryFormat::*;
 
         match format {
-            Int128 | Float128 | Decimal => WriteToPointerArg,
+            Int128 | Decimal => WriteToPointerArg,
 
             DataStructure => {
                 if size == 0 {

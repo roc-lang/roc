@@ -34,7 +34,6 @@ fn add_float_intrinsic<'ctx, F>(
 
     check!(FloatWidth::F32, ctx.f32_type());
     check!(FloatWidth::F64, ctx.f64_type());
-    // check!(IntWidth::F128, ctx.i128_type());
 }
 
 fn add_int_intrinsic<'ctx, F>(

@@ -1,9 +1,9 @@
 #![allow(clippy::manual_map)]
 
 use crate::layout::{
-    self, Builtin, CapturesNiche, ClosureCallOptions, ClosureRepresentation, EnumDispatch,
-    LambdaName, LambdaSet, Layout, LayoutCache, LayoutInterner, LayoutProblem, RawFunctionLayout,
-    STLayoutInterner, TagIdIntType, UnionLayout, WrappedVariant,
+    self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, LambdaName, LambdaSet,
+    Layout, LayoutCache, LayoutInterner, LayoutProblem, Niche, RawFunctionLayout, STLayoutInterner,
+    TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
@@ -22,7 +22,6 @@ use roc_debug_flags::{
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_exhaustive::{Ctor, CtorName, ListArity, RenderAs, TagId};
-use roc_intern::Interner;
 use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -33,8 +32,8 @@ use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
-    instantiate_rigids, Content, ExhaustiveMark, FlatType, RedundantMark, StorageSubs, Subs,
-    Variable, VariableSubsSlice,
+    instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
+    StorageSubs, Subs, Variable, VariableSubsSlice,
 };
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -119,9 +118,15 @@ pub enum OptLevel {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct EntryPoint<'a> {
+pub struct SingleEntryPoint<'a> {
     pub symbol: Symbol,
     pub layout: ProcLayout<'a>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum EntryPoint<'a> {
+    Single(SingleEntryPoint<'a>),
+    Expects { symbols: &'a [Symbol] },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -132,11 +137,6 @@ pub struct PartialProcs<'a> {
     /// maps a function name (symbol) to an index
     symbols: Vec<'a, Symbol>,
 
-    /// An entry (a, b) means `a` directly references the lambda value of `b`,
-    /// i.e. this came from a `let a = b in ...` where `b` was defined as a
-    /// lambda earlier.
-    references: Vec<'a, (Symbol, Symbol)>,
-
     partial_procs: Vec<'a, PartialProc<'a>>,
 }
 
@@ -144,7 +144,6 @@ impl<'a> PartialProcs<'a> {
     fn new_in(arena: &'a Bump) -> Self {
         Self {
             symbols: Vec::new_in(arena),
-            references: Vec::new_in(arena),
             partial_procs: Vec::new_in(arena),
         }
     }
@@ -152,16 +151,7 @@ impl<'a> PartialProcs<'a> {
         self.symbol_to_id(symbol).is_some()
     }
 
-    fn symbol_to_id(&self, mut symbol: Symbol) -> Option<PartialProcId> {
-        while let Some(real_symbol) = self
-            .references
-            .iter()
-            .find(|(alias, _)| *alias == symbol)
-            .map(|(_, real)| real)
-        {
-            symbol = *real_symbol;
-        }
-
+    fn symbol_to_id(&self, symbol: Symbol) -> Option<PartialProcId> {
         self.symbols
             .iter()
             .position(|s| *s == symbol)
@@ -191,21 +181,6 @@ impl<'a> PartialProcs<'a> {
         self.partial_procs.push(partial_proc);
 
         id
-    }
-
-    pub fn insert_alias(&mut self, alias: Symbol, real_symbol: Symbol) {
-        debug_assert!(
-            !self.contains_key(alias),
-            "{:?} is inserted as a partial proc twice: that's a bug!",
-            alias,
-        );
-        debug_assert!(
-            self.contains_key(real_symbol),
-            "{:?} is not a partial proc or another alias: that's a bug!",
-            real_symbol,
-        );
-
-        self.references.push((alias, real_symbol));
     }
 
     pub fn drain(self) -> impl Iterator<Item = (Symbol, PartialProc<'a>)> {
@@ -356,16 +331,17 @@ impl<'a> Proc<'a> {
         &'b self,
         alloc: &'b D,
         interner: &'b I,
+        pretty: bool,
         _parens: Parens,
     ) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let args_doc = self.args.iter().map(|(layout, symbol)| {
-            let arg_doc = symbol_to_doc(alloc, *symbol);
+            let arg_doc = symbol_to_doc(alloc, *symbol, pretty);
             if pretty_print_ir_symbols() {
                 arg_doc.append(alloc.reflow(": ")).append(layout.to_doc(
                     alloc,
@@ -380,36 +356,36 @@ impl<'a> Proc<'a> {
         if pretty_print_ir_symbols() {
             alloc
                 .text("procedure : ")
-                .append(symbol_to_doc(alloc, self.name.name()))
+                .append(symbol_to_doc(alloc, self.name.name(), pretty))
                 .append(" ")
                 .append(self.ret_layout.to_doc(alloc, interner, Parens::NotNeeded))
                 .append(alloc.hardline())
                 .append(alloc.text("procedure = "))
-                .append(symbol_to_doc(alloc, self.name.name()))
+                .append(symbol_to_doc(alloc, self.name.name(), pretty))
                 .append(" (")
                 .append(alloc.intersperse(args_doc, ", "))
                 .append("):")
                 .append(alloc.hardline())
-                .append(self.body.to_doc(alloc, interner).indent(4))
+                .append(self.body.to_doc(alloc, interner, pretty).indent(4))
         } else {
             alloc
                 .text("procedure ")
-                .append(symbol_to_doc(alloc, self.name.name()))
+                .append(symbol_to_doc(alloc, self.name.name(), pretty))
                 .append(" (")
                 .append(alloc.intersperse(args_doc, ", "))
                 .append("):")
                 .append(alloc.hardline())
-                .append(self.body.to_doc(alloc, interner).indent(4))
+                .append(self.body.to_doc(alloc, interner, pretty).indent(4))
         }
     }
 
-    pub fn to_pretty<I>(&self, interner: &I, width: usize) -> String
+    pub fn to_pretty<I>(&self, interner: &I, width: usize, pretty: bool) -> String
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
-        self.to_doc::<_, (), _>(&allocator, interner, Parens::NotNeeded)
+        self.to_doc::<_, (), _>(&allocator, interner, pretty, Parens::NotNeeded)
             .1
             .render(width, &mut w)
             .unwrap();
@@ -1112,12 +1088,7 @@ impl<'a> Procs<'a> {
             .raw_from_var(env.arena, annotation, env.subs)
             .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
 
-        let top_level = ProcLayout::from_raw(
-            env.arena,
-            &layout_cache.interner,
-            raw_layout,
-            name.captures_niche(),
-        );
+        let top_level = ProcLayout::from_raw_named(env.arena, name, raw_layout);
 
         // anonymous functions cannot reference themselves, therefore cannot be tail-recursive
         // EXCEPT when the closure conversion makes it tail-recursive.
@@ -1192,16 +1163,8 @@ impl<'a> Procs<'a> {
                             let partial_proc_id = if let Some(partial_proc_id) =
                                 self.partial_procs.symbol_to_id(name.name())
                             {
-                                let existing = self.partial_procs.get_id(partial_proc_id);
-                                // if we're adding the same partial proc twice, they must be the actual same!
-                                //
-                                // NOTE we can't skip extra work! we still need to make the specialization for this
-                                // invocation. The content of the `annotation` can be different, even if the variable
-                                // number is the same
-                                debug_assert_eq!(annotation, existing.annotation);
-                                debug_assert_eq!(captured_symbols, existing.captured_symbols);
-                                debug_assert_eq!(is_self_recursive, existing.is_self_recursive);
-
+                                // NOTE we can't skip extra work! We still need to make the specialization for this
+                                // invocation.
                                 partial_proc_id
                             } else {
                                 let pattern_symbols = pattern_symbols.into_bump_slice();
@@ -1227,29 +1190,13 @@ impl<'a> Procs<'a> {
                                 &[],
                                 partial_proc_id,
                             ) {
-                                Ok((proc, _ignore_layout)) => {
-                                    // the `layout` is a function pointer, while `_ignore_layout` can be a
-                                    // closure. We only specialize functions, storing this value with a closure
-                                    // layout will give trouble.
-                                    let arguments = Vec::from_iter_in(
-                                        proc.args.iter().map(|(l, _)| *l),
-                                        env.arena,
-                                    )
-                                    .into_bump_slice();
-
-                                    let proper_layout = ProcLayout {
-                                        arguments,
-                                        result: proc.ret_layout,
-                                        captures_niche: proc.name.captures_niche(),
-                                    };
-
-                                    // NOTE: some functions are specialized to have a closure, but don't actually
-                                    // need any closure argument. Here is where we correct this sort of thing,
-                                    // by trusting the layout of the Proc, not of what we specialize for
-                                    self.specialized.remove_specialized(name.name(), &layout);
+                                Ok((proc, layout)) => {
+                                    let proc_name = proc.name;
+                                    let function_layout =
+                                        ProcLayout::from_raw_named(env.arena, proc_name, layout);
                                     self.specialized.insert_specialized(
-                                        name.name(),
-                                        proper_layout,
+                                        proc_name.name(),
+                                        function_layout,
                                         proc,
                                     );
                                 }
@@ -1305,17 +1252,20 @@ impl<'a> Procs<'a> {
                 suspended.specialization(env.subs, name, layout, fn_var);
             }
             (PendingSpecializations::Making(_), false) => {
-                let symbol = name;
+                let proc_name = name;
 
-                let partial_proc_id = match self.partial_procs.symbol_to_id(symbol.name()) {
+                let partial_proc_id = match self.partial_procs.symbol_to_id(proc_name.name()) {
                     Some(p) => p,
-                    None => panic!("no partial_proc for {:?} in module {:?}", symbol, env.home),
+                    None => panic!(
+                        "no partial_proc for {:?} in module {:?}",
+                        proc_name, env.home
+                    ),
                 };
 
                 // Mark this proc as in-progress, so if we're dealing with
                 // mutually recursive functions, we don't loop forever.
                 // (We had a bug around this before this system existed!)
-                self.specialized.mark_in_progress(symbol.name(), layout);
+                self.specialized.mark_in_progress(proc_name.name(), layout);
 
                 // See https://github.com/roc-lang/roc/issues/1600
                 //
@@ -1324,39 +1274,21 @@ impl<'a> Procs<'a> {
                 //
                 // fn_var is the variable representing the type that we actually need for the
                 // function right here.
-                //
-                // For some reason, it matters that we unify with the original variable. Extracting
-                // that variable into a SolvedType and then introducing it again severs some
-                // connection that turns out to be important
                 match specialize_variable(
                     env,
                     self,
-                    symbol,
+                    proc_name,
                     layout_cache,
                     fn_var,
                     Default::default(),
                     partial_proc_id,
                 ) {
-                    Ok((proc, _ignore_layout)) => {
-                        // the `layout` is a function pointer, while `_ignore_layout` can be a
-                        // closure. We only specialize functions, storing this value with a closure
-                        // layout will give trouble.
-                        let arguments =
-                            Vec::from_iter_in(proc.args.iter().map(|(l, _)| *l), env.arena)
-                                .into_bump_slice();
+                    Ok((proc, raw_layout)) => {
+                        let proc_layout =
+                            ProcLayout::from_raw_named(env.arena, proc_name, raw_layout);
 
-                        let proper_layout = ProcLayout {
-                            arguments,
-                            result: proc.ret_layout,
-                            captures_niche: proc.name.captures_niche(),
-                        };
-
-                        // NOTE: some functions are specialized to have a closure, but don't actually
-                        // need any closure argument. Here is where we correct this sort of thing,
-                        // by trusting the layout of the Proc, not of what we specialize for
-                        self.specialized.remove_specialized(symbol.name(), &layout);
                         self.specialized
-                            .insert_specialized(symbol.name(), proper_layout, proc);
+                            .insert_specialized(proc_name.name(), proc_layout, proc);
                     }
                     Err(error) => {
                         panic!("TODO generate a RuntimeError message for {:?}", error);
@@ -1488,6 +1420,9 @@ impl<'a> Specializations<'a> {
 pub struct Env<'a, 'i> {
     pub arena: &'a Bump,
     pub subs: &'i mut Subs,
+    /// [Subs] to write specialized variables of lookups in expects.
+    /// [None] if this module doesn't produce any expects.
+    pub expectation_subs: Option<&'i mut Subs>,
     pub home: ModuleId,
     pub ident_ids: &'i mut IdentIds,
     pub target_info: TargetInfo,
@@ -1624,6 +1559,9 @@ pub fn cond<'a>(
 
 pub type Stores<'a> = &'a [(Symbol, Layout<'a>, Expr<'a>)];
 
+/// The specialized type of a lookup. Represented as a type-variable.
+pub type LookupType = Variable;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt<'a> {
     Let(Symbol, Expr<'a>, Layout<'a>, &'a Stmt<'a>),
@@ -1645,7 +1583,7 @@ pub enum Stmt<'a> {
         condition: Symbol,
         region: Region,
         lookups: &'a [Symbol],
-        layouts: &'a [Layout<'a>],
+        variables: &'a [LookupType],
         /// what happens after the expect
         remainder: &'a Stmt<'a>,
     },
@@ -1653,8 +1591,16 @@ pub enum Stmt<'a> {
         condition: Symbol,
         region: Region,
         lookups: &'a [Symbol],
-        layouts: &'a [Layout<'a>],
+        variables: &'a [LookupType],
         /// what happens after the expect
+        remainder: &'a Stmt<'a>,
+    },
+    Dbg {
+        /// The expression we're displaying
+        symbol: Symbol,
+        /// The specialized variable of the expression
+        variable: Variable,
+        /// What happens after the dbg
         remainder: &'a Stmt<'a>,
     },
     /// a join point `join f <params> = <continuation> in remainder`
@@ -1705,35 +1651,13 @@ pub enum BranchInfo<'a> {
 }
 
 impl<'a> BranchInfo<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, _pretty: bool) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
     {
-        use BranchInfo::*;
-
-        match self {
-            Constructor {
-                tag_id,
-                scrutinee,
-                layout: _,
-            } if pretty_print_ir_symbols() => alloc
-                .hardline()
-                .append("    BranchInfo: { scrutinee: ")
-                .append(symbol_to_doc(alloc, *scrutinee))
-                .append(", tag_id: ")
-                .append(format!("{}", tag_id))
-                .append("} "),
-
-            _ => {
-                if pretty_print_ir_symbols() {
-                    alloc.text(" <no branch info>")
-                } else {
-                    alloc.text("")
-                }
-            }
-        }
+        alloc.text("")
     }
 }
 
@@ -1754,7 +1678,7 @@ pub enum ModifyRc {
 }
 
 impl ModifyRc {
-    pub fn to_doc<'a, D, A>(self, alloc: &'a D) -> DocBuilder<'a, D, A>
+    pub fn to_doc<'a, D, A>(self, alloc: &'a D, pretty: bool) -> DocBuilder<'a, D, A>
     where
         D: DocAllocator<'a, A>,
         D::Doc: Clone,
@@ -1765,20 +1689,20 @@ impl ModifyRc {
         match self {
             Inc(symbol, 1) => alloc
                 .text("inc ")
-                .append(symbol_to_doc(alloc, symbol))
+                .append(symbol_to_doc(alloc, symbol, pretty))
                 .append(";"),
             Inc(symbol, n) => alloc
                 .text("inc ")
                 .append(alloc.text(format!("{} ", n)))
-                .append(symbol_to_doc(alloc, symbol))
+                .append(symbol_to_doc(alloc, symbol, pretty))
                 .append(";"),
             Dec(symbol) => alloc
                 .text("dec ")
-                .append(symbol_to_doc(alloc, symbol))
+                .append(symbol_to_doc(alloc, symbol, pretty))
                 .append(";"),
             DecRef(symbol) => alloc
                 .text("decref ")
-                .append(symbol_to_doc(alloc, symbol))
+                .append(symbol_to_doc(alloc, symbol, pretty))
                 .append(";"),
         }
     }
@@ -1838,7 +1762,7 @@ pub struct Call<'a> {
 }
 
 impl<'a> Call<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, pretty: bool) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
@@ -1852,19 +1776,19 @@ impl<'a> Call<'a> {
             CallType::ByName { name, .. } => {
                 let it = std::iter::once(name.name())
                     .chain(arguments.iter().copied())
-                    .map(|s| symbol_to_doc(alloc, s));
+                    .map(|s| symbol_to_doc(alloc, s, pretty));
 
                 alloc.text("CallByName ").append(alloc.intersperse(it, " "))
             }
             LowLevel { op: lowlevel, .. } => {
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 alloc
                     .text(format!("lowlevel {:?} ", lowlevel))
                     .append(alloc.intersperse(it, " "))
             }
             HigherOrder(higher_order) => {
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 alloc
                     .text(format!("lowlevel {:?} ", higher_order.op))
@@ -1873,7 +1797,7 @@ impl<'a> Call<'a> {
             Foreign {
                 ref foreign_symbol, ..
             } => {
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 alloc
                     .text(format!("foreign {:?} ", foreign_symbol.as_str()))
@@ -2064,10 +1988,10 @@ impl<'a> Literal<'a> {
     }
 }
 
-pub(crate) fn symbol_to_doc_string(symbol: Symbol) -> String {
+pub(crate) fn symbol_to_doc_string(symbol: Symbol, force_pretty: bool) -> String {
     use roc_module::ident::ModuleName;
 
-    if pretty_print_ir_symbols() {
+    if pretty_print_ir_symbols() || force_pretty {
         format!("{:?}", symbol)
     } else {
         let text = format!("{}", symbol);
@@ -2081,26 +2005,30 @@ pub(crate) fn symbol_to_doc_string(symbol: Symbol) -> String {
     }
 }
 
-fn symbol_to_doc<'b, D, A>(alloc: &'b D, symbol: Symbol) -> DocBuilder<'b, D, A>
+fn symbol_to_doc<'b, D, A>(alloc: &'b D, symbol: Symbol, force_pretty: bool) -> DocBuilder<'b, D, A>
 where
     D: DocAllocator<'b, A>,
     D::Doc: Clone,
     A: Clone,
 {
-    alloc.text(symbol_to_doc_string(symbol))
+    alloc.text(symbol_to_doc_string(symbol, force_pretty))
 }
 
-fn join_point_to_doc<'b, D, A>(alloc: &'b D, symbol: JoinPointId) -> DocBuilder<'b, D, A>
+fn join_point_to_doc<'b, D, A>(
+    alloc: &'b D,
+    symbol: JoinPointId,
+    pretty: bool,
+) -> DocBuilder<'b, D, A>
 where
     D: DocAllocator<'b, A>,
     D::Doc: Clone,
     A: Clone,
 {
-    symbol_to_doc(alloc, symbol.0)
+    symbol_to_doc(alloc, symbol.0, pretty)
 }
 
 impl<'a> Expr<'a> {
-    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A>(&'b self, alloc: &'b D, pretty: bool) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
@@ -2111,7 +2039,7 @@ impl<'a> Expr<'a> {
         match self {
             Literal(lit) => lit.to_doc(alloc),
 
-            Call(call) => call.to_doc(alloc),
+            Call(call) => call.to_doc(alloc, pretty),
 
             Tag {
                 tag_id, arguments, ..
@@ -2121,7 +2049,7 @@ impl<'a> Expr<'a> {
                     .append(alloc.text(tag_id.to_string()))
                     .append(")");
 
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 doc_tag
                     .append(alloc.space())
@@ -2139,11 +2067,11 @@ impl<'a> Expr<'a> {
                     .append(alloc.text(tag_id.to_string()))
                     .append(")");
 
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 alloc
                     .text("Reuse ")
-                    .append(symbol_to_doc(alloc, *symbol))
+                    .append(symbol_to_doc(alloc, *symbol, pretty))
                     .append(alloc.space())
                     .append(format!("{:?}", update_mode))
                     .append(alloc.space())
@@ -2160,7 +2088,7 @@ impl<'a> Expr<'a> {
             )),
 
             Struct(args) => {
-                let it = args.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = args.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 alloc
                     .text("Struct {")
@@ -2170,7 +2098,7 @@ impl<'a> Expr<'a> {
             Array { elems, .. } => {
                 let it = elems.iter().map(|e| match e {
                     ListLiteralElement::Literal(l) => l.to_doc(alloc),
-                    ListLiteralElement::Symbol(s) => symbol_to_doc(alloc, *s),
+                    ListLiteralElement::Symbol(s) => symbol_to_doc(alloc, *s, pretty),
                 });
 
                 alloc
@@ -2184,17 +2112,21 @@ impl<'a> Expr<'a> {
                 index, structure, ..
             } => alloc
                 .text(format!("StructAtIndex {} ", index))
-                .append(symbol_to_doc(alloc, *structure)),
+                .append(symbol_to_doc(alloc, *structure, pretty)),
 
             RuntimeErrorFunction(s) => alloc.text(format!("ErrorFunction {}", s)),
 
             GetTagId { structure, .. } => alloc
                 .text("GetTagId ")
-                .append(symbol_to_doc(alloc, *structure)),
+                .append(symbol_to_doc(alloc, *structure, pretty)),
 
-            ExprBox { symbol, .. } => alloc.text("Box ").append(symbol_to_doc(alloc, *symbol)),
+            ExprBox { symbol, .. } => alloc
+                .text("Box ")
+                .append(symbol_to_doc(alloc, *symbol, pretty)),
 
-            ExprUnbox { symbol, .. } => alloc.text("Unbox ").append(symbol_to_doc(alloc, *symbol)),
+            ExprUnbox { symbol, .. } => alloc
+                .text("Unbox ")
+                .append(symbol_to_doc(alloc, *symbol, pretty)),
 
             UnionAtIndex {
                 tag_id,
@@ -2203,14 +2135,14 @@ impl<'a> Expr<'a> {
                 ..
             } => alloc
                 .text(format!("UnionAtIndex (Id {}) (Index {}) ", tag_id, index))
-                .append(symbol_to_doc(alloc, *structure)),
+                .append(symbol_to_doc(alloc, *structure, pretty)),
         }
     }
 
-    pub fn to_pretty(&self, width: usize) -> String {
+    pub fn to_pretty(&self, width: usize, pretty: bool) -> String {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
-        self.to_doc::<_, ()>(&allocator)
+        self.to_doc::<_, ()>(&allocator, pretty)
             .1
             .render(width, &mut w)
             .unwrap();
@@ -2230,31 +2162,45 @@ impl<'a> Stmt<'a> {
         from_can(env, var, can_expr, procs, layout_cache)
     }
 
-    pub fn to_doc<'b, D, A, I>(&'b self, alloc: &'b D, interner: &I) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A, I>(
+        &'b self,
+        alloc: &'b D,
+        interner: &I,
+        pretty: bool,
+    ) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         use Stmt::*;
 
         match self {
             Let(symbol, expr, layout, cont) => alloc
                 .text("let ")
-                .append(symbol_to_doc(alloc, *symbol))
+                .append(symbol_to_doc(alloc, *symbol, pretty))
                 .append(" : ")
                 .append(layout.to_doc(alloc, interner, Parens::NotNeeded))
                 .append(" = ")
-                .append(expr.to_doc(alloc))
+                .append(expr.to_doc(alloc, pretty))
                 .append(";")
                 .append(alloc.hardline())
-                .append(cont.to_doc(alloc, interner)),
+                .append(cont.to_doc(alloc, interner, pretty)),
 
             Refcounting(modify, cont) => modify
-                .to_doc(alloc)
+                .to_doc(alloc, pretty)
                 .append(alloc.hardline())
-                .append(cont.to_doc(alloc, interner)),
+                .append(cont.to_doc(alloc, interner, pretty)),
+
+            Dbg {
+                symbol, remainder, ..
+            } => alloc
+                .text("dbg ")
+                .append(symbol_to_doc(alloc, *symbol, pretty))
+                .append(";")
+                .append(alloc.hardline())
+                .append(remainder.to_doc(alloc, interner, pretty)),
 
             Expect {
                 condition,
@@ -2262,10 +2208,10 @@ impl<'a> Stmt<'a> {
                 ..
             } => alloc
                 .text("expect ")
-                .append(symbol_to_doc(alloc, *condition))
+                .append(symbol_to_doc(alloc, *condition, pretty))
                 .append(";")
                 .append(alloc.hardline())
-                .append(remainder.to_doc(alloc, interner)),
+                .append(remainder.to_doc(alloc, interner, pretty)),
 
             ExpectFx {
                 condition,
@@ -2273,14 +2219,14 @@ impl<'a> Stmt<'a> {
                 ..
             } => alloc
                 .text("expect-fx ")
-                .append(symbol_to_doc(alloc, *condition))
+                .append(symbol_to_doc(alloc, *condition, pretty))
                 .append(";")
                 .append(alloc.hardline())
-                .append(remainder.to_doc(alloc, interner)),
+                .append(remainder.to_doc(alloc, interner, pretty)),
 
             Ret(symbol) => alloc
                 .text("ret ")
-                .append(symbol_to_doc(alloc, *symbol))
+                .append(symbol_to_doc(alloc, *symbol, pretty))
                 .append(";"),
 
             Switch {
@@ -2294,23 +2240,23 @@ impl<'a> Stmt<'a> {
                         let fail = default_branch.1;
                         alloc
                             .text("if ")
-                            .append(symbol_to_doc(alloc, *cond_symbol))
+                            .append(symbol_to_doc(alloc, *cond_symbol, pretty))
                             .append(" then")
-                            .append(info.to_doc(alloc))
+                            .append(info.to_doc(alloc, pretty))
                             .append(alloc.hardline())
-                            .append(pass.to_doc(alloc, interner).indent(4))
+                            .append(pass.to_doc(alloc, interner, pretty).indent(4))
                             .append(alloc.hardline())
                             .append(alloc.text("else"))
-                            .append(default_branch.0.to_doc(alloc))
+                            .append(default_branch.0.to_doc(alloc, pretty))
                             .append(alloc.hardline())
-                            .append(fail.to_doc(alloc, interner).indent(4))
+                            .append(fail.to_doc(alloc, interner, pretty).indent(4))
                     }
 
                     _ => {
                         let default_doc = alloc
                             .text("default:")
                             .append(alloc.hardline())
-                            .append(default_branch.1.to_doc(alloc, interner).indent(4))
+                            .append(default_branch.1.to_doc(alloc, interner, pretty).indent(4))
                             .indent(4);
 
                         let branches_docs = branches
@@ -2319,14 +2265,14 @@ impl<'a> Stmt<'a> {
                                 alloc
                                     .text(format!("case {}:", tag))
                                     .append(alloc.hardline())
-                                    .append(expr.to_doc(alloc, interner).indent(4))
+                                    .append(expr.to_doc(alloc, interner, pretty).indent(4))
                                     .indent(4)
                             })
                             .chain(std::iter::once(default_doc));
                         //
                         alloc
                             .text("switch ")
-                            .append(symbol_to_doc(alloc, *cond_symbol))
+                            .append(symbol_to_doc(alloc, *cond_symbol, pretty))
                             .append(":")
                             .append(alloc.hardline())
                             .append(alloc.intersperse(
@@ -2338,7 +2284,9 @@ impl<'a> Stmt<'a> {
                 }
             }
 
-            Crash(s, _src) => alloc.text("Crash ").append(symbol_to_doc(alloc, *s)),
+            Crash(s, _src) => alloc
+                .text("Crash ")
+                .append(symbol_to_doc(alloc, *s, pretty)),
 
             Join {
                 id,
@@ -2346,29 +2294,31 @@ impl<'a> Stmt<'a> {
                 body: continuation,
                 remainder,
             } => {
-                let it = parameters.iter().map(|p| symbol_to_doc(alloc, p.symbol));
+                let it = parameters
+                    .iter()
+                    .map(|p| symbol_to_doc(alloc, p.symbol, pretty));
 
                 alloc.intersperse(
                     vec![
                         alloc
                             .text("joinpoint ")
-                            .append(join_point_to_doc(alloc, *id))
+                            .append(join_point_to_doc(alloc, *id, pretty))
                             .append(" ".repeat(parameters.len().min(1)))
                             .append(alloc.intersperse(it, alloc.space()))
                             .append(":"),
-                        continuation.to_doc(alloc, interner).indent(4),
+                        continuation.to_doc(alloc, interner, pretty).indent(4),
                         alloc.text("in"),
-                        remainder.to_doc(alloc, interner),
+                        remainder.to_doc(alloc, interner, pretty),
                     ],
                     alloc.hardline(),
                 )
             }
             Jump(id, arguments) => {
-                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s));
+                let it = arguments.iter().map(|s| symbol_to_doc(alloc, *s, pretty));
 
                 alloc
                     .text("jump ")
-                    .append(join_point_to_doc(alloc, *id))
+                    .append(join_point_to_doc(alloc, *id, pretty))
                     .append(" ".repeat(arguments.len().min(1)))
                     .append(alloc.intersperse(it, alloc.space()))
                     .append(";")
@@ -2376,13 +2326,13 @@ impl<'a> Stmt<'a> {
         }
     }
 
-    pub fn to_pretty<I>(&self, interner: &I, width: usize) -> String
+    pub fn to_pretty<I>(&self, interner: &I, width: usize, pretty: bool) -> String
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
-        self.to_doc::<_, (), _>(&allocator, interner)
+        self.to_doc::<_, (), _>(&allocator, interner, pretty)
             .1
             .render(width, &mut w)
             .unwrap();
@@ -2468,25 +2418,70 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, cont.value)
             }
-            Accessor(accessor_data) => {
-                let fresh_record_symbol = env.unique_symbol();
-                register_noncapturing_closure(
-                    env,
-                    procs,
-                    *symbol,
-                    accessor_data.to_closure_data(fresh_record_symbol),
-                );
-
-                lower_rest!(variable, cont.value)
-            }
-            Var(original, _) | AbilityMember(original, _, _) => {
+            Var(original, _) | AbilityMember(original, _, _)
+                if procs.get_partial_proc(original).is_none() =>
+            {
                 // a variable is aliased, e.g.
                 //
                 //  foo = bar
                 //
-                // or
+                // We need to generate an IR that is free of local lvalue aliasing, as this aids in
+                // refcounting. As such, variable aliasing usually involves renaming the LHS in the
+                // rest of the program with the RHS (i.e. [foo->bar]); see `handle_variable_aliasing`
+                // below for the exact algorithm.
                 //
-                //  foo = RBTRee.empty
+                // However, do not attempt to eliminate aliasing to procedures
+                // (either a function pointer or a thunk) here. Doing so is not necessary - if we
+                // have `var = f` where `f` is either a proc or thunk, in either case, `f` will be
+                // resolved to an rvalue, not an lvalue:
+                //
+                // - If `f` is a proc, we assign to `var` its closure data (even if the lambda set
+                //   of `f` is unary with no captures, we leave behind the empty closure data)
+                //
+                // - If `f` is a thunk, we force the thunk and assign to `var` its value.
+                //
+                // With this in mind, when `f` is a thunk or proper function, we are free to follow
+                // the usual (non-lvalue-aliasing) branch of assignment, and end up with correct
+                // code.
+                //
+                // ===
+                //
+                // Recording that an lvalue references a procedure or a thunk may open up
+                // opportunities for optimization - and indeed, recording this information may
+                // sometimes eliminate such unused lvalues, or inline closure data. However, in
+                // general, making sure this kind of aliasing works correctly is very difficult. As
+                // illustration, consider
+                //
+                //     getNum1 = \{} -> 1u64
+                //     getNum2 = \{} -> 2u64
+                //
+                //     dispatch = \fun -> fun {}
+                //
+                //     main =
+                //         myFun1 = getNum1
+                //         myFun2 = getNum2
+                //         dispatch (if Bool.true then myFun1 else myFun2)
+                //
+                // Suppose we leave nothing behind for the assignments `myFun* = getNum*`, and
+                // instead simply associate that they reference procs. In the if-then-else
+                // expression, we then need to construct the closure data for both getNum1 and
+                // getNum2 - but we do not know what lambdas they represent, as we only have access
+                // to the symbols `myFun1` and `myFun2`.
+                //
+                // While associations of `myFun1 -> getNum1` could be propogated, the story gets
+                // more complicated when the referenced proc itself resolves a lambda set with
+                // indirection; for example consider the amendment
+                //
+                //     getNum1 = @Dispatcher \{} -> 1u64
+                //     getNum2 = @Dispatcher \{} -> 2u64
+                //
+                // Now, even the association of `myFun1 -> getNum1` is not enough, as the lambda
+                // set of (if Bool.true then myFun1 else myFun2) would not be { getNum1, getNum2 }
+                // - it would be the binary lambda set of the anonymous closures created under the
+                // `@Dispatcher` wrappers.
+                //
+                // Trying to keep all this information in line has been error prone, and is not
+                // attempted.
 
                 // TODO: right now we need help out rustc with the closure types;
                 // it isn't able to infer the right lifetime bounds. See if we
@@ -2531,17 +2526,68 @@ fn from_can_let<'a>(
                 //              in
                 //                  answer
 
-                let new_def = roc_can::def::Def {
-                    loc_pattern: def.loc_pattern,
-                    loc_expr: *nested_cont,
-                    pattern_vars: def.pattern_vars,
-                    annotation: def.annotation,
-                    expr_var: def.expr_var,
+                use roc_can::{def::Def, expr::Expr, pattern::Pattern};
+
+                let new_outer = match &nested_cont.value {
+                    &Expr::Closure(ClosureData {
+                        name: anon_name, ..
+                    }) => {
+                        // A wrinkle:
+                        //
+                        //   let f =
+                        //      let n = 1 in
+                        //      \{} -[#lam]-> n
+                        //
+                        // must become
+                        //
+                        //   let n = 1 in
+                        //   let #lam = \{} -[#lam]-> n in
+                        //   let f = #lam
+
+                        debug_assert_ne!(*symbol, anon_name);
+
+                        // #lam = \...
+                        let def_anon_closure = Box::new(Def {
+                            loc_pattern: Loc::at_zero(Pattern::Identifier(anon_name)),
+                            loc_expr: *nested_cont,
+                            expr_var: def.expr_var,
+                            pattern_vars: std::iter::once((anon_name, def.expr_var)).collect(),
+                            annotation: None,
+                        });
+
+                        // f = #lam
+                        let new_def = Box::new(Def {
+                            loc_pattern: def.loc_pattern,
+                            loc_expr: Loc::at_zero(Expr::Var(anon_name, def.expr_var)),
+                            expr_var: def.expr_var,
+                            pattern_vars: def.pattern_vars,
+                            annotation: def.annotation,
+                        });
+
+                        let new_inner = LetNonRec(new_def, cont);
+
+                        LetNonRec(
+                            nested_def,
+                            Box::new(Loc::at_zero(LetNonRec(
+                                def_anon_closure,
+                                Box::new(Loc::at_zero(new_inner)),
+                            ))),
+                        )
+                    }
+                    _ => {
+                        let new_def = Def {
+                            loc_pattern: def.loc_pattern,
+                            loc_expr: *nested_cont,
+                            pattern_vars: def.pattern_vars,
+                            annotation: def.annotation,
+                            expr_var: def.expr_var,
+                        };
+
+                        let new_inner = LetNonRec(Box::new(new_def), cont);
+
+                        LetNonRec(nested_def, Box::new(Loc::at_zero(new_inner)))
+                    }
                 };
-
-                let new_inner = LetNonRec(Box::new(new_def), cont);
-
-                let new_outer = LetNonRec(nested_def, Box::new(Loc::at_zero(new_inner)));
 
                 lower_rest!(variable, new_outer)
             }
@@ -2938,55 +2984,18 @@ fn specialize_suspended<'a>(
         };
 
         match specialize_variable(env, procs, name, layout_cache, var, &[], partial_proc) {
-            Ok((proc, _layout)) => {
-                // TODO this code is duplicated elsewhere
-
-                // the `layout` is a function pointer, while `_ignore_layout` can be a
-                // closure. We only specialize functions, storing this value with a closure
-                // layout will give trouble.
-                let arguments = Vec::from_iter_in(proc.args.iter().map(|(l, _)| *l), env.arena)
-                    .into_bump_slice();
-
-                let proper_layout = ProcLayout {
-                    arguments,
-                    result: proc.ret_layout,
-                    captures_niche: proc.name.captures_niche(),
-                };
-                if procs.is_module_thunk(proc.name.name()) {
-                    debug_assert!(
-                        proper_layout.arguments.is_empty(),
-                        "{:?} from {:?}",
-                        name,
-                        proper_layout
-                    );
-                }
-
-                // NOTE: some functions are specialized to have a closure, but don't actually
-                // need any closure argument. Here is where we correct this sort of thing,
-                // by trusting the layout of the Proc, not of what we specialize for
+            Ok((proc, raw_layout)) => {
+                let proc_layout = ProcLayout::from_raw_named(env.arena, name, raw_layout);
                 procs
                     .specialized
-                    .remove_specialized(name.name(), &outside_layout);
-                procs
-                    .specialized
-                    .insert_specialized(name.name(), proper_layout, proc);
+                    .insert_specialized(name.name(), proc_layout, proc);
             }
             Err(SpecializeFailure {
                 attempted_layout, ..
             }) => {
-                let proc = generate_runtime_error_function(
-                    env,
-                    layout_cache,
-                    name.name(),
-                    attempted_layout,
-                );
+                let proc = generate_runtime_error_function(env, name, attempted_layout);
 
-                let top_level = ProcLayout::from_raw(
-                    env.arena,
-                    &layout_cache.interner,
-                    attempted_layout,
-                    CapturesNiche::no_niche(),
-                );
+                let top_level = ProcLayout::from_raw_named(env.arena, name, attempted_layout);
 
                 procs
                     .specialized
@@ -3132,12 +3141,7 @@ fn specialize_external_help<'a>(
 
     match specialization_result {
         Ok((proc, layout)) => {
-            let top_level = ProcLayout::from_raw(
-                env.arena,
-                &layout_cache.interner,
-                layout,
-                proc.name.captures_niche(),
-            );
+            let top_level = ProcLayout::from_raw_named(env.arena, name, layout);
 
             if procs.is_module_thunk(name.name()) {
                 debug_assert!(top_level.arguments.is_empty());
@@ -3148,15 +3152,9 @@ fn specialize_external_help<'a>(
                 .insert_specialized(name.name(), top_level, proc);
         }
         Err(SpecializeFailure { attempted_layout }) => {
-            let proc =
-                generate_runtime_error_function(env, layout_cache, name.name(), attempted_layout);
+            let proc = generate_runtime_error_function(env, name, attempted_layout);
 
-            let top_level = ProcLayout::from_raw(
-                env.arena,
-                &layout_cache.interner,
-                attempted_layout,
-                proc.name.captures_niche(),
-            );
+            let top_level = ProcLayout::from_raw_named(env.arena, name, attempted_layout);
 
             procs
                 .specialized
@@ -3167,8 +3165,7 @@ fn specialize_external_help<'a>(
 
 fn generate_runtime_error_function<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &LayoutCache<'a>,
-    name: Symbol,
+    lambda_name: LambdaName<'a>,
     layout: RawFunctionLayout<'a>,
 ) -> Proc<'a> {
     let mut msg = bumpalo::collections::string::String::with_capacity_in(80, env.arena);
@@ -3176,7 +3173,7 @@ fn generate_runtime_error_function<'a>(
     write!(
         &mut msg,
         "The {:?} function could not be generated, likely due to a type error.",
-        name
+        lambda_name.name(),
     )
     .unwrap();
 
@@ -3192,7 +3189,7 @@ fn generate_runtime_error_function<'a>(
     let (args, ret_layout) = match layout {
         RawFunctionLayout::Function(arg_layouts, lambda_set, ret_layout) => {
             let real_arg_layouts =
-                lambda_set.extend_argument_list(env.arena, &layout_cache.interner, arg_layouts);
+                lambda_set.extend_argument_list_for_named(env.arena, lambda_name, arg_layouts);
             let mut args = Vec::with_capacity_in(real_arg_layouts.len(), env.arena);
 
             for arg in arg_layouts {
@@ -3208,7 +3205,7 @@ fn generate_runtime_error_function<'a>(
     };
 
     Proc {
-        name: LambdaName::no_niche(name),
+        name: lambda_name,
         args,
         body: runtime_error,
         closure_data_layout: None,
@@ -3393,7 +3390,7 @@ fn specialize_proc_help<'a>(
                     let top_level = ProcLayout::new(
                         env.arena,
                         top_level_arguments.into_bump_slice(),
-                        CapturesNiche::no_niche(),
+                        Niche::NONE,
                         *return_layout,
                     );
 
@@ -3406,8 +3403,9 @@ fn specialize_proc_help<'a>(
                     let hole = env.arena.alloc(Stmt::Ret(assigned));
                     let forced = force_thunk(env, lambda_name.name(), result, assigned, hole);
 
+                    let lambda_name = LambdaName::no_niche(name);
                     let proc = Proc {
-                        name: LambdaName::no_niche(name),
+                        name: lambda_name,
                         args: &[],
                         body: forced,
                         closure_data_layout: None,
@@ -3417,12 +3415,7 @@ fn specialize_proc_help<'a>(
                         host_exposed_layouts: HostExposedLayouts::NotHostExposed,
                     };
 
-                    let top_level = ProcLayout::from_raw(
-                        env.arena,
-                        &layout_cache.interner,
-                        layout,
-                        CapturesNiche::no_niche(),
-                    );
+                    let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, layout);
 
                     procs.specialized.insert_specialized(name, top_level, proc);
 
@@ -3430,7 +3423,7 @@ fn specialize_proc_help<'a>(
                         *symbol,
                         (
                             name,
-                            ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), result),
+                            ProcLayout::new(env.arena, &[], Niche::NONE, result),
                             layout,
                         ),
                     );
@@ -3539,10 +3532,12 @@ fn specialize_proc_help<'a>(
                             let ptr_bytes = env.target_info;
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
-                                let size1 =
-                                    layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
-                                let size2 =
-                                    layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size1 = layout_cache
+                                    .get_in(**layout1)
+                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size2 = layout_cache
+                                    .get_in(**layout2)
+                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                                 size2.cmp(&size1)
                             });
@@ -3581,16 +3576,20 @@ fn specialize_proc_help<'a>(
                             let ptr_bytes = env.target_info;
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
-                                let size1 =
-                                    layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
-                                let size2 =
-                                    layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size1 = layout_cache
+                                    .get_in(**layout1)
+                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size2 = layout_cache
+                                    .get_in(**layout2)
+                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                                 size2.cmp(&size1)
                             });
 
                             let ordered_field_layouts = Vec::from_iter_in(
-                                combined.iter().map(|(_, layout)| **layout),
+                                combined
+                                    .iter()
+                                    .map(|(_, layout)| *layout_cache.get_in(**layout)),
                                 env.arena,
                             );
                             let ordered_field_layouts = ordered_field_layouts.into_bump_slice();
@@ -3616,7 +3615,7 @@ fn specialize_proc_help<'a>(
                                 specialized_body = Stmt::Let(
                                     symbol,
                                     expr,
-                                    **layout,
+                                    *layout_cache.get_in(**layout),
                                     env.arena.alloc(specialized_body),
                                 );
                             }
@@ -3956,14 +3955,14 @@ fn specialize_variable<'a>(
 pub struct ProcLayout<'a> {
     pub arguments: &'a [Layout<'a>],
     pub result: Layout<'a>,
-    pub captures_niche: CapturesNiche<'a>,
+    pub niche: Niche<'a>,
 }
 
 impl<'a> ProcLayout<'a> {
-    pub fn new(
+    pub(crate) fn new(
         arena: &'a Bump,
         old_arguments: &'a [Layout<'a>],
-        old_captures_niche: CapturesNiche<'a>,
+        old_niche: Niche<'a>,
         result: Layout<'a>,
     ) -> Self {
         let mut arguments = Vec::with_capacity_in(old_arguments.len(), arena);
@@ -3978,24 +3977,24 @@ impl<'a> ProcLayout<'a> {
 
         ProcLayout {
             arguments: arguments.into_bump_slice(),
-            captures_niche: old_captures_niche,
+            niche: old_niche,
             result: new_result,
         }
     }
 
-    pub fn from_raw(
+    fn from_raw_named(
         arena: &'a Bump,
-        interner: &LayoutInterner<'a>,
+        lambda_name: LambdaName<'a>,
         raw: RawFunctionLayout<'a>,
-        captures_niche: CapturesNiche<'a>,
     ) -> Self {
         match raw {
             RawFunctionLayout::Function(arguments, lambda_set, result) => {
-                let arguments = lambda_set.extend_argument_list(arena, interner, arguments);
-                ProcLayout::new(arena, arguments, captures_niche, *result)
+                let arguments =
+                    lambda_set.extend_argument_list_for_named(arena, lambda_name, arguments);
+                ProcLayout::new(arena, arguments, lambda_name.niche(), *result)
             }
             RawFunctionLayout::ZeroArgumentThunk(result) => {
-                ProcLayout::new(arena, &[], CapturesNiche::no_niche(), result)
+                ProcLayout::new(arena, &[], Niche::NONE, result)
             }
         }
     }
@@ -4039,24 +4038,13 @@ fn specialize_naked_symbol<'a>(
                     std::vec::Vec::new(),
                     layout_cache,
                     assigned,
-                    match hole {
-                        Stmt::Jump(id, _) => env
-                            .arena
-                            .alloc(Stmt::Jump(*id, env.arena.alloc([assigned]))),
-                        Stmt::Ret(_) => env.arena.alloc(Stmt::Ret(assigned)),
-                        hole => hole,
-                    },
+                    hole,
                 );
 
                 return result;
             }
         }
     }
-
-    let result = match hole {
-        Stmt::Jump(id, _) => Stmt::Jump(*id, env.arena.alloc([symbol])),
-        _ => Stmt::Ret(symbol),
-    };
 
     // if the symbol is a function symbol, ensure it is properly specialized!
     let original = symbol;
@@ -4069,8 +4057,8 @@ fn specialize_naked_symbol<'a>(
         procs,
         layout_cache,
         opt_fn_var,
-        symbol,
-        result,
+        assigned,
+        hole,
         original,
     )
 }
@@ -4413,7 +4401,7 @@ pub fn with_hole<'a>(
                             layout_cache,
                             Some(variable),
                             symbol,
-                            stmt,
+                            env.arena.alloc(stmt),
                             symbol,
                         );
                     }
@@ -4642,19 +4630,23 @@ pub fn with_hole<'a>(
             match opt_elem_layout {
                 Ok(elem_layout) => {
                     let expr = Expr::EmptyArray;
+                    // TODO don't alloc once elem_layout is interned
+                    let elem_layout = layout_cache.put_in(env.arena.alloc(elem_layout));
                     Stmt::Let(
                         assigned,
                         expr,
-                        Layout::Builtin(Builtin::List(env.arena.alloc(elem_layout))),
+                        Layout::Builtin(Builtin::List(elem_layout)),
                         hole,
                     )
                 }
                 Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                     let expr = Expr::EmptyArray;
+                    // TODO don't alloc once elem_layout is interned
+                    let elem_layout = layout_cache.put_in(env.arena.alloc(Layout::VOID));
                     Stmt::Let(
                         assigned,
                         expr,
-                        Layout::Builtin(Builtin::List(&Layout::VOID)),
+                        Layout::Builtin(Builtin::List(elem_layout)),
                         hole,
                     )
                 }
@@ -4699,10 +4691,12 @@ pub fn with_hole<'a>(
                 elems: elements.into_bump_slice(),
             };
 
+            let elem_layout = layout_cache.put_in(env.arena.alloc(elem_layout));
+
             let stmt = Stmt::Let(
                 assigned,
                 expr,
-                Layout::Builtin(Builtin::List(env.arena.alloc(elem_layout))),
+                Layout::Builtin(Builtin::List(elem_layout)),
                 hole,
             );
 
@@ -5075,7 +5069,7 @@ pub fn with_hole<'a>(
                                     layout_cache,
                                     Some(record_var),
                                     specialized_structure_sym,
-                                    stmt,
+                                    env.arena.alloc(stmt),
                                     structure,
                                 );
                             }
@@ -5476,14 +5470,7 @@ pub fn with_hole<'a>(
                         "match_on_closure_argument"
                     );
 
-                    // NB: I don't think the top_level here can have a captures niche?
-                    let top_level_capture_niche = CapturesNiche::no_niche();
-                    let top_level = ProcLayout::from_raw(env.arena, &layout_cache.interner, closure_data_layout, top_level_capture_niche);
-
                     let arena = env.arena;
-
-                    let arg_layouts = top_level.arguments;
-                    let ret_layout = top_level.result;
 
                     match closure_data_layout {
                         RawFunctionLayout::Function(_, lambda_set, _) =>  {
@@ -5493,16 +5480,20 @@ pub fn with_hole<'a>(
                                 lambda_set,
                                 op,
                                 closure_data_symbol,
-                                |(top_level_function, closure_data, closure_env_layout,  specialization_id, update_mode)| {
+                                |(lambda_name, closure_data, closure_env_layout,  specialization_id, update_mode)| {
+                                    // Build a call for a specific lambda in the set
+                                    let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, closure_data_layout);
+                                    let arg_layouts = top_level.arguments;
+                                    let ret_layout = top_level.result;
+
                                     let passed_function = PassedFunction {
-                                        name: top_level_function,
+                                        name: lambda_name,
                                         captured_environment: closure_data_symbol,
                                         owns_captured_environment: false,
                                         specialization_id,
                                         argument_layouts: arg_layouts,
                                         return_layout: ret_layout,
                                     };
-
 
                                     let higher_order = HigherOrderLowLevel {
                                         op: crate::low_level::HigherOrder::$ho { $($x,)* },
@@ -5513,7 +5504,7 @@ pub fn with_hole<'a>(
 
                                     self::Call {
                                         call_type: CallType::HigherOrder(arena.alloc(higher_order)),
-                                        arguments: arena.alloc([$($x,)* top_level_function.name(), closure_data]),
+                                        arguments: arena.alloc([$($x,)* lambda_name.name(), closure_data]),
                                     }
                                 },
                                 layout,
@@ -5750,8 +5741,12 @@ where
             let ptr_bytes = env.target_info;
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
-                let size1 = layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
-                let size2 = layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size1 = layout_cache
+                    .get_in(**layout1)
+                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size2 = layout_cache
+                    .get_in(**layout2)
+                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                 size2.cmp(&size1)
             });
@@ -5780,16 +5775,23 @@ where
             let ptr_bytes = env.target_info;
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
-                let size1 = layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
-                let size2 = layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size1 = layout_cache
+                    .get_in(**layout1)
+                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size2 = layout_cache
+                    .get_in(**layout2)
+                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                 size2.cmp(&size1)
             });
 
             let symbols =
                 Vec::from_iter_in(combined.iter().map(|(a, _)| *a), env.arena).into_bump_slice();
-            let field_layouts =
-                Vec::from_iter_in(combined.iter().map(|(_, b)| **b), env.arena).into_bump_slice();
+            let field_layouts = Vec::from_iter_in(
+                combined.iter().map(|(_, b)| *layout_cache.get_in(**b)),
+                env.arena,
+            )
+            .into_bump_slice();
 
             debug_assert_eq!(
                 Layout::struct_no_name_order(field_layouts),
@@ -6502,13 +6504,14 @@ pub fn from_can<'a>(
             let cond_symbol = env.unique_symbol();
 
             let mut lookups = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
-            let mut layouts = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut lookup_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut specialized_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
 
             for ExpectLookup {
                 symbol,
                 var,
                 ability_info,
-            } in lookups_in_cond
+            } in lookups_in_cond.iter().copied()
             {
                 let symbol = match ability_info {
                     Some(specialization_id) => late_resolve_ability_specialization(
@@ -6519,20 +6522,28 @@ pub fn from_can<'a>(
                     ),
                     None => symbol,
                 };
-                let res_layout = layout_cache.from_var(env.arena, var, env.subs);
-                let layout = return_on_layout_error!(env, res_layout, "Expect");
-                if !matches!(layout, Layout::LambdaSet(..)) {
+
+                let expectation_subs = env
+                    .expectation_subs
+                    .as_deref_mut()
+                    .expect("if expects are compiled, their subs should be available");
+                let spec_var = expectation_subs.fresh_unnamed_flex_var();
+
+                if !env.subs.is_function(var) {
                     // Exclude functions from lookups
                     lookups.push(symbol);
-                    layouts.push(layout);
+                    lookup_variables.push(var);
+                    specialized_variables.push(spec_var);
                 }
             }
+
+            let specialized_variables = specialized_variables.into_bump_slice();
 
             let mut stmt = Stmt::Expect {
                 condition: cond_symbol,
                 region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
-                layouts: layouts.into_bump_slice(),
+                variables: specialized_variables,
                 remainder: env.arena.alloc(rest),
             };
 
@@ -6545,6 +6556,10 @@ pub fn from_can<'a>(
                 cond_symbol,
                 env.arena.alloc(stmt),
             );
+
+            // Now that the condition has been specialized, export the specialized types of our
+            // lookups into the expectation subs.
+            store_specialized_expectation_lookups(env, lookup_variables, specialized_variables);
 
             stmt
         }
@@ -6558,13 +6573,14 @@ pub fn from_can<'a>(
             let cond_symbol = env.unique_symbol();
 
             let mut lookups = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
-            let mut layouts = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut lookup_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
+            let mut specialized_variables = Vec::with_capacity_in(lookups_in_cond.len(), env.arena);
 
             for ExpectLookup {
                 symbol,
                 var,
                 ability_info,
-            } in lookups_in_cond
+            } in lookups_in_cond.iter().copied()
             {
                 let symbol = match ability_info {
                     Some(specialization_id) => late_resolve_ability_specialization(
@@ -6575,20 +6591,28 @@ pub fn from_can<'a>(
                     ),
                     None => symbol,
                 };
-                let res_layout = layout_cache.from_var(env.arena, var, env.subs);
-                let layout = return_on_layout_error!(env, res_layout, "Expect");
-                if !matches!(layout, Layout::LambdaSet(..)) {
+
+                let expectation_subs = env
+                    .expectation_subs
+                    .as_deref_mut()
+                    .expect("if expects are compiled, their subs should be available");
+                let spec_var = expectation_subs.fresh_unnamed_flex_var();
+
+                if !env.subs.is_function(var) {
                     // Exclude functions from lookups
                     lookups.push(symbol);
-                    layouts.push(layout);
+                    lookup_variables.push(var);
+                    specialized_variables.push(spec_var);
                 }
             }
+
+            let specialized_variables = specialized_variables.into_bump_slice();
 
             let mut stmt = Stmt::ExpectFx {
                 condition: cond_symbol,
                 region: loc_condition.region,
                 lookups: lookups.into_bump_slice(),
-                layouts: layouts.into_bump_slice(),
+                variables: specialized_variables,
                 remainder: env.arena.alloc(rest),
             };
 
@@ -6602,6 +6626,8 @@ pub fn from_can<'a>(
                 env.arena.alloc(stmt),
             );
 
+            store_specialized_expectation_lookups(env, lookup_variables, specialized_variables);
+
             stmt
         }
 
@@ -6613,20 +6639,21 @@ pub fn from_can<'a>(
         } => {
             let rest = from_can(env, variable, loc_continuation.value, procs, layout_cache);
 
-            let call = crate::ir::Call {
-                call_type: CallType::LowLevel {
-                    op: LowLevel::Dbg,
-                    update_mode: env.next_update_mode_id(),
-                },
-                arguments: env.arena.alloc([dbg_symbol]),
+            let spec_var = env
+                .expectation_subs
+                .as_mut()
+                .unwrap()
+                .fresh_unnamed_flex_var();
+
+            let dbg_stmt = Stmt::Dbg {
+                symbol: dbg_symbol,
+                variable: spec_var,
+                remainder: env.arena.alloc(rest),
             };
 
-            let dbg_layout = layout_cache
-                .from_var(env.arena, variable, env.subs)
-                .expect("invalid dbg_layout");
-
-            let expr = Expr::Call(call);
-            let mut stmt = Stmt::Let(dbg_symbol, expr, dbg_layout, env.arena.alloc(rest));
+            // Now that the dbg value has been specialized, export its specialized type into the
+            // expectations subs.
+            store_specialized_expectation_lookups(env, [variable], &[spec_var]);
 
             let symbol_is_reused = matches!(
                 can_reuse_symbol(env, procs, &loc_condition.value, variable),
@@ -6634,19 +6661,19 @@ pub fn from_can<'a>(
             );
 
             // skip evaluating the condition if it's just a symbol
-            if !symbol_is_reused {
-                stmt = with_hole(
+            if symbol_is_reused {
+                dbg_stmt
+            } else {
+                with_hole(
                     env,
                     loc_condition.value,
                     variable,
                     procs,
                     layout_cache,
                     dbg_symbol,
-                    env.arena.alloc(stmt),
-                );
+                    env.arena.alloc(dbg_stmt),
+                )
             }
-
-            stmt
         }
 
         LetRec(defs, cont, _cycle_mark) => {
@@ -6681,6 +6708,21 @@ pub fn from_can<'a>(
             let hole = env.arena.alloc(Stmt::Ret(symbol));
             with_hole(env, can_expr, variable, procs, layout_cache, symbol, hole)
         }
+    }
+}
+
+fn store_specialized_expectation_lookups(
+    env: &mut Env,
+    lookup_variables: impl IntoIterator<Item = Variable>,
+    specialized_variables: &[Variable],
+) {
+    let subs = &env.subs;
+    let expectation_subs = env.expectation_subs.as_deref_mut().unwrap();
+    for (lookup_var, stored_var) in lookup_variables.into_iter().zip(specialized_variables) {
+        let stored_specialized_var =
+            storage_copy_var_to(&mut Default::default(), subs, expectation_subs, lookup_var);
+        let stored_specialized_desc = expectation_subs.get(stored_specialized_var);
+        expectation_subs.union(*stored_var, stored_specialized_var, stored_specialized_desc);
     }
 }
 
@@ -6948,9 +6990,17 @@ fn substitute_in_stmt_help<'a>(
             default_branch,
             ret_layout,
         } => {
-            let opt_default = substitute_in_stmt_help(arena, default_branch.1, subs);
-
             let mut did_change = false;
+
+            let cond_symbol = match substitute(subs, *cond_symbol) {
+                Some(s) => {
+                    did_change = true;
+                    s
+                }
+                None => *cond_symbol,
+            };
+
+            let opt_default = substitute_in_stmt_help(arena, default_branch.1, subs);
 
             let opt_branches = Vec::from_iter_in(
                 branches.iter().map(|(label, info, branch)| {
@@ -6988,7 +7038,7 @@ fn substitute_in_stmt_help<'a>(
                 };
 
                 Some(arena.alloc(Switch {
-                    cond_symbol: *cond_symbol,
+                    cond_symbol,
                     cond_layout: *cond_layout,
                     default_branch,
                     branches,
@@ -7010,11 +7060,28 @@ fn substitute_in_stmt_help<'a>(
             }
         }
 
+        Dbg {
+            symbol,
+            variable,
+            remainder,
+        } => {
+            let new_remainder =
+                substitute_in_stmt_help(arena, remainder, subs).unwrap_or(remainder);
+
+            let expect = Dbg {
+                symbol: substitute(subs, *symbol).unwrap_or(*symbol),
+                variable: *variable,
+                remainder: new_remainder,
+            };
+
+            Some(arena.alloc(expect))
+        }
+
         Expect {
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let new_remainder =
@@ -7029,7 +7096,7 @@ fn substitute_in_stmt_help<'a>(
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),
-                layouts,
+                variables,
                 remainder: new_remainder,
             };
 
@@ -7040,7 +7107,7 @@ fn substitute_in_stmt_help<'a>(
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let new_remainder =
@@ -7055,7 +7122,7 @@ fn substitute_in_stmt_help<'a>(
                 condition: substitute(subs, *condition).unwrap_or(*condition),
                 region: *region,
                 lookups: new_lookups.into_bump_slice(),
-                layouts,
+                variables,
                 remainder: new_remainder,
             };
 
@@ -8019,15 +8086,11 @@ where
         }
     }
 
-    // 2. Handle references to a known proc - again, we may be either aliasing the proc, or another
-    //    alias to a proc.
-    if procs.partial_procs.contains_key(right) {
-        // This is an alias to a function defined in this module.
-        // Attach the alias, then build the rest of the module, so that we reference and specialize
-        // the correct proc.
-        procs.partial_procs.insert_alias(left, right);
-        return build_rest(env, procs, layout_cache);
-    }
+    // We should never reference a partial proc - instead, we want to generate closure data and
+    // leave it there, even if the lambda set is unary. That way, we avoid having to try to resolve
+    // lambda set of the proc based on the symbol name, which can cause many problems!
+    // See my git blame for details.
+    debug_assert!(!procs.partial_procs.contains_key(right));
 
     // Otherwise we're dealing with an alias whose usages will tell us what specializations we
     // need. So let's figure those out first.
@@ -8154,8 +8217,8 @@ fn specialize_symbol<'a>(
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     arg_var: Option<Variable>,
-    symbol: Symbol,
-    result: Stmt<'a>,
+    assign_to: Symbol,
+    result: &'a Stmt<'a>,
     original: Symbol,
 ) -> Stmt<'a> {
     match procs.get_partial_proc(original) {
@@ -8170,49 +8233,63 @@ fn specialize_symbol<'a>(
                         Err(e) => return_on_layout_error_help!(env, e, "specialize_symbol"),
                     };
 
-                    if procs.is_imported_module_thunk(original) {
-                        let layout = match raw {
-                            RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
-                            RawFunctionLayout::Function(_, lambda_set, _) => {
-                                Layout::LambdaSet(lambda_set)
-                            }
-                        };
+                    match raw {
+                        RawFunctionLayout::Function(_, lambda_set, _)
+                            if !procs.is_imported_module_thunk(original) =>
+                        {
+                            let lambda_name =
+                                find_lambda_name(env, layout_cache, lambda_set, original, &[]);
 
-                        let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
-                        let top_level = ProcLayout::from_raw(
-                            env.arena,
-                            &layout_cache.interner,
-                            raw,
-                            CapturesNiche::no_niche(),
-                        );
+                            debug_assert!(
+                                lambda_name.no_captures(),
+                                "imported functions are top-level and should never capture"
+                            );
 
-                        procs.insert_passed_by_name(
-                            env,
-                            arg_var,
-                            LambdaName::no_niche(original),
-                            top_level,
-                            layout_cache,
-                        );
+                            let function_ptr_layout =
+                                ProcLayout::from_raw_named(env.arena, lambda_name, raw);
+                            procs.insert_passed_by_name(
+                                env,
+                                arg_var,
+                                lambda_name,
+                                function_ptr_layout,
+                                layout_cache,
+                            );
 
-                        force_thunk(env, original, layout, symbol, env.arena.alloc(result))
-                    } else {
-                        // Imported symbol, so it must have no captures niche (since
-                        // top-levels can't capture)
-                        let top_level = ProcLayout::from_raw(
-                            env.arena,
-                            &layout_cache.interner,
-                            raw,
-                            CapturesNiche::no_niche(),
-                        );
-                        procs.insert_passed_by_name(
-                            env,
-                            arg_var,
-                            LambdaName::no_niche(original),
-                            top_level,
-                            layout_cache,
-                        );
+                            construct_closure_data(
+                                env,
+                                procs,
+                                layout_cache,
+                                lambda_set,
+                                lambda_name,
+                                &[],
+                                assign_to,
+                                env.arena.alloc(result),
+                            )
+                        }
+                        _ => {
+                            // This is an imported ZAT that returns either a value, or the closure
+                            // data for a lambda set.
+                            let layout = match raw {
+                                RawFunctionLayout::ZeroArgumentThunk(layout) => layout,
+                                RawFunctionLayout::Function(_, lambda_set, _) => {
+                                    Layout::LambdaSet(lambda_set)
+                                }
+                            };
 
-                        let_empty_struct(symbol, env.arena.alloc(result))
+                            let raw = RawFunctionLayout::ZeroArgumentThunk(layout);
+                            let lambda_name = LambdaName::no_niche(original);
+                            let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, raw);
+
+                            procs.insert_passed_by_name(
+                                env,
+                                arg_var,
+                                lambda_name,
+                                top_level,
+                                layout_cache,
+                            );
+
+                            force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
+                        }
                     }
                 }
 
@@ -8224,6 +8301,13 @@ fn specialize_symbol<'a>(
                         original,
                         (env.home, &arg_var),
                     );
+
+                    // Replaces references of `assign_to` in the rest of the block with `original`,
+                    // since we don't actually need to specialize the original symbol to a value.
+                    //
+                    // This usually means we are using a symbol received from a joinpoint.
+                    let mut result = result.clone();
+                    substitute_in_exprs(env.arena, &mut result, assign_to, original);
                     result
                 }
             }
@@ -8266,12 +8350,8 @@ fn specialize_symbol<'a>(
                         );
 
                         // define the function pointer
-                        let function_ptr_layout = ProcLayout::from_raw(
-                            env.arena,
-                            &layout_cache.interner,
-                            res_layout,
-                            lambda_name.captures_niche(),
-                        );
+                        let function_ptr_layout =
+                            ProcLayout::from_raw_named(env.arena, lambda_name, res_layout);
 
                         // this is a closure by capture, meaning it itself captures local variables.
                         procs.insert_passed_by_name(
@@ -8282,7 +8362,7 @@ fn specialize_symbol<'a>(
                             layout_cache,
                         );
 
-                        let closure_data = symbol;
+                        let closure_data = assign_to;
 
                         construct_closure_data(
                             env,
@@ -8301,8 +8381,7 @@ fn specialize_symbol<'a>(
                         // let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
                         // panic!("suspicious");
                         let layout = Layout::LambdaSet(lambda_set);
-                        let top_level =
-                            ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), layout);
+                        let top_level = ProcLayout::new(env.arena, &[], Niche::NONE, layout);
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
@@ -8311,7 +8390,7 @@ fn specialize_symbol<'a>(
                             layout_cache,
                         );
 
-                        force_thunk(env, original, layout, symbol, env.arena.alloc(result))
+                        force_thunk(env, original, layout, assign_to, env.arena.alloc(result))
                     } else {
                         // even though this function may not itself capture,
                         // unification may still cause it to have an extra argument
@@ -8321,12 +8400,8 @@ fn specialize_symbol<'a>(
                         debug_assert!(lambda_name.no_captures());
 
                         // define the function pointer
-                        let function_ptr_layout = ProcLayout::from_raw(
-                            env.arena,
-                            &layout_cache.interner,
-                            res_layout,
-                            lambda_name.captures_niche(),
-                        );
+                        let function_ptr_layout =
+                            ProcLayout::from_raw_named(env.arena, lambda_name, res_layout);
 
                         procs.insert_passed_by_name(
                             env,
@@ -8343,15 +8418,14 @@ fn specialize_symbol<'a>(
                             lambda_set,
                             lambda_name,
                             &[],
-                            symbol,
+                            assign_to,
                             env.arena.alloc(result),
                         )
                     }
                 }
                 RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
                     // this is a 0-argument thunk
-                    let top_level =
-                        ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), ret_layout);
+                    let top_level = ProcLayout::new(env.arena, &[], Niche::NONE, ret_layout);
                     procs.insert_passed_by_name(
                         env,
                         arg_var,
@@ -8360,7 +8434,13 @@ fn specialize_symbol<'a>(
                         layout_cache,
                     );
 
-                    force_thunk(env, original, ret_layout, symbol, env.arena.alloc(result))
+                    force_thunk(
+                        env,
+                        original,
+                        ret_layout,
+                        assign_to,
+                        env.arena.alloc(result),
+                    )
                 }
             }
         }
@@ -8386,7 +8466,7 @@ fn assign_to_symbol<'a>(
                 layout_cache,
                 Some(arg_var),
                 symbol,
-                result,
+                env.arena.alloc(result),
                 original,
             )
         }
@@ -8672,13 +8752,8 @@ fn call_by_name_help<'a>(
     // number of arguments actually passed.
     let top_level_layout = {
         let argument_layouts =
-            lambda_set.extend_argument_list(env.arena, &layout_cache.interner, argument_layouts);
-        ProcLayout::new(
-            env.arena,
-            argument_layouts,
-            proc_name.captures_niche(),
-            *ret_layout,
-        )
+            lambda_set.extend_argument_list_for_named(env.arena, proc_name, argument_layouts);
+        ProcLayout::new(env.arena, argument_layouts, proc_name.niche(), *ret_layout)
     };
 
     // the variables of the given arguments
@@ -8854,12 +8929,8 @@ fn call_by_name_help<'a>(
                         ) {
                             Ok((proc, layout)) => {
                                 let proc_name = proc.name;
-                                let function_layout = ProcLayout::from_raw(
-                                    env.arena,
-                                    &layout_cache.interner,
-                                    layout,
-                                    proc_name.captures_niche(),
-                                );
+                                let function_layout =
+                                    ProcLayout::from_raw_named(env.arena, proc_name, layout);
                                 procs.specialized.insert_specialized(
                                     proc_name.name(),
                                     function_layout,
@@ -8884,17 +8955,15 @@ fn call_by_name_help<'a>(
                             Err(SpecializeFailure { attempted_layout }) => {
                                 let proc = generate_runtime_error_function(
                                     env,
-                                    layout_cache,
-                                    proc_name.name(),
+                                    proc_name,
                                     attempted_layout,
                                 );
 
                                 let proc_name = proc.name;
-                                let function_layout = ProcLayout::from_raw(
+                                let function_layout = ProcLayout::from_raw_named(
                                     env.arena,
-                                    &layout_cache.interner,
+                                    proc_name,
                                     attempted_layout,
-                                    proc_name.captures_niche(),
                                 );
                                 procs.specialized.insert_specialized(
                                     proc_name.name(),
@@ -8939,7 +9008,7 @@ fn call_by_name_module_thunk<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let top_level_layout = ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), *ret_layout);
+    let top_level_layout = ProcLayout::new(env.arena, &[], Niche::NONE, *ret_layout);
 
     let inner_layout = *ret_layout;
 
@@ -9029,8 +9098,7 @@ fn call_by_name_module_thunk<'a>(
                             Err(SpecializeFailure { attempted_layout }) => {
                                 let proc = generate_runtime_error_function(
                                     env,
-                                    layout_cache,
-                                    proc_name,
+                                    LambdaName::no_niche(proc_name),
                                     attempted_layout,
                                 );
 
@@ -9645,8 +9713,7 @@ fn from_can_pattern_help<'a>(
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
                                     name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
-                                    // don't include tag discriminant in arity
-                                    arity: args.len() - 1,
+                                    arity: args.len(),
                                 })
                             }
 
@@ -9733,36 +9800,21 @@ fn from_can_pattern_help<'a>(
                         } => {
                             debug_assert!(!tags.is_empty());
 
-                            let mut i = 0;
-                            for (tag_name, args) in tags.iter() {
+                            for (i, (tag_name, args)) in tags.iter().enumerate() {
                                 if i == nullable_id as usize {
+                                    debug_assert!(args.is_empty());
                                     ctors.push(Ctor {
                                         tag_id: TagId(i as _),
                                         name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
-                                        // don't include tag discriminant in arity
                                         arity: 0,
                                     });
-
-                                    i += 1;
+                                } else {
+                                    ctors.push(Ctor {
+                                        tag_id: TagId(i as _),
+                                        name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
+                                        arity: args.len(),
+                                    });
                                 }
-
-                                ctors.push(Ctor {
-                                    tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
-                                    // don't include tag discriminant in arity
-                                    arity: args.len() - 1,
-                                });
-
-                                i += 1;
-                            }
-
-                            if i == nullable_id as usize {
-                                ctors.push(Ctor {
-                                    tag_id: TagId(i as _),
-                                    name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
-                                    // don't include tag discriminant in arity
-                                    arity: 0,
-                                });
                             }
 
                             let union = roc_exhaustive::Union {
@@ -9817,8 +9869,7 @@ fn from_can_pattern_help<'a>(
                             ctors.push(Ctor {
                                 tag_id: TagId(!nullable_id as _),
                                 name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
-                                // FIXME drop tag
-                                arity: other_fields.len() - 1,
+                                arity: other_fields.len(),
                             });
 
                             let union = roc_exhaustive::Union {
@@ -9831,7 +9882,6 @@ fn from_can_pattern_help<'a>(
                             let it = if tag_name == nullable_name.expect_tag_ref() {
                                 [].iter()
                             } else {
-                                // FIXME drop tag
                                 argument_layouts.iter()
                             };
 
@@ -9988,15 +10038,6 @@ fn from_can_pattern_help<'a>(
                 // it must be an optional field, and we will use the default
                 match &destruct.value.typ {
                     roc_can::pattern::DestructType::Optional(field_var, loc_expr) => {
-                        // TODO these don't match up in the uniqueness inference; when we remove
-                        // that, reinstate this assert!
-                        //
-                        // dbg!(&env.subs.get_content_without_compacting(*field_var));
-                        // dbg!(&env.subs.get_content_without_compacting(destruct.var).content);
-                        // debug_assert_eq!(
-                        //     env.subs.get_root_key_without_compacting(*field_var),
-                        //     env.subs.get_root_key_without_compacting(destruct.value.var)
-                        // );
                         assignments.push((
                             destruct.value.symbol,
                             // destruct.value.var,
@@ -10395,7 +10436,6 @@ fn match_on_lambda_set<'a>(
 
             let result = union_lambda_set_to_switch(
                 env,
-                layout_cache,
                 lambda_set,
                 closure_tag_id_symbol,
                 union_layout.tag_id_layout(),
@@ -10430,19 +10470,16 @@ fn match_on_lambda_set<'a>(
                     // Lambda set is empty, so this function is never called; synthesize a function
                     // that always yields a runtime error.
                     let name = env.unique_symbol();
+                    let lambda_name = LambdaName::no_niche(name);
                     let function_layout =
                         RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout);
-                    let proc =
-                        generate_runtime_error_function(env, layout_cache, name, function_layout);
-                    let top_level = ProcLayout::from_raw(
-                        env.arena,
-                        &layout_cache.interner,
-                        function_layout,
-                        CapturesNiche::no_niche(),
-                    );
+                    let proc = generate_runtime_error_function(env, lambda_name, function_layout);
+                    let top_level =
+                        ProcLayout::from_raw_named(env.arena, lambda_name, function_layout);
 
                     procs.specialized.insert_specialized(name, top_level, proc);
-                    LambdaName::no_niche(name)
+
+                    lambda_name
                 }
             };
 
@@ -10456,7 +10493,6 @@ fn match_on_lambda_set<'a>(
 
             union_lambda_set_branch_help(
                 env,
-                layout_cache,
                 function_symbol,
                 closure_info,
                 argument_symbols,
@@ -10479,7 +10515,6 @@ fn match_on_lambda_set<'a>(
 
             union_lambda_set_branch_help(
                 env,
-                layout_cache,
                 function_symbol,
                 closure_info,
                 argument_symbols,
@@ -10527,7 +10562,6 @@ fn match_on_lambda_set<'a>(
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_to_switch<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &LayoutCache<'a>,
     lambda_set: LambdaSet<'a>,
     closure_tag_id_symbol: Symbol,
     closure_tag_id_layout: Layout<'a>,
@@ -10562,7 +10596,6 @@ fn union_lambda_set_to_switch<'a>(
 
         let stmt = union_lambda_set_branch(
             env,
-            layout_cache,
             join_point_id,
             lambda_name,
             closure_info,
@@ -10604,7 +10637,6 @@ fn union_lambda_set_to_switch<'a>(
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_branch<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &LayoutCache<'a>,
     join_point_id: JoinPointId,
     lambda_name: LambdaName<'a>,
     closure_info: ClosureInfo<'a>,
@@ -10618,7 +10650,6 @@ fn union_lambda_set_branch<'a>(
 
     union_lambda_set_branch_help(
         env,
-        layout_cache,
         lambda_name,
         closure_info,
         argument_symbols_slice,
@@ -10642,7 +10673,6 @@ enum ClosureInfo<'a> {
 #[allow(clippy::too_many_arguments)]
 fn union_lambda_set_branch_help<'a>(
     env: &mut Env<'a, '_>,
-    layout_cache: &LayoutCache<'a>,
     lambda_name: LambdaName<'a>,
     closure_info: ClosureInfo<'a>,
     argument_symbols_slice: &'a [Symbol],
@@ -10656,22 +10686,21 @@ fn union_lambda_set_branch_help<'a>(
             lambda_set,
             closure_data_symbol,
         } => {
-            let argument_layouts = lambda_set.extend_argument_list(
+            let argument_layouts = lambda_set.extend_argument_list_for_named(
                 env.arena,
-                &layout_cache.interner,
+                lambda_name,
                 argument_layouts_slice,
             );
-            let argument_symbols = if argument_layouts.len() > argument_layouts_slice.len() {
-                // extend symbols with the symbol of the closure environment
-                let mut argument_symbols =
-                    Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
-                argument_symbols.extend(argument_symbols_slice);
-                argument_symbols.push(closure_data_symbol);
-                argument_symbols.into_bump_slice()
-            } else {
-                argument_symbols_slice
-            };
-            (argument_layouts, argument_symbols)
+
+            // Since this lambda captures, the arguments must have been extended.
+            debug_assert!(argument_layouts.len() > argument_layouts_slice.len());
+            // Extend symbols with the symbol of the closure environment.
+            let mut argument_symbols =
+                Vec::with_capacity_in(argument_symbols_slice.len() + 1, env.arena);
+            argument_symbols.extend(argument_symbols_slice);
+            argument_symbols.push(closure_data_symbol);
+
+            (argument_layouts, argument_symbols.into_bump_slice())
         }
         ClosureInfo::DoesNotCapture => {
             // sometimes unification causes a function that does not itself capture anything

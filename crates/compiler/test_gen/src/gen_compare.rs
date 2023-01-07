@@ -339,7 +339,7 @@ fn eq_linked_list_false() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[ignore] // breaks for LLVM (no tail recursion), takes a long time for Wasm
 fn eq_linked_list_long() {
     assert_evals_to!(
         indoc!(
@@ -355,7 +355,7 @@ fn eq_linked_list_long() {
                         prependOnes (n-1) (Cons 1 tail)
 
                 main =
-                    n = 100_000
+                    n = 100_000 # be careful, can make a noticeble difference to test_gen total time!
 
                     x : LinkedList I64
                     x = prependOnes n (Cons 999 Nil)
@@ -465,7 +465,7 @@ fn eq_rosetree() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn eq_different_rosetrees() {
     // Requires two different equality procedures for `List (Rose I64)` and `List (Rose Str)`
     // even though both appear in the mono Layout as `List(RecursivePointer)`

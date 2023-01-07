@@ -1,8 +1,8 @@
 use crate::annotation::{Formattable, Newlines, Parens};
-use crate::expr::fmt_str_literal;
-use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt};
+use crate::expr::{fmt_str_literal, format_sq_literal};
+use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
-use roc_parse::ast::{Base, CommentOrNewline, Pattern};
+use roc_parse::ast::{Base, CommentOrNewline, Pattern, PatternAs};
 
 pub fn fmt_pattern<'a, 'buf>(
     buf: &mut Buf<'buf>,
@@ -11,6 +11,35 @@ pub fn fmt_pattern<'a, 'buf>(
     parens: Parens,
 ) {
     pattern.format_with_options(buf, parens, Newlines::No, indent);
+}
+
+impl<'a> Formattable for PatternAs<'a> {
+    fn is_multiline(&self) -> bool {
+        self.spaces_before.iter().any(|s| s.is_comment())
+    }
+
+    fn format_with_options<'buf>(
+        &self,
+        buf: &mut Buf<'buf>,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        buf.indent(indent);
+
+        if !buf.ends_with_space() {
+            buf.spaces(1);
+        }
+
+        buf.push_str("as");
+        buf.spaces(1);
+
+        // these spaces "belong" to the identifier, which can never be multiline
+        fmt_comments_only(buf, self.spaces_before.iter(), NewlineAt::Bottom, indent);
+
+        buf.indent(indent);
+        buf.push_str(self.identifier.value);
+    }
 }
 
 impl<'a> Formattable for Pattern<'a> {
@@ -28,6 +57,14 @@ impl<'a> Formattable for Pattern<'a> {
 
             Pattern::OptionalField(_, expr) => expr.is_multiline(),
 
+            Pattern::As(pattern, pattern_as) => pattern.is_multiline() || pattern_as.is_multiline(),
+            Pattern::ListRest(opt_pattern_as) => match opt_pattern_as {
+                None => false,
+                Some((list_rest_spaces, pattern_as)) => {
+                    list_rest_spaces.iter().any(|s| s.is_comment()) || pattern_as.is_multiline()
+                }
+            },
+
             Pattern::Identifier(_)
             | Pattern::Tag(_)
             | Pattern::OpaqueRef(_)
@@ -40,8 +77,7 @@ impl<'a> Formattable for Pattern<'a> {
             | Pattern::Underscore(_)
             | Pattern::Malformed(_)
             | Pattern::MalformedIdent(_, _)
-            | Pattern::QualifiedIdentifier { .. }
-            | Pattern::ListRest => false,
+            | Pattern::QualifiedIdentifier { .. } => false,
 
             Pattern::Tuple(patterns) | Pattern::List(patterns) => {
                 patterns.iter().any(|p| p.is_multiline())
@@ -155,9 +191,7 @@ impl<'a> Formattable for Pattern<'a> {
             StrLiteral(literal) => fmt_str_literal(buf, *literal, indent),
             SingleQuote(string) => {
                 buf.indent(indent);
-                buf.push('\'');
-                buf.push_str(string);
-                buf.push('\'');
+                format_sq_literal(buf, string);
             }
             Underscore(name) => {
                 buf.indent(indent);
@@ -196,9 +230,22 @@ impl<'a> Formattable for Pattern<'a> {
 
                 buf.push_str("]");
             }
-            ListRest => {
+            ListRest(opt_pattern_as) => {
                 buf.indent(indent);
                 buf.push_str("..");
+
+                if let Some((list_rest_spaces, pattern_as)) = opt_pattern_as {
+                    // these spaces "belong" to the `..`, which can never be multiline
+                    fmt_comments_only(buf, list_rest_spaces.iter(), NewlineAt::Bottom, indent);
+
+                    pattern_as.format(buf, indent + INDENT);
+                }
+            }
+
+            As(pattern, pattern_as) => {
+                fmt_pattern(buf, &pattern.value, indent, parens);
+
+                pattern_as.format(buf, indent + INDENT);
             }
 
             // Space

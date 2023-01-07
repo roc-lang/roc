@@ -13,7 +13,7 @@ use roc_module::{
 };
 use roc_mono::layout::{
     cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
-    LayoutCache, LayoutInterner, UnionLayout,
+    LayoutCache, TLLayoutInterner, UnionLayout,
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -362,7 +362,7 @@ impl Types {
 
     pub fn add_named<'a>(
         &mut self,
-        interner: &LayoutInterner<'a>,
+        interner: &TLLayoutInterner<'a>,
         name: String,
         typ: RocType,
         layout: Layout<'a>,
@@ -390,7 +390,7 @@ impl Types {
 
     pub fn add_anonymous<'a>(
         &mut self,
-        interner: &LayoutInterner<'a>,
+        interner: &TLLayoutInterner<'a>,
         typ: RocType,
         layout: Layout<'a>,
     ) -> TypeId {
@@ -544,7 +544,6 @@ pub enum RocNum {
     U128,
     F32,
     F64,
-    F128,
     Dec,
 }
 
@@ -566,7 +565,6 @@ impl RocNum {
             RocNum::U128 => size_of::<roc_std::U128>(),
             RocNum::F32 => size_of::<f32>(),
             RocNum::F64 => size_of::<f64>(),
-            RocNum::F128 => todo!(),
             RocNum::Dec => size_of::<roc_std::RocDec>(),
         };
 
@@ -676,7 +674,7 @@ impl<'a> Env<'a> {
         arena: &'a Bump,
         subs: &'a Subs,
         interns: &'a Interns,
-        layout_interner: LayoutInterner<'a>,
+        layout_interner: TLLayoutInterner<'a>,
         target: TargetInfo,
     ) -> Self {
         Env {
@@ -933,6 +931,50 @@ fn add_type_help<'a>(
                             }
                         }
                     }
+                    Layout::Struct { .. } if *name == Symbol::DICT_DICT => {
+                        let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
+
+                        let key_var = type_vars[0];
+                        let key_layout =
+                            env.layout_cache.from_var(env.arena, key_var, subs).unwrap();
+                        let key_id = add_type_help(env, key_layout, key_var, None, types);
+
+                        let value_var = type_vars[1];
+                        let value_layout = env
+                            .layout_cache
+                            .from_var(env.arena, value_var, subs)
+                            .unwrap();
+                        let value_id = add_type_help(env, value_layout, value_var, None, types);
+
+                        let type_id = types.add_anonymous(
+                            &env.layout_cache.interner,
+                            RocType::RocDict(key_id, value_id),
+                            layout,
+                        );
+
+                        types.depends(type_id, key_id);
+                        types.depends(type_id, value_id);
+
+                        type_id
+                    }
+                    Layout::Struct { .. } if *name == Symbol::SET_SET => {
+                        let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
+
+                        let key_var = type_vars[0];
+                        let key_layout =
+                            env.layout_cache.from_var(env.arena, key_var, subs).unwrap();
+                        let key_id = add_type_help(env, key_layout, key_var, None, types);
+
+                        let type_id = types.add_anonymous(
+                            &env.layout_cache.interner,
+                            RocType::RocSet(key_id),
+                            layout,
+                        );
+
+                        types.depends(type_id, key_id);
+
+                        type_id
+                    }
                     _ => {
                         unreachable!()
                     }
@@ -1039,11 +1081,6 @@ fn add_builtin_type<'a>(
                 RocType::Num(RocNum::F64),
                 layout,
             ),
-            F128 => types.add_anonymous(
-                &env.layout_cache.interner,
-                RocType::Num(RocNum::F128),
-                layout,
-            ),
         },
         (Builtin::Decimal, _) => types.add_anonymous(
             &env.layout_cache.interner,
@@ -1060,6 +1097,7 @@ fn add_builtin_type<'a>(
             let args = env.subs.get_subs_slice(*args);
             debug_assert_eq!(args.len(), 1);
 
+            let elem_layout = env.layout_cache.get_in(elem_layout);
             let elem_id = add_type_help(env, *elem_layout, args[0], opt_name, types);
             let list_id = types.add_anonymous(
                 &env.layout_cache.interner,
@@ -1076,7 +1114,7 @@ fn add_builtin_type<'a>(
             Alias(Symbol::DICT_DICT, _alias_variables, alias_var, AliasKind::Opaque),
         ) => {
             match (
-                elem_layout,
+                *env.layout_cache.get_in(elem_layout),
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
@@ -1126,7 +1164,7 @@ fn add_builtin_type<'a>(
             Alias(Symbol::SET_SET, _alias_vars, alias_var, AliasKind::Opaque),
         ) => {
             match (
-                elem_layout,
+                env.layout_cache.get_in(elem_layout),
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
@@ -1418,6 +1456,7 @@ fn add_tag_union<'a>(
             }
         }
         Layout::Boxed(elem_layout) => {
+            let elem_layout = env.layout_cache.get_in(elem_layout);
             let (tag_name, payload_fields) =
                 single_tag_payload_fields(union_tags, subs, &[*elem_layout], env, types);
 

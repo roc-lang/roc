@@ -57,28 +57,28 @@ pub fn supported(link_type: LinkType, target: &Triple) -> bool {
 pub fn build_and_preprocess_host(
     opt_level: OptLevel,
     target: &Triple,
-    host_input_path: &Path,
+    platform_main_roc: &Path,
     preprocessed_host_path: &Path,
     exposed_to_host: Vec<String>,
     exported_closure_types: Vec<String>,
 ) {
     let stub_lib = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
-        host_input_path.with_file_name("libapp.dll")
+        platform_main_roc.with_file_name("libapp.dll")
     } else {
-        host_input_path.with_file_name("libapp.so")
+        platform_main_roc.with_file_name("libapp.so")
     };
 
     let dynhost = if let target_lexicon::OperatingSystem::Windows = target.operating_system {
-        host_input_path.with_file_name("dynhost.exe")
+        platform_main_roc.with_file_name("dynhost.exe")
     } else {
-        host_input_path.with_file_name("dynhost")
+        platform_main_roc.with_file_name("dynhost")
     };
 
     let stub_dll_symbols = make_stub_dll_symbols(exposed_to_host, exported_closure_types);
     generate_dynamic_lib(target, &stub_dll_symbols, &stub_lib);
-    rebuild_host(opt_level, target, host_input_path, Some(&stub_lib));
+    rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
 
-    let metadata = host_input_path.with_file_name(metadata_file_name(target));
+    let metadata = platform_main_roc.with_file_name(metadata_file_name(target));
     // let prehost = host_input_path.with_file_name(preprocessed_host_filename(target).unwrap());
 
     preprocess(
@@ -101,11 +101,11 @@ fn metadata_file_name(target: &Triple) -> String {
 
 pub fn link_preprocessed_host(
     target: &Triple,
-    host_input_path: &Path,
+    platform_path: &Path,
     roc_app_bytes: &[u8],
     binary_path: &Path,
 ) {
-    let metadata = host_input_path.with_file_name(metadata_file_name(target));
+    let metadata = platform_path.with_file_name(metadata_file_name(target));
     surgery(roc_app_bytes, &metadata, binary_path, false, false, target)
 }
 
@@ -121,11 +121,9 @@ pub fn generate_stub_lib(
     // But hopefully it will be removable once we have surgical linking on all platforms.
     let target_info = triple.into();
     let arena = &bumpalo::Bump::new();
-    let subs_by_module = Default::default();
     let loaded = roc_load::load_and_monomorphize(
         arena,
         input_path.to_path_buf(),
-        subs_by_module,
         roc_cache_dir,
         LoadConfig {
             target_info,

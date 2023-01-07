@@ -1,6 +1,7 @@
 use roc_module::ident::Ident;
 use roc_module::ident::{Lowercase, ModuleName, TagName, Uppercase};
 use roc_module::symbol::{Interns, ModuleId, PQModuleName, PackageQualified, Symbol};
+use roc_problem::Severity;
 use roc_region::all::LineColumnRegion;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -97,18 +98,6 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
     );
 
     header
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum Severity {
-    /// This will cause a runtime error if some code get srun
-    /// (e.g. type mismatch, naming error)
-    RuntimeError,
-
-    /// This will never cause the code to misbehave,
-    /// but should be cleaned up
-    /// (e.g. unused def, unused import)
-    Warning,
 }
 
 #[derive(Clone, Copy, Debug)]

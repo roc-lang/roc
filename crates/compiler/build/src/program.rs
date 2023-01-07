@@ -3,7 +3,7 @@ use roc_error_macros::internal_error;
 use roc_gen_llvm::llvm::build::{module_from_builtins, LlvmBackendMode};
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_load::{EntryPoint, ExpectMetadata, LoadedModule, MonomorphizedModule};
-use roc_mono::ir::OptLevel;
+use roc_mono::ir::{OptLevel, SingleEntryPoint};
 use roc_reporting::cli::{report_problems, Problems};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -102,7 +102,7 @@ pub fn gen_from_mono_module<'a>(
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
 fn gen_from_mono_module_llvm<'a>(
     arena: &'a bumpalo::Bump,
-    loaded: MonomorphizedModule<'a>,
+    mut loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
     target: &target_lexicon::Triple,
     code_gen_options: CodeGenOptions,
@@ -168,7 +168,6 @@ fn gen_from_mono_module_llvm<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
-        layout_interner: &loaded.layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -188,18 +187,26 @@ fn gen_from_mono_module_llvm<'a>(
     // expects that would confuse the surgical linker
     add_default_roc_externs(&env);
 
-    let opt_entry_point = match loaded.entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
-            Some(roc_mono::ir::EntryPoint { symbol, layout })
+    let entry_point = match loaded.entry_point {
+        EntryPoint::Executable {
+            exposed_to_host,
+            platform_path: _,
+        } => {
+            // TODO support multiple of these!
+            debug_assert_eq!(exposed_to_host.len(), 1);
+            let (symbol, layout) = exposed_to_host[0];
+
+            roc_mono::ir::EntryPoint::Single(SingleEntryPoint { symbol, layout })
         }
-        EntryPoint::Test => None,
+        EntryPoint::Test => roc_mono::ir::EntryPoint::Expects { symbols: &[] },
     };
 
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
+        &mut loaded.layout_interner,
         opt_level,
         loaded.procedures,
-        opt_entry_point,
+        entry_point,
         Some(&app_ll_file),
     );
 
@@ -230,14 +237,101 @@ fn gen_from_mono_module_llvm<'a>(
 
     // annotate the LLVM IR output with debug info
     // so errors are reported with the line number of the LLVM source
-    let memory_buffer = if emit_debug_info {
+    let memory_buffer = if cfg!(feature = "sanitizers") && std::env::var("ROC_SANITIZERS").is_ok() {
+        let dir = tempfile::tempdir().unwrap();
+        let dir = dir.into_path();
+
+        let app_ll_file = dir.join("app.ll");
+        let app_bc_file = dir.join("app.bc");
+        let app_o_file = dir.join("app.o");
+
+        // write the ll code to a file, so we can modify it
+        module.print_to_file(&app_ll_file).unwrap();
+
+        // Apply coverage passes.
+        // Note, this is specifically tailored for `cargo afl` and afl++.
+        // It most likely will not work with other fuzzer setups without modification.
+        let mut passes = vec![];
+        let mut extra_args = vec![];
+        let mut unrecognized = vec![];
+        for sanitizer in std::env::var("ROC_SANITIZERS")
+            .unwrap()
+            .split(',')
+            .map(|x| x.trim())
+        {
+            match sanitizer {
+                "address" => passes.push("asan-module"),
+                "memory" => passes.push("msan-module"),
+                "thread" => passes.push("tsan-module"),
+                "cargo-fuzz" => {
+                    passes.push("sancov-module");
+                    extra_args.extend_from_slice(&[
+                        "-sanitizer-coverage-level=3",
+                        "-sanitizer-coverage-prune-blocks=0",
+                        "-sanitizer-coverage-inline-8bit-counters",
+                        "-sanitizer-coverage-pc-table",
+                    ]);
+                }
+                "afl.rs" => {
+                    passes.push("sancov-module");
+                    extra_args.extend_from_slice(&[
+                        "-sanitizer-coverage-level=3",
+                        "-sanitizer-coverage-prune-blocks=0",
+                        "-sanitizer-coverage-trace-pc-guard",
+                    ]);
+                }
+                x => unrecognized.push(x.to_owned()),
+            }
+        }
+        if !unrecognized.is_empty() {
+            let out = unrecognized
+                .iter()
+                .map(|x| format!("{:?}", x))
+                .collect::<Vec<String>>()
+                .join(", ");
+            eprintln!("Unrecognized sanitizer: {}\nSupported options are \"address\", \"memory\", \"thread\", \"cargo-fuzz\", and \"afl.rs\".", out);
+            eprintln!("Note: \"cargo-fuzz\" and \"afl.rs\" both enable sanitizer coverage for fuzzing. They just use different parameters to match the respective libraries.")
+        }
+
+        use std::process::Command;
+        let mut opt = Command::new("opt");
+        opt.args([
+            app_ll_file.to_str().unwrap(),
+            "-o",
+            app_bc_file.to_str().unwrap(),
+        ])
+        .args(extra_args);
+        if !passes.is_empty() {
+            opt.arg(format!("-passes={}", passes.join(",")));
+        }
+        let opt = opt.output().unwrap();
+
+        assert!(opt.stderr.is_empty(), "{:#?}", opt);
+
+        // write the .o file. Note that this builds the .o for the local machine,
+        // and ignores the `target_machine` entirely.
+        //
+        // different systems name this executable differently, so we shotgun for
+        // the most common ones and then give up.
+        let bc_to_object = Command::new("llc")
+            .args(&[
+                "-relocation-model=pic",
+                "-filetype=obj",
+                app_bc_file.to_str().unwrap(),
+                "-o",
+                app_o_file.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        assert!(bc_to_object.status.success(), "{:#?}", bc_to_object);
+
+        MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
+    } else if emit_debug_info {
         module.strip_debug_info();
 
         let mut app_ll_dbg_file = PathBuf::from(roc_file_path);
         app_ll_dbg_file.set_extension("dbg.ll");
-
-        let mut app_bc_file = PathBuf::from(roc_file_path);
-        app_bc_file.set_extension("bc");
 
         let mut app_o_file = PathBuf::from(roc_file_path);
         app_o_file.set_extension("o");
@@ -270,33 +364,23 @@ fn gen_from_mono_module_llvm<'a>(
             | Architecture::X86_32(_)
             | Architecture::Aarch64(_)
             | Architecture::Wasm32 => {
-                let ll_to_bc = Command::new("llvm-as")
-                    .args([
-                        app_ll_dbg_file.to_str().unwrap(),
-                        "-o",
-                        app_bc_file.to_str().unwrap(),
-                    ])
-                    .output()
-                    .unwrap();
-
-                assert!(ll_to_bc.stderr.is_empty(), "{:#?}", ll_to_bc);
-
-                let llc_args = &[
-                    "-relocation-model=pic",
-                    "-filetype=obj",
-                    app_bc_file.to_str().unwrap(),
-                    "-o",
-                    app_o_file.to_str().unwrap(),
-                ];
-
                 // write the .o file. Note that this builds the .o for the local machine,
                 // and ignores the `target_machine` entirely.
                 //
                 // different systems name this executable differently, so we shotgun for
                 // the most common ones and then give up.
-                let bc_to_object = Command::new("llc").args(llc_args).output().unwrap();
+                let ll_to_object = Command::new("llc")
+                    .args(&[
+                        "-relocation-model=pic",
+                        "-filetype=obj",
+                        app_ll_dbg_file.to_str().unwrap(),
+                        "-o",
+                        app_o_file.to_str().unwrap(),
+                    ])
+                    .output()
+                    .unwrap();
 
-                assert!(bc_to_object.stderr.is_empty(), "{:#?}", bc_to_object);
+                assert!(ll_to_object.stderr.is_empty(), "{:#?}", ll_to_object);
             }
             _ => unreachable!(),
         }
@@ -394,7 +478,7 @@ fn gen_from_mono_module_dev_wasm32<'a>(
         module_id,
         procedures,
         mut interns,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
@@ -407,7 +491,6 @@ fn gen_from_mono_module_dev_wasm32<'a>(
 
     let env = roc_gen_wasm::Env {
         arena,
-        layout_interner: &layout_interner,
         module_id,
         exposed_to_host,
         stack_bytes: wasm_dev_stack_bytes.unwrap_or(roc_gen_wasm::Env::DEFAULT_STACK_BYTES),
@@ -429,8 +512,13 @@ fn gen_from_mono_module_dev_wasm32<'a>(
         )
     });
 
-    let final_binary_bytes =
-        roc_gen_wasm::build_app_binary(&env, &mut interns, host_module, procedures);
+    let final_binary_bytes = roc_gen_wasm::build_app_binary(
+        &env,
+        &mut layout_interner,
+        &mut interns,
+        host_module,
+        procedures,
+    );
 
     let code_gen = code_gen_start.elapsed();
 
@@ -460,20 +548,20 @@ fn gen_from_mono_module_dev_assembly<'a>(
         procedures,
         mut interns,
         exposed_to_host,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
     let env = roc_gen_dev::Env {
         arena,
-        layout_interner: &layout_interner,
         module_id,
         exposed_to_host: exposed_to_host.values.keys().copied().collect(),
         lazy_literals,
         generate_allocators,
     };
 
-    let module_object = roc_gen_dev::build_module(&env, &mut interns, target, procedures);
+    let module_object =
+        roc_gen_dev::build_module(&env, &mut interns, &mut layout_interner, target, procedures);
 
     let code_gen = code_gen_start.elapsed();
 

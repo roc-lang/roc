@@ -368,7 +368,7 @@ fn character_literal() {
                 "#
         ),
         65,
-        u32
+        i64
     );
 }
 
@@ -383,7 +383,7 @@ fn character_literal_back_slash() {
                 "#
         ),
         92,
-        u32
+        i64
     );
 }
 
@@ -398,7 +398,7 @@ fn character_literal_single_quote() {
                 "#
         ),
         39,
-        u32
+        i64
     );
 }
 
@@ -413,7 +413,7 @@ fn character_literal_new_line() {
                 "#
         ),
         10,
-        u32
+        i64
     );
 }
 

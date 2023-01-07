@@ -64,7 +64,7 @@ pub enum SyntaxError<'a> {
     Space(BadInputError),
     NotEndOfFile(Position),
 }
-pub trait SpaceProblem {
+pub trait SpaceProblem: std::fmt::Debug {
     fn space_problem(e: BadInputError, pos: Position) -> Self;
 }
 
@@ -109,8 +109,7 @@ impl_space_problem! {
     EAbility<'a>,
     PInParens<'a>,
     PRecord<'a>,
-    PList<'a>,
-    ETuple<'a>
+    PList<'a>
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +126,7 @@ pub enum EHeader<'a> {
     Start(Position),
     ModuleName(Position),
     AppName(EString<'a>, Position),
+    PackageName(EPackageName<'a>, Position),
     PlatformName(EPackageName<'a>, Position),
     IndentStart(Position),
 
@@ -141,7 +141,6 @@ pub enum EProvides<'a> {
     IndentProvides(Position),
     IndentTo(Position),
     IndentListStart(Position),
-    IndentListEnd(Position),
     IndentPackage(Position),
     ListStart(Position),
     ListEnd(Position),
@@ -156,7 +155,6 @@ pub enum EExposes {
     Open(Position),
     IndentExposes(Position),
     IndentListStart(Position),
-    IndentListEnd(Position),
     ListStart(Position),
     ListEnd(Position),
     Identifier(Position),
@@ -169,7 +167,6 @@ pub enum ERequires<'a> {
     Open(Position),
     IndentRequires(Position),
     IndentListStart(Position),
-    IndentListEnd(Position),
     ListStart(Position),
     ListEnd(Position),
     TypedIdent(ETypedIdent<'a>, Position),
@@ -233,7 +230,6 @@ pub enum EImports {
     ModuleName(Position),
     Space(BadInputError, Position),
     IndentSetStart(Position),
-    IndentSetEnd(Position),
     SetStart(Position),
     SetEnd(Position),
 }
@@ -265,20 +261,13 @@ pub enum EGeneratesWith {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BadInputError {
     HasTab,
+    HasMisplacedCarriageReturn,
+    HasAsciiControl,
     ///
     TooManyLines,
     ///
     ///
     BadUtf8,
-}
-
-pub fn bad_input_to_syntax_error<'a>(bad_input: BadInputError) -> SyntaxError<'a> {
-    use crate::parser::BadInputError::*;
-    match bad_input {
-        HasTab => SyntaxError::NotYetImplemented("call error on tabs".to_string()),
-        TooManyLines => SyntaxError::TooManyLines,
-        BadUtf8 => SyntaxError::BadUtf8,
-    }
 }
 
 impl<'a, T> SourceError<'a, T> {
@@ -323,6 +312,8 @@ impl<'a> SyntaxError<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EExpr<'a> {
+    TrailingOperator(Position),
+
     Start(Position),
     End(Position),
     BadExprEnd(Position),
@@ -364,7 +355,6 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
-    Tuple(ETuple<'a>, Position),
     Str(EString<'a>, Position),
     SingleQuote(EString<'a>, Position),
     Number(ENumber, Position),
@@ -404,48 +394,12 @@ pub enum ERecord<'a> {
     Field(Position),
     Colon(Position),
     QuestionMark(Position),
-    Bar(Position),
     Ampersand(Position),
 
     // TODO remove
     Expr(&'a EExpr<'a>, Position),
 
     Space(BadInputError, Position),
-
-    IndentOpen(Position),
-    IndentColon(Position),
-    IndentBar(Position),
-    IndentAmpersand(Position),
-    IndentEnd(Position),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ETuple<'a> {
-    // Empty tuples are not allowed
-    Empty(Position),
-
-    // Single element tuples are not allowed
-    Single(Position),
-
-    End(Position),
-    Open(Position),
-
-    Updateable(Position),
-    Field(Position),
-    Colon(Position),
-    QuestionMark(Position),
-    Bar(Position),
-    Ampersand(Position),
-
-    Expr(&'a EExpr<'a>, Position),
-
-    Space(BadInputError, Position),
-
-    IndentOpen(Position),
-    IndentColon(Position),
-    IndentBar(Position),
-    IndentAmpersand(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -461,9 +415,6 @@ pub enum EInParens<'a> {
 
     ///
     Space(BadInputError, Position),
-    ///
-    IndentOpen(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -488,9 +439,6 @@ pub enum EList<'a> {
     Space(BadInputError, Position),
 
     Expr(&'a EExpr<'a>, Position),
-
-    IndentOpen(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -559,7 +507,10 @@ pub enum EExpect<'a> {
 pub enum EPattern<'a> {
     Record(PRecord<'a>, Position),
     List(PList<'a>, Position),
+    AsKeyword(Position),
+    AsIdentifier(Position),
     Underscore(Position),
+    NotAPattern(Position),
 
     Start(Position),
     End(Position),
@@ -586,11 +537,6 @@ pub enum PRecord<'a> {
     Expr(&'a EExpr<'a>, Position),
 
     Space(BadInputError, Position),
-
-    IndentOpen(Position),
-    IndentColon(Position),
-    IndentOptional(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -602,9 +548,6 @@ pub enum PList<'a> {
     Pattern(&'a EPattern<'a>, Position),
 
     Space(BadInputError, Position),
-
-    IndentOpen(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -615,14 +558,13 @@ pub enum PInParens<'a> {
     Pattern(&'a EPattern<'a>, Position),
 
     Space(BadInputError, Position),
-    IndentOpen(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EType<'a> {
     Space(BadInputError, Position),
 
+    UnderscoreSpacing(Position),
     TRecord(ETypeRecord<'a>, Position),
     TTagUnion(ETypeTagUnion<'a>, Position),
     TInParens(ETypeInParens<'a>, Position),
@@ -670,9 +612,6 @@ pub enum ETypeTagUnion<'a> {
     Type(&'a EType<'a>, Position),
 
     Space(BadInputError, Position),
-
-    IndentOpen(Position),
-    IndentEnd(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -723,13 +662,8 @@ pub enum ETypeAbilityImpl<'a> {
 
     Space(BadInputError, Position),
 
-    IndentOpen(Position),
-    IndentColon(Position),
-    IndentOptional(Position),
-    IndentEnd(Position),
     Updateable(Position),
     QuestionMark(Position),
-    Bar(Position),
     Ampersand(Position),
     Expr(&'a EExpr<'a>, Position),
     IndentBar(Position),
@@ -744,16 +678,10 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::Field(p) => ETypeAbilityImpl::Field(p),
             ERecord::Colon(p) => ETypeAbilityImpl::Colon(p),
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
-            ERecord::IndentOpen(p) => ETypeAbilityImpl::IndentOpen(p),
-            ERecord::IndentColon(p) => ETypeAbilityImpl::IndentColon(p),
-            ERecord::IndentEnd(p) => ETypeAbilityImpl::IndentEnd(p),
             ERecord::Updateable(p) => ETypeAbilityImpl::Updateable(p),
             ERecord::QuestionMark(p) => ETypeAbilityImpl::QuestionMark(p),
-            ERecord::Bar(p) => ETypeAbilityImpl::Bar(p),
             ERecord::Ampersand(p) => ETypeAbilityImpl::Ampersand(p),
             ERecord::Expr(e, p) => ETypeAbilityImpl::Expr(e, p),
-            ERecord::IndentBar(p) => ETypeAbilityImpl::IndentBar(p),
-            ERecord::IndentAmpersand(p) => ETypeAbilityImpl::IndentAmpersand(p),
         }
     }
 }
@@ -773,7 +701,7 @@ pub struct FileError<'a, T> {
 pub trait Parser<'a, Output, Error> {
     fn parse(
         &self,
-        alloc: &'a Bump,
+        arena: &'a Bump,
         state: State<'a>,
         min_indent: u32,
     ) -> ParseResult<'a, Output, Error>;
@@ -1206,18 +1134,6 @@ where
     }
 }
 
-pub fn fail_when_progress<T, E>(
-    progress: Progress,
-    fail: E,
-    value: T,
-    state: State<'_>,
-) -> ParseResult<'_, T, E> {
-    match progress {
-        MadeProgress => Err((MadeProgress, fail)),
-        NoProgress => Ok((NoProgress, value, state)),
-    }
-}
-
 pub fn optional<'a, P, T, E>(parser: P) -> impl Parser<'a, Option<T>, E>
 where
     P: Parser<'a, T, E>,
@@ -1295,64 +1211,19 @@ macro_rules! skip_second {
     };
 }
 
-/// Parse zero or more elements between two braces (e.g. square braces).
-/// Elements can be optionally surrounded by spaces, and are separated by a
-/// delimiter (e.g comma-separated). Braces and delimiters get discarded.
 #[macro_export]
-macro_rules! collection {
-    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $min_indent:expr) => {
-        skip_first!(
-            $opening_brace,
-            skip_first!(
-                // We specifically allow space characters inside here, so that
-                // `[  ]` can be successfully parsed as an empty list, and then
-                // changed by the formatter back into `[]`.
-                //
-                // We don't allow newlines or comments in the middle of empty
-                // roc_collections because those are normally stored in an Expr,
-                // and there's no Expr in which to store them in an empty collection!
-                //
-                // We could change the AST to add extra storage specifically to
-                // support empty literals containing newlines or comments, but this
-                // does not seem worth even the tiniest regression in compiler performance.
-                zero_or_more!($crate::parser::ascii_char(b' ')),
-                skip_second!(
-                    $crate::parser::sep_by0(
-                        $delimiter,
-                        $crate::blankspace::space0_around($elem, $min_indent)
-                    ),
-                    $closing_brace
-                )
-            )
-        )
-    };
-}
-
-#[macro_export]
-macro_rules! collection_trailing_sep_e {
-    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $indent_problem:expr, $space_before:expr) => {
+macro_rules! collection_inner {
+    ($elem:expr, $delimiter:expr, $space_before:expr) => {
         map_with_arena!(
-            skip_first!(
-                $opening_brace,
+            and!(
                 and!(
-                    and!(
-                        space0_e($indent_problem),
-                        $crate::parser::trailing_sep_by0(
-                            $delimiter,
-                            $crate::blankspace::space0_before_optional_after(
-                                $elem,
-                                $indent_problem,
-                                $indent_problem
-                            )
-                        )
-                    ),
-                    skip_second!(
-                        $crate::parser::reset_min_indent($crate::blankspace::space0_e(
-                            $indent_problem
-                        )),
-                        $closing_brace
+                    $crate::blankspace::spaces(),
+                    $crate::parser::trailing_sep_by0(
+                        $delimiter,
+                        $crate::blankspace::spaces_before_optional_after($elem,)
                     )
-                )
+                ),
+                $crate::blankspace::spaces()
             ),
             |arena: &'a bumpalo::Bump,
              ((spaces, mut parsed_elems), mut final_comments): (
@@ -1366,7 +1237,7 @@ macro_rules! collection_trailing_sep_e {
                     if let Some(first) = parsed_elems.first_mut() {
                         first.value = $space_before(arena.alloc(first.value), spaces)
                     } else {
-                        assert!(final_comments.is_empty());
+                        debug_assert!(final_comments.is_empty());
                         final_comments = spaces;
                     }
                 }
@@ -1377,6 +1248,21 @@ macro_rules! collection_trailing_sep_e {
                     final_comments,
                 )
             }
+        )
+    };
+}
+
+#[macro_export]
+macro_rules! collection_trailing_sep_e {
+    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $space_before:expr) => {
+        between!(
+            $opening_brace,
+            $crate::parser::reset_min_indent($crate::collection_inner!(
+                $elem,
+                $delimiter,
+                $space_before
+            )),
+            $closing_brace
         )
     };
 }

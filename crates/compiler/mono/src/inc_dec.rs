@@ -108,6 +108,13 @@ pub fn occurring_variables(stmt: &Stmt<'_>) -> (MutSet<Symbol>, MutSet<Symbol>) 
                 stack.push(cont);
             }
 
+            Dbg {
+                symbol, remainder, ..
+            } => {
+                result.insert(*symbol);
+                stack.push(remainder);
+            }
+
             Expect {
                 condition,
                 remainder,
@@ -588,7 +595,7 @@ impl<'a, 'i> Context<'a, 'i> {
                 ..
             } => {
                 let top_level =
-                    ProcLayout::new(self.arena, arg_layouts, name.captures_niche(), **ret_layout);
+                    ProcLayout::new(self.arena, arg_layouts, name.niche(), **ret_layout);
 
                 // get the borrow signature
                 let ps = self
@@ -638,7 +645,7 @@ impl<'a, 'i> Context<'a, 'i> {
         let function_layout = ProcLayout {
             arguments: passed_function.argument_layouts,
             result: passed_function.return_layout,
-            captures_niche: passed_function.name.captures_niche(),
+            niche: passed_function.name.niche(),
         };
 
         let function_ps = match self
@@ -1194,12 +1201,32 @@ impl<'a, 'i> Context<'a, 'i> {
                 (switch, case_live_vars)
             }
 
+            Dbg {
+                symbol,
+                variable,
+                remainder,
+            } => {
+                let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
+
+                let expect = self.arena.alloc(Stmt::Dbg {
+                    symbol: *symbol,
+                    variable: *variable,
+                    remainder: b,
+                });
+
+                let expect = self.add_inc_before_consume_all(&[*symbol], expect, &b_live_vars);
+
+                b_live_vars.extend([symbol]);
+
+                (expect, b_live_vars)
+            }
+
             Expect {
                 remainder,
                 condition,
                 region,
                 lookups,
-                layouts,
+                variables,
             } => {
                 let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
 
@@ -1207,7 +1234,7 @@ impl<'a, 'i> Context<'a, 'i> {
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: b,
                 });
 
@@ -1223,7 +1250,7 @@ impl<'a, 'i> Context<'a, 'i> {
                 condition,
                 region,
                 lookups,
-                layouts,
+                variables,
             } => {
                 let (b, mut b_live_vars) = self.visit_stmt(codegen, remainder);
 
@@ -1231,7 +1258,7 @@ impl<'a, 'i> Context<'a, 'i> {
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: b,
                 });
 
@@ -1356,6 +1383,13 @@ pub fn collect_stmt(
             let symbol = modify.get_symbol();
             vars.insert(symbol);
             collect_stmt(cont, jp_live_vars, vars)
+        }
+
+        Dbg {
+            symbol, remainder, ..
+        } => {
+            vars.insert(*symbol);
+            collect_stmt(remainder, jp_live_vars, vars)
         }
 
         Expect {

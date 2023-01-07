@@ -8,7 +8,7 @@ On Macos and Linux, we highly recommend Using [nix](https://nixos.org/download.h
 
 :warning: If you tried to run `cargo` in the repo folder before installing nix, make sure to execute `cargo clean` first. To prevent you from executing `cargo` outside of nix, tools like [direnv](https://github.com/nix-community/nix-direnv) and [lorri](https://github.com/nix-community/lorri) can put you in a nix shell automatically when you `cd` into the directory.
 
-### On Linux x86_64/aarch64 or MacOS aarch64/arm64/x86_64
+### On Linux x86_64 or MacOS aarch64/arm64/x86_64
 
 #### Install
 
@@ -82,7 +82,6 @@ To build the compiler, you need these installed:
 - On Debian/Ubuntu `sudo apt-get install pkg-config`
 - LLVM, see below for version
 - [rust](https://rustup.rs/)
-- Also run `cargo install bindgen` after installing rust. You may need to open a new terminal.
 
 To run the test suite (via `cargo test`), you additionally need to install:
 

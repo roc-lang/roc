@@ -1588,7 +1588,7 @@ fn float_type(
                 num_binary64,
                 AliasVariables::default(),
                 Variable::EMPTY_TAG_UNION,
-                AliasKind::Structural,
+                AliasKind::Opaque,
             )
         });
     }
@@ -2135,6 +2135,8 @@ impl Subs {
         is_inhabited(self, var)
     }
 
+    /// Is the ground constructor (in the layout-determination sense) of this type a function?
+    /// That is, is this a function modulo aliases and opaques?
     pub fn is_function(&self, mut var: Variable) -> bool {
         loop {
             match self.get_content_without_compacting(var) {
@@ -2183,6 +2185,7 @@ pub struct Rank(u32);
 impl Rank {
     pub const NONE: Rank = Rank(0);
 
+    /// The generalized rank
     pub fn is_none(&self) -> bool {
         *self == Self::NONE
     }
@@ -3965,6 +3968,8 @@ fn flat_type_to_err_type(
                     ErrorType::Record(err_fields, TypeExt::RigidOpen(var))
                 }
 
+                ErrorType::Error => ErrorType::Record(err_fields, TypeExt::Closed),
+
                 other =>
                     panic!("Tried to convert a record extension to an error, but the record extension had the ErrorType of {:?}", other)
             }
@@ -3988,6 +3993,8 @@ fn flat_type_to_err_type(
                 ErrorType::RigidVar(var) | ErrorType::RigidAbleVar(var, _)=> {
                     ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var), pol)
                 }
+
+                ErrorType::Error => ErrorType::TagUnion(err_tags, TypeExt::Closed, pol),
 
                 other =>
                     panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
@@ -4016,6 +4023,8 @@ fn flat_type_to_err_type(
                 ErrorType::RigidVar(var) | ErrorType::RigidAbleVar(var, _)=> {
                     ErrorType::TagUnion(err_tags, TypeExt::RigidOpen(var), pol)
                 }
+
+                ErrorType::Error => ErrorType::TagUnion(err_tags, TypeExt::Closed, pol),
 
                 other =>
                     panic!("Tried to convert a tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
@@ -4046,6 +4055,8 @@ fn flat_type_to_err_type(
                 ErrorType::RigidVar(var) => {
                     ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::RigidOpen(var), pol)
                 }
+
+                ErrorType::Error => ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::Closed, pol),
 
                 other =>
                     panic!("Tried to convert a recursive tag union extension to an error, but the tag union extension had the ErrorType of {:?}", other)
@@ -4085,10 +4096,12 @@ fn get_fresh_error_var_name(state: &mut ErrorTypeState) -> Lowercase {
     //
     // We want to claim both the "#name" and "name" forms, because if "#name" appears multiple
     // times during error type reporting, we'll use "name" for display.
-    let (name, new_index) =
-        name_type_var(state.letters_used, &mut state.taken.iter(), |var, str| {
-            var.as_str() == str
-        });
+    let (name, new_index) = name_type_var(
+        "",
+        state.letters_used,
+        &mut state.taken.iter(),
+        |var, str| var.as_str() == str,
+    );
 
     state.letters_used = new_index;
 
@@ -4337,8 +4350,12 @@ impl StorageSubs {
         match content {
             FlexVar(opt_name) => FlexVar(*opt_name),
             RigidVar(name) => RigidVar(*name),
-            FlexAbleVar(opt_name, ability) => FlexAbleVar(*opt_name, *ability),
-            RigidAbleVar(name, ability) => RigidAbleVar(*name, *ability),
+            FlexAbleVar(opt_name, abilities) => {
+                FlexAbleVar(*opt_name, Self::offset_ability_slice(offsets, *abilities))
+            }
+            RigidAbleVar(name, abilities) => {
+                RigidAbleVar(*name, Self::offset_ability_slice(offsets, *abilities))
+            }
             RecursionVar {
                 structure,
                 opt_name,
@@ -4383,6 +4400,15 @@ impl StorageSubs {
         union_tags.values_start += offsets.variable_slices;
 
         union_tags
+    }
+
+    fn offset_ability_slice(
+        offsets: &StorageSubsOffsets,
+        mut ability_names: SubsSlice<Symbol>,
+    ) -> SubsSlice<Symbol> {
+        ability_names.start += offsets.symbol_names;
+
+        ability_names
     }
 
     fn offset_lambda_set(

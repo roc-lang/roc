@@ -7,8 +7,8 @@ use roc_build::link::llvm_module_to_dylib;
 use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{llvm::build::LlvmBackendMode, run_roc::RocCallResult};
-use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
-use roc_mono::ir::{CrashTag, OptLevel};
+use roc_load::{EntryPoint, ExecutionMode, LoadConfig, LoadMonomorphizedError, Threading};
+use roc_mono::ir::{CrashTag, OptLevel, SingleEntryPoint};
 use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
@@ -80,14 +80,15 @@ fn create_llvm_module<'a>(
         filename,
         module_src,
         src_dir,
-        Default::default(),
         RocCacheDir::Disallowed,
         load_config,
     );
 
     let mut loaded = match loaded {
         Ok(x) => x,
-        Err(roc_load::LoadingProblem::FormattedReport(report)) => {
+        Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
+            report,
+        ))) => {
             println!("{}", report);
             panic!();
         }
@@ -97,9 +98,8 @@ fn create_llvm_module<'a>(
     use roc_load::MonomorphizedModule;
     let MonomorphizedModule {
         procedures,
-        entry_point,
         interns,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
@@ -216,7 +216,6 @@ fn create_llvm_module<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
-        layout_interner: &layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -236,9 +235,16 @@ fn create_llvm_module<'a>(
     // platform to provide them.
     add_default_roc_externs(&env);
 
-    let entry_point = match entry_point {
-        EntryPoint::Executable { symbol, layout, .. } => {
-            roc_mono::ir::EntryPoint { symbol, layout }
+    let entry_point = match loaded.entry_point {
+        EntryPoint::Executable {
+            exposed_to_host,
+            platform_path: _,
+        } => {
+            // TODO support multiple of these!
+            debug_assert_eq!(exposed_to_host.len(), 1);
+            let (symbol, layout) = exposed_to_host[0];
+
+            SingleEntryPoint { symbol, layout }
         }
         EntryPoint::Test => {
             unreachable!()
@@ -250,12 +256,14 @@ fn create_llvm_module<'a>(
         LlvmBackendMode::CliTest => unreachable!(),
         LlvmBackendMode::WasmGenTest => roc_gen_llvm::llvm::build::build_wasm_test_wrapper(
             &env,
+            &mut layout_interner,
             config.opt_level,
             procedures,
             entry_point,
         ),
         LlvmBackendMode::GenTest => roc_gen_llvm::llvm::build::build_procedures_return_main(
             &env,
+            &mut layout_interner,
             config.opt_level,
             procedures,
             entry_point,
@@ -605,9 +613,6 @@ macro_rules! assert_llvm_evals_to {
                 CrashTag::User => panic!(r#"User crash with message: "{}""#, msg),
             },
         }
-
-        // artificially extend the lifetime of `lib`
-        lib.close().unwrap();
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {

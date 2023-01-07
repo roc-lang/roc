@@ -5,6 +5,7 @@ extern crate roc_module;
 extern crate tempfile;
 
 use roc_utils::cargo;
+use roc_utils::pretty_command_string;
 use roc_utils::root_dir;
 use serde::Deserialize;
 use serde_xml_rs::from_str;
@@ -446,16 +447,4 @@ pub fn known_bad_file(file_name: &str) -> PathBuf {
     path.push(file_name);
 
     path
-}
-
-fn pretty_command_string(command: &Command) -> OsString {
-    let mut command_string = std::ffi::OsString::new();
-    command_string.push(command.get_program());
-
-    for arg in command.get_args() {
-        command_string.push(" ");
-        command_string.push(arg);
-    }
-
-    command_string
 }

@@ -15,33 +15,11 @@ mod cli_run {
     };
     use const_format::concatcp;
     use indoc::indoc;
-    use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_FORMAT, CMD_RUN};
+    use roc_cli::{CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_FORMAT, CMD_RUN, CMD_TEST};
     use roc_test_utils::assert_multiline_str_eq;
     use serial_test::serial;
     use std::iter;
     use std::path::Path;
-
-    const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
-    const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
-    const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
-    const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT, "=true");
-    #[allow(dead_code)]
-    const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
-
-    #[derive(Debug)]
-    enum CliMode {
-        RocBuild, // buildOnly
-        RocRun,   // buildAndRun
-        Roc,      // buildAndRunIfNoErrors
-    }
-
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    const TEST_LEGACY_LINKER: bool = true;
-
-    // Surgical linker currently only supports linux x86_64,
-    // so we're always testing the legacy linker on other targets.
-    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-    const TEST_LEGACY_LINKER: bool = false;
 
     #[cfg(all(unix, not(target_os = "macos")))]
     const ALLOW_VALGRIND: bool = true;
@@ -54,6 +32,45 @@ mod cli_run {
 
     #[cfg(windows)]
     const ALLOW_VALGRIND: bool = false;
+
+    // use valgrind (if supported on the current platform)
+    #[derive(Debug, Clone, Copy)]
+    enum UseValgrind {
+        Yes,
+        No,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum TestCliCommands {
+        Many,
+        Run,
+        Test,
+        Dev,
+    }
+
+    const OPTIMIZE_FLAG: &str = concatcp!("--", roc_cli::FLAG_OPTIMIZE);
+    const LINKER_FLAG: &str = concatcp!("--", roc_cli::FLAG_LINKER);
+    const CHECK_FLAG: &str = concatcp!("--", roc_cli::FLAG_CHECK);
+    const PREBUILT_PLATFORM: &str = concatcp!("--", roc_cli::FLAG_PREBUILT, "=true");
+    #[allow(dead_code)]
+    const TARGET_FLAG: &str = concatcp!("--", roc_cli::FLAG_TARGET);
+
+    #[derive(Debug)]
+    enum CliMode {
+        Roc,      // buildAndRunIfNoErrors
+        RocBuild, // buildOnly
+        RocRun,   // buildAndRun
+        RocTest,
+        RocDev,
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    const TEST_LEGACY_LINKER: bool = true;
+
+    // Surgical linker currently only supports linux x86_64,
+    // so we're always testing the legacy linker on other targets.
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    const TEST_LEGACY_LINKER: bool = false;
 
     #[derive(Debug, PartialEq, Eq)]
     enum Arg<'a> {
@@ -89,6 +106,26 @@ mod cli_run {
         assert_eq!(out.status.success(), expects_success_exit_code);
     }
 
+    fn run_roc_on_failure_is_panic<'a, I: IntoIterator<Item = &'a str>>(
+        file: &'a Path,
+        args: I,
+        stdin: &[&str],
+        roc_app_args: &[String],
+        env: &[(&str, &str)],
+    ) -> Out {
+        let compile_out = run_roc_on(file, args, stdin, roc_app_args, env);
+
+        assert!(
+            compile_out.status.success(),
+            "\n___________\nRoc command failed with status {:?}:\n\n  {} {}\n___________\n",
+            compile_out.status,
+            compile_out.stdout,
+            compile_out.stderr,
+        );
+
+        compile_out
+    }
+
     fn run_roc_on<'a, I: IntoIterator<Item = &'a str>>(
         file: &'a Path,
         args: I,
@@ -118,13 +155,6 @@ mod cli_run {
             panic!("\n___________\nThe roc command:\n\n  {:?}\n\nhad unexpected stderr:\n\n  {}\n___________\n", compile_out.cmd_str, stderr);
         }
 
-        assert!(
-            compile_out.status.success(),
-            "\n___________\nRoc command failed with status {:?}:\n\n  {:?}\n___________\n",
-            compile_out.status,
-            compile_out
-        );
-
         compile_out
     }
 
@@ -137,8 +167,8 @@ mod cli_run {
         roc_app_args: &[String],
         extra_env: &[(&str, &str)],
         expected_ending: &str,
-        use_valgrind: bool,
-        test_many_cli_commands: bool, // buildOnly, buildAndRun and buildAndRunIfNoErrors
+        use_valgrind: UseValgrind,
+        test_cli_commands: TestCliCommands,
     ) {
         // valgrind does not yet support avx512 instructions, see #1963.
         // we can't enable this only when testing with valgrind because of host re-use between tests
@@ -149,14 +179,18 @@ mod cli_run {
 
         // TODO: expects don't currently work on windows
         let cli_commands = if cfg!(windows) {
-            match test_many_cli_commands {
-                true => vec![CliMode::RocBuild, CliMode::RocRun],
-                false => vec![CliMode::RocRun],
+            match test_cli_commands {
+                TestCliCommands::Many => vec![CliMode::RocBuild, CliMode::RocRun],
+                TestCliCommands::Run => vec![CliMode::RocRun],
+                TestCliCommands::Test => vec![],
+                TestCliCommands::Dev => vec![],
             }
         } else {
-            match test_many_cli_commands {
-                true => vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc],
-                false => vec![CliMode::Roc],
+            match test_cli_commands {
+                TestCliCommands::Many => vec![CliMode::RocBuild, CliMode::RocRun, CliMode::Roc],
+                TestCliCommands::Run => vec![CliMode::Roc],
+                TestCliCommands::Test => vec![CliMode::RocTest],
+                TestCliCommands::Dev => vec![CliMode::RocDev],
             }
         };
 
@@ -174,7 +208,7 @@ mod cli_run {
 
             let out = match cli_mode {
                 CliMode::RocBuild => {
-                    run_roc_on(
+                    run_roc_on_failure_is_panic(
                         file,
                         iter::once(CMD_BUILD).chain(flags.clone()),
                         &[],
@@ -182,7 +216,7 @@ mod cli_run {
                         &[],
                     );
 
-                    if use_valgrind && ALLOW_VALGRIND {
+                    if matches!(use_valgrind, UseValgrind::Yes) && ALLOW_VALGRIND {
                         let mut valgrind_args = vec![file
                             .with_file_name(executable_filename)
                             .to_str()
@@ -236,30 +270,58 @@ mod cli_run {
                     }
                 }
                 CliMode::Roc => {
-                    if !extra_env.is_empty() {
-                        // TODO: `roc` and `roc dev` are currently buggy for `env.roc`
-                        continue;
-                    }
-
-                    run_roc_on(file, flags.clone(), stdin, roc_app_args, extra_env)
+                    run_roc_on_failure_is_panic(file, flags.clone(), stdin, roc_app_args, extra_env)
                 }
-                CliMode::RocRun => run_roc_on(
+                CliMode::RocRun => run_roc_on_failure_is_panic(
                     file,
                     iter::once(CMD_RUN).chain(flags.clone()),
                     stdin,
                     roc_app_args,
                     extra_env,
                 ),
+                CliMode::RocTest => {
+                    // here failure is what we expect
+
+                    run_roc_on(
+                        file,
+                        iter::once(CMD_TEST).chain(flags.clone()),
+                        stdin,
+                        roc_app_args,
+                        extra_env,
+                    )
+                }
+                CliMode::RocDev => {
+                    // here failure is what we expect
+
+                    run_roc_on(
+                        file,
+                        iter::once(CMD_DEV).chain(flags.clone()),
+                        stdin,
+                        roc_app_args,
+                        extra_env,
+                    )
+                }
             };
 
-            if !&out.stdout.ends_with(expected_ending) {
+            let mut actual = strip_colors(&out.stdout);
+
+            // e.g. "1 failed and 0 passed in 123 ms."
+            if let Some(split) = actual.rfind("passed in ") {
+                let (before_first_digit, _) = actual.split_at(split);
+                actual = format!("{}passed in <ignored for test> ms.", before_first_digit);
+            }
+
+            let self_path = file.display().to_string();
+            actual = actual.replace(&self_path, "<ignored for tests>");
+
+            if !actual.ends_with(expected_ending) {
                 panic!(
-                    "expected output to end with {:?} but instead got {:#?} - stderr was: {:#?}",
-                    expected_ending, out.stdout, out.stderr
+                    "expected output to end with:\n{}\nbut instead got:\n{}\n stderr was:\n{}",
+                    expected_ending, actual, out.stderr
                 );
             }
 
-            if !out.status.success() {
+            if !out.status.success() && !matches!(cli_mode, CliMode::RocTest) {
                 // We don't need stdout, Cargo prints it for us.
                 panic!(
                     "Example program exited with status {:?}\nstderr was:\n{:#?}",
@@ -275,7 +337,7 @@ mod cli_run {
         roc_filename: &str,
         executable_filename: &str,
         expected_ending: &str,
-        use_valgrind: bool,
+        use_valgrind: UseValgrind,
     ) {
         test_roc_app(
             dir_name,
@@ -286,7 +348,7 @@ mod cli_run {
             &[],
             expected_ending,
             use_valgrind,
-            false,
+            TestCliCommands::Run,
         )
     }
 
@@ -299,8 +361,8 @@ mod cli_run {
         args: &[Arg],
         extra_env: &[(&str, &str)],
         expected_ending: &str,
-        use_valgrind: bool,
-        test_many_cli_commands: bool, // buildOnly, buildAndRun and buildAndRunIfNoErrors
+        use_valgrind: UseValgrind,
+        test_cli_commands: TestCliCommands,
     ) {
         let file_name = file_path_from_root(dir_name, roc_filename);
         let mut roc_app_args: Vec<String> = Vec::new();
@@ -373,7 +435,7 @@ mod cli_run {
             extra_env,
             expected_ending,
             use_valgrind,
-            test_many_cli_commands,
+            test_cli_commands,
         );
 
         custom_flags.push(OPTIMIZE_FLAG);
@@ -389,7 +451,7 @@ mod cli_run {
             extra_env,
             expected_ending,
             use_valgrind,
-            test_many_cli_commands,
+            test_cli_commands,
         );
 
         // Also check with the legacy linker.
@@ -404,20 +466,36 @@ mod cli_run {
                 extra_env,
                 expected_ending,
                 use_valgrind,
-                test_many_cli_commands,
+                test_cli_commands,
             );
         }
     }
 
     #[test]
     #[serial(cli_platform)]
+    #[ignore]
+    // ignored because downloaded prebuilt platforms cause problems with nix and NixOS
+    // this is explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)
     fn hello_world() {
         test_roc_app_slim(
             "examples",
             "helloWorld.roc",
             "helloWorld",
             "Hello, World!\n",
-            true,
+            UseValgrind::Yes,
+        )
+    }
+
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn hello_world_no_url() {
+        test_roc_app_slim(
+            "examples",
+            "helloWorldNoURL.roc",
+            "helloWorld",
+            "Hello, World!\n",
+            UseValgrind::Yes,
         )
     }
 
@@ -435,7 +513,7 @@ mod cli_run {
             "main.roc",
             "rocLovesPlatforms",
             &("Which platform am I running on now?".to_string() + LINE_ENDING),
-            true,
+            UseValgrind::Yes,
         )
     }
 
@@ -449,7 +527,7 @@ mod cli_run {
             "rocLovesRust.roc",
             "rocLovesRust",
             "Roc <3 Rust!\n",
-            true,
+            UseValgrind::Yes,
         )
     }
 
@@ -460,7 +538,7 @@ mod cli_run {
             "rocLovesZig.roc",
             "rocLovesZig",
             "Roc <3 Zig!\n",
-            true,
+            UseValgrind::Yes,
         )
     }
 
@@ -471,7 +549,7 @@ mod cli_run {
             "rocLovesWebAssembly.roc",
             "rocLovesWebAssembly",
             "Roc <3 Web Assembly!\n",
-            true,
+            UseValgrind::Yes,
         )
     }
 
@@ -482,8 +560,79 @@ mod cli_run {
             "rocLovesSwift.roc",
             "rocLovesSwift",
             "Roc <3 Swift!\n",
-            true,
+            UseValgrind::Yes,
         )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn expects_dev_and_test() {
+        // these are in the same test function so we don't have to worry about race conditions
+        // on the building of the platform
+
+        test_roc_app(
+            "crates/cli_testing_examples/expects",
+            "expects.roc",
+            "expects-test",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                This expectation failed:
+
+                18│      expect x != x
+                                ^^^^^^
+
+                When it failed, these variables had these values:
+
+                x : Num *
+                x = 42
+
+                [<ignored for tests> 19:9] 42
+                [<ignored for tests> 20:9] "Fjoer en ferdjer frieten oan dyn geve lea"
+                [<ignored for tests> 13:9] "abc"
+                [<ignored for tests> 13:9] 10
+                [<ignored for tests> 13:9] A (B C)
+                Program finished!
+                "#
+            ),
+            UseValgrind::Yes,
+            TestCliCommands::Dev,
+        );
+
+        test_roc_app(
+            "crates/cli_testing_examples/expects",
+            "expects.roc",
+            "expects-test",
+            &[],
+            &[],
+            &[],
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 6│>  expect
+                 7│>      a = 1
+                 8│>      b = 2
+                 9│>
+                10│>      a == b
+
+                When it failed, these variables had these values:
+
+                a : Num *
+                a = 1
+
+                b : Num *
+                b = 2
+
+
+
+                1 failed and 0 passed in <ignored for test> ms."#
+            ),
+            UseValgrind::Yes,
+            TestCliCommands::Test,
+        );
     }
 
     #[test]
@@ -492,7 +641,13 @@ mod cli_run {
         ignore = "this platform is broken, and `roc run --lib` is missing on windows"
     )]
     fn ruby_interop() {
-        test_roc_app_slim("examples/ruby-interop", "main.roc", "libhello", "", true)
+        test_roc_app_slim(
+            "examples/ruby-interop",
+            "main.roc",
+            "libhello",
+            "",
+            UseValgrind::Yes,
+        )
     }
 
     #[test]
@@ -502,13 +657,19 @@ mod cli_run {
             "fibonacci.roc",
             "fibonacci",
             "",
-            true,
+            UseValgrind::Yes,
         )
     }
 
     #[test]
     fn hello_gui() {
-        test_roc_app_slim("examples/gui", "hello.roc", "hello-gui", "", false)
+        test_roc_app_slim(
+            "examples/gui",
+            "hello.roc",
+            "hello-gui",
+            "",
+            UseValgrind::No,
+        )
     }
 
     #[test]
@@ -518,7 +679,7 @@ mod cli_run {
             "breakout.roc",
             "breakout",
             "",
-            false,
+            UseValgrind::No,
         )
     }
 
@@ -529,7 +690,7 @@ mod cli_run {
             "quicksort.roc",
             "quicksort",
             "[0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2]\n",
-            true,
+            UseValgrind::Yes,
         )
     }
 
@@ -551,8 +712,8 @@ mod cli_run {
             ],
             &[],
             "4\n",
-            false,
-            false,
+            UseValgrind::No,
+            TestCliCommands::Run,
         )
     }
 
@@ -562,6 +723,24 @@ mod cli_run {
     #[serial(cli_platform)]
     fn cli_args_check() {
         let path = file_path_from_root("examples/cli", "args.roc");
+        let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    // TODO: write a new test once mono bugs are resolved in investigation
+    #[test]
+    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
+    fn check_virtual_dom_server() {
+        let path = file_path_from_root("examples/virtual-dom-wip", "example-server.roc");
+        let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    // TODO: write a new test once mono bugs are resolved in investigation
+    #[test]
+    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
+    fn check_virtual_dom_client() {
+        let path = file_path_from_root("examples/virtual-dom-wip", "example-client.roc");
         let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -576,8 +755,8 @@ mod cli_run {
             &[],
             &[],
             "hi there!\nIt is known\n",
-            true,
-            false,
+            UseValgrind::Yes,
+            TestCliCommands::Run,
         )
     }
 
@@ -592,8 +771,8 @@ mod cli_run {
             &[],
             &[],
             "Hello Worldfoo!\n",
-            true,
-            false,
+            UseValgrind::Yes,
+            TestCliCommands::Run,
         )
     }
 
@@ -607,14 +786,20 @@ mod cli_run {
             &[Arg::ExamplePath("examples/hello.false")],
             &[],
             &("Hello, World!".to_string() + LINE_ENDING),
-            false,
-            true,
+            UseValgrind::No,
+            TestCliCommands::Many,
         )
     }
 
     #[test]
     fn swift_ui() {
-        test_roc_app_slim("examples/swiftui", "main.roc", "swiftui", "", false)
+        test_roc_app_slim(
+            "examples/swiftui",
+            "main.roc",
+            "swiftui",
+            "",
+            UseValgrind::No,
+        )
     }
 
     #[test]
@@ -627,8 +812,8 @@ mod cli_run {
             &[Arg::ExamplePath("input"), Arg::ExamplePath("output")],
             &[],
             "Processed 3 files with 3 successes and 0 errors\n",
-            false,
-            false,
+            UseValgrind::No,
+            TestCliCommands::Run,
         )
     }
 
@@ -649,8 +834,8 @@ mod cli_run {
             "Your favorite editor is roc-editor!\n\
             Your current shell level is 3!\n\
             Your favorite letters are: a c e j\n",
-            false,
-            false,
+            UseValgrind::No,
+            TestCliCommands::Run,
         )
     }
 
@@ -661,13 +846,14 @@ mod cli_run {
             "parse-movies-csv.roc",
             "parse-movies-csv",
             "Parse success!\n",
-            false,
+            UseValgrind::No,
         )
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
     // this is for testing the benchmarks, to perform proper benchmarks see crates/cli/benches/README.md
     mod test_benchmarks {
+        use super::{TestCliCommands, UseValgrind};
         use cli_utils::helpers::cli_testing_dir;
 
         use super::{check_output_with_stdin, OPTIMIZE_FLAG, PREBUILT_PLATFORM};
@@ -681,17 +867,29 @@ mod cli_run {
             executable_filename: &str,
             stdin: &[&str],
             expected_ending: &str,
-            use_valgrind: bool,
+            use_valgrind: UseValgrind,
         ) {
             let file_name = cli_testing_dir("benchmarks").join(roc_filename);
 
             // TODO fix QuicksortApp and then remove this!
-            if roc_filename == "QuicksortApp.roc" {
-                eprintln!(
+            match roc_filename {
+                "QuicksortApp.roc" => {
+                    eprintln!(
                     "WARNING: skipping testing benchmark {} because the test is broken right now!",
                     roc_filename
                 );
-                return;
+                    return;
+                }
+                "TestAStar.roc" => {
+                    if cfg!(feature = "wasm32-cli-run") {
+                        eprintln!(
+                        "WARNING: skipping testing benchmark {} because it currently does not work on wasm32 due to dictionaries.",
+                        roc_filename
+                    );
+                        return;
+                    }
+                }
+                _ => {}
             }
 
             #[cfg(all(not(feature = "wasm32-cli-run"), not(feature = "i386-cli-run")))]
@@ -722,7 +920,7 @@ mod cli_run {
             stdin: &[&str],
             executable_filename: &str,
             expected_ending: &str,
-            use_valgrind: bool,
+            use_valgrind: UseValgrind,
         ) {
             let mut ran_without_optimizations = false;
 
@@ -737,7 +935,7 @@ mod cli_run {
                     &[],
                     expected_ending,
                     use_valgrind,
-                    false,
+                    TestCliCommands::Run,
                 );
 
                 ran_without_optimizations = true;
@@ -757,7 +955,7 @@ mod cli_run {
                     &[],
                     expected_ending,
                     use_valgrind,
-                    false,
+                    TestCliCommands::Run,
                 );
             }
 
@@ -770,7 +968,7 @@ mod cli_run {
                 &[],
                 expected_ending,
                 use_valgrind,
-                false,
+                TestCliCommands::Run,
             );
         }
 
@@ -830,7 +1028,7 @@ mod cli_run {
             let mut path = file.with_file_name(executable_filename);
             path.set_extension("wasm");
 
-            let stdout = crate::run_with_wasmer(&path, stdin);
+            let stdout = crate::run_wasm(&path, stdin);
 
             if !stdout.ends_with(expected_ending) {
                 panic!(
@@ -846,17 +1044,20 @@ mod cli_run {
             stdin: &[&str],
             executable_filename: &str,
             expected_ending: &str,
-            use_valgrind: bool,
+            use_valgrind: UseValgrind,
         ) {
+            use super::{concatcp, CMD_BUILD, TARGET_FLAG};
+
             check_output_with_stdin(
                 &file_name,
                 stdin,
                 executable_filename,
                 &[concatcp!(TARGET_FLAG, "=x86_32")],
                 &[],
+                &[],
                 expected_ending,
                 use_valgrind,
-                false,
+                TestCliCommands::Run,
             );
 
             check_output_with_stdin(
@@ -865,20 +1066,21 @@ mod cli_run {
                 executable_filename,
                 &[concatcp!(TARGET_FLAG, "=x86_32"), OPTIMIZE_FLAG],
                 &[],
+                &[],
                 expected_ending,
                 use_valgrind,
-                false,
+                TestCliCommands::Run,
             );
         }
 
         #[test]
         fn nqueens() {
-            test_benchmark("NQueens.roc", "nqueens", &["6"], "4\n", true)
+            test_benchmark("NQueens.roc", "nqueens", &["6"], "4\n", UseValgrind::Yes)
         }
 
         #[test]
         fn cfold() {
-            test_benchmark("CFold.roc", "cfold", &["3"], "11 & 11\n", true)
+            test_benchmark("CFold.roc", "cfold", &["3"], "11 & 11\n", UseValgrind::Yes)
         }
 
         #[test]
@@ -888,13 +1090,19 @@ mod cli_run {
                 "deriv",
                 &["2"],
                 "1 count: 6\n2 count: 22\n",
-                true,
+                UseValgrind::Yes,
             )
         }
 
         #[test]
         fn rbtree_ck() {
-            test_benchmark("RBTreeCk.roc", "rbtree-ck", &["100"], "10\n", true)
+            test_benchmark(
+                "RBTreeCk.roc",
+                "rbtree-ck",
+                &["100"],
+                "10\n",
+                UseValgrind::Yes,
+            )
         }
 
         #[test]
@@ -904,7 +1112,7 @@ mod cli_run {
                 "rbtree-insert",
                 &[],
                 "Node Black 0 {} Empty Empty\n",
-                true,
+                UseValgrind::Yes,
             )
         }
 
@@ -924,7 +1132,13 @@ mod cli_run {
 
         #[test]
         fn astar() {
-            test_benchmark("TestAStar.roc", "test-astar", &[], "True\n", false)
+            test_benchmark(
+                "TestAStar.roc",
+                "test-astar",
+                &[],
+                "True\n",
+                UseValgrind::No,
+            )
         }
 
         #[test]
@@ -934,18 +1148,24 @@ mod cli_run {
                 "test-base64",
                 &[],
                 "encoded: SGVsbG8gV29ybGQ=\ndecoded: Hello World\n",
-                true,
+                UseValgrind::Yes,
             )
         }
 
         #[test]
         fn closure() {
-            test_benchmark("Closure.roc", "closure", &[], "", false)
+            test_benchmark("Closure.roc", "closure", &[], "", UseValgrind::No)
         }
 
         #[test]
         fn issue2279() {
-            test_benchmark("Issue2279.roc", "issue2279", &[], "Hello, world!\n", true)
+            test_benchmark(
+                "Issue2279.roc",
+                "issue2279",
+                &[],
+                "Hello, world!\n",
+                UseValgrind::Yes,
+            )
         }
 
         #[test]
@@ -955,7 +1175,7 @@ mod cli_run {
                 "quicksortapp",
                 &[],
                 "todo put the correct quicksort answer here",
-                true,
+                UseValgrind::Yes,
             )
         }
     }
@@ -971,8 +1191,8 @@ mod cli_run {
             &[],
             &[],
             "I am Dep2.str2\n",
-            true,
-            false,
+            UseValgrind::Yes,
+            TestCliCommands::Run,
         );
     }
 
@@ -987,8 +1207,8 @@ mod cli_run {
             &[],
             &[],
             "I am Dep2.str2\n",
-            true,
-            false,
+            UseValgrind::Yes,
+            TestCliCommands::Run,
         );
     }
 
@@ -1003,8 +1223,8 @@ mod cli_run {
             &[],
             &[],
             "I am Dep2.value2\n",
-            true,
-            false,
+            UseValgrind::Yes,
+            TestCliCommands::Run,
         );
     }
 
@@ -1019,8 +1239,42 @@ mod cli_run {
             &[],
             &[],
             "I am Dep2.value2\n",
-            true,
-            false,
+            UseValgrind::Yes,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_thunk)]
+    #[cfg_attr(windows, ignore)]
+    fn run_packages_unoptimized() {
+        check_output_with_stdin(
+            &fixture_file("packages", "app.roc"),
+            &[],
+            "packages-test",
+            &[],
+            &[],
+            &[],
+            "Hello, World! This text came from a package! This text came from a CSV package!\n",
+            UseValgrind::Yes,
+            TestCliCommands::Run,
+        );
+    }
+
+    #[test]
+    #[serial(multi_dep_thunk)]
+    #[cfg_attr(windows, ignore)]
+    fn run_packages_optimized() {
+        check_output_with_stdin(
+            &fixture_file("packages", "app.roc"),
+            &[],
+            "packages-test",
+            &[OPTIMIZE_FLAG],
+            &[],
+            &[],
+            "Hello, World! This text came from a package! This text came from a CSV package!\n",
+            UseValgrind::Yes,
+            TestCliCommands::Run,
         );
     }
 
@@ -1148,75 +1402,49 @@ mod cli_run {
     }
 }
 
-#[allow(dead_code)]
-fn run_with_wasmer(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
-    use std::io::Write;
-    use wasmer::{Instance, Module, Store};
+#[cfg(feature = "wasm32-cli-run")]
+fn run_wasm(wasm_path: &std::path::Path, stdin: &[&str]) -> String {
+    use bumpalo::Bump;
+    use roc_wasm_interp::{DefaultImportDispatcher, Instance, Value, WasiFile};
 
-    //    std::process::Command::new("cp")
-    //        .args(&[
-    //            wasm_path.to_str().unwrap(),
-    //            "/home/folkertdev/roc/wasm/nqueens.wasm",
-    //        ])
-    //        .output()
-    //        .unwrap();
+    let wasm_bytes = std::fs::read(wasm_path).unwrap();
+    let arena = Bump::new();
 
-    let store = Store::default();
-    let module = Module::from_file(&store, wasm_path).unwrap();
+    let mut instance = {
+        let mut fake_stdin = vec![];
+        let fake_stdout = vec![];
+        let fake_stderr = vec![];
+        for s in stdin {
+            fake_stdin.extend_from_slice(s.as_bytes())
+        }
 
-    let mut fake_stdin = wasmer_wasi::Pipe::new();
-    let fake_stdout = wasmer_wasi::Pipe::new();
-    let fake_stderr = wasmer_wasi::Pipe::new();
+        let mut dispatcher = DefaultImportDispatcher::default();
+        dispatcher.wasi.files = vec![
+            WasiFile::ReadOnly(fake_stdin),
+            WasiFile::WriteOnly(fake_stdout),
+            WasiFile::WriteOnly(fake_stderr),
+        ];
 
-    for line in stdin {
-        write!(fake_stdin, "{}", line).unwrap();
-    }
+        Instance::from_bytes(&arena, &wasm_bytes, dispatcher, false).unwrap()
+    };
 
-    // First, we create the `WasiEnv`
-    use wasmer_wasi::WasiState;
-    let mut wasi_env = WasiState::new("hello")
-        .stdin(Box::new(fake_stdin))
-        .stdout(Box::new(fake_stdout))
-        .stderr(Box::new(fake_stderr))
-        .finalize()
-        .unwrap();
+    let result = instance.call_export("_start", []);
 
-    // Then, we get the import object related to our WASI
-    // and attach it to the Wasm instance.
-    let import_object = wasi_env
-        .import_object(&module)
-        .unwrap_or_else(|_| wasmer::imports!());
-
-    let instance = Instance::new(&module, &import_object).unwrap();
-
-    let start = instance.exports.get_function("_start").unwrap();
-
-    match start.call(&[]) {
-        Ok(_) => read_wasi_stdout(wasi_env),
+    match result {
+        Ok(Some(Value::I32(0))) => match &instance.import_dispatcher.wasi.files[1] {
+            WasiFile::WriteOnly(fake_stdout) => String::from_utf8(fake_stdout.clone())
+                .unwrap_or_else(|_| "Wasm test printed invalid UTF-8".into()),
+            _ => unreachable!(),
+        },
+        Ok(Some(Value::I32(exit_code))) => {
+            format!("WASI app exit code {}", exit_code)
+        }
+        Ok(Some(val)) => {
+            format!("WASI _start returned an unexpected number type {:?}", val)
+        }
+        Ok(None) => "WASI _start returned no value".into(),
         Err(e) => {
-            use wasmer_wasi::WasiError;
-            match e.downcast::<WasiError>() {
-                Ok(WasiError::Exit(0)) => {
-                    // we run the `_start` function, so exit(0) is expected
-                    read_wasi_stdout(wasi_env)
-                }
-                other => format!("Something went wrong running a wasm test: {:?}", other),
-            }
+            format!("WASI error {}", e)
         }
-    }
-}
-
-#[allow(dead_code)]
-fn read_wasi_stdout(wasi_env: wasmer_wasi::WasiEnv) -> String {
-    let mut state = wasi_env.state.lock().unwrap();
-
-    match state.fs.stdout_mut() {
-        Ok(Some(stdout)) => {
-            let mut buf = String::new();
-            stdout.read_to_string(&mut buf).unwrap();
-
-            buf
-        }
-        _ => todo!(),
     }
 }

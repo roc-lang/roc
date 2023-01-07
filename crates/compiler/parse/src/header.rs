@@ -4,35 +4,66 @@ use crate::ident::{lowercase_ident, UppercaseIdent};
 use crate::parser::{optional, then};
 use crate::parser::{specialize, word1, EPackageEntry, EPackageName, Parser};
 use crate::string_literal;
-use bumpalo::collections::Vec;
-use roc_module::symbol::Symbol;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::Loc;
 use std::fmt::Debug;
 
+impl<'a> HeaderType<'a> {
+    pub fn exposed_or_provided_values(&'a self) -> &'a [Loc<ExposedName<'a>>] {
+        match self {
+            HeaderType::App {
+                provides: exposes, ..
+            }
+            | HeaderType::Hosted { exposes, .. }
+            | HeaderType::Builtin { exposes, .. }
+            | HeaderType::Interface { exposes, .. } => exposes,
+            HeaderType::Platform { .. } | HeaderType::Package { .. } => &[],
+        }
+    }
+}
+
 #[derive(Debug)]
-pub enum HeaderFor<'a> {
+pub enum HeaderType<'a> {
     App {
+        output_name: StrLiteral<'a>,
+        provides: &'a [Loc<ExposedName<'a>>],
         to_platform: To<'a>,
     },
     Hosted {
+        name: ModuleName<'a>,
+        exposes: &'a [Loc<ExposedName<'a>>],
         generates: UppercaseIdent<'a>,
         generates_with: &'a [Loc<ExposedName<'a>>],
     },
     /// Only created during canonicalization, never actually parsed from source
     Builtin {
+        name: ModuleName<'a>,
+        exposes: &'a [Loc<ExposedName<'a>>],
         generates_with: &'a [Symbol],
     },
+    Package {
+        /// usually something other than `pf`
+        config_shorthand: &'a str,
+        exposes: &'a [Loc<ModuleName<'a>>],
+        exposes_ids: &'a [ModuleId],
+    },
     Platform {
+        opt_app_module_id: Option<ModuleId>,
+        /// the name and type scheme of the main function (required by the platform)
+        /// (type scheme is currently unused)
+        provides: &'a [(Loc<ExposedName<'a>>, Loc<TypedIdent<'a>>)],
+        requires: &'a [Loc<TypedIdent<'a>>],
+        requires_types: &'a [Loc<UppercaseIdent<'a>>],
+        exposes: &'a [Loc<ModuleName<'a>>],
+        exposes_ids: &'a [ModuleId],
+
         /// usually `pf`
         config_shorthand: &'a str,
-        /// the type scheme of the main function (required by the platform)
-        /// (currently unused)
-        #[allow(dead_code)]
-        platform_main_type: TypedIdent<'a>,
-        /// provided symbol to host (commonly `mainForHost`)
-        main_for_host: roc_module::symbol::Symbol,
     },
-    Interface,
+    Interface {
+        name: ModuleName<'a>,
+        exposes: &'a [Loc<ExposedName<'a>>],
+    },
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -94,15 +125,6 @@ impl<'a> ModuleName<'a> {
     pub const fn as_str(&'a self) -> &'a str {
         self.0
     }
-}
-
-#[derive(Debug)]
-pub enum ModuleNameEnum<'a> {
-    /// A filename
-    App(StrLiteral<'a>),
-    Interface(ModuleName<'a>),
-    Hosted(ModuleName<'a>),
-    Platform,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
@@ -214,14 +236,9 @@ pub struct PackageHeader<'a> {
     pub before_name: &'a [CommentOrNewline<'a>],
     pub name: Loc<PackageName<'a>>,
 
-    pub exposes_keyword: Spaces<'a, ExposesKeyword>,
-    pub exposes: Vec<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
-
-    pub packages_keyword: Spaces<'a, PackagesKeyword>,
-    pub packages: Vec<'a, (Loc<&'a str>, Loc<PackageName<'a>>)>,
-
-    pub imports_keyword: Spaces<'a, ImportsKeyword>,
-    pub imports: Vec<'a, Loc<ImportsEntry<'a>>>,
+    pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ModuleName<'a>>>>>,
+    pub packages:
+        KeywordItem<'a, PackagesKeyword, Collection<'a, Loc<Spaced<'a, PackageEntry<'a>>>>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

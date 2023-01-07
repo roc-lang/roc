@@ -85,7 +85,6 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
             // for expects
             "roc_mmap" => Some("mmap"),
             "roc_getppid" => Some("getppid"),
-            "roc_send_signal" => Some("kill"),
             "roc_shm_open" => Some("shm_open"),
 
             _ => None,

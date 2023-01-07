@@ -1363,7 +1363,7 @@ fn linked_list_singleton() {
             "#
         ),
         0,
-        i64,
+        usize,
         |_| 0
     );
 }
@@ -4104,6 +4104,44 @@ fn issue_4349() {
             "#
         ),
         RocStr::from("okay"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn issue_4712() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Parser a : {} -> a
+
+            v1 : {}
+            v1 = {}
+
+            v2 : Str
+            v2 = "cd"
+
+            apply : Parser (a -> Str), a -> Parser Str
+            apply = \fnParser, valParser ->
+                \{} ->
+                    (fnParser {}) (valParser)
+
+            map : a, (a -> Str) -> Parser Str
+            map = \simpleParser, transform ->
+                apply (\{} -> transform) simpleParser
+
+            gen = \{} ->
+                [ map v1 (\{} -> "ab"), map v2 (\s -> s) ]
+                |> List.map (\f -> f {})
+                |> Str.joinWith  ","
+
+            main = gen {}
+            "#
+        ),
+        RocStr::from("ab,cd"),
         RocStr
     );
 }

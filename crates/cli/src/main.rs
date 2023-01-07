@@ -209,37 +209,9 @@ fn main() -> io::Result<()> {
             Ok(0)
         }
         Some((CMD_DOCS, matches)) => {
-            let maybe_values = matches.values_of_os(DIRECTORY_OR_FILES);
+            let root_filename = matches.value_of_os(ROC_FILE).unwrap();
 
-            let mut values: Vec<OsString> = Vec::new();
-
-            match maybe_values {
-                None => {
-                    let mut os_string_values: Vec<OsString> = Vec::new();
-                    read_all_roc_files(
-                        &std::env::current_dir()?.as_os_str().to_os_string(),
-                        &mut os_string_values,
-                    )?;
-                    for os_string in os_string_values {
-                        values.push(os_string);
-                    }
-                }
-                Some(os_values) => {
-                    for os_str in os_values {
-                        values.push(os_str.to_os_string());
-                    }
-                }
-            }
-
-            let mut roc_files = Vec::new();
-
-            // Populate roc_files
-            for os_str in values {
-                let metadata = fs::metadata(os_str.clone())?;
-                roc_files_recursive(os_str.as_os_str(), metadata.file_type(), &mut roc_files)?;
-            }
-
-            generate_docs_html(roc_files);
+            generate_docs_html(PathBuf::from(root_filename));
 
             Ok(0)
         }

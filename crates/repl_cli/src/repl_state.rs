@@ -321,7 +321,7 @@ fn parse_src<'a>(arena: &'a Bump, line: &'a str) -> ParseOutcome<'a> {
         _ => {
             let src_bytes = line.as_bytes();
 
-            match roc_parse::expr::loc_expr().parse(arena, State::new(src_bytes), 0) {
+            match roc_parse::expr::loc_expr(true).parse(arena, State::new(src_bytes), 0) {
                 Ok((_, loc_expr, _)) => ParseOutcome::Expr(loc_expr.value),
                 // Special case some syntax errors to allow for multi-line inputs
                 Err((_, EExpr::Closure(EClosure::Body(_, _), _)))

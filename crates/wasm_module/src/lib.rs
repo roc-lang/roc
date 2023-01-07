@@ -695,28 +695,28 @@ pub enum Value {
 }
 
 impl Value {
-    pub fn unwrap_i32(&self) -> i32 {
+    pub fn expect_i32(&self) -> Result<i32, (ValueType, ValueType)> {
         match self {
-            Value::I32(x) => *x,
-            _ => panic!("Expected I32 but found {:?}", self),
+            Value::I32(x) => Ok(*x),
+            _ => Err((ValueType::I32, ValueType::from(*self))),
         }
     }
-    pub fn unwrap_i64(&self) -> i64 {
+    pub fn expect_i64(&self) -> Result<i64, (ValueType, ValueType)> {
         match self {
-            Value::I64(x) => *x,
-            _ => panic!("Expected I64 but found {:?}", self),
+            Value::I64(x) => Ok(*x),
+            _ => Err((ValueType::I64, ValueType::from(*self))),
         }
     }
-    pub fn unwrap_f32(&self) -> f32 {
+    pub fn expect_f32(&self) -> Result<f32, (ValueType, ValueType)> {
         match self {
-            Value::F32(x) => *x,
-            _ => panic!("Expected F32 but found {:?}", self),
+            Value::F32(x) => Ok(*x),
+            _ => Err((ValueType::F32, ValueType::from(*self))),
         }
     }
-    pub fn unwrap_f64(&self) -> f64 {
+    pub fn expect_f64(&self) -> Result<f64, (ValueType, ValueType)> {
         match self {
-            Value::F64(x) => *x,
-            _ => panic!("Expected F64 but found {:?}", self),
+            Value::F64(x) => Ok(*x),
+            _ => Err((ValueType::F64, ValueType::from(*self))),
         }
     }
 }

@@ -252,7 +252,7 @@ impl<'a> Storage<'a> {
                         .extend_from_slice(CallConv::C.stack_memory_arg_types(size, format));
 
                     let location = match format {
-                        Int128 | Float128 | Decimal => {
+                        Int128 | Decimal => {
                             // passed as two i64's but stored in the stack frame
                             wide_number_args.push(local_index);
                             let loc =

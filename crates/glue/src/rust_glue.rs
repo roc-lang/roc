@@ -1737,7 +1737,6 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::Num(RocNum::I128) => "roc_std::I128".to_string(),
         RocType::Num(RocNum::F32) => "f32".to_string(),
         RocType::Num(RocNum::F64) => "f64".to_string(),
-        RocType::Num(RocNum::F128) => "roc_std::F128".to_string(),
         RocType::Num(RocNum::Dec) => "roc_std::RocDec".to_string(),
         RocType::RocDict(key_id, val_id) => format!(
             "roc_std::RocDict<{}, {}>",
@@ -2433,7 +2432,7 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
             use RocNum::*;
 
             match num {
-                F32 | F64 | F128 => true,
+                F32 | F64 => true,
                 I8 | U8 | I16 | U16 | I32 | U32 | I64 | U64 | I128 | U128 | Dec => false,
             }
         }

@@ -31,6 +31,7 @@ pub enum Token {
     KeywordTo = 0b_0010_1110,
     KeywordExposes = 0b_0010_1111,
     KeywordEffects = 0b_0011_0000,
+    KeywordPackage = 0b_0111_1100,
     KeywordPlatform = 0b_0011_0001,
     KeywordRequires = 0b_0011_0010,
     KeywordDbg = 0b_0111_1011,
@@ -428,6 +429,7 @@ fn lex_ident(uppercase: bool, bytes: &[u8]) -> (Token, usize) {
         b"to" => Token::KeywordTo,
         b"exposes" => Token::KeywordExposes,
         b"effects" => Token::KeywordEffects,
+        b"package" => Token::KeywordPackage,
         b"platform" => Token::KeywordPlatform,
         b"requires" => Token::KeywordRequires,
         ident => {

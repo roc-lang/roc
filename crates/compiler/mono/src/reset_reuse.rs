@@ -191,11 +191,32 @@ fn function_s<'a, 'i>(
             }
         }
 
+        Dbg {
+            symbol,
+            variable,
+            remainder,
+        } => {
+            let continuation: &Stmt = remainder;
+            let new_continuation = function_s(env, w, c, continuation);
+
+            if std::ptr::eq(continuation, new_continuation) || continuation == new_continuation {
+                stmt
+            } else {
+                let new_refcounting = Dbg {
+                    symbol: *symbol,
+                    variable: *variable,
+                    remainder: new_continuation,
+                };
+
+                arena.alloc(new_refcounting)
+            }
+        }
+
         Expect {
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let continuation: &Stmt = remainder;
@@ -208,7 +229,7 @@ fn function_s<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: new_continuation,
                 };
 
@@ -220,7 +241,7 @@ fn function_s<'a, 'i>(
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let continuation: &Stmt = remainder;
@@ -233,7 +254,7 @@ fn function_s<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: new_continuation,
                 };
 
@@ -438,11 +459,39 @@ fn function_d_main<'a, 'i>(
             }
         }
 
+        Dbg {
+            symbol,
+            variable,
+            remainder,
+        } => {
+            let (b, found) = function_d_main(env, x, c, remainder);
+
+            if found || *symbol != x {
+                let refcounting = Dbg {
+                    symbol: *symbol,
+                    variable: *variable,
+                    remainder: b,
+                };
+
+                (arena.alloc(refcounting), found)
+            } else {
+                let b = try_function_s(env, x, c, b);
+
+                let refcounting = Dbg {
+                    symbol: *symbol,
+                    variable: *variable,
+                    remainder: b,
+                };
+
+                (arena.alloc(refcounting), found)
+            }
+        }
+
         Expect {
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let (b, found) = function_d_main(env, x, c, remainder);
@@ -452,7 +501,7 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: b,
                 };
 
@@ -464,7 +513,7 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: b,
                 };
 
@@ -475,7 +524,7 @@ fn function_d_main<'a, 'i>(
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let (b, found) = function_d_main(env, x, c, remainder);
@@ -485,7 +534,7 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: b,
                 };
 
@@ -497,7 +546,7 @@ fn function_d_main<'a, 'i>(
                     condition: *condition,
                     region: *region,
                     lookups,
-                    layouts,
+                    variables,
                     remainder: b,
                 };
 
@@ -656,11 +705,27 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             arena.alloc(Refcounting(*modify_rc, b))
         }
 
+        Dbg {
+            symbol,
+            variable,
+            remainder,
+        } => {
+            let b = function_r(env, remainder);
+
+            let expect = Dbg {
+                symbol: *symbol,
+                variable: *variable,
+                remainder: b,
+            };
+
+            arena.alloc(expect)
+        }
+
         Expect {
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let b = function_r(env, remainder);
@@ -669,7 +734,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
                 condition: *condition,
                 region: *region,
                 lookups,
-                layouts,
+                variables,
                 remainder: b,
             };
 
@@ -680,7 +745,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             condition,
             region,
             lookups,
-            layouts,
+            variables,
             remainder,
         } => {
             let b = function_r(env, remainder);
@@ -689,7 +754,7 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
                 condition: *condition,
                 region: *region,
                 lookups,
-                layouts,
+                variables,
                 remainder: b,
             };
 
@@ -726,6 +791,9 @@ fn has_live_var<'a>(jp_live_vars: &JPLiveVarMap, stmt: &'a Stmt<'a>, needle: Sym
         Refcounting(modify_rc, cont) => {
             modify_rc.get_symbol() == needle || has_live_var(jp_live_vars, cont, needle)
         }
+        Dbg {
+            symbol, remainder, ..
+        } => *symbol == needle || has_live_var(jp_live_vars, remainder, needle),
         Expect {
             condition,
             remainder,

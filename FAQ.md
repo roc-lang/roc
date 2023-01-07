@@ -140,7 +140,7 @@ and `Optional` (like in Java).
 By design, Roc does not have one of these. There are several reasons for this.
 
 First, if a function returns a potential error, Roc has the convention to use `Result` with an error type that
-has a single tag describing what went wrong. (For example, `List.first : List a -> Result a [ListWasEmpty]*`
+has a single tag describing what went wrong. (For example, `List.first : List a -> Result a [ListWasEmpty]`
 instead of `List.first : List a -> Maybe a`.) This is not only more self-descriptive, it also composes better with
 other operations that can fail; there's no need to have functions like `Result.toMaybe` or `Maybe.toResult`,
 because in Roc, the convention is that operations that can fail always use `Result`.
@@ -170,7 +170,7 @@ for using `Maybe` even when it's less self-descriptive), we'd have to rewrite al
 helper functions. As such, a subtle downside of these helper functions is that they discourage any change to
 the data model that would break their call sites, even if that change would improve the data model overall.
 
-On a historical note, `Maybe` may have been thought of as a substitute for null references—as opposed to something that emerged organically based on specific motivating use cases after `Result` already existed. That said, in languages that do not have an equivalent of Roc's tag unions, it's much less ergonomic to write something like `Result a [ListWasEmpty]*`, so that design would not fit those languages as well as it fits Roc.
+On a historical note, `Maybe` may have been thought of as a substitute for null references—as opposed to something that emerged organically based on specific motivating use cases after `Result` already existed. That said, in languages that do not have an equivalent of Roc's tag unions, it's much less ergonomic to write something like `Result a [ListWasEmpty]`, so that design would not fit those languages as well as it fits Roc.
 
 ## Why doesn't Roc have higher-kinded polymorphism or arbitrary-rank types?
 
@@ -204,9 +204,7 @@ No implementation of Rank-2 types can remove any of these downsides. Thus far, w
 with sufficiently nice APIs that only require Rank-1 types, and we haven't seen a really compelling use case
 where the gap between the Rank-2 and Rank-1 designs was big enough to justify switching to Rank-2.
 
-Since I prefer Roc being simpler and having a faster compiler with nicer error messages, my hope is that Roc
-will never get Rank-2 types. However, it may turn out that in the future we learn about currently-unknown
-upsides that somehow outweigh these downsides, so I'm open to considering the possibility - while rooting against it.
+As such, the plan is for Roc to stick with Rank-1 types indefinitely. In Roc's case, the benefits of Rank-1's faster compilation with nicer error messages and a simpler type system outweigh Rank-2's benefits of expanded API options.
 
 ### Higher-kinded polymorphism
 
@@ -289,8 +287,6 @@ Roc also has a different standard library from Elm. Some of the differences come
 - `Str` instead of `String` - after using the `str` type in Rust, I realized I had no issue whatsoever with the more concise name, especially since it was used in so many places (similar to `Msg` and `Cmd` in Elm) - so I decided to save a couple of letters.
 - No function composition operators - I stopped using these in Elm so long ago, at one point I forgot they were in the language! See the FAQ entry on currying for details about why.
 - No `Char`. What most people think of as a "character" is a rendered glyph. However, rendered glyphs are comprised of [grapheme clusters](https://stackoverflow.com/a/27331885), which are a variable number of Unicode code points - and there's no upper bound on how many code points there can be in a single cluster. In a world of emoji, I think this makes `Char` error-prone and it's better to have `Str` be the only first-class unit. For convenience when working with unicode code points (e.g. for performance-critical tasks like parsing), the single-quote syntax is sugar for the corresponding `U32` code point - for example, writing `'鹏'` is exactly the same as writing `40527`. Like Rust, you get a compiler error if you put something in single quotes that's not a valid [Unicode scalar value](http://www.unicode.org/glossary/#unicode_scalar_value).
-- No `Debug.log` - the editor can do a better job at this, or you can write `expect x != x` to see what `x` is when the expectation fails. Using the editor means your code doesn't change, and using `expect` gives a natural reminder to remove the debugging code before shipping: the build will fail.
-- No `Debug.todo` - instead you can write a type annotation with no implementation below it; the type checker will treat it normally, but attempting to use the value will cause a runtime exception. This is a feature I've often wanted in Elm, because I like prototyping APIs by writing out the types only, but then when I want the compiler to type-check them for me, I end up having to add `Debug.todo` in various places.
 - No `Maybe`. See the "Why doesn't Roc have a `Maybe`/`Option`/`Optional` type" FAQ question
 
 ## Why aren't Roc functions curried by default?

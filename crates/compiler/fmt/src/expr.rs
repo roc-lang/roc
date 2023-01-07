@@ -55,13 +55,18 @@ impl<'a> Formattable for Expr<'a> {
                 use roc_parse::ast::StrLiteral::*;
 
                 match literal {
-                    PlainLine(_) | Line(_) => {
+                    PlainLine(string) => {
+                        // When a PlainLine contains '\n' or '"', format as a block string
+                        string.contains('"') || string.contains('\n')
+                    }
+                    Line(_) => {
                         // If this had any newlines, it'd have parsed as Block.
                         false
                     }
-                    Block(lines) => {
-                        // Block strings don't *have* to be multiline!
-                        lines.len() > 1
+                    Block(_) => {
+                        // Block strings are always formatted on multiple lines,
+                        // even if the string is only a single line.
+                        true
                     }
                 }
             }
@@ -298,17 +303,7 @@ impl<'a> Formattable for Expr<'a> {
             }
             SingleQuote(string) => {
                 buf.indent(indent);
-                buf.push('\'');
-                for c in string.chars() {
-                    if c == '"' {
-                        buf.push_char_literal('"')
-                    } else {
-                        for escaped in c.escape_default() {
-                            buf.push_char_literal(escaped);
-                        }
-                    }
-                }
-                buf.push('\'');
+                format_sq_literal(buf, string);
             }
             &NonBase10Int {
                 base,
@@ -368,14 +363,12 @@ impl<'a> Formattable for Expr<'a> {
                                 indent,
                             );
                         } else {
-                            if !empty_line_before_return {
-                                buf.newline();
-                            }
-
                             ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
                         }
                     }
                     _ => {
+                        buf.ensure_ends_with_newline();
+                        buf.indent(indent);
                         // Even if there were no defs, which theoretically should never happen,
                         // still print the return value.
                         ret.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent);
@@ -436,6 +429,20 @@ impl<'a> Formattable for Expr<'a> {
             PrecedenceConflict { .. } => {}
         }
     }
+}
+
+pub(crate) fn format_sq_literal(buf: &mut Buf, s: &str) {
+    buf.push('\'');
+    for c in s.chars() {
+        if c == '"' {
+            buf.push_char_literal('"')
+        } else {
+            for escaped in c.escape_default() {
+                buf.push_char_literal(escaped);
+            }
+        }
+    }
+    buf.push('\'');
 }
 
 fn starts_with_newline(expr: &Expr) -> bool {
@@ -517,11 +524,11 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
 
     match literal {
         PlainLine(string) => {
-            buf.indent(indent);
-            buf.push('"');
             // When a PlainLine contains '\n' or '"', format as a block string
             if string.contains('"') || string.contains('\n') {
-                buf.push_str("\"\"");
+                buf.ensure_ends_with_newline();
+                buf.indent(indent);
+                buf.push_str("\"\"\"");
                 buf.newline();
                 for line in string.split('\n') {
                     buf.indent(indent);
@@ -529,11 +536,13 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
                     buf.newline();
                 }
                 buf.indent(indent);
-                buf.push_str("\"\"");
+                buf.push_str("\"\"\"");
             } else {
+                buf.indent(indent);
+                buf.push('"');
                 buf.push_str_allow_spaces(string);
+                buf.push('"');
             };
-            buf.push('"');
         }
         Line(segments) => {
             buf.indent(indent);
@@ -552,8 +561,13 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
 
             for segments in lines.iter() {
                 for seg in segments.iter() {
-                    buf.indent(indent);
-                    format_str_segment(seg, buf, indent);
+                    // only add indent if the line isn't empty
+                    if *seg != StrSegment::Plaintext("\n") {
+                        buf.indent(indent);
+                        format_str_segment(seg, buf, indent);
+                    } else {
+                        buf.newline();
+                    }
                 }
 
                 buf.newline();
@@ -675,11 +689,9 @@ fn fmt_when<'a, 'buf>(
     indent: u16,
 ) {
     let is_multiline_condition = loc_condition.is_multiline();
+    buf.ensure_ends_with_newline();
     buf.indent(indent);
-    buf.push_str(
-        "\
-         when",
-    );
+    buf.push_str("when");
     if is_multiline_condition {
         let condition_indent = indent + INDENT;
 
@@ -1360,6 +1372,7 @@ fn format_field_multiline<'a, 'buf, T>(
 
             if !spaces.is_empty() {
                 fmt_spaces(buf, spaces.iter(), indent);
+                buf.indent(indent);
             }
 
             buf.push_str(separator_prefix);
@@ -1375,6 +1388,7 @@ fn format_field_multiline<'a, 'buf, T>(
 
             if !spaces.is_empty() {
                 fmt_spaces(buf, spaces.iter(), indent);
+                buf.indent(indent);
             }
 
             buf.push_str(separator_prefix);

@@ -3,8 +3,8 @@ use crate::blankspace::{space0_around_ee, space0_before_e, space0_e};
 use crate::header::{
     package_entry, package_name, AppHeader, ExposedName, ExposesKeyword, GeneratesKeyword,
     HostedHeader, ImportsEntry, ImportsKeyword, InterfaceHeader, Keyword, KeywordItem, ModuleName,
-    PackageEntry, PackagesKeyword, PlatformHeader, PlatformRequires, ProvidesKeyword, ProvidesTo,
-    RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
+    PackageEntry, PackageHeader, PackagesKeyword, PlatformHeader, PlatformRequires,
+    ProvidesKeyword, ProvidesTo, RequiresKeyword, To, ToKeyword, TypedIdent, WithKeyword,
 };
 use crate::ident::{self, lowercase_ident, unqualified_ident, uppercase, UppercaseIdent};
 use crate::parser::Progress::{self, *};
@@ -47,7 +47,7 @@ pub fn parse_header<'a>(
     }
 }
 
-fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
+pub fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
     use crate::parser::keyword_e;
 
     record!(Module {
@@ -66,6 +66,13 @@ fn header<'a>() -> impl Parser<'a, Module<'a>, EHeader<'a>> {
                     increment_min_indent(app_header())
                 ),
                 Header::App
+            ),
+            map!(
+                skip_first!(
+                    keyword_e("package", EHeader::Start),
+                    increment_min_indent(package_header())
+                ),
+                Header::Package
             ),
             map!(
                 skip_first!(
@@ -184,6 +191,17 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
 }
 
 #[inline(always)]
+fn package_header<'a>() -> impl Parser<'a, PackageHeader<'a>, EHeader<'a>> {
+    record!(PackageHeader {
+        before_name: space0_e(EHeader::IndentStart),
+        name: loc!(specialize(EHeader::PackageName, package_name())),
+        exposes: specialize(EHeader::Exposes, exposes_modules()),
+        packages: specialize(EHeader::Packages, packages()),
+    })
+    .trace("package_header")
+}
+
+#[inline(always)]
 fn platform_header<'a>() -> impl Parser<'a, PlatformHeader<'a>, EHeader<'a>> {
     record!(PlatformHeader {
         before_name: space0_e(EHeader::IndentStart),
@@ -221,7 +239,6 @@ fn provides_to<'a>() -> impl Parser<'a, ProvidesTo<'a>, EProvides<'a>> {
             exposes_entry(EProvides::Identifier),
             word1(b',', EProvides::ListEnd),
             word1(b']', EProvides::ListEnd),
-            EProvides::IndentListEnd,
             Spaced::SpaceBefore
         ),
         types: optional(backtrackable(provides_types())),
@@ -253,7 +270,6 @@ fn provides_exposed<'a>() -> impl Parser<
             exposes_entry(EProvides::Identifier),
             word1(b',', EProvides::ListEnd),
             word1(b']', EProvides::ListEnd),
-            EProvides::IndentListEnd,
             Spaced::SpaceBefore
         ),
     })
@@ -279,7 +295,6 @@ fn provides_types<'a>(
             provides_type_entry(EProvides::Identifier),
             word1(b',', EProvides::ListEnd),
             word1(b'}', EProvides::ListEnd),
-            EProvides::IndentListEnd,
             Spaced::SpaceBefore
         )
     )
@@ -346,7 +361,6 @@ fn requires_rigids<'a>(
         ),
         word1(b',', ERequires::ListEnd),
         word1(b'}', ERequires::ListEnd),
-        ERequires::IndentListEnd,
         Spaced::SpaceBefore
     )
 }
@@ -384,7 +398,6 @@ fn exposes_values<'a>() -> impl Parser<
             exposes_entry(EExposes::Identifier),
             word1(b',', EExposes::ListEnd),
             word1(b']', EExposes::ListEnd),
-            EExposes::IndentListEnd,
             Spaced::SpaceBefore
         )
     })
@@ -435,7 +448,6 @@ fn exposes_modules<'a>() -> impl Parser<
             exposes_module(EExposes::Identifier),
             word1(b',', EExposes::ListEnd),
             word1(b']', EExposes::ListEnd),
-            EExposes::IndentListEnd,
             Spaced::SpaceBefore
         ),
     })
@@ -473,7 +485,6 @@ fn packages<'a>() -> impl Parser<
             specialize(EPackages::PackageEntry, loc!(package_entry())),
             word1(b',', EPackages::ListEnd),
             word1(b'}', EPackages::ListEnd),
-            EPackages::IndentListEnd,
             Spaced::SpaceBefore
         )
     })
@@ -511,7 +522,6 @@ fn generates_with<'a>() -> impl Parser<
             exposes_entry(EGeneratesWith::Identifier),
             word1(b',', EGeneratesWith::ListEnd),
             word1(b']', EGeneratesWith::ListEnd),
-            EGeneratesWith::IndentListEnd,
             Spaced::SpaceBefore
         )
     })
@@ -535,7 +545,6 @@ fn imports<'a>() -> impl Parser<
             loc!(imports_entry()),
             word1(b',', EImports::ListEnd),
             word1(b']', EImports::ListEnd),
-            EImports::IndentListEnd,
             Spaced::SpaceBefore
         )
     })
@@ -616,7 +625,6 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                     exposes_entry(EImports::Identifier),
                     word1(b',', EImports::SetEnd),
                     word1(b'}', EImports::SetEnd),
-                    EImports::IndentSetEnd,
                     Spaced::SpaceBefore
                 )
             ))

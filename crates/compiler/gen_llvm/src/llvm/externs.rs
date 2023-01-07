@@ -1,6 +1,7 @@
 use crate::llvm::bitcode::call_void_bitcode_fn;
-use crate::llvm::build::{add_func, get_panic_msg_ptr, get_panic_tag_ptr, C_CALL_CONV};
+use crate::llvm::build::{add_func, get_panic_msg_ptr, get_panic_tag_ptr, BuilderExt, C_CALL_CONV};
 use crate::llvm::build::{CCReturn, Env, FunctionSpec};
+use crate::llvm::convert::zig_str_type;
 use inkwell::module::Linkage;
 use inkwell::types::BasicType;
 use inkwell::values::BasicValue;
@@ -158,7 +159,6 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
 
         unreachable_function(env, "roc_getppid");
         unreachable_function(env, "roc_mmap");
-        unreachable_function(env, "roc_send_signal");
         unreachable_function(env, "roc_shm_open");
 
         add_sjlj_roc_panic(env)
@@ -168,7 +168,10 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
 fn unreachable_function(env: &Env, name: &str) {
     // The type of this function (but not the implementation) should have
     // already been defined by the builtins, which rely on it.
-    let fn_val = env.module.get_function(name).unwrap();
+    let fn_val = match env.module.get_function(name) {
+        Some(f) => f,
+        None => panic!("extern function {name} is not defined by the builtins"),
+    };
 
     // Add a basic block for the entry point
     let entry = env.context.append_basic_block(fn_val, "entry");
@@ -215,7 +218,12 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
                 roc_target::PtrWidth::Bytes4 => roc_str_arg,
                 // On 64-bit we pass RocStrs by reference internally
                 roc_target::PtrWidth::Bytes8 => {
-                    builder.build_load(roc_str_arg.into_pointer_value(), "load_roc_str")
+                    let str_typ = zig_str_type(env);
+                    builder.new_build_load(
+                        str_typ,
+                        roc_str_arg.into_pointer_value(),
+                        "load_roc_str",
+                    )
                 }
             };
 
@@ -261,11 +269,11 @@ pub fn build_longjmp_call(env: &Env) {
             call_void_bitcode_fn(env, &[jmp_buf.into(), tag.into()], bitcode::UTILS_LONGJMP);
     } else {
         // Call the LLVM-intrinsic longjmp: `void @llvm.eh.sjlj.longjmp(i8* %setjmp_buf)`
-        let jmp_buf_i8p = env.builder.build_bitcast(
+        let jmp_buf_i8p = env.builder.build_pointer_cast(
             jmp_buf,
             env.context.i8_type().ptr_type(AddressSpace::Generic),
             "jmp_buf i8*",
         );
-        let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[jmp_buf_i8p]);
+        let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[jmp_buf_i8p.into()]);
     }
 }

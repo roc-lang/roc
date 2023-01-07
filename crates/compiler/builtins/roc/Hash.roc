@@ -14,14 +14,16 @@ interface Hash
         hashI32,
         hashI64,
         hashI128,
+        hashNat,
         complete,
         hashStrBytes,
         hashList,
         hashUnordered,
     ] imports [
+        Bool.{ isEq },
         List,
         Str,
-        Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128 },
+        Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, Nat },
     ]
 
 ## A value that can hashed.
@@ -87,6 +89,21 @@ hashI64 = \hasher, n -> addU64 hasher (Num.toU64 n)
 ## Adds a single I128 to a hasher.
 hashI128 : a, I128 -> a | a has Hasher
 hashI128 = \hasher, n -> addU128 hasher (Num.toU128 n)
+
+## Adds a single Nat to a hasher.
+hashNat : a, Nat -> a | a has Hasher
+hashNat = \hasher, n ->
+    isPlatform32bit =
+        x : Nat
+        x = 0xffff_ffff
+        y = Num.addWrap x 1
+
+        y == 0
+
+    if isPlatform32bit then
+        addU32 hasher (Num.toU32 n)
+    else
+        addU64 hasher (Num.toU64 n)
 
 ## Adds a container of [Hash]able elements to a [Hasher] by hashing each element.
 ## The container is iterated using the walk method passed in.
