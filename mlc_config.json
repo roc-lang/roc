@@ -29,6 +29,9 @@
         },
         {
             "pattern": "/builtins"
+        },
+        {
+            "pattern": "https://www.10xeditor.com/"
         }
     ]
 }
