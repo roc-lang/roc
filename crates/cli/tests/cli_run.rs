@@ -840,6 +840,7 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
             "examples/parser",
@@ -1131,6 +1132,7 @@ mod cli_run {
         }*/
 
         #[test]
+        #[cfg_attr(windows, ignore)]
         fn astar() {
             test_benchmark(
                 "TestAStar.roc",
@@ -1383,6 +1385,7 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore)]
     fn format_check_good() {
         check_format_check_as_expected(&fixture_file("format", "Formatted.roc"), true);
     }
@@ -1393,6 +1396,7 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore)]
     fn format_check_folders() {
         // This fails, because "NotFormatted.roc" is present in this folder
         check_format_check_as_expected(&fixtures_dir("format"), false);
