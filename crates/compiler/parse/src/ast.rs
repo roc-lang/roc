@@ -2,6 +2,7 @@ use std::fmt::Debug;
 
 use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader};
 use crate::ident::Ident;
+use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_collections::soa::{EitherIndex, Index, Slice};
@@ -117,10 +118,19 @@ pub enum StrSegment<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SingleQuoteSegment<'a> {
+    Plaintext(&'a str),    // e.g. 'f'
+    Unicode(Loc<&'a str>), // e.g. '00A0' in '\u(00A0)'
+    EscapedChar(EscapedChar), // e.g. '\n'
+                           // No interpolated expressions in single-quoted strings
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EscapedChar {
     Newline,        // \n
     Tab,            // \t
-    Quote,          // \"
+    DoubleQuote,    // \"
+    SingleQuote,    // \'
     Backslash,      // \\
     CarriageReturn, // \r
 }
@@ -132,10 +142,69 @@ impl EscapedChar {
 
         match self {
             Backslash => '\\',
-            Quote => '"',
+            SingleQuote => '\'',
+            DoubleQuote => '"',
             CarriageReturn => 'r',
             Tab => 't',
             Newline => 'n',
+        }
+    }
+
+    pub fn unescape(self) -> char {
+        use EscapedChar::*;
+
+        match self {
+            Backslash => '\\',
+            SingleQuote => '\'',
+            DoubleQuote => '"',
+            CarriageReturn => '\r',
+            Tab => '\t',
+            Newline => '\n',
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SingleQuoteLiteral<'a> {
+    /// The most common case: a plain character with no escapes
+    PlainLine(&'a str),
+    Line(&'a [SingleQuoteSegment<'a>]),
+}
+
+impl<'a> SingleQuoteLiteral<'a> {
+    pub fn to_str_in(&self, arena: &'a Bump) -> &'a str {
+        match self {
+            SingleQuoteLiteral::PlainLine(s) => s,
+            SingleQuoteLiteral::Line(segments) => {
+                let mut s = String::new_in(arena);
+                for segment in *segments {
+                    match segment {
+                        SingleQuoteSegment::Plaintext(s2) => s.push_str(s2),
+                        SingleQuoteSegment::Unicode(loc) => {
+                            let s2 = loc.value;
+                            let c = u32::from_str_radix(s2, 16).expect("Invalid unicode escape");
+                            s.push(char::from_u32(c).expect("Invalid unicode codepoint"));
+                        }
+                        SingleQuoteSegment::EscapedChar(c) => {
+                            s.push(c.unescape());
+                        }
+                    }
+                }
+                s.into_bump_str()
+            }
+        }
+    }
+}
+
+impl<'a> TryFrom<StrSegment<'a>> for SingleQuoteSegment<'a> {
+    type Error = ESingleQuote;
+
+    fn try_from(value: StrSegment<'a>) -> Result<Self, Self::Error> {
+        match value {
+            StrSegment::Plaintext(s) => Ok(SingleQuoteSegment::Plaintext(s)),
+            StrSegment::Unicode(s) => Ok(SingleQuoteSegment::Unicode(s)),
+            StrSegment::EscapedChar(s) => Ok(SingleQuoteSegment::EscapedChar(s)),
+            StrSegment::Interpolated(_) => Err(ESingleQuote::InterpolationNotAllowed),
         }
     }
 }

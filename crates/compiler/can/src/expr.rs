@@ -18,7 +18,7 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, Defs, EscapedChar, StrLiteral};
+use roc_parse::ast::{self, Defs, StrLiteral};
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
@@ -2297,7 +2297,7 @@ fn flatten_str_lines<'a>(
                         );
                     }
                 }
-                EscapedChar(escaped) => buf.push(unescape_char(escaped)),
+                EscapedChar(escaped) => buf.push(escaped.unescape()),
             }
         }
     }
@@ -2353,19 +2353,6 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
     }
 
     loc_expr.value
-}
-
-/// Returns the char that would have been originally parsed to
-pub fn unescape_char(escaped: &EscapedChar) -> char {
-    use EscapedChar::*;
-
-    match escaped {
-        Backslash => '\\',
-        Quote => '"',
-        CarriageReturn => '\r',
-        Tab => '\t',
-        Newline => '\n',
-    }
 }
 
 #[derive(Clone, Debug)]

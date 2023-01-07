@@ -8,6 +8,7 @@ use crate::parser::{
     word3, EPattern, PInParens, PList, PRecord, Parser,
 };
 use crate::state::State;
+use crate::string_literal::StrLikeLiteral;
 use bumpalo::collections::string::String;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -83,8 +84,7 @@ fn loc_pattern_help_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern<'a>
         )),
         loc!(specialize(EPattern::List, list_pattern_help())),
         loc!(number_pattern_help()),
-        loc!(string_pattern_help()),
-        loc!(single_quote_pattern_help()),
+        loc!(string_like_pattern_help()),
     )
 }
 
@@ -177,8 +177,7 @@ fn loc_parse_tag_pattern_arg<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, EPattern
             EPattern::Record,
             crate::pattern::record_pattern_help()
         )),
-        loc!(string_pattern_help()),
-        loc!(single_quote_pattern_help()),
+        loc!(string_like_pattern_help()),
         loc!(number_pattern_help())
     )
 }
@@ -238,19 +237,18 @@ fn number_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
     )
 }
 
-fn string_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
+fn string_like_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
     specialize(
         |_, pos| EPattern::Start(pos),
-        map!(crate::string_literal::parse(), Pattern::StrLiteral),
-    )
-}
-
-fn single_quote_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, EPattern<'a>> {
-    specialize(
-        |_, pos| EPattern::Start(pos),
-        map!(
-            crate::string_literal::parse_single_quote(),
-            Pattern::SingleQuote
+        map_with_arena!(
+            crate::string_literal::parse_str_like_literal(),
+            |arena, lit| match lit {
+                StrLikeLiteral::Str(s) => Pattern::StrLiteral(s),
+                StrLikeLiteral::SingleQuote(s) => {
+                    // TODO: preserve the original escaping
+                    Pattern::SingleQuote(s.to_str_in(arena))
+                }
+            }
         ),
     )
 }

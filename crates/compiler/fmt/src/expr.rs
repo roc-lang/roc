@@ -431,14 +431,30 @@ impl<'a> Formattable for Expr<'a> {
     }
 }
 
+fn needs_unicode_escape(ch: char) -> bool {
+    matches!(ch, '\u{0000}'..='\u{001f}' | '\u{007f}'..='\u{009f}')
+}
+
 pub(crate) fn format_sq_literal(buf: &mut Buf, s: &str) {
     buf.push('\'');
     for c in s.chars() {
         if c == '"' {
             buf.push_char_literal('"')
         } else {
-            for escaped in c.escape_default() {
-                buf.push_char_literal(escaped);
+            match c {
+                '"' => buf.push_str("\""),
+                '\'' => buf.push_str("\\\'"),
+                '\t' => buf.push_str("\\t"),
+                '\r' => buf.push_str("\\r"),
+                '\n' => buf.push_str("\\n"),
+                '\\' => buf.push_str("\\\\"),
+                _ => {
+                    if needs_unicode_escape(c) {
+                        buf.push_str(&format!("\\u({:x})", c as u32))
+                    } else {
+                        buf.push_char_literal(c)
+                    }
+                }
             }
         }
     }
