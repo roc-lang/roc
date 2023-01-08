@@ -8581,4 +8581,78 @@ mod solve_expr {
         @"polyDbg : a -[[polyDbg(1)]]-> a"
         );
     }
+
+    #[test]
+    fn pattern_as_uses_inferred_type() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = when A "foo" is
+                    A _ as a -> a
+                    #           ^
+                    b -> b
+                    #    ^
+                "#
+            ),
+        @r###"
+        a : [A Str]*
+        b : [A Str]*
+        "###
+        );
+    }
+
+    #[test]
+    fn pattern_as_does_not_narrow() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                input : [A Str, B Str]
+                input = A "foo"
+
+                drop : a -> {}
+                drop = \_ -> {}
+
+                main = when input is
+                    #       ^^^^^
+                    A _ as a -> drop a
+                    #                ^
+                    B _ as b -> drop b
+                    #                ^
+                "#
+            ),
+        @r###"
+        input : [A Str, B Str]
+        a : [A Str, B Str]
+        b : [A Str, B Str]
+        "###
+        );
+    }
+
+    #[test]
+    fn pattern_as_list() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                input : List Str
+                input = [ "foo", "bar" ]
+
+                main = when input is
+                    #       ^^^^^
+                    [ _first, .. as rest ] -> 1 + List.len rest
+                    #                                      ^^^^
+                    [] -> 0
+                "#
+            ),
+        @r###"
+        input : List Str
+        rest : List Str
+        "###
+        );
+    }
 }

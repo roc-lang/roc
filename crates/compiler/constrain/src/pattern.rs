@@ -125,12 +125,23 @@ fn headers_from_annotation_help(
             _ => false,
         },
 
-        List { .. } => {
-            // There are no interesting headers to introduce for list patterns, since the only
-            // exhaustive list pattern is
-            //   \[..] -> <body>
-            // which does not introduce any symbols.
-            false
+        List { patterns, .. } => {
+            if let Some((_, Some(rest))) = patterns.opt_rest {
+                let annotation_index = {
+                    let typ = types.from_old_type(annotation.value);
+                    constraints.push_type(types, typ)
+                };
+                let typ = Loc::at(annotation.region, annotation_index);
+                headers.insert(rest, typ);
+
+                false
+            } else {
+                // There are no interesting headers to introduce for list patterns, since the only
+                // exhaustive list pattern is
+                //   \[..] -> <body>
+                // which does not introduce any symbols.
+                false
+            }
         }
 
         AppliedTag {
@@ -203,32 +214,6 @@ fn headers_from_annotation_help(
     }
 }
 
-fn constrain_pattern_symbol(
-    types: &mut Types,
-    constraints: &mut Constraints,
-    region: Region,
-    expected: PExpectedTypeIndex,
-    state: &mut PatternState,
-    symbol: Symbol,
-) {
-    let expected = &constraints[expected];
-    let type_index = *expected.get_type_ref();
-
-    if could_be_a_tag_union(types, type_index) {
-        state
-            .delayed_is_open_constraints
-            .push(constraints.is_open_type(type_index));
-    }
-
-    state.headers.insert(
-        symbol,
-        Loc {
-            region,
-            value: type_index,
-        },
-    );
-}
-
 /// This accepts PatternState (rather than returning it) so that the caller can
 /// initialize the Vecs in PatternState using with_capacity
 /// based on its knowledge of their lengths.
@@ -261,11 +246,34 @@ pub fn constrain_pattern(
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
-            constrain_pattern_symbol(types, constraints, region, expected, state, *symbol);
+            let type_index = *constraints[expected].get_type_ref();
+
+            if could_be_a_tag_union(types, type_index) {
+                state
+                    .delayed_is_open_constraints
+                    .push(constraints.is_open_type(type_index));
+            }
+
+            state.headers.insert(
+                *symbol,
+                Loc {
+                    region,
+                    value: type_index,
+                },
+            );
         }
 
         As(subpattern, symbol) => {
-            constrain_pattern_symbol(types, constraints, region, expected, state, *symbol);
+            // NOTE: we don't use `could_be_a_tag_union` here. The `PATTERN as name` should
+            // just use the type of the PATTERN, and not influence what type is inferred for PATTERN
+
+            state.headers.insert(
+                *symbol,
+                Loc {
+                    region,
+                    value: *constraints[expected].get_type_ref(),
+                },
+            );
 
             constrain_pattern(
                 types,
@@ -599,13 +607,19 @@ pub fn constrain_pattern(
         List {
             list_var,
             elem_var,
-            patterns:
-                ListPatterns {
-                    patterns,
-                    opt_rest: _,
-                },
+            patterns: ListPatterns { patterns, opt_rest },
         } => {
             let elem_var_index = constraints.push_variable(*elem_var);
+
+            if let Some((_, Some(rest))) = opt_rest {
+                state.headers.insert(
+                    *rest,
+                    Loc {
+                        region,
+                        value: *constraints[expected].get_type_ref(),
+                    },
+                );
+            }
 
             for loc_pat in patterns.iter() {
                 let expected = constraints.push_pat_expected_type(PExpected::ForReason(

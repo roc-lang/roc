@@ -781,8 +781,29 @@ pub fn canonicalize_pattern<'a>(
             malformed_pattern(env, problem, region)
         }
 
-        As(_pattern, _pattern_as) => {
-            todo!();
+        As(loc_pattern, pattern_as) => {
+            let can_subpattern = canonicalize_pattern(
+                env,
+                var_store,
+                scope,
+                output,
+                pattern_type,
+                &loc_pattern.value,
+                loc_pattern.region,
+                permit_shadows,
+            );
+
+            match canonicalize_pattern_symbol(
+                env,
+                scope,
+                output,
+                region,
+                permit_shadows,
+                pattern_as.identifier.value,
+            ) {
+                Ok(symbol) => Pattern::As(Box::new(can_subpattern), symbol),
+                Err(pattern) => pattern,
+            }
         }
 
         Malformed(_str) => {
