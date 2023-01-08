@@ -74,6 +74,7 @@ fn valgrind_test_linux(source: &str) {
     drop(temp_dir)
 }
 
+#[allow(unused)]
 fn run_with_valgrind(binary_path: &std::path::Path) {
     use cli_utils::helpers::{extract_valgrind_errors, ValgrindError, ValgrindErrorXWhat};
 
