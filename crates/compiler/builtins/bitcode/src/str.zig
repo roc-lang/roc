@@ -90,13 +90,13 @@ pub const RocStr = extern struct {
     }
 
     pub fn deinit(self: RocStr) void {
-        if (!self.isSmallStr()) {
-            utils.decref(self.str_bytes, self.str_len, RocStr.alignment);
-        }
+        self.decref();
     }
 
     fn decref(self: RocStr) void {
-        self.deinit();
+        if (!self.isSmallStr()) {
+            utils.decref(self.str_bytes, self.str_capacity, RocStr.alignment);
+        }
     }
 
     pub fn eq(self: RocStr, other: RocStr) bool {
@@ -204,7 +204,7 @@ pub const RocStr = extern struct {
         @memcpy(dest_ptr, source_ptr, old_length);
         @memset(dest_ptr + old_length, 0, delta_length);
 
-        self.deinit();
+        self.decref();
 
         return result;
     }
@@ -320,8 +320,16 @@ pub const RocStr = extern struct {
     }
 
     fn isRefcountOne(self: RocStr) bool {
+        return self.refcountMachine() == utils.REFCOUNT_ONE;
+    }
+
+    fn refcountMachine(self: RocStr) usize {
         const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
-        return (ptr - 1)[0] == utils.REFCOUNT_ONE;
+        return (ptr - 1)[0];
+    }
+
+    fn refcountHuman(self: RocStr) usize {
+        return self.refcountMachine() - utils.REFCOUNT_ONE + 1;
     }
 
     pub fn asSlice(self: *const RocStr) []const u8 {
