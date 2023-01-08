@@ -41,6 +41,7 @@ fn valgrind_test_linux(source: &str) {
     for line in source.lines() {
         app_module_source.push_str("    ");
         app_module_source.push_str(line);
+        app_module_source.push('\n');
     }
 
     let temp_dir = tempfile::tempdir().unwrap();
@@ -68,6 +69,12 @@ fn valgrind_test_linux(source: &str) {
 
             run_with_valgrind(&binary_path);
         }
+        Err(roc_cli::build::BuildFileError::LoadingProblem(
+            roc_load::LoadingProblem::FormattedReport(report),
+        )) => {
+            eprintln!("{}", report);
+            panic!("");
+        }
         Err(e) => panic!("{:?}", e),
     }
 
@@ -94,21 +101,21 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
                 indoc!(
                     r#"
                     failed to parse the `valgrind` xml output:
-                      
+
                         Error was:
-  
+
                             {:?}
-  
+
                         valgrind xml was:
-  
+
                             {}
-  
+
                         valgrind stdout was:
-  
+
                             {}
-  
+
                         valgrind stderr was:
-  
+
                             {}
                     "#
                 ),
@@ -174,7 +181,25 @@ fn split_not_present() {
     valgrind_test(indoc!(
         r#"
         Str.split (Str.concat "a string that is stored on the heap" "!") "\n"
-            |> Str.joinWith "" 
+            |> Str.joinWith ""
+        "#
+    ));
+}
+
+#[test]
+fn str_concat_first_argument_not_unique() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            str1 = Str.reserve "" 48
+            str2 = "a"
+
+            out = Str.concat str1 str2
+            if Bool.false then
+                out
+            else
+                str1
+            )
         "#
     ));
 }
