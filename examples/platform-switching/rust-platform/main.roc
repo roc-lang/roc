@@ -7,5 +7,9 @@ platform "echo-in-rust"
 
 Op : [StdoutWrite Str ({} -> Op), StderrWrite Str ({} -> Op), Done]
 
+
+# mainForHost : { bar: Str, foo: I64 -> I64 }
+# mainForHost = { bar: main, foo: \x -> x }
+
 mainForHost : Op
 mainForHost = main

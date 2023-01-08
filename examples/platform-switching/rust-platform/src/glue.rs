@@ -97,6 +97,21 @@ union union_Op {
     _sizer: [u8; 8],
 }
 
+#[derive(Clone)]
+struct RocFunction_3 { 
+    closure_data: T
+}
+
+impl RocFunction_3 { 
+    pub fn call(self) -> U { 
+        extern "C" { 
+            fn call_the_closure(T) -> U ;
+        }
+
+        call_the_closure(self.closure_data)
+    }
+}
+
 impl Op {
     #[cfg(any(
         target_arch = "arm",

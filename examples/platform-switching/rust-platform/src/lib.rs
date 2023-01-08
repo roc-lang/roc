@@ -93,7 +93,7 @@ pub extern "C" fn rust_main() -> i32 {
 
     println!("Let's do things!");
 
-    let op: Op = unsafe {
+    let mut op: Op = unsafe {
         let mut mem = MaybeUninit::uninit();
 
         roc_main(mem.as_mut_ptr());
@@ -101,26 +101,33 @@ pub extern "C" fn rust_main() -> i32 {
         mem.assume_init()
     };
 
-    match dbg!(op.discriminant()) {
-        StdoutWrite => {
-            let output: RocStr = unsafe { op.get_StdoutWrite_0() };
-            // let _next = unsafe { op.get_StdoutWrite_1() };
+    loop {
+        match dbg!(op.discriminant()) {
+            StdoutWrite => {
+                let output: RocStr = unsafe { op.get_StdoutWrite_0() };
+                op = unsafe { op.get_StdoutWrite_1() };
 
-            dbg!(&output);
+                dbg!(&output);
 
-            if let Err(e) = std::io::stdout().write_all(output.as_bytes()) {
-                panic!("Writing to stdout failed! {:?}", e);
+                if let Err(e) = std::io::stdout().write_all(output.as_bytes()) {
+                    panic!("Writing to stdout failed! {:?}", e);
+                }
+            }
+            StderrWrite => {
+                let output: RocStr = unsafe { op.get_StderrWrite_0() };
+                // let _next = unsafe { op.get_StderrWrite_1() };
+                dbg!(&output);
+
+                break;
+
+                if let Err(e) = std::io::stderr().write_all(output.as_bytes()) {
+                    panic!("Writing to stderr failed! {:?}", e);
+                }
+            }
+            Done => {
+                break;
             }
         }
-        StderrWrite => {
-            let output: RocStr = unsafe { op.get_StderrWrite_0() };
-            // let _next = unsafe { op.get_StderrWrite_1() };
-
-            if let Err(e) = std::io::stderr().write_all(output.as_bytes()) {
-                panic!("Writing to stderr failed! {:?}", e);
-            }
-        }
-        Done => {}
     }
 
     println!("Done!");

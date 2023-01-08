@@ -4591,9 +4591,6 @@ pub fn build_procedures<'a, 'ctx, 'env>(
     let niche = Niche::NONE;
 
     for (symbol, top_level) in glue_layouts.getters.iter().copied() {
-        dbg!(symbol, unsafe {
-            std::mem::transmute::<Symbol, u64>(symbol)
-        });
         let it = top_level.arguments.iter().copied();
         let bytes = roc_alias_analysis::func_name_bytes_help(symbol, it, niche, &top_level.result);
         let func_name = FuncName(&bytes);
@@ -4612,6 +4609,8 @@ pub fn build_procedures<'a, 'ctx, 'env>(
 
         let name = getter_fn.get_name().to_str().unwrap();
         let getter_name = symbol.as_str(&env.interns);
+
+        dbg!(&getter_name);
 
         // Add the getter function to the module.
         let _ = expose_function_to_host_help_c_abi(

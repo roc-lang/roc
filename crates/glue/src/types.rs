@@ -974,7 +974,7 @@ fn add_type_help<'a>(
                 add_type_help(env, ret_layout, *ret_var, None, types)
             };
 
-            let name = format!("TODO_roc_function_{:?}", closure_var);
+            let name = format!("RocFunction_{:?}", closure_var);
             let fn_type_id = types.add_named(
                 &env.layout_cache.interner,
                 name.clone(),
