@@ -62,7 +62,6 @@ fn headers_from_annotation_help(
         | Shadowed(_, _, symbol)
         | AbilityMemberSpecialization {
             ident: symbol,
-            // TODO(abilities): handle linking the member def to the specialization ident
             specializes: _,
         } => {
             let annotation_index = {
