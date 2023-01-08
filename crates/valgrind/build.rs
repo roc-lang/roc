@@ -1,37 +1,28 @@
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux"))]
 fn main() {
-    let temp_dir = tempfile::tempdir().unwrap();
-    let app_module_path = temp_dir.path().join("app.roc");
+    use roc_build::link::preprocessed_host_filename;
+    use roc_linker::build_and_preprocess_host;
 
-    let pf = std::env::current_dir()
+    let platform_main_roc = std::env::current_dir()
         .unwrap()
         .join("zig-platform/main.roc");
 
-    let app_module_source: String = format!(
-        indoc::indoc!(
-            r#"
-            app "test"
-                packages {{ pf: "{}" }}
-                imports []
-                provides [main] to pf
+    // tests always run on the host
+    let target = target_lexicon::Triple::host();
 
-            main = "hello world"
-            "#
-        ),
-        pf.to_str().unwrap()
+    // the preprocessed host is stored beside the platform's main.roc
+    let preprocessed_host_path =
+        platform_main_roc.with_file_name(preprocessed_host_filename(&target).unwrap());
+
+    build_and_preprocess_host(
+        roc_mono::ir::OptLevel::Normal,
+        &target,
+        &platform_main_roc,
+        &preprocessed_host_path,
+        vec![String::from("mainForHost")],
+        vec![],
     );
-
-    let arena = bumpalo::Bump::new();
-    let assume_prebuilt = false;
-    let res_binary_path = roc_cli::build::build_str_test(
-        &arena,
-        &app_module_path,
-        &app_module_source,
-        assume_prebuilt,
-    );
-
-    res_binary_path.unwrap();
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(all(target_os = "linux")))]
 fn main() {}

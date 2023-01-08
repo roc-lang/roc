@@ -24,6 +24,7 @@ roc_build = { path = "../compiler/build" }
 roc_mono = { path = "../compiler/mono" }
 roc_load = { path = "../compiler/load" }
 roc_reporting = { path = "../reporting" }
+roc_linker = { path = "../linker" }
 roc_packaging = { path = "../packaging" }
 bumpalo.workspace = true
 target-lexicon.workspace = true
