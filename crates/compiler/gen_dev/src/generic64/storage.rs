@@ -9,6 +9,7 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::{
+    borrow::Ownership,
     ir::{JoinPointId, Param},
     layout::{Builtin, Layout, STLayoutInterner, TagIdIntType, UnionLayout},
 };
@@ -1012,11 +1013,11 @@ impl<
         param_storage.reserve(params.len());
         for Param {
             symbol,
-            borrow,
+            ownership,
             layout,
         } in params
         {
-            if *borrow {
+            if *ownership == Ownership::Borrowed {
                 // These probably need to be passed by pointer/reference?
                 // Otherwise, we probably need to copy back to the param at the end of the joinpoint.
                 todo!("joinpoints with borrowed parameters");

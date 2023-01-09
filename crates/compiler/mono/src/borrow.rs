@@ -15,12 +15,22 @@ use roc_module::symbol::Symbol;
 pub(crate) const OWNED: bool = false;
 pub(crate) const BORROWED: bool = true;
 
-/// For reference-counted types (lists, (big) strings, recursive tags), owning a value
-/// means incrementing its reference count. Hence, we prefer borrowing for these types
-fn should_borrow_layout(layout: &Layout) -> bool {
-    layout.is_refcounted()
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ownership {
+    Owned,
+    Borrowed,
 }
 
+impl Ownership {
+    /// For reference-counted types (lists, (big) strings, recursive tags), owning a value
+    /// means incrementing its reference count. Hence, we prefer borrowing for these types
+    fn from_layout(layout: &Layout) -> Self {
+        match layout.is_refcounted() {
+            true => Ownership::Borrowed,
+            false => Ownership::Owned,
+        }
+    }
+}
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
     procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
@@ -106,7 +116,7 @@ pub struct ParamOffset(usize);
 
 impl From<ParamOffset> for usize {
     fn from(id: ParamOffset) -> Self {
-        id.0 as usize
+        id.0
     }
 }
 
@@ -220,7 +230,7 @@ impl<'a> ParamMap<'a> {
     fn init_borrow_params(arena: &'a Bump, ps: &'a [Param<'a>]) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|p| Param {
-                borrow: p.layout.is_refcounted(),
+                ownership: Ownership::from_layout(&p.layout),
                 layout: p.layout,
                 symbol: p.symbol,
             }),
@@ -232,7 +242,7 @@ impl<'a> ParamMap<'a> {
     fn init_borrow_args(arena: &'a Bump, ps: &'a [(Layout<'a>, Symbol)]) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
-                borrow: should_borrow_layout(layout),
+                ownership: Ownership::from_layout(layout),
                 layout: *layout,
                 symbol: *symbol,
             }),
@@ -247,7 +257,7 @@ impl<'a> ParamMap<'a> {
     ) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
-                borrow: false,
+                ownership: Ownership::Owned,
                 layout: *layout,
                 symbol: *symbol,
             }),
@@ -390,12 +400,12 @@ impl<'a> BorrowInfState<'a> {
     fn update_param_map_help(&mut self, ps: &[Param<'a>]) -> &'a [Param<'a>] {
         let mut new_ps = Vec::with_capacity_in(ps.len(), self.arena);
         new_ps.extend(ps.iter().map(|p| {
-            if !p.borrow {
+            if p.ownership == Ownership::Owned {
                 *p
             } else if self.is_owned(p.symbol) {
                 self.modified = true;
                 let mut p = *p;
-                p.borrow = false;
+                p.ownership = Ownership::Owned;
 
                 p
             } else {
@@ -412,15 +422,15 @@ impl<'a> BorrowInfState<'a> {
         start: ParamOffset,
         length: usize,
     ) {
-        let index: usize = start.into();
+        let ParamOffset(index) = start;
         let ps = &mut param_map.declarations[index..][..length];
 
         for p in ps.iter_mut() {
-            if !p.borrow {
+            if p.ownership == Ownership::Owned {
                 // do nothing
             } else if self.is_owned(p.symbol) {
                 self.modified = true;
-                p.borrow = false;
+                p.ownership = Ownership::Owned;
             } else {
                 // do nothing
             }
@@ -440,7 +450,7 @@ impl<'a> BorrowInfState<'a> {
         debug_assert_eq!(xs.len(), ps.len());
 
         for (x, p) in xs.iter().zip(ps.iter()) {
-            if !p.borrow {
+            if p.ownership == Ownership::Owned {
                 self.own_var(*x);
             }
         }
@@ -568,44 +578,44 @@ impl<'a> BorrowInfState<'a> {
                 match op {
                     ListMap { xs } => {
                         // own the list if the function wants to own the element
-                        if !function_ps[0].borrow {
+                        if function_ps[0].ownership == Ownership::Owned {
                             self.own_var(*xs);
                         }
                     }
                     ListMap2 { xs, ys } => {
                         // own the lists if the function wants to own the element
-                        if !function_ps[0].borrow {
+                        if function_ps[0].ownership == Ownership::Owned {
                             self.own_var(*xs);
                         }
 
-                        if !function_ps[1].borrow {
+                        if function_ps[1].ownership == Ownership::Owned {
                             self.own_var(*ys);
                         }
                     }
                     ListMap3 { xs, ys, zs } => {
                         // own the lists if the function wants to own the element
-                        if !function_ps[0].borrow {
+                        if function_ps[0].ownership == Ownership::Owned {
                             self.own_var(*xs);
                         }
-                        if !function_ps[1].borrow {
+                        if function_ps[1].ownership == Ownership::Owned {
                             self.own_var(*ys);
                         }
-                        if !function_ps[2].borrow {
+                        if function_ps[2].ownership == Ownership::Owned {
                             self.own_var(*zs);
                         }
                     }
                     ListMap4 { xs, ys, zs, ws } => {
                         // own the lists if the function wants to own the element
-                        if !function_ps[0].borrow {
+                        if function_ps[0].ownership == Ownership::Owned {
                             self.own_var(*xs);
                         }
-                        if !function_ps[1].borrow {
+                        if function_ps[1].ownership == Ownership::Owned {
                             self.own_var(*ys);
                         }
-                        if !function_ps[2].borrow {
+                        if function_ps[2].ownership == Ownership::Owned {
                             self.own_var(*zs);
                         }
-                        if !function_ps[3].borrow {
+                        if function_ps[3].ownership == Ownership::Owned {
                             self.own_var(*ws);
                         }
                     }
@@ -617,7 +627,9 @@ impl<'a> BorrowInfState<'a> {
 
                 // own the closure environment if the function needs to own it
                 let function_env_position = op.function_arity();
-                if let Some(false) = function_ps.get(function_env_position).map(|p| p.borrow) {
+                if let Some(Ownership::Owned) =
+                    function_ps.get(function_env_position).map(|p| p.ownership)
+                {
                     self.own_var(passed_function.captured_environment);
                 }
             }

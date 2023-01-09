@@ -1,5 +1,6 @@
 #![allow(clippy::manual_map)]
 
+use crate::borrow::Ownership;
 use crate::layout::{
     self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, LambdaName, LambdaSet,
     Layout, LayoutCache, LayoutInterner, LayoutProblem, Niche, RawFunctionLayout, STLayoutInterner,
@@ -1525,14 +1526,14 @@ pub struct JoinPointId(pub Symbol);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Param<'a> {
     pub symbol: Symbol,
-    pub borrow: bool,
+    pub ownership: Ownership,
     pub layout: Layout<'a>,
 }
 
 impl<'a> Param<'a> {
     pub const EMPTY: Self = Param {
         symbol: Symbol::EMPTY_PARAM,
-        borrow: false,
+        ownership: Ownership::Owned,
         layout: Layout::UNIT,
     };
 }
@@ -4545,7 +4546,7 @@ pub fn with_hole<'a>(
                         let param = Param {
                             symbol: assigned,
                             layout,
-                            borrow: false,
+                            ownership: Ownership::Owned,
                         };
 
                         Stmt::Join {
@@ -4610,7 +4611,7 @@ pub fn with_hole<'a>(
             let param = Param {
                 symbol: assigned,
                 layout,
-                borrow: false,
+                ownership: Ownership::Owned,
             };
 
             Stmt::Join {
@@ -10402,7 +10403,7 @@ where
     let param = Param {
         symbol: assigned,
         layout: return_layout,
-        borrow: false,
+        ownership: Ownership::Owned,
     };
 
     Stmt::Join {
@@ -10626,7 +10627,7 @@ fn union_lambda_set_to_switch<'a>(
     let param = Param {
         symbol: assigned,
         layout: *return_layout,
-        borrow: false,
+        ownership: Ownership::Owned,
     };
 
     Stmt::Join {
@@ -10777,7 +10778,7 @@ fn enum_lambda_set_to_switch<'a>(
     let param = Param {
         symbol: assigned,
         layout: *return_layout,
-        borrow: false,
+        ownership: Ownership::Owned,
     };
 
     Stmt::Join {
@@ -10880,7 +10881,7 @@ where
     let param = Param {
         symbol: assigned,
         layout: return_layout,
-        borrow: false,
+        ownership: Ownership::Owned,
     };
 
     Stmt::Join {

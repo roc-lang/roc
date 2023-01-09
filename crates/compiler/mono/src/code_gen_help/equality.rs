@@ -2,6 +2,7 @@ use bumpalo::collections::vec::Vec;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, Symbol};
 
+use crate::borrow::Ownership;
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, Param, Stmt, UpdateModeId,
 };
@@ -418,7 +419,7 @@ fn eq_tag_union_help<'a>(
     } else {
         let loop_params_iter = operands.iter().map(|arg| Param {
             symbol: *arg,
-            borrow: true,
+            ownership: Ownership::Borrowed,
             layout: Layout::Union(union_layout),
         });
 
@@ -718,13 +719,13 @@ fn eq_list<'a>(
 
     let param_addr1 = Param {
         symbol: addr1,
-        borrow: false,
+        ownership: Ownership::Owned,
         layout: layout_isize,
     };
 
     let param_addr2 = Param {
         symbol: addr2,
-        borrow: false,
+        ownership: Ownership::Owned,
         layout: layout_isize,
     };
 

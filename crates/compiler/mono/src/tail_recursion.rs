@@ -1,5 +1,6 @@
 #![allow(clippy::manual_map)]
 
+use crate::borrow::Ownership;
 use crate::ir::{CallType, Expr, JoinPointId, Param, Stmt};
 use crate::layout::{LambdaName, Layout};
 use bumpalo::collections::Vec;
@@ -46,7 +47,7 @@ pub fn make_tail_recursive<'a>(
         args.iter().map(|(layout, symbol, _)| Param {
             symbol: *symbol,
             layout: *layout,
-            borrow: true,
+            ownership: Ownership::Borrowed,
         }),
         arena,
     )

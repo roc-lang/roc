@@ -1,3 +1,4 @@
+use crate::borrow::Ownership;
 use crate::ir::{
     build_list_index_probe, BranchInfo, Call, CallType, DestructType, Env, Expr, JoinPointId,
     ListIndex, Literal, Param, Pattern, Procs, Stmt,
@@ -1906,7 +1907,7 @@ fn decide_to_branching<'a>(
             let param = Param {
                 symbol: test_symbol,
                 layout: Layout::Builtin(Builtin::Bool),
-                borrow: false,
+                ownership: Ownership::Owned,
             };
 
             let join = Stmt::Join {
