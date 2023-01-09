@@ -21,12 +21,16 @@ pub enum Ownership {
     Borrowed,
 }
 
-/// For reference-counted types (lists, (big) strings, recursive tags), owning a value
-/// means incrementing its reference count. Hence, we prefer borrowing for these types
-fn should_borrow_layout(layout: &Layout) -> bool {
-    layout.is_refcounted()
+impl Ownership {
+    /// For reference-counted types (lists, (big) strings, recursive tags), owning a value
+    /// means incrementing its reference count. Hence, we prefer borrowing for these types
+    fn from_layout(layout: &Layout) -> Self {
+        match layout.is_refcounted() {
+            true => Ownership::Borrowed,
+            false => Ownership::Owned,
+        }
+    }
 }
-
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
     procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
@@ -226,11 +230,7 @@ impl<'a> ParamMap<'a> {
     fn init_borrow_params(arena: &'a Bump, ps: &'a [Param<'a>]) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|p| Param {
-                ownership: if p.layout.is_refcounted() {
-                    Ownership::Borrowed
-                } else {
-                    Ownership::Owned
-                },
+                ownership: Ownership::from_layout(&p.layout),
                 layout: p.layout,
                 symbol: p.symbol,
             }),
@@ -242,11 +242,7 @@ impl<'a> ParamMap<'a> {
     fn init_borrow_args(arena: &'a Bump, ps: &'a [(Layout<'a>, Symbol)]) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
-                ownership: if should_borrow_layout(layout) {
-                    Ownership::Borrowed
-                } else {
-                    Ownership::Owned
-                },
+                ownership: Ownership::from_layout(layout),
                 layout: *layout,
                 symbol: *symbol,
             }),
