@@ -22,7 +22,7 @@ fn valgrind_test_linux(source: &str) {
         .unwrap()
         .join("zig-platform/main.roc");
 
-    assert!(pf.exists(), "{:?}", &pf);
+    assert!(pf.exists(), "cannot find platform {:?}", &pf);
 
     let mut app_module_source = format!(
         indoc::indoc!(
