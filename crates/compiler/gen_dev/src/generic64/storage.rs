@@ -9,7 +9,8 @@ use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::{
-    ir::{JoinPointId, Ownership, Param},
+    borrow::Ownership,
+    ir::{JoinPointId, Param},
     layout::{Builtin, Layout, STLayoutInterner, TagIdIntType, UnionLayout},
 };
 use roc_target::TargetInfo;

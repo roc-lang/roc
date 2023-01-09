@@ -2,8 +2,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use crate::ir::{
-    Expr, HigherOrderLowLevel, JoinPointId, Ownership, Param, PassedFunction, Proc, ProcLayout,
-    Stmt,
+    Expr, HigherOrderLowLevel, JoinPointId, Param, PassedFunction, Proc, ProcLayout, Stmt,
 };
 use crate::layout::Layout;
 use bumpalo::collections::Vec;
@@ -15,6 +14,12 @@ use roc_module::symbol::Symbol;
 
 pub(crate) const OWNED: bool = false;
 pub(crate) const BORROWED: bool = true;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ownership {
+    Owned,
+    Borrowed,
+}
 
 /// For reference-counted types (lists, (big) strings, recursive tags), owning a value
 /// means incrementing its reference count. Hence, we prefer borrowing for these types
@@ -107,7 +112,7 @@ pub struct ParamOffset(usize);
 
 impl From<ParamOffset> for usize {
     fn from(id: ParamOffset) -> Self {
-        id.0 as usize
+        id.0
     }
 }
 
@@ -421,7 +426,7 @@ impl<'a> BorrowInfState<'a> {
         start: ParamOffset,
         length: usize,
     ) {
-        let index: usize = start.into();
+        let ParamOffset(index) = start;
         let ps = &mut param_map.declarations[index..][..length];
 
         for p in ps.iter_mut() {

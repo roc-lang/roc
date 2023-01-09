@@ -1,7 +1,7 @@
-use crate::borrow::{ParamMap, BORROWED, OWNED};
+use crate::borrow::{Ownership, ParamMap, BORROWED, OWNED};
 use crate::ir::{
-    CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Ownership, Param, Proc, ProcLayout,
-    Stmt, UpdateModeIds,
+    CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt,
+    UpdateModeIds,
 };
 use crate::layout::{Layout, STLayoutInterner};
 use bumpalo::collections::Vec;

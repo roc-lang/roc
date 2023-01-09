@@ -1,5 +1,6 @@
 #![allow(clippy::manual_map)]
 
+use crate::borrow::Ownership;
 use crate::layout::{
     self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, LambdaName, LambdaSet,
     Layout, LayoutCache, LayoutProblem, Niche, RawFunctionLayout, STLayoutInterner, TagIdIntType,
@@ -1522,12 +1523,6 @@ impl<'a, 'i> Env<'a, 'i> {
 
 #[derive(Clone, Debug, PartialEq, Copy, Eq, Hash)]
 pub struct JoinPointId(pub Symbol);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Ownership {
-    Owned,
-    Borrowed,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Param<'a> {

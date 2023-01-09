@@ -7,10 +7,10 @@ use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::{IdentIds, Symbol};
 use roc_target::PtrWidth;
 
+use crate::borrow::Ownership;
 use crate::code_gen_help::let_lowlevel;
 use crate::ir::{
-    BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Ownership, Param, Stmt,
-    UpdateModeId,
+    BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
 };
 use crate::layout::{Builtin, InLayout, Layout, STLayoutInterner, TagIdIntType, UnionLayout};
 
