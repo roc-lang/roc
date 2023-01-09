@@ -1,4 +1,4 @@
-#[cfg(all(target_os = "linux"))]
+#[cfg(all(target_os = "linux", test))]
 fn main() {
     use roc_build::link::preprocessed_host_filename;
     use roc_linker::build_and_preprocess_host;
@@ -24,5 +24,5 @@ fn main() {
     );
 }
 
-#[cfg(not(all(target_os = "linux")))]
+#[cfg(not(all(target_os = "linux", test)))]
 fn main() {}
