@@ -301,6 +301,7 @@ fn sketch_pattern(pattern: &crate::pattern::Pattern) -> SketchedPattern {
     use SketchedPattern as SP;
 
     match pattern {
+        As(subpattern, _) => sketch_pattern(&subpattern.value),
         &NumLiteral(_, _, IntValue::I128(n), _) | &IntLiteral(_, _, _, IntValue::I128(n), _) => {
             SP::Literal(Literal::Int(n))
         }

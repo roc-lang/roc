@@ -654,6 +654,7 @@ fn deep_copy_pattern_help<C: CopyEnv>(
 
     match pat {
         Identifier(s) => Identifier(*s),
+        As(subpattern, s) => As(Box::new(subpattern.map(|p| go_help!(p))), *s),
         AppliedTag {
             whole_var,
             ext_var,

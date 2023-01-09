@@ -431,6 +431,9 @@ fn pattern<'a>(
         | AbilityMemberSpecialization {
             specializes: sym, ..
         } => pp_sym(c, f, *sym),
+        As(subpattern, symbol) => pattern(c, prec, f, &subpattern.value)
+            .append(f.text(" as "))
+            .append(pp_sym(c, f, *symbol)),
         AppliedTag {
             tag_name,
             arguments,

@@ -2869,6 +2869,8 @@ fn pattern_to_when<'a>(
             (*new_symbol, Loc::at_zero(RuntimeError(error)))
         }
 
+        As(_, _) => todo!("as bindings are not supported yet"),
+
         UnsupportedPattern(region) => {
             // create the runtime error here, instead of delegating to When.
             // UnsupportedPattern should then never occur in When
@@ -9390,6 +9392,7 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
+        As(_, _) => todo!(),
         AbilityMemberSpecialization { ident, .. } => Ok(Pattern::Identifier(*ident)),
         IntLiteral(var, _, int_str, int, _bound) => Ok(make_num_literal_pattern(
             env,
