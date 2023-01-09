@@ -355,8 +355,10 @@ pub enum EExpr<'a> {
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
+
+    // SingleQuote errors are folded into the EString
     Str(EString<'a>, Position),
-    SingleQuote(EString<'a>, Position),
+
     Number(ENumber, Position),
     List(EList<'a>, Position),
 
@@ -376,13 +378,24 @@ pub enum EString<'a> {
     CodePtOpen(Position),
     CodePtEnd(Position),
 
+    InvalidSingleQuote(ESingleQuote, Position),
+
     Space(BadInputError, Position),
-    EndlessSingle(Position),
-    EndlessMulti(Position),
+    EndlessSingleLine(Position),
+    EndlessMultiLine(Position),
+    EndlessSingleQuote(Position),
     UnknownEscape(Position),
     Format(&'a EExpr<'a>, Position),
     FormatEnd(Position),
     MultilineInsufficientIndent(Position),
+    ExpectedDoubleQuoteGotSingleQuote(Position),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ESingleQuote {
+    Empty,
+    TooLong,
+    InterpolationNotAllowed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,6 +1,6 @@
 use crate::annotation::freshen_opaque_def;
 use crate::env::Env;
-use crate::expr::{canonicalize_expr, unescape_char, Expr, IntValue, Output};
+use crate::expr::{canonicalize_expr, Expr, IntValue, Output};
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, FloatBound, IntBound, NumBound,
     ParsedNumResult,
@@ -1003,7 +1003,7 @@ fn flatten_str_lines(lines: &[&[StrSegment<'_>]]) -> Pattern {
                 Interpolated(loc_expr) => {
                     return Pattern::UnsupportedPattern(loc_expr.region);
                 }
-                EscapedChar(escaped) => buf.push(unescape_char(escaped)),
+                EscapedChar(escaped) => buf.push(escaped.unescape()),
             }
         }
     }

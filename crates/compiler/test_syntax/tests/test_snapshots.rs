@@ -258,6 +258,7 @@ mod test_snapshots {
         pass/comment_before_op.expr,
         pass/comment_inside_empty_list.expr,
         pass/comment_with_non_ascii.expr,
+        pass/control_characters_in_scalar.expr,
         pass/crash.expr,
         pass/dbg.expr,
         pass/def_without_newline.expr,
@@ -567,7 +568,7 @@ mod test_snapshots {
             ("\\n", EscapedChar::Newline),
             ("\\r", EscapedChar::CarriageReturn),
             ("\\t", EscapedChar::Tab),
-            ("\\\"", EscapedChar::Quote),
+            ("\\\"", EscapedChar::DoubleQuote),
         ] {
             let actual = parse_expr_with(&arena, arena.alloc(to_input(string)));
             let expected_slice = to_expected(*escaped, &arena);

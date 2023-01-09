@@ -5304,6 +5304,23 @@ Tab characters are not allowed."###,
     );
 
     test_report!(
+        single_quote_too_long,
+        r#"'abcdef'"#,
+        @r###"
+    ── INVALID SCALAR ───────────────────────── tmp/single_quote_too_long/Test.roc ─
+
+    I am part way through parsing this scalar literal (character literal),
+    but it's too long to fit in a U32 so it's not a valid scalar.
+
+    4│      'abcdef'
+             ^
+
+    You could change it to something like 'a' or '\n'. Note, roc strings
+    use double quotes, like "hello".
+    "###
+    );
+
+    test_report!(
         single_no_end,
         r#""there is no end"#,
         @r###"
