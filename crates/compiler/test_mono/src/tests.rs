@@ -2339,3 +2339,27 @@ fn nullable_wrapped_with_non_nullable_singleton_tags() {
         "###
     )
 }
+
+#[mono_test]
+fn nullable_wrapped_with_nullable_not_last_index() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        Parser : [
+            OneOrMore Parser,
+            Keyword Str,
+            CharLiteral,
+        ]
+
+        toIdParser : Parser -> Str
+        toIdParser = \parser ->
+            when parser is
+                OneOrMore _ -> "a"
+                Keyword _ -> "b"
+                CharLiteral -> "c"
+
+        main = toIdParser CharLiteral == "c"
+        "###
+    )
+}

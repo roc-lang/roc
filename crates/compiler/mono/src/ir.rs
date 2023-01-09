@@ -9797,21 +9797,20 @@ fn from_can_pattern_help<'a>(
                         }
 
                         NullableWrapped {
-                            sorted_tag_layouts: ref tags,
+                            sorted_tag_layouts: ref non_nulled_tags,
                             nullable_id,
                             nullable_name,
                         } => {
-                            debug_assert!(!tags.is_empty());
-
-                            for (i, (tag_name, args)) in tags.iter().enumerate() {
-                                if i == nullable_id as usize {
-                                    debug_assert!(args.is_empty());
+                            for id in 0..(non_nulled_tags.len() + 1) {
+                                if id == nullable_id as usize {
                                     ctors.push(Ctor {
-                                        tag_id: TagId(i as _),
+                                        tag_id: TagId(id as _),
                                         name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
                                         arity: 0,
                                     });
                                 } else {
+                                    let i = if id < nullable_id.into() { id } else { id - 1 };
+                                    let (tag_name, args) = &non_nulled_tags[i];
                                     ctors.push(Ctor {
                                         tag_id: TagId(i as _),
                                         name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
