@@ -1,6 +1,35 @@
 #![cfg(test)]
 
 use indoc::indoc;
+use std::sync::Once;
+
+static BUILD_ONCE: Once = Once::new();
+
+#[cfg(all(target_os = "linux"))]
+fn build_host() {
+    use roc_build::link::preprocessed_host_filename;
+    use roc_linker::build_and_preprocess_host;
+
+    let platform_main_roc = std::env::current_dir()
+        .unwrap()
+        .join("zig-platform/main.roc");
+
+    // tests always run on the host
+    let target = target_lexicon::Triple::host();
+
+    // the preprocessed host is stored beside the platform's main.roc
+    let preprocessed_host_path =
+        platform_main_roc.with_file_name(preprocessed_host_filename(&target).unwrap());
+
+    build_and_preprocess_host(
+        roc_mono::ir::OptLevel::Normal,
+        &target,
+        &platform_main_roc,
+        &preprocessed_host_path,
+        vec![String::from("mainForHost")],
+        vec![],
+    );
+}
 
 fn valgrind_test(source: &str) {
     #[cfg(target_os = "linux")]
@@ -17,6 +46,9 @@ fn valgrind_test(source: &str) {
 #[cfg(target_os = "linux")]
 fn valgrind_test_linux(source: &str) {
     use roc_cli::build::BuiltFile;
+
+    // the host is identical for all tests so we only want to build it once
+    BUILD_ONCE.call_once(build_host);
 
     let pf = std::env::current_dir()
         .unwrap()
