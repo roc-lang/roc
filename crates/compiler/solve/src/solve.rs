@@ -3503,25 +3503,21 @@ fn generalize(
     // the appropriate old pool if they are not redundant.
     for vars in all_but_last_pool {
         for var in vars {
-            if !subs.redundant(var) {
-                let rank = subs.get_rank(var);
+            let rank = subs.get_rank(var);
 
-                pools.get_mut(rank).push(var);
-            }
+            pools.get_mut(rank).push(var);
         }
     }
 
     // For variables with rank young_rank, if rank < young_rank: register in old pool,
     // otherwise generalize
     for var in last_pool.drain(..) {
-        if !subs.redundant(var) {
-            let desc_rank = subs.get_rank(var);
+        let desc_rank = subs.get_rank(var);
 
-            if desc_rank < young_rank {
-                pools.get_mut(desc_rank).push(var);
-            } else {
-                subs.set_rank(var, Rank::NONE);
-            }
+        if desc_rank < young_rank {
+            pools.get_mut(desc_rank).push(var);
+        } else {
+            subs.set_rank(var, Rank::NONE);
         }
     }
 
