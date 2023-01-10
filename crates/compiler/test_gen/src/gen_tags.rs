@@ -2164,3 +2164,32 @@ fn nullable_wrapped_with_non_nullable_singleton_tags() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn nullable_wrapped_with_nullable_not_last_index() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Parser : [
+                OneOrMore Parser,
+                Keyword Str,
+                CharLiteral,
+            ]
+
+            toIdParser : Parser -> Str
+            toIdParser = \parser ->
+                when parser is
+                    OneOrMore _ -> "a"
+                    Keyword _ -> "b"
+                    CharLiteral -> "c"
+
+            main = toIdParser CharLiteral
+            "#
+        ),
+        RocStr::from("c"),
+        RocStr
+    );
+}
