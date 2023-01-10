@@ -1149,7 +1149,7 @@ fn build_rec_union_help<'a, 'ctx, 'env>(
     fn_val: FunctionValue<'ctx>,
 ) {
     let tags = union_layout_tags(env.arena, &union_layout);
-    debug_assert!(!tags.is_empty());
+    debug_assert!(!tags.tags.is_empty());
 
     let context = &env.context;
     let builder = env.builder;
@@ -1272,7 +1272,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     parent: FunctionValue<'ctx>,
     decrement_fn: FunctionValue<'ctx>,
     union_layout: UnionLayout<'a>,
-    tags: &[&[Layout<'a>]],
+    tags: UnionLayoutTags<'a>,
     value_ptr: PointerValue<'ctx>,
     current_tag_id: IntValue<'ctx>,
     refcount_ptr: PointerToRefcount<'ctx>,
@@ -1283,6 +1283,8 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     let call_mode = mode_to_call_mode(decrement_fn, mode);
     let builder = env.builder;
 
+    let UnionLayoutTags { nullable_id, tags } = tags;
+
     // next, make a jump table for all possible values of the tag_id
     let mut cases = Vec::with_capacity_in(tags.len(), env.arena);
 
@@ -1290,6 +1292,15 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         basic_type_from_layout(env, layout_interner, &union_layout.tag_id_layout()).into_int_type();
 
     for (tag_id, field_layouts) in tags.iter().enumerate() {
+        let tag_id = match nullable_id {
+            Some(null_id) if tag_id as u16 >= null_id => {
+                // This tag comes after the nullable tag, so its ID is one higher than the
+                // enumeration says.
+                tag_id + 1
+            }
+            _ => tag_id,
+        };
+
         // if none of the fields are or contain anything refcounted, just move on
         if fields_need_no_refcounting(layout_interner, field_layouts) {
             continue;
@@ -1449,20 +1460,44 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     }
 }
 
+struct UnionLayoutTags<'a> {
+    nullable_id: Option<u16>,
+    tags: &'a [&'a [Layout<'a>]],
+}
+
 fn union_layout_tags<'a>(
     arena: &'a bumpalo::Bump,
     union_layout: &UnionLayout<'a>,
-) -> &'a [&'a [Layout<'a>]] {
+) -> UnionLayoutTags<'a> {
     use UnionLayout::*;
 
     match union_layout {
         NullableWrapped {
-            other_tags: tags, ..
-        } => tags,
-        NullableUnwrapped { other_fields, .. } => arena.alloc([*other_fields]),
-        NonNullableUnwrapped(fields) => arena.alloc([*fields]),
-        Recursive(tags) => tags,
-        NonRecursive(tags) => tags,
+            other_tags,
+            nullable_id,
+        } => UnionLayoutTags {
+            nullable_id: Some(*nullable_id),
+            tags: other_tags,
+        },
+        NullableUnwrapped {
+            other_fields,
+            nullable_id,
+        } => UnionLayoutTags {
+            nullable_id: Some(*nullable_id as u16),
+            tags: arena.alloc([*other_fields]),
+        },
+        NonNullableUnwrapped(fields) => UnionLayoutTags {
+            nullable_id: None,
+            tags: arena.alloc([*fields]),
+        },
+        Recursive(tags) => UnionLayoutTags {
+            nullable_id: None,
+            tags,
+        },
+        NonRecursive(tags) => UnionLayoutTags {
+            nullable_id: None,
+            tags,
+        },
     }
 }
 
@@ -1531,7 +1566,7 @@ fn build_reuse_rec_union_help<'a, 'ctx, 'env>(
 ) {
     let tags = union_layout_tags(env.arena, &union_layout);
 
-    debug_assert!(!tags.is_empty());
+    debug_assert!(!tags.tags.is_empty());
 
     let context = &env.context;
     let builder = env.builder;
