@@ -3449,7 +3449,8 @@ mod report_text {
 
         if entries.is_empty() {
             alloc.text("{}").append(ext_doc)
-        } else {
+        } else if entries.len() == 1 {
+            // Single-field records get printed on one line; multi-field records get multiple lines
             let entry_to_doc =
                 |(field_name, field_type): (RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)| {
                     match field_type {
@@ -3475,6 +3476,33 @@ mod report_text {
             );
 
             entries_doc.append(alloc.reflow(" }")).append(ext_doc)
+        } else {
+            // Multi-field records get printed on multiple lines
+            let entry_to_doc =
+                |(field_name, field_type): (RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)| {
+                    match field_type {
+                        RecordField::Demanded(field)
+                        | RecordField::Required(field)
+                        | RecordField::RigidRequired(field) => {
+                            field_name.append(alloc.text(" : ")).append(field)
+                        }
+                        RecordField::Optional(field) | RecordField::RigidOptional(field) => {
+                            field_name.append(alloc.text(" ? ")).append(field)
+                        }
+                    }
+                };
+
+            alloc
+                .vcat(
+                    std::iter::once(alloc.reflow("{"))
+                        .chain(
+                            entries.into_iter().map(|entry| {
+                                entry_to_doc(entry).indent(4).append(alloc.reflow(","))
+                            }),
+                        )
+                        .chain(std::iter::once(alloc.reflow("}"))),
+                )
+                .append(ext_doc)
         }
     }
 
