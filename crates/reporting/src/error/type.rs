@@ -3472,60 +3472,53 @@ mod report_text {
             alloc.nil()
         };
 
-        if entries.is_empty() {
+        let entry_to_doc =
+            |(field_name, field_type): (RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)| {
+                match field_type {
+                    RecordField::Demanded(field)
+                    | RecordField::Required(field)
+                    | RecordField::RigidRequired(field) => {
+                        field_name.append(alloc.text(" : ")).append(field)
+                    }
+                    RecordField::Optional(field) | RecordField::RigidOptional(field) => {
+                        field_name.append(alloc.text(" ? ")).append(field)
+                    }
+                }
+            };
+
+        if entries.is_empty() && fields_ommitted == 0 {
             alloc.text("{}").append(ext_doc)
-        } else if entries.len() == 1 {
+        } else if entries.len() == 1 && fields_ommitted == 0 {
             // Single-field records get printed on one line; multi-field records get multiple lines
-            let entry_to_doc =
-                |(field_name, field_type): (RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)| {
-                    match field_type {
-                        RecordField::Demanded(field)
-                        | RecordField::Required(field)
-                        | RecordField::RigidRequired(field) => {
-                            field_name.append(alloc.text(" : ")).append(field)
-                        }
-                        RecordField::Optional(field) | RecordField::RigidOptional(field) => {
-                            field_name.append(alloc.text(" ? ")).append(field)
-                        }
-                    }
-                };
-
-            let starts =
-                std::iter::once(alloc.reflow("{ ")).chain(std::iter::repeat(alloc.reflow(", ")));
-
-            let entries_doc = alloc.concat(
-                entries
-                    .into_iter()
-                    .zip(starts)
-                    .map(|(entry, start)| start.append(entry_to_doc(entry))),
-            );
-
-            entries_doc.append(alloc.reflow(" }")).append(ext_doc)
+            alloc
+                .reflow(" {")
+                .append(entry_to_doc(entries.into_iter().next().unwrap()))
+                .append(ext_doc)
         } else {
-            // Multi-field records get printed on multiple lines
-            let entry_to_doc =
-                |(field_name, field_type): (RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)| {
-                    match field_type {
-                        RecordField::Demanded(field)
-                        | RecordField::Required(field)
-                        | RecordField::RigidRequired(field) => {
-                            field_name.append(alloc.text(" : ")).append(field)
-                        }
-                        RecordField::Optional(field) | RecordField::RigidOptional(field) => {
-                            field_name.append(alloc.text(" ? ")).append(field)
-                        }
-                    }
-                };
+            let ending = if fields_ommitted == 0 {
+                alloc.reflow("}")
+            } else {
+                alloc.vcat([
+                    alloc
+                        .omitted_record_fields(fields_ommitted)
+                        .indent(super::RECORD_FIELD_INDENT),
+                    alloc.reflow("}"),
+                ])
+            };
 
+            // Multi-field records get printed on multiple lines, as do records with fields omitted.
             alloc
                 .vcat(
-                    std::iter::once(alloc.reflow("{"))
-                        .chain(
-                            entries.into_iter().map(|entry| {
-                                entry_to_doc(entry).indent(4).append(alloc.reflow(","))
-                            }),
-                        )
-                        .chain(std::iter::once(alloc.reflow("}"))),
+                    std::iter::once(alloc.reflow("{")).chain(
+                        entries
+                            .into_iter()
+                            .map(|entry| {
+                                entry_to_doc(entry)
+                                    .indent(super::RECORD_FIELD_INDENT)
+                                    .append(alloc.reflow(","))
+                            })
+                            .chain(std::iter::once(ending)),
+                    ),
                 )
                 .append(ext_doc)
         }
@@ -4411,6 +4404,7 @@ fn exhaustive_pattern_to_doc<'b>(
 }
 
 const AFTER_TAG_INDENT: &str = "    ";
+const RECORD_FIELD_INDENT: usize = 4;
 
 fn pattern_to_doc_help<'b>(
     alloc: &'b RocDocAllocator<'b>,

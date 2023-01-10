@@ -459,14 +459,13 @@ impl<'a> RocDocAllocator<'a> {
     }
 
     pub fn module_name(&'a self, name: ModuleName) -> DocBuilder<'a, Self, Annotation> {
-        let name = if name.is_empty() {
+        if name.is_empty() {
             // Render the app module as "app"
-            "app".to_string()
+            self.text("app")
         } else {
-            name.as_str().to_string()
-        };
-
-        self.text(name).annotate(Annotation::Module)
+            self.text(name.as_str().to_string())
+        }
+        .annotate(Annotation::Module)
     }
 
     pub fn binop(
@@ -497,6 +496,21 @@ impl<'a> RocDocAllocator<'a> {
             .annotate(Annotation::Tip)
             .append(":")
             .append(self.softline())
+    }
+
+    pub fn omitted_record_fields(
+        &'a self,
+        fields_omitted: usize,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        let fields = if fields_omitted == 1 {
+            "field "
+        } else {
+            "fields"
+        };
+
+        self.text(format!(
+            "…({fields_omitted} {fields} were the same as the other type)"
+        ))
     }
 
     pub fn note(&'a self, line: &'a str) -> DocBuilder<'a, Self, Annotation> {
