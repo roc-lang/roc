@@ -790,7 +790,16 @@ fn solve(
                     let_con.def_types,
                 );
 
-                pools.get_mut(next_rank).extend(pool_variables);
+                // If the let-binding can be generalized, introduce all variables at the next rank;
+                // those that persist at the next rank after rank-adjustment will be generalized.
+                //
+                // Otherwise, introduce all variables at the current rank; since none of them will
+                // end up at the next rank, none will be generalized.
+                if let_con.generalizable.0 {
+                    pools.get_mut(next_rank).extend(pool_variables);
+                } else {
+                    pools.get_mut(rank).extend(pool_variables);
+                }
 
                 debug_assert_eq!(
                     // Check that no variable ended up in a higher rank than the next rank.. that
