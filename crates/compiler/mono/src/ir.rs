@@ -401,8 +401,9 @@ impl<'a> Proc<'a> {
         ident_ids: &'i mut IdentIds,
         update_mode_ids: &'i mut UpdateModeIds,
         procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+        host_exposed_procs: &[Symbol],
     ) {
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
+        let borrow_params = crate::borrow::infer_borrow(arena, procs, host_exposed_procs);
 
         crate::inc_dec::visit_procs(
             arena,
@@ -410,7 +411,7 @@ impl<'a> Proc<'a> {
             home,
             ident_ids,
             update_mode_ids,
-            borrow_params,
+            arena.alloc(borrow_params),
             procs,
         );
     }

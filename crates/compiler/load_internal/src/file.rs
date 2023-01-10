@@ -3100,6 +3100,11 @@ fn update<'a>(
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
+                    let host_exposed_procs = bumpalo::collections::Vec::from_iter_in(
+                        state.exposed_to_host.values.keys().copied(),
+                        arena,
+                    );
+
                     Proc::insert_refcount_operations(
                         arena,
                         &layout_interner,
@@ -3107,6 +3112,7 @@ fn update<'a>(
                         ident_ids,
                         &mut update_mode_ids,
                         &mut state.procedures,
+                        &host_exposed_procs,
                     );
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_REFCOUNT);

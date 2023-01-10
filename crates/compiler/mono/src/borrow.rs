@@ -34,6 +34,7 @@ impl Ownership {
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
     procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    host_exposed_procs: &[Symbol],
 ) -> ParamMap<'a> {
     // intern the layouts
 
@@ -94,8 +95,12 @@ pub fn infer_borrow<'a>(
         loop {
             for index in group.iter_ones() {
                 let (key, proc) = &procs.iter().nth(index).unwrap();
+
+                // host-exposed functions must always own their arguments.
+                let is_host_exposed = host_exposed_procs.contains(&key.0);
+
                 let param_offset = param_map.get_param_offset(key.0, key.1);
-                env.collect_proc(&mut param_map, proc, param_offset);
+                env.collect_proc(&mut param_map, proc, param_offset, is_host_exposed);
             }
 
             if !env.modified {
@@ -868,6 +873,7 @@ impl<'a> BorrowInfState<'a> {
         param_map: &mut ParamMap<'a>,
         proc: &Proc<'a>,
         param_offset: ParamOffset,
+        is_host_exposed: bool,
     ) {
         let old = self.param_set.clone();
 
@@ -876,7 +882,14 @@ impl<'a> BorrowInfState<'a> {
         self.current_proc = proc.name.name();
 
         // ensure that current_proc is in the owned map
-        self.owned.entry(proc.name.name()).or_default();
+        let owned_entry = self.owned.entry(proc.name.name()).or_default();
+
+        // host-exposed must own all its params
+        if is_host_exposed {
+            let ParamOffset(index) = param_offset;
+            let params = &param_map.declarations[index..][..proc.args.len()];
+            owned_entry.extend(params.iter().map(|p| p.symbol));
+        }
 
         self.collect_stmt(param_map, &proc.body);
         self.update_param_map_declaration(param_map, param_offset, proc.args.len());
