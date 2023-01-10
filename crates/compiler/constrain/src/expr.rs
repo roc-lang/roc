@@ -1055,7 +1055,17 @@ pub fn constrain_expr(
                 pattern_headers,
                 pattern_constraints,
                 body_constraints,
-                // TODO(weakening)
+                // NB(weakening): ideally we never explicitly mark generalizability here, but we
+                // must currently do so to handle cases like
+                //
+                // ```
+                // \x -> when x is
+                //     Red -> Red
+                // ```
+                //
+                // because we ultimately want `[Red]*` to be generalized at the level the function
+                // argument `x` is and not pulled down into a lower rank. However we don't yet have
+                // a way to express that requirement.
                 Generalizable(true),
             );
 
@@ -2283,7 +2293,17 @@ fn constrain_when_branch_help(
                 [],
                 guard_constraint,
                 ret_constraint,
-                // TODO(weakening)
+                // NB(weakening): ideally we never explicitly mark generalizability here, but we
+                // must currently do so to handle cases like
+                //
+                // ```
+                // \x -> when x is
+                //     Red -> Red
+                // ```
+                //
+                // because we ultimately want `[Red]*` to be generalized at the level the function
+                // argument `x` is and not pulled down into a lower rank. However we don't yet have
+                // a way to express that requirement.
                 Generalizable(true),
             );
 
