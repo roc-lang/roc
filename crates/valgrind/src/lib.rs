@@ -1,10 +1,9 @@
 #![cfg(test)]
 
 use indoc::indoc;
-use std::sync::Once;
 
 #[cfg(target_os = "linux")]
-static BUILD_ONCE: Once = Once::new();
+static BUILD_ONCE: std::sync::Once = std::sync::Once::new();
 
 #[cfg(all(target_os = "linux"))]
 fn build_host() {
