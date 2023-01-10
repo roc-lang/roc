@@ -3701,7 +3701,9 @@ mod report_text {
             if fields_ommitted == 0 {
                 alloc.text("{}")
             } else {
-                alloc.text("{ … }")
+                alloc
+                    .text("{ ")
+                    .append(alloc.ellipsis().append(alloc.text(" }")))
             }
             .append(ext_doc)
         } else if entries.len() == 1 && fields_ommitted == 0 {
@@ -3715,7 +3717,7 @@ mod report_text {
                 alloc.reflow("}")
             } else {
                 alloc.vcat([
-                    alloc.text("…").indent(super::RECORD_FIELD_INDENT),
+                    alloc.ellipsis().indent(super::RECORD_FIELD_INDENT),
                     alloc.reflow("}"),
                 ])
             };
