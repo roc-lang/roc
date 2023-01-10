@@ -1055,7 +1055,8 @@ pub fn constrain_expr(
                 pattern_headers,
                 pattern_constraints,
                 body_constraints,
-                Generalizable(false),
+                // TODO(weakening)
+                Generalizable(true),
             );
 
             let result_con =
@@ -2282,7 +2283,8 @@ fn constrain_when_branch_help(
                 [],
                 guard_constraint,
                 ret_constraint,
-                Generalizable(false),
+                // TODO(weakening)
+                Generalizable(true),
             );
 
             (state_constraints, delayed_is_open_constraints, inner)
@@ -2399,7 +2401,8 @@ pub fn constrain_decls(
                     [],
                     expect_constraint,
                     constraint,
-                    Generalizable(false),
+                    // TODO(weakening)
+                    Generalizable(true),
                 )
             }
             ExpectationFx => {
@@ -2427,7 +2430,8 @@ pub fn constrain_decls(
                     [],
                     expect_constraint,
                     constraint,
-                    Generalizable(false),
+                    // TODO(weakening)
+                    Generalizable(true),
                 )
             }
             Function(function_def_index) => {
@@ -3604,7 +3608,8 @@ pub fn rec_defs_help_simple(
             }
             _ => true, // this must be a function
         });
-        Generalizable(generalizable)
+        // TODO(weakening)
+        Generalizable(generalizable || true)
     };
 
     for index in range {
@@ -3816,15 +3821,17 @@ pub fn rec_defs_help_simple(
 /// A let-bound expression is generalizable if it is
 ///   - a syntactic function under an opaque wrapper
 ///   - a number literal under an opaque wrapper
-fn is_generalizable_expr(mut expr: &Expr) -> bool {
-    loop {
-        match expr {
-            Num(..) | Int(..) | Float(..) => return true,
-            Closure(_) => return true,
-            OpaqueRef { argument, .. } => expr = &argument.1.value,
-            _ => return false,
-        }
-    }
+fn is_generalizable_expr(_expr: &Expr) -> bool {
+    // TODO(weakening)
+    // loop {
+    //     match expr {
+    //         Num(..) | Int(..) | Float(..) => return true,
+    //         Closure(_) => return true,
+    //         OpaqueRef { argument, .. } => expr = &argument.1.value,
+    //         _ => return false,
+    //     }
+    // }
+    true
 }
 
 fn constrain_recursive_defs(
@@ -3858,7 +3865,8 @@ fn rec_defs_help(
         let generalizable = defs
             .iter()
             .all(|d| is_generalizable_expr(&d.loc_expr.value));
-        Generalizable(generalizable)
+        // TODO(weakening)
+        Generalizable(generalizable || true)
     };
 
     for def in defs {
