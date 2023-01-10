@@ -3499,9 +3499,7 @@ mod report_text {
                 alloc.reflow("}")
             } else {
                 alloc.vcat([
-                    alloc
-                        .omitted_record_fields(fields_ommitted)
-                        .indent(super::RECORD_FIELD_INDENT),
+                    alloc.text("…").indent(super::RECORD_FIELD_INDENT),
                     alloc.reflow("}"),
                 ])
             };

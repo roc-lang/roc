@@ -498,21 +498,6 @@ impl<'a> RocDocAllocator<'a> {
             .append(self.softline())
     }
 
-    pub fn omitted_record_fields(
-        &'a self,
-        fields_omitted: usize,
-    ) -> DocBuilder<'a, Self, Annotation> {
-        let fields = if fields_omitted == 1 {
-            "field "
-        } else {
-            "fields"
-        };
-
-        self.text(format!(
-            "…({fields_omitted} {fields} were the same as the other type)"
-        ))
-    }
-
     pub fn note(&'a self, line: &'a str) -> DocBuilder<'a, Self, Annotation> {
         self.text("Note")
             .annotate(Annotation::Tip)
