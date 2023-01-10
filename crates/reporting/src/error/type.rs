@@ -3697,8 +3697,13 @@ mod report_text {
                 }
             };
 
-        if entries.is_empty() && fields_ommitted == 0 {
-            alloc.text("{}").append(ext_doc)
+        if entries.is_empty() {
+            if fields_ommitted == 0 {
+                alloc.text("{}")
+            } else {
+                alloc.text("{ … }")
+            }
+            .append(ext_doc)
         } else if entries.len() == 1 && fields_ommitted == 0 {
             // Single-field records get printed on one line; multi-field records get multiple lines
             alloc
