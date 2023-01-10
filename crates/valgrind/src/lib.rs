@@ -3,6 +3,7 @@
 use indoc::indoc;
 use std::sync::Once;
 
+#[cfg(target_os = "linux")]
 static BUILD_ONCE: Once = Once::new();
 
 #[cfg(all(target_os = "linux"))]
