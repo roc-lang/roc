@@ -8656,4 +8656,22 @@ mod solve_expr {
         "###
         );
     }
+
+    #[test]
+    fn rank_no_overgeneralization() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main =
+                #^^^^{-1}
+                    \x ->
+                        y = \z -> x z
+                        y
+                "#
+            ),
+        @"main : (a -[[]]-> b) -[[main(0)]]-> (a -[[y(2) (a -[[]]-> b)]]-> b)"
+        );
+    }
 }
