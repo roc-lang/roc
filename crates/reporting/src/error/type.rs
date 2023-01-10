@@ -2412,6 +2412,7 @@ fn to_doc_help<'b>(
                     })
                     .collect(),
                 record_ext_to_doc(alloc, ext),
+                0, // zero fields omitted, since this isn't a diff
             )
         }
 
@@ -2956,61 +2957,57 @@ fn diff_record<'b>(
     alloc: &'b RocDocAllocator<'b>,
     fields1: SendMap<Lowercase, RecordField<ErrorType>>,
     ext1: TypeExt,
-    fields2: SendMap<Lowercase, RecordField<ErrorType>>,
+    mut fields2: SendMap<Lowercase, RecordField<ErrorType>>,
     ext2: TypeExt,
 ) -> Diff<RocDocBuilder<'b>> {
-    let to_overlap_docs = |(field, (t1, t2)): (
-        &Lowercase,
-        &(RecordField<ErrorType>, RecordField<ErrorType>),
-    )| {
-        let diff = to_diff(
-            alloc,
-            Parens::Unnecessary,
-            t1.clone().into_inner(),
-            t2.clone().into_inner(),
-        );
+    let to_overlap_docs =
+        |(field, (t1, t2)): (Lowercase, (RecordField<ErrorType>, RecordField<ErrorType>))| {
+            let diff = to_diff(
+                alloc,
+                Parens::Unnecessary,
+                t1.clone().into_inner(),
+                t2.clone().into_inner(),
+            );
 
-        Diff {
-            left: (
-                field.clone(),
-                alloc.string(field.as_str().to_string()),
-                t1.replace(diff.left),
-            ),
-            right: (
-                field.clone(),
-                alloc.string(field.as_str().to_string()),
-                t2.replace(diff.right),
-            ),
-            status: {
-                match (&t1, &t2) {
-                    (RecordField::Demanded(_), RecordField::Optional(_))
-                    | (RecordField::Optional(_), RecordField::Demanded(_))
-                    | (
-                        RecordField::Demanded(_) | RecordField::Required(_),
-                        RecordField::RigidOptional(_),
-                    )
-                    | (
-                        RecordField::RigidOptional(_),
-                        RecordField::Demanded(_) | RecordField::Required(_),
-                    ) => match diff.status {
-                        Status::Similar => {
-                            Status::Different(vec![Problem::OptionalRequiredMismatch(
-                                field.clone(),
-                            )])
-                        }
-                        Status::Different(mut problems) => {
-                            problems.push(Problem::OptionalRequiredMismatch(field.clone()));
+            Diff {
+                left: (
+                    field.clone(),
+                    alloc.string(field.as_str().to_string()),
+                    t1.replace(diff.left),
+                ),
+                right: (
+                    field.clone(),
+                    alloc.string(field.as_str().to_string()),
+                    t2.replace(diff.right),
+                ),
+                status: {
+                    match (&t1, &t2) {
+                        (RecordField::Demanded(_), RecordField::Optional(_))
+                        | (RecordField::Optional(_), RecordField::Demanded(_))
+                        | (
+                            RecordField::Demanded(_) | RecordField::Required(_),
+                            RecordField::RigidOptional(_),
+                        )
+                        | (
+                            RecordField::RigidOptional(_),
+                            RecordField::Demanded(_) | RecordField::Required(_),
+                        ) => match diff.status {
+                            Status::Similar => {
+                                Status::Different(vec![Problem::OptionalRequiredMismatch(field)])
+                            }
+                            Status::Different(mut problems) => {
+                                problems.push(Problem::OptionalRequiredMismatch(field));
 
-                            Status::Different(problems)
-                        }
-                    },
-                    _ => diff.status,
-                }
-            },
-            left_able: diff.left_able,
-            right_able: diff.right_able,
-        }
-    };
+                                Status::Different(problems)
+                            }
+                        },
+                        _ => diff.status,
+                    }
+                },
+                left_able: diff.left_able,
+                right_able: diff.right_able,
+            }
+        };
 
     let to_unknown_docs = |(field, tipe): (&Lowercase, &RecordField<ErrorType>)| {
         (
@@ -3019,15 +3016,37 @@ fn diff_record<'b>(
             tipe.map(|t| to_doc(alloc, Parens::Unnecessary, t.clone()).0),
         )
     };
-    let shared_keys = fields1
-        .clone()
-        .intersection_with(fields2.clone(), |v1, v2| (v1, v2));
-    let left_keys = fields1.clone().relative_complement(fields2.clone());
-    let right_keys = fields2.clone().relative_complement(fields1.clone());
+    let mut same_fields_different_types = VecMap::default();
+    let mut fields_in_left_only = Vec::default();
+    let mut same_fields_same_types = 1;
 
-    let both = shared_keys.iter().map(to_overlap_docs);
-    let mut left = left_keys.iter().map(to_unknown_docs).peekable();
-    let mut right = right_keys.iter().map(to_unknown_docs).peekable();
+    for (k1, v1) in fields1.into_iter() {
+        match fields2.remove(&k1) {
+            Some(v2) if v2 != v1 => {
+                // The field names are the same but the types are different
+                same_fields_different_types.insert(k1, (v1, v2));
+            }
+            Some(_) => {
+                // They're both the same fields and the same types
+                same_fields_same_types += 1;
+            }
+            None => {
+                // Only fields1 has this field.
+                fields_in_left_only.push((k1, v1));
+            }
+        }
+    }
+
+    // We've removed all the fields that they had in common, so the remaining entries in fields2
+    // are ones that appear on the right only.
+    let fields_in_right_only = fields2;
+
+    let both = same_fields_different_types.into_iter().map(to_overlap_docs);
+    let mut left = fields_in_left_only
+        .iter()
+        .map(|(k, v)| to_unknown_docs((k, v)))
+        .peekable();
+    let mut right = fields_in_right_only.iter().map(to_unknown_docs).peekable();
 
     let all_fields_shared = left.peek().is_none() && right.peek().is_none();
 
@@ -3035,7 +3054,7 @@ fn diff_record<'b>(
         (true, true) => match left.peek() {
             Some((f, _, _)) => Status::Different(vec![Problem::FieldTypo(
                 f.clone(),
-                fields2.keys().cloned().collect(),
+                fields_in_right_only.keys().cloned().collect(),
             )]),
             None => {
                 if right.peek().is_none() {
@@ -3045,7 +3064,7 @@ fn diff_record<'b>(
                         right.map(|v| v.0).collect(),
                     )]);
                     // we just used the values in `right`.  in
-                    right = right_keys.iter().map(to_unknown_docs).peekable();
+                    right = fields_in_right_only.iter().map(to_unknown_docs).peekable();
                     result
                 }
             }
@@ -3053,14 +3072,17 @@ fn diff_record<'b>(
         (false, true) => match left.peek() {
             Some((f, _, _)) => Status::Different(vec![Problem::FieldTypo(
                 f.clone(),
-                fields2.keys().cloned().collect(),
+                fields_in_right_only.keys().cloned().collect(),
             )]),
             None => Status::Similar,
         },
         (true, false) => match right.peek() {
             Some((f, _, _)) => Status::Different(vec![Problem::FieldTypo(
                 f.clone(),
-                fields1.keys().cloned().collect(),
+                fields_in_left_only
+                    .iter()
+                    .map(|(field, _)| field.clone())
+                    .collect(),
             )]),
             None => Status::Similar,
         },
@@ -3104,6 +3126,7 @@ fn diff_record<'b>(
             .map(|(_, b, c)| (b, c))
             .collect(),
         ext_diff.left,
+        same_fields_same_types,
     );
     let doc2 = report_text::record(
         alloc,
@@ -3113,6 +3136,7 @@ fn diff_record<'b>(
             .map(|(_, b, c)| (b, c))
             .collect(),
         ext_diff.right,
+        same_fields_same_types,
     );
 
     fields_diff.status.merge(status);
@@ -3440,6 +3464,7 @@ mod report_text {
         alloc: &'b RocDocAllocator<'b>,
         entries: Vec<(RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
+        fields_ommitted: usize,
     ) -> RocDocBuilder<'b> {
         let ext_doc = if let Some(t) = opt_ext {
             t
