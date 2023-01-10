@@ -2186,10 +2186,13 @@ fn nullable_wrapped_with_nullable_not_last_index() {
                     Keyword _ -> "b"
                     CharLiteral -> "c"
 
-            main = toIdParser CharLiteral
+            main =
+                toIdParser (OneOrMore CharLiteral)
+                |> Str.concat (toIdParser (Keyword "try"))
+                |> Str.concat (toIdParser CharLiteral)
             "#
         ),
-        RocStr::from("c"),
+        RocStr::from("abc"),
         RocStr
     );
 }
