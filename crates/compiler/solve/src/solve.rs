@@ -1254,25 +1254,30 @@ fn solve(
 
                     state
                 } else {
-                    // work in the next pool to localize header
-                    let next_rank = rank.next();
+                    // If the let-binding is generalizable, work at the next rank (which will be
+                    // the rank promoted to generalization); otherwise, don't leave our rank.
+                    let binding_rank = if let_con.generalizable.0 {
+                        rank.next()
+                    } else {
+                        rank
+                    };
 
                     // introduce variables
                     for &var in rigid_vars.iter().chain(flex_vars.iter()) {
-                        subs.set_rank(var, next_rank);
+                        subs.set_rank(var, binding_rank);
                     }
 
                     // determine the next pool
-                    if next_rank.into_usize() < pools.len() {
+                    if binding_rank.into_usize() < pools.len() {
                         // Nothing to do, we already accounted for the next rank, no need to
                         // adjust the pools
                     } else {
                         // we should be off by one at this point
-                        debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
-                        pools.extend_to(next_rank.into_usize());
+                        debug_assert_eq!(binding_rank.into_usize(), 1 + pools.len());
+                        pools.extend_to(binding_rank.into_usize());
                     }
 
-                    let pool: &mut Vec<Variable> = pools.get_mut(next_rank);
+                    let pool: &mut Vec<Variable> = pools.get_mut(binding_rank);
 
                     // Replace the contents of this pool with rigid_vars and flex_vars
                     pool.clear();
@@ -1295,7 +1300,7 @@ fn solve(
                     });
                     stack.push(Work::Constraint {
                         env,
-                        rank: next_rank,
+                        rank: binding_rank,
                         constraint: defs_constraint,
                     });
 
