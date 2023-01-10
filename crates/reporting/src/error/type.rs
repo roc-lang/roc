@@ -2690,7 +2690,7 @@ fn to_diff<'b>(
         (Function(args1, _, ret1), Function(args2, _, ret2)) => {
             if args1.len() == args2.len() {
                 let mut status = Status::Similar;
-                let arg_diff = traverse(alloc, Parens::InFn, args1, args2);
+                let arg_diff = diff_args(alloc, Parens::InFn, args1, args2);
                 let ret_diff = to_diff(alloc, Parens::InFn, *ret1, *ret2);
                 status.merge(arg_diff.status);
                 status.merge(ret_diff.status);
@@ -2726,7 +2726,7 @@ fn to_diff<'b>(
             }
         }
         (Type(symbol1, args1), Type(symbol2, args2)) if symbol1 == symbol2 => {
-            let args_diff = traverse(alloc, Parens::InTypeParam, args1, args2);
+            let args_diff = diff_args(alloc, Parens::InTypeParam, args1, args2);
             let left = report_text::apply(
                 alloc,
                 parens,
@@ -2750,7 +2750,7 @@ fn to_diff<'b>(
         }
 
         (Alias(symbol1, args1, _, _), Alias(symbol2, args2, _, _)) if symbol1 == symbol2 => {
-            let args_diff = traverse(alloc, Parens::InTypeParam, args1, args2);
+            let args_diff = diff_args(alloc, Parens::InTypeParam, args1, args2);
             let left = report_text::apply(
                 alloc,
                 parens,
@@ -2908,7 +2908,7 @@ fn to_diff<'b>(
     }
 }
 
-fn traverse<'b, I>(
+fn diff_args<'b, I>(
     alloc: &'b RocDocAllocator<'b>,
     parens: Parens,
     args1: I,
@@ -3133,7 +3133,7 @@ fn same_tag_name_overlap_diff<'b>(
     args2: Vec<ErrorType>,
 ) -> Diff<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)> {
     if args1.len() == args2.len() {
-        let diff = traverse(alloc, Parens::InTypeParam, args1, args2);
+        let diff = diff_args(alloc, Parens::InTypeParam, args1, args2);
 
         Diff {
             left: (field.clone(), alloc.tag_name(field.clone()), diff.left),
