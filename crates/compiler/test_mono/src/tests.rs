@@ -2217,7 +2217,7 @@ fn issue_4749() {
 
         expect
             input = [82, 111, 99]
-            got = Decode.fromBytes input Json.fromUtf8 
+            got = Decode.fromBytes input Json.fromUtf8
             got == Ok "Roc"
         "###
     )
@@ -2246,7 +2246,7 @@ fn lambda_set_with_imported_toplevels_issue_4733() {
 fn order_list_size_tests_issue_4732() {
     indoc!(
         r###"
-        when [] is 
+        when [] is
             [1, ..]          -> "B1"
             [2, 1, ..]       -> "B2"
             [3, 2, 1, ..]    -> "B3"
@@ -2360,6 +2360,51 @@ fn nullable_wrapped_with_nullable_not_last_index() {
                 CharLiteral -> "c"
 
         main = toIdParser CharLiteral == "c"
+        "###
+    )
+}
+
+#[mono_test]
+fn pattern_as_toplevel() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        record = { a: 42i64, b: "foo" }
+
+        main =
+            when record is
+                { a: 42i64 } as r -> record == r
+                _ -> Bool.false
+        "###
+    )
+}
+
+#[mono_test]
+fn pattern_as_nested() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        record = { a: 42i64, b: "foo" }
+
+        main =
+            when Pair {} record is
+                Pair {} ({ a: 42i64 } as r) -> record == r
+                _ -> Bool.false
+        "###
+    )
+}
+
+#[mono_test]
+fn pattern_as_of_symbol() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        main =
+            when "foo" is
+                a as b -> a == b
         "###
     )
 }
