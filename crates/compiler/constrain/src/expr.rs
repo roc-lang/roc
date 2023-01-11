@@ -3609,6 +3609,7 @@ pub fn rec_defs_help_simple(
             _ => true, // this must be a function
         });
         // TODO(weakening)
+        #[allow(clippy::logic_bug)]
         Generalizable(generalizable || true)
     };
 
@@ -3866,6 +3867,7 @@ fn rec_defs_help(
             .iter()
             .all(|d| is_generalizable_expr(&d.loc_expr.value));
         // TODO(weakening)
+        #[allow(clippy::logic_bug)]
         Generalizable(generalizable || true)
     };
 
