@@ -3,6 +3,9 @@
 # https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 set -euxo pipefail
 
+# check if jq is installed
+jq --version
+
 # cd into the directory where this script lives.
 # This allows us to run this script from the root project directory,
 # which is what Netlify wants to do.
@@ -95,7 +98,7 @@ rm -rf ./downloaded-basic-cli
 
 git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
 
-cargo run --bin roc-docs downloaded-basic-cli/src/main.roc
+cargo run --release --bin roc-docs downloaded-basic-cli/src/main.roc
 
 rm -rf ./downloaded-basic-cli
 
