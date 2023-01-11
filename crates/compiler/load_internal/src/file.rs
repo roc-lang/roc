@@ -4468,23 +4468,7 @@ fn build_header<'a>(
         //
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
-            let cloned_module_name = qualified_module_name.module.clone();
-            let pq_module_name = if qualified_module_name.is_builtin() {
-                // If this is a builtin, it must be unqualified, and we should *never* prefix it
-                // with the package shorthand! The user intended to import the module as-is here.
-                debug_assert!(qualified_module_name.opt_package.is_none());
-                PQModuleName::Unqualified(qualified_module_name.module)
-            } else {
-                match qualified_module_name.opt_package {
-                    None => match opt_shorthand {
-                        Some(shorthand) => {
-                            PQModuleName::Qualified(shorthand, qualified_module_name.module)
-                        }
-                        None => PQModuleName::Unqualified(qualified_module_name.module),
-                    },
-                    Some(package) => PQModuleName::Qualified(package, cloned_module_name),
-                }
-            };
+            let pq_module_name = qualified_module_name.into_pq_module_name(opt_shorthand);
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
 
@@ -4497,18 +4481,14 @@ fn build_header<'a>(
             // to the same symbols as the ones we're using here.
             let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
-            for Loc {
-                region,
-                value: ident,
-            } in exposed_idents
-            {
-                let ident_id = ident_ids.get_or_insert(ident.as_str());
+            for loc_ident in exposed_idents {
+                let ident_id = ident_ids.get_or_insert(loc_ident.value.as_str());
                 let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
-                debug_assert!(!scope.contains_key(&ident));
+                debug_assert!(!scope.contains_key(&loc_ident.value));
 
-                scope.insert(ident, (symbol, region));
+                scope.insert(loc_ident.value, (symbol, loc_ident.region));
             }
         }
 

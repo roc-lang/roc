@@ -5263,6 +5263,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "valgrind"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "cli_utils",
+ "indoc",
+ "roc_build",
+ "roc_cli",
+ "roc_linker",
+ "roc_load",
+ "roc_mono",
+ "roc_packaging",
+ "roc_reporting",
+ "target-lexicon",
+ "tempfile",
+]
+
+[[package]]
 name = "valuable"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

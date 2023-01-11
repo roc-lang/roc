@@ -1,6 +1,8 @@
 pub use roc_ident::IdentStr;
 use std::fmt;
 
+use crate::symbol::PQModuleName;
+
 /// This could be uppercase or lowercase, qualified or unqualified.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct Ident(pub IdentStr);
@@ -19,6 +21,25 @@ impl Ident {
 pub struct QualifiedModuleName<'a> {
     pub opt_package: Option<&'a str>,
     pub module: ModuleName,
+}
+
+impl<'a> QualifiedModuleName<'a> {
+    pub fn into_pq_module_name(self, opt_shorthand: Option<&'a str>) -> PQModuleName<'a> {
+        if self.is_builtin() {
+            // If this is a builtin, it must be unqualified, and we should *never* prefix it
+            // with the package shorthand! The user intended to import the module as-is here.
+            debug_assert!(self.opt_package.is_none());
+            PQModuleName::Unqualified(self.module)
+        } else {
+            match self.opt_package {
+                None => match opt_shorthand {
+                    Some(shorthand) => PQModuleName::Qualified(shorthand, self.module),
+                    None => PQModuleName::Unqualified(self.module),
+                },
+                Some(package) => PQModuleName::Qualified(package, self.module),
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
