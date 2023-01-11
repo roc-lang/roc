@@ -3828,9 +3828,9 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             OpaqueRef { argument, .. } => expr = &argument.1.value,
             | Str(_)
             | List { .. }
+            | SingleQuote(_, _, _, _)
                 => return false,
             // TODO(weakening)
-            | SingleQuote(_, _, _, _)
             | Var(_, _)
             | AbilityMember(_, _, _)
             | When { .. }
