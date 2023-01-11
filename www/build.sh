@@ -53,8 +53,20 @@ mv generated-docs/ www/build/builtins # move all the folders to build/builtins/
 find www/build/builtins -type f -name 'index.html' -exec sed -i 's!</nav>!<div class="builtins-tip"><b>Tip:</b> <a href="/different-names">Some names</a> differ from other languages.</div></nav>!' {} \;
 
 
+# cleanup files that could have stayed behind if the script failed
+rm -rf roc_nightly roc_releases.json
+
 echo 'Fetching latest roc nightly...'
-curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
+
+if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
+  curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
+else
+  curl --request GET \
+          --url https://api.github.com/repos/roc-lang/roc/releases \
+          -u $GITHUB_TOKEN_READ_ONLY \
+          --output roc_releases.json
+fi
+
 # get the url of the latest release
 export ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh linux_x86_64)
 # get roc release archive
@@ -70,7 +82,7 @@ mkdir www/build/tutorial
 ./roc_nightly/roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
 mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
 
-# cleanup roc
+# cleanup
 rm -rf roc_nightly roc_releases.json
 
 echo 'Generating CLI example platform docs...'
