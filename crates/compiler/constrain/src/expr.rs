@@ -3826,14 +3826,11 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             Num(..) | Int(..) | Float(..) => return true,
             Closure(_) => return true,
             OpaqueRef { argument, .. } => expr = &argument.1.value,
-            | Str(_)
-            | List { .. }
-            | SingleQuote(_, _, _, _)
-            | When { .. }
-            | If { .. }
-                => return false,
+            Str(_) | List { .. } | SingleQuote(_, _, _, _) | When { .. } | If { .. } => {
+                return false
+            }
             // TODO(weakening)
-            | Var(_, _)
+            Var(_, _)
             | AbilityMember(_, _, _)
             | LetRec(_, _, _)
             | LetNonRec(_, _)
