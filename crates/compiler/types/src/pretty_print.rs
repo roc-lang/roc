@@ -427,7 +427,7 @@ fn name_all_type_vars(variable: Variable, subs: &mut Subs, debug_print: DebugPri
 fn is_weakened_unbound(subs: &Subs, var: Variable) -> bool {
     use Content::*;
     let desc = subs.get_without_compacting(var);
-    !desc.rank.is_none()
+    !desc.rank.is_generalized()
         && !matches!(
             desc.content,
             FlexVar(_) | RigidVar(_) | FlexAbleVar(..) | RigidAbleVar(..)
