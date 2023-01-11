@@ -3615,15 +3615,14 @@ fn adjust_rank(
     let desc_mark = subs.get_mark_unchecked(var);
 
     if desc_mark == young_mark {
-        let content = {
-            let ptr = subs.get_content_unchecked(var) as *const _;
-            unsafe { &*ptr }
-        };
+        let content = *subs.get_content_unchecked(var);
 
         // Mark the variable as visited before adjusting content, as it may be cyclic.
         subs.set_mark_unchecked(var, visit_mark);
 
-        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
+        // Adjust the nested types' ranks, making sure that no nested unbound type variable is at a
+        // higher rank than the group rank this `var` is at
+        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, &content);
 
         subs.set_rank_unchecked(var, max_rank);
         subs.set_mark_unchecked(var, visit_mark);
