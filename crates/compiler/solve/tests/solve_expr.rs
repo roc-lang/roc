@@ -8674,4 +8674,27 @@ mod solve_expr {
         @"main : (a -[[]]-> b) -[[main(0)]]-> (a -[[y(2) (a -[[]]-> b)]]-> b)"
         );
     }
+
+    #[test]
+    fn when_branch_variables_not_generalized() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = \{} -> when Red is
+                #^^^^{-1}
+                    x ->
+                        y : [Red]_
+                        y = x
+
+                        z : [Red, Green]_
+                        z = x
+
+                        {y, z}
+                "#
+            ),
+        @"main : {}* -[[main(0)]]-> { y : [Green, Red]a, z : [Green, Red]a }"
+        );
+    }
 }
