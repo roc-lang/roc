@@ -3820,17 +3820,41 @@ pub fn rec_defs_help_simple(
 /// A let-bound expression is generalizable if it is
 ///   - a syntactic function under an opaque wrapper
 ///   - a number literal under an opaque wrapper
-fn is_generalizable_expr(_expr: &Expr) -> bool {
-    // TODO(weakening)
-    // loop {
-    //     match expr {
-    //         Num(..) | Int(..) | Float(..) => return true,
-    //         Closure(_) => return true,
-    //         OpaqueRef { argument, .. } => expr = &argument.1.value,
-    //         _ => return false,
-    //     }
-    // }
-    true
+fn is_generalizable_expr(mut expr: &Expr) -> bool {
+    loop {
+        match expr {
+            Num(..) | Int(..) | Float(..) => return true,
+            Closure(_) => return true,
+            OpaqueRef { argument, .. } => expr = &argument.1.value,
+            | Str(_) => return false,
+            // TODO(weakening)
+            | SingleQuote(_, _, _, _)
+            | List { .. }
+            | Var(_, _)
+            | AbilityMember(_, _, _)
+            | When { .. }
+            | If { .. }
+            | LetRec(_, _, _)
+            | LetNonRec(_, _)
+            | Call(_, _, _)
+            | RunLowLevel { .. }
+            | ForeignCall { .. }
+            | Expr::Record { .. }
+            | EmptyRecord
+            | Crash { .. }
+            | Access { .. }
+            | Accessor(_)
+            | Update { .. }
+            | Tag { .. }
+            | ZeroArgumentTag { .. }
+            | OpaqueWrapFunction(_)
+            | Expect { .. }
+            | ExpectFx { .. }
+            | Dbg { .. }
+            | TypedHole(_)
+            | RuntimeError(_) => return true,
+        }
+    }
 }
 
 fn constrain_recursive_defs(
