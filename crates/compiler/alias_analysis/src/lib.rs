@@ -895,7 +895,7 @@ fn call_spec<'a>(
                         &WhenRecursive::Unreachable,
                     )?;
 
-                    let return_layout = interner.insert(return_layout);
+                    let return_layout = interner.insert(*return_layout);
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
@@ -928,7 +928,7 @@ fn call_spec<'a>(
                         with_new_heap_cell(builder, block, bag)
                     };
 
-                    let arg0_layout = interner.insert(&argument_layouts[0]);
+                    let arg0_layout = interner.insert(argument_layouts[0]);
 
                     let state_layout = Layout::Builtin(Builtin::List(arg0_layout));
                     let state_type = layout_spec(
@@ -969,7 +969,7 @@ fn call_spec<'a>(
                         &WhenRecursive::Unreachable,
                     )?;
 
-                    let return_layout = interner.insert(return_layout);
+                    let return_layout = interner.insert(*return_layout);
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
@@ -1016,7 +1016,7 @@ fn call_spec<'a>(
                         &WhenRecursive::Unreachable,
                     )?;
 
-                    let return_layout = interner.insert(return_layout);
+                    let return_layout = interner.insert(*return_layout);
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
@@ -1069,7 +1069,7 @@ fn call_spec<'a>(
                         &WhenRecursive::Unreachable,
                     )?;
 
-                    let return_layout = interner.insert(return_layout);
+                    let return_layout = interner.insert(*return_layout);
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
@@ -1246,7 +1246,7 @@ fn lowlevel_spec<'a>(
                         env,
                         builder,
                         interner,
-                        element_layout,
+                        &element_layout,
                         &WhenRecursive::Unreachable,
                     )?;
                     new_list(builder, block, type_id)
@@ -1585,7 +1585,7 @@ fn expr_spec<'a>(
                     env,
                     builder,
                     interner,
-                    element_layout,
+                    &element_layout,
                     &WhenRecursive::Unreachable,
                 )?;
                 new_list(builder, block, type_id)
@@ -1731,7 +1731,7 @@ fn layout_spec_help<'a>(
         Boxed(inner_layout) => {
             let inner_layout = interner.get(*inner_layout);
             let inner_type =
-                layout_spec_help(env, builder, interner, inner_layout, when_recursive)?;
+                layout_spec_help(env, builder, interner, &inner_layout, when_recursive)?;
             let cell_type = builder.add_heap_cell_type();
 
             builder.add_tuple_type(&[cell_type, inner_type])
@@ -1772,7 +1772,7 @@ fn builtin_spec<'a>(
         List(element_layout) => {
             let element_layout = interner.get(*element_layout);
             let element_type =
-                layout_spec_help(env, builder, interner, element_layout, when_recursive)?;
+                layout_spec_help(env, builder, interner, &element_layout, when_recursive)?;
 
             let cell = builder.add_heap_cell_type();
             let bag = builder.add_bag_type(element_type)?;

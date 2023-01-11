@@ -682,8 +682,8 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     let di_location = env.builder.get_current_debug_location().unwrap();
 
     let element_layout = layout_interner.get(element_layout);
-    let element_layout = when_recursive.unwrap_recursive_pointer(*element_layout);
-    let element_layout = layout_interner.insert(env.arena.alloc(element_layout));
+    let element_layout = when_recursive.unwrap_recursive_pointer(element_layout);
+    let element_layout = layout_interner.insert(element_layout);
     let list_layout = &Layout::Builtin(Builtin::List(element_layout));
     let (_, fn_name) = function_name_from_mode(
         layout_ids,
@@ -777,7 +777,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
 
     let element_layout = layout_interner.get(element_layout);
     if element_layout.contains_refcounted(layout_interner) {
-        let ptr_type = basic_type_from_layout(env, layout_interner, element_layout)
+        let ptr_type = basic_type_from_layout(env, layout_interner, &element_layout)
             .ptr_type(AddressSpace::Generic);
 
         let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
@@ -790,7 +790,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
                 mode.to_call_mode(fn_val),
                 when_recursive,
                 element,
-                element_layout,
+                &element_layout,
             );
         };
 
@@ -798,7 +798,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
             env,
             layout_interner,
             parent,
-            *element_layout,
+            element_layout,
             ptr,
             len,
             "modify_rc_index",

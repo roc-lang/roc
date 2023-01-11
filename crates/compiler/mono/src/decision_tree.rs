@@ -1448,9 +1448,9 @@ fn path_to_expr_help<'a>(
 
                         let elem_layout = layout_interner.get(elem_layout);
 
-                        stores.push((load_sym, *elem_layout, load_expr));
+                        stores.push((load_sym, elem_layout, load_expr));
 
-                        layout = *elem_layout;
+                        layout = elem_layout;
                         symbol = load_sym;
                     }
                     _ => internal_error!("not a list"),

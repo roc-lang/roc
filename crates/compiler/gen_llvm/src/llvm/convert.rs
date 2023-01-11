@@ -45,7 +45,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
         ),
         Boxed(inner_layout) => {
             let inner_layout = layout_interner.get(*inner_layout);
-            let inner_type = basic_type_from_layout(env, layout_interner, inner_layout);
+            let inner_type = basic_type_from_layout(env, layout_interner, &inner_layout);
 
             inner_type.ptr_type(AddressSpace::Generic).into()
         }

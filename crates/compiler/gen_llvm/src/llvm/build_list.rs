@@ -118,8 +118,8 @@ pub(crate) fn list_with_capacity<'a, 'ctx, 'env>(
         &[],
         &[
             capacity.into(),
-            env.alignment_intvalue(layout_interner, element_layout),
-            layout_width(env, layout_interner, element_layout),
+            env.alignment_intvalue(layout_interner, &element_layout),
+            layout_width(env, layout_interner, &element_layout),
         ],
         BitcodeReturns::List,
         bitcode::LIST_WITH_CAPACITY,
@@ -137,7 +137,7 @@ pub(crate) fn list_get_unsafe<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let element_layout = layout_interner.get(element_layout);
-    let elem_type = basic_type_from_layout(env, layout_interner, element_layout);
+    let elem_type = basic_type_from_layout(env, layout_interner, &element_layout);
     let ptr_type = elem_type.ptr_type(AddressSpace::Generic);
     // Load the pointer to the array data
     let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
@@ -156,12 +156,12 @@ pub(crate) fn list_get_unsafe<'a, 'ctx, 'env>(
     let result = load_roc_value(
         env,
         layout_interner,
-        *element_layout,
+        element_layout,
         elem_ptr,
         "list_get_load_element",
     );
 
-    increment_refcount_layout(env, layout_interner, layout_ids, 1, result, element_layout);
+    increment_refcount_layout(env, layout_interner, layout_ids, 1, result, &element_layout);
 
     result
 }
@@ -180,9 +180,9 @@ pub(crate) fn list_reserve<'a, 'ctx, 'env>(
         env,
         list.into_struct_value(),
         &[
-            env.alignment_intvalue(layout_interner, element_layout),
+            env.alignment_intvalue(layout_interner, &element_layout),
             spare,
-            layout_width(env, layout_interner, element_layout),
+            layout_width(env, layout_interner, &element_layout),
             pass_update_mode(env, update_mode),
         ],
         bitcode::LIST_RESERVE,
@@ -243,8 +243,8 @@ pub(crate) fn list_swap<'a, 'ctx, 'env>(
         env,
         original_wrapper,
         &[
-            env.alignment_intvalue(layout_interner, element_layout),
-            layout_width(env, layout_interner, element_layout),
+            env.alignment_intvalue(layout_interner, &element_layout),
+            layout_width(env, layout_interner, &element_layout),
             index_1.into(),
             index_2.into(),
             pass_update_mode(env, update_mode),
@@ -264,13 +264,13 @@ pub(crate) fn list_sublist<'a, 'ctx, 'env>(
     element_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let element_layout = layout_interner.get(element_layout);
-    let dec_element_fn = build_dec_wrapper(env, layout_interner, layout_ids, element_layout);
+    let dec_element_fn = build_dec_wrapper(env, layout_interner, layout_ids, &element_layout);
     call_list_bitcode_fn_1(
         env,
         original_wrapper,
         &[
-            env.alignment_intvalue(layout_interner, element_layout),
-            layout_width(env, layout_interner, element_layout),
+            env.alignment_intvalue(layout_interner, &element_layout),
+            layout_width(env, layout_interner, &element_layout),
             start.into(),
             len.into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
@@ -289,13 +289,13 @@ pub(crate) fn list_drop_at<'a, 'ctx, 'env>(
     element_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
     let element_layout = layout_interner.get(element_layout);
-    let dec_element_fn = build_dec_wrapper(env, layout_interner, layout_ids, element_layout);
+    let dec_element_fn = build_dec_wrapper(env, layout_interner, layout_ids, &element_layout);
     call_list_bitcode_fn_1(
         env,
         original_wrapper,
         &[
-            env.alignment_intvalue(layout_interner, element_layout),
-            layout_width(env, layout_interner, element_layout),
+            env.alignment_intvalue(layout_interner, &element_layout),
+            layout_width(env, layout_interner, &element_layout),
             count.into(),
             dec_element_fn.as_global_value().as_pointer_value().into(),
         ],
@@ -624,8 +624,8 @@ pub(crate) fn list_concat<'a, 'ctx, 'env>(
         env,
         &[list1.into_struct_value(), list2.into_struct_value()],
         &[
-            env.alignment_intvalue(layout_interner, element_layout),
-            layout_width(env, layout_interner, element_layout),
+            env.alignment_intvalue(layout_interner, &element_layout),
+            layout_width(env, layout_interner, &element_layout),
         ],
         BitcodeReturns::List,
         bitcode::LIST_CONCAT,

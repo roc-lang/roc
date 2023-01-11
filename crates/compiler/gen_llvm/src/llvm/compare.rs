@@ -435,7 +435,7 @@ fn build_list_eq<'a, 'ctx, 'env>(
 
     let symbol = Symbol::LIST_EQ;
     let element_layout = layout_interner.get(element_layout);
-    let element_layout = when_recursive.unwrap_recursive_pointer(*element_layout);
+    let element_layout = when_recursive.unwrap_recursive_pointer(element_layout);
     let fn_name = layout_ids
         .get(symbol, &element_layout)
         .to_symbol_string(symbol, &env.interns);
@@ -1458,8 +1458,8 @@ fn build_box_eq_help<'a, 'ctx, 'env>(
 
     let inner_layout = layout_interner.get(inner_layout);
 
-    let value1 = load_roc_value(env, layout_interner, *inner_layout, box1, "load_box1");
-    let value2 = load_roc_value(env, layout_interner, *inner_layout, box2, "load_box2");
+    let value1 = load_roc_value(env, layout_interner, inner_layout, box1, "load_box1");
+    let value2 = load_roc_value(env, layout_interner, inner_layout, box2, "load_box2");
 
     let is_equal = build_eq(
         env,
@@ -1467,8 +1467,8 @@ fn build_box_eq_help<'a, 'ctx, 'env>(
         layout_ids,
         value1,
         value2,
-        inner_layout,
-        inner_layout,
+        &inner_layout,
+        &inner_layout,
         when_recursive,
     );
 

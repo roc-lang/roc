@@ -187,7 +187,7 @@ pub fn refcount_generic<'a>(
                 ctx,
                 layout_interner,
                 &layout,
-                inner_layout,
+                &inner_layout,
                 structure,
             )
         }
@@ -429,7 +429,7 @@ where
     match layout {
         Layout::Builtin(Builtin::List(elem_layout)) => {
             let elem_layout = interner.get(*elem_layout);
-            is_rc_implemented_yet(interner, elem_layout)
+            is_rc_implemented_yet(interner, &elem_layout)
         }
         Layout::Builtin(_) => true,
         Layout::Struct { field_layouts, .. } => field_layouts
@@ -775,7 +775,7 @@ fn refcount_list<'a>(
     let elem_layout = layout_interner.get(elem_layout);
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_union_layout = UnionLayout::NonNullableUnwrapped(arena.alloc([*elem_layout]));
+    let box_union_layout = UnionLayout::NonNullableUnwrapped(arena.alloc([elem_layout]));
     let box_layout = Layout::Union(box_union_layout);
 
     //
@@ -843,7 +843,7 @@ fn refcount_list<'a>(
             ident_ids,
             ctx,
             layout_interner,
-            elem_layout,
+            &elem_layout,
             LAYOUT_UNIT,
             box_union_layout,
             len,
@@ -1684,8 +1684,8 @@ fn refcount_boxed<'a>(
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
     layout_interner: &mut STLayoutInterner<'a>,
-    layout: &Layout,
-    inner_layout: &'a Layout,
+    layout: &Layout<'a>,
+    inner_layout: &Layout<'a>,
     outer: Symbol,
 ) -> Stmt<'a> {
     let arena = root.arena;

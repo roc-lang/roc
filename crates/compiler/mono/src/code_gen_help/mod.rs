@@ -446,8 +446,8 @@ impl<'a> CodeGenHelp<'a> {
     ) -> Layout<'a> {
         match layout {
             Layout::Builtin(Builtin::List(v)) => {
-                let v = self.replace_rec_ptr(ctx, layout_interner, *layout_interner.get(v));
-                let v = layout_interner.insert(self.arena.alloc(v));
+                let v = self.replace_rec_ptr(ctx, layout_interner, layout_interner.get(v));
+                let v = layout_interner.insert(v);
                 Layout::Builtin(Builtin::List(v))
             }
 
@@ -487,9 +487,7 @@ impl<'a> CodeGenHelp<'a> {
 
             Layout::Boxed(inner) => {
                 let inner = layout_interner.get(inner);
-                let inner = self
-                    .arena
-                    .alloc(self.replace_rec_ptr(ctx, layout_interner, *inner));
+                let inner = self.replace_rec_ptr(ctx, layout_interner, inner);
                 let inner = layout_interner.insert(inner);
                 Layout::Boxed(inner)
             }

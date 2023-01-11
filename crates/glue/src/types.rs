@@ -1098,7 +1098,7 @@ fn add_builtin_type<'a>(
             debug_assert_eq!(args.len(), 1);
 
             let elem_layout = env.layout_cache.get_in(elem_layout);
-            let elem_id = add_type_help(env, *elem_layout, args[0], opt_name, types);
+            let elem_id = add_type_help(env, elem_layout, args[0], opt_name, types);
             let list_id = types.add_anonymous(
                 &env.layout_cache.interner,
                 RocType::RocList(elem_id),
@@ -1114,7 +1114,7 @@ fn add_builtin_type<'a>(
             Alias(Symbol::DICT_DICT, _alias_variables, alias_var, AliasKind::Opaque),
         ) => {
             match (
-                *env.layout_cache.get_in(elem_layout),
+                env.layout_cache.get_in(elem_layout),
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
@@ -1458,7 +1458,7 @@ fn add_tag_union<'a>(
         Layout::Boxed(elem_layout) => {
             let elem_layout = env.layout_cache.get_in(elem_layout);
             let (tag_name, payload_fields) =
-                single_tag_payload_fields(union_tags, subs, &[*elem_layout], env, types);
+                single_tag_payload_fields(union_tags, subs, &[elem_layout], env, types);
 
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
