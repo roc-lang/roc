@@ -620,22 +620,6 @@ mod solve_expr {
     }
 
     #[test]
-    fn concat_different_types() {
-        infer_eq(
-            indoc!(
-                r#"
-                empty = []
-                one = List.concat [1] empty
-                str = List.concat ["blah"] empty
-
-                empty
-            "#
-            ),
-            "List *",
-        );
-    }
-
-    #[test]
     fn list_of_one_int() {
         infer_eq(
             indoc!(
@@ -3959,11 +3943,11 @@ mod solve_expr {
                 f : List a -> List a
                 f = \input ->
                     # let-polymorphism at work
-                    x : List b
-                    x = []
+                    x : {} -> List b
+                    x = \{} -> []
 
                     when List.get input 0 is
-                        Ok val -> List.append x val
+                        Ok val -> List.append (x {}) val
                         Err _ -> input
                 f
                 "#
@@ -6951,7 +6935,7 @@ mod solve_expr {
                 #^^^^^^^^^^^^^^^^^^^^^^{-1}
                 "#
             ),
-            @r###"[\{} -> {}, \{} -> {}] : List ({}* -[[1, 2]]-> {})"###
+            @r###"[\{} -> {}, \{} -> {}] : List ({}w_a -[[1, 2]]-> {})"###
         )
     }
 
@@ -7678,7 +7662,7 @@ mod solve_expr {
                         A _ C -> ""
                 "#
             ),
-            @r#"x : [A [B]* [C]*]"#
+            @r#"x : [A [B]w_a [C]w_b]"#
             allow_errors: true
         );
     }
@@ -7694,7 +7678,7 @@ mod solve_expr {
                         _ -> ""
                 "#
             ),
-            @r#"x : { a : [A { b : [B]* }*]* }*"#
+            @"x : { a : [A { b : [B]w_a }*]w_b }*"
         );
     }
 
@@ -8695,6 +8679,21 @@ mod solve_expr {
                 "#
             ),
         @"main : {}* -[[main(0)]]-> { y : [Green, Red]a, z : [Green, Red]a }"
+        );
+    }
+
+    #[test]
+    fn weakened_list() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = []
+                #^^^^{-1}
+                "#
+            ),
+        @"main : List w_a"
         );
     }
 }

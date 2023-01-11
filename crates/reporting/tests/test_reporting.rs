@@ -12817,4 +12817,34 @@ I recommend using camelCase. It's the standard style in Roc code!
     @r###"
     "###
     );
+
+    // TODO(weakening-reports)
+    test_report!(
+        concat_different_types,
+        indoc!(
+            r#"
+            empty = []
+            one = List.concat [1] empty
+            str = List.concat ["blah"] empty
+
+            {one, str}
+        "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 2nd argument to `concat` has an unexpected type:
+
+    6│      str = List.concat ["blah"] empty
+                                       ^^^^^
+
+    This `empty` value is a:
+
+        List (Num *)
+
+    But `concat` needs its 2nd argument to be:
+
+        List Str
+    "###
+    );
 }

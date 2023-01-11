@@ -3826,10 +3826,11 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             Num(..) | Int(..) | Float(..) => return true,
             Closure(_) => return true,
             OpaqueRef { argument, .. } => expr = &argument.1.value,
-            | Str(_) => return false,
+            | Str(_)
+            | List { .. }
+                => return false,
             // TODO(weakening)
             | SingleQuote(_, _, _, _)
-            | List { .. }
             | Var(_, _)
             | AbilityMember(_, _, _)
             | When { .. }
