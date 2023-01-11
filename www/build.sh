@@ -58,6 +58,7 @@ rm -rf roc_nightly roc_releases.json
 
 echo 'Fetching latest roc nightly...'
 
+# to prevent GitHub from rate limiting netlify servers
 if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
   curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
 else
