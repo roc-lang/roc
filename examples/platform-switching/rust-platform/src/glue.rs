@@ -87,6 +87,56 @@ union union_Op {
 //TODO HAS CLOSURE 2
 
 #[cfg(any(
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "wasm32",
+    target_arch = "x86",
+    target_arch = "x86_64"
+))]
+
+#[repr(C)]
+pub struct RocFunction_65 {
+    pub closure_data: (),
+}
+
+impl RocFunction_65 {
+    pub fn force_thunk(self, ) -> Op {
+        extern "C" {
+             fn roc__mainForHost_1__Fx2_caller(output: *mut Op, );
+        }
+
+        let mut output = std::mem::MaybeUninit::uninit();
+        unsafe { roc__mainForHost_1__Fx2_caller(output.as_mut_ptr(), ) };
+        unsafe { output.assume_init() }
+    }
+}
+
+#[cfg(any(
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "wasm32",
+    target_arch = "x86",
+    target_arch = "x86_64"
+))]
+
+#[repr(C)]
+pub struct RocFunction_67 {
+    pub closure_data: (),
+}
+
+impl RocFunction_67 {
+    pub fn force_thunk(self, ) -> Op {
+        extern "C" {
+             fn roc__mainForHost_1__Fx2_caller(output: *mut Op, );
+        }
+
+        let mut output = std::mem::MaybeUninit::uninit();
+        unsafe { roc__mainForHost_1__Fx2_caller(output.as_mut_ptr(), ) };
+        unsafe { output.assume_init() }
+    }
+}
+
+#[cfg(any(
     target_arch = "aarch64",
     target_arch = "x86_64"
 ))]
@@ -95,21 +145,6 @@ union union_Op {
     StderrWrite: core::mem::ManuallyDrop<Op_StderrWrite>,
     StdoutWrite: core::mem::ManuallyDrop<Op_StdoutWrite>,
     _sizer: [u8; 8],
-}
-
-#[derive(Clone)]
-struct RocFunction_3 { 
-    closure_data: T
-}
-
-impl RocFunction_3 { 
-    pub fn call(self) -> U { 
-        extern "C" { 
-            fn call_the_closure(T) -> U ;
-        }
-
-        call_the_closure(self.closure_data)
-    }
 }
 
 impl Op {
@@ -224,12 +259,12 @@ impl Op {
     /// Unsafely assume this `Op` has a `.discriminant()` of `StderrWrite` and return its payload at index 1.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `StderrWrite`.
-    pub unsafe fn get_StderrWrite_1(&self) -> TODO_roc_function_69 {
+    pub unsafe fn get_StderrWrite_1(&self) -> RocFunction_67 {
         debug_assert_eq!(self.discriminant(), discriminant_Op::StderrWrite);
 
         extern "C" {
             #[link_name = "roc__getter__3"]
-            fn getter(_: *mut TODO_roc_function_69, _: *const Op);
+            fn getter(_: *mut RocFunction_67, _: *const Op);
         }
 
         let mut ret = core::mem::MaybeUninit::uninit();
@@ -346,12 +381,12 @@ impl Op {
     /// Unsafely assume this `Op` has a `.discriminant()` of `StdoutWrite` and return its payload at index 1.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `StdoutWrite`.
-    pub unsafe fn get_StdoutWrite_1(&self) -> TODO_roc_function_70 {
+    pub unsafe fn get_StdoutWrite_1(&self) -> RocFunction_65 {
         debug_assert_eq!(self.discriminant(), discriminant_Op::StdoutWrite);
 
         extern "C" {
             #[link_name = "roc__getter__3"]
-            fn getter(_: *mut TODO_roc_function_70, _: *const Op);
+            fn getter(_: *mut RocFunction_65, _: *const Op);
         }
 
         let mut ret = core::mem::MaybeUninit::uninit();

@@ -17,7 +17,7 @@ use roc_mono::layout::{
 };
 use roc_target::TargetInfo;
 use roc_types::{
-    subs::{Content, FlatType, GetSubsSlice, Subs, UnionLabels, UnionTags, Variable},
+    subs::{Content, FlatType, GetSubsSlice, Label, Subs, UnionLabels, Variable},
     types::{AliasKind, RecordField},
 };
 use std::fmt::Display;
@@ -393,11 +393,13 @@ impl Types {
                 Function(RocFn {
                     name: name_a,
                     args: args_a,
+                    lambda_set: lambda_a,
                     ret: ret_a,
                 }),
                 Function(RocFn {
                     name: name_b,
                     args: args_b,
+                    lambda_set: lambda_b,
                     ret: ret_b,
                 }),
             ) => {
@@ -405,6 +407,10 @@ impl Types {
                 // with the same type could have completely different implementations!
                 if name_a == name_b
                     && args_a.len() == args_b.len()
+                    && self.is_equivalent_help(
+                        self.get_type_or_pending(*lambda_a),
+                        self.get_type_or_pending(*lambda_b),
+                    )
                     && self.is_equivalent_help(
                         self.get_type_or_pending(*ret_a),
                         self.get_type_or_pending(*ret_b),
@@ -625,6 +631,7 @@ impl RocStructFields {
 pub struct RocFn {
     pub name: String,
     pub args: Vec<TypeId>,
+    pub lambda_set: TypeId,
     pub ret: TypeId,
 }
 
@@ -965,6 +972,15 @@ fn add_type_help<'a>(
                 arg_type_ids.push(add_type_help(env, arg_layout, *arg_var, None, types));
             }
 
+            let lambda_set_type_id = {
+                let lambda_set_layout = env
+                    .layout_cache
+                    .from_var(env.arena, *closure_var, env.subs)
+                    .expect("Something weird ended up in the content");
+
+                add_type_help(env, lambda_set_layout, *closure_var, None, types)
+            };
+
             let ret_type_id = {
                 let ret_layout = env
                     .layout_cache
@@ -975,16 +991,15 @@ fn add_type_help<'a>(
             };
 
             let name = format!("RocFunction_{:?}", closure_var);
-            let fn_type_id = types.add_named(
-                &env.layout_cache.interner,
-                name.clone(),
+
+            let fn_type_id = add_function(env, name, types, layout, |name| {
                 RocType::Function(RocFn {
                     name,
                     args: arg_type_ids.clone(),
+                    lambda_set: lambda_set_type_id,
                     ret: ret_type_id,
-                }),
-                layout,
-            );
+                })
+            });
 
             types.depends(fn_type_id, ret_type_id);
 
@@ -1141,7 +1156,16 @@ fn add_type_help<'a>(
 
             type_id
         }
-        Content::LambdaSet(_) => todo!(),
+        Content::LambdaSet(lambda_set) => {
+            let tags = lambda_set.solved;
+
+            if tags.is_empty() {
+                // this function does not capture anything. Represent that at runtime as a unit value
+                types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
+            } else {
+                add_tag_union(env, opt_name, &tags, var, types, layout, None)
+            }
+        }
     }
 }
 
@@ -1336,6 +1360,27 @@ fn add_builtin_type<'a>(
     }
 }
 
+fn add_function<'a, F>(
+    env: &mut Env<'a>,
+    name: String,
+    types: &mut Types,
+    layout: Layout<'a>,
+    to_type: F,
+) -> TypeId
+where
+    F: FnOnce(String) -> RocType,
+{
+    // let subs = env.subs;
+    // let arena = env.arena;
+
+    types.add_named(
+        &env.layout_cache.interner,
+        name.clone(),
+        to_type(name),
+        layout,
+    )
+}
+
 fn add_struct<'a, I, L, F>(
     env: &mut Env<'a>,
     name: String,
@@ -1421,22 +1466,34 @@ where
     )
 }
 
-fn add_tag_union<'a>(
+trait UnionTag: Label + std::fmt::Debug {
+    fn union_tag_name(&self) -> String;
+}
+
+impl UnionTag for TagName {
+    fn union_tag_name(&self) -> String {
+        self.0.as_str().to_string()
+    }
+}
+
+impl UnionTag for Symbol {
+    fn union_tag_name(&self) -> String {
+        format!("C{:?}_{}", self.module_id(), self.ident_id().index())
+    }
+}
+
+fn tag_union_type_from_layout<'a>(
     env: &mut Env<'a>,
     opt_name: Option<Symbol>,
-    union_tags: &UnionTags,
+    name: String,
+    union_tags: &UnionLabels<impl UnionTag>,
     var: Variable,
     types: &mut Types,
     layout: Layout<'a>,
-    rec_root: Option<Variable>,
-) -> TypeId {
+) -> RocTagUnion {
     let subs = env.subs;
-    let name = match opt_name {
-        Some(sym) => sym.as_str(env.interns).to_string(),
-        None => env.enum_names.get_name(var),
-    };
 
-    let tag_union_type = match layout {
+    match layout {
         _ if union_tags.is_newtype_wrapper(subs)
             && matches!(
                 subs.get_content_without_compacting(var),
@@ -1453,7 +1510,7 @@ fn add_tag_union<'a>(
 
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
-                tag_name: tag_name.to_string(),
+                tag_name,
                 payload,
             }
         }
@@ -1509,7 +1566,7 @@ fn add_tag_union<'a>(
                     // e.g. `RoseTree a : [Tree a (List (RoseTree a))]`
                     RocTagUnion::NonNullableUnwrapped {
                         name: name.clone(),
-                        tag_name: tag_name.to_string(),
+                        tag_name,
                         payload: opt_payload.unwrap(),
                     }
                 }
@@ -1620,19 +1677,50 @@ fn add_tag_union<'a>(
 
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
-                tag_name: tag_name.to_string(),
+                tag_name,
                 payload: payload_fields,
             }
         }
-        Layout::LambdaSet(_) => {
-            todo!();
-        }
+        Layout::LambdaSet(lambda_set) => tag_union_type_from_layout(
+            env,
+            opt_name,
+            name,
+            union_tags,
+            var,
+            types,
+            lambda_set.runtime_representation(&env.layout_cache.interner),
+        ),
         Layout::RecursivePointer => {
             // A single-tag union which only wraps itself is erroneous and should have
             // been turned into an error earlier in the process.
             unreachable!();
         }
+    }
+}
+
+fn add_tag_union<'a>(
+    env: &mut Env<'a>,
+    opt_name: Option<Symbol>,
+    union_tags: &UnionLabels<impl UnionTag>,
+    var: Variable,
+    types: &mut Types,
+    layout: Layout<'a>,
+    rec_root: Option<Variable>,
+) -> TypeId {
+    let name = match opt_name {
+        Some(sym) => sym.as_str(env.interns).to_string(),
+        None => env.enum_names.get_name(var),
     };
+
+    let tag_union_type = tag_union_type_from_layout(
+        env,
+        opt_name,
+        name.to_string(),
+        union_tags,
+        var,
+        types,
+        layout,
+    );
 
     let typ = RocType::TagUnion(tag_union_type);
     let type_id = types.add_named(&env.layout_cache.interner, name, typ, layout);
@@ -1645,14 +1733,14 @@ fn add_tag_union<'a>(
 }
 
 fn add_int_enumeration(
-    union_tags: &UnionLabels<TagName>,
+    union_tags: &UnionLabels<impl UnionTag>,
     subs: &Subs,
     name: &str,
     int_width: IntWidth,
 ) -> RocTagUnion {
     let tags: Vec<String> = union_tags
         .iter_from_subs(subs)
-        .map(|(tag_name, _)| tag_name.0.as_str().to_string())
+        .map(|(tag_name, _)| tag_name.union_tag_name())
         .collect();
     RocTagUnion::Enumeration {
         name: name.to_string(),
@@ -1663,7 +1751,7 @@ fn add_int_enumeration(
 
 fn union_tags_to_types<'a>(
     name: &str,
-    union_tags: &UnionLabels<TagName>,
+    union_tags: &UnionLabels<impl UnionTag>,
     subs: &Subs,
     env: &mut Env<'a>,
     types: &mut Types,
@@ -1673,7 +1761,7 @@ fn union_tags_to_types<'a>(
     let mut tags: Vec<(String, Vec<Variable>)> = union_tags
         .iter_from_subs(subs)
         .map(|(tag_name, payload_vars)| {
-            let name_str = tag_name.0.as_str().to_string();
+            let name_str = tag_name.union_tag_name();
 
             (name_str, payload_vars.to_vec())
         })
@@ -1698,25 +1786,25 @@ fn union_tags_to_types<'a>(
 }
 
 fn single_tag_payload<'a>(
-    union_tags: &'a UnionLabels<TagName>,
+    union_tags: &'a UnionLabels<impl UnionTag>,
     subs: &'a Subs,
-) -> (&'a str, &'a [Variable]) {
+) -> (String, &'a [Variable]) {
     let mut iter = union_tags.iter_from_subs(subs);
     let (tag_name, payload_vars) = iter.next().unwrap();
     // This should be a single-tag union.
-    debug_assert_eq!(iter.next(), None);
+    debug_assert!(iter.next().is_none());
 
-    (tag_name.0.as_str(), payload_vars)
+    (tag_name.union_tag_name(), payload_vars)
 }
 
 fn single_tag_payload_fields<'a, 'b>(
-    union_tags: &'b UnionLabels<TagName>,
+    union_tags: &'b UnionLabels<impl UnionTag>,
     subs: &'b Subs,
     layout: Layout<'a>,
     field_layouts: &[Layout<'a>],
     env: &mut Env<'a>,
     types: &mut Types,
-) -> (&'b str, RocSingleTagPayload) {
+) -> (String, RocSingleTagPayload) {
     // There should be a glue_procs_by_layout entry iff this layout has a closure in it,
     // so we shouldn't need to separately check that. Howeevr, we still do a debug_assert
     // anyway just so we have some warning in case that relationship somehow didn't hold!

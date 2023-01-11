@@ -290,9 +290,7 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
             // This is recursively pointing to a type that should already have been added,
             // so no extra work needs to happen.
         }
-        RocType::Function(RocFn { .. }) => {
-            // TODO actually generate glue functions!
-        }
+        RocType::Function(roc_fn) => add_function(target_info, roc_fn, types, impls),
     }
 }
 
@@ -638,6 +636,7 @@ fn add_tag_union(
     types: &Types,
     impls: &mut Impls,
 ) {
+    dbg!("adding", name);
     let name = escape_kw(name.to_string());
 
     // We should never be attempting to generate glue for empty tag unions;
@@ -1805,6 +1804,83 @@ fn add_enumeration<I: ExactSizeIterator<Item = S>, S: AsRef<str> + Display>(
     }
 
     write!(buf, "}}\n\n{debug_buf}{INDENT}{INDENT}}}\n{INDENT}}}\n}}").unwrap();
+
+    add_decl(impls, None, target_info, buf);
+}
+
+fn add_function(
+    // name: &str,
+    target_info: TargetInfo,
+    roc_fn: &RocFn,
+    types: &Types,
+    impls: &mut Impls,
+) {
+    let name = escape_kw(roc_fn.name.to_string());
+    // let derive = derive_str(types.get_type(struct_id), types, true);
+    let derive = "";
+    let pub_str = "pub ";
+    let mut buf;
+
+    let repr = "C";
+    buf = format!("{derive}\n#[repr({repr})]\n{pub_str}struct {name} {{\n");
+
+    let fields = [("closure_data", &roc_fn.lambda_set)];
+
+    for (label, type_id) in fields {
+        let type_str = type_name(*type_id, types);
+
+        // Tag union payloads have numbered fields, so we prefix them
+        // with an "f" because Rust doesn't allow struct fields to be numbers.
+        let label = escape_kw(label.to_string());
+
+        writeln!(buf, "{INDENT}pub {label}: {type_str},",).unwrap();
+    }
+
+    buf.push('}');
+
+    buf.push('\n');
+    buf.push('\n');
+
+    let arguments = "";
+    let argument_types = "";
+    let argument_names = "";
+    let extern_name = "roc__mainForHost_1__Fx2_caller";
+
+    let return_type_str = type_name(roc_fn.ret, types);
+
+    writeln!(buf, "impl {name} {{").unwrap();
+    writeln!(
+        buf,
+        "{INDENT}pub fn force_thunk(self, {arguments}) -> {return_type_str} {{"
+    )
+    .unwrap();
+
+    writeln!(buf, "{INDENT}{INDENT}extern \"C\" {{").unwrap();
+    writeln!(
+        buf,
+        "{INDENT}{INDENT}{INDENT} fn {extern_name}(output: *mut {return_type_str}, {argument_types});"
+    )
+    .unwrap();
+    writeln!(buf, "{INDENT}{INDENT}}}").unwrap();
+
+    writeln!(buf).unwrap();
+
+    writeln!(
+        buf,
+        "{INDENT}{INDENT}let mut output = std::mem::MaybeUninit::uninit();"
+    )
+    .unwrap();
+
+    writeln!(
+        buf,
+        "{INDENT}{INDENT}unsafe {{ {extern_name}(output.as_mut_ptr(), {argument_names}) }};"
+    )
+    .unwrap();
+
+    writeln!(buf, "{INDENT}{INDENT}unsafe {{ output.assume_init() }}").unwrap();
+
+    writeln!(buf, "{INDENT}}}").unwrap();
+    buf.push('}');
 
     add_decl(impls, None, target_info, buf);
 }

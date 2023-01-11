@@ -10999,6 +10999,7 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
                 }
             },
             Layout::LambdaSet(lambda_set) => {
+                // TODO generate closure caller
                 stack.push(lambda_set.runtime_representation(layout_interner))
             }
             Layout::RecursivePointer => {

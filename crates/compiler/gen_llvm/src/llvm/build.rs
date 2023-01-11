@@ -5233,7 +5233,7 @@ fn build_host_exposed_alias_size_help<'a, 'ctx, 'env>(
     builder.build_return(Some(&size));
 }
 
-pub fn build_proc<'a, 'ctx, 'env>(
+fn build_proc<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,

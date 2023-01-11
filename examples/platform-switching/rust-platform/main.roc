@@ -5,11 +5,13 @@ platform "echo-in-rust"
     imports []
     provides [mainForHost]
 
-Op : [StdoutWrite Str ({} -> Op), StderrWrite Str ({} -> Op), Done]
 
-
-# mainForHost : { bar: Str, foo: I64 -> I64 }
-# mainForHost = { bar: main, foo: \x -> x }
-
-mainForHost : Op
+mainForHost : [StdoutWrite Str (({} -> Op) as Fx1), StderrWrite Str (({} -> Op) as Fx2), Done] as Op
 mainForHost = main
+
+# mainForHost : { x: Str, y: {} -> Str }
+# mainForHost = 
+#     y = "foo"
+# 
+#     when main is
+#         _ -> { x: "bar", y: \{} -> y }
