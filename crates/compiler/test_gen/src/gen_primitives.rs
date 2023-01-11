@@ -3418,7 +3418,9 @@ fn polymorphic_lambda_set_multiple_specializations() {
             r#"
             id1 = \x -> x
             id2 = \y -> y
-            id = if Bool.true then id1 else id2
+            id = \z ->
+                f = if Bool.true then id1 else id2
+                f z
 
             (id 9u8) + Num.toU8 (id 16u16)
             "#

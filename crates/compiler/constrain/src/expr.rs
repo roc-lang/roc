@@ -3830,11 +3830,11 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | List { .. }
             | SingleQuote(_, _, _, _)
             | When { .. }
+            | If { .. }
                 => return false,
             // TODO(weakening)
             | Var(_, _)
             | AbilityMember(_, _, _)
-            | If { .. }
             | LetRec(_, _, _)
             | LetNonRec(_, _)
             | Call(_, _, _)
