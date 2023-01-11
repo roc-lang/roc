@@ -2401,8 +2401,7 @@ pub fn constrain_decls(
                     [],
                     expect_constraint,
                     constraint,
-                    // TODO(weakening)
-                    Generalizable(true),
+                    Generalizable(false),
                 )
             }
             ExpectationFx => {
@@ -2430,8 +2429,7 @@ pub fn constrain_decls(
                     [],
                     expect_constraint,
                     constraint,
-                    // TODO(weakening)
-                    Generalizable(true),
+                    Generalizable(false),
                 )
             }
             Function(function_def_index) => {
