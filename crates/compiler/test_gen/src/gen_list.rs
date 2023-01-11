@@ -3461,11 +3461,11 @@ fn issue_3530_uninitialized_capacity_in_list_literal() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn list_let_generalization() {
+fn list_infer_usage() {
     assert_evals_to!(
         indoc!(
             r#"
-            empty : List a
+            empty : List _
             empty = []
 
             xs : List Str
