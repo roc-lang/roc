@@ -826,9 +826,12 @@ fn solve(
                     0
                 );
 
-                // pop pool
-                generalize(subs, young_mark, visit_mark, next_rank, pools);
-                debug_assert!(pools.get(next_rank).is_empty());
+                // If the let-binding is eligible for generalization, it was solved at the
+                // next-higher level. Those that are still at that level (intuitively, they did not
+                // "escape" into the lower level before or after the let-binding) now get to be
+                // generalized.
+                generalize(subs, young_mark, visit_mark, rank.next(), pools);
+                debug_assert!(pools.get(rank.next()).is_empty());
 
                 // check that things went well
                 dbg_do!(ROC_VERIFY_RIGID_LET_GENERALIZED, {
@@ -3493,6 +3496,12 @@ fn circular_error(
     problems.push(problem);
 }
 
+/// Promotes variables at the `young_rank`, which did not escape a let-binding
+/// into a lower scope, to generalization.
+///
+/// Ensures that variables introduced at the `young_rank`, but that should be
+/// stuck at a lower level, are marked at that level and not generalized at the
+/// present `young_rank`. See [adjust_rank].
 fn generalize(
     subs: &mut Subs,
     young_mark: Mark,
@@ -3576,6 +3585,23 @@ fn pool_to_rank_table(
 
 /// Adjust variable ranks such that ranks never increase as you move deeper.
 /// This way the outermost rank is representative of the entire structure.
+///
+/// This procedure also catches type variables at a given rank that contain types at a higher rank.
+/// In such cases, the contained types must be lowered to the rank of the outer type. This is
+/// critical for soundness of the type inference; for example consider
+///
+/// ```ignore(illustrative)
+/// \f ->              # rank=1
+///     g = \x -> f x  # rank=2
+///     g
+/// ```
+///
+/// say that during the solving of the outer body at rank 1 we conditionally give `f` the type
+/// `a -> b (rank=1)`. Without rank-adjustment, the type of `g` would be solved as `c -> d (rank=2)` for
+/// some `c ~ a`, `d ~ b`, and hence would be generalized to the function `c -> d`, even though `c`
+/// and `d` are individually at rank 1 after unfication with `a` and `b` respectively.
+/// This is incorrect; the whole of `c -> d` must lie at rank 1, and only be generalized at the
+/// level that `f` is introduced.
 fn adjust_rank(
     subs: &mut Subs,
     young_mark: Mark,
