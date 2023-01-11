@@ -7411,6 +7411,28 @@ fn store_pattern_help<'a>(
             // do nothing
             return StorePattern::NotProductive(stmt);
         }
+        As(subpattern, symbol) => {
+            let stored_subpattern =
+                store_pattern_help(env, procs, layout_cache, subpattern, outer_symbol, stmt);
+
+            let mut stmt = match stored_subpattern {
+                StorePattern::Productive(stmt) => stmt,
+                StorePattern::NotProductive(stmt) => stmt,
+            };
+
+            // An identifier in a pattern can define at most one specialization!
+            // Remove any requested specializations for this name now, since this is the definition site.
+            let specialization_symbol = procs
+                .symbol_specializations
+                .remove_single(*symbol)
+                // Can happen when the symbol was never used under this body, and hence has no
+                // requested specialization.
+                .unwrap_or(*symbol);
+
+            substitute_in_exprs(env.arena, &mut stmt, specialization_symbol, outer_symbol);
+
+            return StorePattern::Productive(stmt);
+        }
         IntLiteral(_, _)
         | FloatLiteral(_, _)
         | DecimalLiteral(_)
@@ -9259,6 +9281,7 @@ fn call_specialized_proc<'a>(
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
+    As(Box<Pattern<'a>>, Symbol),
     IntLiteral([u8; 16], IntWidth),
     FloatLiteral(u64, FloatWidth),
     DecimalLiteral([u8; 16]),
@@ -9316,6 +9339,7 @@ impl<'a> Pattern<'a> {
                 | Pattern::BitLiteral { .. }
                 | Pattern::EnumLiteral { .. }
                 | Pattern::StrLiteral(_) => { /* terminal */ }
+                Pattern::As(subpattern, _) => stack.push(subpattern),
                 Pattern::RecordDestructure(destructs, _) => {
                     for destruct in destructs {
                         match &destruct.typ {
@@ -9394,7 +9418,12 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
-        As(_, _) => todo!(),
+        As(subpattern, symbol) => {
+            let mono_subpattern =
+                from_can_pattern_help(env, procs, layout_cache, &subpattern.value, assignments)?;
+
+            Ok(Pattern::As(Box::new(mono_subpattern), *symbol))
+        }
         AbilityMemberSpecialization { ident, .. } => Ok(Pattern::Identifier(*ident)),
         IntLiteral(var, _, int_str, int, _bound) => Ok(make_num_literal_pattern(
             env,

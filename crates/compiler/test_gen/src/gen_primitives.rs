@@ -4145,3 +4145,63 @@ fn issue_4712() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn pattern_as_toplevel() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            record = { a: 42i64, b: "foo" }
+
+            main =
+                when record is
+                    { a: 42i64 } as r -> record == r
+                    _ -> Bool.false
+            "#
+        ),
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn pattern_as_nested() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            record = { a: 42i64, b: "foo" }
+
+            main =
+                when Pair {} record is
+                    Pair {} ({ a: 42i64 } as r) -> record == r
+                    _ -> Bool.false
+            "#
+        ),
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn pattern_as_of_symbol() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                when "foo" is
+                    a as b -> a == b
+            "#
+        ),
+        true,
+        bool
+    );
+}
