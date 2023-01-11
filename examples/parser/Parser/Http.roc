@@ -6,7 +6,7 @@ interface Parser.Http
         response,
     ]
     imports [
-        Parser.Core.{ Parser, ParseResult, map, apply, skip, const, oneOrMore, many },
+        Parser.Core.{ Parser, ParseResult, map, keep, skip, const, oneOrMore, many },
         Parser.Str.{
             RawStr,
             oneOf,
@@ -79,9 +79,9 @@ httpVersion : Parser RawStr HttpVersion
 httpVersion =
     const (\major -> \minor -> "\(major).\(minor)")
     |> skip (string "HTTP/")
-    |> apply digits
+    |> keep digits
     |> skip (codeunit '.')
-    |> apply digits
+    |> keep digits
 
 Header : [Header Str Str]
 
@@ -100,9 +100,9 @@ stringWithoutCr =
 header : Parser RawStr Header
 header =
     const (\k -> \v -> Header k v)
-    |> apply stringWithoutColon
+    |> keep stringWithoutColon
     |> skip (string ": ")
-    |> apply stringWithoutCr
+    |> keep stringWithoutCr
     |> skip crlf
 
 expect
@@ -113,15 +113,15 @@ expect
 request : Parser RawStr Request
 request =
     const (\m -> \u -> \hv -> \hs -> \b -> { method: m, uri: u, httpVersion: hv, headers: hs, body: b })
-    |> apply method
+    |> keep method
     |> skip sp
-    |> apply requestUri
+    |> keep requestUri
     |> skip sp
-    |> apply httpVersion
+    |> keep httpVersion
     |> skip crlf
-    |> apply (many header)
+    |> keep (many header)
     |> skip crlf
-    |> apply anyRawString
+    |> keep anyRawString
 
 expect
     requestText =
@@ -183,15 +183,15 @@ expect
 response : Parser RawStr Response
 response =
     const (\hv -> \sc -> \s -> \hs -> \b -> { httpVersion: hv, statusCode: sc, status: s, headers: hs, body: b })
-    |> apply httpVersion
+    |> keep httpVersion
     |> skip sp
-    |> apply digits
+    |> keep digits
     |> skip sp
-    |> apply stringWithoutCr
+    |> keep stringWithoutCr
     |> skip crlf
-    |> apply (many header)
+    |> keep (many header)
     |> skip crlf
-    |> apply anyRawString
+    |> keep anyRawString
 
 expect
     body =

@@ -7,7 +7,7 @@ interface Parser.Core
         fail,
         const,
         alt,
-        apply,
+        keep,
         skip,
         oneOf,
         map,
@@ -92,7 +92,7 @@ fail = \msg ->
 
 ## Parser that will always produce the given `val`, without looking at the actual input.
 ## This is useful as basic building block, especially in combination with
-## `map` and `apply`.
+## `map` and `keep`.
 const : a -> Parser * a
 const = \val ->
     buildPrimitiveParser \input ->
@@ -122,19 +122,19 @@ alt = \first, second ->
 ## >>> |> map3 Parser.Str.nat Parser.Str.nat Parser.Str.nat
 ##
 ## >>> const (\x -> \y -> \z -> Triple x y z)
-## >>> |> apply Parser.Str.nat
-## >>> |> apply Parser.Str.nat
-## >>> |> apply Parser.Str.nat
+## >>> |> keep Parser.Str.nat
+## >>> |> keep Parser.Str.nat
+## >>> |> keep Parser.Str.nat
 ##
 ## (And indeed, this is how `map`, `map2`, `map3` etc. are implemented under the hood.)
 ##
 ## # Currying
-## Be aware that when using `apply`, you need to explicitly 'curry' the parameters to the construction function.
+## Be aware that when using `keep`, you need to explicitly 'curry' the parameters to the construction function.
 ## This means that instead of writing `\x, y, z -> ...`
 ## you'll need to write `\x -> \y -> \z -> ...`.
 ## This is because the parameters to the function will be applied one-by-one as parsing continues.
-apply : Parser input (a -> b), Parser input a -> Parser input b
-apply = \funParser, valParser ->
+keep : Parser input (a -> b), Parser input a -> Parser input b
+keep = \funParser, valParser ->
     combined = \input ->
         { val: funVal, input: rest } <- Result.try (parsePartial funParser input)
         parsePartial valParser rest
@@ -145,21 +145,21 @@ apply = \funParser, valParser ->
 
 ## Skip over a parsed item as part of a pipeline
 ##
-## This is useful if you are using a pipeline of parsers with `apply` but
+## This is useful if you are using a pipeline of parsers with `keep` but
 ## some parsed items are not part of the final result
 ##
 ## >>> const (\x -> \y -> \z -> Triple x y z)
-## >>> |> apply Parser.Str.nat
+## >>> |> keep Parser.Str.nat
 ## >>> |> skip (codeunit ',')
-## >>> |> apply Parser.Str.nat
+## >>> |> keep Parser.Str.nat
 ## >>> |> skip (codeunit ',')
-## >>> |> apply Parser.Str.nat
+## >>> |> keep Parser.Str.nat
 ##
 skip : Parser input kept, Parser input skipped -> Parser input kept
 skip = \kept, skipped ->
     const (\k -> \_ -> k)
-    |> apply kept
-    |> apply skipped
+    |> keep kept
+    |> keep skipped
 
 # Internal utility function. Not exposed to users, since usage is discouraged!
 #
@@ -168,7 +168,7 @@ skip = \kept, skipped ->
 # This function returns a new parser, which is finally run.
 #
 # `andThen` is usually more flexible than necessary, and less efficient
-# than using `const` with `map` and/or `apply`.
+# than using `const` with `map` and/or `keep`.
 # Consider using those functions first.
 andThen : Parser input a, (a -> Parser input b) -> Parser input b
 andThen = \firstParser, buildNextParser ->
@@ -190,27 +190,27 @@ oneOf = \parsers ->
 map : Parser input a, (a -> b) -> Parser input b
 map = \simpleParser, transform ->
     const transform
-    |> apply simpleParser
+    |> keep simpleParser
 
 ## Transforms the result of parsing into something else,
 ## using the given two-parameter transformation function.
 map2 : Parser input a, Parser input b, (a, b -> c) -> Parser input c
 map2 = \parserA, parserB, transform ->
     const (\a -> \b -> transform a b)
-    |> apply parserA
-    |> apply parserB
+    |> keep parserA
+    |> keep parserB
 
 ## Transforms the result of parsing into something else,
 ## using the given three-parameter transformation function.
 ##
 ## If you need transformations with more inputs,
-## take a look at `apply`.
+## take a look at `keep`.
 map3 : Parser input a, Parser input b, Parser input c, (a, b, c -> d) -> Parser input d
 map3 = \parserA, parserB, parserC, transform ->
     const (\a -> \b -> \c -> transform a b c)
-    |> apply parserA
-    |> apply parserB
-    |> apply parserC
+    |> keep parserA
+    |> keep parserB
+    |> keep parserC
 
 # ^ And this could be repeated for as high as we want, of course.
 # Removes a layer of 'result' from running the parser.
@@ -275,8 +275,8 @@ many = \parser ->
 oneOrMore : Parser input a -> Parser input (List a)
 oneOrMore = \parser ->
     const (\val -> \vals -> List.prepend vals val)
-    |> apply parser
-    |> apply (many parser)
+    |> keep parser
+    |> keep (many parser)
 
 ## Runs a parser for an 'opening' delimiter, then your main parser, then the 'closing' delimiter,
 ## and only returns the result of your main parser.
@@ -287,20 +287,20 @@ oneOrMore = \parser ->
 between : Parser input a, Parser input open, Parser input close -> Parser input a
 between = \parser, open, close ->
     const (\_ -> \val -> \_ -> val)
-    |> apply open
-    |> apply parser
-    |> apply close
+    |> keep open
+    |> keep parser
+    |> keep close
 
 sepBy1 : Parser input a, Parser input sep -> Parser input (List a)
 sepBy1 = \parser, separator ->
     parserFollowedBySep =
         const (\_ -> \val -> val)
-        |> apply separator
-        |> apply parser
+        |> keep separator
+        |> keep parser
 
     const (\val -> \vals -> List.prepend vals val)
-    |> apply parser
-    |> apply (many parserFollowedBySep)
+    |> keep parser
+    |> keep (many parserFollowedBySep)
 
 sepBy : Parser input a, Parser input sep -> Parser input (List a)
 sepBy = \parser, separator ->
