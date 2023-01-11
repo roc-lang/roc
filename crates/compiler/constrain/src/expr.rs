@@ -1055,18 +1055,8 @@ pub fn constrain_expr(
                 pattern_headers,
                 pattern_constraints,
                 body_constraints,
-                // NB(weakening): ideally we never explicitly mark generalizability here, but we
-                // must currently do so to handle cases like
-                //
-                // ```
-                // \x -> when x is
-                //     Red -> Red
-                // ```
-                //
-                // because we ultimately want `[Red]*` to be generalized at the level the function
-                // argument `x` is and not pulled down into a lower rank. However we don't yet have
-                // a way to express that requirement.
-                Generalizable(true),
+                // Never generalize identifiers introduced in branch-patterns
+                Generalizable(false),
             );
 
             let result_con =
@@ -2293,18 +2283,8 @@ fn constrain_when_branch_help(
                 [],
                 guard_constraint,
                 ret_constraint,
-                // NB(weakening): ideally we never explicitly mark generalizability here, but we
-                // must currently do so to handle cases like
-                //
-                // ```
-                // \x -> when x is
-                //     Red -> Red
-                // ```
-                //
-                // because we ultimately want `[Red]*` to be generalized at the level the function
-                // argument `x` is and not pulled down into a lower rank. However we don't yet have
-                // a way to express that requirement.
-                Generalizable(true),
+                // Never generalize identifiers introduced in branch guards
+                Generalizable(false),
             );
 
             (state_constraints, delayed_is_open_constraints, inner)

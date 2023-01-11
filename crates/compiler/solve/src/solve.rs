@@ -767,8 +767,6 @@ fn solve(
                 let offset = let_con.defs_and_ret_constraint.index();
                 let ret_constraint = &constraints.constraints[offset + 1];
 
-                let next_rank = rank.next();
-
                 let mark = state.mark;
                 let saved_env = state.env;
 
@@ -776,10 +774,16 @@ fn solve(
                 let visit_mark = young_mark.next();
                 let final_mark = visit_mark.next();
 
+                let intro_rank = if let_con.generalizable.0 {
+                    rank.next()
+                } else {
+                    rank
+                };
+
                 // Add a variable for each def to local_def_vars.
                 let local_def_vars = LocalDefVarsVec::from_def_types(
                     constraints,
-                    next_rank,
+                    intro_rank,
                     pools,
                     problems,
                     abilities_store,
@@ -796,7 +800,7 @@ fn solve(
                 // Otherwise, introduce all variables at the current rank; since none of them will
                 // end up at the next rank, none will be generalized.
                 if let_con.generalizable.0 {
-                    pools.get_mut(next_rank).extend(pool_variables);
+                    pools.get_mut(rank.next()).extend(pool_variables);
                 } else {
                     pools.get_mut(rank).extend(pool_variables);
                 }
@@ -806,10 +810,10 @@ fn solve(
                     // would mean we generalized one level more than we need to!
                     {
                         let offenders = pools
-                            .get(next_rank)
+                            .get(rank.next())
                             .iter()
                             .filter(|var| {
-                                subs.get_rank(**var).into_usize() > next_rank.into_usize()
+                                subs.get_rank(**var).into_usize() > rank.next().into_usize()
                             })
                             .collect::<Vec<_>>();
 
@@ -1258,17 +1262,12 @@ fn solve(
                     state
                 } else {
                     // If the let-binding is generalizable, work at the next rank (which will be
-                    // the rank promoted to generalization); otherwise, don't leave our rank.
+                    // the rank promoted to generalization); otherwise, stay at the current level.
                     let binding_rank = if let_con.generalizable.0 {
                         rank.next()
                     } else {
                         rank
                     };
-
-                    // introduce variables
-                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
-                        subs.set_rank(var, binding_rank);
-                    }
 
                     // determine the next pool
                     if binding_rank.into_usize() < pools.len() {
@@ -1282,19 +1281,25 @@ fn solve(
 
                     let pool: &mut Vec<Variable> = pools.get_mut(binding_rank);
 
-                    // Replace the contents of this pool with rigid_vars and flex_vars
-                    pool.clear();
+                    // Introduce the variables of this binding, and extend the pool at our binding
+                    // rank.
+                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
+                        subs.set_rank(var, binding_rank);
+                    }
                     pool.reserve(rigid_vars.len() + flex_vars.len());
                     pool.extend(rigid_vars.iter());
                     pool.extend(flex_vars.iter());
 
-                    // run solver in next pool
-
-                    // items are popped from the stack in reverse order. That means that we'll
+                    // Now, run our binding constraint, generalize, then solve the rest of the
+                    // program.
+                    //
+                    // Items are popped from the stack in reverse order. That means that we'll
                     // first solve then defs_constraint, and then (eventually) the ret_constraint.
                     //
-                    // Note that the LetConSimple gets the current env and rank,
-                    // and not the env/rank from after solving the defs_constraint
+                    // NB: LetCon gets the current env and rank, not the env/rank from after solving the defs_constraint.
+                    // That's because the defs constraints may be solved in next_rank if we are
+                    // eligible for generalization. The LetCon will then promote variables still at
+                    // next_rank to generalized variables.
                     stack.push(Work::LetConIntroducesVariables {
                         env,
                         rank,
@@ -3544,7 +3549,8 @@ fn generalize(
         }
     }
 
-    // re-use the last_vector (which likely has a good capacity for future runs
+    // re-use the last_vector (which likely has a good capacity for future runs)
+    debug_assert!(last_pool.is_empty());
     *pools.get_mut(young_rank) = last_pool;
 }
 
