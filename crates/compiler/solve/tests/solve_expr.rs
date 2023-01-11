@@ -6672,6 +6672,7 @@ mod solve_expr {
                 main =
                     choice : [T, U]
 
+                    # Should not get generalized
                     idChoice =
                     #^^^^^^^^{-1}
                         when choice is
@@ -6685,7 +6686,7 @@ mod solve_expr {
             @r###"
         A#id(4) : A -[[id(4)]]-> A
         idNotAbility : a -[[idNotAbility(5)]]-> a
-        idChoice : a -[[idNotAbility(5)] + a:id(2):1]-> a | a has Id
+        idChoice : A -[[id(4), idNotAbility(5)]]-> A
         idChoice : A -[[id(4), idNotAbility(5)]]-> A
         "###
         )
@@ -6707,6 +6708,7 @@ mod solve_expr {
                 main =
                     choice : [T, U]
 
+                    # Should not get generalized
                     idChoice =
                     #^^^^^^^^{-1}
                         when choice is
@@ -6719,7 +6721,7 @@ mod solve_expr {
             ),
             @r#"
             A#id(4) : A -[[id(4)]]-> A
-            idChoice : a -[[] + a:id(2):1]-> a | a has Id
+            idChoice : A -[[id(4)]]-> A
             idChoice : A -[[id(4)]]-> A
             "#
         )
@@ -8582,8 +8584,8 @@ mod solve_expr {
                 "#
             ),
         @r###"
-        a : [A Str]*
-        b : [A Str]*
+        a : [A Str]w_a
+        b : [A Str]w_a
         "###
         );
     }
