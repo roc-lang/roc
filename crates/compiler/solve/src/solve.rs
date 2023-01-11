@@ -831,7 +831,9 @@ fn solve(
                     // or that it just never came up in elm.
                     let mut it = rigid_vars
                         .iter()
-                        .filter(|&var| !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE)
+                        .filter(|&var| {
+                            !subs.redundant(*var) && subs.get_rank(*var) != Rank::GENERALIZED
+                        })
                         .peekable();
 
                     if it.peek().is_some() {
@@ -2316,7 +2318,7 @@ impl RegisterVariable {
             | TypeTag::HostExposedAlias { shared, .. } => {
                 let AliasShared { symbol, .. } = types[shared];
                 if let Some(reserved) = Variable::get_reserved(symbol) {
-                    let direct_var = if rank.is_none() {
+                    let direct_var = if rank.is_generalized() {
                         // reserved variables are stored with rank NONE
                         reserved
                     } else {
@@ -3517,7 +3519,7 @@ fn generalize(
         if desc_rank < young_rank {
             pools.get_mut(desc_rank).push(var);
         } else {
-            subs.set_rank(var, Rank::NONE);
+            subs.set_rank(var, Rank::GENERALIZED);
         }
     }
 
@@ -3714,7 +3716,7 @@ fn adjust_rank_content(
                     // we'll wind up with [Z, S a]{}, but it will be at rank 0, and "a" will get
                     // over-generalized. Really, the empty tag union should be introduced at
                     // whatever current group rank we're at, and so that's how we encode it here.
-                    if *ext_var == Variable::EMPTY_TAG_UNION && rank.is_none() {
+                    if *ext_var == Variable::EMPTY_TAG_UNION && rank.is_generalized() {
                         rank = group_rank;
                     }
 
@@ -3914,7 +3916,7 @@ fn has_trivial_copy(subs: &Subs, root_var: Variable) -> Option<Variable> {
 
     if let Some(copy) = existing_copy.into_variable() {
         Some(copy)
-    } else if subs.get_rank_unchecked(root_var) != Rank::NONE {
+    } else if subs.get_rank_unchecked(root_var) != Rank::GENERALIZED {
         Some(root_var)
     } else {
         None

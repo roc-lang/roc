@@ -628,7 +628,7 @@ fn solve<'a>(
                         let failing: Vec<_> = rigid_vars
                             .iter()
                             .filter(|&var| {
-                                !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE
+                                !subs.redundant(*var) && subs.get_rank(*var) != Rank::GENERALIZED
                             })
                             .collect();
 
@@ -772,7 +772,7 @@ pub fn insert_type_into_subs<'a>(
     subs: &mut Subs,
     typ: &Type2,
 ) -> Variable {
-    let rank = Rank::NONE;
+    let rank = Rank::GENERALIZED;
     let mut pools = Pools::default();
     let mut cached = MutMap::default();
 
@@ -1235,7 +1235,7 @@ fn generalize(
             if desc_rank < young_rank {
                 pools.get_mut(desc_rank).push(var);
             } else {
-                subs.set_rank(var, Rank::NONE);
+                subs.set_rank(var, Rank::GENERALIZED);
             }
         }
     }
@@ -1494,7 +1494,7 @@ fn introduce(subs: &mut Subs, rank: Rank, pools: &mut Pools, vars: &[Variable]) 
 /// Function that converts rigids variables to flex variables
 /// this is used during the monomorphization process
 pub fn instantiate_rigids(subs: &mut Subs, var: Variable) {
-    let rank = Rank::NONE;
+    let rank = Rank::GENERALIZED;
     let mut pools = Pools::default();
 
     instantiate_rigids_help(subs, rank, &mut pools, var);
@@ -1677,7 +1677,7 @@ fn deep_copy_var_help(
 
     if let Some(copy) = desc.copy.into_variable() {
         return copy;
-    } else if desc.rank != Rank::NONE {
+    } else if desc.rank != Rank::GENERALIZED {
         return var;
     }
 
