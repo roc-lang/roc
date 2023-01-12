@@ -3827,14 +3827,18 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             Closure(_) => return true,
             Accessor(_) => {
                 // Accessor functions `.field` are equivalent to closures `\r -> r.field`, no need to weaken them.
-                return true
-            },
+                return true;
+            }
             OpaqueWrapFunction(_) => {
                 // Opaque wrapper functions `@Q` are equivalent to closures `\x -> @Q x`, no need to weaken them.
-                return true
+                return true;
             }
             OpaqueRef { argument, .. } => expr = &argument.1.value,
-            Str(_) | List { .. } | SingleQuote(_, _, _, _) | When { .. } | If { .. }
+            Str(_)
+            | List { .. }
+            | SingleQuote(_, _, _, _)
+            | When { .. }
+            | If { .. }
             | LetRec(_, _, _)
             | LetNonRec(_, _)
             | Call(_, _, _)
@@ -3849,16 +3853,11 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | ExpectFx { .. }
             | Dbg { .. }
             | TypedHole(_)
-            | RuntimeError(_)
-            => {
-                return false
-            }
+            | RuntimeError(_) => return false,
             // TODO(weakening)
-            Var(_, _)
-            | AbilityMember(_, _, _)
-            | Tag { .. }
-            | ZeroArgumentTag { .. }
-             => return true,
+            Var(_, _) | AbilityMember(_, _, _) | Tag { .. } | ZeroArgumentTag { .. } => {
+                return true
+            }
         }
     }
 }
