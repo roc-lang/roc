@@ -391,13 +391,15 @@ impl Types {
             ) => false,
             (
                 Function(RocFn {
-                    name: name_a,
+                    function_name: name_a,
+                    extern_name: extern_a,
                     args: args_a,
                     lambda_set: lambda_a,
                     ret: ret_a,
                 }),
                 Function(RocFn {
-                    name: name_b,
+                    function_name: name_b,
+                    extern_name: extern_b,
                     args: args_b,
                     lambda_set: lambda_b,
                     ret: ret_b,
@@ -406,6 +408,7 @@ impl Types {
                 // for functions, the name is actually important because two functions
                 // with the same type could have completely different implementations!
                 if name_a == name_b
+                    && extern_a == extern_b
                     && args_a.len() == args_b.len()
                     && self.is_equivalent_help(
                         self.get_type_or_pending(*lambda_a),
@@ -629,7 +632,8 @@ impl RocStructFields {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RocFn {
-    pub name: String,
+    pub function_name: String,
+    pub extern_name: String,
     pub args: Vec<TypeId>,
     pub lambda_set: TypeId,
     pub ret: TypeId,
@@ -992,9 +996,12 @@ fn add_type_help<'a>(
 
             let name = format!("RocFunction_{:?}", closure_var);
 
+            let extern_name = String::from("roc__mainForHost_1__Fx2_caller");
+
             let fn_type_id = add_function(env, name, types, layout, |name| {
                 RocType::Function(RocFn {
-                    name,
+                    function_name: name,
+                    extern_name,
                     args: arg_type_ids.clone(),
                     lambda_set: lambda_set_type_id,
                     ret: ret_type_id,

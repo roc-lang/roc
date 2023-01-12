@@ -1815,7 +1815,7 @@ fn add_function(
     types: &Types,
     impls: &mut Impls,
 ) {
-    let name = escape_kw(roc_fn.name.to_string());
+    let name = escape_kw(roc_fn.function_name.to_string());
     // let derive = derive_str(types.get_type(struct_id), types, true);
     let derive = "";
     let pub_str = "pub ";
@@ -1844,7 +1844,7 @@ fn add_function(
     let arguments = "";
     let argument_types = "";
     let argument_names = "";
-    let extern_name = "roc__mainForHost_1__Fx2_caller";
+    let extern_name = &roc_fn.extern_name;
 
     let return_type_str = type_name(roc_fn.ret, types);
 
@@ -1977,7 +1977,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         | RocType::TagUnion(RocTagUnion::NonNullableUnwrapped { name, .. })
         | RocType::TagUnion(RocTagUnion::SingleTagStruct { name, .. }) => escape_kw(name.clone()),
         RocType::RecursivePointer(content) => type_name(*content, types),
-        RocType::Function(RocFn { name, .. }) => escape_kw(name.clone()),
+        RocType::Function(RocFn { function_name, .. }) => escape_kw(function_name.clone()),
     }
 }
 
