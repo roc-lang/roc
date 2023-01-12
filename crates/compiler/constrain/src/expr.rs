@@ -3840,13 +3840,13 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | Expr::Record { .. }
             | Crash { .. }
             | Access { .. }
+            | Update { .. }
             => {
                 return false
             }
             // TODO(weakening)
             Var(_, _)
             | AbilityMember(_, _, _)
-            | Update { .. }
             | Tag { .. }
             | ZeroArgumentTag { .. }
             | OpaqueWrapFunction(_)
