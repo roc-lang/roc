@@ -3849,6 +3849,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | ExpectFx { .. }
             | Dbg { .. }
             | TypedHole(_)
+            | RuntimeError(_)
             => {
                 return false
             }
@@ -3857,7 +3858,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | AbilityMember(_, _, _)
             | Tag { .. }
             | ZeroArgumentTag { .. }
-            | RuntimeError(_) => return true,
+             => return true,
         }
     }
 }
