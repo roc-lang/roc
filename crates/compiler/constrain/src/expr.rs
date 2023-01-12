@@ -3830,13 +3830,13 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | LetRec(_, _, _)
             | LetNonRec(_, _)
             | Call(_, _, _)
+            | RunLowLevel { .. }
             => {
                 return false
             }
             // TODO(weakening)
             Var(_, _)
             | AbilityMember(_, _, _)
-            | RunLowLevel { .. }
             | ForeignCall { .. }
             | Expr::Record { .. }
             | EmptyRecord
