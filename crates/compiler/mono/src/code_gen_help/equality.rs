@@ -2,10 +2,13 @@ use bumpalo::collections::vec::Vec;
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, Symbol};
 
+use crate::borrow::Ownership;
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, Param, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, Layout, TagIdIntType, UnionLayout};
+use crate::layout::{
+    Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+};
 
 use super::{let_lowlevel, CodeGenHelp, Context, LAYOUT_BOOL};
 
@@ -16,6 +19,7 @@ pub fn eq_generic<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
     layout: Layout<'a>,
 ) -> Stmt<'a> {
     let main_body = match layout {
@@ -28,10 +32,18 @@ pub fn eq_generic<'a>(
         Layout::Builtin(Builtin::Str) => {
             unreachable!("No generated helper proc for `==` on Str. Use Zig function.")
         }
-        Layout::Builtin(Builtin::List(elem_layout)) => eq_list(root, ident_ids, ctx, elem_layout),
-        Layout::Struct { field_layouts, .. } => eq_struct(root, ident_ids, ctx, field_layouts),
-        Layout::Union(union_layout) => eq_tag_union(root, ident_ids, ctx, union_layout),
-        Layout::Boxed(inner_layout) => eq_boxed(root, ident_ids, ctx, inner_layout),
+        Layout::Builtin(Builtin::List(elem_layout)) => {
+            eq_list(root, ident_ids, ctx, layout_interner, elem_layout)
+        }
+        Layout::Struct { field_layouts, .. } => {
+            eq_struct(root, ident_ids, ctx, layout_interner, field_layouts)
+        }
+        Layout::Union(union_layout) => {
+            eq_tag_union(root, ident_ids, ctx, layout_interner, union_layout)
+        }
+        Layout::Boxed(inner_layout) => {
+            eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout)
+        }
         Layout::LambdaSet(_) => unreachable!("`==` is not defined on functions"),
         Layout::RecursivePointer => {
             unreachable!(
@@ -129,6 +141,7 @@ fn eq_struct<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
     field_layouts: &'a [Layout<'a>],
 ) -> Stmt<'a> {
     let mut else_stmt = Stmt::Ret(Symbol::BOOL_TRUE);
@@ -153,6 +166,7 @@ fn eq_struct<'a>(
             .call_specialized_op(
                 ident_ids,
                 ctx,
+                layout_interner,
                 *layout,
                 root.arena.alloc([field1_sym, field2_sym]),
             )
@@ -181,6 +195,7 @@ fn eq_tag_union<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
 ) -> Stmt<'a> {
     use UnionLayout::*;
@@ -191,13 +206,37 @@ fn eq_tag_union<'a>(
     }
 
     let body = match union_layout {
-        NonRecursive(tags) => eq_tag_union_help(root, ident_ids, ctx, union_layout, tags, None),
+        NonRecursive(tags) => eq_tag_union_help(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            union_layout,
+            tags,
+            None,
+        ),
 
-        Recursive(tags) => eq_tag_union_help(root, ident_ids, ctx, union_layout, tags, None),
+        Recursive(tags) => eq_tag_union_help(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            union_layout,
+            tags,
+            None,
+        ),
 
         NonNullableUnwrapped(field_layouts) => {
             let tags = root.arena.alloc([field_layouts]);
-            eq_tag_union_help(root, ident_ids, ctx, union_layout, tags, None)
+            eq_tag_union_help(
+                root,
+                ident_ids,
+                ctx,
+                layout_interner,
+                union_layout,
+                tags,
+                None,
+            )
         }
 
         NullableWrapped {
@@ -207,6 +246,7 @@ fn eq_tag_union<'a>(
             root,
             ident_ids,
             ctx,
+            layout_interner,
             union_layout,
             other_tags,
             Some(nullable_id),
@@ -219,6 +259,7 @@ fn eq_tag_union<'a>(
             root,
             ident_ids,
             ctx,
+            layout_interner,
             union_layout,
             root.arena.alloc([other_fields]),
             Some(nullable_id as TagIdIntType),
@@ -234,6 +275,7 @@ fn eq_tag_union_help<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
     tag_layouts: &'a [&'a [Layout<'a>]],
     nullable_id: Option<TagIdIntType>,
@@ -314,6 +356,7 @@ fn eq_tag_union_help<'a>(
             root,
             ident_ids,
             ctx,
+            layout_interner,
             tailrec_loop,
             union_layout,
             field_layouts,
@@ -335,6 +378,7 @@ fn eq_tag_union_help<'a>(
                 root,
                 ident_ids,
                 ctx,
+                layout_interner,
                 tailrec_loop,
                 union_layout,
                 tag_layouts.last().unwrap(),
@@ -375,7 +419,7 @@ fn eq_tag_union_help<'a>(
     } else {
         let loop_params_iter = operands.iter().map(|arg| Param {
             symbol: *arg,
-            borrow: true,
+            ownership: Ownership::Borrowed,
             layout: Layout::Union(union_layout),
         });
 
@@ -395,6 +439,7 @@ fn eq_tag_fields<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
     tailrec_loop: JoinPointId,
     union_layout: UnionLayout<'a>,
     field_layouts: &'a [Layout<'a>],
@@ -482,6 +527,7 @@ fn eq_tag_fields<'a>(
             .call_specialized_op(
                 ident_ids,
                 ctx,
+                layout_interner,
                 *layout,
                 root.arena.alloc([field1_sym, field2_sym]),
             )
@@ -530,8 +576,11 @@ fn eq_boxed<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
-    inner_layout: &'a Layout<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    inner_layout: InLayout<'a>,
 ) -> Stmt<'a> {
+    let inner_layout = layout_interner.get(inner_layout);
+
     let a = root.create_symbol(ident_ids, "a");
     let b = root.create_symbol(ident_ids, "b");
     let result = root.create_symbol(ident_ids, "result");
@@ -539,19 +588,25 @@ fn eq_boxed<'a>(
     let a_expr = Expr::ExprUnbox { symbol: ARG_1 };
     let b_expr = Expr::ExprUnbox { symbol: ARG_2 };
     let eq_call_expr = root
-        .call_specialized_op(ident_ids, ctx, *inner_layout, root.arena.alloc([a, b]))
+        .call_specialized_op(
+            ident_ids,
+            ctx,
+            layout_interner,
+            inner_layout,
+            root.arena.alloc([a, b]),
+        )
         .unwrap();
 
     Stmt::Let(
         a,
         a_expr,
-        *inner_layout,
+        inner_layout,
         root.arena.alloc(
             //
             Stmt::Let(
                 b,
                 b_expr,
-                *inner_layout,
+                inner_layout,
                 root.arena.alloc(
                     //
                     Stmt::Let(
@@ -576,14 +631,17 @@ fn eq_list<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
-    elem_layout: &Layout<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    elem_layout: InLayout<'a>,
 ) -> Stmt<'a> {
     use LowLevel::*;
     let layout_isize = root.layout_isize;
     let arena = root.arena;
 
+    let elem_layout = layout_interner.get(elem_layout);
+
     // A "Box" layout (heap pointer to a single list element)
-    let box_union_layout = UnionLayout::NonNullableUnwrapped(root.arena.alloc([*elem_layout]));
+    let box_union_layout = UnionLayout::NonNullableUnwrapped(root.arena.alloc([elem_layout]));
     let box_layout = Layout::Union(box_union_layout);
 
     // Compare lengths
@@ -629,7 +687,7 @@ fn eq_list<'a>(
     // let size = literal int
     let size = root.create_symbol(ident_ids, "size");
     let size_expr = Expr::Literal(Literal::Int(
-        (elem_layout.stack_size(root.layout_interner, root.target_info) as i128).to_ne_bytes(),
+        (elem_layout.stack_size(layout_interner, root.target_info) as i128).to_ne_bytes(),
     ));
     let size_stmt = |next| Stmt::Let(size, size_expr, layout_isize, next);
 
@@ -661,13 +719,13 @@ fn eq_list<'a>(
 
     let param_addr1 = Param {
         symbol: addr1,
-        borrow: false,
+        ownership: Ownership::Owned,
         layout: layout_isize,
     };
 
     let param_addr2 = Param {
         symbol: addr2,
-        borrow: false,
+        ownership: Ownership::Owned,
         layout: layout_isize,
     };
 
@@ -696,14 +754,14 @@ fn eq_list<'a>(
         tag_id: 0,
         index: 0,
     };
-    let elem1_stmt = |next| Stmt::Let(elem1, elem1_expr, *elem_layout, next);
-    let elem2_stmt = |next| Stmt::Let(elem2, elem2_expr, *elem_layout, next);
+    let elem1_stmt = |next| Stmt::Let(elem1, elem1_expr, elem_layout, next);
+    let elem2_stmt = |next| Stmt::Let(elem2, elem2_expr, elem_layout, next);
 
     // Compare the two current elements
     let eq_elems = root.create_symbol(ident_ids, "eq_elems");
     let eq_elems_args = root.arena.alloc([elem1, elem2]);
     let eq_elems_expr = root
-        .call_specialized_op(ident_ids, ctx, *elem_layout, eq_elems_args)
+        .call_specialized_op(ident_ids, ctx, layout_interner, elem_layout, eq_elems_args)
         .unwrap();
 
     let eq_elems_stmt = |next| Stmt::Let(eq_elems, eq_elems_expr, LAYOUT_BOOL, next);

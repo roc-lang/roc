@@ -1,12 +1,11 @@
 use std::fmt::Display;
 
-use roc_intern::Interner;
 use roc_module::symbol::{Interns, Symbol};
 use ven_pretty::{Arena, DocAllocator, DocBuilder};
 
 use crate::{
     ir::{Parens, ProcLayout},
-    layout::{CapturesNiche, Layout},
+    layout::{Layout, LayoutInterner},
 };
 
 use super::{
@@ -20,7 +19,7 @@ pub fn format_problems<'a, I>(
     problems: Problems<'a>,
 ) -> impl Display
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     let Problems(problems) = problems;
     let f = Arena::new();
@@ -44,7 +43,7 @@ fn format_problem<'a, 'd, I>(
 ) -> Doc<'d>
 where
     'a: 'd,
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     let Problem {
         proc,
@@ -118,7 +117,7 @@ fn format_kind<'a, 'd, I>(
     kind: ProblemKind<'a>,
 ) -> (&'static str, Vec<(usize, Doc<'d>)>, Doc<'d>)
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     let title;
     let docs_before;
@@ -445,7 +444,7 @@ fn format_proc_spec<'a, 'd, I>(
     proc_layout: ProcLayout<'a>,
 ) -> Doc<'d>
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     f.concat([
         f.as_string(symbol.as_str(interns)),
@@ -460,12 +459,12 @@ fn format_proc_layout<'a, 'd, I>(
     proc_layout: ProcLayout<'a>,
 ) -> Doc<'d>
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     let ProcLayout {
         arguments,
         result,
-        captures_niche,
+        niche: captures_niche,
     } = proc_layout;
     let args = f.intersperse(
         arguments
@@ -478,21 +477,9 @@ where
         f.reflow(" -> "),
         result.to_doc(f, interner, Parens::NotNeeded),
     ]);
-    let niche = if captures_niche == CapturesNiche::no_niche() {
-        f.reflow("(no niche)")
-    } else {
-        f.concat([
-            f.reflow("(niche {"),
-            f.intersperse(
-                captures_niche
-                    .0
-                    .iter()
-                    .map(|c| c.to_doc(f, interner, Parens::NotNeeded)),
-                f.reflow(", "),
-            ),
-            f.reflow("})"),
-        ])
-    };
+    let niche = (f.text("("))
+        .append(captures_niche.to_doc(f, interner))
+        .append(f.text(")"));
     f.concat([fun, f.space(), niche])
 }
 

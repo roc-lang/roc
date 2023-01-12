@@ -102,7 +102,7 @@ pub fn gen_from_mono_module<'a>(
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
 fn gen_from_mono_module_llvm<'a>(
     arena: &'a bumpalo::Bump,
-    loaded: MonomorphizedModule<'a>,
+    mut loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
     target: &target_lexicon::Triple,
     code_gen_options: CodeGenOptions,
@@ -168,7 +168,6 @@ fn gen_from_mono_module_llvm<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
-        layout_interner: &loaded.layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -204,6 +203,7 @@ fn gen_from_mono_module_llvm<'a>(
 
     roc_gen_llvm::llvm::build::build_procedures(
         &env,
+        &mut loaded.layout_interner,
         opt_level,
         loaded.procedures,
         entry_point,
@@ -263,14 +263,21 @@ fn gen_from_mono_module_llvm<'a>(
                 "address" => passes.push("asan-module"),
                 "memory" => passes.push("msan-module"),
                 "thread" => passes.push("tsan-module"),
-                "fuzzer" => {
+                "cargo-fuzz" => {
+                    passes.push("sancov-module");
+                    extra_args.extend_from_slice(&[
+                        "-sanitizer-coverage-level=3",
+                        "-sanitizer-coverage-prune-blocks=0",
+                        "-sanitizer-coverage-inline-8bit-counters",
+                        "-sanitizer-coverage-pc-table",
+                    ]);
+                }
+                "afl.rs" => {
                     passes.push("sancov-module");
                     extra_args.extend_from_slice(&[
                         "-sanitizer-coverage-level=3",
                         "-sanitizer-coverage-prune-blocks=0",
                         "-sanitizer-coverage-trace-pc-guard",
-                        // This can be used instead of the line above to enable working with `cargo fuzz` and libFuzzer.
-                        // "-sanitizer-coverage-inline-8bit-counters",
                     ]);
                 }
                 x => unrecognized.push(x.to_owned()),
@@ -282,7 +289,8 @@ fn gen_from_mono_module_llvm<'a>(
                 .map(|x| format!("{:?}", x))
                 .collect::<Vec<String>>()
                 .join(", ");
-            eprintln!("Unrecognized sanitizer: {}\nSupported options are \"address\", \"memory\", \"thread\", and \"fuzzer\"", out);
+            eprintln!("Unrecognized sanitizer: {}\nSupported options are \"address\", \"memory\", \"thread\", \"cargo-fuzz\", and \"afl.rs\".", out);
+            eprintln!("Note: \"cargo-fuzz\" and \"afl.rs\" both enable sanitizer coverage for fuzzing. They just use different parameters to match the respective libraries.")
         }
 
         use std::process::Command;
@@ -470,7 +478,7 @@ fn gen_from_mono_module_dev_wasm32<'a>(
         module_id,
         procedures,
         mut interns,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
@@ -483,7 +491,6 @@ fn gen_from_mono_module_dev_wasm32<'a>(
 
     let env = roc_gen_wasm::Env {
         arena,
-        layout_interner: &layout_interner,
         module_id,
         exposed_to_host,
         stack_bytes: wasm_dev_stack_bytes.unwrap_or(roc_gen_wasm::Env::DEFAULT_STACK_BYTES),
@@ -505,8 +512,13 @@ fn gen_from_mono_module_dev_wasm32<'a>(
         )
     });
 
-    let final_binary_bytes =
-        roc_gen_wasm::build_app_binary(&env, &mut interns, host_module, procedures);
+    let final_binary_bytes = roc_gen_wasm::build_app_binary(
+        &env,
+        &mut layout_interner,
+        &mut interns,
+        host_module,
+        procedures,
+    );
 
     let code_gen = code_gen_start.elapsed();
 
@@ -536,20 +548,20 @@ fn gen_from_mono_module_dev_assembly<'a>(
         procedures,
         mut interns,
         exposed_to_host,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
     let env = roc_gen_dev::Env {
         arena,
-        layout_interner: &layout_interner,
         module_id,
         exposed_to_host: exposed_to_host.values.keys().copied().collect(),
         lazy_literals,
         generate_allocators,
     };
 
-    let module_object = roc_gen_dev::build_module(&env, &mut interns, target, procedures);
+    let module_object =
+        roc_gen_dev::build_module(&env, &mut interns, &mut layout_interner, target, procedures);
 
     let code_gen = code_gen_start.elapsed();
 

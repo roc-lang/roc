@@ -17,6 +17,7 @@ members = [
     "crates/repl_wasm",
     "crates/repl_expect",
     "crates/test_utils",
+    "crates/valgrind",
     "crates/tracing",
     "crates/utils",
     "crates/docs",
@@ -129,3 +130,7 @@ codegen-units = 1
 [profile.bench]
 lto = "thin"
 codegen-units = 1
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true

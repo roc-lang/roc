@@ -14,7 +14,7 @@ use roc_mono::ir::{
     Literal, ModifyRc, OptLevel, Proc, ProcLayout, SingleEntryPoint, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, CapturesNiche, FieldOrderHash, Layout, RawFunctionLayout, STLayoutInterner,
+    Builtin, FieldOrderHash, Layout, LayoutInterner, Niche, RawFunctionLayout, STLayoutInterner,
     UnionLayout,
 };
 
@@ -30,7 +30,7 @@ pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     let bytes = func_name_bytes_help(
         proc.name.name(),
         proc.args.iter().map(|x| x.0),
-        proc.name.captures_niche(),
+        proc.name.niche(),
         &proc.ret_layout,
     );
     bytes
@@ -74,7 +74,7 @@ impl TagUnionId {
 pub fn func_name_bytes_help<'a, I>(
     symbol: Symbol,
     argument_layouts: I,
-    captures_niche: CapturesNiche<'a>,
+    niche: Niche<'a>,
     return_layout: &Layout<'a>,
 ) -> [u8; SIZE]
 where
@@ -93,7 +93,7 @@ where
             layout.hash(&mut hasher);
         }
 
-        captures_niche.hash(&mut hasher);
+        niche.hash(&mut hasher);
 
         return_layout.hash(&mut hasher);
 
@@ -133,15 +133,15 @@ fn bytes_as_ascii(bytes: &[u8]) -> String {
     buf
 }
 
-pub fn spec_program<'a, I>(
+pub fn spec_program<'a, 'r, I>(
     arena: &'a Bump,
-    interner: &STLayoutInterner<'a>,
+    interner: &'r mut STLayoutInterner<'a>,
     opt_level: OptLevel,
     entry_point: roc_mono::ir::EntryPoint<'a>,
     procs: I,
 ) -> Result<morphic_lib::Solutions>
 where
-    I: Iterator<Item = &'a Proc<'a>>,
+    I: Iterator<Item = &'r Proc<'a>>,
 {
     let main_module = {
         let mut m = ModDefBuilder::new();
@@ -188,22 +188,14 @@ where
                     match layout {
                         RawFunctionLayout::Function(_, _, _) => {
                             let it = top_level.arguments.iter().copied();
-                            let bytes = func_name_bytes_help(
-                                *symbol,
-                                it,
-                                CapturesNiche::no_niche(),
-                                &top_level.result,
-                            );
+                            let bytes =
+                                func_name_bytes_help(*symbol, it, Niche::NONE, &top_level.result);
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
                         RawFunctionLayout::ZeroArgumentThunk(_) => {
-                            let bytes = func_name_bytes_help(
-                                *symbol,
-                                [],
-                                CapturesNiche::no_niche(),
-                                &top_level.result,
-                            );
+                            let bytes =
+                                func_name_bytes_help(*symbol, [], Niche::NONE, &top_level.result);
 
                             host_exposed_functions.push((bytes, top_level.arguments));
                         }
@@ -236,7 +228,7 @@ where
                 let roc_main_bytes = func_name_bytes_help(
                     entry_point_symbol,
                     entry_point_layout.arguments.iter().copied(),
-                    CapturesNiche::no_niche(),
+                    Niche::NONE,
                     &entry_point_layout.result,
                 );
                 let roc_main = FuncName(&roc_main_bytes);
@@ -264,19 +256,14 @@ where
                         field_order_hash: FieldOrderHash::from_ordered_fields(&[]),
                         field_layouts: &[],
                     },
-                    captures_niche: CapturesNiche::no_niche(),
+                    niche: Niche::NONE,
                 };
 
                 let host_exposed: Vec<_> = symbols
                     .iter()
                     .map(|symbol| {
                         (
-                            func_name_bytes_help(
-                                *symbol,
-                                [],
-                                CapturesNiche::no_niche(),
-                                &layout.result,
-                            ),
+                            func_name_bytes_help(*symbol, [], Niche::NONE, &layout.result),
                             [].as_slice(),
                         )
                     })
@@ -448,7 +435,7 @@ fn build_entry_point<'a>(
 
 fn proc_spec<'a>(
     arena: &'a Bump,
-    interner: &STLayoutInterner<'a>,
+    interner: &mut STLayoutInterner<'a>,
     proc: &Proc<'a>,
 ) -> Result<(FuncDef, MutSet<UnionLayout<'a>>)> {
     let mut builder = FuncDefBuilder::new();
@@ -545,7 +532,7 @@ fn apply_refcount_operation<'a>(
 
 fn stmt_spec<'a>(
     builder: &mut FuncDefBuilder,
-    interner: &STLayoutInterner<'a>,
+    interner: &mut STLayoutInterner<'a>,
     env: &mut Env<'a>,
     block: BlockId,
     layout: &Layout<'a>,
@@ -787,7 +774,7 @@ fn add_loop(
 
 fn call_spec<'a>(
     builder: &mut FuncDefBuilder,
-    interner: &STLayoutInterner<'a>,
+    interner: &mut STLayoutInterner<'a>,
     env: &mut Env<'a>,
     block: BlockId,
     layout: &Layout<'a>,
@@ -807,7 +794,7 @@ fn call_spec<'a>(
 
             let arg_value_id = build_tuple_value(builder, env, block, call.arguments)?;
             let args_it = arg_layouts.iter().copied();
-            let captures_niche = name.captures_niche();
+            let captures_niche = name.niche();
             let bytes = func_name_bytes_help(name.name(), args_it, captures_niche, ret_layout);
             let name = FuncName(&bytes);
             let module = MOD_APP;
@@ -859,7 +846,7 @@ fn call_spec<'a>(
             let update_mode_var = UpdateModeVar(&mode);
 
             let args_it = passed_function.argument_layouts.iter().copied();
-            let captures_niche = passed_function.name.captures_niche();
+            let captures_niche = passed_function.name.niche();
             let bytes = func_name_bytes_help(
                 passed_function.name.name(),
                 args_it,
@@ -908,6 +895,8 @@ fn call_spec<'a>(
                         &WhenRecursive::Unreachable,
                     )?;
 
+                    let return_layout = interner.insert(*return_layout);
+
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
                         env,
@@ -939,7 +928,9 @@ fn call_spec<'a>(
                         with_new_heap_cell(builder, block, bag)
                     };
 
-                    let state_layout = Layout::Builtin(Builtin::List(&argument_layouts[0]));
+                    let arg0_layout = interner.insert(argument_layouts[0]);
+
+                    let state_layout = Layout::Builtin(Builtin::List(arg0_layout));
                     let state_type = layout_spec(
                         env,
                         builder,
@@ -977,6 +968,8 @@ fn call_spec<'a>(
                         return_layout,
                         &WhenRecursive::Unreachable,
                     )?;
+
+                    let return_layout = interner.insert(*return_layout);
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
@@ -1022,6 +1015,8 @@ fn call_spec<'a>(
                         return_layout,
                         &WhenRecursive::Unreachable,
                     )?;
+
+                    let return_layout = interner.insert(*return_layout);
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
@@ -1073,6 +1068,8 @@ fn call_spec<'a>(
                         return_layout,
                         &WhenRecursive::Unreachable,
                     )?;
+
+                    let return_layout = interner.insert(*return_layout);
 
                     let state_layout = Layout::Builtin(Builtin::List(return_layout));
                     let state_type = layout_spec(
@@ -1244,11 +1241,12 @@ fn lowlevel_spec<'a>(
 
             match layout {
                 Layout::Builtin(Builtin::List(element_layout)) => {
+                    let element_layout = interner.get(*element_layout);
                     let type_id = layout_spec(
                         env,
                         builder,
                         interner,
-                        element_layout,
+                        &element_layout,
                         &WhenRecursive::Unreachable,
                     )?;
                     new_list(builder, block, type_id)
@@ -1412,7 +1410,7 @@ fn worst_case_type(context: &mut impl TypeContext) -> Result<TypeId> {
 
 fn expr_spec<'a>(
     builder: &mut FuncDefBuilder,
-    interner: &STLayoutInterner<'a>,
+    interner: &mut STLayoutInterner<'a>,
     env: &mut Env<'a>,
     block: BlockId,
     layout: &Layout<'a>,
@@ -1582,11 +1580,12 @@ fn expr_spec<'a>(
 
         EmptyArray => match layout {
             Layout::Builtin(Builtin::List(element_layout)) => {
+                let element_layout = interner.get(*element_layout);
                 let type_id = layout_spec(
                     env,
                     builder,
                     interner,
-                    element_layout,
+                    &element_layout,
                     &WhenRecursive::Unreachable,
                 )?;
                 new_list(builder, block, type_id)
@@ -1730,8 +1729,9 @@ fn layout_spec_help<'a>(
         }
 
         Boxed(inner_layout) => {
+            let inner_layout = interner.get(*inner_layout);
             let inner_type =
-                layout_spec_help(env, builder, interner, inner_layout, when_recursive)?;
+                layout_spec_help(env, builder, interner, &inner_layout, when_recursive)?;
             let cell_type = builder.add_heap_cell_type();
 
             builder.add_tuple_type(&[cell_type, inner_type])
@@ -1770,8 +1770,9 @@ fn builtin_spec<'a>(
         Decimal | Float(_) => builder.add_tuple_type(&[]),
         Str => str_type(builder),
         List(element_layout) => {
+            let element_layout = interner.get(*element_layout);
             let element_type =
-                layout_spec_help(env, builder, interner, element_layout, when_recursive)?;
+                layout_spec_help(env, builder, interner, &element_layout, when_recursive)?;
 
             let cell = builder.add_heap_cell_type();
             let bag = builder.add_bag_type(element_type)?;

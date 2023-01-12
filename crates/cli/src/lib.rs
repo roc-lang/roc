@@ -13,7 +13,6 @@ use roc_load::{ExpectMetadata, LoadingProblem, Threading};
 use roc_mono::ir::OptLevel;
 use roc_packaging::cache::RocCacheDir;
 use roc_packaging::tarball::Compression;
-use roc_reporting::cli::Problems;
 use std::env;
 use std::ffi::{CString, OsStr};
 use std::io;
@@ -34,7 +33,7 @@ pub mod build;
 mod format;
 pub use format::format;
 
-use crate::build::{BuildFileError, BuildOrdering};
+use crate::build::{standard_load_config, BuildFileError, BuildOrdering};
 
 const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
@@ -417,8 +416,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let target_info = TargetInfo::from(target);
 
     // Step 1: compile the app and generate the .o file
-    let subs_by_module = Default::default();
-
     let load_config = LoadConfig {
         target_info,
         // TODO: expose this from CLI?
@@ -430,7 +427,6 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
     let load_result = roc_load::load_and_monomorphize(
         arena,
         path.to_path_buf(),
-        subs_by_module,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         load_config,
     );
@@ -466,7 +462,7 @@ pub fn test(matches: &ArgMatches, triple: Triple) -> io::Result<i32> {
             "if there were errors, we would have already exited."
         );
         if problems.warnings > 0 {
-            print_problems(problems, start_time.elapsed());
+            problems.print_to_stdout(start_time.elapsed());
             println!(".\n\nRunning tests…\n\n\x1B[36m{}\x1B[39m", "─".repeat(80));
         }
     }
@@ -675,6 +671,8 @@ pub fn build(
         emit_debug_info,
     };
 
+    let load_config = standard_load_config(&triple, build_ordering, threading);
+
     let res_binary_path = build_file(
         &arena,
         &triple,
@@ -684,10 +682,9 @@ pub fn build(
         link_type,
         linking_strategy,
         prebuilt,
-        threading,
         wasm_dev_stack_bytes,
         roc_cache_dir,
-        build_ordering,
+        load_config,
     );
 
     match res_binary_path {
@@ -710,7 +707,7 @@ pub fn build(
                     // since the process is about to exit anyway.
                     // std::mem::forget(arena);
 
-                    print_problems(problems, total_time);
+                    problems.print_to_stdout(total_time);
                     println!(" while successfully building:\n\n    {generated_filename}");
 
                     // Return a nonzero exit code if there were problems
@@ -718,7 +715,7 @@ pub fn build(
                 }
                 BuildAndRun => {
                     if problems.errors > 0 || problems.warnings > 0 {
-                        print_problems(problems, total_time);
+                        problems.print_to_stdout(total_time);
                         println!(
                             ".\n\nRunning program anyway…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
@@ -739,7 +736,7 @@ pub fn build(
                         "if there are errors, they should have been returned as an error variant"
                     );
                     if problems.warnings > 0 {
-                        print_problems(problems, total_time);
+                        problems.print_to_stdout(total_time);
                         println!(
                             ".\n\nRunning program…\n\n\x1B[36m{}\x1B[39m",
                             "─".repeat(80)
@@ -773,7 +770,7 @@ fn handle_error_module(
 
     let problems = roc_build::program::report_problems_typechecked(&mut module);
 
-    print_problems(problems, total_time);
+    problems.print_to_stdout(total_time);
 
     if print_run_anyway_hint {
         // If you're running "main.roc" then you can just do `roc run`
@@ -803,34 +800,6 @@ fn handle_loading_problem(problem: LoadingProblem) -> io::Result<i32> {
             Ok(1)
         }
     }
-}
-
-fn print_problems(problems: Problems, total_time: std::time::Duration) {
-    const GREEN: usize = 32;
-    const YELLOW: usize = 33;
-
-    print!(
-        "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms",
-        match problems.errors {
-            0 => GREEN,
-            _ => YELLOW,
-        },
-        problems.errors,
-        match problems.errors {
-            1 => "error",
-            _ => "errors",
-        },
-        match problems.warnings {
-            0 => GREEN,
-            _ => YELLOW,
-        },
-        problems.warnings,
-        match problems.warnings {
-            1 => "warning",
-            _ => "warnings",
-        },
-        total_time.as_millis(),
-    );
 }
 
 fn roc_run<'a, I: IntoIterator<Item = &'a OsStr>>(

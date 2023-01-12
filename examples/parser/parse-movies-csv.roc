@@ -1,6 +1,6 @@
 app "parse-movies-csv"
     packages { pf: "platform/main.roc" }
-    imports [Parser.Core.{ Parser, map, apply }, Parser.Str.{ RawStr }, Parser.CSV.{ CSV, record, field, string, nat }]
+    imports [Parser.Core.{ Parser, map, keep }, Parser.Str.{ RawStr }, Parser.CSV.{ CSV, record, field, string, nat }]
     provides [main] to pf
 
 input : Str
@@ -35,9 +35,9 @@ MovieInfo := { title : Str, releaseYear : Nat, actors : List Str }
 
 movieInfoParser =
     record (\title -> \releaseYear -> \actors -> @MovieInfo { title, releaseYear, actors })
-    |> apply (field string)
-    |> apply (field nat)
-    |> apply (field actorsParser)
+    |> keep (field string)
+    |> keep (field nat)
+    |> keep (field actorsParser)
 
 actorsParser =
     string

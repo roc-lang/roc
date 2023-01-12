@@ -33,9 +33,9 @@ Defs(
                                 },
                                 [
                                     @13-28 Record(
-                                        Collection {
-                                            items: [
-                                                @17-26 SpaceBefore(
+                                        [
+                                            @17-26 SpaceBefore(
+                                                SpaceAfter(
                                                     RequiredValue(
                                                         @17-20 "bar",
                                                         [],
@@ -48,11 +48,11 @@ Defs(
                                                         Newline,
                                                     ],
                                                 ),
-                                            ],
-                                            final_comments: [
-                                                Newline,
-                                            ],
-                                        },
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                        ],
                                     ),
                                 ],
                                 Space,

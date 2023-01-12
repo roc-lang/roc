@@ -98,7 +98,6 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         filename,
         module_src,
         src_dir,
-        Default::default(),
         RocCacheDir::Disallowed,
         load_config,
     );
@@ -111,7 +110,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         procedures,
         mut interns,
         exposed_to_host,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
@@ -125,7 +124,6 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
 
     let env = roc_gen_wasm::Env {
         arena,
-        layout_interner: &layout_interner,
         module_id,
         exposed_to_host,
         stack_bytes: roc_gen_wasm::Env::DEFAULT_STACK_BYTES,
@@ -140,8 +138,13 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         )
     });
 
-    let (mut module, mut called_fns, main_fn_index) =
-        roc_gen_wasm::build_app_module(&env, &mut interns, host_module, procedures);
+    let (mut module, mut called_fns, main_fn_index) = roc_gen_wasm::build_app_module(
+        &env,
+        &mut layout_interner,
+        &mut interns,
+        host_module,
+        procedures,
+    );
 
     T::insert_wrapper(arena, &mut module, TEST_WRAPPER_NAME, main_fn_index);
     called_fns.push(true);

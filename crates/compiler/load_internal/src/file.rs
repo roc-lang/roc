@@ -24,7 +24,6 @@ use roc_debug_flags::{
 };
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
-use roc_intern::{GlobalInterner, SingleThreadedInterner};
 use roc_late_solve::{AbilitiesView, WorldAbilities};
 use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
@@ -36,7 +35,7 @@ use roc_mono::ir::{
     UpdateModeIds,
 };
 use roc_mono::layout::{
-    CapturesNiche, LambdaName, Layout, LayoutCache, LayoutProblem, STLayoutInterner,
+    GlobalLayoutInterner, LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner,
 };
 use roc_packaging::cache::{self, RocCacheDir};
 #[cfg(not(target_family = "wasm"))]
@@ -751,7 +750,7 @@ pub struct MonomorphizedModule<'a> {
     pub module_id: ModuleId,
     pub interns: Interns,
     pub subs: Subs,
-    pub layout_interner: SingleThreadedInterner<'a, Layout<'a>>,
+    pub layout_interner: STLayoutInterner<'a>,
     pub output_path: Box<Path>,
     pub can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub type_problems: MutMap<ModuleId, Vec<TypeError>>,
@@ -768,7 +767,7 @@ pub struct MonomorphizedModule<'a> {
 /// Values used to render expect output
 pub struct ExpectMetadata<'a> {
     pub interns: Interns,
-    pub layout_interner: SingleThreadedInterner<'a, Layout<'a>>,
+    pub layout_interner: STLayoutInterner<'a>,
     pub expectations: VecMap<ModuleId, Expectations>,
 }
 
@@ -1015,7 +1014,7 @@ struct State<'a> {
     // cached types (used for builtin modules, could include packages in the future too)
     cached_types: CachedTypeState,
 
-    layout_interner: Arc<GlobalInterner<'a, Layout<'a>>>,
+    layout_interner: GlobalLayoutInterner<'a>,
 }
 
 type CachedTypeState = Arc<Mutex<MutMap<ModuleId, TypeState>>>;
@@ -1073,7 +1072,7 @@ impl<'a> State<'a> {
             exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
-            layout_interner: GlobalInterner::with_capacity(128),
+            layout_interner: GlobalLayoutInterner::with_capacity(128),
         }
     }
 }
@@ -1145,6 +1144,51 @@ impl ModuleTiming {
         };
 
         calculate(Some(end_time.duration_since(*start_time))).unwrap_or_default()
+    }
+}
+
+fn report_timing(
+    buf: &mut impl std::fmt::Write,
+    label: &str,
+    duration: Duration,
+) -> std::fmt::Result {
+    writeln!(
+        buf,
+        "        {:9.3} ms   {}",
+        duration.as_secs_f64() * 1000.0,
+        label,
+    )
+}
+
+impl std::fmt::Display for ModuleTiming {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let module_timing = self;
+
+        report_timing(f, "Read .roc file from disk", module_timing.read_roc_file)?;
+        report_timing(f, "Parse header", module_timing.parse_header)?;
+        report_timing(f, "Parse body", module_timing.parse_body)?;
+        report_timing(f, "Canonicalize", module_timing.canonicalize)?;
+        report_timing(f, "Constrain", module_timing.constrain)?;
+        report_timing(f, "Solve", module_timing.solve)?;
+        report_timing(
+            f,
+            "Find Specializations",
+            module_timing.find_specializations,
+        )?;
+        let multiple_make_specializations_passes = module_timing.make_specializations.len() > 1;
+        for (i, pass_time) in module_timing.make_specializations.iter().enumerate() {
+            let suffix = if multiple_make_specializations_passes {
+                format!(" (Pass {})", i)
+            } else {
+                String::new()
+            };
+            report_timing(f, &format!("Make Specializations{}", suffix), *pass_time)?;
+        }
+        report_timing(f, "Other", module_timing.other())?;
+        f.write_str("\n")?;
+        report_timing(f, "Total", module_timing.total())?;
+
+        Ok(())
     }
 }
 
@@ -2280,9 +2324,9 @@ macro_rules! debug_check_ir {
 
             let procedures = &$state.procedures;
 
-            let problems = check_procs($arena, $interner, procedures);
+            let problems = check_procs($arena, &mut $interner, procedures);
             if !problems.is_empty() {
-                let formatted = format_problems(&interns, $interner, problems);
+                let formatted = format_problems(&interns, &$interner, problems);
                 eprintln!("IR PROBLEMS FOUND:\n{formatted}");
             }
         })
@@ -3028,7 +3072,7 @@ fn update<'a>(
                     }
 
                     let layout_interner = {
-                        let mut taken = GlobalInterner::with_capacity(0);
+                        let mut taken = GlobalLayoutInterner::with_capacity(0);
                         std::mem::swap(&mut state.layout_interner, &mut taken);
                         taken
                     };
@@ -3036,10 +3080,13 @@ fn update<'a>(
                         .unwrap()
                         .expect("outstanding references to global layout interener, but we just drained all layout caches");
 
+                    #[cfg(debug_assertions)]
+                    let mut layout_interner = layout_interner;
+
                     log!("specializations complete from {:?}", module_id);
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_SPECIALIZATION);
-                    debug_check_ir!(state, arena, &layout_interner, ROC_CHECK_MONO_IR);
+                    debug_check_ir!(state, arena, layout_interner, ROC_CHECK_MONO_IR);
 
                     let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
 
@@ -3053,6 +3100,11 @@ fn update<'a>(
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
+                    let host_exposed_procs = bumpalo::collections::Vec::from_iter_in(
+                        state.exposed_to_host.values.keys().copied(),
+                        arena,
+                    );
+
                     Proc::insert_refcount_operations(
                         arena,
                         &layout_interner,
@@ -3060,6 +3112,7 @@ fn update<'a>(
                         ident_ids,
                         &mut update_mode_ids,
                         &mut state.procedures,
+                        &host_exposed_procs,
                     );
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_REFCOUNT);
@@ -3378,7 +3431,7 @@ fn proc_layout_for<'a>(
             roc_mono::ir::ProcLayout {
                 arguments: &[],
                 result: Layout::struct_no_name_order(&[]),
-                captures_niche: CapturesNiche::no_niche(),
+                niche: Niche::NONE,
             }
         }
     }
@@ -4415,23 +4468,7 @@ fn build_header<'a>(
         //
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
-            let cloned_module_name = qualified_module_name.module.clone();
-            let pq_module_name = if qualified_module_name.is_builtin() {
-                // If this is a builtin, it must be unqualified, and we should *never* prefix it
-                // with the package shorthand! The user intended to import the module as-is here.
-                debug_assert!(qualified_module_name.opt_package.is_none());
-                PQModuleName::Unqualified(qualified_module_name.module)
-            } else {
-                match qualified_module_name.opt_package {
-                    None => match opt_shorthand {
-                        Some(shorthand) => {
-                            PQModuleName::Qualified(shorthand, qualified_module_name.module)
-                        }
-                        None => PQModuleName::Unqualified(qualified_module_name.module),
-                    },
-                    Some(package) => PQModuleName::Qualified(package, cloned_module_name),
-                }
-            };
+            let pq_module_name = qualified_module_name.into_pq_module_name(opt_shorthand);
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
 
@@ -4444,18 +4481,14 @@ fn build_header<'a>(
             // to the same symbols as the ones we're using here.
             let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
-            for Loc {
-                region,
-                value: ident,
-            } in exposed_idents
-            {
-                let ident_id = ident_ids.get_or_insert(ident.as_str());
+            for loc_ident in exposed_idents {
+                let ident_id = ident_ids.get_or_insert(loc_ident.value.as_str());
                 let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
-                debug_assert!(!scope.contains_key(&ident));
+                debug_assert!(!scope.contains_key(&loc_ident.value));
 
-                scope.insert(ident, (symbol, region));
+                scope.insert(loc_ident.value, (symbol, loc_ident.region));
             }
         }
 

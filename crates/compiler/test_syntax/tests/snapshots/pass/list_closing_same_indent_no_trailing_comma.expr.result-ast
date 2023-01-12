@@ -20,17 +20,17 @@ Defs(
                     "my_list",
                 ),
                 @10-26 List(
-                    Collection {
-                        items: [
-                            @16-17 SpaceBefore(
-                                Num(
-                                    "0",
-                                ),
-                                [
-                                    Newline,
-                                ],
+                    [
+                        @16-17 SpaceBefore(
+                            Num(
+                                "0",
                             ),
-                            @23-24 SpaceBefore(
+                            [
+                                Newline,
+                            ],
+                        ),
+                        @23-24 SpaceBefore(
+                            SpaceAfter(
                                 Num(
                                     "1",
                                 ),
@@ -38,11 +38,11 @@ Defs(
                                     Newline,
                                 ],
                             ),
-                        ],
-                        final_comments: [
-                            Newline,
-                        ],
-                    },
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ],
                 ),
             ),
         ],

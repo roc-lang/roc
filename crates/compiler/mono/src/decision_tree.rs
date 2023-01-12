@@ -1,8 +1,11 @@
+use crate::borrow::Ownership;
 use crate::ir::{
     build_list_index_probe, BranchInfo, Call, CallType, DestructType, Env, Expr, JoinPointId,
     ListIndex, Literal, Param, Pattern, Procs, Stmt,
 };
-use crate::layout::{Builtin, Layout, LayoutCache, TagIdIntType, UnionLayout};
+use crate::layout::{
+    Builtin, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, TagIdIntType, UnionLayout,
+};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
@@ -518,138 +521,142 @@ fn tests_at_path<'a>(
     unique
 }
 
+fn test_for_pattern<'a>(pattern: &Pattern<'a>) -> Option<Test<'a>> {
+    use Pattern::*;
+    use Test::*;
+
+    let test = match pattern {
+        Identifier(_) | Underscore => {
+            return None;
+        }
+
+        As(subpattern, _) => return test_for_pattern(subpattern),
+
+        RecordDestructure(destructs, _) => {
+            // not rendered, so pick the easiest
+            let union = Union {
+                render_as: RenderAs::Tag,
+                alternatives: vec![Ctor {
+                    tag_id: TagId(0),
+                    name: CtorName::Tag(TagName(RECORD_TAG_NAME.into())),
+                    arity: destructs.len(),
+                }],
+            };
+
+            let mut arguments = std::vec::Vec::new();
+
+            for destruct in destructs {
+                match &destruct.typ {
+                    DestructType::Guard(guard) => {
+                        arguments.push((guard.clone(), destruct.layout));
+                    }
+                    DestructType::Required(_) => {
+                        arguments.push((Pattern::Underscore, destruct.layout));
+                    }
+                }
+            }
+
+            IsCtor {
+                tag_id: 0,
+                ctor_name: CtorName::Tag(TagName(RECORD_TAG_NAME.into())),
+                union,
+                arguments,
+            }
+        }
+
+        NewtypeDestructure {
+            tag_name,
+            arguments,
+        } => {
+            let tag_id = 0;
+            let union = Union::newtype_wrapper(CtorName::Tag(tag_name.clone()), arguments.len());
+
+            IsCtor {
+                tag_id,
+                ctor_name: CtorName::Tag(tag_name.clone()),
+                union,
+                arguments: arguments.to_vec(),
+            }
+        }
+
+        AppliedTag {
+            tag_name,
+            tag_id,
+            arguments,
+            union,
+            ..
+        } => IsCtor {
+            tag_id: *tag_id,
+            ctor_name: CtorName::Tag(tag_name.clone()),
+            union: union.clone(),
+            arguments: arguments.to_vec(),
+        },
+
+        List {
+            arity,
+            element_layout: _,
+            elements: _,
+        } => IsListLen {
+            bound: match arity {
+                ListArity::Exact(_) => ListLenBound::Exact,
+                ListArity::Slice(_, _) => ListLenBound::AtLeast,
+            },
+            len: arity.min_len() as _,
+        },
+
+        Voided { .. } => internal_error!("unreachable"),
+
+        OpaqueUnwrap { opaque, argument } => {
+            let union = Union {
+                render_as: RenderAs::Tag,
+                alternatives: vec![Ctor {
+                    tag_id: TagId(0),
+                    name: CtorName::Opaque(*opaque),
+                    arity: 1,
+                }],
+            };
+
+            IsCtor {
+                tag_id: 0,
+                ctor_name: CtorName::Opaque(*opaque),
+                union,
+                arguments: vec![(**argument).clone()],
+            }
+        }
+
+        BitLiteral { value, .. } => IsBit(*value),
+        EnumLiteral { tag_id, union, .. } => IsByte {
+            tag_id: *tag_id as _,
+            num_alts: union.alternatives.len(),
+        },
+        IntLiteral(v, precision) => IsInt(*v, *precision),
+        FloatLiteral(v, precision) => IsFloat(*v, *precision),
+        DecimalLiteral(v) => IsDecimal(*v),
+        StrLiteral(v) => IsStr(v.clone()),
+    };
+
+    Some(test)
+}
+
 fn test_at_path<'a>(
     selected_path: &[PathInstruction],
     branch: &Branch<'a>,
 ) -> Option<GuardedTest<'a>> {
-    use Pattern::*;
-    use Test::*;
-
-    match branch
+    let (_, pattern) = branch
         .patterns
         .iter()
-        .find(|(path, _)| path == selected_path)
-    {
-        None => None,
-        Some((_, pattern)) => {
-            let test = match pattern {
-                Identifier(_) | Underscore => {
-                    if let Guard::Guard { .. } = &branch.guard {
-                        // no tests for this pattern remain, but we cannot discard it yet
-                        // because it has a guard!
-                        return Some(GuardedTest::Placeholder);
-                    } else {
-                        return None;
-                    }
-                }
+        .find(|(path, _)| path == selected_path)?;
 
-                RecordDestructure(destructs, _) => {
-                    // not rendered, so pick the easiest
-                    let union = Union {
-                        render_as: RenderAs::Tag,
-                        alternatives: vec![Ctor {
-                            tag_id: TagId(0),
-                            name: CtorName::Tag(TagName(RECORD_TAG_NAME.into())),
-                            arity: destructs.len(),
-                        }],
-                    };
-
-                    let mut arguments = std::vec::Vec::new();
-
-                    for destruct in destructs {
-                        match &destruct.typ {
-                            DestructType::Guard(guard) => {
-                                arguments.push((guard.clone(), destruct.layout));
-                            }
-                            DestructType::Required(_) => {
-                                arguments.push((Pattern::Underscore, destruct.layout));
-                            }
-                        }
-                    }
-
-                    IsCtor {
-                        tag_id: 0,
-                        ctor_name: CtorName::Tag(TagName(RECORD_TAG_NAME.into())),
-                        union,
-                        arguments,
-                    }
-                }
-
-                NewtypeDestructure {
-                    tag_name,
-                    arguments,
-                } => {
-                    let tag_id = 0;
-                    let union =
-                        Union::newtype_wrapper(CtorName::Tag(tag_name.clone()), arguments.len());
-
-                    IsCtor {
-                        tag_id,
-                        ctor_name: CtorName::Tag(tag_name.clone()),
-                        union,
-                        arguments: arguments.to_vec(),
-                    }
-                }
-
-                AppliedTag {
-                    tag_name,
-                    tag_id,
-                    arguments,
-                    union,
-                    ..
-                } => IsCtor {
-                    tag_id: *tag_id,
-                    ctor_name: CtorName::Tag(tag_name.clone()),
-                    union: union.clone(),
-                    arguments: arguments.to_vec(),
-                },
-
-                List {
-                    arity,
-                    element_layout: _,
-                    elements: _,
-                } => IsListLen {
-                    bound: match arity {
-                        ListArity::Exact(_) => ListLenBound::Exact,
-                        ListArity::Slice(_, _) => ListLenBound::AtLeast,
-                    },
-                    len: arity.min_len() as _,
-                },
-
-                Voided { .. } => internal_error!("unreachable"),
-
-                OpaqueUnwrap { opaque, argument } => {
-                    let union = Union {
-                        render_as: RenderAs::Tag,
-                        alternatives: vec![Ctor {
-                            tag_id: TagId(0),
-                            name: CtorName::Opaque(*opaque),
-                            arity: 1,
-                        }],
-                    };
-
-                    IsCtor {
-                        tag_id: 0,
-                        ctor_name: CtorName::Opaque(*opaque),
-                        union,
-                        arguments: vec![(**argument).clone()],
-                    }
-                }
-
-                BitLiteral { value, .. } => IsBit(*value),
-                EnumLiteral { tag_id, union, .. } => IsByte {
-                    tag_id: *tag_id as _,
-                    num_alts: union.alternatives.len(),
-                },
-                IntLiteral(v, precision) => IsInt(*v, *precision),
-                FloatLiteral(v, precision) => IsFloat(*v, *precision),
-                DecimalLiteral(v) => IsDecimal(*v),
-                StrLiteral(v) => IsStr(v.clone()),
-            };
-
-            let guarded_test = GuardedTest::TestNotGuarded { test };
-
-            Some(guarded_test)
+    match test_for_pattern(pattern) {
+        Some(test) => Some(GuardedTest::TestNotGuarded { test }),
+        None => {
+            if let Guard::Guard { .. } = &branch.guard {
+                // no tests for this pattern remain, but we cannot discard it yet
+                // because it has a guard!
+                Some(GuardedTest::Placeholder)
+            } else {
+                None
+            }
         }
     }
 }
@@ -728,6 +735,10 @@ fn to_relevant_branch_help<'a>(
 
     match pattern {
         Identifier(_) | Underscore => Some(branch.clone()),
+
+        As(subpattern, _symbol) => {
+            to_relevant_branch_help(test, path, start, end, branch, *subpattern)
+        }
 
         RecordDestructure(destructs, _) => match test {
             IsCtor {
@@ -1096,6 +1107,8 @@ fn needs_tests(pattern: &Pattern) -> bool {
     match pattern {
         Identifier(_) | Underscore => false,
 
+        As(subpattern, _) => needs_tests(subpattern),
+
         NewtypeDestructure { .. }
         | RecordDestructure(..)
         | AppliedTag { .. }
@@ -1358,6 +1371,7 @@ enum PathInstruction {
 
 fn path_to_expr_help<'a>(
     env: &mut Env<'a, '_>,
+    layout_interner: &TLLayoutInterner<'a>,
     mut symbol: Symbol,
     path: &[PathInstruction],
     mut layout: Layout<'a>,
@@ -1442,9 +1456,11 @@ fn path_to_expr_help<'a>(
                             arguments: env.arena.alloc([list_sym, index_sym]),
                         });
 
-                        stores.push((load_sym, *elem_layout, load_expr));
+                        let elem_layout = layout_interner.get(elem_layout);
 
-                        layout = *elem_layout;
+                        stores.push((load_sym, elem_layout, load_expr));
+
+                        layout = elem_layout;
                         symbol = load_sym;
                     }
                     _ => internal_error!("not a list"),
@@ -1458,13 +1474,14 @@ fn path_to_expr_help<'a>(
 
 fn test_to_comparison<'a>(
     env: &mut Env<'a, '_>,
+    layout_interner: &TLLayoutInterner<'a>,
     cond_symbol: Symbol,
     cond_layout: &Layout<'a>,
     path: &[PathInstruction],
     test: Test<'a>,
 ) -> (StoresVec<'a>, Comparison, Option<ConstructorKnown<'a>>) {
     let (rhs_symbol, mut stores, test_layout) =
-        path_to_expr_help(env, cond_symbol, path, *cond_layout);
+        path_to_expr_help(env, layout_interner, cond_symbol, path, *cond_layout);
 
     match test {
         Test::IsCtor { tag_id, union, .. } => {
@@ -1614,6 +1631,7 @@ type Tests<'a> = std::vec::Vec<(
 
 fn stores_and_condition<'a>(
     env: &mut Env<'a, '_>,
+    layout_interner: &TLLayoutInterner<'a>,
     cond_symbol: Symbol,
     cond_layout: &Layout<'a>,
     test_chain: Vec<(Vec<PathInstruction>, Test<'a>)>,
@@ -1624,6 +1642,7 @@ fn stores_and_condition<'a>(
     for (path, test) in test_chain {
         tests.push(test_to_comparison(
             env,
+            layout_interner,
             cond_symbol,
             cond_layout,
             &path,
@@ -1898,7 +1917,7 @@ fn decide_to_branching<'a>(
             let param = Param {
                 symbol: test_symbol,
                 layout: Layout::Builtin(Builtin::Bool),
-                borrow: false,
+                ownership: Ownership::Owned,
             };
 
             let join = Stmt::Join {
@@ -1942,7 +1961,13 @@ fn decide_to_branching<'a>(
             let chain_branch_info =
                 ConstructorKnown::from_test_chain(cond_symbol, &cond_layout, &test_chain);
 
-            let tests = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
+            let tests = stores_and_condition(
+                env,
+                &layout_cache.interner,
+                cond_symbol,
+                &cond_layout,
+                test_chain,
+            );
 
             let number_of_tests = tests.len() as i64;
 
@@ -1990,7 +2015,7 @@ fn decide_to_branching<'a>(
             // switch on the tag discriminant (currently an i64 value)
             // NOTE the tag discriminant is not actually loaded, `cond` can point to a tag
             let (inner_cond_symbol, cond_stores_vec, inner_cond_layout) =
-                path_to_expr_help(env, cond_symbol, &path, cond_layout);
+                path_to_expr_help(env, &layout_cache.interner, cond_symbol, &path, cond_layout);
 
             let default_branch = decide_to_branching(
                 env,

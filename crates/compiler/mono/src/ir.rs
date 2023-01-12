@@ -1,8 +1,9 @@
 #![allow(clippy::manual_map)]
 
+use crate::borrow::Ownership;
 use crate::layout::{
-    self, Builtin, CapturesNiche, ClosureCallOptions, ClosureRepresentation, EnumDispatch,
-    LambdaName, LambdaSet, Layout, LayoutCache, LayoutProblem, RawFunctionLayout, STLayoutInterner,
+    self, Builtin, ClosureCallOptions, ClosureRepresentation, EnumDispatch, LambdaName, LambdaSet,
+    Layout, LayoutCache, LayoutInterner, LayoutProblem, Niche, RawFunctionLayout, STLayoutInterner,
     TagIdIntType, UnionLayout, WrappedVariant,
 };
 use bumpalo::collections::{CollectIn, Vec};
@@ -22,7 +23,6 @@ use roc_debug_flags::{
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_exhaustive::{Ctor, CtorName, ListArity, RenderAs, TagId};
-use roc_intern::Interner;
 use roc_late_solve::storage::{ExternalModuleStorage, ExternalModuleStorageSnapshot};
 use roc_late_solve::{resolve_ability_specialization, AbilitiesView, Resolved, UnificationFailed};
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
@@ -339,7 +339,7 @@ impl<'a> Proc<'a> {
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let args_doc = self.args.iter().map(|(layout, symbol)| {
             let arg_doc = symbol_to_doc(alloc, *symbol, pretty);
@@ -382,7 +382,7 @@ impl<'a> Proc<'a> {
 
     pub fn to_pretty<I>(&self, interner: &I, width: usize, pretty: bool) -> String
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
@@ -401,8 +401,9 @@ impl<'a> Proc<'a> {
         ident_ids: &'i mut IdentIds,
         update_mode_ids: &'i mut UpdateModeIds,
         procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+        host_exposed_procs: &[Symbol],
     ) {
-        let borrow_params = arena.alloc(crate::borrow::infer_borrow(arena, procs));
+        let borrow_params = crate::borrow::infer_borrow(arena, procs, host_exposed_procs);
 
         crate::inc_dec::visit_procs(
             arena,
@@ -410,7 +411,7 @@ impl<'a> Proc<'a> {
             home,
             ident_ids,
             update_mode_ids,
-            borrow_params,
+            arena.alloc(borrow_params),
             procs,
         );
     }
@@ -1526,14 +1527,14 @@ pub struct JoinPointId(pub Symbol);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Param<'a> {
     pub symbol: Symbol,
-    pub borrow: bool,
+    pub ownership: Ownership,
     pub layout: Layout<'a>,
 }
 
 impl<'a> Param<'a> {
     pub const EMPTY: Self = Param {
         symbol: Symbol::EMPTY_PARAM,
-        borrow: false,
+        ownership: Ownership::Owned,
         layout: Layout::UNIT,
     };
 }
@@ -2173,7 +2174,7 @@ impl<'a> Stmt<'a> {
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
         A: Clone,
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         use Stmt::*;
 
@@ -2329,7 +2330,7 @@ impl<'a> Stmt<'a> {
 
     pub fn to_pretty<I>(&self, interner: &I, width: usize, pretty: bool) -> String
     where
-        I: Interner<'a, Layout<'a>>,
+        I: LayoutInterner<'a>,
     {
         let allocator = BoxAllocator;
         let mut w = std::vec::Vec::new();
@@ -2870,6 +2871,8 @@ fn pattern_to_when<'a>(
             (*new_symbol, Loc::at_zero(RuntimeError(error)))
         }
 
+        As(_, _) => todo!("as bindings are not supported yet"),
+
         UnsupportedPattern(region) => {
             // create the runtime error here, instead of delegating to When.
             // UnsupportedPattern should then never occur in When
@@ -3391,7 +3394,7 @@ fn specialize_proc_help<'a>(
                     let top_level = ProcLayout::new(
                         env.arena,
                         top_level_arguments.into_bump_slice(),
-                        CapturesNiche::no_niche(),
+                        Niche::NONE,
                         *return_layout,
                     );
 
@@ -3424,7 +3427,7 @@ fn specialize_proc_help<'a>(
                         *symbol,
                         (
                             name,
-                            ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), result),
+                            ProcLayout::new(env.arena, &[], Niche::NONE, result),
                             layout,
                         ),
                     );
@@ -3533,10 +3536,12 @@ fn specialize_proc_help<'a>(
                             let ptr_bytes = env.target_info;
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
-                                let size1 =
-                                    layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
-                                let size2 =
-                                    layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size1 = layout_cache
+                                    .get_in(**layout1)
+                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size2 = layout_cache
+                                    .get_in(**layout2)
+                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                                 size2.cmp(&size1)
                             });
@@ -3575,16 +3580,20 @@ fn specialize_proc_help<'a>(
                             let ptr_bytes = env.target_info;
 
                             combined.sort_by(|(_, layout1), (_, layout2)| {
-                                let size1 =
-                                    layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
-                                let size2 =
-                                    layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size1 = layout_cache
+                                    .get_in(**layout1)
+                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                                let size2 = layout_cache
+                                    .get_in(**layout2)
+                                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                                 size2.cmp(&size1)
                             });
 
                             let ordered_field_layouts = Vec::from_iter_in(
-                                combined.iter().map(|(_, layout)| **layout),
+                                combined
+                                    .iter()
+                                    .map(|(_, layout)| layout_cache.get_in(**layout)),
                                 env.arena,
                             );
                             let ordered_field_layouts = ordered_field_layouts.into_bump_slice();
@@ -3610,7 +3619,7 @@ fn specialize_proc_help<'a>(
                                 specialized_body = Stmt::Let(
                                     symbol,
                                     expr,
-                                    **layout,
+                                    layout_cache.get_in(**layout),
                                     env.arena.alloc(specialized_body),
                                 );
                             }
@@ -3950,14 +3959,14 @@ fn specialize_variable<'a>(
 pub struct ProcLayout<'a> {
     pub arguments: &'a [Layout<'a>],
     pub result: Layout<'a>,
-    pub captures_niche: CapturesNiche<'a>,
+    pub niche: Niche<'a>,
 }
 
 impl<'a> ProcLayout<'a> {
     pub(crate) fn new(
         arena: &'a Bump,
         old_arguments: &'a [Layout<'a>],
-        old_captures_niche: CapturesNiche<'a>,
+        old_niche: Niche<'a>,
         result: Layout<'a>,
     ) -> Self {
         let mut arguments = Vec::with_capacity_in(old_arguments.len(), arena);
@@ -3972,7 +3981,7 @@ impl<'a> ProcLayout<'a> {
 
         ProcLayout {
             arguments: arguments.into_bump_slice(),
-            captures_niche: old_captures_niche,
+            niche: old_niche,
             result: new_result,
         }
     }
@@ -3986,10 +3995,10 @@ impl<'a> ProcLayout<'a> {
             RawFunctionLayout::Function(arguments, lambda_set, result) => {
                 let arguments =
                     lambda_set.extend_argument_list_for_named(arena, lambda_name, arguments);
-                ProcLayout::new(arena, arguments, lambda_name.captures_niche(), *result)
+                ProcLayout::new(arena, arguments, lambda_name.niche(), *result)
             }
             RawFunctionLayout::ZeroArgumentThunk(result) => {
-                ProcLayout::new(arena, &[], CapturesNiche::no_niche(), result)
+                ProcLayout::new(arena, &[], Niche::NONE, result)
             }
         }
     }
@@ -4538,7 +4547,7 @@ pub fn with_hole<'a>(
                         let param = Param {
                             symbol: assigned,
                             layout,
-                            borrow: false,
+                            ownership: Ownership::Owned,
                         };
 
                         Stmt::Join {
@@ -4603,7 +4612,7 @@ pub fn with_hole<'a>(
             let param = Param {
                 symbol: assigned,
                 layout,
-                borrow: false,
+                ownership: Ownership::Owned,
             };
 
             Stmt::Join {
@@ -4625,19 +4634,23 @@ pub fn with_hole<'a>(
             match opt_elem_layout {
                 Ok(elem_layout) => {
                     let expr = Expr::EmptyArray;
+                    // TODO don't alloc once elem_layout is interned
+                    let elem_layout = layout_cache.put_in(elem_layout);
                     Stmt::Let(
                         assigned,
                         expr,
-                        Layout::Builtin(Builtin::List(env.arena.alloc(elem_layout))),
+                        Layout::Builtin(Builtin::List(elem_layout)),
                         hole,
                     )
                 }
                 Err(LayoutProblem::UnresolvedTypeVar(_)) => {
                     let expr = Expr::EmptyArray;
+                    // TODO don't alloc once elem_layout is interned
+                    let elem_layout = layout_cache.put_in(Layout::VOID);
                     Stmt::Let(
                         assigned,
                         expr,
-                        Layout::Builtin(Builtin::List(&Layout::VOID)),
+                        Layout::Builtin(Builtin::List(elem_layout)),
                         hole,
                     )
                 }
@@ -4682,10 +4695,12 @@ pub fn with_hole<'a>(
                 elems: elements.into_bump_slice(),
             };
 
+            let elem_layout = layout_cache.put_in(elem_layout);
+
             let stmt = Stmt::Let(
                 assigned,
                 expr,
-                Layout::Builtin(Builtin::List(env.arena.alloc(elem_layout))),
+                Layout::Builtin(Builtin::List(elem_layout)),
                 hole,
             );
 
@@ -5730,8 +5745,12 @@ where
             let ptr_bytes = env.target_info;
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
-                let size1 = layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
-                let size2 = layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size1 = layout_cache
+                    .get_in(**layout1)
+                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size2 = layout_cache
+                    .get_in(**layout2)
+                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                 size2.cmp(&size1)
             });
@@ -5760,16 +5779,23 @@ where
             let ptr_bytes = env.target_info;
 
             combined.sort_by(|(_, layout1), (_, layout2)| {
-                let size1 = layout1.alignment_bytes(&layout_cache.interner, ptr_bytes);
-                let size2 = layout2.alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size1 = layout_cache
+                    .get_in(**layout1)
+                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
+                let size2 = layout_cache
+                    .get_in(**layout2)
+                    .alignment_bytes(&layout_cache.interner, ptr_bytes);
 
                 size2.cmp(&size1)
             });
 
             let symbols =
                 Vec::from_iter_in(combined.iter().map(|(a, _)| *a), env.arena).into_bump_slice();
-            let field_layouts =
-                Vec::from_iter_in(combined.iter().map(|(_, b)| **b), env.arena).into_bump_slice();
+            let field_layouts = Vec::from_iter_in(
+                combined.iter().map(|(_, b)| layout_cache.get_in(**b)),
+                env.arena,
+            )
+            .into_bump_slice();
 
             debug_assert_eq!(
                 Layout::struct_no_name_order(field_layouts),
@@ -7385,6 +7411,28 @@ fn store_pattern_help<'a>(
             // do nothing
             return StorePattern::NotProductive(stmt);
         }
+        As(subpattern, symbol) => {
+            let stored_subpattern =
+                store_pattern_help(env, procs, layout_cache, subpattern, outer_symbol, stmt);
+
+            let mut stmt = match stored_subpattern {
+                StorePattern::Productive(stmt) => stmt,
+                StorePattern::NotProductive(stmt) => stmt,
+            };
+
+            // An identifier in a pattern can define at most one specialization!
+            // Remove any requested specializations for this name now, since this is the definition site.
+            let specialization_symbol = procs
+                .symbol_specializations
+                .remove_single(*symbol)
+                // Can happen when the symbol was never used under this body, and hence has no
+                // requested specialization.
+                .unwrap_or(*symbol);
+
+            substitute_in_exprs(env.arena, &mut stmt, specialization_symbol, outer_symbol);
+
+            return StorePattern::Productive(stmt);
+        }
         IntLiteral(_, _)
         | FloatLiteral(_, _)
         | DecimalLiteral(_)
@@ -8359,8 +8407,7 @@ fn specialize_symbol<'a>(
                         // let layout = Layout::Closure(argument_layouts, lambda_set, ret_layout);
                         // panic!("suspicious");
                         let layout = Layout::LambdaSet(lambda_set);
-                        let top_level =
-                            ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), layout);
+                        let top_level = ProcLayout::new(env.arena, &[], Niche::NONE, layout);
                         procs.insert_passed_by_name(
                             env,
                             arg_var,
@@ -8404,8 +8451,7 @@ fn specialize_symbol<'a>(
                 }
                 RawFunctionLayout::ZeroArgumentThunk(ret_layout) => {
                     // this is a 0-argument thunk
-                    let top_level =
-                        ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), ret_layout);
+                    let top_level = ProcLayout::new(env.arena, &[], Niche::NONE, ret_layout);
                     procs.insert_passed_by_name(
                         env,
                         arg_var,
@@ -8733,12 +8779,7 @@ fn call_by_name_help<'a>(
     let top_level_layout = {
         let argument_layouts =
             lambda_set.extend_argument_list_for_named(env.arena, proc_name, argument_layouts);
-        ProcLayout::new(
-            env.arena,
-            argument_layouts,
-            proc_name.captures_niche(),
-            *ret_layout,
-        )
+        ProcLayout::new(env.arena, argument_layouts, proc_name.niche(), *ret_layout)
     };
 
     // the variables of the given arguments
@@ -8993,7 +9034,7 @@ fn call_by_name_module_thunk<'a>(
     assigned: Symbol,
     hole: &'a Stmt<'a>,
 ) -> Stmt<'a> {
-    let top_level_layout = ProcLayout::new(env.arena, &[], CapturesNiche::no_niche(), *ret_layout);
+    let top_level_layout = ProcLayout::new(env.arena, &[], Niche::NONE, *ret_layout);
 
     let inner_layout = *ret_layout;
 
@@ -9240,6 +9281,7 @@ fn call_specialized_proc<'a>(
 pub enum Pattern<'a> {
     Identifier(Symbol),
     Underscore,
+    As(Box<Pattern<'a>>, Symbol),
     IntLiteral([u8; 16], IntWidth),
     FloatLiteral(u64, FloatWidth),
     DecimalLiteral([u8; 16]),
@@ -9297,6 +9339,7 @@ impl<'a> Pattern<'a> {
                 | Pattern::BitLiteral { .. }
                 | Pattern::EnumLiteral { .. }
                 | Pattern::StrLiteral(_) => { /* terminal */ }
+                Pattern::As(subpattern, _) => stack.push(subpattern),
                 Pattern::RecordDestructure(destructs, _) => {
                     for destruct in destructs {
                         match &destruct.typ {
@@ -9375,6 +9418,12 @@ fn from_can_pattern_help<'a>(
     match can_pattern {
         Underscore => Ok(Pattern::Underscore),
         Identifier(symbol) => Ok(Pattern::Identifier(*symbol)),
+        As(subpattern, symbol) => {
+            let mono_subpattern =
+                from_can_pattern_help(env, procs, layout_cache, &subpattern.value, assignments)?;
+
+            Ok(Pattern::As(Box::new(mono_subpattern), *symbol))
+        }
         AbilityMemberSpecialization { ident, .. } => Ok(Pattern::Identifier(*ident)),
         IntLiteral(var, _, int_str, int, _bound) => Ok(make_num_literal_pattern(
             env,
@@ -9698,8 +9747,7 @@ fn from_can_pattern_help<'a>(
                                 ctors.push(Ctor {
                                     tag_id: TagId(i as _),
                                     name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
-                                    // don't include tag discriminant in arity
-                                    arity: args.len() - 1,
+                                    arity: args.len(),
                                 })
                             }
 
@@ -9780,42 +9828,26 @@ fn from_can_pattern_help<'a>(
                         }
 
                         NullableWrapped {
-                            sorted_tag_layouts: ref tags,
+                            sorted_tag_layouts: ref non_nulled_tags,
                             nullable_id,
                             nullable_name,
                         } => {
-                            debug_assert!(!tags.is_empty());
-
-                            let mut i = 0;
-                            for (tag_name, args) in tags.iter() {
-                                if i == nullable_id as usize {
+                            for id in 0..(non_nulled_tags.len() + 1) {
+                                if id == nullable_id as usize {
                                     ctors.push(Ctor {
-                                        tag_id: TagId(i as _),
+                                        tag_id: TagId(id as _),
                                         name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
-                                        // don't include tag discriminant in arity
                                         arity: 0,
                                     });
-
-                                    i += 1;
+                                } else {
+                                    let i = if id < nullable_id.into() { id } else { id - 1 };
+                                    let (tag_name, args) = &non_nulled_tags[i];
+                                    ctors.push(Ctor {
+                                        tag_id: TagId(i as _),
+                                        name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
+                                        arity: args.len(),
+                                    });
                                 }
-
-                                ctors.push(Ctor {
-                                    tag_id: TagId(i as _),
-                                    name: CtorName::Tag(tag_name.expect_tag_ref().clone()),
-                                    // don't include tag discriminant in arity
-                                    arity: args.len() - 1,
-                                });
-
-                                i += 1;
-                            }
-
-                            if i == nullable_id as usize {
-                                ctors.push(Ctor {
-                                    tag_id: TagId(i as _),
-                                    name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
-                                    // don't include tag discriminant in arity
-                                    arity: 0,
-                                });
                             }
 
                             let union = roc_exhaustive::Union {
@@ -9870,8 +9902,7 @@ fn from_can_pattern_help<'a>(
                             ctors.push(Ctor {
                                 tag_id: TagId(!nullable_id as _),
                                 name: CtorName::Tag(nullable_name.expect_tag_ref().clone()),
-                                // FIXME drop tag
-                                arity: other_fields.len() - 1,
+                                arity: other_fields.len(),
                             });
 
                             let union = roc_exhaustive::Union {
@@ -9884,7 +9915,6 @@ fn from_can_pattern_help<'a>(
                             let it = if tag_name == nullable_name.expect_tag_ref() {
                                 [].iter()
                             } else {
-                                // FIXME drop tag
                                 argument_layouts.iter()
                             };
 
@@ -10402,7 +10432,7 @@ where
     let param = Param {
         symbol: assigned,
         layout: return_layout,
-        borrow: false,
+        ownership: Ownership::Owned,
     };
 
     Stmt::Join {
@@ -10626,7 +10656,7 @@ fn union_lambda_set_to_switch<'a>(
     let param = Param {
         symbol: assigned,
         layout: *return_layout,
-        borrow: false,
+        ownership: Ownership::Owned,
     };
 
     Stmt::Join {
@@ -10777,7 +10807,7 @@ fn enum_lambda_set_to_switch<'a>(
     let param = Param {
         symbol: assigned,
         layout: *return_layout,
-        borrow: false,
+        ownership: Ownership::Owned,
     };
 
     Stmt::Join {
@@ -10880,7 +10910,7 @@ where
     let param = Param {
         symbol: assigned,
         layout: return_layout,
-        borrow: false,
+        ownership: Ownership::Owned,
     };
 
     Stmt::Join {

@@ -27,7 +27,7 @@ pub fn host_wasm_tempfile() -> std::io::Result<NamedTempFile> {
 }
 
 #[cfg(unix)]
-pub fn host_unix_tempfile() -> std::io::Result<NamedTempFile> {
+fn host_unix_tempfile() -> std::io::Result<NamedTempFile> {
     let tempfile = tempfile::Builder::new()
         .prefix("host_bitcode")
         .suffix(".o")
@@ -40,7 +40,7 @@ pub fn host_unix_tempfile() -> std::io::Result<NamedTempFile> {
 }
 
 #[cfg(windows)]
-pub fn host_windows_tempfile() -> std::io::Result<NamedTempFile> {
+fn host_windows_tempfile() -> std::io::Result<NamedTempFile> {
     let tempfile = tempfile::Builder::new()
         .prefix("host_bitcode")
         .suffix(".obj")
@@ -50,6 +50,23 @@ pub fn host_windows_tempfile() -> std::io::Result<NamedTempFile> {
     std::fs::write(tempfile.path(), HOST_WINDOWS)?;
 
     Ok(tempfile)
+}
+
+pub fn host_tempfile() -> std::io::Result<NamedTempFile> {
+    #[cfg(unix)]
+    {
+        host_unix_tempfile()
+    }
+
+    #[cfg(windows)]
+    {
+        host_windows_tempfile()
+    }
+
+    #[cfg(not(any(windows, unix)))]
+    {
+        unreachable!()
+    }
 }
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -346,7 +363,7 @@ pub const STR_INIT: &str = "roc_builtins.str.init";
 pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
 pub const STR_CONCAT: &str = "roc_builtins.str.concat";
 pub const STR_JOIN_WITH: &str = "roc_builtins.str.joinWith";
-pub const STR_STR_SPLIT: &str = "roc_builtins.str.str_split";
+pub const STR_SPLIT: &str = "roc_builtins.str.str_split";
 pub const STR_TO_SCALARS: &str = "roc_builtins.str.to_scalars";
 pub const STR_COUNT_GRAPEHEME_CLUSTERS: &str = "roc_builtins.str.count_grapheme_clusters";
 pub const STR_COUNT_UTF8_BYTES: &str = "roc_builtins.str.count_utf8_bytes";

@@ -189,7 +189,6 @@ mod test_snapshots {
         fail/lambda_missing_indent.expr,
         fail/list_double_comma.expr,
         fail/list_pattern_not_terminated.expr,
-        fail/list_pattern_weird_indent.expr,
         fail/list_pattern_weird_rest_pattern.expr,
         fail/list_without_end.expr,
         fail/multi_no_end.expr,
@@ -259,6 +258,7 @@ mod test_snapshots {
         pass/comment_before_op.expr,
         pass/comment_inside_empty_list.expr,
         pass/comment_with_non_ascii.expr,
+        pass/control_characters_in_scalar.expr,
         pass/crash.expr,
         pass/dbg.expr,
         pass/def_without_newline.expr,
@@ -291,6 +291,7 @@ mod test_snapshots {
         pass/list_closing_indent_not_enough.expr,
         pass/list_closing_same_indent_no_trailing_comma.expr,
         pass/list_closing_same_indent_with_trailing_comma.expr,
+        pass/list_pattern_weird_indent.expr,
         pass/list_patterns.expr,
         pass/lowest_float.expr,
         pass/lowest_int.expr,
@@ -321,6 +322,7 @@ mod test_snapshots {
         pass/newline_and_spaces_before_less_than.expr,
         pass/newline_before_add.expr,
         pass/newline_before_sub.expr,
+        pass/newline_in_packages.full,
         pass/newline_in_type_def.expr,
         pass/newline_inside_empty_list.expr,
         pass/newline_singleton_list.expr,
@@ -345,6 +347,7 @@ mod test_snapshots {
         pass/opaque_with_type_arguments.moduledefs,
         pass/ops_with_newlines.expr,
         pass/outdented_app_with_record.expr,
+        pass/outdented_colon_in_record.expr,
         pass/outdented_list.expr,
         pass/outdented_record.expr,
         pass/packed_singleton_list.expr,
@@ -354,6 +357,9 @@ mod test_snapshots {
         pass/parenthetical_var.expr,
         pass/parse_alias.expr,
         pass/parse_as_ann.expr,
+        pass/pattern_as.expr,
+        pass/pattern_as_list_rest.expr,
+        pass/pattern_as_spaces.expr,
         pass/pattern_with_space_in_parens.expr, // https://github.com/roc-lang/roc/issues/929
         pass/plus_if.expr,
         pass/plus_when.expr,
@@ -562,7 +568,7 @@ mod test_snapshots {
             ("\\n", EscapedChar::Newline),
             ("\\r", EscapedChar::CarriageReturn),
             ("\\t", EscapedChar::Tab),
-            ("\\\"", EscapedChar::Quote),
+            ("\\\"", EscapedChar::DoubleQuote),
         ] {
             let actual = parse_expr_with(&arena, arena.alloc(to_input(string)));
             let expected_slice = to_expected(*escaped, &arena);

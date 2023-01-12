@@ -109,7 +109,6 @@ mod test_reporting {
             promote_expr_to_module(src)
         };
 
-        let exposed_types = Default::default();
         let loaded = {
             // Use a deterministic temporary directory.
             // We can't have all tests use "tmp" because tests run in parallel,
@@ -132,7 +131,6 @@ mod test_reporting {
             let result = roc_load::load_and_typecheck(
                 arena,
                 full_file_path,
-                exposed_types,
                 RocCacheDir::Disallowed,
                 load_config,
             );
@@ -4228,12 +4226,12 @@ mod test_reporting {
     I am partway through parsing a tag union type, but I got stuck here:
 
     4│      f : [
-                 ^
+    5│
+    6│
+        ^
 
     I was expecting to see a closing square bracket before this, so try
     adding a ] and see if that helps?
-
-    Note: I may be confused by indentation
     "###
     );
 
@@ -4314,12 +4312,12 @@ mod test_reporting {
     I am partway through parsing a record type, but I got stuck here:
 
     4│      f : {
-                 ^
+    5│
+    6│
+        ^
 
     I was expecting to see a closing curly brace before this, so try
     adding a } and see if that helps?
-
-    Note: I may be confused by indentation
     "###
     );
 
@@ -4337,12 +4335,13 @@ mod test_reporting {
     I am partway through parsing a record type, but I got stuck here:
 
     4│      f : {
-                 ^
+    5│      foo : I64,
+    6│
+    7│
+        ^
 
     I was expecting to see a closing curly brace before this, so try
     adding a } and see if that helps?
-
-    Note: I may be confused by indentation
     "###
     );
 
@@ -4460,12 +4459,12 @@ Tab characters are not allowed."###,
     here:
 
     4│      f : (
-                 ^
+    5│
+    6│
+        ^
 
-    I was expecting to see a parenthesis before this, so try adding a )
-    and see if that helps?
-
-    Note: I may be confused by indentation
+    I was expecting to see a closing parenthesis before this, so try
+    adding a ) and see if that helps?
     "###
     );
 
@@ -5305,6 +5304,23 @@ Tab characters are not allowed."###,
     );
 
     test_report!(
+        single_quote_too_long,
+        r#"'abcdef'"#,
+        @r###"
+    ── INVALID SCALAR ───────────────────────── tmp/single_quote_too_long/Test.roc ─
+
+    I am part way through parsing this scalar literal (character literal),
+    but it's too long to fit in a U32 so it's not a valid scalar.
+
+    4│      'abcdef'
+             ^
+
+    You could change it to something like 'a' or '\n'. Note, roc strings
+    use double quotes, like "hello".
+    "###
+    );
+
+    test_report!(
         single_no_end,
         r#""there is no end"#,
         @r###"
@@ -6139,15 +6155,16 @@ In roc, functions are always written as a lambda, like{}
         @r###"
     ── UNFINISHED PARENTHESES ───────── tmp/pattern_in_parens_indent_open/Test.roc ─
 
-    I just started parsing a pattern in parentheses, but I got stuck here:
+    I am partway through parsing a pattern in parentheses, but I got stuck
+    here:
 
     4│      \(
-              ^
+    5│
+    6│
+        ^
 
-    Record pattern look like { name, age: currentAge }, so I was expecting
-    to see a field name next.
-
-    Note: I may be confused by indentation
+    I was expecting to see a closing parenthesis before this, so try
+    adding a ) and see if that helps?
     "###
     );
 
@@ -11779,29 +11796,6 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     5│          [1, 2, -> ""
                        ^
-
-    I was expecting to see a closing square brace before this, so try
-    adding a ] and see if that helps?
-    "###
-    );
-
-    test_report!(
-        list_pattern_weird_indent,
-        indoc!(
-            r#"
-            when [] is
-                [1, 2,
-            3] -> ""
-            "#
-        ),
-    @r###"
-    ── UNFINISHED LIST PATTERN ──────────── tmp/list_pattern_weird_indent/Test.roc ─
-
-    I am partway through parsing a list pattern, but I got stuck here:
-
-    5│          [1, 2,
-    6│      3] -> ""
-            ^
 
     I was expecting to see a closing square brace before this, so try
     adding a ] and see if that helps?

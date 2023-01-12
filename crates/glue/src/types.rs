@@ -13,7 +13,7 @@ use roc_module::{
 };
 use roc_mono::layout::{
     cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
-    LayoutCache, LayoutInterner, UnionLayout,
+    LayoutCache, TLLayoutInterner, UnionLayout,
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -362,7 +362,7 @@ impl Types {
 
     pub fn add_named<'a>(
         &mut self,
-        interner: &LayoutInterner<'a>,
+        interner: &TLLayoutInterner<'a>,
         name: String,
         typ: RocType,
         layout: Layout<'a>,
@@ -390,7 +390,7 @@ impl Types {
 
     pub fn add_anonymous<'a>(
         &mut self,
-        interner: &LayoutInterner<'a>,
+        interner: &TLLayoutInterner<'a>,
         typ: RocType,
         layout: Layout<'a>,
     ) -> TypeId {
@@ -674,7 +674,7 @@ impl<'a> Env<'a> {
         arena: &'a Bump,
         subs: &'a Subs,
         interns: &'a Interns,
-        layout_interner: LayoutInterner<'a>,
+        layout_interner: TLLayoutInterner<'a>,
         target: TargetInfo,
     ) -> Self {
         Env {
@@ -1097,7 +1097,8 @@ fn add_builtin_type<'a>(
             let args = env.subs.get_subs_slice(*args);
             debug_assert_eq!(args.len(), 1);
 
-            let elem_id = add_type_help(env, *elem_layout, args[0], opt_name, types);
+            let elem_layout = env.layout_cache.get_in(elem_layout);
+            let elem_id = add_type_help(env, elem_layout, args[0], opt_name, types);
             let list_id = types.add_anonymous(
                 &env.layout_cache.interner,
                 RocType::RocList(elem_id),
@@ -1113,7 +1114,7 @@ fn add_builtin_type<'a>(
             Alias(Symbol::DICT_DICT, _alias_variables, alias_var, AliasKind::Opaque),
         ) => {
             match (
-                elem_layout,
+                env.layout_cache.get_in(elem_layout),
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
@@ -1163,7 +1164,7 @@ fn add_builtin_type<'a>(
             Alias(Symbol::SET_SET, _alias_vars, alias_var, AliasKind::Opaque),
         ) => {
             match (
-                elem_layout,
+                env.layout_cache.get_in(elem_layout),
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
@@ -1455,8 +1456,9 @@ fn add_tag_union<'a>(
             }
         }
         Layout::Boxed(elem_layout) => {
+            let elem_layout = env.layout_cache.get_in(elem_layout);
             let (tag_name, payload_fields) =
-                single_tag_payload_fields(union_tags, subs, &[*elem_layout], env, types);
+                single_tag_payload_fields(union_tags, subs, &[elem_layout], env, types);
 
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),

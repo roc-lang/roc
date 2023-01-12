@@ -1,0 +1,128 @@
+Full {
+    header: Module {
+        comments: [],
+        header: App(
+            AppHeader {
+                before_name: [],
+                name: @4-11 PlainLine(
+                    "hello",
+                ),
+                packages: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [
+                                Newline,
+                            ],
+                            item: PackagesKeyword,
+                            after: [],
+                        },
+                        item: [
+                            @27-145 SpaceAfter(
+                                PackageEntry {
+                                    shorthand: "pf",
+                                    spaces_after_shorthand: [
+                                        Newline,
+                                    ],
+                                    package_name: @31-145 PackageName(
+                                        "https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br",
+                                    ),
+                                },
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                    },
+                ),
+                imports: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [
+                                Newline,
+                            ],
+                            item: ImportsKeyword,
+                            after: [],
+                        },
+                        item: [
+                            @161-170 Package(
+                                "pf",
+                                ModuleName(
+                                    "Stdout",
+                                ),
+                                [],
+                            ),
+                        ],
+                    },
+                ),
+                provides: ProvidesTo {
+                    provides_keyword: Spaces {
+                        before: [
+                            Newline,
+                        ],
+                        item: ProvidesKeyword,
+                        after: [],
+                    },
+                    entries: [
+                        @186-190 ExposedName(
+                            "main",
+                        ),
+                    ],
+                    types: None,
+                    to_keyword: Spaces {
+                        before: [],
+                        item: ToKeyword,
+                        after: [],
+                    },
+                    to: @195-197 ExistingPackage(
+                        "pf",
+                    ),
+                },
+            },
+        ),
+    },
+    module_defs: Defs {
+        tags: [
+            Index(2147483648),
+        ],
+        regions: [
+            @199-246,
+        ],
+        space_before: [
+            Slice(start = 0, length = 2),
+        ],
+        space_after: [
+            Slice(start = 2, length = 0),
+        ],
+        spaces: [
+            Newline,
+            Newline,
+        ],
+        type_defs: [],
+        value_defs: [
+            Body(
+                @199-203 Identifier(
+                    "main",
+                ),
+                @210-246 SpaceBefore(
+                    Apply(
+                        @210-221 Var {
+                            module_name: "Stdout",
+                            ident: "line",
+                        },
+                        [
+                            @222-246 Str(
+                                PlainLine(
+                                    "I'm a Roc application!",
+                                ),
+                            ),
+                        ],
+                        Space,
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+        ],
+    },
+}

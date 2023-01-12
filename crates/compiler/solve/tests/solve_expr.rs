@@ -96,7 +96,6 @@ mod solve_expr {
             module_src = &temp;
         }
 
-        let exposed_types = Default::default();
         let loaded = {
             let dir = tempdir()?;
             let filename = PathBuf::from("Test.roc");
@@ -106,7 +105,6 @@ mod solve_expr {
                 file_path,
                 module_src,
                 dir.path().to_path_buf(),
-                exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
                 roc_reporting::report::RenderTarget::Generic,
                 RocCacheDir::Disallowed,
@@ -334,6 +332,7 @@ mod solve_expr {
                     print_lambda_sets: true,
                     print_only_under_alias: options.print_only_under_alias,
                     ignore_polarity: true,
+                    print_weakened_vars: true,
                 },
             );
             subs.rollback_to(snapshot);
@@ -8581,6 +8580,121 @@ mod solve_expr {
                 "#
             ),
         @"polyDbg : a -[[polyDbg(1)]]-> a"
+        );
+    }
+
+    #[test]
+    fn pattern_as_uses_inferred_type() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = when A "foo" is
+                    A _ as a -> a
+                    #           ^
+                    b -> b
+                    #    ^
+                "#
+            ),
+        @r###"
+        a : [A Str]*
+        b : [A Str]*
+        "###
+        );
+    }
+
+    #[test]
+    fn pattern_as_does_not_narrow() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                input : [A Str, B Str]
+                input = A "foo"
+
+                drop : a -> {}
+                drop = \_ -> {}
+
+                main = when input is
+                    #       ^^^^^
+                    A _ as a -> drop a
+                    #                ^
+                    B _ as b -> drop b
+                    #                ^
+                "#
+            ),
+        @r###"
+        input : [A Str, B Str]
+        a : [A Str, B Str]
+        b : [A Str, B Str]
+        "###
+        );
+    }
+
+    #[test]
+    fn pattern_as_list() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                input : List Str
+                input = [ "foo", "bar" ]
+
+                main = when input is
+                    #       ^^^^^
+                    [ _first, .. as rest ] -> 1 + List.len rest
+                    #                                      ^^^^
+                    [] -> 0
+                "#
+            ),
+        @r###"
+        input : List Str
+        rest : List Str
+        "###
+        );
+    }
+
+    #[test]
+    fn rank_no_overgeneralization() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main =
+                #^^^^{-1}
+                    \x ->
+                        y = \z -> x z
+                        y
+                "#
+            ),
+        @"main : (a -[[]]-> b) -[[main(0)]]-> (a -[[y(2) (a -[[]]-> b)]]-> b)"
+        );
+    }
+
+    #[test]
+    fn when_branch_variables_not_generalized() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = \{} -> when Red is
+                #^^^^{-1}
+                    x ->
+                        y : [Red]_
+                        y = x
+
+                        z : [Red, Green]_
+                        z = x
+
+                        {y, z}
+                "#
+            ),
+        @"main : {}* -[[main(0)]]-> { y : [Green, Red]a, z : [Green, Red]a }"
         );
     }
 }

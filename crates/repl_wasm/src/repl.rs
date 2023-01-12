@@ -208,7 +208,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
         mut interns,
         mut subs,
         exposed_to_host,
-        layout_interner,
+        mut layout_interner,
         ..
     } = mono;
 
@@ -234,7 +234,6 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     let app_module_bytes = {
         let env = roc_gen_wasm::Env {
             arena,
-            layout_interner: &layout_interner,
             module_id,
             stack_bytes: roc_gen_wasm::Env::DEFAULT_STACK_BYTES,
             exposed_to_host: exposed_to_host
@@ -248,6 +247,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
             let host_module = roc_gen_wasm::parse_host(env.arena, PRE_LINKED_BINARY).unwrap();
             roc_gen_wasm::build_app_module(
                 &env,
+                &mut layout_interner,
                 &mut interns, // NOTE: must drop this mutable ref before jit_to_ast
                 host_module,
                 procedures,

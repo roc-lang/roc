@@ -6,10 +6,9 @@ use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
-use roc_intern::SingleThreadedInterner;
 use roc_load::{EntryPoint, MonomorphizedModule};
 use roc_mono::ir::OptLevel;
-use roc_mono::layout::Layout;
+use roc_mono::layout::STLayoutInterner;
 use roc_parse::ast::Expr;
 use roc_repl_eval::eval::jit_to_ast;
 use roc_repl_eval::gen::{compile_to_mono, format_answer, Problems, ReplOutput};
@@ -181,15 +180,7 @@ fn mono_module_to_dylib<'a>(
     target: Triple,
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
-) -> Result<
-    (
-        libloading::Library,
-        &'a str,
-        Subs,
-        SingleThreadedInterner<'a, Layout<'a>>,
-    ),
-    libloading::Error,
-> {
+) -> Result<(libloading::Library, &'a str, Subs, STLayoutInterner<'a>), libloading::Error> {
     let target_info = TargetInfo::from(&target);
 
     let MonomorphizedModule {
@@ -197,7 +188,7 @@ fn mono_module_to_dylib<'a>(
         entry_point,
         interns,
         subs,
-        layout_interner,
+        mut layout_interner,
         ..
     } = loaded;
 
@@ -216,7 +207,6 @@ fn mono_module_to_dylib<'a>(
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
         arena,
-        layout_interner: &layout_interner,
         builder: &builder,
         dibuilder: &dibuilder,
         compile_unit: &compile_unit,
@@ -251,6 +241,7 @@ fn mono_module_to_dylib<'a>(
 
     let (main_fn_name, main_fn) = roc_gen_llvm::llvm::build::build_procedures_return_main(
         &env,
+        &mut layout_interner,
         opt_level,
         procedures,
         entry_point,

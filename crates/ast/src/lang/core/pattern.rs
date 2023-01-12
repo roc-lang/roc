@@ -3,7 +3,7 @@
 #![allow(unused_imports)]
 
 use bumpalo::collections::Vec as BumpVec;
-use roc_can::expr::{unescape_char, IntValue};
+use roc_can::expr::IntValue;
 use roc_can::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, ParsedNumResult,
 };
@@ -449,7 +449,8 @@ pub fn to_pattern2<'a>(
 
         Tuple(..) => todo!(),
         List(..) => todo!(),
-        ListRest => todo!(),
+        ListRest(_) => todo!(),
+        As(_, _) => todo!(),
 
         Malformed(_str) => {
             let problem = MalformedPatternProblem::Unknown;
@@ -619,7 +620,7 @@ pub(crate) fn flatten_str_lines(pool: &mut Pool, lines: &[&[StrSegment<'_>]]) ->
                 Interpolated(loc_expr) => {
                     return Pattern2::UnsupportedPattern(loc_expr.region);
                 }
-                EscapedChar(escaped) => buf.push(unescape_char(escaped)),
+                EscapedChar(escaped) => buf.push(escaped.unescape()),
             }
         }
     }

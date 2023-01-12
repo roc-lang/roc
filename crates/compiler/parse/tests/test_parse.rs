@@ -66,7 +66,7 @@ mod test_parse {
             ("\\n", EscapedChar::Newline),
             ("\\r", EscapedChar::CarriageReturn),
             ("\\t", EscapedChar::Tab),
-            ("\\\"", EscapedChar::Quote),
+            ("\\\"", EscapedChar::DoubleQuote),
         ] {
             let actual = parse_expr_with(&arena, arena.alloc(to_input(string)));
             let expected_slice = to_expected(*escaped, &arena);
