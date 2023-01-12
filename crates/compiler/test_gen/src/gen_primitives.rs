@@ -1255,8 +1255,8 @@ fn linked_list_is_singleton() {
 
             ConsList a : [Cons a (ConsList a), Nil]
 
-            empty : ConsList a
-            empty = Nil
+            empty : {} -> ConsList a
+            empty = \{} -> Nil
 
             isSingleton : ConsList a -> Bool
             isSingleton = \list ->
@@ -1270,7 +1270,7 @@ fn linked_list_is_singleton() {
             main : Bool
             main =
                 myList : ConsList I64
-                myList = empty
+                myList = empty {}
 
                 isSingleton myList
             "#
@@ -1290,8 +1290,8 @@ fn linked_list_is_empty_1() {
 
             ConsList a : [Cons a (ConsList a), Nil]
 
-            empty : ConsList a
-            empty = Nil
+            empty : {} -> ConsList a
+            empty = \{} -> Nil
 
             isEmpty : ConsList a -> Bool
             isEmpty = \list ->
@@ -1304,8 +1304,8 @@ fn linked_list_is_empty_1() {
 
             main : Bool
             main =
-                myList : ConsList (Int *)
-                myList = empty
+                myList : ConsList U8
+                myList = empty {}
 
                 isEmpty myList
             "#

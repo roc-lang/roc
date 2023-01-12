@@ -943,12 +943,14 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                foo = Foo
+                foo0 = Foo
+                foo1 = Foo
+                foo2 = Foo
 
                 {
-                    x: [foo, Foo],
-                    y: [foo, \x -> Foo x],
-                    z: [foo, \x,y  -> Foo x y]
+                    x: [foo0, Foo],
+                    y: [foo1, \x -> Foo x],
+                    z: [foo2, \x,y  -> Foo x y]
                 }
                 "#
             ),
@@ -3101,7 +3103,6 @@ mod solve_expr {
 
     #[test]
     fn rigid_in_letrec_ignored() {
-        // re-enable when we don't capture local things that don't need to be!
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -3109,7 +3110,7 @@ mod solve_expr {
 
                     toEmpty : ConsList a -> ConsList a
                     toEmpty = \_ ->
-                        result : ConsList a
+                        result : ConsList _   # TODO to enable using `a` we need scoped variables
                         result = Nil
 
                         toEmpty result
@@ -3132,7 +3133,7 @@ mod solve_expr {
 
                 toEmpty : ConsList a -> ConsList a
                 toEmpty = \_ ->
-                    result : ConsList a
+                    result : ConsList _   # TODO to enable using `a` we need scoped variables
                     result = Nil
 
                     toEmpty result
@@ -4353,12 +4354,12 @@ mod solve_expr {
                 RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
                 # Create an empty dictionary.
-                empty : RBTree k v
-                empty =
+                empty : {} -> RBTree k v
+                empty = \{} ->
                     Empty
 
                 foo : RBTree I64 I64
-                foo = empty
+                foo = empty {}
 
                 main : RBTree I64 I64
                 main =

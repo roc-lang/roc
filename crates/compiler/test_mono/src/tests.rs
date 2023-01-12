@@ -1199,10 +1199,10 @@ fn monomorphized_tag() {
         app "test" provides [main] to "./platform"
 
         main =
-            b = Bar
+            b = \{} -> Bar
             f : [Foo, Bar], [Bar, Baz] -> U8
             f = \_, _ -> 18
-            f b b
+            f (b {}) (b {})
         "#
     )
 }
@@ -1800,7 +1800,7 @@ fn instantiate_annotated_as_recursive_alias_toplevel() {
 
         Value : [Nil, Array (List Value)]
 
-        foo : [Nil]*
+        foo : [Nil]_
         foo = Nil
 
         it : Value
@@ -1818,7 +1818,7 @@ fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
         main =
             Value : [Nil, Array (List Value)]
 
-            foo : [Nil]*
+            foo : [Nil]_
             foo = Nil
 
             it : Value
@@ -1838,7 +1838,7 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
         main =
             Value : [Nil, Array (List Value)]
 
-            foo : [Nil]*
+            foo : [Nil]_
             foo = Nil
 
             v1 : Value
