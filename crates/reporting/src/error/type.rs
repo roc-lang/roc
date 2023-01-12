@@ -3170,13 +3170,19 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
         (FlexVar(v1), FlexVar(v2)) => v1 != v2,
         (RigidVar(v1), RigidVar(v2)) => v1 != v2,
         (FlexAbleVar(v1, set1), FlexAbleVar(v2, set2)) => {
-            if v1 != v2 || set1.len() != set2.len() {
-                return true;
+            #[cfg(debug_assertions)]
+            {
+                if v1 == v2 {
+                    // If v1 == v2, then the sets should be equal too!
+                    debug_assert_eq!(set1.len(), set2.len());
+                    debug_assert!(set1
+                        .sorted_iter()
+                        .zip(set2.sorted_iter())
+                        .all(|(t1, t2)| t1 == t2));
+                }
             }
 
-            set1.sorted_iter()
-                .zip(set2.sorted_iter())
-                .any(|(t1, t2)| t1 != t2)
+            v1 != v2
         }
         (RigidAbleVar(v1, set1), RigidAbleVar(v2, set2)) => {
             if v1 != v2 || set1.len() != set2.len() {
