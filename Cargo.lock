@@ -3462,6 +3462,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_parse",
+ "roc_problem",
  "roc_region",
  "roc_types",
 ]

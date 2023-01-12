@@ -3833,6 +3833,11 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
                 // Opaque wrapper functions `@Q` are equivalent to closures `\x -> @Q x`, no need to weaken them.
                 return true;
             }
+            RuntimeError(roc_problem::can::RuntimeError::NoImplementation)
+            | RuntimeError(roc_problem::can::RuntimeError::NoImplementationNamed { .. }) => {
+                // Allow generalization of signatures with no implementation
+                return true;
+            }
             OpaqueRef { argument, .. } => expr = &argument.1.value,
             Str(_)
             | List { .. }
@@ -3853,7 +3858,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | ExpectFx { .. }
             | Dbg { .. }
             | TypedHole(_)
-            | RuntimeError(_) => return false,
+            | RuntimeError(..) => return false,
             // TODO(weakening)
             Var(_, _) | AbilityMember(_, _, _) | Tag { .. } | ZeroArgumentTag { .. } => {
                 return true
