@@ -3825,6 +3825,10 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
         match expr {
             Num(..) | Int(..) | Float(..) => return true,
             Closure(_) => return true,
+            Accessor(_) => {
+                // Accessor functions `.field` are equivalent to closures, no need to weaken them.
+                return true
+            },
             OpaqueRef { argument, .. } => expr = &argument.1.value,
             Str(_) | List { .. } | SingleQuote(_, _, _, _) | When { .. } | If { .. }
             | LetRec(_, _, _)
@@ -3842,7 +3846,6 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             // TODO(weakening)
             Var(_, _)
             | AbilityMember(_, _, _)
-            | Accessor(_)
             | Update { .. }
             | Tag { .. }
             | ZeroArgumentTag { .. }
