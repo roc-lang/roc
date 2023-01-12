@@ -8476,10 +8476,10 @@ mod solve_expr {
 
                 main =
                     s1 : Set U8
-                    s1 = Set.empty
+                    s1 = Set.empty {}
 
                     s2 : Set Str
-                    s2 = Set.empty
+                    s2 = Set.empty {}
 
                     Bool.isEq s1 s1 && Bool.isEq s2 s2
                 #   ^^^^^^^^^          ^^^^^^^^^

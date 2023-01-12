@@ -3833,13 +3833,13 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | RunLowLevel { .. }
             | ForeignCall { .. }
             | EmptyRecord
+            | Expr::Record { .. }
             => {
                 return false
             }
             // TODO(weakening)
             Var(_, _)
             | AbilityMember(_, _, _)
-            | Expr::Record { .. }
             | Crash { .. }
             | Access { .. }
             | Accessor(_)

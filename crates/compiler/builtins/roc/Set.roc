@@ -43,9 +43,9 @@ isEq = \xs, ys ->
             else
                 Break Bool.false
 
-## An empty set.
-empty : Set k | k has Hash & Eq
-empty = @Set Dict.empty
+## Creates a new empty set.
+empty : {} -> Set k | k has Hash & Eq
+empty = \{} -> @Set (Dict.empty {})
 
 single : k -> Set k | k has Hash & Eq
 single = \key ->
@@ -58,14 +58,14 @@ insert = \@Set dict, key ->
 # Inserting a duplicate key has no effect.
 expect
     actual =
-        empty
+        empty {}
         |> insert "foo"
         |> insert "bar"
         |> insert "foo"
         |> insert "baz"
 
     expected =
-        empty
+        empty {}
         |> insert "foo"
         |> insert "bar"
         |> insert "baz"
@@ -79,7 +79,7 @@ len = \@Set dict ->
 # Inserting a duplicate key has no effect on length.
 expect
     actual =
-        empty
+        empty {}
         |> insert "foo"
         |> insert "bar"
         |> insert "foo"

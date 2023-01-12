@@ -4777,7 +4777,7 @@ Tab characters are not allowed."###,
             app "dict" imports [ Dict ] provides [main] to "./platform"
 
             myDict : Dict.Dict Num.I64 Str
-            myDict = Dict.insert Dict.empty "foo" 42
+            myDict = Dict.insert (Dict.empty {}) "foo" 42
 
             main = myDict
             "#
@@ -4788,8 +4788,8 @@ Tab characters are not allowed."###,
     Something is off with the body of the `myDict` definition:
 
     3│  myDict : Dict.Dict Num.I64 Str
-    4│  myDict = Dict.insert Dict.empty "foo" 42
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    4│  myDict = Dict.insert (Dict.empty {}) "foo" 42
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     This `insert` call produces:
 

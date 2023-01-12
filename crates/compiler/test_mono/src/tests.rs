@@ -385,7 +385,7 @@ fn when_on_two_values() {
 #[mono_test]
 fn dict() {
     r#"
-    Dict.len Dict.empty
+    Dict.len (Dict.empty {})
     "#
 }
 
@@ -1273,7 +1273,7 @@ fn aliased_polymorphic_closure() {
 }
 
 #[mono_test]
-fn issue_2535_polymorphic_fields_referenced_in_list() {
+fn issue_2535_let_weakened_fields_referenced_in_list() {
     indoc!(
         r#"
         app "test" provides [nums] to "./platform"
