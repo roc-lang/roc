@@ -78,7 +78,7 @@ impl FlatEncodable {
                     // `t`-prefixed payload types.
                     let (tags_iter, ext) = tags.unsorted_tags_and_ext(subs, ext);
 
-                    check_derivable_ext_var(subs, ext, |ext| {
+                    check_derivable_ext_var(subs, ext.var(), |ext| {
                         matches!(ext, Content::Structure(FlatType::EmptyTagUnion))
                     })?;
 

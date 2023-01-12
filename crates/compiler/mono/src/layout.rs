@@ -11,7 +11,7 @@ use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
-    self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs,
+    self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs, TagExt,
     UnsortedUnionLabels, Variable,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
@@ -2061,7 +2061,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                     stack.push((*ext, depth_any + 1, depth_lset));
                 }
                 FlatType::FunctionOrTagUnion(_, _, ext) => {
-                    stack.push((*ext, depth_any + 1, depth_lset));
+                    stack.push((ext.var(), depth_any + 1, depth_lset));
                 }
                 FlatType::TagUnion(tags, ext) => {
                     for (_, payloads) in tags.iter_from_subs(subs) {
@@ -2069,7 +2069,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                             stack.push((*payload, depth_any + 1, depth_lset));
                         }
                     }
-                    stack.push((*ext, depth_any + 1, depth_lset));
+                    stack.push((ext.var(), depth_any + 1, depth_lset));
                 }
                 FlatType::RecursiveTagUnion(rec_var, tags, ext) => {
                     seen_rec_vars.insert(*rec_var);
@@ -2078,7 +2078,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                             stack.push((*payload, depth_any + 1, depth_lset));
                         }
                     }
-                    stack.push((*ext, depth_any + 1, depth_lset));
+                    stack.push((ext.var(), depth_any + 1, depth_lset));
                 }
                 FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
             },
@@ -4110,13 +4110,13 @@ pub fn ext_var_is_empty_record(_subs: &Subs, _ext_var: Variable) -> bool {
 }
 
 #[cfg(debug_assertions)]
-pub fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
+pub fn ext_var_is_empty_tag_union(subs: &Subs, tag_ext: TagExt) -> bool {
     use roc_types::pretty_print::ChasedExt;
     use Content::*;
 
     // the ext_var is empty
     let mut ext_fields = std::vec::Vec::new();
-    match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
+    match roc_types::pretty_print::chase_ext_tag_union(subs, tag_ext.var(), &mut ext_fields) {
         ChasedExt::Empty => ext_fields.is_empty(),
         ChasedExt::NonEmpty { content, .. } => {
             match content {

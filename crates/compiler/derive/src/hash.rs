@@ -19,7 +19,7 @@ use roc_types::{
     num::int_lit_width_to_variable,
     subs::{
         Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
-        RedundantMark, Subs, SubsIndex, SubsSlice, UnionLambdas, UnionTags, Variable,
+        RedundantMark, Subs, SubsIndex, SubsSlice, TagExt, UnionLambdas, UnionTags, Variable,
         VariableSubsSlice,
     },
     types::RecordField,
@@ -146,7 +146,10 @@ fn hash_tag_union(
         let union_tags = UnionTags::insert_slices_into_subs(env.subs, flex_tag_labels);
         let tag_union_var = synth_var(
             env.subs,
-            Content::Structure(FlatType::TagUnion(union_tags, Variable::EMPTY_TAG_UNION)),
+            Content::Structure(FlatType::TagUnion(
+                union_tags,
+                TagExt::Any(Variable::EMPTY_TAG_UNION),
+            )),
         );
 
         (tag_union_var, union_tags)
@@ -305,7 +308,10 @@ fn hash_newtype_tag_union(
         let union_tags = UnionTags::from_slices(tag_name_index.as_slice(), variables_slices_slice);
         let tag_union_var = synth_var(
             env.subs,
-            Content::Structure(FlatType::TagUnion(union_tags, Variable::EMPTY_TAG_UNION)),
+            Content::Structure(FlatType::TagUnion(
+                union_tags,
+                TagExt::Any(Variable::EMPTY_TAG_UNION),
+            )),
         );
 
         (

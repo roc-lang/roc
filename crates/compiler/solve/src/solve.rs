@@ -29,7 +29,7 @@ use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, LambdaSet, Mark,
-    OptVariable, Rank, RecordFields, Subs, SubsSlice, UlsOfVar, UnionLabels, UnionLambdas,
+    OptVariable, Rank, RecordFields, Subs, SubsSlice, TagExt, UlsOfVar, UnionLabels, UnionLambdas,
     UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
@@ -217,7 +217,7 @@ impl Aliases {
             SubsSlice::extend_new(&mut subs.variable_slices, [err_slice, ok_slice]);
 
         let union_tags = UnionTags::from_slices(tag_names_slice, variable_slices);
-        let ext_var = Variable::EMPTY_TAG_UNION;
+        let ext_var = TagExt::Any(Variable::EMPTY_TAG_UNION);
         let flat_type = FlatType::TagUnion(union_tags, ext_var);
         let content = Content::Structure(flat_type);
 
@@ -1829,9 +1829,9 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
         let desc = subs.get(var);
         match desc.content {
             Structure(TagUnion(tags, ext)) => {
-                if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext) {
-                    let new_ext = subs.fresh_unnamed_flex_var();
-                    subs.set_rank(new_ext, desc.rank);
+                if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext.var()) {
+                    let new_ext = TagExt::Any(subs.fresh_unnamed_flex_var());
+                    subs.set_rank(new_ext.var(), desc.rank);
                     let new_union = Structure(TagUnion(tags, new_ext));
                     subs.set_content(var, new_union);
                 }
@@ -1880,12 +1880,15 @@ fn close_pattern_matched_tag_unions(subs: &mut Subs, var: Variable) {
             Structure(TagUnion(tags, mut ext)) => {
                 // Close the extension, chasing it as far as it goes.
                 loop {
-                    match subs.get_content_without_compacting(ext) {
+                    match subs.get_content_without_compacting(ext.var()) {
                         Structure(FlatType::EmptyTagUnion) => {
                             break;
                         }
                         FlexVar(..) | FlexAbleVar(..) => {
-                            subs.set_content_unchecked(ext, Structure(FlatType::EmptyTagUnion));
+                            subs.set_content_unchecked(
+                                ext.var(),
+                                Structure(FlatType::EmptyTagUnion),
+                            );
                             break;
                         }
                         RigidVar(..) | RigidAbleVar(..) => {
@@ -2682,7 +2685,7 @@ fn type_to_variable<'a>(
                 let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
                     subs,
                     UnionTags::default(),
-                    temp_ext_var,
+                    TagExt::Any(temp_ext_var),
                 )
                 .expect("extension var could not be seen as a tag union");
 
@@ -3112,7 +3115,7 @@ fn roc_result_to_var(
                     subs.variable_slices.push(ok_slice);
 
                     let union_tags = UnionTags::from_slices(Subs::RESULT_TAG_NAMES, variables);
-                    let ext = Variable::EMPTY_TAG_UNION;
+                    let ext = TagExt::Any(Variable::EMPTY_TAG_UNION);
 
                     let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
 
@@ -3383,7 +3386,7 @@ fn type_to_union_tags(
     union_tags: UnionTags,
     opt_ext_slice: Slice<TypeTag>,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
-) -> (UnionTags, Variable) {
+) -> (UnionTags, TagExt) {
     use bumpalo::collections::Vec;
 
     let (tags, _) = types.union_tag_slices(union_tags);
@@ -3403,7 +3406,7 @@ fn type_to_union_tags(
                 insert_tags_slow_path(subs, rank, pools, arena, types, union_tags, tag_vars, stack)
             };
 
-            (union_tags, ext)
+            (union_tags, TagExt::Any(ext))
         }
         Some(ext) => {
             let mut tag_vars = Vec::with_capacity_in(tags.len(), arena);
@@ -3413,7 +3416,7 @@ fn type_to_union_tags(
             let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
                 subs,
                 UnionTags::default(),
-                temp_ext_var,
+                TagExt::Any(temp_ext_var),
             )
             .expect("extension var could not be seen as tag union");
 
@@ -3745,7 +3748,8 @@ fn adjust_rank_content(
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+                    let mut rank =
+                        adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var.var());
                     // For performance reasons, we only keep one representation of empty tag unions
                     // in subs. That representation exists at rank 0, which we don't always want to
                     // reflect the whole tag union as, because doing so may over-generalize free
@@ -3761,7 +3765,7 @@ fn adjust_rank_content(
                     // we'll wind up with [Z, S a]{}, but it will be at rank 0, and "a" will get
                     // over-generalized. Really, the empty tag union should be introduced at
                     // whatever current group rank we're at, and so that's how we encode it here.
-                    if *ext_var == Variable::EMPTY_TAG_UNION && rank.is_generalized() {
+                    if ext_var.var() == Variable::EMPTY_TAG_UNION && rank.is_generalized() {
                         rank = group_rank;
                     }
 
@@ -3778,11 +3782,12 @@ fn adjust_rank_content(
                 }
 
                 FunctionOrTagUnion(_, _, ext_var) => {
-                    adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var)
+                    adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var.var())
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+                    let mut rank =
+                        adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var.var());
 
                     for (_, index) in tags.iter_all() {
                         let slice = subs[index];
@@ -4136,17 +4141,17 @@ fn deep_copy_var_help(
                     TagUnion(tags, ext_var) => {
                         let union_tags = copy_union!(tags);
 
-                        TagUnion(union_tags, work!(ext_var))
+                        TagUnion(union_tags, ext_var.map(|v| work!(v)))
                     }
 
                     FunctionOrTagUnion(tag_name, symbol, ext_var) => {
-                        FunctionOrTagUnion(tag_name, symbol, work!(ext_var))
+                        FunctionOrTagUnion(tag_name, symbol, ext_var.map(|v| work!(v)))
                     }
 
                     RecursiveTagUnion(rec_var, tags, ext_var) => {
                         let union_tags = copy_union!(tags);
 
-                        RecursiveTagUnion(work!(rec_var), union_tags, work!(ext_var))
+                        RecursiveTagUnion(work!(rec_var), union_tags, ext_var.map(|v| work!(v)))
                     }
                 };
 

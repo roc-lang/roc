@@ -17,7 +17,9 @@ use roc_parse::ast::{AssignedField, Collection, Expr, Pattern, StrLiteral};
 use roc_region::all::{Loc, Region};
 use roc_std::RocDec;
 use roc_target::TargetInfo;
-use roc_types::subs::{Content, FlatType, GetSubsSlice, RecordFields, Subs, UnionTags, Variable};
+use roc_types::subs::{
+    Content, FlatType, GetSubsSlice, RecordFields, Subs, TagExt, UnionTags, Variable,
+};
 
 use crate::{ReplApp, ReplAppMemory};
 
@@ -116,7 +118,7 @@ fn get_newtype_tag_and_var(
     };
 
     let vars = tags
-        .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
+        .unsorted_iterator(env.subs, TagExt::Any(Variable::EMPTY_TAG_UNION))
         .find(|(tag, _)| **tag == tag_name)
         .unwrap()
         .1;
@@ -244,7 +246,7 @@ fn get_tags_vars_and_variant<'a>(
     opt_rec_var: Option<Variable>,
 ) -> (MutMap<TagName, std::vec::Vec<Variable>>, UnionVariant<'a>) {
     let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> = tags
-        .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
+        .unsorted_iterator(env.subs, TagExt::Any(Variable::EMPTY_TAG_UNION))
         .map(|(a, b)| (a.clone(), b.to_vec()))
         .collect();
 
@@ -1286,7 +1288,7 @@ fn byte_to_ast<'a>(env: &mut Env<'a, '_>, value: u8, content: &Content) -> Expr<
                     debug_assert!(tags.len() > 2);
 
                     let tags_vec: std::vec::Vec<(TagName, std::vec::Vec<Variable>)> = tags
-                        .unsorted_iterator(env.subs, Variable::EMPTY_TAG_UNION)
+                        .unsorted_iterator(env.subs, TagExt::Any(Variable::EMPTY_TAG_UNION))
                         .map(|(a, b)| (a.clone(), b.to_vec()))
                         .collect();
 

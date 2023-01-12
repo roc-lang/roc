@@ -1,7 +1,7 @@
 use crate::num::NumericRange;
 use crate::pretty_print::Parens;
 use crate::subs::{
-    GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
+    GetSubsSlice, RecordFields, Subs, TagExt, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_collections::soa::{Index, Slice};
@@ -3385,7 +3385,7 @@ pub struct RecordStructure {
 pub struct TagUnionStructure<'a> {
     /// Invariant: these should be sorted!
     pub fields: Vec<(TagName, &'a [Variable])>,
-    pub ext: Variable,
+    pub ext: TagExt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4250,11 +4250,11 @@ pub enum GatherTagsError {
 pub fn gather_tags_unsorted_iter(
     subs: &Subs,
     other_fields: UnionTags,
-    mut var: Variable,
+    mut ext: TagExt,
 ) -> Result<
     (
         impl Iterator<Item = (&TagName, VariableSubsSlice)> + '_,
-        Variable,
+        TagExt,
     ),
     GatherTagsError,
 > {
@@ -4267,7 +4267,7 @@ pub fn gather_tags_unsorted_iter(
     let mut seen_head_union = false;
 
     loop {
-        match subs.get_content_without_compacting(var) {
+        match subs.get_content_without_compacting(ext.var()) {
             Structure(TagUnion(sub_fields, sub_ext)) => {
                 #[cfg(debug_assertions)]
                 {
@@ -4277,7 +4277,7 @@ pub fn gather_tags_unsorted_iter(
 
                 stack.push(*sub_fields);
 
-                var = *sub_ext;
+                ext = *sub_ext;
             }
 
             Structure(FunctionOrTagUnion(_tag_name_index, _, _sub_ext)) => {
@@ -4296,7 +4296,8 @@ pub fn gather_tags_unsorted_iter(
             }
 
             Alias(_, _, actual_var, _) => {
-                var = *actual_var;
+                debug_assert!(matches!(ext, TagExt::Any(..)));
+                ext = TagExt::Any(*actual_var);
             }
 
             Structure(EmptyTagUnion) => break,
@@ -4307,7 +4308,7 @@ pub fn gather_tags_unsorted_iter(
 
             Error => break,
 
-            _ => return Err(GatherTagsError::NotATagUnion(var)),
+            _ => return Err(GatherTagsError::NotATagUnion(ext.var())),
         }
     }
 
@@ -4321,15 +4322,15 @@ pub fn gather_tags_unsorted_iter(
             (tag_name, subs_slice)
         });
 
-    Ok((it, var))
+    Ok((it, ext))
 }
 
 pub fn gather_tags_slices(
     subs: &Subs,
     other_fields: UnionTags,
-    var: Variable,
-) -> Result<(Vec<(TagName, VariableSubsSlice)>, Variable), GatherTagsError> {
-    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var)?;
+    ext: TagExt,
+) -> Result<(Vec<(TagName, VariableSubsSlice)>, TagExt), GatherTagsError> {
+    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, ext)?;
 
     let mut result: Vec<_> = it
         .map(|(ref_label, field): (_, VariableSubsSlice)| (ref_label.clone(), field))
@@ -4343,9 +4344,9 @@ pub fn gather_tags_slices(
 pub fn gather_tags(
     subs: &Subs,
     other_fields: UnionTags,
-    var: Variable,
+    ext: TagExt,
 ) -> Result<TagUnionStructure, GatherTagsError> {
-    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var)?;
+    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, ext)?;
 
     let mut result: Vec<_> = it
         .map(|(ref_label, field): (_, VariableSubsSlice)| {
