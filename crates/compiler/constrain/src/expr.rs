@@ -3860,9 +3860,10 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | TypedHole(_)
             | RuntimeError(..)
             | ZeroArgumentTag { .. }
-            | Tag { .. } => return false,
+            | Tag { .. }
+            | AbilityMember(_, _, _) => return false,
             // TODO(weakening)
-            Var(_, _) | AbilityMember(_, _, _) => return true,
+            Var(_, _) => return true,
         }
     }
 }
