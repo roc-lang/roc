@@ -2463,7 +2463,7 @@ fn unify_tag_unions<M: MetaCollector>(
                 return ext_outcome;
             }
 
-            let mut shared_tags_outcome = unify_shared_tags_new(
+            let mut shared_tags_outcome = unify_shared_tags(
                 env,
                 pool,
                 ctx,
@@ -2503,7 +2503,7 @@ fn unify_tag_unions<M: MetaCollector>(
                 return ext_outcome;
             }
 
-            let mut shared_tags_outcome = unify_shared_tags_new(
+            let mut shared_tags_outcome = unify_shared_tags(
                 env,
                 pool,
                 ctx,
@@ -2558,7 +2558,7 @@ fn unify_tag_unions<M: MetaCollector>(
             false
         };
 
-        let shared_tags_outcome = unify_shared_tags_new(
+        let shared_tags_outcome = unify_shared_tags(
             env,
             pool,
             ctx,
@@ -2628,7 +2628,7 @@ fn unify_tag_unions<M: MetaCollector>(
         env.subs.commit_snapshot(snapshot);
 
         let shared_tags_outcome =
-            unify_shared_tags_new(env, pool, ctx, shared_tags, other_tags, ext, recursion_var);
+            unify_shared_tags(env, pool, ctx, shared_tags, other_tags, ext, recursion_var);
         total_outcome.union(shared_tags_outcome);
         total_outcome
     }
@@ -2740,7 +2740,7 @@ fn choose_merged_var(subs: &Subs, var1: Variable, var2: Variable) -> Variable {
 }
 
 #[must_use]
-fn unify_shared_tags_new<M: MetaCollector>(
+fn unify_shared_tags<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
     ctx: &Context,
@@ -2856,8 +2856,7 @@ fn unify_shared_tags_new<M: MetaCollector>(
             }
         };
 
-        let merge_outcome =
-            unify_shared_tags_merge_new(env, ctx, new_tags, new_ext_var, recursion_var);
+        let merge_outcome = unify_shared_tags_merge(env, ctx, new_tags, new_ext_var, recursion_var);
 
         total_outcome.union(merge_outcome);
         total_outcome
@@ -2871,7 +2870,7 @@ fn unify_shared_tags_new<M: MetaCollector>(
 }
 
 #[must_use]
-fn unify_shared_tags_merge_new<M: MetaCollector>(
+fn unify_shared_tags_merge<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
     new_tags: UnionTags,
