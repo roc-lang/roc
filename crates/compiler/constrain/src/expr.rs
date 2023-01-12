@@ -3832,6 +3832,7 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | Call(_, _, _)
             | RunLowLevel { .. }
             | ForeignCall { .. }
+            | EmptyRecord
             => {
                 return false
             }
@@ -3839,7 +3840,6 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             Var(_, _)
             | AbilityMember(_, _, _)
             | Expr::Record { .. }
-            | EmptyRecord
             | Crash { .. }
             | Access { .. }
             | Accessor(_)
