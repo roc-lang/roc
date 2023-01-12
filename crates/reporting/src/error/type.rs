@@ -3018,7 +3018,7 @@ fn diff_record<'b>(
     };
     let mut same_fields_different_types = VecMap::default();
     let mut fields_in_left_only = Vec::default();
-    let mut same_fields_same_types = 1;
+    let mut same_fields_same_types = 0;
 
     for (k1, v1) in fields1.into_iter() {
         match fields2.remove(&k1) {
