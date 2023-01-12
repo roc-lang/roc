@@ -3023,10 +3023,6 @@ fn diff_record<'b>(
     for (k1, v1) in fields1.into_iter() {
         match fields2.remove(&k1) {
             Some(v2) if should_show_field_diff(&v1, &v2) => {
-                eprintln!(
-                    "\nsame field, diff type: {:?} ==>\n\n\t{:?}\n\n!=\n\n\t{:?}",
-                    &k1, &v1, &v2
-                );
                 // The field names are the same but the types are different
                 // (or at least should be rendered as different)
                 same_fields_different_types.insert(k1, (v1, v2));
