@@ -3675,7 +3675,7 @@ mod report_text {
         alloc: &'b RocDocAllocator<'b>,
         entries: Vec<(RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
-        fields_ommitted: usize,
+        fields_omitted: usize,
     ) -> RocDocBuilder<'b> {
         let ext_doc = if let Some(t) = opt_ext {
             t
@@ -3698,7 +3698,7 @@ mod report_text {
             };
 
         if entries.is_empty() {
-            if fields_ommitted == 0 {
+            if fields_omitted == 0 {
                 alloc.text("{}")
             } else {
                 alloc
@@ -3706,7 +3706,7 @@ mod report_text {
                     .append(alloc.ellipsis().append(alloc.text(" }")))
             }
             .append(ext_doc)
-        } else if entries.len() == 1 && fields_ommitted == 0 {
+        } else if entries.len() == 1 && fields_omitted == 0 {
             // Single-field records get printed on one line; multi-field records get multiple lines
             alloc
                 .text("{ ")
@@ -3714,7 +3714,7 @@ mod report_text {
                 .append(alloc.text(" }"))
                 .append(ext_doc)
         } else {
-            let ending = if fields_ommitted == 0 {
+            let ending = if fields_omitted == 0 {
                 alloc.reflow("}")
             } else {
                 alloc.vcat([
