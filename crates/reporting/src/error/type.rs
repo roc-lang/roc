@@ -3706,11 +3706,16 @@ mod report_text {
                     .append(alloc.ellipsis().append(alloc.text(" }")))
             }
             .append(ext_doc)
-        } else if entries.len() == 1 && fields_omitted == 0 {
+        } else if entries.len() == 1 {
             // Single-field records get printed on one line; multi-field records get multiple lines
             alloc
                 .text("{ ")
                 .append(entry_to_doc(entries.into_iter().next().unwrap()))
+                .append(if fields_omitted == 0 {
+                    alloc.text("")
+                } else {
+                    alloc.text(", ").append(alloc.ellipsis())
+                })
                 .append(alloc.text(" }"))
                 .append(ext_doc)
         } else {
