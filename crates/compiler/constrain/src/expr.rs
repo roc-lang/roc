@@ -3835,13 +3835,13 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | EmptyRecord
             | Expr::Record { .. }
             | Crash { .. }
+            | Access { .. }
             => {
                 return false
             }
             // TODO(weakening)
             Var(_, _)
             | AbilityMember(_, _, _)
-            | Access { .. }
             | Accessor(_)
             | Update { .. }
             | Tag { .. }
