@@ -471,10 +471,16 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                vec1 : { x : U8, y : U8 }
+                vec1 : {
+                    x : U8,
+                    y : U8,
+                }
                 vec1 = { x: 1, y: 2 }
 
-                vec2 : { x : U8, y : U8 }
+                vec2 : {
+                    x : U8,
+                    y : U8,
+                }
                 vec2 = { x: 4, y: 8 }
                 "#
             ),
@@ -584,7 +590,10 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                a : { brillist : Str, utopia : Str }
+                a : {
+                    brillist : Str,
+                    utopia : Str,
+                }
                 a = { brillist: "Profundum et fundamentum", utopia: "Astra mortemque praestare gradatim" }
                 "#
             ),
