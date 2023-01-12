@@ -157,7 +157,7 @@ where
                 f.concat([
                     format_symbol(f, interns, symbol),
                     f.reflow(" defined here with layout "),
-                    def_layout.to_doc(f, interner, Parens::NotNeeded),
+                    interner.to_doc(def_layout, f, Parens::NotNeeded),
                 ]),
             )];
             f.concat([
@@ -165,7 +165,7 @@ where
                 f.reflow(" used as a "),
                 f.reflow(format_use_kind(use_kind)),
                 f.reflow(" here with layout "),
-                use_layout.to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc(use_layout, f, Parens::NotNeeded),
             ])
         }
         ProblemKind::SymbolDefMismatch {
@@ -178,9 +178,9 @@ where
             f.concat([
                 format_symbol(f, interns, symbol),
                 f.reflow(" is defined as "),
-                def_layout.to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc(def_layout, f, Parens::NotNeeded),
                 f.reflow(" but its initializer is "),
-                expr_layout.to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc(expr_layout, f, Parens::NotNeeded),
             ])
         }
         ProblemKind::BadSwitchConditionLayout { found_layout } => {
@@ -188,7 +188,7 @@ where
             docs_before = vec![];
             f.concat([
                 f.reflow("This switch condition is a "),
-                found_layout.to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc(found_layout, f, Parens::NotNeeded),
             ])
         }
         ProblemKind::DuplicateSwitchBranch {} => {
@@ -469,13 +469,13 @@ where
     let args = f.intersperse(
         arguments
             .iter()
-            .map(|a| a.to_doc(f, interner, Parens::InFunction)),
+            .map(|a| interner.to_doc(*a, f, Parens::InFunction)),
         f.reflow(", "),
     );
     let fun = f.concat([
         f.concat([f.reflow("("), args, f.reflow(")")]),
         f.reflow(" -> "),
-        result.to_doc(f, interner, Parens::NotNeeded),
+        interner.to_doc(result, f, Parens::NotNeeded),
     ]);
     let niche = (f.text("("))
         .append(captures_niche.to_doc(f, interner))

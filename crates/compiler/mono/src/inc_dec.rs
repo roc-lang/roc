@@ -3,7 +3,7 @@ use crate::ir::{
     CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt,
     UpdateModeIds,
 };
-use crate::layout::{Layout, STLayoutInterner};
+use crate::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
@@ -559,7 +559,7 @@ impl<'a, 'i> Context<'a, 'i> {
         z: Symbol,
         call_type: crate::ir::CallType<'a>,
         arguments: &'a [Symbol],
-        l: Layout<'a>,
+        l: InLayout<'a>,
         b: &'a Stmt<'a>,
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
@@ -600,8 +600,7 @@ impl<'a, 'i> Context<'a, 'i> {
                 arg_layouts,
                 ..
             } => {
-                let top_level =
-                    ProcLayout::new(self.arena, arg_layouts, name.niche(), **ret_layout);
+                let top_level = ProcLayout::new(self.arena, arg_layouts, name.niche(), *ret_layout);
 
                 // get the borrow signature
                 let ps = self
@@ -629,7 +628,7 @@ impl<'a, 'i> Context<'a, 'i> {
         z: Symbol,
         lowlevel: &'a crate::ir::HigherOrderLowLevel,
         arguments: &'a [Symbol],
-        l: Layout<'a>,
+        l: InLayout<'a>,
         b: &'a Stmt<'a>,
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
@@ -857,7 +856,7 @@ impl<'a, 'i> Context<'a, 'i> {
         codegen: &mut CodegenTools<'i>,
         z: Symbol,
         v: Expr<'a>,
-        l: Layout<'a>,
+        l: InLayout<'a>,
         b: &'a Stmt<'a>,
         b_live_vars: &LiveVarSet,
     ) -> (&'a Stmt<'a>, LiveVarSet) {
@@ -955,7 +954,7 @@ impl<'a, 'i> Context<'a, 'i> {
         (new_b, live_vars)
     }
 
-    fn update_var_info(&self, symbol: Symbol, layout: &Layout<'a>, expr: &Expr<'a>) -> Self {
+    fn update_var_info(&self, symbol: Symbol, layout: &InLayout<'a>, expr: &Expr<'a>) -> Self {
         // is this value a constant? TODO do function pointers also fall into this category?
         let persistent = false;
 
@@ -970,13 +969,13 @@ impl<'a, 'i> Context<'a, 'i> {
     fn update_var_info_help(
         &self,
         symbol: Symbol,
-        layout: &Layout<'a>,
+        layout: &InLayout<'a>,
         persistent: bool,
         consume: bool,
         reset: bool,
     ) -> Self {
         // should we perform incs and decs on this value?
-        let reference = layout.contains_refcounted(self.layout_interner);
+        let reference = self.layout_interner.contains_refcounted(*layout);
 
         let info = VarInfo {
             reference,
@@ -997,7 +996,7 @@ impl<'a, 'i> Context<'a, 'i> {
 
         for p in ps.iter() {
             let info = VarInfo {
-                reference: p.layout.contains_refcounted(self.layout_interner),
+                reference: self.layout_interner.contains_refcounted(p.layout),
                 consume: match p.ownership {
                     Ownership::Owned => true,
                     Ownership::Borrowed => false,
@@ -1024,7 +1023,7 @@ impl<'a, 'i> Context<'a, 'i> {
     ) -> &'a Stmt<'a> {
         for p in ps.iter() {
             if p.ownership == Ownership::Owned
-                && p.layout.contains_refcounted(self.layout_interner)
+                && self.layout_interner.contains_refcounted(p.layout)
                 && !b_live_vars.contains(&p.symbol)
             {
                 b = self.add_dec(p.symbol, b)
@@ -1300,7 +1299,7 @@ fn branch_on_list_uniqueness<'a, 'i>(
     arena: &'a Bump,
     codegen: &mut CodegenTools<'i>,
     list_symbol: Symbol,
-    return_layout: Layout<'a>,
+    return_layout: InLayout<'a>,
     then_branch_stmt: Stmt<'a>,
     else_branch_stmt: &'a Stmt<'a>,
 ) -> Stmt<'a> {
@@ -1331,7 +1330,7 @@ fn branch_on_list_uniqueness<'a, 'i>(
     Stmt::Let(
         condition_symbol,
         Expr::Call(condition_call),
-        Layout::bool(),
+        Layout::BOOL,
         stmt,
     )
 }
