@@ -748,7 +748,7 @@ fn to_relevant_branch_help<'a>(
         Identifier(_) | Underscore => Some(branch.clone()),
 
         As(subpattern, _symbol) => {
-            to_relevant_branch_help(test, path, start, end, branch, *subpattern)
+            to_relevant_branch_help(interner, test, path, start, end, branch, *subpattern)
         }
 
         RecordDestructure(destructs, _) => match test {
