@@ -3167,9 +3167,9 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
                 .any(|(t1, t2)| should_show_diff(t1, t2))
         }
         (Infinite, Infinite) | (Error, Error) => false,
-        (FlexVar(v1), FlexVar(v2)) => v1 != v2,
-        (RigidVar(v1), RigidVar(v2)) => v1 != v2,
-        (FlexAbleVar(v1, set1), FlexAbleVar(v2, set2)) => {
+        (FlexVar(v1), FlexVar(v2)) | (RigidVar(v1), RigidVar(v2)) => v1 != v2,
+        (FlexAbleVar(v1, set1), FlexAbleVar(v2, set2))
+        | (RigidAbleVar(v1, set1), RigidAbleVar(v2, set2)) => {
             #[cfg(debug_assertions)]
             {
                 if v1 == v2 {
@@ -3183,15 +3183,6 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
             }
 
             v1 != v2
-        }
-        (RigidAbleVar(v1, set1), RigidAbleVar(v2, set2)) => {
-            if v1 != v2 || set1.len() != set2.len() {
-                return true;
-            }
-
-            set1.sorted_iter()
-                .zip(set2.sorted_iter())
-                .any(|(t1, t2)| t1 != t2)
         }
         (Record(fields1, ext1), Record(fields2, ext2)) => {
             if fields1.len() != fields1.len() || ext1 != ext2 {
