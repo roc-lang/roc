@@ -3896,9 +3896,7 @@ fn rec_defs_help(
         let generalizable = defs
             .iter()
             .all(|d| is_generalizable_expr(&d.loc_expr.value));
-        // TODO(weakening)
-        #[allow(clippy::logic_bug)]
-        Generalizable(generalizable || true)
+        Generalizable(generalizable)
     };
 
     for def in defs {
