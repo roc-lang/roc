@@ -4263,9 +4263,18 @@ pub fn gather_tags_unsorted_iter(
 
     let mut stack = vec![other_fields];
 
+    #[cfg(debug_assertions)]
+    let mut seen_head_union = false;
+
     loop {
         match subs.get_content_without_compacting(var) {
             Structure(TagUnion(sub_fields, sub_ext)) => {
+                #[cfg(debug_assertions)]
+                {
+                    assert!(!seen_head_union, "extension variable is another tag union, but I expected it to be either open or closed!");
+                    seen_head_union = true;
+                }
+
                 stack.push(*sub_fields);
 
                 var = *sub_ext;
