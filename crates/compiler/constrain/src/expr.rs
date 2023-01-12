@@ -3606,9 +3606,7 @@ pub fn rec_defs_help_simple(
             }
             _ => true, // this must be a function
         });
-        // TODO(weakening)
-        #[allow(clippy::logic_bug)]
-        Generalizable(generalizable || true)
+        Generalizable(generalizable)
     };
 
     for index in range {
