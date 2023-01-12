@@ -3194,9 +3194,11 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
                 .zip(fields2.iter())
                 .any(|((name1, f1), (name2, f2))| name1 != name2 || should_show_field_diff(f1, f2))
         }
-        (TagUnion(tags1, ext1, _polarity1), TagUnion(tags2, ext2, _polarity2)) => {
-            // If two tag unions differ only in polarity, don't show that as a diff;
-            // polarity is invisible to the reader!
+        (TagUnion(tags1, ext1, polarity1), TagUnion(tags2, ext2, polarity2)) => {
+            debug_assert_eq!(
+                polarity1, polarity2,
+                "Any two tag unions we're comparing should have the same polarity!"
+            );
 
             if tags1.len() != tags2.len() || ext1 != ext2 {
                 return true;
