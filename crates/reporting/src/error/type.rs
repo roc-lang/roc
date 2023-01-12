@@ -3709,8 +3709,9 @@ mod report_text {
         } else if entries.len() == 1 && fields_ommitted == 0 {
             // Single-field records get printed on one line; multi-field records get multiple lines
             alloc
-                .reflow(" {")
+                .text("{ ")
                 .append(entry_to_doc(entries.into_iter().next().unwrap()))
+                .append(alloc.text(" }"))
                 .append(ext_doc)
         } else {
             let ending = if fields_ommitted == 0 {
