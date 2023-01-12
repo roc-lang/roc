@@ -831,11 +831,11 @@ fn solve(
                 );
 
                 // If the let-binding is eligible for generalization, it was solved at the
-                // next-higher level. Those that are still at that level (intuitively, they did not
-                // "escape" into the lower level before or after the let-binding) now get to be
-                // generalized.
+                // next rank. The variables introduced in the let-binding that are still at
+                // that rank (intuitively, they did not "escape" into the lower level
+                // before or after the let-binding) now get to be generalized.
                 generalize(subs, young_mark, visit_mark, rank.next(), pools);
-                debug_assert!(pools.get(rank.next()).is_empty());
+                debug_assert!(pools.get(rank.next()).is_empty(), "variables left over in let-binding scope, but they should all be in a lower scope or generalized now");
 
                 // check that things went well
                 dbg_do!(ROC_VERIFY_RIGID_LET_GENERALIZED, {
@@ -1264,7 +1264,8 @@ fn solve(
                     state
                 } else {
                     // If the let-binding is generalizable, work at the next rank (which will be
-                    // the rank promoted to generalization); otherwise, stay at the current level.
+                    // the rank at which introduced variables will become generalized, if they end up
+                    // staying there); otherwise, stay at the current level.
                     let binding_rank = if let_con.generalizable.0 {
                         rank.next()
                     } else {
@@ -1296,12 +1297,11 @@ fn solve(
                     // program.
                     //
                     // Items are popped from the stack in reverse order. That means that we'll
-                    // first solve then defs_constraint, and then (eventually) the ret_constraint.
+                    // first solve the defs_constraint, and then (eventually) the ret_constraint.
                     //
-                    // NB: LetCon gets the current env and rank, not the env/rank from after solving the defs_constraint.
-                    // That's because the defs constraints may be solved in next_rank if we are
-                    // eligible for generalization. The LetCon will then promote variables still at
-                    // next_rank to generalized variables.
+                    // NB: LetCon gets the current scope's env and rank, not the env/rank from after solving the defs_constraint.
+                    // That's because the defs constraints will be solved in next_rank if it is eligible for generalization.
+                    // The LetCon will then generalize variables that are at a higher rank than the rank of the current scope.
                     stack.push(Work::LetConIntroducesVariables {
                         env,
                         rank,
@@ -3503,8 +3503,8 @@ fn circular_error(
     problems.push(problem);
 }
 
-/// Promotes variables at the `young_rank`, which did not escape a let-binding
-/// into a lower scope, to generalization.
+/// Generalizes variables at the `young_rank`, which did not escape a let-binding
+/// into a lower scope.
 ///
 /// Ensures that variables introduced at the `young_rank`, but that should be
 /// stuck at a lower level, are marked at that level and not generalized at the
