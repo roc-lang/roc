@@ -72,12 +72,11 @@ fn fmt_spaces_max_consecutive_newlines<'a, 'buf, I>(
     // Only ever print two newlines back to back.
     // (Two newlines renders as one blank line.)
     let mut consecutive_newlines = 0;
-    let mut encountered_comment = false;
 
     for space in spaces {
         match space {
             Newline => {
-                if !encountered_comment && (consecutive_newlines < max_consecutive_newlines) {
+                if consecutive_newlines < max_consecutive_newlines {
                     buf.newline();
 
                     // Don't bother incrementing it if we're already over the limit.
@@ -90,14 +89,14 @@ fn fmt_spaces_max_consecutive_newlines<'a, 'buf, I>(
                 fmt_comment(buf, comment);
                 buf.newline();
 
-                encountered_comment = true;
+                consecutive_newlines = 1;
             }
             DocComment(docs) => {
                 buf.indent(indent);
                 fmt_docs(buf, docs);
                 buf.newline();
 
-                encountered_comment = true;
+                consecutive_newlines = 1;
             }
         }
     }

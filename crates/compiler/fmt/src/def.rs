@@ -77,6 +77,7 @@ impl<'a> Formattable for TypeDef<'a> {
                 for var in *vars {
                     buf.spaces(1);
                     fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
+                    buf.indent(indent);
                 }
 
                 buf.push_str(" :");
@@ -95,6 +96,7 @@ impl<'a> Formattable for TypeDef<'a> {
                 for var in *vars {
                     buf.spaces(1);
                     fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
+                    buf.indent(indent);
                 }
 
                 buf.push_str(" :=");
@@ -136,6 +138,7 @@ impl<'a> Formattable for TypeDef<'a> {
                 for var in *vars {
                     buf.spaces(1);
                     fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
+                    buf.indent(indent);
                 }
 
                 buf.push_str(" has");
@@ -191,6 +194,7 @@ impl<'a> Formattable for ValueDef<'a> {
         match self {
             Annotation(loc_pattern, loc_annotation) => {
                 loc_pattern.format(buf, indent);
+                buf.indent(indent);
 
                 if loc_annotation.is_multiline() {
                     buf.push_str(" :");
@@ -390,6 +394,7 @@ pub fn fmt_body<'a, 'buf>(
     indent: u16,
 ) {
     pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
+    buf.indent(indent);
     buf.push_str(" =");
 
     if body.is_multiline() {
@@ -415,7 +420,7 @@ pub fn fmt_body<'a, 'buf>(
                     );
                 }
             }
-            Expr::BinOps(_, _) => {
+            Expr::Defs(..) | Expr::BinOps(_, _) => {
                 // Binop chains always get a newline. Otherwise you can have things like:
                 //
                 //     something = foo
