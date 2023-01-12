@@ -3768,8 +3768,12 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
         } else {
             match layout {
                 Layout::Builtin(Builtin::List(_)) => {
+                    let list_type = arg_type
+                        .into_pointer_type()
+                        .get_element_type()
+                        .into_struct_type();
                     let loaded = env.builder.new_build_load(
-                        arg_type,
+                        list_type,
                         arg.into_pointer_value(),
                         "load_list_pointer",
                     );
