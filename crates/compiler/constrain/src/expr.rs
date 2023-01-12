@@ -3828,13 +3828,13 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             OpaqueRef { argument, .. } => expr = &argument.1.value,
             Str(_) | List { .. } | SingleQuote(_, _, _, _) | When { .. } | If { .. }
             | LetRec(_, _, _)
+            | LetNonRec(_, _)
             => {
                 return false
             }
             // TODO(weakening)
             Var(_, _)
             | AbilityMember(_, _, _)
-            | LetNonRec(_, _)
             | Call(_, _, _)
             | RunLowLevel { .. }
             | ForeignCall { .. }

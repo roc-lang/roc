@@ -7140,7 +7140,7 @@ mod solve_expr {
                 #^^^{-1}
                 "#
             ),
-            @r#"fun : {} -[[thunk(5) [A Str]*, thunk(5) { a : Str }]]-> Str"#
+            @r#"fun : {} -[[thunk(5) [A Str]w_a, thunk(5) { a : Str }]]-> Str"#
         );
     }
 
