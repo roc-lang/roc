@@ -21,7 +21,7 @@ fn empty_len() {
     assert_evals_to!(
         indoc!(
             r#"
-            Set.len Set.empty
+            Set.len (Set.empty {})
             "#
         ),
         0,
@@ -73,7 +73,7 @@ fn insert() {
     assert_evals_to!(
         indoc!(
             r#"
-            Set.empty
+            Set.empty {}
                 |> Set.insert 0
                 |> Set.insert 1
                 |> Set.insert 2
@@ -91,7 +91,7 @@ fn remove() {
     assert_evals_to!(
         indoc!(
             r#"
-            Set.empty
+            Set.empty {}
                 |> Set.insert 0
                 |> Set.insert 1
                 |> Set.remove 1
@@ -259,7 +259,7 @@ fn to_list_empty() {
     assert_evals_to!(
         indoc!(
             r#"
-            Set.toList Set.empty
+            Set.toList (Set.empty {})
             "#
         ),
         RocList::<std::convert::Infallible>::default(),
