@@ -3861,9 +3861,8 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | RuntimeError(..)
             | ZeroArgumentTag { .. }
             | Tag { .. }
-            | AbilityMember(_, _, _) => return false,
-            // TODO(weakening)
-            Var(_, _) => return true,
+            | AbilityMember(..)
+            | Var(..) => return false,
         }
     }
 }
