@@ -2557,10 +2557,10 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    ok : Result I64 *
+                    ok : Result I64 _
                     ok = Ok 5
 
-                    err : Result * Str
+                    err : Result _ Str
                     err = Err "blah"
 
                     if 1 > 0 then
@@ -6992,7 +6992,7 @@ mod solve_expr {
                 "#
             ),
             @r#"
-            foo : [Named Str (List a)]* as a
+            foo : [Named Str (List a)] as a
             Named name outerList : [Named Str (List a)] as a
             name : Str
             outerList : List ([Named Str (List a)] as a)
