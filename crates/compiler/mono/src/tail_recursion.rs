@@ -2,7 +2,7 @@
 
 use crate::borrow::Ownership;
 use crate::ir::{CallType, Expr, JoinPointId, Param, Stmt};
-use crate::layout::{LambdaName, Layout};
+use crate::layout::{InLayout, LambdaName};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::symbol::Symbol;
@@ -34,8 +34,8 @@ pub fn make_tail_recursive<'a>(
     id: JoinPointId,
     needle: LambdaName,
     stmt: Stmt<'a>,
-    args: &'a [(Layout<'a>, Symbol, Symbol)],
-    ret_layout: Layout,
+    args: &'a [(InLayout<'a>, Symbol, Symbol)],
+    ret_layout: InLayout<'a>,
 ) -> Option<Stmt<'a>> {
     let allocated = arena.alloc(stmt);
 
@@ -73,8 +73,8 @@ fn insert_jumps<'a>(
     stmt: &'a Stmt<'a>,
     goal_id: JoinPointId,
     needle: LambdaName,
-    needle_arguments: &'a [(Layout<'a>, Symbol, Symbol)],
-    needle_result: Layout,
+    needle_arguments: &'a [(InLayout<'a>, Symbol, Symbol)],
+    needle_result: InLayout<'a>,
 ) -> Option<&'a Stmt<'a>> {
     use Stmt::*;
 
@@ -101,7 +101,7 @@ fn insert_jumps<'a>(
             }),
             _,
             Stmt::Ret(rsym),
-        ) if symbol == rsym && is_equal_function(*fsym, arg_layouts, **ret_layout) => {
+        ) if symbol == rsym && is_equal_function(*fsym, arg_layouts, *ret_layout) => {
             // replace the call and return with a jump
 
             let jump = Stmt::Jump(goal_id, arguments);

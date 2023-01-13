@@ -4,7 +4,8 @@ use crate::ir::{
     ListIndex, Literal, Param, Pattern, Procs, Stmt,
 };
 use crate::layout::{
-    Builtin, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, TagIdIntType, UnionLayout,
+    Builtin, InLayout, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, TagIdIntType,
+    UnionLayout,
 };
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
@@ -23,7 +24,10 @@ const RECORD_TAG_NAME: &str = "#Record";
 /// some normal branches and gives out a decision tree that has "labels" at all
 /// the leafs and a dictionary that maps these "labels" to the code that should
 /// run.
-fn compile<'a>(raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>) -> DecisionTree<'a> {
+fn compile<'a>(
+    interner: &TLLayoutInterner<'a>,
+    raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>,
+) -> DecisionTree<'a> {
     let formatted = raw_branches
         .into_iter()
         .map(|(guard, pattern, index)| Branch {
@@ -33,7 +37,7 @@ fn compile<'a>(raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>) -> DecisionTree
         })
         .collect();
 
-    to_decision_tree(formatted)
+    to_decision_tree(interner, formatted)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -96,7 +100,7 @@ enum Test<'a> {
         tag_id: TagIdIntType,
         ctor_name: CtorName,
         union: roc_exhaustive::Union,
-        arguments: Vec<(Pattern<'a>, Layout<'a>)>,
+        arguments: Vec<(Pattern<'a>, InLayout<'a>)>,
     },
     IsInt([u8; 16], IntWidth),
     IsFloat(u64, FloatWidth),
@@ -207,7 +211,10 @@ struct Branch<'a> {
     patterns: Vec<(Vec<PathInstruction>, Pattern<'a>)>,
 }
 
-fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
+fn to_decision_tree<'a>(
+    interner: &TLLayoutInterner<'a>,
+    raw_branches: Vec<Branch<'a>>,
+) -> DecisionTree<'a> {
     let branches: Vec<_> = raw_branches.into_iter().map(flatten_patterns).collect();
 
     debug_assert!(!branches.is_empty());
@@ -239,7 +246,7 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
                     let default = if branches.is_empty() {
                         None
                     } else {
-                        Some(Box::new(to_decision_tree(branches)))
+                        Some(Box::new(to_decision_tree(interner, branches)))
                     };
 
                     DecisionTree::Decision {
@@ -256,7 +263,7 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
             let path = pick_path(&branches).clone();
 
             let bs = branches.clone();
-            let (edges, fallback) = gather_edges(branches, &path);
+            let (edges, fallback) = gather_edges(interner, branches, &path);
 
             let mut decision_edges: Vec<_> = edges
                 .into_iter()
@@ -264,7 +271,7 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
                     if bs == branches {
                         panic!();
                     } else {
-                        (test, to_decision_tree(branches))
+                        (test, to_decision_tree(interner, branches))
                     }
                 })
                 .collect();
@@ -280,12 +287,12 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
                 ([], _) => {
                     // should be guaranteed by the patterns
                     debug_assert!(!fallback.is_empty());
-                    to_decision_tree(fallback)
+                    to_decision_tree(interner, fallback)
                 }
                 (_, _) => break_out_guard(
                     path,
                     decision_edges,
-                    Some(Box::new(to_decision_tree(fallback))),
+                    Some(Box::new(to_decision_tree(interner, fallback))),
                 ),
             }
         }
@@ -458,6 +465,7 @@ fn check_for_match(branches: &[Branch]) -> Match {
 
 // my understanding: branches that we could jump to based on the pattern at the current path
 fn gather_edges<'a>(
+    interner: &TLLayoutInterner<'a>,
     branches: Vec<Branch<'a>>,
     path: &[PathInstruction],
 ) -> (Vec<(GuardedTest<'a>, Vec<Branch<'a>>)>, Vec<Branch<'a>>) {
@@ -467,7 +475,7 @@ fn gather_edges<'a>(
 
     let all_edges = relevant_tests
         .into_iter()
-        .map(|t| edges_for(path, &branches, t))
+        .map(|t| edges_for(interner, path, &branches, t))
         .collect();
 
     let fallbacks = if check {
@@ -665,6 +673,7 @@ fn test_at_path<'a>(
 
 // understanding: if the test is successful, where could we go?
 fn edges_for<'a>(
+    interner: &TLLayoutInterner<'a>,
     path: &[PathInstruction],
     branches: &[Branch<'a>],
     test: GuardedTest<'a>,
@@ -686,13 +695,14 @@ fn edges_for<'a>(
     };
 
     for branch in it {
-        new_branches.extend(to_relevant_branch(&test, path, branch));
+        new_branches.extend(to_relevant_branch(interner, &test, path, branch));
     }
 
     (test, new_branches)
 }
 
 fn to_relevant_branch<'a>(
+    interner: &TLLayoutInterner<'a>,
     guarded_test: &GuardedTest<'a>,
     path: &[PathInstruction],
     branch: &Branch<'a>,
@@ -716,13 +726,14 @@ fn to_relevant_branch<'a>(
                 Some(branch.clone())
             }
             GuardedTest::TestNotGuarded { test } => {
-                to_relevant_branch_help(test, path, start, end, branch, pattern)
+                to_relevant_branch_help(interner, test, path, start, end, branch, pattern)
             }
         },
     }
 }
 
 fn to_relevant_branch_help<'a>(
+    interner: &TLLayoutInterner<'a>,
     test: &Test<'a>,
     path: &[PathInstruction],
     mut start: Vec<(Vec<PathInstruction>, Pattern<'a>)>,
@@ -737,7 +748,7 @@ fn to_relevant_branch_help<'a>(
         Identifier(_) | Underscore => Some(branch.clone()),
 
         As(subpattern, _symbol) => {
-            to_relevant_branch_help(test, path, start, end, branch, *subpattern)
+            to_relevant_branch_help(interner, test, path, start, end, branch, *subpattern)
         }
 
         RecordDestructure(destructs, _) => match test {
@@ -911,11 +922,15 @@ fn to_relevant_branch_help<'a>(
 
                     // the test matches the constructor of this pattern
                     match layout {
-                        UnionLayout::NonRecursive(
-                            [[Layout::Struct {
-                                field_layouts: [_], ..
-                            }]],
-                        ) => {
+                        UnionLayout::NonRecursive([[arg]])
+                            if matches!(
+                                interner.get(*arg),
+                                Layout::Struct {
+                                    field_layouts: [_],
+                                    ..
+                                }
+                            ) =>
+                        {
                             // a one-element record equivalent
                             // Theory: Unbox doesn't have any value for us
                             debug_assert_eq!(arguments.len(), 1);
@@ -1284,15 +1299,15 @@ enum Choice<'a> {
     Jump(Label),
 }
 
-type StoresVec<'a> = bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>;
+type StoresVec<'a> = bumpalo::collections::Vec<'a, (Symbol, InLayout<'a>, Expr<'a>)>;
 
 pub fn optimize_when<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     cond_symbol: Symbol,
-    cond_layout: Layout<'a>,
-    ret_layout: Layout<'a>,
+    cond_layout: InLayout<'a>,
+    ret_layout: InLayout<'a>,
     opt_branches: bumpalo::collections::Vec<'a, (Pattern<'a>, Guard<'a>, Stmt<'a>)>,
 ) -> Stmt<'a> {
     let (patterns, _indexed_branches) = opt_branches
@@ -1309,7 +1324,7 @@ pub fn optimize_when<'a>(
 
     let indexed_branches: Vec<_> = _indexed_branches;
 
-    let decision_tree = compile(patterns);
+    let decision_tree = compile(&layout_cache.interner, patterns);
     let decider = tree_to_decider(decision_tree);
 
     // for each target (branch body), count in how many ways it can be reached
@@ -1371,11 +1386,11 @@ enum PathInstruction {
 
 fn path_to_expr_help<'a>(
     env: &mut Env<'a, '_>,
-    layout_interner: &TLLayoutInterner<'a>,
+    layout_interner: &mut TLLayoutInterner<'a>,
     mut symbol: Symbol,
     path: &[PathInstruction],
-    mut layout: Layout<'a>,
-) -> (Symbol, StoresVec<'a>, Layout<'a>) {
+    mut layout: InLayout<'a>,
+) -> (Symbol, StoresVec<'a>, InLayout<'a>) {
     let mut stores = bumpalo::collections::Vec::new_in(env.arena);
 
     // let instructions = reverse_path(path);
@@ -1391,17 +1406,20 @@ fn path_to_expr_help<'a>(
             PathInstruction::TagIndex { index, tag_id } => {
                 let index = *index;
 
-                match &layout {
+                match layout_interner.get(layout) {
                     Layout::Union(union_layout) => {
                         let inner_expr = Expr::UnionAtIndex {
                             tag_id: *tag_id,
                             structure: symbol,
                             index,
-                            union_layout: *union_layout,
+                            union_layout,
                         };
 
-                        let inner_layout =
-                            union_layout.layout_at(*tag_id as TagIdIntType, index as usize);
+                        let inner_layout = union_layout.layout_at(
+                            layout_interner,
+                            *tag_id as TagIdIntType,
+                            index as usize,
+                        );
 
                         symbol = env.unique_symbol();
                         stores.push((symbol, inner_layout, inner_expr));
@@ -1441,7 +1459,7 @@ fn path_to_expr_help<'a>(
             PathInstruction::ListIndex { index } => {
                 let list_sym = symbol;
 
-                match layout {
+                match layout_interner.get(layout) {
                     Layout::Builtin(Builtin::List(elem_layout)) => {
                         let (index_sym, new_stores) = build_list_index_probe(env, list_sym, index);
 
@@ -1455,8 +1473,6 @@ fn path_to_expr_help<'a>(
                             },
                             arguments: env.arena.alloc([list_sym, index_sym]),
                         });
-
-                        let elem_layout = layout_interner.get(elem_layout);
 
                         stores.push((load_sym, elem_layout, load_expr));
 
@@ -1474,9 +1490,9 @@ fn path_to_expr_help<'a>(
 
 fn test_to_comparison<'a>(
     env: &mut Env<'a, '_>,
-    layout_interner: &TLLayoutInterner<'a>,
+    layout_interner: &mut TLLayoutInterner<'a>,
     cond_symbol: Symbol,
-    cond_layout: &Layout<'a>,
+    cond_layout: &InLayout<'a>,
     path: &[PathInstruction],
     test: Test<'a>,
 ) -> (StoresVec<'a>, Comparison, Option<ConstructorKnown<'a>>) {
@@ -1490,7 +1506,7 @@ fn test_to_comparison<'a>(
             // (e.g. record pattern guard matches)
             debug_assert!(union.alternatives.len() > 1);
 
-            match test_layout {
+            match layout_interner.get(test_layout) {
                 Layout::Union(union_layout) => {
                     let lhs = Expr::Literal(Literal::Int((tag_id as i128).to_ne_bytes()));
 
@@ -1554,7 +1570,7 @@ fn test_to_comparison<'a>(
 
             let lhs = Expr::Literal(Literal::Byte(test_byte as u8));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::u8(), lhs));
+            stores.push((lhs_symbol, Layout::U8, lhs));
 
             (stores, (lhs_symbol, Comparator::Eq, rhs_symbol), None)
         }
@@ -1562,7 +1578,7 @@ fn test_to_comparison<'a>(
         Test::IsBit(test_bit) => {
             let lhs = Expr::Literal(Literal::Bool(test_bit));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Bool), lhs));
+            stores.push((lhs_symbol, Layout::BOOL, lhs));
 
             (stores, (lhs_symbol, Comparator::Eq, rhs_symbol), None)
         }
@@ -1571,7 +1587,7 @@ fn test_to_comparison<'a>(
             let lhs = Expr::Literal(Literal::Str(env.arena.alloc(test_str)));
             let lhs_symbol = env.unique_symbol();
 
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Str), lhs));
+            stores.push((lhs_symbol, Layout::STR, lhs));
 
             (stores, (lhs_symbol, Comparator::Eq, rhs_symbol), None)
         }
@@ -1580,7 +1596,7 @@ fn test_to_comparison<'a>(
             let list_layout = test_layout;
             let list_sym = rhs_symbol;
 
-            match list_layout {
+            match layout_interner.get(list_layout) {
                 Layout::Builtin(Builtin::List(_elem_layout)) => {
                     let real_len_expr = Expr::Call(Call {
                         call_type: CallType::LowLevel {
@@ -1624,16 +1640,16 @@ enum Comparator {
 type Comparison = (Symbol, Comparator, Symbol);
 
 type Tests<'a> = std::vec::Vec<(
-    bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+    bumpalo::collections::Vec<'a, (Symbol, InLayout<'a>, Expr<'a>)>,
     Comparison,
     Option<ConstructorKnown<'a>>,
 )>;
 
 fn stores_and_condition<'a>(
     env: &mut Env<'a, '_>,
-    layout_interner: &TLLayoutInterner<'a>,
+    layout_interner: &mut TLLayoutInterner<'a>,
     cond_symbol: Symbol,
-    cond_layout: &Layout<'a>,
+    cond_layout: &InLayout<'a>,
     test_chain: Vec<(Vec<PathInstruction>, Test<'a>)>,
 ) -> Tests<'a> {
     let mut tests: Tests = Vec::with_capacity(test_chain.len());
@@ -1656,8 +1672,8 @@ fn stores_and_condition<'a>(
 #[allow(clippy::too_many_arguments)]
 fn compile_test<'a>(
     env: &mut Env<'a, '_>,
-    ret_layout: Layout<'a>,
-    stores: bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+    ret_layout: InLayout<'a>,
+    stores: bumpalo::collections::Vec<'a, (Symbol, InLayout<'a>, Expr<'a>)>,
     lhs: Symbol,
     cmp: Comparator,
     rhs: Symbol,
@@ -1681,8 +1697,8 @@ fn compile_test<'a>(
 fn compile_test_help<'a>(
     env: &mut Env<'a, '_>,
     branch_info: ConstructorKnown<'a>,
-    ret_layout: Layout<'a>,
-    stores: bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+    ret_layout: InLayout<'a>,
+    stores: bumpalo::collections::Vec<'a, (Symbol, InLayout<'a>, Expr<'a>)>,
     lhs: Symbol,
     cmp: Comparator,
     rhs: Symbol,
@@ -1739,7 +1755,7 @@ fn compile_test_help<'a>(
 
     cond = Stmt::Switch {
         cond_symbol: test_symbol,
-        cond_layout: Layout::Builtin(Builtin::Bool),
+        cond_layout: Layout::BOOL,
         ret_layout,
         branches,
         default_branch,
@@ -1758,12 +1774,7 @@ fn compile_test_help<'a>(
     });
 
     // write to the test symbol
-    cond = Stmt::Let(
-        test_symbol,
-        test,
-        Layout::Builtin(Builtin::Bool),
-        arena.alloc(cond),
-    );
+    cond = Stmt::Let(test_symbol, test, Layout::BOOL, arena.alloc(cond));
 
     // stores are in top-to-bottom order, so we have to add them in reverse
     for (symbol, layout, expr) in stores.into_iter().rev() {
@@ -1775,7 +1786,7 @@ fn compile_test_help<'a>(
 
 fn compile_tests<'a>(
     env: &mut Env<'a, '_>,
-    ret_layout: Layout<'a>,
+    ret_layout: InLayout<'a>,
     tests: Tests<'a>,
     fail: &'a Stmt<'a>,
     mut cond: Stmt<'a>,
@@ -1799,13 +1810,13 @@ fn compile_tests<'a>(
 enum ConstructorKnown<'a> {
     Both {
         scrutinee: Symbol,
-        layout: Layout<'a>,
+        layout: InLayout<'a>,
         pass: TagIdIntType,
         fail: TagIdIntType,
     },
     OnlyPass {
         scrutinee: Symbol,
-        layout: Layout<'a>,
+        layout: InLayout<'a>,
         tag_id: TagIdIntType,
     },
     Neither,
@@ -1814,7 +1825,7 @@ enum ConstructorKnown<'a> {
 impl<'a> ConstructorKnown<'a> {
     fn from_test_chain(
         cond_symbol: Symbol,
-        cond_layout: &Layout<'a>,
+        cond_layout: InLayout<'a>,
         test_chain: &[(Vec<PathInstruction>, Test)],
     ) -> Self {
         match test_chain {
@@ -1823,14 +1834,14 @@ impl<'a> ConstructorKnown<'a> {
                     if union.alternatives.len() == 2 {
                         // excluded middle: we also know the tag_id in the fail branch
                         ConstructorKnown::Both {
-                            layout: *cond_layout,
+                            layout: cond_layout,
                             scrutinee: cond_symbol,
                             pass: *tag_id,
                             fail: (*tag_id == 0) as _,
                         }
                     } else {
                         ConstructorKnown::OnlyPass {
-                            layout: *cond_layout,
+                            layout: cond_layout,
                             scrutinee: cond_symbol,
                             tag_id: *tag_id,
                         }
@@ -1852,8 +1863,8 @@ fn decide_to_branching<'a>(
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     cond_symbol: Symbol,
-    cond_layout: Layout<'a>,
-    ret_layout: Layout<'a>,
+    cond_layout: InLayout<'a>,
+    ret_layout: InLayout<'a>,
     decider: Decider<'a, Choice<'a>>,
     jumps: &[(u64, JoinPointId, Stmt<'a>)],
 ) -> Stmt<'a> {
@@ -1907,7 +1918,7 @@ fn decide_to_branching<'a>(
             let decide = crate::ir::cond(
                 env,
                 test_symbol,
-                Layout::Builtin(Builtin::Bool),
+                Layout::BOOL,
                 pass_expr,
                 fail_expr,
                 ret_layout,
@@ -1916,7 +1927,7 @@ fn decide_to_branching<'a>(
             // calculate the guard value
             let param = Param {
                 symbol: test_symbol,
-                layout: Layout::Builtin(Builtin::Bool),
+                layout: Layout::BOOL,
                 ownership: Ownership::Owned,
             };
 
@@ -1959,11 +1970,11 @@ fn decide_to_branching<'a>(
             );
 
             let chain_branch_info =
-                ConstructorKnown::from_test_chain(cond_symbol, &cond_layout, &test_chain);
+                ConstructorKnown::from_test_chain(cond_symbol, cond_layout, &test_chain);
 
             let tests = stores_and_condition(
                 env,
-                &layout_cache.interner,
+                &mut layout_cache.interner,
                 cond_symbol,
                 &cond_layout,
                 test_chain,
@@ -2014,8 +2025,13 @@ fn decide_to_branching<'a>(
             // the cond_layout can change in the process. E.g. if the cond is a Tag, we actually
             // switch on the tag discriminant (currently an i64 value)
             // NOTE the tag discriminant is not actually loaded, `cond` can point to a tag
-            let (inner_cond_symbol, cond_stores_vec, inner_cond_layout) =
-                path_to_expr_help(env, &layout_cache.interner, cond_symbol, &path, cond_layout);
+            let (inner_cond_symbol, cond_stores_vec, inner_cond_layout) = path_to_expr_help(
+                env,
+                &mut layout_cache.interner,
+                cond_symbol,
+                &path,
+                cond_layout,
+            );
 
             let default_branch = decide_to_branching(
                 env,
@@ -2092,7 +2108,8 @@ fn decide_to_branching<'a>(
 
             // We have learned more about the exact layout of the cond (based on the path)
             // but tests are still relative to the original cond symbol
-            let mut switch = if let Layout::Union(union_layout) = inner_cond_layout {
+            let inner_cond_layout_raw = layout_cache.get_in(inner_cond_layout);
+            let mut switch = if let Layout::Union(union_layout) = inner_cond_layout_raw {
                 let tag_id_symbol = env.unique_symbol();
 
                 let temp = Stmt::Switch {
@@ -2114,7 +2131,7 @@ fn decide_to_branching<'a>(
                     union_layout.tag_id_layout(),
                     env.arena.alloc(temp),
                 )
-            } else if let Layout::Builtin(Builtin::List(_)) = inner_cond_layout {
+            } else if let Layout::Builtin(Builtin::List(_)) = inner_cond_layout_raw {
                 let len_symbol = env.unique_symbol();
 
                 let switch = Stmt::Switch {
@@ -2160,7 +2177,7 @@ fn decide_to_branching<'a>(
 }
 
 /*
-fn boolean_all<'a>(arena: &'a Bump, tests: Vec<(Expr<'a>, Expr<'a>, Layout<'a>)>) -> Expr<'a> {
+fn boolean_all<'a>(arena: &'a Bump, tests: Vec<(Expr<'a>, Expr<'a>, InLayout<'a>)>) -> Expr<'a> {
     let mut expr = Expr::Bool(true);
 
     for (lhs, rhs, layout) in tests.into_iter().rev() {

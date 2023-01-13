@@ -11,7 +11,9 @@ use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{
     BranchInfo, JoinPointId, ListLiteralElement, Literal, Param, ProcLayout, SelfRecursive, Stmt,
 };
-use roc_mono::layout::{Builtin, Layout, STLayoutInterner, TagIdIntType, UnionLayout};
+use roc_mono::layout::{
+    Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+};
 use roc_target::TargetInfo;
 use std::marker::PhantomData;
 
@@ -73,9 +75,9 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         buf: &mut Vec<'a, u8>,
         storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, Self>,
         layout_interner: &mut STLayoutInterner<'a>,
-        args: &'a [(Layout<'a>, Symbol)],
+        args: &'a [(InLayout<'a>, Symbol)],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
-        ret_layout: &Layout<'a>,
+        ret_layout: &InLayout<'a>,
     );
 
     /// store_args stores the args in registers and on the stack for function calling.
@@ -86,9 +88,9 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         layout_interner: &mut STLayoutInterner<'a>,
         dst: &Symbol,
         args: &[Symbol],
-        arg_layouts: &[Layout<'a>],
+        arg_layouts: &[InLayout<'a>],
         // ret_layout is needed because if it is a complex type, we pass a pointer as the first arg.
-        ret_layout: &Layout<'a>,
+        ret_layout: &InLayout<'a>,
     );
 
     /// return_complex_symbol returns the specified complex/non-primative symbol.
@@ -98,7 +100,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, Self>,
         layout_interner: &mut STLayoutInterner<'a>,
         sym: &Symbol,
-        layout: &Layout<'a>,
+        layout: &InLayout<'a>,
     );
 
     /// load_returned_complex_symbol loads a complex symbol that was returned from a function call.
@@ -108,7 +110,7 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
         storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, Self>,
         layout_interner: &mut STLayoutInterner<'a>,
         sym: &Symbol,
-        layout: &Layout<'a>,
+        layout: &InLayout<'a>,
     );
 }
 
@@ -368,7 +370,6 @@ pub struct Backend64Bit<
     // They are likely to be small enough that it is faster to use a vec and linearly scan it or keep it sorted and binary search.
     phantom_asm: PhantomData<ASM>,
     phantom_cc: PhantomData<CC>,
-    target_info: TargetInfo,
     env: &'r Env<'a>,
     layout_interner: &'r mut STLayoutInterner<'a>,
     interns: &'r mut Interns,
@@ -380,10 +381,10 @@ pub struct Backend64Bit<
     is_self_recursive: Option<SelfRecursive>,
 
     last_seen_map: MutMap<Symbol, *const Stmt<'a>>,
-    layout_map: MutMap<Symbol, Layout<'a>>,
+    layout_map: MutMap<Symbol, InLayout<'a>>,
     free_map: MutMap<*const Stmt<'a>, Vec<'a, Symbol>>,
 
-    literal_map: MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)>,
+    literal_map: MutMap<Symbol, (*const Literal<'a>, *const InLayout<'a>)>,
     join_map: MutMap<JoinPointId, Vec<'a, (u64, u64)>>,
 
     storage_manager: StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
@@ -406,7 +407,6 @@ pub fn new_backend_64bit<
     Backend64Bit {
         phantom_asm: PhantomData,
         phantom_cc: PhantomData,
-        target_info,
         env,
         interns,
         layout_interner,
@@ -453,6 +453,9 @@ impl<
     fn interns(&self) -> &Interns {
         self.interns
     }
+    fn interner(&self) -> &STLayoutInterner<'a> {
+        self.layout_interner
+    }
     fn module_interns_helpers_mut(
         &mut self,
     ) -> (
@@ -489,7 +492,7 @@ impl<
         self.storage_manager.reset();
     }
 
-    fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)> {
+    fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const InLayout<'a>)> {
         &mut self.literal_map
     }
 
@@ -497,7 +500,7 @@ impl<
         &mut self.last_seen_map
     }
 
-    fn layout_map(&mut self) -> &mut MutMap<Symbol, Layout<'a>> {
+    fn layout_map(&mut self) -> &mut MutMap<Symbol, InLayout<'a>> {
         &mut self.layout_map
     }
 
@@ -603,7 +606,7 @@ impl<
         (out, out_relocs)
     }
 
-    fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)], ret_layout: &Layout<'a>) {
+    fn load_args(&mut self, args: &'a [(InLayout<'a>, Symbol)], ret_layout: &InLayout<'a>) {
         CC::load_args(
             &mut self.buf,
             &mut self.storage_manager,
@@ -626,8 +629,8 @@ impl<
         dst: &Symbol,
         fn_name: String,
         args: &[Symbol],
-        arg_layouts: &[Layout<'a>],
-        ret_layout: &Layout<'a>,
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
     ) {
         if let Some(SelfRecursive::SelfRecursive(id)) = self.is_self_recursive {
             if &fn_name == self.proc_name.as_ref().unwrap() && self.join_map.contains_key(&id) {
@@ -653,7 +656,7 @@ impl<
         ASM::call(&mut self.buf, &mut self.relocs, fn_name);
 
         // move return value to dst.
-        match ret_layout {
+        match *ret_layout {
             single_register_integers!() => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 ASM::mov_reg64_reg64(&mut self.buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
@@ -677,10 +680,10 @@ impl<
     fn build_switch(
         &mut self,
         cond_symbol: &Symbol,
-        _cond_layout: &Layout<'a>, // cond_layout must be a integer due to potential jump table optimizations.
+        _cond_layout: &InLayout<'a>, // cond_layout must be a integer due to potential jump table optimizations.
         branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
         default_branch: &(BranchInfo<'a>, &'a Stmt<'a>),
-        ret_layout: &Layout<'a>,
+        ret_layout: &InLayout<'a>,
     ) {
         // Switches are a little complex due to keeping track of jumps.
         // In general I am trying to not have to loop over things multiple times or waste memory.
@@ -748,7 +751,7 @@ impl<
         parameters: &'a [Param<'a>],
         body: &'a Stmt<'a>,
         remainder: &'a Stmt<'a>,
-        ret_layout: &Layout<'a>,
+        ret_layout: &InLayout<'a>,
     ) {
         // Free everything to the stack to make sure they don't get messed up when looping back to this point.
         // TODO: look into a nicer solution.
@@ -785,8 +788,8 @@ impl<
         &mut self,
         id: &JoinPointId,
         args: &[Symbol],
-        arg_layouts: &[Layout<'a>],
-        _ret_layout: &Layout<'a>,
+        arg_layouts: &[InLayout<'a>],
+        _ret_layout: &InLayout<'a>,
     ) {
         self.storage_manager
             .setup_jump(self.layout_interner, &mut self.buf, id, args, arg_layouts);
@@ -801,8 +804,8 @@ impl<
         }
     }
 
-    fn build_num_abs(&mut self, dst: &Symbol, src: &Symbol, layout: &Layout<'a>) {
-        match layout {
+    fn build_num_abs(&mut self, dst: &Symbol, src: &Symbol, layout: &InLayout<'a>) {
+        match self.interner().get(*layout) {
             Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
@@ -817,8 +820,8 @@ impl<
         }
     }
 
-    fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>) {
-        match layout {
+    fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
+        match self.layout_interner.get(*layout) {
             Layout::Builtin(Builtin::Int(quadword_and_smaller!())) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
@@ -850,18 +853,18 @@ impl<
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
-        num_layout: &Layout<'a>,
-        return_layout: &Layout<'a>,
+        num_layout: &InLayout<'a>,
+        return_layout: &InLayout<'a>,
     ) {
         use Builtin::Int;
 
         let buf = &mut self.buf;
 
-        let struct_size = return_layout.stack_size(self.layout_interner, self.target_info);
+        let struct_size = self.layout_interner.stack_size(*return_layout);
 
         let base_offset = self.storage_manager.claim_stack_area(dst, struct_size);
 
-        match num_layout {
+        match self.layout_interner.get(*num_layout) {
             Layout::Builtin(Int(IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8)) => {
                 let dst_reg = self
                     .storage_manager
@@ -896,10 +899,10 @@ impl<
         }
     }
 
-    fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>) {
+    fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
         use Builtin::Int;
 
-        match layout {
+        match self.layout_interner.get(*layout) {
             Layout::Builtin(Int(IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
@@ -943,8 +946,8 @@ impl<
         }
     }
 
-    fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>) {
-        match layout {
+    fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
+        match self.layout_interner.get(*layout) {
             Layout::Builtin(Builtin::Int(
                 IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
             )) => {
@@ -999,8 +1002,8 @@ impl<
         }
     }
 
-    fn build_num_neg(&mut self, dst: &Symbol, src: &Symbol, layout: &Layout<'a>) {
-        match layout {
+    fn build_num_neg(&mut self, dst: &Symbol, src: &Symbol, layout: &InLayout<'a>) {
+        match self.layout_interner.get(*layout) {
             Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
@@ -1010,8 +1013,8 @@ impl<
         }
     }
 
-    fn build_num_sub(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>) {
-        match layout {
+    fn build_num_sub(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
+        match self.layout_interner.get(*layout) {
             Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
@@ -1026,9 +1029,9 @@ impl<
         }
     }
 
-    fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>) {
-        match arg_layout {
-            Layout::Builtin(single_register_int_builtins!()) => {
+    fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
+        match *arg_layout {
+            single_register_int_builtins!() => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -1042,8 +1045,8 @@ impl<
         }
     }
 
-    fn build_neq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>) {
-        match arg_layout {
+    fn build_neq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
+        match self.layout_interner.get(*arg_layout) {
             Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
@@ -1063,9 +1066,9 @@ impl<
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
-        arg_layout: &Layout<'a>,
+        arg_layout: &InLayout<'a>,
     ) {
-        match arg_layout {
+        match self.layout_interner.get(*arg_layout) {
             Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
@@ -1084,11 +1087,14 @@ impl<
         &mut self,
         dst: &Symbol,
         src: &Symbol,
-        arg_layout: &Layout<'a>,
-        ret_layout: &Layout<'a>,
+        arg_layout: &InLayout<'a>,
+        ret_layout: &InLayout<'a>,
     ) {
         let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
-        match (arg_layout, ret_layout) {
+        match (
+            self.layout_interner.get(*arg_layout),
+            self.layout_interner.get(*ret_layout),
+        ) {
             (
                 Layout::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)),
                 Layout::Builtin(Builtin::Float(FloatWidth::F64)),
@@ -1140,10 +1146,10 @@ impl<
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
-        arg_layout: &Layout<'a>,
+        arg_layout: &InLayout<'a>,
     ) {
-        match arg_layout {
-            Layout::Builtin(single_register_int_builtins!()) => {
+        match *arg_layout {
+            single_register_int_builtins!() => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -1162,10 +1168,10 @@ impl<
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
-        arg_layout: &Layout<'a>,
+        arg_layout: &InLayout<'a>,
     ) {
-        match arg_layout {
-            Layout::Builtin(single_register_int_builtins!()) => {
+        match *arg_layout {
+            single_register_int_builtins!() => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -1188,14 +1194,13 @@ impl<
         dst: &Symbol,
         list: &Symbol,
         index: &Symbol,
-        ret_layout: &Layout<'a>,
+        ret_layout: &InLayout<'a>,
     ) {
         let (base_offset, _) = self.storage_manager.stack_offset_and_size(list);
         let index_reg = self
             .storage_manager
             .load_to_general_reg(&mut self.buf, index);
-        let ret_stack_size =
-            ret_layout.stack_size(self.layout_interner, self.storage_manager.target_info());
+        let ret_stack_size = self.layout_interner.stack_size(*ret_layout);
         // TODO: This can be optimized with smarter instructions.
         // Also can probably be moved into storage manager at least partly.
         self.storage_manager.with_tmp_general_reg(
@@ -1206,7 +1211,7 @@ impl<
                     ASM::mov_reg64_imm64(buf, tmp, ret_stack_size as i64);
                     ASM::imul_reg64_reg64_reg64(buf, tmp, tmp, index_reg);
                     ASM::add_reg64_reg64_reg64(buf, tmp, tmp, list_ptr);
-                    match ret_layout {
+                    match *ret_layout {
                         single_register_integers!() if ret_stack_size == 8 => {
                             let dst_reg = storage_manager.claim_general_reg(buf, dst);
                             ASM::mov_reg64_mem64_offset32(buf, dst_reg, tmp, 0);
@@ -1222,8 +1227,8 @@ impl<
         &mut self,
         dst: &Symbol,
         args: &'a [Symbol],
-        arg_layouts: &[Layout<'a>],
-        ret_layout: &Layout<'a>,
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
     ) {
         // We want to delegate to the zig builtin, but it takes some extra parameters.
         // Firstly, it takes the alignment of the list.
@@ -1236,19 +1241,18 @@ impl<
         let elem = args[2];
         let elem_layout = arg_layouts[2];
 
-        let u32_layout = &Layout::Builtin(Builtin::Int(IntWidth::U32));
-        let list_alignment =
-            list_layout.alignment_bytes(self.layout_interner, self.storage_manager.target_info());
+        let u32_layout = Layout::U32;
+        let list_alignment = self.layout_interner.alignment_bytes(list_layout);
         self.load_literal(
             &Symbol::DEV_TMP,
-            u32_layout,
+            &u32_layout,
             &Literal::Int((list_alignment as i128).to_ne_bytes()),
         );
 
         // Have to pass the input element by pointer, so put it on the stack and load it's address.
         self.storage_manager
             .ensure_symbol_on_stack(&mut self.buf, &elem);
-        let u64_layout = &Layout::Builtin(Builtin::Int(IntWidth::U64));
+        let u64_layout = Layout::U64;
         let (new_elem_offset, _) = self.storage_manager.stack_offset_and_size(&elem);
         // Load address of output element into register.
         let reg = self
@@ -1257,47 +1261,40 @@ impl<
         ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
 
         // Load the elements size.
-        let elem_stack_size =
-            elem_layout.stack_size(self.layout_interner, self.storage_manager.target_info());
+        let elem_stack_size = self.layout_interner.stack_size(elem_layout);
         self.load_literal(
             &Symbol::DEV_TMP3,
-            u64_layout,
+            &u64_layout,
             &Literal::Int((elem_stack_size as i128).to_ne_bytes()),
         );
 
         // Setup the return location.
-        let base_offset = self.storage_manager.claim_stack_area(
-            dst,
-            ret_layout.stack_size(self.layout_interner, self.storage_manager.target_info()),
-        );
+        let base_offset = self
+            .storage_manager
+            .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
 
-        let ret_fields = if let Layout::Struct { field_layouts, .. } = ret_layout {
-            field_layouts
-        } else {
-            internal_error!(
-                "Expected replace to return a struct instead found: {:?}",
-                ret_layout
-            )
-        };
+        let ret_fields =
+            if let Layout::Struct { field_layouts, .. } = self.layout_interner.get(*ret_layout) {
+                field_layouts
+            } else {
+                internal_error!(
+                    "Expected replace to return a struct instead found: {:?}",
+                    ret_layout
+                )
+            };
 
         // Only return list and old element.
         debug_assert_eq!(ret_fields.len(), 2);
 
         let (out_list_offset, out_elem_offset) = if ret_fields[0] == elem_layout {
             (
-                base_offset
-                    + ret_fields[0]
-                        .stack_size(self.layout_interner, self.storage_manager.target_info())
-                        as i32,
+                base_offset + self.layout_interner.stack_size(ret_fields[0]) as i32,
                 base_offset,
             )
         } else {
             (
                 base_offset,
-                base_offset
-                    + ret_fields[0]
-                        .stack_size(self.layout_interner, self.storage_manager.target_info())
-                        as i32,
+                base_offset + self.layout_interner.stack_size(ret_fields[0]) as i32,
             )
         };
 
@@ -1319,11 +1316,11 @@ impl<
         let lowlevel_arg_layouts = bumpalo::vec![
         in self.env.arena;
                 list_layout,
-                *u32_layout,
+                u32_layout,
                 index_layout,
-                *u64_layout,
-                *u64_layout,
-                *u64_layout,
+                u64_layout,
+                u64_layout,
+                u64_layout,
         ];
 
         self.build_fn_call(
@@ -1372,29 +1369,26 @@ impl<
     fn create_array(
         &mut self,
         sym: &Symbol,
-        elem_layout: &Layout<'a>,
+        elem_layout: &InLayout<'a>,
         elems: &'a [ListLiteralElement<'a>],
     ) {
         // Allocate
         // This requires at least 8 for the refcount alignment.
         let allocation_alignment = std::cmp::max(
             8,
-            elem_layout.allocation_alignment_bytes(
-                self.layout_interner,
-                self.storage_manager.target_info(),
-            ) as u64,
+            self.layout_interner
+                .allocation_alignment_bytes(*elem_layout) as u64,
         );
 
-        let elem_size =
-            elem_layout.stack_size(self.layout_interner, self.storage_manager.target_info()) as u64;
+        let elem_size = self.layout_interner.stack_size(*elem_layout) as u64;
         let allocation_size = elem_size * elems.len() as u64 + allocation_alignment /* add space for refcount */;
-        let u64_layout = Layout::Builtin(Builtin::Int(IntWidth::U64));
+        let u64_layout = Layout::U64;
         self.load_literal(
             &Symbol::DEV_TMP,
             &u64_layout,
             &Literal::Int((allocation_size as i128).to_ne_bytes()),
         );
-        let u32_layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
+        let u32_layout = Layout::U32;
         self.load_literal(
             &Symbol::DEV_TMP2,
             &u32_layout,
@@ -1443,7 +1437,7 @@ impl<
                 }
             };
             // TODO: Expand to all types.
-            match elem_layout {
+            match self.layout_interner.get(*elem_layout) {
                 Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
                     let sym_reg = self
                         .storage_manager
@@ -1489,7 +1483,7 @@ impl<
         self.free_symbol(&Symbol::DEV_TMP3);
     }
 
-    fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]) {
+    fn create_struct(&mut self, sym: &Symbol, layout: &InLayout<'a>, fields: &'a [Symbol]) {
         self.storage_manager.create_struct(
             self.layout_interner,
             &mut self.buf,
@@ -1504,7 +1498,7 @@ impl<
         sym: &Symbol,
         structure: &Symbol,
         index: u64,
-        field_layouts: &'a [Layout<'a>],
+        field_layouts: &'a [InLayout<'a>],
     ) {
         self.storage_manager.load_field_at_index(
             self.layout_interner,
@@ -1564,8 +1558,8 @@ impl<
         )
     }
 
-    fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>) {
-        match (lit, layout) {
+    fn load_literal(&mut self, sym: &Symbol, layout: &InLayout<'a>, lit: &Literal<'a>) {
+        match (lit, self.layout_interner.get(*layout)) {
             (
                 Literal::Int(x),
                 Layout::Builtin(Builtin::Int(
@@ -1635,10 +1629,10 @@ impl<
         self.storage_manager.free_symbol(sym);
     }
 
-    fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>) {
+    fn return_symbol(&mut self, sym: &Symbol, layout: &InLayout<'a>) {
         if self.storage_manager.is_stored_primitive(sym) {
             // Just load it to the correct type of reg as a stand alone value.
-            match layout {
+            match *layout {
                 single_register_integers!() => {
                     self.storage_manager.load_to_specified_general_reg(
                         &mut self.buf,
@@ -1767,44 +1761,42 @@ impl<
 #[macro_export]
 macro_rules! sign_extended_int_builtins {
     () => {
-        Builtin::Int(IntWidth::I8 | IntWidth::I16 | IntWidth::I32 | IntWidth::I64 | IntWidth::I128)
+        Layout::I8 | Layout::I16 | Layout::I32 | Layout::I64 | Layout::I128
     };
 }
 
 #[macro_export]
 macro_rules! zero_extended_int_builtins {
     () => {
-        Builtin::Int(IntWidth::U8 | IntWidth::U16 | IntWidth::U32 | IntWidth::U64 | IntWidth::U128)
+        Layout::U8 | Layout::U16 | Layout::U32 | Layout::U64 | Layout::U128
     };
 }
 
 #[macro_export]
 macro_rules! single_register_int_builtins {
     () => {
-        Builtin::Int(
-            IntWidth::I8
-                | IntWidth::I16
-                | IntWidth::I32
-                | IntWidth::I64
-                | IntWidth::U8
-                | IntWidth::U16
-                | IntWidth::U32
-                | IntWidth::U64,
-        )
+        Layout::I8
+            | Layout::I16
+            | Layout::I32
+            | Layout::I64
+            | Layout::U8
+            | Layout::U16
+            | Layout::U32
+            | Layout::U64
     };
 }
 
 #[macro_export]
 macro_rules! single_register_integers {
     () => {
-        Layout::Builtin(Builtin::Bool | single_register_int_builtins!()) | Layout::RecursivePointer
+        Layout::BOOL | single_register_int_builtins!() | Layout::RECURSIVE_PTR
     };
 }
 
 #[macro_export]
 macro_rules! single_register_floats {
     () => {
-        Layout::Builtin(Builtin::Float(FloatWidth::F32 | FloatWidth::F64))
+        Layout::F32 | Layout::F64
     };
 }
 

@@ -17,7 +17,9 @@ use inkwell::values::{
 use inkwell::AddressSpace;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Builtin, LambdaSet, Layout, LayoutIds, STLayoutInterner};
+use roc_mono::layout::{
+    Builtin, InLayout, LambdaSet, Layout, LayoutIds, LayoutInterner, STLayoutInterner,
+};
 
 use super::build::{create_entry_block_alloca, BuilderExt};
 use super::convert::zig_list_type;
@@ -98,7 +100,7 @@ pub fn call_bitcode_fn_fixing_for_convention<'a, 'ctx, 'env>(
     layout_interner: &mut STLayoutInterner<'a>,
     bitcode_return_type: StructType<'ctx>,
     args: &[BasicValueEnum<'ctx>],
-    return_layout: &Layout<'a>,
+    return_layout: InLayout<'a>,
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
     // Calling zig bitcode, so we must follow C calling conventions.
@@ -168,8 +170,8 @@ pub(crate) fn build_transform_caller<'a, 'ctx, 'env>(
     layout_interner: &mut STLayoutInterner<'a>,
     function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
-    argument_layouts: &[Layout<'a>],
-    result_layout: Layout<'a>,
+    argument_layouts: &[InLayout<'a>],
+    result_layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
     let fn_name: &str = &format!(
         "{}_zig_function_caller",
@@ -195,8 +197,8 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
     layout_interner: &mut STLayoutInterner<'a>,
     roc_function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
-    argument_layouts: &[Layout<'a>],
-    result_layout: Layout<'a>,
+    argument_layouts: &[InLayout<'a>],
+    result_layout: InLayout<'a>,
     fn_name: &str,
 ) -> FunctionValue<'ctx> {
     debug_assert!(argument_layouts.len() <= 7);
@@ -242,7 +244,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
 
     for (argument_ptr, layout) in arguments.iter().zip(argument_layouts) {
         let basic_type =
-            basic_type_from_layout(env, layout_interner, layout).ptr_type(AddressSpace::Generic);
+            basic_type_from_layout(env, layout_interner, *layout).ptr_type(AddressSpace::Generic);
 
         let cast_ptr = env.builder.build_pointer_cast(
             argument_ptr.into_pointer_value(),
@@ -265,13 +267,13 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         closure_data_layout
             .is_represented(layout_interner)
             .is_some(),
-        closure_data_layout.runtime_representation(layout_interner),
+        closure_data_layout.runtime_representation(),
     ) {
         (false, _) => {
             // the function doesn't expect a closure argument, nothing to add
         }
         (true, layout) => {
-            let closure_type = basic_type_from_layout(env, layout_interner, &layout)
+            let closure_type = basic_type_from_layout(env, layout_interner, layout)
                 .ptr_type(AddressSpace::Generic);
 
             let closure_cast =
@@ -289,7 +291,7 @@ fn build_transform_caller_help<'a, 'ctx, 'env>(
         env,
         layout_interner,
         roc_function,
-        &result_layout,
+        result_layout,
         arguments_cast.as_slice(),
     );
 
@@ -325,7 +327,7 @@ pub fn build_inc_n_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
+    layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
     build_rc_wrapper(env, layout_interner, layout_ids, layout, Mode::IncN)
 }
@@ -335,7 +337,7 @@ pub fn build_inc_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
+    layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
     build_rc_wrapper(env, layout_interner, layout_ids, layout, Mode::Inc)
 }
@@ -344,7 +346,7 @@ pub fn build_dec_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
+    layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
     build_rc_wrapper(env, layout_interner, layout_ids, layout, Mode::Dec)
 }
@@ -353,7 +355,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
+    layout: InLayout<'a>,
     rc_operation: Mode,
 ) -> FunctionValue<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
@@ -361,7 +363,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
 
     let symbol = Symbol::GENERIC_RC_REF;
     let fn_name = layout_ids
-        .get(symbol, layout)
+        .get(symbol, &layout)
         .to_symbol_string(symbol, &env.interns);
 
     let fn_name = match rc_operation {
@@ -417,7 +419,7 @@ fn build_rc_wrapper<'a, 'ctx, 'env>(
             // even though this looks like a `load_roc_value`, that gives segfaults in practice.
             // I suspect it has something to do with the lifetime of the alloca that is created by
             // `load_roc_value`
-            let value = if layout.is_passed_by_reference(layout_interner, env.target_info) {
+            let value = if layout_interner.is_passed_by_reference(layout) {
                 value_ptr.into()
             } else {
                 env.builder
@@ -457,14 +459,14 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    layout: &Layout<'a>,
+    layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
     let symbol = Symbol::GENERIC_EQ_REF;
     let fn_name = layout_ids
-        .get(symbol, layout)
+        .get(symbol, &layout)
         .to_symbol_string(symbol, &env.interns);
 
     let function_value = match env.module.get_function(fn_name.as_str()) {
@@ -511,8 +513,8 @@ pub fn build_eq_wrapper<'a, 'ctx, 'env>(
                 .build_pointer_cast(value_ptr2, value_type, "load_opaque");
 
             // load_roc_value(env, *element_layout, elem_ptr, "get_elem")
-            let value1 = load_roc_value(env, layout_interner, *layout, value_cast1, "load_opaque");
-            let value2 = load_roc_value(env, layout_interner, *layout, value_cast2, "load_opaque");
+            let value1 = load_roc_value(env, layout_interner, layout, value_cast1, "load_opaque");
+            let value2 = load_roc_value(env, layout_interner, layout, value_cast2, "load_opaque");
 
             let result = crate::llvm::compare::generic_eq(
                 env,
@@ -542,7 +544,7 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
     layout_interner: &mut STLayoutInterner<'a>,
     roc_function: FunctionValue<'ctx>,
     closure_data_layout: LambdaSet<'a>,
-    layout: &Layout<'a>,
+    layout: InLayout<'a>,
 ) -> FunctionValue<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
@@ -609,15 +611,18 @@ pub fn build_compare_wrapper<'a, 'ctx, 'env>(
 
             let default = [value1.into(), value2.into()];
 
-            let arguments_cast = match closure_data_layout.runtime_representation(layout_interner) {
+            let closure_data_repr = closure_data_layout.runtime_representation();
+
+            let arguments_cast = match layout_interner.get(closure_data_repr) {
                 Layout::Struct {
                     field_layouts: &[], ..
                 } => {
                     // nothing to add
                     &default
                 }
-                other => {
-                    let closure_type = basic_type_from_layout(env, layout_interner, &other);
+                _ => {
+                    let closure_type =
+                        basic_type_from_layout(env, layout_interner, closure_data_repr);
                     let closure_ptr_type = closure_type.ptr_type(AddressSpace::Generic);
 
                     let closure_cast = env.builder.build_pointer_cast(

@@ -1072,7 +1072,7 @@ impl<'a> State<'a> {
             exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
-            layout_interner: GlobalLayoutInterner::with_capacity(128),
+            layout_interner: GlobalLayoutInterner::with_capacity(128, target_info),
         }
     }
 }
@@ -3072,16 +3072,13 @@ fn update<'a>(
                     }
 
                     let layout_interner = {
-                        let mut taken = GlobalLayoutInterner::with_capacity(0);
+                        let mut taken = GlobalLayoutInterner::with_capacity(0, state.target_info);
                         std::mem::swap(&mut state.layout_interner, &mut taken);
                         taken
                     };
-                    let layout_interner = layout_interner
+                    let mut layout_interner = layout_interner
                         .unwrap()
                         .expect("outstanding references to global layout interener, but we just drained all layout caches");
-
-                    #[cfg(debug_assertions)]
-                    let mut layout_interner = layout_interner;
 
                     log!("specializations complete from {:?}", module_id);
 
@@ -3092,6 +3089,7 @@ fn update<'a>(
 
                     Proc::insert_reset_reuse_operations(
                         arena,
+                        &mut layout_interner,
                         module_id,
                         ident_ids,
                         &mut update_mode_ids,
@@ -3430,7 +3428,7 @@ fn proc_layout_for<'a>(
             // is a function value
             roc_mono::ir::ProcLayout {
                 arguments: &[],
-                result: Layout::struct_no_name_order(&[]),
+                result: Layout::UNIT,
                 niche: Niche::NONE,
             }
         }

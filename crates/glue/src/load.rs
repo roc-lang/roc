@@ -150,7 +150,7 @@ pub fn load_types(
         }
     });
 
-    let layout_interner = GlobalLayoutInterner::with_capacity(128);
+    let layout_interner = GlobalLayoutInterner::with_capacity(128, target_info);
 
     let architectures = Architecture::iter();
     let mut types_and_targets = Vec::with_capacity(architectures.len());

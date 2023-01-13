@@ -4,7 +4,7 @@ use bumpalo::Bump;
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Layout, STLayoutInterner};
+use roc_mono::layout::{InLayout, STLayoutInterner};
 
 use crate::code_builder::{CodeBuilder, VmSymbolState};
 use crate::layout::{CallConv, ReturnMethod, StackMemoryFormat, WasmLayout};
@@ -91,7 +91,7 @@ pub struct Storage<'a> {
     pub return_var: Option<LocalId>,
     pub arg_types: Vec<'a, ValueType>,
     pub local_types: Vec<'a, ValueType>,
-    pub symbol_layouts: MutMap<Symbol, Layout<'a>>,
+    pub symbol_layouts: MutMap<Symbol, InLayout<'a>>,
     pub symbol_storage_map: MutMap<Symbol, StoredValue>,
     pub stack_frame_pointer: Option<LocalId>,
     pub stack_frame_size: i32,
@@ -170,11 +170,11 @@ impl<'a> Storage<'a> {
     pub fn allocate_var(
         &mut self,
         interner: &STLayoutInterner<'a>,
-        layout: Layout<'a>,
+        layout: InLayout<'a>,
         symbol: Symbol,
         kind: StoredVarKind,
     ) -> StoredValue {
-        let wasm_layout = WasmLayout::new(interner, &layout);
+        let wasm_layout = WasmLayout::new(interner, layout);
         self.symbol_layouts.insert(symbol, layout);
 
         let storage = match wasm_layout {
@@ -220,7 +220,7 @@ impl<'a> Storage<'a> {
     pub fn allocate_args(
         &mut self,
         interner: &STLayoutInterner<'a>,
-        args: &[(Layout<'a>, Symbol)],
+        args: &[(InLayout<'a>, Symbol)],
         code_builder: &mut CodeBuilder,
         arena: &'a Bump,
     ) {
@@ -229,7 +229,7 @@ impl<'a> Storage<'a> {
 
         for (layout, symbol) in args {
             self.symbol_layouts.insert(*symbol, *layout);
-            let wasm_layout = WasmLayout::new(interner, layout);
+            let wasm_layout = WasmLayout::new(interner, *layout);
             let local_index = self.arg_types.len() as u32;
 
             let storage = match wasm_layout {
