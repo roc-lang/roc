@@ -2437,7 +2437,9 @@ fn unify_tag_ext<M: MetaCollector>(
             )
         }
         TagExt::Any(_) => true,
-    };
+    }
+    // Tag unions are always extendable during specialization
+    || M::IS_LATE;
     if legal_unification {
         if flip_for_unify {
             unify_pool(env, pool, var, ext.var(), mode)
