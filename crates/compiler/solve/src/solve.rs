@@ -4068,6 +4068,16 @@ fn deep_copy_var_help(
         }};
     }
 
+    // When generalizing annotations with `Openness` extensions
+    // we want to promote them to `Any`, so that usages at
+    // specialized sites can grow unboundedly and are not bound to
+    // openness-polymorphism.
+    macro_rules! copy_tag_ext {
+        ($ext:expr) => {
+            TagExt::Any(work!($ext.var()))
+        };
+    }
+
     while let Some(DeepCopyVarWork { source: var, copy }) = stack.pop() {
         visited.push(var);
         pool.push(copy);
@@ -4141,17 +4151,17 @@ fn deep_copy_var_help(
                     TagUnion(tags, ext_var) => {
                         let union_tags = copy_union!(tags);
 
-                        TagUnion(union_tags, ext_var.map(|v| work!(v)))
+                        TagUnion(union_tags, copy_tag_ext!(ext_var))
                     }
 
                     FunctionOrTagUnion(tag_name, symbol, ext_var) => {
-                        FunctionOrTagUnion(tag_name, symbol, ext_var.map(|v| work!(v)))
+                        FunctionOrTagUnion(tag_name, symbol, copy_tag_ext!(ext_var))
                     }
 
                     RecursiveTagUnion(rec_var, tags, ext_var) => {
                         let union_tags = copy_union!(tags);
 
-                        RecursiveTagUnion(work!(rec_var), union_tags, ext_var.map(|v| work!(v)))
+                        RecursiveTagUnion(work!(rec_var), union_tags, copy_tag_ext!(ext_var))
                     }
                 };
 
