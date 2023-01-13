@@ -2405,6 +2405,41 @@ fn close_uninhabited_extended_union(subs: &mut Subs, mut var: Variable) {
     }
 }
 
+#[must_use]
+fn unify_tag_ext<M: MetaCollector>(
+    env: &mut Env,
+    pool: &mut Pool,
+    ext: TagExt,
+    var: Variable,
+    mode: Mode,
+) -> Outcome<M> {
+    let legal_unification = match ext {
+        TagExt::Openness(_) => {
+            // Openness extensions can either unify with empty tag unions (marking them as closed),
+            // or flex/rigids. Anything else is a change in the monomorphic size of the tag and not
+            // a reflection of the polymorphism of the tag, an error.
+            match env.subs.get_content_without_compacting(var) {
+                FlexVar(..) | RigidVar(..) | FlexAbleVar(..) | RigidAbleVar(..) => true,
+                Structure(s) => match s {
+                    FlatType::EmptyTagUnion => true,
+                    _ => false,
+                },
+                Error => {
+                    // errors propagate
+                    true
+                }
+                _ => false,
+            }
+        }
+        TagExt::Any(_) => true,
+    };
+    if legal_unification {
+        unify_pool(env, pool, ext.var(), var, mode)
+    } else {
+        mismatch!()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 fn unify_tag_unions<M: MetaCollector>(
@@ -2454,7 +2489,10 @@ fn unify_tag_unions<M: MetaCollector>(
     if separate.only_in_1.is_empty() {
         if separate.only_in_2.is_empty() {
             let ext_outcome = if ctx.mode.is_eq() {
-                // TODO(openness)
+                // Neither extension can grow in monomorphic tag sizes,
+                // so the extension must either be [] or a polymorphic extension variable like `a`.
+                // As such we can always unify directly even if the extensions are measuring
+                // openness.
                 unify_pool(env, pool, ext1.var(), ext2.var(), ctx.mode)
             } else {
                 // In a presence context, we don't care about ext2 being equal to ext1
@@ -2500,11 +2538,13 @@ fn unify_tag_unions<M: MetaCollector>(
                 ext1 = new_ext;
             }
 
-            let ext_outcome = unify_pool(env, pool, ext1.var(), extra_tags_in_2, ctx.mode);
+            let ext_outcome = unify_tag_ext(env, pool, ext1, extra_tags_in_2, ctx.mode);
 
             if !ext_outcome.mismatches.is_empty() {
                 return ext_outcome;
             }
+
+            let combined_ext = ext1.map(|_| extra_tags_in_2);
 
             let mut shared_tags_outcome = unify_shared_tags(
                 env,
@@ -2512,7 +2552,7 @@ fn unify_tag_unions<M: MetaCollector>(
                 ctx,
                 shared_tags,
                 OtherTags2::Empty,
-                ext1.map(|_| extra_tags_in_2),
+                combined_ext,
                 recursion_var,
             );
 
@@ -2550,7 +2590,7 @@ fn unify_tag_unions<M: MetaCollector>(
                 ext2 = new_ext;
             }
 
-            let ext_outcome = unify_pool(env, pool, extra_tags_in_1, ext2.var(), ctx.mode);
+            let ext_outcome = unify_tag_ext(env, pool, ext2, extra_tags_in_1, ctx.mode);
 
             if !ext_outcome.mismatches.is_empty() {
                 return ext_outcome;
@@ -2562,13 +2602,15 @@ fn unify_tag_unions<M: MetaCollector>(
             false
         };
 
+        let combined_ext = ext2.map(|_| extra_tags_in_1);
+
         let shared_tags_outcome = unify_shared_tags(
             env,
             pool,
             ctx,
             shared_tags,
             OtherTags2::Empty,
-            ext2.map(|_| extra_tags_in_1),
+            combined_ext,
             recursion_var,
         );
         total_outcome.union(shared_tags_outcome);
@@ -2589,7 +2631,11 @@ fn unify_tag_unions<M: MetaCollector>(
         } else {
             Content::FlexVar(None)
         };
+        // If ext1 or ext2 are `Openness`, we will necessarily get an error below when unifying
+        // the separate tags since `Openness` cannot grow in terms of width of tags. As such, the
+        // unified type, when it exists, must always be include an `Any` extension.
         let ext = TagExt::Any(fresh(env, pool, ctx, ext_content));
+
         let flat_type1 = FlatType::TagUnion(unique_tags1, ext);
         let flat_type2 = FlatType::TagUnion(unique_tags2, ext);
 
@@ -2613,7 +2659,7 @@ fn unify_tag_unions<M: MetaCollector>(
         let mut total_outcome = Outcome::default();
         let snapshot = env.subs.snapshot();
 
-        let ext1_outcome = unify_pool(env, pool, ext1.var(), sub2, ctx.mode);
+        let ext1_outcome = unify_tag_ext(env, pool, ext1, sub2, ctx.mode);
         if !ext1_outcome.mismatches.is_empty() {
             env.subs.rollback_to(snapshot);
             return ext1_outcome;
@@ -2621,7 +2667,7 @@ fn unify_tag_unions<M: MetaCollector>(
         total_outcome.union(ext1_outcome);
 
         if ctx.mode.is_eq() {
-            let ext2_outcome = unify_pool(env, pool, sub1, ext2.var(), ctx.mode);
+            let ext2_outcome = unify_tag_ext(env, pool, ext2, sub1, ctx.mode);
             if !ext2_outcome.mismatches.is_empty() {
                 env.subs.rollback_to(snapshot);
                 return ext2_outcome;
