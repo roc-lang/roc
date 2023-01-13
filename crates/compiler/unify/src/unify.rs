@@ -2426,18 +2426,16 @@ fn unify_tag_ext<M: MetaCollector>(
             // Openness extensions can either unify with empty tag unions (marking them as closed),
             // or flex/rigids. Anything else is a change in the monomorphic size of the tag and not
             // a reflection of the polymorphism of the tag, an error.
-            match env.subs.get_content_without_compacting(var) {
-                FlexVar(..) | RigidVar(..) | FlexAbleVar(..) | RigidAbleVar(..) => true,
-                Structure(s) => match s {
-                    FlatType::EmptyTagUnion => true,
-                    _ => false,
-                },
-                Error => {
+            matches!(
+                env.subs.get_content_without_compacting(var),
+                FlexVar(..)
+                    | RigidVar(..)
+                    | FlexAbleVar(..)
+                    | RigidAbleVar(..)
+                    | Structure(FlatType::EmptyTagUnion)
                     // errors propagate
-                    true
-                }
-                _ => false,
-            }
+                    | Error,
+            )
         }
         TagExt::Any(_) => true,
     };

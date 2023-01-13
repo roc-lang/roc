@@ -1017,7 +1017,7 @@ impl VarStore {
         let next = (subs.utable.len()) as u32;
         debug_assert!(next >= Variable::FIRST_USER_SPACE_VAR.0);
 
-        VarStore { next: next }
+        VarStore { next }
     }
 
     pub fn peek(&mut self) -> u32 {
