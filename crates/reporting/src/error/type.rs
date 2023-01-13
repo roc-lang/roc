@@ -3168,16 +3168,16 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
         }
         (Infinite, Infinite) | (Error, Error) => false,
         (FlexVar(v1), FlexVar(v2)) | (RigidVar(v1), RigidVar(v2)) => v1 != v2,
-        (FlexAbleVar(v1, set1), FlexAbleVar(v2, set2))
-        | (RigidAbleVar(v1, set1), RigidAbleVar(v2, set2)) => {
+        (FlexAbleVar(v1, _set1), FlexAbleVar(v2, _set2))
+        | (RigidAbleVar(v1, _set1), RigidAbleVar(v2, _set2)) => {
             #[cfg(debug_assertions)]
             {
                 if v1 == v2 {
                     // If v1 == v2, then the sets should be equal too!
-                    debug_assert_eq!(set1.len(), set2.len());
-                    debug_assert!(set1
+                    debug_assert_eq!(_set1.len(), _set2.len());
+                    debug_assert!(_set1
                         .sorted_iter()
-                        .zip(set2.sorted_iter())
+                        .zip(_set2.sorted_iter())
                         .all(|(t1, t2)| t1 == t2));
                 }
             }
