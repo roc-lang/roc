@@ -15,7 +15,7 @@ jobs:
     runs-on: [self-hosted, macOS, X64]
     timeout-minutes: 90
     env:
-      RUSTC_WRAPPER: /Users/username1/.cargo/bin
+      RUSTC_WRAPPER: /Users/username1/.cargo/bin/sccache
     steps:
       - uses: actions/checkout@v2
         with:
