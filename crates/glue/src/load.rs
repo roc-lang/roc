@@ -156,6 +156,7 @@ pub fn load_types(
         };
         let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
         let mut glue_procs_by_layout = MutMap::default();
+        let mut extern_names = MutMap::default();
 
         // Populate glue getters/setters for all relevant variables
         for var in variables.clone() {
@@ -172,10 +173,12 @@ pub fn load_types(
                     arena.alloc(layout),
                 );
 
+                extern_names.extend(answer.extern_names);
+
                 // Even though generate_glue_procs does more work than we need it to,
                 // it's important that we use it in order to make sure we get exactly
                 // the same names that mono::ir did for code gen!
-                for (layout, glue_procs) in answer {
+                for (layout, glue_procs) in answer.getters {
                     let mut names =
                         bumpalo::collections::Vec::with_capacity_in(glue_procs.len(), arena);
 
@@ -189,7 +192,7 @@ pub fn load_types(
                         // the structs and fields.
                         //
                         // Store them as strings, because symbols won't be useful to glue generators!
-                        names.push(dbg!(name.as_str(&interns)).to_string());
+                        names.push(name.as_str(&interns).to_string());
                     }
 
                     glue_procs_by_layout.insert(layout, names.into_bump_slice());
@@ -203,6 +206,7 @@ pub fn load_types(
             variables.clone(),
             arena.alloc(interns),
             glue_procs_by_layout,
+            extern_names,
             layout_cache,
             target_info,
         );

@@ -3271,6 +3271,107 @@ fn rollback_typestate(
     }
 }
 
+struct HostExposedProc<'a> {
+    proc: Proc<'a>,
+    top_level: ProcLayout<'a>,
+}
+
+impl<'a> HostExposedProc<'a> {
+    fn new(
+        env: &mut Env<'a, '_>,
+        procs: &mut Procs<'a>,
+        lambda_name: LambdaName<'a>,
+        layout_cache: &mut LayoutCache<'a>,
+        name: Symbol,
+        layout: RawFunctionLayout<'a>,
+    ) -> Self {
+        match layout {
+            RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout) => {
+                let assigned = env.unique_symbol();
+
+                let mut argument_symbols = Vec::with_capacity_in(argument_layouts.len(), env.arena);
+                let mut proc_arguments =
+                    Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
+                let mut top_level_arguments =
+                    Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
+
+                for layout in argument_layouts {
+                    let symbol = env.unique_symbol();
+
+                    proc_arguments.push((*layout, symbol));
+
+                    argument_symbols.push(symbol);
+                    top_level_arguments.push(*layout);
+                }
+
+                // the proc needs to take an extra closure argument
+                let lambda_set_layout = Layout::LambdaSet(lambda_set);
+                proc_arguments.push((lambda_set_layout, Symbol::ARG_CLOSURE));
+
+                // this should also be reflected in the TopLevel signature
+                top_level_arguments.push(lambda_set_layout);
+
+                let hole = env.arena.alloc(Stmt::Ret(assigned));
+
+                let body = match_on_lambda_set(
+                    env,
+                    layout_cache,
+                    procs,
+                    lambda_set,
+                    Symbol::ARG_CLOSURE,
+                    argument_symbols.into_bump_slice(),
+                    argument_layouts,
+                    return_layout,
+                    assigned,
+                    hole,
+                );
+
+                let proc = Proc {
+                    name: LambdaName::no_niche(name),
+                    args: proc_arguments.into_bump_slice(),
+                    body,
+                    closure_data_layout: None,
+                    ret_layout: *return_layout,
+                    is_self_recursive: SelfRecursive::NotSelfRecursive,
+                    must_own_arguments: false,
+                    host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+                };
+
+                let top_level = ProcLayout::new(
+                    env.arena,
+                    top_level_arguments.into_bump_slice(),
+                    Niche::NONE,
+                    *return_layout,
+                );
+
+                Self { proc, top_level }
+            }
+
+            RawFunctionLayout::ZeroArgumentThunk(result) => {
+                let assigned = env.unique_symbol();
+                let hole = env.arena.alloc(Stmt::Ret(assigned));
+                let forced = force_thunk(env, lambda_name.name(), result, assigned, hole);
+
+                let lambda_name = LambdaName::no_niche(name);
+                let proc = Proc {
+                    name: lambda_name,
+                    args: &[],
+                    body: forced,
+                    closure_data_layout: None,
+                    ret_layout: result,
+                    is_self_recursive: SelfRecursive::NotSelfRecursive,
+                    must_own_arguments: false,
+                    host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+                };
+
+                let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, layout);
+
+                Self { proc, top_level }
+            }
+        }
+    }
+}
+
 /// Specialize a single proc.
 ///
 /// The caller should snapshot and rollback the type state before and after calling this function,
@@ -3329,107 +3430,19 @@ fn specialize_proc_help<'a>(
         let mut aliases = BumpMap::new_in(env.arena);
 
         for (symbol, variable) in host_exposed_variables {
-            let layout = layout_cache
+            let raw_layout = layout_cache
                 .raw_from_var(env.arena, *variable, env.subs)
                 .unwrap();
 
             let name = env.unique_symbol();
 
-            match layout {
-                RawFunctionLayout::Function(argument_layouts, lambda_set, return_layout) => {
-                    let assigned = env.unique_symbol();
+            let HostExposedProc {
+                proc, top_level, ..
+            } = HostExposedProc::new(env, procs, lambda_name, layout_cache, name, raw_layout);
 
-                    let mut argument_symbols =
-                        Vec::with_capacity_in(argument_layouts.len(), env.arena);
-                    let mut proc_arguments =
-                        Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
-                    let mut top_level_arguments =
-                        Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
+            procs.specialized.insert_specialized(name, top_level, proc);
 
-                    for layout in argument_layouts {
-                        let symbol = env.unique_symbol();
-
-                        proc_arguments.push((*layout, symbol));
-
-                        argument_symbols.push(symbol);
-                        top_level_arguments.push(*layout);
-                    }
-
-                    // the proc needs to take an extra closure argument
-                    let lambda_set_layout = Layout::LambdaSet(lambda_set);
-                    proc_arguments.push((lambda_set_layout, Symbol::ARG_CLOSURE));
-
-                    // this should also be reflected in the TopLevel signature
-                    top_level_arguments.push(lambda_set_layout);
-
-                    let hole = env.arena.alloc(Stmt::Ret(assigned));
-
-                    let body = match_on_lambda_set(
-                        env,
-                        layout_cache,
-                        procs,
-                        lambda_set,
-                        Symbol::ARG_CLOSURE,
-                        argument_symbols.into_bump_slice(),
-                        argument_layouts,
-                        return_layout,
-                        assigned,
-                        hole,
-                    );
-
-                    let proc = Proc {
-                        name: LambdaName::no_niche(name),
-                        args: proc_arguments.into_bump_slice(),
-                        body,
-                        closure_data_layout: None,
-                        ret_layout: *return_layout,
-                        is_self_recursive: SelfRecursive::NotSelfRecursive,
-                        must_own_arguments: false,
-                        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
-                    };
-
-                    let top_level = ProcLayout::new(
-                        env.arena,
-                        top_level_arguments.into_bump_slice(),
-                        Niche::NONE,
-                        *return_layout,
-                    );
-
-                    procs.specialized.insert_specialized(name, top_level, proc);
-
-                    aliases.insert(*symbol, (name, top_level, layout));
-                }
-                RawFunctionLayout::ZeroArgumentThunk(result) => {
-                    let assigned = env.unique_symbol();
-                    let hole = env.arena.alloc(Stmt::Ret(assigned));
-                    let forced = force_thunk(env, lambda_name.name(), result, assigned, hole);
-
-                    let lambda_name = LambdaName::no_niche(name);
-                    let proc = Proc {
-                        name: lambda_name,
-                        args: &[],
-                        body: forced,
-                        closure_data_layout: None,
-                        ret_layout: result,
-                        is_self_recursive: SelfRecursive::NotSelfRecursive,
-                        must_own_arguments: false,
-                        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
-                    };
-
-                    let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, layout);
-
-                    procs.specialized.insert_specialized(name, top_level, proc);
-
-                    aliases.insert(
-                        *symbol,
-                        (
-                            name,
-                            ProcLayout::new(env.arena, &[], Niche::NONE, result),
-                            layout,
-                        ),
-                    );
-                }
-            }
+            aliases.insert(*symbol, (name, top_level, raw_layout));
         }
 
         HostExposedLayouts::HostExposed {
@@ -10902,16 +10915,26 @@ pub struct GlueProc<'a> {
     pub proc: Proc<'a>,
 }
 
+pub struct GlueProcs<'a> {
+    pub getters: Vec<'a, (Layout<'a>, Vec<'a, GlueProc<'a>>)>,
+    pub extern_names: Vec<'a, (LambdaSet<'a>, String)>,
+}
+
 pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
     home: ModuleId,
     interns: &mut Interns,
     arena: &'a Bump,
     layout_interner: &mut I,
     layout: &'a Layout<'a>,
-) -> Vec<'a, (Layout<'a>, Vec<'a, GlueProc<'a>>)> {
-    let mut answer: Vec<'a, (Layout<'a>, Vec<'a, GlueProc<'a>>)> = Vec::new_in(arena);
+) -> GlueProcs<'a> {
+    let mut answer = GlueProcs {
+        getters: Vec::new_in(arena),
+        extern_names: Vec::new_in(arena),
+    };
+
     let mut stack: Vec<'a, Layout<'a>> = Vec::from_iter_in([*layout], arena);
     let mut next_unique_id = 0;
+    let mut next_extern_id = 0;
 
     macro_rules! handle_struct_field_layouts {
         ($field_layouts: expr) => {{
@@ -10929,7 +10952,7 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
                     $field_layouts,
                 );
 
-                answer.push((*layout, procs));
+                answer.getters.push((*layout, procs));
             }
 
             stack.extend($field_layouts.iter().copied());
@@ -10954,7 +10977,7 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
                     $field_layouts,
                 );
 
-                answer.push((*layout, procs));
+                answer.getters.push((*layout, procs));
             }
 
             stack.extend($field_layouts.iter().copied());
@@ -10999,6 +11022,10 @@ pub fn generate_glue_procs<'a, I: Interner<'a, Layout<'a>>>(
                 }
             },
             Layout::LambdaSet(lambda_set) => {
+                let symbol = unique_glue_symbol(arena, &mut next_unique_id, home, interns);
+                let string = String::from(symbol.as_str(interns));
+                answer.extern_names.push((lambda_set, string));
+
                 // TODO generate closure caller
                 stack.push(lambda_set.runtime_representation(layout_interner))
             }

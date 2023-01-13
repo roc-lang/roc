@@ -3403,16 +3403,18 @@ fn finish_specialization<'a>(
                     layout,
                 );
 
-                glue_getters.extend(all_glue_procs.iter().flat_map(|(_, glue_procs)| {
+                glue_getters.extend(all_glue_procs.getters.iter().flat_map(|(_, glue_procs)| {
                     glue_procs
                         .iter()
                         .map(|glue_proc| (glue_proc.name, glue_proc.proc_layout))
                 }));
-                procedures.extend(all_glue_procs.into_iter().flat_map(|(_, glue_procs)| {
-                    glue_procs.into_iter().map(|glue_proc| {
-                        (((glue_proc.name), glue_proc.proc_layout), glue_proc.proc)
-                    })
-                }));
+                procedures.extend(all_glue_procs.getters.into_iter().flat_map(
+                    |(_, glue_procs)| {
+                        glue_procs.into_iter().map(|glue_proc| {
+                            (((glue_proc.name), glue_proc.proc_layout), glue_proc.proc)
+                        })
+                    },
+                ));
             }
         }
     }

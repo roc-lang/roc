@@ -12,8 +12,8 @@ use roc_module::{
     symbol::{Interns, Symbol},
 };
 use roc_mono::layout::{
-    cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
-    LayoutCache, LayoutInterner, UnionLayout,
+    cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant,
+    LambdaSet, Layout, LayoutCache, LayoutInterner, UnionLayout,
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -67,12 +67,14 @@ impl Types {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new<'a, I: Iterator<Item = Variable>>(
         arena: &'a Bump,
         subs: &'a Subs,
         variables: I,
         interns: &'a Interns,
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
+        extern_names: MutMap<LambdaSet<'a>, String>,
         layout_cache: LayoutCache<'a>,
         target: TargetInfo,
     ) -> Self {
@@ -83,6 +85,7 @@ impl Types {
             interns,
             layout_cache,
             glue_procs_by_layout,
+            extern_names,
             target,
         );
 
@@ -818,6 +821,7 @@ struct Env<'a> {
     subs: &'a Subs,
     layout_cache: LayoutCache<'a>,
     glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
+    extern_names: MutMap<LambdaSet<'a>, String>,
     interns: &'a Interns,
     struct_names: Structs,
     enum_names: Enums,
@@ -833,6 +837,7 @@ impl<'a> Env<'a> {
         interns: &'a Interns,
         layout_cache: LayoutCache<'a>,
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
+        extern_names: MutMap<LambdaSet<'a>, String>,
         target: TargetInfo,
     ) -> Self {
         Env {
@@ -844,6 +849,7 @@ impl<'a> Env<'a> {
             pending_recursive_types: Default::default(),
             known_recursive_types: Default::default(),
             glue_procs_by_layout,
+            extern_names,
             layout_cache,
             target,
         }
@@ -967,23 +973,36 @@ fn add_type_help<'a>(
             let args = env.subs.get_subs_slice(*args);
             let mut arg_type_ids = Vec::with_capacity(args.len());
 
+            let name = format!("RocFunction_{:?}", closure_var);
+
+            let lambda_set_layout = env
+                .layout_cache
+                .from_var(env.arena, *closure_var, env.subs)
+                .expect("Something weird ended up in the content");
+
+            let lambda_set = match lambda_set_layout {
+                Layout::LambdaSet(lambda_set) => lambda_set,
+                _ => unreachable!(),
+            };
+
+            // String::from("roc__mainForHost_1__Fx2_caller");
+            let extern_name = env.extern_names.get(&lambda_set).cloned().unwrap();
+
+            dbg!(&extern_name, &name);
+
             for arg_var in args {
                 let arg_layout = env
                     .layout_cache
                     .from_var(env.arena, *arg_var, env.subs)
                     .expect("Something weird ended up in the content");
 
+                dbg!(&arg_layout);
+
                 arg_type_ids.push(add_type_help(env, arg_layout, *arg_var, None, types));
             }
 
-            let lambda_set_type_id = {
-                let lambda_set_layout = env
-                    .layout_cache
-                    .from_var(env.arena, *closure_var, env.subs)
-                    .expect("Something weird ended up in the content");
-
-                add_type_help(env, lambda_set_layout, *closure_var, None, types)
-            };
+            let lambda_set_type_id =
+                add_type_help(env, lambda_set_layout, *closure_var, None, types);
 
             let ret_type_id = {
                 let ret_layout = env
@@ -991,12 +1010,10 @@ fn add_type_help<'a>(
                     .from_var(env.arena, *ret_var, env.subs)
                     .expect("Something weird ended up in the content");
 
+                dbg!(ret_layout);
+
                 add_type_help(env, ret_layout, *ret_var, None, types)
             };
-
-            let name = format!("RocFunction_{:?}", closure_var);
-
-            let extern_name = String::from("roc__mainForHost_1__Fx2_caller");
 
             let fn_type_id = add_function(env, name, types, layout, |name| {
                 RocType::Function(RocFn {
@@ -1654,7 +1671,7 @@ fn tag_union_type_from_layout<'a>(
 
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
-                tag_name: tag_name.to_string(),
+                tag_name,
                 payload,
             }
         }
@@ -1670,7 +1687,7 @@ fn tag_union_type_from_layout<'a>(
 
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
-                tag_name: tag_name.to_string(),
+                tag_name,
                 payload: RocSingleTagPayload::HasNoClosure {
                     // Builtins have no closures
                     payload_fields: vec![type_id],

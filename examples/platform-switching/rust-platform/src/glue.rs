@@ -102,11 +102,11 @@ pub struct RocFunction_65 {
 impl RocFunction_65 {
     pub fn force_thunk(self, ) -> Op {
         extern "C" {
-             fn roc__mainForHost_1__Fx2_caller(output: *mut Op, );
+             fn roc__getter__5(output: *mut Op, );
         }
 
         let mut output = std::mem::MaybeUninit::uninit();
-        unsafe { roc__mainForHost_1__Fx2_caller(output.as_mut_ptr(), ) };
+        unsafe { roc__getter__5(output.as_mut_ptr(), ) };
         unsafe { output.assume_init() }
     }
 }
@@ -127,11 +127,11 @@ pub struct RocFunction_67 {
 impl RocFunction_67 {
     pub fn force_thunk(self, ) -> Op {
         extern "C" {
-             fn roc__mainForHost_1__Fx2_caller(output: *mut Op, );
+             fn roc__getter__5(output: *mut Op, );
         }
 
         let mut output = std::mem::MaybeUninit::uninit();
-        unsafe { roc__mainForHost_1__Fx2_caller(output.as_mut_ptr(), ) };
+        unsafe { roc__getter__5(output.as_mut_ptr(), ) };
         unsafe { output.assume_init() }
     }
 }
