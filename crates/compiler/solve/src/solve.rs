@@ -33,8 +33,8 @@ use roc_types::subs::{
     UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasKind, AliasShared, Category, OptAbleVar, Polarity, Reason,
-    RecordField, Type, TypeExtension, TypeTag, Types, Uls,
+    gather_fields_unsorted_iter, AliasKind, AliasShared, Category, IsImplicitOpennessVar,
+    OptAbleVar, Polarity, Reason, RecordField, Type, TypeExtension, TypeTag, Types, Uls,
 };
 use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Env as UEnv, Mode, Obligated,
@@ -2658,7 +2658,7 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
 
-            TagUnion(tags) => {
+            TagUnion(tags, ext_openness) => {
                 let ext_slice = types.get_type_arguments(typ_index);
 
                 // An empty tags is inefficient (but would be correct)
@@ -2666,26 +2666,41 @@ fn type_to_variable<'a>(
                 debug_assert!(!tags.is_empty() || !ext_slice.is_empty());
 
                 let (union_tags, ext) = type_to_union_tags(
-                    subs, rank, pools, arena, types, tags, ext_slice, &mut stack,
+                    subs,
+                    rank,
+                    pools,
+                    arena,
+                    types,
+                    tags,
+                    ext_slice,
+                    ext_openness,
+                    &mut stack,
                 );
                 let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
-            FunctionOrTagUnion(symbol) => {
+            FunctionOrTagUnion(symbol, ext_openness) => {
                 let ext_slice = types.get_type_arguments(typ_index);
                 let tag_name = types.get_tag_name(&typ_index).clone();
 
                 debug_assert!(ext_slice.len() <= 1);
-                let temp_ext_var = match ext_slice.into_iter().next() {
-                    Some(ext) => helper!(ext),
-                    None => roc_types::subs::Variable::EMPTY_TAG_UNION,
+                let temp_ext = match ext_slice.into_iter().next() {
+                    Some(ext) => {
+                        let var = helper!(ext);
+                        if ext_openness.0 {
+                            TagExt::Openness(var)
+                        } else {
+                            TagExt::Any(var)
+                        }
+                    }
+                    None => TagExt::Any(roc_types::subs::Variable::EMPTY_TAG_UNION),
                 };
 
                 let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
                     subs,
                     UnionTags::default(),
-                    TagExt::Any(temp_ext_var),
+                    temp_ext,
                 )
                 .expect("extension var could not be seen as a tag union");
 
@@ -2701,7 +2716,7 @@ fn type_to_variable<'a>(
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
-            RecursiveTagUnion(rec_var, tags) => {
+            RecursiveTagUnion(rec_var, tags, ext_openness) => {
                 let ext_slice = types.get_type_arguments(typ_index);
 
                 // An empty tags is inefficient (but would be correct)
@@ -2709,7 +2724,15 @@ fn type_to_variable<'a>(
                 debug_assert!(!tags.is_empty() || !ext_slice.is_empty());
 
                 let (union_tags, ext) = type_to_union_tags(
-                    subs, rank, pools, arena, types, tags, ext_slice, &mut stack,
+                    subs,
+                    rank,
+                    pools,
+                    arena,
+                    types,
+                    tags,
+                    ext_slice,
+                    ext_openness,
+                    &mut stack,
                 );
                 let content =
                     Content::Structure(FlatType::RecursiveTagUnion(rec_var, union_tags, ext));
@@ -3076,7 +3099,7 @@ fn roc_result_to_var(
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> Variable {
     match types[result_type] {
-        TypeTag::TagUnion(tags) => {
+        TypeTag::TagUnion(tags, _ext_openness) => {
             let ext_slice = types.get_type_arguments(result_type);
 
             debug_assert!(ext_slice.is_empty());
@@ -3385,6 +3408,7 @@ fn type_to_union_tags(
     types: &mut Types,
     union_tags: UnionTags,
     opt_ext_slice: Slice<TypeTag>,
+    ext_openness: IsImplicitOpennessVar,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> (UnionTags, TagExt) {
     use bumpalo::collections::Vec;
@@ -3411,14 +3435,18 @@ fn type_to_union_tags(
         Some(ext) => {
             let mut tag_vars = Vec::with_capacity_in(tags.len(), arena);
 
-            let temp_ext_var =
-                RegisterVariable::with_stack(subs, rank, pools, arena, types, ext, stack);
-            let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
-                subs,
-                UnionTags::default(),
-                TagExt::Any(temp_ext_var),
-            )
-            .expect("extension var could not be seen as tag union");
+            let temp_ext = {
+                let temp_ext_var =
+                    RegisterVariable::with_stack(subs, rank, pools, arena, types, ext, stack);
+                if ext_openness.0 {
+                    TagExt::Openness(temp_ext_var)
+                } else {
+                    TagExt::Any(temp_ext_var)
+                }
+            };
+            let (it, ext) =
+                roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext)
+                    .expect("extension var could not be seen as tag union");
 
             tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
 

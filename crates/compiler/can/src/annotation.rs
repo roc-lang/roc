@@ -9,8 +9,8 @@ use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
-    name_type_var, AbilitySet, Alias, AliasCommon, AliasKind, AliasVar, LambdaSet, OptAbleType,
-    OptAbleVar, RecordField, Type, TypeExtension,
+    name_type_var, AbilitySet, Alias, AliasCommon, AliasKind, AliasVar, IsImplicitOpennessVar,
+    LambdaSet, OptAbleType, OptAbleVar, RecordField, Type, TypeExtension,
 };
 
 #[derive(Clone, Debug)]
@@ -876,7 +876,7 @@ fn can_annotation_help(
             todo!("tuple");
         }
         Record { fields, ext } => {
-            let ext_type = can_extension_type(
+            let (ext_type, is_implicit_openness) = can_extension_type(
                 env,
                 pol,
                 scope,
@@ -888,13 +888,21 @@ fn can_annotation_help(
                 roc_problem::can::ExtensionTypeKind::Record,
             );
 
+            debug_assert!(
+                !is_implicit_openness.0,
+                "records should never be implicitly inferred open"
+            );
+
             if fields.is_empty() {
                 match ext {
                     Some(_) => {
                         // just `a` does not mean the same as `{}a`, so even
                         // if there are no fields, still make this a `Record`,
                         // not an EmptyRec
-                        Type::Record(Default::default(), TypeExtension::from_type(ext_type))
+                        Type::Record(
+                            Default::default(),
+                            TypeExtension::from_type(ext_type, is_implicit_openness),
+                        )
                     }
 
                     None => Type::EmptyRec,
@@ -912,11 +920,14 @@ fn can_annotation_help(
                     references,
                 );
 
-                Type::Record(field_types, TypeExtension::from_type(ext_type))
+                Type::Record(
+                    field_types,
+                    TypeExtension::from_type(ext_type, is_implicit_openness),
+                )
             }
         }
         TagUnion { tags, ext, .. } => {
-            let ext_type = can_extension_type(
+            let (ext_type, is_implicit_openness) = can_extension_type(
                 env,
                 pol,
                 scope,
@@ -934,7 +945,10 @@ fn can_annotation_help(
                         // just `a` does not mean the same as `[]`, so even
                         // if there are no fields, still make this a `TagUnion`,
                         // not an EmptyTagUnion
-                        Type::TagUnion(Default::default(), TypeExtension::from_type(ext_type))
+                        Type::TagUnion(
+                            Default::default(),
+                            TypeExtension::from_type(ext_type, is_implicit_openness),
+                        )
                     }
 
                     None => Type::EmptyTagUnion,
@@ -957,7 +971,10 @@ fn can_annotation_help(
                 // in theory we save a lot of time by sorting once here
                 insertion_sort_by(&mut tag_types, |a, b| a.0.cmp(&b.0));
 
-                Type::TagUnion(tag_types, TypeExtension::from_type(ext_type))
+                Type::TagUnion(
+                    tag_types,
+                    TypeExtension::from_type(ext_type, is_implicit_openness),
+                )
             }
         }
         SpaceBefore(nested, _) | SpaceAfter(nested, _) => can_annotation_help(
@@ -1094,7 +1111,7 @@ fn can_extension_type<'a>(
     references: &mut VecSet<Symbol>,
     opt_ext: &Option<&Loc<TypeAnnotation<'a>>>,
     ext_problem_kind: roc_problem::can::ExtensionTypeKind,
-) -> Type {
+) -> (Type, IsImplicitOpennessVar) {
     fn valid_record_ext_type(typ: &Type) -> bool {
         // Include erroneous types so that we don't overreport errors.
         matches!(
@@ -1141,7 +1158,7 @@ fn can_extension_type<'a>(
                     })
                 }
 
-                ext_type
+                (ext_type, IsImplicitOpennessVar::NO)
             } else {
                 // Report an error but mark the extension variable to be inferred
                 // so that we're as permissive as possible.
@@ -1157,21 +1174,27 @@ fn can_extension_type<'a>(
 
                 introduced_variables.insert_inferred(Loc::at_zero(var));
 
-                Type::Variable(var)
+                (
+                    Type::Variable(var),
+                    // Since this is an error anyway, just be permissive
+                    IsImplicitOpennessVar::NO,
+                )
             }
         }
         None => match ext_problem_kind {
-            ExtensionTypeKind::Record => Type::EmptyRec,
+            ExtensionTypeKind::Record => (Type::EmptyRec, IsImplicitOpennessVar::NO),
             ExtensionTypeKind::TagUnion => {
                 // In negative positions a missing extension variable forces a closed tag union;
                 // otherwise, open-in-output-position means we give the tag an inference variable.
                 match pol {
-                    CanPolarity::Neg | CanPolarity::InOpaque => Type::EmptyTagUnion,
+                    CanPolarity::Neg | CanPolarity::InOpaque => {
+                        (Type::EmptyTagUnion, IsImplicitOpennessVar::NO)
+                    }
                     CanPolarity::Pos | CanPolarity::InAlias => {
                         let var = var_store.fresh();
                         introduced_variables.insert_infer_ext_in_output(var);
 
-                        Type::Variable(var)
+                        (Type::Variable(var), IsImplicitOpennessVar::YES)
                     }
                 }
             }

@@ -279,7 +279,7 @@ pub fn constrain_expr(
             let fields_type = {
                 let typ = types.from_old_type(&Type::Record(
                     fields,
-                    TypeExtension::from_type(Type::Variable(*ext_var)),
+                    TypeExtension::from_non_annotation_type(Type::Variable(*ext_var)),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -1090,7 +1090,7 @@ pub fn constrain_expr(
             let record_type = {
                 let typ = types.from_old_type(&Type::Record(
                     rec_field_types,
-                    TypeExtension::from_type(ext_type),
+                    TypeExtension::from_non_annotation_type(ext_type),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -1134,7 +1134,10 @@ pub fn constrain_expr(
             let mut field_types = SendMap::default();
             let label = field.clone();
             field_types.insert(label, RecordField::Demanded(field_type.clone()));
-            let record_type = Type::Record(field_types, TypeExtension::from_type(ext_type));
+            let record_type = Type::Record(
+                field_types,
+                TypeExtension::from_non_annotation_type(ext_type),
+            );
             let record_type_index = {
                 let typ = types.from_old_type(&record_type);
                 constraints.push_type(types, typ)
@@ -1267,7 +1270,7 @@ pub fn constrain_expr(
             let tag_union_type = {
                 let typ = types.from_old_type(&Type::TagUnion(
                     vec![(name.clone(), payload_types)],
-                    TypeExtension::from_type(Type::Variable(*ext_var)),
+                    TypeExtension::from_non_annotation_type(Type::Variable(*ext_var)),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -1299,7 +1302,7 @@ pub fn constrain_expr(
                 let typ = types.from_old_type(&Type::FunctionOrTagUnion(
                     name.clone(),
                     *closure_name,
-                    TypeExtension::from_type(Type::Variable(*ext_var)),
+                    TypeExtension::from_non_annotation_type(Type::Variable(*ext_var)),
                 ));
                 constraints.push_type(types, typ)
             };
