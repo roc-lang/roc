@@ -10,12 +10,12 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  test-zig-rust-wasm:
+  test-rust-macos-x86-64:
     name: test zig, rust, wasm...
     runs-on: [self-hosted, macOS, X64]
     timeout-minutes: 90
     env:
-      RUSTC_WRAPPER: /home/small-ci-user/.cargo/bin/sccache
+      RUSTC_WRAPPER: /Users/username1/.cargo/bin
     steps:
       - uses: actions/checkout@v2
         with:
