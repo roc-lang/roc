@@ -2423,8 +2423,8 @@ fn unify_tag_ext<M: MetaCollector>(
     };
     let legal_unification = match ext {
         TagExt::Openness(_) => {
-            // Openness extensions can either unify with empty tag unions (marking them as closed),
-            // or flex/rigids. Anything else is a change in the monomorphic size of the tag and not
+            // Openness extensions can only unify with flex/rigids.
+            // Anything else is a change in the monomorphic size of the tag and not
             // a reflection of the polymorphism of the tag, an error.
             matches!(
                 env.subs.get_content_without_compacting(var),
@@ -2432,7 +2432,6 @@ fn unify_tag_ext<M: MetaCollector>(
                     | RigidVar(..)
                     | FlexAbleVar(..)
                     | RigidAbleVar(..)
-                    | Structure(FlatType::EmptyTagUnion)
                     // errors propagate
                     | Error,
             )
