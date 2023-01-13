@@ -397,7 +397,7 @@ pub enum TypeTag {
     },
     // type extension is implicit
     // tag name is in the `single_tag_union_tag_names` map
-    FunctionOrTagUnion(Symbol, IsImplicitOpennessVar),
+    FunctionOrTagUnion(Symbol, ExtImplicitOpenness),
     UnspecializedLambdaSet {
         unspecialized: Uls,
     },
@@ -433,8 +433,8 @@ pub enum TypeTag {
     // TypeExtension is implicit in the type slice
     // it is length zero for closed, length 1 for existing
     // if not closed, IsImplicitOpennessVar is whether the extension is an Openness variable
-    TagUnion(UnionTags, IsImplicitOpennessVar),
-    RecursiveTagUnion(Variable, UnionTags, IsImplicitOpennessVar),
+    TagUnion(UnionTags, ExtImplicitOpenness),
+    RecursiveTagUnion(Variable, UnionTags, ExtImplicitOpenness),
     Record(RecordFields),
 }
 
@@ -1798,22 +1798,20 @@ impl Clone for OptAbleType {
 /// but can't grow more monomorphic tags.
 /// E.g. `[]_a` can unify with `[]` or `[]*` but not `[A, B]`.
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
-pub struct IsImplicitOpennessVar(pub bool);
-
-impl IsImplicitOpennessVar {
-    pub const YES: Self = Self(true);
-    pub const NO: Self = Self(false);
+pub enum ExtImplicitOpenness {
+    Yes,
+    No,
 }
 
 #[derive(PartialEq, Eq, Clone)]
 pub enum TypeExtension {
-    Open(Box<Type>, IsImplicitOpennessVar),
+    Open(Box<Type>, ExtImplicitOpenness),
     Closed,
 }
 
 impl TypeExtension {
     #[inline(always)]
-    pub fn from_type(typ: Type, is_implicit_openness: IsImplicitOpennessVar) -> Self {
+    pub fn from_type(typ: Type, is_implicit_openness: ExtImplicitOpenness) -> Self {
         match typ {
             Type::EmptyTagUnion | Type::EmptyRec => Self::Closed,
             _ => Self::Open(Box::new(typ), is_implicit_openness),
@@ -1824,7 +1822,7 @@ impl TypeExtension {
     pub fn from_non_annotation_type(typ: Type) -> Self {
         match typ {
             Type::EmptyTagUnion | Type::EmptyRec => Self::Closed,
-            _ => Self::Open(Box::new(typ), IsImplicitOpennessVar::NO),
+            _ => Self::Open(Box::new(typ), ExtImplicitOpenness::No),
         }
     }
 
@@ -1845,10 +1843,10 @@ impl TypeExtension {
     }
 
     #[inline(always)]
-    fn is_implicit_openness(&self) -> IsImplicitOpennessVar {
+    fn is_implicit_openness(&self) -> ExtImplicitOpenness {
         match self {
             TypeExtension::Open(_, is_implicit_openness) => *is_implicit_openness,
-            TypeExtension::Closed => IsImplicitOpennessVar::NO,
+            TypeExtension::Closed => ExtImplicitOpenness::No,
         }
     }
 }

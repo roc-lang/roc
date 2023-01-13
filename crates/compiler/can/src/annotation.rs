@@ -9,7 +9,7 @@ use roc_problem::can::ShadowKind;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
-    name_type_var, AbilitySet, Alias, AliasCommon, AliasKind, AliasVar, IsImplicitOpennessVar,
+    name_type_var, AbilitySet, Alias, AliasCommon, AliasKind, AliasVar, ExtImplicitOpenness,
     LambdaSet, OptAbleType, OptAbleVar, RecordField, Type, TypeExtension,
 };
 
@@ -889,7 +889,7 @@ fn can_annotation_help(
             );
 
             debug_assert!(
-                !is_implicit_openness.0,
+                matches!(is_implicit_openness, ExtImplicitOpenness::No),
                 "records should never be implicitly inferred open"
             );
 
@@ -1111,7 +1111,7 @@ fn can_extension_type<'a>(
     references: &mut VecSet<Symbol>,
     opt_ext: &Option<&Loc<TypeAnnotation<'a>>>,
     ext_problem_kind: roc_problem::can::ExtensionTypeKind,
-) -> (Type, IsImplicitOpennessVar) {
+) -> (Type, ExtImplicitOpenness) {
     fn valid_record_ext_type(typ: &Type) -> bool {
         // Include erroneous types so that we don't overreport errors.
         matches!(
@@ -1158,7 +1158,7 @@ fn can_extension_type<'a>(
                     })
                 }
 
-                (ext_type, IsImplicitOpennessVar::NO)
+                (ext_type, ExtImplicitOpenness::No)
             } else {
                 // Report an error but mark the extension variable to be inferred
                 // so that we're as permissive as possible.
@@ -1177,24 +1177,24 @@ fn can_extension_type<'a>(
                 (
                     Type::Variable(var),
                     // Since this is an error anyway, just be permissive
-                    IsImplicitOpennessVar::NO,
+                    ExtImplicitOpenness::No,
                 )
             }
         }
         None => match ext_problem_kind {
-            ExtensionTypeKind::Record => (Type::EmptyRec, IsImplicitOpennessVar::NO),
+            ExtensionTypeKind::Record => (Type::EmptyRec, ExtImplicitOpenness::No),
             ExtensionTypeKind::TagUnion => {
                 // In negative positions a missing extension variable forces a closed tag union;
                 // otherwise, open-in-output-position means we give the tag an inference variable.
                 match pol {
                     CanPolarity::Neg | CanPolarity::InOpaque => {
-                        (Type::EmptyTagUnion, IsImplicitOpennessVar::NO)
+                        (Type::EmptyTagUnion, ExtImplicitOpenness::No)
                     }
                     CanPolarity::Pos | CanPolarity::InAlias => {
                         let var = var_store.fresh();
                         introduced_variables.insert_infer_ext_in_output(var);
 
-                        (Type::Variable(var), IsImplicitOpennessVar::YES)
+                        (Type::Variable(var), ExtImplicitOpenness::Yes)
                     }
                 }
             }

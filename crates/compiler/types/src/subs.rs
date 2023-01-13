@@ -1,7 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 use crate::types::{
-    name_type_var, AbilitySet, AliasKind, ErrorType, Polarity, RecordField, RecordFieldsError,
-    TypeExt, Uls,
+    name_type_var, AbilitySet, AliasKind, ErrorType, ExtImplicitOpenness, Polarity, RecordField,
+    RecordFieldsError, TypeExt, Uls,
 };
 use roc_collections::all::{FnvMap, ImMap, ImSet, MutSet, SendMap};
 use roc_collections::{VecMap, VecSet};
@@ -2548,6 +2548,13 @@ impl TagExt {
 
     pub fn is_any(&self) -> bool {
         matches!(self, Self::Any(..))
+    }
+
+    pub fn from_can(var: Variable, ext_openness: ExtImplicitOpenness) -> Self {
+        match ext_openness {
+            ExtImplicitOpenness::Yes => Self::Openness(var),
+            ExtImplicitOpenness::No => Self::Any(var),
+        }
     }
 }
 

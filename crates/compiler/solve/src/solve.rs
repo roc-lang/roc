@@ -33,8 +33,8 @@ use roc_types::subs::{
     UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasKind, AliasShared, Category, IsImplicitOpennessVar,
-    OptAbleVar, Polarity, Reason, RecordField, Type, TypeExtension, TypeTag, Types, Uls,
+    gather_fields_unsorted_iter, AliasKind, AliasShared, Category, ExtImplicitOpenness, OptAbleVar,
+    Polarity, Reason, RecordField, Type, TypeExtension, TypeTag, Types, Uls,
 };
 use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Env as UEnv, Mode, Obligated,
@@ -2688,11 +2688,7 @@ fn type_to_variable<'a>(
                 let temp_ext = match ext_slice.into_iter().next() {
                     Some(ext) => {
                         let var = helper!(ext);
-                        if ext_openness.0 {
-                            TagExt::Openness(var)
-                        } else {
-                            TagExt::Any(var)
-                        }
+                        TagExt::from_can(var, ext_openness)
                     }
                     None => TagExt::Any(roc_types::subs::Variable::EMPTY_TAG_UNION),
                 };
@@ -3408,7 +3404,7 @@ fn type_to_union_tags(
     types: &mut Types,
     union_tags: UnionTags,
     opt_ext_slice: Slice<TypeTag>,
-    ext_openness: IsImplicitOpennessVar,
+    ext_openness: ExtImplicitOpenness,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> (UnionTags, TagExt) {
     use bumpalo::collections::Vec;
@@ -3438,11 +3434,7 @@ fn type_to_union_tags(
             let temp_ext = {
                 let temp_ext_var =
                     RegisterVariable::with_stack(subs, rank, pools, arena, types, ext, stack);
-                if ext_openness.0 {
-                    TagExt::Openness(temp_ext_var)
-                } else {
-                    TagExt::Any(temp_ext_var)
-                }
+                TagExt::from_can(temp_ext_var, ext_openness)
             };
             let (it, ext) =
                 roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext)
