@@ -2002,7 +2002,11 @@ mod test_reporting {
 
     But the type annotation on `x` says it should be:
 
-        { a : Int *, b : Frac *, c : Str }
+        {
+            a : Int *,
+            b : Frac *,
+            c : Str,
+        }
 
     Tip: Looks like the c and a fields are missing.
     "###
@@ -3759,11 +3763,11 @@ mod test_reporting {
 
     The argument is a pattern that matches record values of type:
 
-        { x : I64, y ? Str }
+        { y ? Str, … }
 
     But the annotation on `f` says the 1st argument should be:
 
-        { x : I64, y ? I64 }
+        { y ? I64, … }
     "###
     );
 
@@ -3788,11 +3792,11 @@ mod test_reporting {
 
     The body is a value of type:
 
-        { x : I64, y : Str }
+        { y : Str, … }
 
     But the type annotation says it should be:
 
-        { x : I64, y ? Str }
+        { y ? Str, … }
 
     Tip: To extract the `.y` field it must be non-optional, but the type
     says this field is optional. Learn more about optional fields at TODO.
@@ -3819,11 +3823,11 @@ mod test_reporting {
 
     The argument is a pattern that matches record values of type:
 
-        { x : I64, y : I64 }
+        { y : I64, … }
 
     But the annotation on `f` says the 1st argument should be:
 
-        { x : I64, y ? I64 }
+        { y ? I64, … }
 
     Tip: To extract the `.y` field it must be non-optional, but the type
     says this field is optional. Learn more about optional fields at TODO.
@@ -3852,11 +3856,11 @@ mod test_reporting {
 
     This `r` value is a:
 
-        { x : I64, y ? I64 }
+        { y ? I64, … }
 
     But the branch patterns have type:
 
-        { x : I64, y : I64 }
+        { y : I64, … }
 
     The branches must be cases of the `when` condition's type!
 
@@ -3885,11 +3889,11 @@ mod test_reporting {
 
     This `r` value is a:
 
-        { x : I64, y ? I64 }
+        { y ? I64, … }
 
     But you are trying to use it as:
 
-        { x : I64, y : I64 }
+        { y : I64, … }
 
     Tip: To extract the `.y` field it must be non-optional, but the type
     says this field is optional. Learn more about optional fields at TODO.
@@ -3916,11 +3920,11 @@ mod test_reporting {
 
     This `r` value is a:
 
-        { x : I64, y ? I64 }
+        { y ? I64, … }
 
     But this function needs its 1st argument to be:
 
-        { x : I64, y : I64 }
+        { y : I64, … }
 
     Tip: To extract the `.y` field it must be non-optional, but the type
     says this field is optional. Learn more about optional fields at TODO.
@@ -3951,11 +3955,11 @@ mod test_reporting {
 
     This `r` value is a:
 
-        { x : I64, y : I64 }
+        { y : I64, … }
 
     But the branch patterns have type:
 
-        { x : I64, y : Str }
+        { y : Str, … }
 
     The branches must be cases of the `when` condition's type!
     "###
@@ -3985,11 +3989,11 @@ mod test_reporting {
 
     This `r` value is a:
 
-        { x : I64, y ? I64 }
+        { y ? I64, … }
 
     But the branch patterns have type:
 
-        { x : I64, y ? Str }
+        { y ? Str, … }
 
     The branches must be cases of the `when` condition's type!
     "###
@@ -6474,7 +6478,11 @@ In roc, functions are always written as a lambda, like{}
     The type annotation on `f` says the body is a record should have the
     type:
 
-        { x : a, y : b, z : * }
+        {
+            x : a,
+            y : b,
+            z : *,
+        }
 
     However, the type of the body is a record is connected to another type
     in a way that isn't reflected in this annotation.
@@ -10531,11 +10539,17 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     The body is a record of type:
 
-        { a : Str, b : Str }
+        {
+            a : Str,
+            b : Str,
+        }
 
     But the type annotation on `f` says it should be:
 
-        { a : Str, b ? Str }
+        {
+            a : Str,
+            b ? Str,
+        }
 
     Tip: To extract the `.b` field it must be non-optional, but the type
     says this field is optional. Learn more about optional fields at TODO.
@@ -10566,7 +10580,10 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     But the type annotation on `f` says it should be:
 
-        { a : Str, b ? Str }
+        {
+            a : Str,
+            b ? Str,
+        }
 
     Tip: Looks like the b field is missing.
     "###
@@ -10645,7 +10662,10 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't generate an implementation of the `Decoding` ability for
 
-        { x : Str, y ? Str }
+        {
+            x : Str,
+            y ? Str,
+        }
 
     Note: I can't derive decoding for a record with an optional field,
     which in this case is `.y`. Optional record fields are polymorphic over
