@@ -30,9 +30,9 @@ pub use intern::{
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
 roc_error_macros::assert_sizeof_aarch64!(Builtin, 2 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Layout, 4 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Layout, 6 * 8);
 roc_error_macros::assert_sizeof_aarch64!(UnionLayout, 3 * 8);
-roc_error_macros::assert_sizeof_aarch64!(LambdaSet, 3 * 8);
+roc_error_macros::assert_sizeof_aarch64!(LambdaSet, 5 * 8);
 
 roc_error_macros::assert_sizeof_wasm!(Builtin, 2 * 4);
 roc_error_macros::assert_sizeof_wasm!(Layout, 6 * 4);
@@ -40,9 +40,9 @@ roc_error_macros::assert_sizeof_wasm!(UnionLayout, 3 * 4);
 roc_error_macros::assert_sizeof_wasm!(LambdaSet, 3 * 4);
 
 roc_error_macros::assert_sizeof_default!(Builtin, 2 * 8);
-roc_error_macros::assert_sizeof_default!(Layout, 4 * 8);
+roc_error_macros::assert_sizeof_default!(Layout, 6 * 8);
 roc_error_macros::assert_sizeof_default!(UnionLayout, 3 * 8);
-roc_error_macros::assert_sizeof_default!(LambdaSet, 3 * 8);
+roc_error_macros::assert_sizeof_default!(LambdaSet, 5 * 8);
 
 type LayoutResult<'a> = Result<InLayout<'a>, LayoutProblem>;
 type RawFunctionLayoutResult<'a> = Result<RawFunctionLayout<'a>, LayoutProblem>;
@@ -1339,6 +1339,8 @@ impl<'a> LambdaName<'a> {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LambdaSet<'a> {
+    pub(crate) args: &'a &'a [InLayout<'a>],
+    pub(crate) ret: InLayout<'a>,
     /// collection of function names and their closure arguments
     // Double reference to cut from fat slice (16 bytes) to 8 bytes
     pub(crate) set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
@@ -1867,20 +1869,28 @@ impl<'a> LambdaSet<'a> {
                     opt_recursion_var.into_variable(),
                 );
 
-                let lambda_set = env
-                    .cache
-                    .interner
-                    .insert_lambda_set(env.arena.alloc(set.into_bump_slice()), representation);
+                // TODO
+                let args = &(&[] as &[InLayout]);
+                let ret = Layout::VOID;
+
+                let lambda_set = env.cache.interner.insert_lambda_set(
+                    args,
+                    ret,
+                    env.arena.alloc(set.into_bump_slice()),
+                    representation,
+                );
 
                 Cacheable(Ok(lambda_set), criteria)
             }
             ResolvedLambdaSet::Unbound => {
                 // The lambda set is unbound which means it must be unused. Just give it the empty lambda set.
                 // See also https://github.com/roc-lang/roc/issues/3163.
-                let lambda_set = env
-                    .cache
-                    .interner
-                    .insert_lambda_set(&(&[] as &[(Symbol, &[InLayout])]), Layout::UNIT);
+                let lambda_set = env.cache.interner.insert_lambda_set(
+                    &(&[] as &[InLayout]),
+                    Layout::UNIT,
+                    &(&[] as &[(Symbol, &[InLayout])]),
+                    Layout::UNIT,
+                );
                 cacheable(Ok(lambda_set))
             }
         }
@@ -4381,6 +4391,8 @@ mod test {
         let mut interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
 
         let lambda_set = LambdaSet {
+            args: &(&[] as &[InLayout]),
+            ret: Layout::VOID,
             set: &(&[(Symbol::LIST_MAP, &[] as &[InLayout])] as &[(Symbol, &[InLayout])]),
             representation: Layout::UNIT,
             full_layout: Layout::VOID,
