@@ -2405,14 +2405,22 @@ fn close_uninhabited_extended_union(subs: &mut Subs, mut var: Variable) {
     }
 }
 
+enum UnifySides<T, U> {
+    Left(T, U),
+    Right(U, T),
+}
+
 #[must_use]
 fn unify_tag_ext<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
-    ext: TagExt,
-    var: Variable,
+    vars: UnifySides<TagExt, Variable>,
     mode: Mode,
 ) -> Outcome<M> {
+    let (ext, var, flip_for_unify) = match vars {
+        UnifySides::Left(ext, var) => (ext, var, false),
+        UnifySides::Right(var, ext) => (ext, var, true),
+    };
     let legal_unification = match ext {
         TagExt::Openness(_) => {
             // Openness extensions can either unify with empty tag unions (marking them as closed),
@@ -2434,9 +2442,21 @@ fn unify_tag_ext<M: MetaCollector>(
         TagExt::Any(_) => true,
     };
     if legal_unification {
-        unify_pool(env, pool, ext.var(), var, mode)
+        if flip_for_unify {
+            unify_pool(env, pool, var, ext.var(), mode)
+        } else {
+            unify_pool(env, pool, ext.var(), var, mode)
+        }
     } else {
         mismatch!()
+    }
+}
+
+#[must_use]
+fn merge_tag_exts(ext1: TagExt, ext2: TagExt) -> TagExt {
+    match (ext1, ext2) {
+        (_, TagExt::Openness(v)) | (TagExt::Openness(v), _) => TagExt::Openness(v),
+        (TagExt::Any(v), TagExt::Any(_)) => TagExt::Any(v),
     }
 }
 
@@ -2509,7 +2529,7 @@ fn unify_tag_unions<M: MetaCollector>(
                 ctx,
                 shared_tags,
                 OtherTags2::Empty,
-                ext1,
+                merge_tag_exts(ext1, ext2),
                 recursion_var,
             );
 
@@ -2538,7 +2558,8 @@ fn unify_tag_unions<M: MetaCollector>(
                 ext1 = new_ext;
             }
 
-            let ext_outcome = unify_tag_ext(env, pool, ext1, extra_tags_in_2, ctx.mode);
+            let ext_outcome =
+                unify_tag_ext(env, pool, UnifySides::Left(ext1, extra_tags_in_2), ctx.mode);
 
             if !ext_outcome.mismatches.is_empty() {
                 return ext_outcome;
@@ -2590,7 +2611,12 @@ fn unify_tag_unions<M: MetaCollector>(
                 ext2 = new_ext;
             }
 
-            let ext_outcome = unify_tag_ext(env, pool, ext2, extra_tags_in_1, ctx.mode);
+            let ext_outcome = unify_tag_ext(
+                env,
+                pool,
+                UnifySides::Right(extra_tags_in_1, ext2),
+                ctx.mode,
+            );
 
             if !ext_outcome.mismatches.is_empty() {
                 return ext_outcome;
@@ -2659,7 +2685,7 @@ fn unify_tag_unions<M: MetaCollector>(
         let mut total_outcome = Outcome::default();
         let snapshot = env.subs.snapshot();
 
-        let ext1_outcome = unify_tag_ext(env, pool, ext1, sub2, ctx.mode);
+        let ext1_outcome = unify_tag_ext(env, pool, UnifySides::Left(ext1, sub2), ctx.mode);
         if !ext1_outcome.mismatches.is_empty() {
             env.subs.rollback_to(snapshot);
             return ext1_outcome;
@@ -2667,7 +2693,7 @@ fn unify_tag_unions<M: MetaCollector>(
         total_outcome.union(ext1_outcome);
 
         if ctx.mode.is_eq() {
-            let ext2_outcome = unify_tag_ext(env, pool, ext2, sub1, ctx.mode);
+            let ext2_outcome = unify_tag_ext(env, pool, UnifySides::Right(sub1, ext2), ctx.mode);
             if !ext2_outcome.mismatches.is_empty() {
                 env.subs.rollback_to(snapshot);
                 return ext2_outcome;
