@@ -1,6 +1,6 @@
 on: [pull_request]
 
-name: CI
+name: Macos x86-64 rust tests
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
