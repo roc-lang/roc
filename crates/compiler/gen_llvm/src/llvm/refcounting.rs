@@ -5,7 +5,7 @@ use crate::llvm::build::{
     add_func, cast_basic_basic, get_tag_id, tag_pointer_clear_tag_id, use_roc_value, Env,
     WhenRecursive, FAST_CALL_CONV,
 };
-use crate::llvm::build_list::{incrementing_elem_loop, list_len, load_list};
+use crate::llvm::build_list::{incrementing_elem_loop, list_capacity, load_list};
 use crate::llvm::convert::{basic_type_from_layout, zig_str_type, RocUnion};
 use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
@@ -758,7 +758,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
     let parent = fn_val;
     let original_wrapper = arg_val.into_struct_value();
 
-    let len = list_len(builder, original_wrapper);
+    let len = list_capacity(builder, original_wrapper);
 
     let is_non_empty = builder.build_int_compare(
         IntPredicate::UGT,

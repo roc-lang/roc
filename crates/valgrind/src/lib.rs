@@ -235,3 +235,18 @@ fn str_concat_first_argument_not_unique() {
         "#
     ));
 }
+
+#[test]
+fn list_concat_empty_list_zero_sized_type() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            a = List.reserve [] 11
+            b = []
+            List.concat a b
+            |> List.len
+            |> Num.toStr
+        )
+        "#
+    ));
+}
