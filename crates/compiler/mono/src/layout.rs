@@ -4133,7 +4133,7 @@ pub fn ext_var_is_empty_tag_union(subs: &Subs, tag_ext: TagExt) -> bool {
 }
 
 #[cfg(not(debug_assertions))]
-pub fn ext_var_is_empty_tag_union(_: &Subs, _: Variable) -> bool {
+pub fn ext_var_is_empty_tag_union(_: &Subs, _: TagExt) -> bool {
     // This should only ever be used in debug_assert! macros
     unreachable!();
 }
