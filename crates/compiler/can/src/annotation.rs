@@ -931,9 +931,9 @@ fn can_annotation_help(
             if tags.is_empty() {
                 match ext {
                     Some(_) => {
-                        // just `a` does not mean the same as `{}a`, so even
-                        // if there are no fields, still make this a `Record`,
-                        // not an EmptyRec
+                        // just `a` does not mean the same as `[]`, so even
+                        // if there are no fields, still make this a `TagUnion`,
+                        // not an EmptyTagUnion
                         Type::TagUnion(Default::default(), TypeExtension::from_type(ext_type))
                     }
 
