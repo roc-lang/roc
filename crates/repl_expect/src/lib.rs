@@ -389,7 +389,7 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                items : List (Num *)
+                items : List (Int Signed64)
                 items = [0, 1]
 
                 expected : Result I64 [OutOfBounds]

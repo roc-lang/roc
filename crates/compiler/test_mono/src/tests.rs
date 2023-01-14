@@ -1231,12 +1231,12 @@ fn monomorphized_list() {
         app "test" provides [main] to "./platform"
 
         main =
-            l = [1, 2, 3]
+            l = \{} -> [1, 2, 3]
 
             f : List U8, List U16 -> Nat
             f = \_, _ -> 18
 
-            f l l
+            f (l {}) (l {})
         "#
     )
 }
