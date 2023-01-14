@@ -975,4 +975,128 @@ mod test {
             ),
         );
     }
+
+    #[test]
+    fn adjacent_lists() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                expect
+                    actual : { headers: List U8, body: List U8, x: List U8 }
+                    actual = {
+                        body: [],
+                        headers: [],
+                        x: [],
+                    }
+
+                    expected : { headers: List U8, body: List U8, x: List U8 }
+                    expected = {
+                        body: [ 42, 43, 44 ],
+                        headers: [15, 16, 17],
+                        x: [115, 116, 117],
+                    }
+                    actual == expected
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 3│>  expect
+                 4│>      actual : { headers: List U8, body: List U8, x: List U8 }
+                 5│>      actual = {
+                 6│>          body: [],
+                 7│>          headers: [],
+                 8│>          x: [],
+                 9│>      }
+                10│>
+                11│>      expected : { headers: List U8, body: List U8, x: List U8 }
+                12│>      expected = {
+                13│>          body: [ 42, 43, 44 ],
+                14│>          headers: [15, 16, 17],
+                15│>          x: [115, 116, 117],
+                16│>      }
+                17│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                actual : {
+                    body : List (Int Unsigned8),
+                    headers : List (Int Unsigned8),
+                    x : List (Int Unsigned8),
+                }
+                actual = { body: [], headers: [], x: [] }
+
+                expected : {
+                    body : List (Int Unsigned8),
+                    headers : List (Int Unsigned8),
+                    x : List (Int Unsigned8),
+                }
+                expected = { body: [42, 43, 44], headers: [15, 16, 17], x: [115, 116, 117] }
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn record_field_ordering() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                Request : {
+                    fieldA : [Get, Post],
+                    fieldB : Str,
+                }
+
+                expect
+
+                    actual : Request
+                    actual = {
+                        fieldA: Get,
+                        fieldB: "/things?id=2",
+                    }
+
+                    expected : Request
+                    expected = {
+                        fieldA: Get,
+                        fieldB: "/things?id=1",
+                    }
+                    actual == expected
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
+                 8│>  expect
+                 9│>
+                10│>      actual : Request
+                11│>      actual = {
+                12│>          fieldA: Get,
+                13│>          fieldB: "/things?id=2",
+                14│>      }
+                15│>
+                16│>      expected : Request
+                17│>      expected = {
+                18│>          fieldA: Get,
+                19│>          fieldB: "/things?id=1",
+                20│>      }
+                21│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                actual : Request
+                actual = { fieldA: Get, fieldB: "/things?id=2" }
+
+                expected : Request
+                expected = { fieldA: Get, fieldB: "/things?id=1" }
+
+                "#
+            ),
+        );
+    }
 }

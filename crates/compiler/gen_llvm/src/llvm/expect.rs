@@ -1042,9 +1042,13 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
 
             let elements_width = bd.build_int_mul(element_width, len, "elements_width");
 
+            // We clone the elements into the extra_offset address.
+            let _ = offset;
+            let elements_start_offset = cursors.extra_offset;
+
             if layout_interner.safe_to_memcpy(elem) {
                 // NOTE we are not actually sure the dest is properly aligned
-                let dest = pointer_at_offset(bd, env.context.i8_type(), ptr, offset);
+                let dest = pointer_at_offset(bd, env.context.i8_type(), ptr, elements_start_offset);
                 let src = bd.build_pointer_cast(
                     elements,
                     env.context.i8_type().ptr_type(AddressSpace::Generic),
@@ -1052,11 +1056,8 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                 );
                 bd.build_memcpy(dest, 1, src, 1, elements_width).unwrap();
 
-                bd.build_int_add(offset, elements_width, "new_offset")
+                bd.build_int_add(elements_start_offset, elements_width, "new_offset")
             } else {
-                // We cloned the elements into the extra_offset address.
-                let elements_start_offset = cursors.extra_offset;
-
                 let element_type = basic_type_from_layout(env, layout_interner, elem);
                 let elements = bd.build_pointer_cast(
                     elements,
