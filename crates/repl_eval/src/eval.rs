@@ -341,7 +341,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
     layout: InLayout<'a>,
     var: Variable,
 ) -> Expr<'a> {
-    let (newtype_containers, alias_content, raw_var) = unroll_newtypes_and_aliases(env, var);
+    let (newtype_containers, _alias_content, raw_var) = unroll_newtypes_and_aliases(env, var);
 
     macro_rules! num_helper {
         ($ty:ty) => {
@@ -1054,7 +1054,7 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
         // We'll advance this as we iterate through the fields
         let mut field_addr = addr;
 
-        // the type checker stores record fiels in alphabetical order
+        // the type checker stores record fields in alphabetical order
         let alphabetical_fields: Vec<_> = record_fields
             .sorted_iterator(subs, Variable::EMPTY_RECORD)
             .map(|(l, field)| {

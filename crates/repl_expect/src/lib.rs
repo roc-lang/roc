@@ -1072,6 +1072,29 @@ mod test {
                 r#"
                 This expectation failed:
 
+                 8│>  expect
+                 9│>
+                10│>      actual : Request
+                11│>      actual = {
+                12│>          fieldA: Get,
+                13│>          fieldB: "/things?id=2",
+                14│>      }
+                15│>
+                16│>      expected : Request
+                17│>      expected = {
+                18│>          fieldA: Get,
+                19│>          fieldB: "/things?id=1",
+                20│>      }
+                21│>      actual == expected
+
+                When it failed, these variables had these values:
+
+                actual : Request
+                actual = { fieldA: Get, fieldB: "/things?id=2" }
+
+                expected : Request
+                expected = { fieldA: Get, fieldB: "/things?id=1" }
+
                 "#
             ),
         );
