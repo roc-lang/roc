@@ -16,13 +16,15 @@ interface Parser.Http
             codeunitSatisfies,
             strFromRaw,
             anyRawString,
+            digit,
+            digits,
         },
     ]
 
 # https://www.ietf.org/rfc/rfc2616.txt
 Method : [Options, Get, Post, Put, Delete, Head, Trace, Connect, Patch]
 
-HttpVersion : Str
+HttpVersion : { major: U8, minor: U8}
 
 Request : {
     method : Method,
@@ -34,7 +36,7 @@ Request : {
 
 Response : {
     httpVersion : HttpVersion,
-    statusCode : Str,
+    statusCode : U16,
     status : Str,
     headers : List [Header Str Str],
     body : List U8,
@@ -71,13 +73,9 @@ requestUri =
 sp = codeunit ' '
 crlf = string "\r\n"
 
-# TODO: The 'digit' and 'digits' from Parser.Str are causing repl.expect to blow up
-digit = codeunitSatisfies \c -> c >= '0' && c <= '9'
-digits = digit |> oneOrMore |> map strFromRaw
-
 httpVersion : Parser RawStr HttpVersion
 httpVersion =
-    const (\major -> \minor -> "\(major).\(minor)")
+    const (\major -> \minor -> { major, minor })
     |> skip (string "HTTP/")
     |> keep digits
     |> skip (codeunit '.')
@@ -139,7 +137,7 @@ expect
     expected = Ok {
         method: Get,
         uri: "/things?id=1",
-        httpVersion: "1.1",
+        httpVersion: { major: 1, minor: 1 },
         headers: [
             Header "Host" "bar.example",
             Header "Accept-Encoding" "gzip, deflate",
@@ -167,7 +165,7 @@ expect
     expected = Ok {
         method: Options,
         uri: "/resources/post-here/",
-        httpVersion: "1.1",
+        httpVersion: { major: 1, minor: 1 },
         headers: [
             Header "Host" "bar.example",
             Header "Accept" "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -234,8 +232,8 @@ expect
         parseStr response responseText
     expected =
         Ok {
-            httpVersion: "1.1",
-            statusCode: "200",
+            httpVersion: { major: 1, minor: 1 },
+            statusCode: 200,
             status: "OK",
             headers: [
                 Header "Content-Type" "text/html; charset=utf-8",
