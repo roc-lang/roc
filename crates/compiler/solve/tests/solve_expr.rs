@@ -7140,7 +7140,7 @@ mod solve_expr {
                 #^^^{-1}
                 "#
             ),
-            @r#"fun : {} -[[thunk(5) [A Str]*, thunk(5) { a : Str }]]-> Str"#
+            @r#"fun : {} -[[thunk(5) [A Str]w_a, thunk(5) { a : Str }]]-> Str"#
         );
     }
 
@@ -7264,7 +7264,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn polymorphic_lambda_set_specialization_with_let_generalization() {
+    fn polymorphic_lambda_set_specialization_with_let_weakened() {
         infer_queries!(
             indoc!(
                 r#"
@@ -7282,6 +7282,7 @@ mod solve_expr {
                 #^{-1}
 
                 main =
+                    # h should get weakened
                     h = f (@Fo {})
                 #   ^   ^
                     h (@Go {})
@@ -7291,15 +7292,15 @@ mod solve_expr {
             @r###"
         Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
         Go#g(8) : Go -[[g(8)]]-> {}
-        h : b -[[] + b:g(4):1]-> {} | b has G
-        Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
+        h : Go -[[g(8)]]-> {}
+        Fo#f(7) : Fo -[[f(7)]]-> (Go -[[g(8)]]-> {})
         h : Go -[[g(8)]]-> {}
         "###
         );
     }
 
     #[test]
-    fn polymorphic_lambda_set_specialization_with_let_generalization_unapplied() {
+    fn polymorphic_lambda_set_specialization_with_let_weakened_unapplied() {
         infer_queries!(
             indoc!(
                 r#"
@@ -7461,9 +7462,9 @@ mod solve_expr {
 
                 main =
                 #^^^^{-1}
-                    it =
+                    it = \x -> 
                 #   ^^
-                        (f A (@C {}) (@D {}))
+                        (f A (@C {}) (@D {})) x
                 #        ^
                     if Bool.true
                         then it (@E {})
@@ -7484,10 +7485,10 @@ mod solve_expr {
         J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) | j has J, j1 has J, k has K
         it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
         main : {}
-        it : k -[[] + k:k(4):1]-> {} | k has K
+        it : k -[[it(21)]]-> {} | k has K
         f : [A, B], C, D -[[f(13)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
-        it : E -[[kE(11)]]-> {}
-        it : F -[[kF(12)]]-> {}
+        it : E -[[it(21)]]-> {}
+        it : F -[[it(21)]]-> {}
         "###
         );
     }
@@ -8475,10 +8476,10 @@ mod solve_expr {
 
                 main =
                     s1 : Set U8
-                    s1 = Set.empty
+                    s1 = Set.empty {}
 
                     s2 : Set Str
-                    s2 = Set.empty
+                    s2 = Set.empty {}
 
                     Bool.isEq s1 s1 && Bool.isEq s2 s2
                 #   ^^^^^^^^^          ^^^^^^^^^

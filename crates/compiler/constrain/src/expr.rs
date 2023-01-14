@@ -3825,32 +3825,44 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
         match expr {
             Num(..) | Int(..) | Float(..) => return true,
             Closure(_) => return true,
-            OpaqueRef { argument, .. } => expr = &argument.1.value,
-            Str(_) | List { .. } | SingleQuote(_, _, _, _) | When { .. } | If { .. } => {
-                return false
+            Accessor(_) => {
+                // Accessor functions `.field` are equivalent to closures `\r -> r.field`, no need to weaken them.
+                return true;
             }
-            // TODO(weakening)
-            Var(_, _)
-            | AbilityMember(_, _, _)
+            OpaqueWrapFunction(_) => {
+                // Opaque wrapper functions `@Q` are equivalent to closures `\x -> @Q x`, no need to weaken them.
+                return true;
+            }
+            RuntimeError(roc_problem::can::RuntimeError::NoImplementation)
+            | RuntimeError(roc_problem::can::RuntimeError::NoImplementationNamed { .. }) => {
+                // Allow generalization of signatures with no implementation
+                return true;
+            }
+            OpaqueRef { argument, .. } => expr = &argument.1.value,
+            Str(_)
+            | List { .. }
+            | SingleQuote(_, _, _, _)
+            | When { .. }
+            | If { .. }
             | LetRec(_, _, _)
             | LetNonRec(_, _)
             | Call(_, _, _)
             | RunLowLevel { .. }
             | ForeignCall { .. }
-            | Expr::Record { .. }
             | EmptyRecord
+            | Expr::Record { .. }
             | Crash { .. }
             | Access { .. }
-            | Accessor(_)
             | Update { .. }
-            | Tag { .. }
-            | ZeroArgumentTag { .. }
-            | OpaqueWrapFunction(_)
             | Expect { .. }
             | ExpectFx { .. }
             | Dbg { .. }
             | TypedHole(_)
-            | RuntimeError(_) => return true,
+            | RuntimeError(..) => return false,
+            // TODO(weakening)
+            Var(_, _) | AbilityMember(_, _, _) | Tag { .. } | ZeroArgumentTag { .. } => {
+                return true
+            }
         }
     }
 }

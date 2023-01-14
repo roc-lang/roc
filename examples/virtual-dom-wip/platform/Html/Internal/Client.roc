@@ -57,10 +57,10 @@ RenderedAttributes : {
 }
 
 emptyRenderedAttrs = {
-    eventListeners: Dict.empty,
-    htmlAttrs: Dict.empty,
-    domProps: Dict.empty,
-    styles: Dict.empty,
+    eventListeners: Dict.empty {},
+    htmlAttrs: Dict.empty {},
+    domProps: Dict.empty {},
+    styles: Dict.empty {},
 }
 
 Patch : [

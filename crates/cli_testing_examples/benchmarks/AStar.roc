@@ -14,10 +14,10 @@ Model position : {
 
 initialModel : position -> Model position | position has Hash & Eq
 initialModel = \start -> {
-    evaluated: Set.empty,
+    evaluated: Set.empty {},
     openSet: Set.single start,
     costs: Dict.single start 0,
-    cameFrom: Dict.empty,
+    cameFrom: Dict.empty {},
 }
 
 cheapestOpen : (position -> F64), Model position -> Result position {} | position has Hash & Eq

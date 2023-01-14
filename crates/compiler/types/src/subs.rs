@@ -4049,11 +4049,11 @@ fn flat_type_to_err_type(
                     ErrorType::RecursiveTagUnion(rec_error_type, sub_tags.union(err_tags), sub_ext, pol)
                 }
 
-                ErrorType::FlexVar(var) => {
+                ErrorType::FlexVar(var) | ErrorType::FlexAbleVar(var, _) => {
                     ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::FlexOpen(var), pol)
                 }
 
-                ErrorType::RigidVar(var) => {
+                ErrorType::RigidVar(var) | ErrorType::RigidAbleVar(var, _) => {
                     ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::RigidOpen(var), pol)
                 }
 
