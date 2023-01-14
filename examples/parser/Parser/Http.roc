@@ -134,6 +134,8 @@ expect
         """
     actual =
         parseStr request requestText
+
+    expected : Result Request [ParsingFailure Str, ParsingIncomplete Str]
     expected = Ok {
         method: Get,
         uri: "/things?id=1",

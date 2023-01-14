@@ -977,7 +977,7 @@ mod test {
     }
 
     #[test]
-    fn foobar() {
+    fn adjacent_lists() {
         run_expect_test(
             indoc!(
                 r#"
@@ -1035,6 +1035,43 @@ mod test {
                     x : List (Int Unsigned8),
                 }
                 expected = { body: [42, 43, 44], headers: [15, 16, 17], x: [115, 116, 117] }
+                "#
+            ),
+        );
+    }
+
+    #[test]
+    fn record_field_ordering() {
+        run_expect_test(
+            indoc!(
+                r#"
+                interface Test exposes [] imports []
+
+                Request : {
+                    fieldA : [Get, Post],
+                    fieldB : Str,
+                }
+
+                expect
+
+                    actual : Request
+                    actual = {
+                        fieldA: Get,
+                        fieldB: "/things?id=2",
+                    }
+
+                    expected : Request
+                    expected = {
+                        fieldA: Get,
+                        fieldB: "/things?id=1",
+                    }
+                    actual == expected
+                "#
+            ),
+            indoc!(
+                r#"
+                This expectation failed:
+
                 "#
             ),
         );

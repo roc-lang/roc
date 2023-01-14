@@ -17,7 +17,15 @@ macro_rules! deref_number {
 }
 
 impl ReplAppMemory for ExpectMemory {
-    deref_number!(deref_bool, bool);
+    fn deref_bool(&self, addr: usize) -> bool {
+        let ptr = unsafe { self.start.add(addr) } as *const u8;
+        let value = unsafe { std::ptr::read_unaligned(ptr) };
+
+        // bool values should only ever be 0 or 1
+        debug_assert!(value == 0 || value == 1);
+
+        value != 0
+    }
 
     deref_number!(deref_u8, u8);
     deref_number!(deref_u16, u16);

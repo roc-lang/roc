@@ -1,4 +1,4 @@
-use bumpalo::collections::Vec;
+use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
 use roc_types::types::AliasKind;
 use std::cmp::{max_by_key, min_by_key};
@@ -10,8 +10,8 @@ use roc_module::ident::TagName;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::ProcLayout;
 use roc_mono::layout::{
-    self, union_sorted_tags_pub, Builtin, InLayout, Layout, LayoutCache, LayoutInterner,
-    TLLayoutInterner, UnionLayout, UnionVariant, WrappedVariant,
+    self, cmp_fields, union_sorted_tags_pub, Builtin, InLayout, Layout, LayoutCache,
+    LayoutInterner, TLLayoutInterner, UnionLayout, UnionVariant, WrappedVariant,
 };
 use roc_parse::ast::{AssignedField, Collection, Expr, Pattern, StrLiteral};
 use roc_region::all::{Loc, Region};
@@ -365,7 +365,6 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 (Alias(Symbol::NUM_UNSIGNED8 | Symbol::NUM_U8, ..), U8) => num_helper!(u8),
                 (_, U8) => {
                     // This is not a number, it's a tag union or something else
-                    dbg!(&alias_content);
                     app.call_function(main_fn_name, |_mem: &A::Memory, num: u8| {
                         byte_to_ast(env, num, env.subs.get_content_without_compacting(raw_var))
                     })
@@ -559,9 +558,11 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
         (_, Layout::Builtin(Builtin::Bool)) => {
             // TODO: bits are not as expected here.
             // num is always false at the moment.
-            let num: bool = mem.deref_bool(addr);
+            let num: u8 = mem.deref_u8(addr);
 
-            bool_to_ast(env, num, raw_content)
+            debug_assert!(num == 0 || num == 1);
+
+            bool_to_ast(env, num != 0, raw_content)
         }
         (_, Layout::Builtin(Builtin::Int(int_width))) => {
             use IntWidth::*;
@@ -1053,16 +1054,34 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
         // We'll advance this as we iterate through the fields
         let mut field_addr = addr;
 
-        // We recalculate the layouts here because we will have compiled the record so that its fields
-        // are sorted by descending alignment, and then alphabetic, but the type of the record is
-        // always only sorted alphabetically. We want to arrange the rendered record in the order of
-        // the type.
-        for (label, field) in record_fields.sorted_iterator(subs, Variable::EMPTY_RECORD) {
+        // the type checker stores record fiels in alphabetical order
+        let alphabetical_fields: Vec<_> = record_fields
+            .sorted_iterator(subs, Variable::EMPTY_RECORD)
+            .map(|(l, field)| {
+                let layout = env
+                    .layout_cache
+                    .from_var(arena, field.into_inner(), env.subs)
+                    .unwrap();
+
+                (l, field, layout)
+            })
+            .collect_in(arena);
+
+        // but the memory representation sorts first by size (and uses field name as a tie breaker)
+        let mut in_memory_fields = alphabetical_fields;
+        in_memory_fields.sort_by(|(label1, _, layout1), (label2, _, layout2)| {
+            cmp_fields(
+                &env.layout_cache.interner,
+                label1,
+                *layout1,
+                label2,
+                *layout2,
+                env.target_info,
+            )
+        });
+
+        for (label, field, field_layout) in in_memory_fields {
             let field_var = field.into_inner();
-            let field_layout = env
-                .layout_cache
-                .from_var(arena, field.into_inner(), env.subs)
-                .unwrap();
 
             let loc_expr = &*arena.alloc(Loc {
                 value: addr_to_ast(
@@ -1091,6 +1110,15 @@ fn struct_to_ast<'a, 'env, M: ReplAppMemory>(
             field_addr += env.layout_cache.interner.stack_size(field_layout) as usize;
         }
 
+        // to the user we want to present the fields in alphabetical order again, so re-sort
+        fn sort_key<'a, T>(loc_field: &'a Loc<AssignedField<'a, T>>) -> &'a str {
+            match &loc_field.value {
+                AssignedField::RequiredValue(field_name, _, _) => field_name.value,
+                _ => unreachable!("was not added to output"),
+            }
+        }
+
+        output.sort_by(|a, b| sort_key(a).cmp(sort_key(b)));
         let output = output.into_bump_slice();
 
         Expr::Record(Collection::with_items(output))
