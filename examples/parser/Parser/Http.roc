@@ -142,7 +142,7 @@ expect
         httpVersion: "1.1",
         headers: [
             Header "Host" "bar.example",
-            # Header "Accept-Encoding" "gzip, deflate",
+            Header "Accept-Encoding" "gzip, deflate",
         ],
         body: "Hello, world!" |> Str.toUtf8,
     }
