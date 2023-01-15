@@ -20,7 +20,7 @@ pub const RocList = extern struct {
     length: usize,
     capacity: usize,
 
-    pub fn len(self: RocList) usize {
+    pub inline fn len(self: RocList) usize {
         return self.length;
     }
 
@@ -410,9 +410,7 @@ pub fn listWithCapacity(
     alignment: u32,
     element_width: usize,
 ) callconv(.C) RocList {
-    var output = RocList.allocate(alignment, capacity, element_width);
-    output.length = 0;
-    return output;
+    return listReserve(RocList.empty(), alignment, capacity, element_width, .InPlace);
 }
 
 pub fn listReserve(
