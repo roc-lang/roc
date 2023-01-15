@@ -6,6 +6,9 @@ license = "UPL-1.0"
 edition = "2021"
 description = "Tests for the parse + fmt crates."
 
+[features]
+"parse_debug_trace" = ["roc_parse/parse_debug_trace"]
+
 [dependencies]
 roc_collections = { path = "../collections" }
 roc_region = { path = "../region" }

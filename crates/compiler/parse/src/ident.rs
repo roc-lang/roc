@@ -290,6 +290,10 @@ fn chomp_integer_part(buffer: &[u8]) -> Result<&str, Progress> {
     )
 }
 
+fn is_plausible_ident_continue(ch: char) -> bool {
+    ch == '_' || is_alnum(ch)
+}
+
 #[inline(always)]
 fn chomp_part<F, G>(leading_is_good: F, rest_is_good: G, buffer: &[u8]) -> Result<&str, Progress>
 where
@@ -314,6 +318,15 @@ where
         } else {
             // we're done
             break;
+        }
+    }
+
+    if let Ok((next, _width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
+        // This would mean we have e.g.:
+        // * identifier followed by a _
+        // * an integer followed by an alphabetic char
+        if is_plausible_ident_continue(next) {
+            return Err(NoProgress);
         }
     }
 

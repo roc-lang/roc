@@ -1,7 +1,6 @@
 use std::fmt::Debug;
 
 use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader};
-use crate::ident::Ident;
 use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
@@ -807,51 +806,6 @@ pub enum Base {
 }
 
 impl<'a> Pattern<'a> {
-    pub fn from_ident(arena: &'a Bump, ident: Ident<'a>) -> Pattern<'a> {
-        match ident {
-            Ident::Tag(string) => Pattern::Tag(string),
-            Ident::OpaqueRef(string) => Pattern::OpaqueRef(string),
-            Ident::Access { module_name, parts } => {
-                if parts.len() == 1 {
-                    // This is valid iff there is no module.
-                    let ident = parts.iter().next().unwrap();
-
-                    if module_name.is_empty() {
-                        Pattern::Identifier(ident)
-                    } else {
-                        Pattern::QualifiedIdentifier { module_name, ident }
-                    }
-                } else {
-                    // This is definitely malformed.
-                    let mut buf =
-                        String::with_capacity_in(module_name.len() + (2 * parts.len()), arena);
-                    let mut any_parts_printed = if module_name.is_empty() {
-                        false
-                    } else {
-                        buf.push_str(module_name);
-
-                        true
-                    };
-
-                    for part in parts.iter() {
-                        if any_parts_printed {
-                            buf.push('.');
-                        } else {
-                            any_parts_printed = true;
-                        }
-
-                        buf.push_str(part);
-                    }
-
-                    Pattern::Malformed(buf.into_bump_str())
-                }
-            }
-            Ident::RecordAccessorFunction(string) => Pattern::Malformed(string),
-            Ident::TupleAccessorFunction(string) => Pattern::Malformed(string),
-            Ident::Malformed(string, _problem) => Pattern::Malformed(string),
-        }
-    }
-
     /// Check that patterns are equivalent, meaning they have the same shape, but may have
     /// different locations/whitespace
     pub fn equivalent(&self, other: &Self) -> bool {

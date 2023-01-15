@@ -378,6 +378,10 @@ where
     }
 }
 
+fn begins_with_crlf(bytes: &[u8]) -> bool {
+    bytes.len() >= 2 && bytes[0] == b'\r' && bytes[1] == b'\n'
+}
+
 pub fn spaces<'a, E>() -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
 where
     E: 'a + SpaceProblem,
@@ -399,6 +403,7 @@ where
                     let is_doc_comment = state.bytes().first() == Some(&b'#')
                         && (state.bytes().get(1) == Some(&b' ')
                             || state.bytes().get(1) == Some(&b'\n')
+                            || begins_with_crlf(&state.bytes()[1..])
                             || state.bytes().get(1) == None);
 
                     if is_doc_comment {
@@ -422,7 +427,10 @@ where
                     newlines.push(comment);
                     state.advance_mut(len);
 
-                    if state.bytes().first() == Some(&b'\n') {
+                    if begins_with_crlf(state.bytes()) {
+                        state.advance_mut(1);
+                        state = state.advance_newline();
+                    } else if state.bytes().first() == Some(&b'\n') {
                         state = state.advance_newline();
                     }
 

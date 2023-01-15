@@ -16,8 +16,11 @@ Defs(
         type_defs: [],
         value_defs: [
             Body(
-                @0-7 Malformed(
+                @0-7 MalformedIdent(
                     "my_list",
+                    Underscore(
+                        @3,
+                    ),
                 ),
                 @10-58 List(
                     Collection {
