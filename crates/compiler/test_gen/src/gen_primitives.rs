@@ -4208,3 +4208,49 @@ fn pattern_as_of_symbol() {
         bool
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn function_specialization_information_in_lambda_set_thunk() {
+    assert_evals_to!(
+        indoc!(
+            r###"
+            app "test" provides [main] to "./platform"
+
+            andThen = \{} ->
+                x = 10u8
+                \newFn -> Num.add (newFn {}) x
+
+            between = andThen {}
+
+            main = between \{} -> between \{} -> 10u8
+            "###
+        ),
+        30,
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
+    assert_evals_to!(
+        indoc!(
+            r###"
+            app "test" provides [main] to "./platform"
+
+            andThen = \{} ->
+                x = 10u8
+                \newFn -> Num.add (newFn {}) x
+
+            between1 = andThen {}
+
+            between2 = andThen {}
+
+            main = between1 \{} -> between2 \{} -> 10u8
+            "###
+        ),
+        30,
+        u8
+    );
+}
