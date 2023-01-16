@@ -924,7 +924,7 @@ macro_rules! join_alias_to_body {
 }
 
 fn parse_defs_end<'a>(
-    _options: ExprParseOptions,
+    options: ExprParseOptions,
     min_indent: u32,
     mut defs: Defs<'a>,
     arena: &'a Bump,
@@ -935,7 +935,7 @@ fn parse_defs_end<'a>(
     loop {
         let state = global_state;
 
-        global_state = match parse_single_def(_options, min_indent, arena, state) {
+        global_state = match parse_single_def(options, min_indent, arena, state) {
             Ok((_, Some(single_def), next_state)) => {
                 let region = single_def.region;
                 let spaces_before_current = single_def.spaces_before;
@@ -1953,7 +1953,7 @@ pub fn toplevel_defs<'a>() -> impl Parser<'a, Defs<'a>, EExpr<'a>> {
         let start_column = state.column();
 
         let options = ExprParseOptions {
-            accept_multi_backpassing: false,
+            accept_multi_backpassing: true,
             check_for_arrow: true,
         };
 

@@ -309,6 +309,7 @@ mod test_snapshots {
         pass/mixed_docs.expr,
         pass/module_def_newline.moduledefs,
         pass/multi_backpassing.expr,
+        pass/multi_backpassing_in_def.moduledefs,
         pass/multi_backpassing_with_apply.expr,
         pass/multi_char_string.expr,
         pass/multiline_string.expr,
