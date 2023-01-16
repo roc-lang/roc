@@ -114,7 +114,6 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
         filename,
         module_src,
         src_dir,
-        Default::default(),
         RocCacheDir::Disallowed,
         load_config,
     );
@@ -135,7 +134,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
         module_id: home,
         procedures,
         exposed_to_host,
-        layout_interner,
+        mut layout_interner,
         interns,
         ..
     } = loaded;
@@ -152,7 +151,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
     let main_fn_symbol = exposed_to_host.values.keys().copied().next();
 
     if !no_check {
-        check_procedures(arena, &interns, &layout_interner, &procedures);
+        check_procedures(arena, &interns, &mut layout_interner, &procedures);
     }
 
     verify_procedures(test_name, layout_interner, procedures, main_fn_symbol);
@@ -161,7 +160,7 @@ fn compiles_to_ir(test_name: &str, src: &str, mode: &str, no_check: bool) {
 fn check_procedures<'a>(
     arena: &'a Bump,
     interns: &Interns,
-    interner: &STLayoutInterner<'a>,
+    interner: &mut STLayoutInterner<'a>,
     procedures: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) {
     use roc_mono::debug::{check_procs, format_problems};
@@ -386,7 +385,7 @@ fn when_on_two_values() {
 #[mono_test]
 fn dict() {
     r#"
-    Dict.len Dict.empty
+    Dict.len (Dict.empty {})
     "#
 }
 
@@ -593,7 +592,7 @@ fn record_optional_field_function_use_default() {
     "#
 }
 
-#[mono_test(no_check)]
+#[mono_test(no_check = "https://github.com/roc-lang/roc/issues/4694")]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r#"
@@ -1232,12 +1231,12 @@ fn monomorphized_list() {
         app "test" provides [main] to "./platform"
 
         main =
-            l = [1, 2, 3]
+            l = \{} -> [1, 2, 3]
 
             f : List U8, List U16 -> Nat
             f = \_, _ -> 18
 
-            f l l
+            f (l {}) (l {})
         "#
     )
 }
@@ -1274,7 +1273,7 @@ fn aliased_polymorphic_closure() {
 }
 
 #[mono_test]
-fn issue_2535_polymorphic_fields_referenced_in_list() {
+fn issue_2535_let_weakened_fields_referenced_in_list() {
     indoc!(
         r#"
         app "test" provides [nums] to "./platform"
@@ -1311,7 +1310,7 @@ fn issue_2583_specialize_errors_behind_unified_branches() {
     )
 }
 
-#[mono_test(no_check)]
+#[mono_test]
 fn issue_2810() {
     indoc!(
         r#"
@@ -1530,7 +1529,7 @@ fn encode_derived_record() {
     )
 }
 
-#[mono_test(no_check)]
+#[mono_test]
 fn choose_correct_recursion_var_under_record() {
     indoc!(
         r#"
@@ -1926,6 +1925,28 @@ fn encode_derived_tag_one_field_string() {
 }
 
 #[mono_test]
+fn polymorphic_expression_unification() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        RenderTree : [
+            Text Str,
+            Indent (List RenderTree),
+        ]
+        parseFunction : Str -> RenderTree
+        parseFunction = \name ->
+            last = Indent [Text ".trace(\"\(name)\")" ]
+            Indent [last]
+
+        values = parseFunction "interface_header"
+
+        main = values == Text ""
+        "#
+    )
+}
+
+#[mono_test]
 fn encode_derived_tag_two_payloads_string() {
     indoc!(
         r#"
@@ -2196,13 +2217,13 @@ fn issue_4749() {
 
         expect
             input = [82, 111, 99]
-            got = Decode.fromBytes input Json.fromUtf8 
+            got = Decode.fromBytes input Json.fromUtf8
             got == Ok "Roc"
         "###
     )
 }
 
-#[mono_test(mode = "test", no_check)]
+#[mono_test(mode = "test")]
 fn lambda_set_with_imported_toplevels_issue_4733() {
     indoc!(
         r###"
@@ -2217,6 +2238,173 @@ fn lambda_set_with_imported_toplevels_issue_4733() {
             \a -> op a a
 
         expect ((fn {}) 3) == 9
+        "###
+    )
+}
+
+#[mono_test]
+fn order_list_size_tests_issue_4732() {
+    indoc!(
+        r###"
+        when [] is
+            [1, ..]          -> "B1"
+            [2, 1, ..]       -> "B2"
+            [3, 2, 1, ..]    -> "B3"
+            [4, 3, 2, 1, ..] -> "B4"
+            _                -> "Catchall"
+        "###
+    )
+}
+
+#[mono_test]
+fn anonymous_closure_in_polymorphic_expression_issue_4717() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "platform"
+
+        chompWhile : (List U8) -> (List U8)
+        chompWhile = \input ->
+                index = List.walkUntil input 0 \i, _ -> Break i
+
+                if index == 0 then
+                    input
+                else
+                    List.drop input index
+
+        main = chompWhile [1u8, 2u8, 3u8]
+        "###
+    )
+}
+
+#[mono_test]
+fn list_map_take_capturing_or_noncapturing() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "platform"
+
+        main =
+            x = 1u8
+            y = 2u8
+            f = when "" is
+                "A" ->
+                    g = \n -> n + x
+                    g
+                "B" ->
+                    h = \n -> n + y
+                    h
+                _   ->
+                    k = \n -> n + n
+                    k
+            List.map [1u8, 2u8, 3u8] f
+        "###
+    )
+}
+
+#[mono_test]
+fn issue_4557() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        isEqQ = \q1, q2 -> when T q1 q2 is
+            T (U f1) (U f2) -> Bool.or (isEqQ (U f2) (U f1)) (f1 {} == f2 {})
+
+        main = isEqQ (U \{} -> "a") (U \{} -> "a")
+        "###
+    )
+}
+
+#[mono_test]
+fn nullable_wrapped_with_non_nullable_singleton_tags() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        F : [
+            A F,
+            B,
+            C,
+        ]
+
+        g : F -> Str
+        g = \f -> when f is
+                A _ -> "A"
+                B -> "B"
+                C -> "C"
+
+        main =
+            g (A (B))
+            |> Str.concat (g B)
+            |> Str.concat (g C)
+        "###
+    )
+}
+
+#[mono_test]
+fn nullable_wrapped_with_nullable_not_last_index() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        Parser : [
+            OneOrMore Parser,
+            Keyword Str,
+            CharLiteral,
+        ]
+
+        toIdParser : Parser -> Str
+        toIdParser = \parser ->
+            when parser is
+                OneOrMore _ -> "a"
+                Keyword _ -> "b"
+                CharLiteral -> "c"
+
+        main = toIdParser CharLiteral == "c"
+        "###
+    )
+}
+
+#[mono_test]
+fn pattern_as_toplevel() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        record = { a: 42i64, b: "foo" }
+
+        main =
+            when record is
+                { a: 42i64 } as r -> record == r
+                _ -> Bool.false
+        "###
+    )
+}
+
+#[mono_test]
+fn pattern_as_nested() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        record = { a: 42i64, b: "foo" }
+
+        main =
+            when Pair {} record is
+                Pair {} ({ a: 42i64 } as r) -> record == r
+                _ -> Bool.false
+        "###
+    )
+}
+
+#[mono_test]
+fn pattern_as_of_symbol() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        main =
+            when "foo" is
+                a as b -> a == b
         "###
     )
 }

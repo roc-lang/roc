@@ -15,7 +15,6 @@ roc_types = { path = "../types" }
 roc_can = { path = "../can" }
 roc_derive_key = { path = "../derive_key" }
 roc_derive = { path = "../derive" }
-roc_intern = { path = "../intern" }
 roc_late_solve = { path = "../late_solve" }
 roc_std = { path = "../../roc_std" }
 roc_problem = { path = "../problem" }
@@ -30,3 +29,4 @@ bumpalo.workspace = true
 hashbrown.workspace = true
 static_assertions.workspace = true
 bitvec.workspace = true
+parking_lot.workspace = true

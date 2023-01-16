@@ -16,5 +16,7 @@ components = [
     # for usages of rust-analyzer or similar tools inside `nix develop`
     "rust-src"
 ]
-# for test_wasm.sh
-targets = ["wasm32-wasi"]
+
+targets = [
+    "wasm32-wasi", # for test_wasm.sh
+]

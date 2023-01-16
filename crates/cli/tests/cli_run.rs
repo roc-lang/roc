@@ -331,6 +331,13 @@ mod cli_run {
         }
     }
 
+    // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
+    fn test_roc_expect(dir_name: &str, roc_filename: &str) {
+        let path = file_path_from_root(dir_name, roc_filename);
+        let out = run_roc(&[CMD_TEST, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
     // when you don't need args, stdin or extra_env
     fn test_roc_app_slim(
         dir_name: &str,
@@ -473,11 +480,26 @@ mod cli_run {
 
     #[test]
     #[serial(cli_platform)]
-    #[cfg_attr(windows, ignore)]
+    #[ignore]
+    // ignored because downloaded prebuilt platforms cause problems with nix and NixOS
+    // this is explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)
     fn hello_world() {
         test_roc_app_slim(
             "examples",
             "helloWorld.roc",
+            "helloWorld",
+            "Hello, World!\n",
+            UseValgrind::Yes,
+        )
+    }
+
+    #[test]
+    #[serial(cli_platform)]
+    #[cfg_attr(windows, ignore)]
+    fn hello_world_no_url() {
+        test_roc_app_slim(
+            "examples",
+            "helloWorldNoURL.roc",
             "helloWorld",
             "Hello, World!\n",
             UseValgrind::Yes,
@@ -719,10 +741,18 @@ mod cli_run {
 
     // TODO: write a new test once mono bugs are resolved in investigation
     #[test]
-    #[serial(cli_platform)]
-    #[cfg_attr(windows, ignore)]
-    fn cli_virtual_dom_check() {
-        let path = file_path_from_root("examples/virtual-dom-wip", "app-server.roc");
+    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
+    fn check_virtual_dom_server() {
+        let path = file_path_from_root("examples/virtual-dom-wip", "example-server.roc");
+        let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
+    // TODO: write a new test once mono bugs are resolved in investigation
+    #[test]
+    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
+    fn check_virtual_dom_client() {
+        let path = file_path_from_root("examples/virtual-dom-wip", "example-client.roc");
         let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
@@ -836,6 +866,12 @@ mod cli_run {
             "Parse success!\n",
             UseValgrind::No,
         )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn parse_http() {
+        test_roc_expect("examples/parser/Parser", "Http.roc")
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]

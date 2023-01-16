@@ -10,9 +10,6 @@ pub fn mono_test(args: TokenStream, item: TokenStream) -> TokenStream {
     let mut mode = "exec".to_owned();
     for arg in syn::parse_macro_input!(args as syn::AttributeArgs) {
         use syn::{Lit, Meta, MetaNameValue, NestedMeta};
-        if matches!(&arg, NestedMeta::Meta(Meta::Path(p)) if p.is_ident("no_check")) {
-            no_check = true;
-        }
         if let NestedMeta::Meta(Meta::NameValue(MetaNameValue {
             path,
             eq_token: _,
@@ -21,6 +18,9 @@ pub fn mono_test(args: TokenStream, item: TokenStream) -> TokenStream {
         {
             if path.is_ident("mode") {
                 mode = s.value();
+            }
+            if path.is_ident("no_check") {
+                no_check = true;
             }
         }
     }

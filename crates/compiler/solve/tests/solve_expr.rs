@@ -96,7 +96,6 @@ mod solve_expr {
             module_src = &temp;
         }
 
-        let exposed_types = Default::default();
         let loaded = {
             let dir = tempdir()?;
             let filename = PathBuf::from("Test.roc");
@@ -106,7 +105,6 @@ mod solve_expr {
                 file_path,
                 module_src,
                 dir.path().to_path_buf(),
-                exposed_types,
                 roc_target::TargetInfo::default_x86_64(),
                 roc_reporting::report::RenderTarget::Generic,
                 RocCacheDir::Disallowed,
@@ -334,6 +332,7 @@ mod solve_expr {
                     print_lambda_sets: true,
                     print_only_under_alias: options.print_only_under_alias,
                     ignore_polarity: true,
+                    print_weakened_vars: true,
                 },
             );
             subs.rollback_to(snapshot);
@@ -617,22 +616,6 @@ mod solve_expr {
                 "#
             ),
             "List (List (List *))",
-        );
-    }
-
-    #[test]
-    fn concat_different_types() {
-        infer_eq(
-            indoc!(
-                r#"
-                empty = []
-                one = List.concat [1] empty
-                str = List.concat ["blah"] empty
-
-                empty
-            "#
-            ),
-            "List *",
         );
     }
 
@@ -3960,11 +3943,11 @@ mod solve_expr {
                 f : List a -> List a
                 f = \input ->
                     # let-polymorphism at work
-                    x : List b
-                    x = []
+                    x : {} -> List b
+                    x = \{} -> []
 
                     when List.get input 0 is
-                        Ok val -> List.append x val
+                        Ok val -> List.append (x {}) val
                         Err _ -> input
                 f
                 "#
@@ -6689,6 +6672,7 @@ mod solve_expr {
                 main =
                     choice : [T, U]
 
+                    # Should not get generalized
                     idChoice =
                     #^^^^^^^^{-1}
                         when choice is
@@ -6702,7 +6686,7 @@ mod solve_expr {
             @r###"
         A#id(4) : A -[[id(4)]]-> A
         idNotAbility : a -[[idNotAbility(5)]]-> a
-        idChoice : a -[[idNotAbility(5)] + a:id(2):1]-> a | a has Id
+        idChoice : A -[[id(4), idNotAbility(5)]]-> A
         idChoice : A -[[id(4), idNotAbility(5)]]-> A
         "###
         )
@@ -6724,6 +6708,7 @@ mod solve_expr {
                 main =
                     choice : [T, U]
 
+                    # Should not get generalized
                     idChoice =
                     #^^^^^^^^{-1}
                         when choice is
@@ -6736,7 +6721,7 @@ mod solve_expr {
             ),
             @r#"
             A#id(4) : A -[[id(4)]]-> A
-            idChoice : a -[[] + a:id(2):1]-> a | a has Id
+            idChoice : A -[[id(4)]]-> A
             idChoice : A -[[id(4)]]-> A
             "#
         )
@@ -6952,7 +6937,7 @@ mod solve_expr {
                 #^^^^^^^^^^^^^^^^^^^^^^{-1}
                 "#
             ),
-            @r###"[\{} -> {}, \{} -> {}] : List ({}* -[[1, 2]]-> {})"###
+            @r###"[\{} -> {}, \{} -> {}] : List ({}w_a -[[1, 2]]-> {})"###
         )
     }
 
@@ -7155,7 +7140,7 @@ mod solve_expr {
                 #^^^{-1}
                 "#
             ),
-            @r#"fun : {} -[[thunk(5) [A Str]*, thunk(5) { a : Str }]]-> Str"#
+            @r#"fun : {} -[[thunk(5) [A Str]w_a, thunk(5) { a : Str }]]-> Str"#
         );
     }
 
@@ -7279,7 +7264,7 @@ mod solve_expr {
     }
 
     #[test]
-    fn polymorphic_lambda_set_specialization_with_let_generalization() {
+    fn polymorphic_lambda_set_specialization_with_let_weakened() {
         infer_queries!(
             indoc!(
                 r#"
@@ -7297,6 +7282,7 @@ mod solve_expr {
                 #^{-1}
 
                 main =
+                    # h should get weakened
                     h = f (@Fo {})
                 #   ^   ^
                     h (@Go {})
@@ -7306,15 +7292,15 @@ mod solve_expr {
             @r###"
         Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
         Go#g(8) : Go -[[g(8)]]-> {}
-        h : b -[[] + b:g(4):1]-> {} | b has G
-        Fo#f(7) : Fo -[[f(7)]]-> (b -[[] + b:g(4):1]-> {}) | b has G
+        h : Go -[[g(8)]]-> {}
+        Fo#f(7) : Fo -[[f(7)]]-> (Go -[[g(8)]]-> {})
         h : Go -[[g(8)]]-> {}
         "###
         );
     }
 
     #[test]
-    fn polymorphic_lambda_set_specialization_with_let_generalization_unapplied() {
+    fn polymorphic_lambda_set_specialization_with_let_weakened_unapplied() {
         infer_queries!(
             indoc!(
                 r#"
@@ -7476,9 +7462,9 @@ mod solve_expr {
 
                 main =
                 #^^^^{-1}
-                    it =
+                    it = \x -> 
                 #   ^^
-                        (f A (@C {}) (@D {}))
+                        (f A (@C {}) (@D {})) x
                 #        ^
                     if Bool.true
                         then it (@E {})
@@ -7499,10 +7485,10 @@ mod solve_expr {
         J#j(2) : j -[[] + j:j(2):1]-> (k -[[] + j1:j(2):2 + j:j(2):2]-> {}) | j has J, j1 has J, k has K
         it : k -[[] + j:j(2):2 + j1:j(2):2]-> {} | j has J, j1 has J, k has K
         main : {}
-        it : k -[[] + k:k(4):1]-> {} | k has K
+        it : k -[[it(21)]]-> {} | k has K
         f : [A, B], C, D -[[f(13)]]-> (k -[[] + k:k(4):1]-> {}) | k has K
-        it : E -[[kE(11)]]-> {}
-        it : F -[[kF(12)]]-> {}
+        it : E -[[it(21)]]-> {}
+        it : F -[[it(21)]]-> {}
         "###
         );
     }
@@ -7679,7 +7665,7 @@ mod solve_expr {
                         A _ C -> ""
                 "#
             ),
-            @r#"x : [A [B]* [C]*]"#
+            @r#"x : [A [B]w_a [C]w_b]"#
             allow_errors: true
         );
     }
@@ -7695,7 +7681,7 @@ mod solve_expr {
                         _ -> ""
                 "#
             ),
-            @r#"x : { a : [A { b : [B]* }*]* }*"#
+            @"x : { a : [A { b : [B]w_a }*]w_b }*"
         );
     }
 
@@ -8490,10 +8476,10 @@ mod solve_expr {
 
                 main =
                     s1 : Set U8
-                    s1 = Set.empty
+                    s1 = Set.empty {}
 
                     s2 : Set Str
-                    s2 = Set.empty
+                    s2 = Set.empty {}
 
                     Bool.isEq s1 s1 && Bool.isEq s2 s2
                 #   ^^^^^^^^^          ^^^^^^^^^
@@ -8581,6 +8567,136 @@ mod solve_expr {
                 "#
             ),
         @"polyDbg : a -[[polyDbg(1)]]-> a"
+        );
+    }
+
+    #[test]
+    fn pattern_as_uses_inferred_type() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = when A "foo" is
+                    A _ as a -> a
+                    #           ^
+                    b -> b
+                    #    ^
+                "#
+            ),
+        @r###"
+        a : [A Str]w_a
+        b : [A Str]w_a
+        "###
+        );
+    }
+
+    #[test]
+    fn pattern_as_does_not_narrow() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                input : [A Str, B Str]
+                input = A "foo"
+
+                drop : a -> {}
+                drop = \_ -> {}
+
+                main = when input is
+                    #       ^^^^^
+                    A _ as a -> drop a
+                    #                ^
+                    B _ as b -> drop b
+                    #                ^
+                "#
+            ),
+        @r###"
+        input : [A Str, B Str]
+        a : [A Str, B Str]
+        b : [A Str, B Str]
+        "###
+        );
+    }
+
+    #[test]
+    fn pattern_as_list() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                input : List Str
+                input = [ "foo", "bar" ]
+
+                main = when input is
+                    #       ^^^^^
+                    [ _first, .. as rest ] -> 1 + List.len rest
+                    #                                      ^^^^
+                    [] -> 0
+                "#
+            ),
+        @r###"
+        input : List Str
+        rest : List Str
+        "###
+        );
+    }
+
+    #[test]
+    fn rank_no_overgeneralization() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main =
+                #^^^^{-1}
+                    \x ->
+                        y = \z -> x z
+                        y
+                "#
+            ),
+        @"main : (a -[[]]-> b) -[[main(0)]]-> (a -[[y(2) (a -[[]]-> b)]]-> b)"
+        );
+    }
+
+    #[test]
+    fn when_branch_variables_not_generalized() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = \{} -> when Red is
+                #^^^^{-1}
+                    x ->
+                        y : [Red]_
+                        y = x
+
+                        z : [Red, Green]_
+                        z = x
+
+                        {y, z}
+                "#
+            ),
+        @"main : {}* -[[main(0)]]-> { y : [Green, Red]a, z : [Green, Red]a }"
+        );
+    }
+
+    #[test]
+    fn weakened_list() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                main = []
+                #^^^^{-1}
+                "#
+            ),
+        @"main : List w_a"
         );
     }
 }

@@ -149,6 +149,7 @@ pub struct ModuleOutput {
     pub rigid_variables: RigidVariables,
     pub declarations: Declarations,
     pub exposed_imports: MutMap<Symbol, Region>,
+    pub exposed_symbols: VecSet<Symbol>,
     pub problems: Vec<Problem>,
     pub referenced_values: VecSet<Symbol>,
     pub referenced_types: VecSet<Symbol>,
@@ -280,7 +281,7 @@ pub fn canonicalize_module_defs<'a>(
     aliases: MutMap<Symbol, Alias>,
     imported_abilities_state: PendingAbilitiesStore,
     exposed_imports: MutMap<Ident, (Symbol, Region)>,
-    exposed_symbols: &VecSet<Symbol>,
+    exposed_symbols: VecSet<Symbol>,
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
 ) -> ModuleOutput {
@@ -340,8 +341,6 @@ pub fn canonicalize_module_defs<'a>(
                     panic!("TODO gracefully handle shadowing in imports.")
                 }
             }
-        } else if [Symbol::LIST_LIST, Symbol::STR_STR, Symbol::BOX_BOX_TYPE].contains(&symbol) {
-            // These are not aliases but Apply's and we make sure they are always in scope
         } else {
             // This is a type alias or ability
 
@@ -442,7 +441,7 @@ pub fn canonicalize_module_defs<'a>(
         var_store,
         defs,
         new_output,
-        exposed_symbols,
+        &exposed_symbols,
     );
 
     debug_assert!(
@@ -810,6 +809,7 @@ pub fn canonicalize_module_defs<'a>(
         pending_derives,
         loc_expects: collected.expects,
         loc_dbgs: collected.dbgs,
+        exposed_symbols,
     }
 }
 
@@ -927,6 +927,14 @@ fn fix_values_captured_in_closure_pattern(
                 );
             }
         }
+        As(subpattern, _) => {
+            fix_values_captured_in_closure_pattern(
+                &mut subpattern.value,
+                no_capture_symbols,
+                closure_captures,
+            );
+        }
+
         Identifier(_)
         | NumLiteral(..)
         | IntLiteral(..)

@@ -3,18 +3,19 @@ platform "server-side"
     exposes []
     packages {}
     imports [
-        Html.Internal.{ App, initServerApp },
+        Html.Internal.Shared.{ App },
+        Html.Internal.Server.{ initServerApp },
         Html.{ renderStatic },
         Json,
     ]
     provides [main]
 
-main : Str -> Result Str Str
-main = \initJson ->
+main : Str, Str -> Result Str Str
+main = \initJson, hostJavaScript ->
     initJson
     |> Str.toUtf8
     |> Decode.fromBytes Json.fromUtf8
-    |> Result.try \initData -> initServerApp initData app
+    |> Result.try \initData -> initServerApp app initData hostJavaScript
     |> Result.map renderStatic
     |> Result.mapErr \err ->
         when err is

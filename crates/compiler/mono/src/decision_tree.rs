@@ -1,8 +1,12 @@
+use crate::borrow::Ownership;
 use crate::ir::{
     build_list_index_probe, BranchInfo, Call, CallType, DestructType, Env, Expr, JoinPointId,
     ListIndex, Literal, Param, Pattern, Procs, Stmt,
 };
-use crate::layout::{Builtin, Layout, LayoutCache, TagIdIntType, UnionLayout};
+use crate::layout::{
+    Builtin, InLayout, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, TagIdIntType,
+    UnionLayout,
+};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{MutMap, MutSet};
 use roc_error_macros::internal_error;
@@ -20,7 +24,10 @@ const RECORD_TAG_NAME: &str = "#Record";
 /// some normal branches and gives out a decision tree that has "labels" at all
 /// the leafs and a dictionary that maps these "labels" to the code that should
 /// run.
-fn compile<'a>(raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>) -> DecisionTree<'a> {
+fn compile<'a>(
+    interner: &TLLayoutInterner<'a>,
+    raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>,
+) -> DecisionTree<'a> {
     let formatted = raw_branches
         .into_iter()
         .map(|(guard, pattern, index)| Branch {
@@ -30,7 +37,7 @@ fn compile<'a>(raw_branches: Vec<(Guard<'a>, Pattern<'a>, u64)>) -> DecisionTree
         })
         .collect();
 
-    to_decision_tree(formatted)
+    to_decision_tree(interner, formatted)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -51,12 +58,14 @@ impl<'a> Guard<'a> {
     }
 }
 
+type Edge<'a> = (GuardedTest<'a>, DecisionTree<'a>);
+
 #[derive(Clone, Debug, PartialEq)]
 enum DecisionTree<'a> {
     Match(Label),
     Decision {
         path: Vec<PathInstruction>,
-        edges: Vec<(GuardedTest<'a>, DecisionTree<'a>)>,
+        edges: Vec<Edge<'a>>,
         default: Option<Box<DecisionTree<'a>>>,
     },
 }
@@ -91,7 +100,7 @@ enum Test<'a> {
         tag_id: TagIdIntType,
         ctor_name: CtorName,
         union: roc_exhaustive::Union,
-        arguments: Vec<(Pattern<'a>, Layout<'a>)>,
+        arguments: Vec<(Pattern<'a>, InLayout<'a>)>,
     },
     IsInt([u8; 16], IntWidth),
     IsFloat(u64, FloatWidth),
@@ -202,7 +211,10 @@ struct Branch<'a> {
     patterns: Vec<(Vec<PathInstruction>, Pattern<'a>)>,
 }
 
-fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
+fn to_decision_tree<'a>(
+    interner: &TLLayoutInterner<'a>,
+    raw_branches: Vec<Branch<'a>>,
+) -> DecisionTree<'a> {
     let branches: Vec<_> = raw_branches.into_iter().map(flatten_patterns).collect();
 
     debug_assert!(!branches.is_empty());
@@ -234,7 +246,7 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
                     let default = if branches.is_empty() {
                         None
                     } else {
-                        Some(Box::new(to_decision_tree(branches)))
+                        Some(Box::new(to_decision_tree(interner, branches)))
                     };
 
                     DecisionTree::Decision {
@@ -251,7 +263,7 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
             let path = pick_path(&branches).clone();
 
             let bs = branches.clone();
-            let (edges, fallback) = gather_edges(branches, &path);
+            let (edges, fallback) = gather_edges(interner, branches, &path);
 
             let mut decision_edges: Vec<_> = edges
                 .into_iter()
@@ -259,7 +271,7 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
                     if bs == branches {
                         panic!();
                     } else {
-                        (test, to_decision_tree(branches))
+                        (test, to_decision_tree(interner, branches))
                     }
                 })
                 .collect();
@@ -275,12 +287,12 @@ fn to_decision_tree(raw_branches: Vec<Branch>) -> DecisionTree {
                 ([], _) => {
                     // should be guaranteed by the patterns
                     debug_assert!(!fallback.is_empty());
-                    to_decision_tree(fallback)
+                    to_decision_tree(interner, fallback)
                 }
                 (_, _) => break_out_guard(
                     path,
                     decision_edges,
-                    Some(Box::new(to_decision_tree(fallback))),
+                    Some(Box::new(to_decision_tree(interner, fallback))),
                 ),
             }
         }
@@ -453,6 +465,7 @@ fn check_for_match(branches: &[Branch]) -> Match {
 
 // my understanding: branches that we could jump to based on the pattern at the current path
 fn gather_edges<'a>(
+    interner: &TLLayoutInterner<'a>,
     branches: Vec<Branch<'a>>,
     path: &[PathInstruction],
 ) -> (Vec<(GuardedTest<'a>, Vec<Branch<'a>>)>, Vec<Branch<'a>>) {
@@ -462,7 +475,7 @@ fn gather_edges<'a>(
 
     let all_edges = relevant_tests
         .into_iter()
-        .map(|t| edges_for(path, &branches, t))
+        .map(|t| edges_for(interner, path, &branches, t))
         .collect();
 
     let fallbacks = if check {
@@ -516,138 +529,142 @@ fn tests_at_path<'a>(
     unique
 }
 
+fn test_for_pattern<'a>(pattern: &Pattern<'a>) -> Option<Test<'a>> {
+    use Pattern::*;
+    use Test::*;
+
+    let test = match pattern {
+        Identifier(_) | Underscore => {
+            return None;
+        }
+
+        As(subpattern, _) => return test_for_pattern(subpattern),
+
+        RecordDestructure(destructs, _) => {
+            // not rendered, so pick the easiest
+            let union = Union {
+                render_as: RenderAs::Tag,
+                alternatives: vec![Ctor {
+                    tag_id: TagId(0),
+                    name: CtorName::Tag(TagName(RECORD_TAG_NAME.into())),
+                    arity: destructs.len(),
+                }],
+            };
+
+            let mut arguments = std::vec::Vec::new();
+
+            for destruct in destructs {
+                match &destruct.typ {
+                    DestructType::Guard(guard) => {
+                        arguments.push((guard.clone(), destruct.layout));
+                    }
+                    DestructType::Required(_) => {
+                        arguments.push((Pattern::Underscore, destruct.layout));
+                    }
+                }
+            }
+
+            IsCtor {
+                tag_id: 0,
+                ctor_name: CtorName::Tag(TagName(RECORD_TAG_NAME.into())),
+                union,
+                arguments,
+            }
+        }
+
+        NewtypeDestructure {
+            tag_name,
+            arguments,
+        } => {
+            let tag_id = 0;
+            let union = Union::newtype_wrapper(CtorName::Tag(tag_name.clone()), arguments.len());
+
+            IsCtor {
+                tag_id,
+                ctor_name: CtorName::Tag(tag_name.clone()),
+                union,
+                arguments: arguments.to_vec(),
+            }
+        }
+
+        AppliedTag {
+            tag_name,
+            tag_id,
+            arguments,
+            union,
+            ..
+        } => IsCtor {
+            tag_id: *tag_id,
+            ctor_name: CtorName::Tag(tag_name.clone()),
+            union: union.clone(),
+            arguments: arguments.to_vec(),
+        },
+
+        List {
+            arity,
+            element_layout: _,
+            elements: _,
+        } => IsListLen {
+            bound: match arity {
+                ListArity::Exact(_) => ListLenBound::Exact,
+                ListArity::Slice(_, _) => ListLenBound::AtLeast,
+            },
+            len: arity.min_len() as _,
+        },
+
+        Voided { .. } => internal_error!("unreachable"),
+
+        OpaqueUnwrap { opaque, argument } => {
+            let union = Union {
+                render_as: RenderAs::Tag,
+                alternatives: vec![Ctor {
+                    tag_id: TagId(0),
+                    name: CtorName::Opaque(*opaque),
+                    arity: 1,
+                }],
+            };
+
+            IsCtor {
+                tag_id: 0,
+                ctor_name: CtorName::Opaque(*opaque),
+                union,
+                arguments: vec![(**argument).clone()],
+            }
+        }
+
+        BitLiteral { value, .. } => IsBit(*value),
+        EnumLiteral { tag_id, union, .. } => IsByte {
+            tag_id: *tag_id as _,
+            num_alts: union.alternatives.len(),
+        },
+        IntLiteral(v, precision) => IsInt(*v, *precision),
+        FloatLiteral(v, precision) => IsFloat(*v, *precision),
+        DecimalLiteral(v) => IsDecimal(*v),
+        StrLiteral(v) => IsStr(v.clone()),
+    };
+
+    Some(test)
+}
+
 fn test_at_path<'a>(
     selected_path: &[PathInstruction],
     branch: &Branch<'a>,
 ) -> Option<GuardedTest<'a>> {
-    use Pattern::*;
-    use Test::*;
-
-    match branch
+    let (_, pattern) = branch
         .patterns
         .iter()
-        .find(|(path, _)| path == selected_path)
-    {
-        None => None,
-        Some((_, pattern)) => {
-            let test = match pattern {
-                Identifier(_) | Underscore => {
-                    if let Guard::Guard { .. } = &branch.guard {
-                        // no tests for this pattern remain, but we cannot discard it yet
-                        // because it has a guard!
-                        return Some(GuardedTest::Placeholder);
-                    } else {
-                        return None;
-                    }
-                }
+        .find(|(path, _)| path == selected_path)?;
 
-                RecordDestructure(destructs, _) => {
-                    // not rendered, so pick the easiest
-                    let union = Union {
-                        render_as: RenderAs::Tag,
-                        alternatives: vec![Ctor {
-                            tag_id: TagId(0),
-                            name: CtorName::Tag(TagName(RECORD_TAG_NAME.into())),
-                            arity: destructs.len(),
-                        }],
-                    };
-
-                    let mut arguments = std::vec::Vec::new();
-
-                    for destruct in destructs {
-                        match &destruct.typ {
-                            DestructType::Guard(guard) => {
-                                arguments.push((guard.clone(), destruct.layout));
-                            }
-                            DestructType::Required(_) => {
-                                arguments.push((Pattern::Underscore, destruct.layout));
-                            }
-                        }
-                    }
-
-                    IsCtor {
-                        tag_id: 0,
-                        ctor_name: CtorName::Tag(TagName(RECORD_TAG_NAME.into())),
-                        union,
-                        arguments,
-                    }
-                }
-
-                NewtypeDestructure {
-                    tag_name,
-                    arguments,
-                } => {
-                    let tag_id = 0;
-                    let union =
-                        Union::newtype_wrapper(CtorName::Tag(tag_name.clone()), arguments.len());
-
-                    IsCtor {
-                        tag_id,
-                        ctor_name: CtorName::Tag(tag_name.clone()),
-                        union,
-                        arguments: arguments.to_vec(),
-                    }
-                }
-
-                AppliedTag {
-                    tag_name,
-                    tag_id,
-                    arguments,
-                    union,
-                    ..
-                } => IsCtor {
-                    tag_id: *tag_id,
-                    ctor_name: CtorName::Tag(tag_name.clone()),
-                    union: union.clone(),
-                    arguments: arguments.to_vec(),
-                },
-
-                List {
-                    arity,
-                    element_layout: _,
-                    elements: _,
-                } => IsListLen {
-                    bound: match arity {
-                        ListArity::Exact(_) => ListLenBound::Exact,
-                        ListArity::Slice(_, _) => ListLenBound::AtLeast,
-                    },
-                    len: arity.min_len() as _,
-                },
-
-                Voided { .. } => internal_error!("unreachable"),
-
-                OpaqueUnwrap { opaque, argument } => {
-                    let union = Union {
-                        render_as: RenderAs::Tag,
-                        alternatives: vec![Ctor {
-                            tag_id: TagId(0),
-                            name: CtorName::Opaque(*opaque),
-                            arity: 1,
-                        }],
-                    };
-
-                    IsCtor {
-                        tag_id: 0,
-                        ctor_name: CtorName::Opaque(*opaque),
-                        union,
-                        arguments: vec![(**argument).clone()],
-                    }
-                }
-
-                BitLiteral { value, .. } => IsBit(*value),
-                EnumLiteral { tag_id, union, .. } => IsByte {
-                    tag_id: *tag_id as _,
-                    num_alts: union.alternatives.len(),
-                },
-                IntLiteral(v, precision) => IsInt(*v, *precision),
-                FloatLiteral(v, precision) => IsFloat(*v, *precision),
-                DecimalLiteral(v) => IsDecimal(*v),
-                StrLiteral(v) => IsStr(v.clone()),
-            };
-
-            let guarded_test = GuardedTest::TestNotGuarded { test };
-
-            Some(guarded_test)
+    match test_for_pattern(pattern) {
+        Some(test) => Some(GuardedTest::TestNotGuarded { test }),
+        None => {
+            if let Guard::Guard { .. } = &branch.guard {
+                // no tests for this pattern remain, but we cannot discard it yet
+                // because it has a guard!
+                Some(GuardedTest::Placeholder)
+            } else {
+                None
+            }
         }
     }
 }
@@ -656,6 +673,7 @@ fn test_at_path<'a>(
 
 // understanding: if the test is successful, where could we go?
 fn edges_for<'a>(
+    interner: &TLLayoutInterner<'a>,
     path: &[PathInstruction],
     branches: &[Branch<'a>],
     test: GuardedTest<'a>,
@@ -677,13 +695,14 @@ fn edges_for<'a>(
     };
 
     for branch in it {
-        new_branches.extend(to_relevant_branch(&test, path, branch));
+        new_branches.extend(to_relevant_branch(interner, &test, path, branch));
     }
 
     (test, new_branches)
 }
 
 fn to_relevant_branch<'a>(
+    interner: &TLLayoutInterner<'a>,
     guarded_test: &GuardedTest<'a>,
     path: &[PathInstruction],
     branch: &Branch<'a>,
@@ -707,13 +726,14 @@ fn to_relevant_branch<'a>(
                 Some(branch.clone())
             }
             GuardedTest::TestNotGuarded { test } => {
-                to_relevant_branch_help(test, path, start, end, branch, pattern)
+                to_relevant_branch_help(interner, test, path, start, end, branch, pattern)
             }
         },
     }
 }
 
 fn to_relevant_branch_help<'a>(
+    interner: &TLLayoutInterner<'a>,
     test: &Test<'a>,
     path: &[PathInstruction],
     mut start: Vec<(Vec<PathInstruction>, Pattern<'a>)>,
@@ -726,6 +746,10 @@ fn to_relevant_branch_help<'a>(
 
     match pattern {
         Identifier(_) | Underscore => Some(branch.clone()),
+
+        As(subpattern, _symbol) => {
+            to_relevant_branch_help(interner, test, path, start, end, branch, *subpattern)
+        }
 
         RecordDestructure(destructs, _) => match test {
             IsCtor {
@@ -898,11 +922,15 @@ fn to_relevant_branch_help<'a>(
 
                     // the test matches the constructor of this pattern
                     match layout {
-                        UnionLayout::NonRecursive(
-                            [[Layout::Struct {
-                                field_layouts: [_], ..
-                            }]],
-                        ) => {
+                        UnionLayout::NonRecursive([[arg]])
+                            if matches!(
+                                interner.get(*arg),
+                                Layout::Struct {
+                                    field_layouts: [_],
+                                    ..
+                                }
+                            ) =>
+                        {
                             // a one-element record equivalent
                             // Theory: Unbox doesn't have any value for us
                             debug_assert_eq!(arguments.len(), 1);
@@ -1094,6 +1122,8 @@ fn needs_tests(pattern: &Pattern) -> bool {
     match pattern {
         Identifier(_) | Underscore => false,
 
+        As(subpattern, _) => needs_tests(subpattern),
+
         NewtypeDestructure { .. }
         | RecordDestructure(..)
         | AppliedTag { .. }
@@ -1269,15 +1299,15 @@ enum Choice<'a> {
     Jump(Label),
 }
 
-type StoresVec<'a> = bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>;
+type StoresVec<'a> = bumpalo::collections::Vec<'a, (Symbol, InLayout<'a>, Expr<'a>)>;
 
 pub fn optimize_when<'a>(
     env: &mut Env<'a, '_>,
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     cond_symbol: Symbol,
-    cond_layout: Layout<'a>,
-    ret_layout: Layout<'a>,
+    cond_layout: InLayout<'a>,
+    ret_layout: InLayout<'a>,
     opt_branches: bumpalo::collections::Vec<'a, (Pattern<'a>, Guard<'a>, Stmt<'a>)>,
 ) -> Stmt<'a> {
     let (patterns, _indexed_branches) = opt_branches
@@ -1294,7 +1324,7 @@ pub fn optimize_when<'a>(
 
     let indexed_branches: Vec<_> = _indexed_branches;
 
-    let decision_tree = compile(patterns);
+    let decision_tree = compile(&layout_cache.interner, patterns);
     let decider = tree_to_decider(decision_tree);
 
     // for each target (branch body), count in how many ways it can be reached
@@ -1356,10 +1386,11 @@ enum PathInstruction {
 
 fn path_to_expr_help<'a>(
     env: &mut Env<'a, '_>,
+    layout_interner: &mut TLLayoutInterner<'a>,
     mut symbol: Symbol,
     path: &[PathInstruction],
-    mut layout: Layout<'a>,
-) -> (Symbol, StoresVec<'a>, Layout<'a>) {
+    mut layout: InLayout<'a>,
+) -> (Symbol, StoresVec<'a>, InLayout<'a>) {
     let mut stores = bumpalo::collections::Vec::new_in(env.arena);
 
     // let instructions = reverse_path(path);
@@ -1375,17 +1406,20 @@ fn path_to_expr_help<'a>(
             PathInstruction::TagIndex { index, tag_id } => {
                 let index = *index;
 
-                match &layout {
+                match layout_interner.get(layout) {
                     Layout::Union(union_layout) => {
                         let inner_expr = Expr::UnionAtIndex {
                             tag_id: *tag_id,
                             structure: symbol,
                             index,
-                            union_layout: *union_layout,
+                            union_layout,
                         };
 
-                        let inner_layout =
-                            union_layout.layout_at(*tag_id as TagIdIntType, index as usize);
+                        let inner_layout = union_layout.layout_at(
+                            layout_interner,
+                            *tag_id as TagIdIntType,
+                            index as usize,
+                        );
 
                         symbol = env.unique_symbol();
                         stores.push((symbol, inner_layout, inner_expr));
@@ -1425,7 +1459,7 @@ fn path_to_expr_help<'a>(
             PathInstruction::ListIndex { index } => {
                 let list_sym = symbol;
 
-                match layout {
+                match layout_interner.get(layout) {
                     Layout::Builtin(Builtin::List(elem_layout)) => {
                         let (index_sym, new_stores) = build_list_index_probe(env, list_sym, index);
 
@@ -1440,9 +1474,9 @@ fn path_to_expr_help<'a>(
                             arguments: env.arena.alloc([list_sym, index_sym]),
                         });
 
-                        stores.push((load_sym, *elem_layout, load_expr));
+                        stores.push((load_sym, elem_layout, load_expr));
 
-                        layout = *elem_layout;
+                        layout = elem_layout;
                         symbol = load_sym;
                     }
                     _ => internal_error!("not a list"),
@@ -1456,13 +1490,14 @@ fn path_to_expr_help<'a>(
 
 fn test_to_comparison<'a>(
     env: &mut Env<'a, '_>,
+    layout_interner: &mut TLLayoutInterner<'a>,
     cond_symbol: Symbol,
-    cond_layout: &Layout<'a>,
+    cond_layout: &InLayout<'a>,
     path: &[PathInstruction],
     test: Test<'a>,
 ) -> (StoresVec<'a>, Comparison, Option<ConstructorKnown<'a>>) {
     let (rhs_symbol, mut stores, test_layout) =
-        path_to_expr_help(env, cond_symbol, path, *cond_layout);
+        path_to_expr_help(env, layout_interner, cond_symbol, path, *cond_layout);
 
     match test {
         Test::IsCtor { tag_id, union, .. } => {
@@ -1471,7 +1506,7 @@ fn test_to_comparison<'a>(
             // (e.g. record pattern guard matches)
             debug_assert!(union.alternatives.len() > 1);
 
-            match test_layout {
+            match layout_interner.get(test_layout) {
                 Layout::Union(union_layout) => {
                     let lhs = Expr::Literal(Literal::Int((tag_id as i128).to_ne_bytes()));
 
@@ -1535,7 +1570,7 @@ fn test_to_comparison<'a>(
 
             let lhs = Expr::Literal(Literal::Byte(test_byte as u8));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::u8(), lhs));
+            stores.push((lhs_symbol, Layout::U8, lhs));
 
             (stores, (lhs_symbol, Comparator::Eq, rhs_symbol), None)
         }
@@ -1543,7 +1578,7 @@ fn test_to_comparison<'a>(
         Test::IsBit(test_bit) => {
             let lhs = Expr::Literal(Literal::Bool(test_bit));
             let lhs_symbol = env.unique_symbol();
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Bool), lhs));
+            stores.push((lhs_symbol, Layout::BOOL, lhs));
 
             (stores, (lhs_symbol, Comparator::Eq, rhs_symbol), None)
         }
@@ -1552,7 +1587,7 @@ fn test_to_comparison<'a>(
             let lhs = Expr::Literal(Literal::Str(env.arena.alloc(test_str)));
             let lhs_symbol = env.unique_symbol();
 
-            stores.push((lhs_symbol, Layout::Builtin(Builtin::Str), lhs));
+            stores.push((lhs_symbol, Layout::STR, lhs));
 
             (stores, (lhs_symbol, Comparator::Eq, rhs_symbol), None)
         }
@@ -1561,7 +1596,7 @@ fn test_to_comparison<'a>(
             let list_layout = test_layout;
             let list_sym = rhs_symbol;
 
-            match list_layout {
+            match layout_interner.get(list_layout) {
                 Layout::Builtin(Builtin::List(_elem_layout)) => {
                     let real_len_expr = Expr::Call(Call {
                         call_type: CallType::LowLevel {
@@ -1596,6 +1631,7 @@ fn test_to_comparison<'a>(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 enum Comparator {
     Eq,
     Geq,
@@ -1604,15 +1640,16 @@ enum Comparator {
 type Comparison = (Symbol, Comparator, Symbol);
 
 type Tests<'a> = std::vec::Vec<(
-    bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+    bumpalo::collections::Vec<'a, (Symbol, InLayout<'a>, Expr<'a>)>,
     Comparison,
     Option<ConstructorKnown<'a>>,
 )>;
 
 fn stores_and_condition<'a>(
     env: &mut Env<'a, '_>,
+    layout_interner: &mut TLLayoutInterner<'a>,
     cond_symbol: Symbol,
-    cond_layout: &Layout<'a>,
+    cond_layout: &InLayout<'a>,
     test_chain: Vec<(Vec<PathInstruction>, Test<'a>)>,
 ) -> Tests<'a> {
     let mut tests: Tests = Vec::with_capacity(test_chain.len());
@@ -1621,6 +1658,7 @@ fn stores_and_condition<'a>(
     for (path, test) in test_chain {
         tests.push(test_to_comparison(
             env,
+            layout_interner,
             cond_symbol,
             cond_layout,
             &path,
@@ -1634,8 +1672,8 @@ fn stores_and_condition<'a>(
 #[allow(clippy::too_many_arguments)]
 fn compile_test<'a>(
     env: &mut Env<'a, '_>,
-    ret_layout: Layout<'a>,
-    stores: bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+    ret_layout: InLayout<'a>,
+    stores: bumpalo::collections::Vec<'a, (Symbol, InLayout<'a>, Expr<'a>)>,
     lhs: Symbol,
     cmp: Comparator,
     rhs: Symbol,
@@ -1659,8 +1697,8 @@ fn compile_test<'a>(
 fn compile_test_help<'a>(
     env: &mut Env<'a, '_>,
     branch_info: ConstructorKnown<'a>,
-    ret_layout: Layout<'a>,
-    stores: bumpalo::collections::Vec<'a, (Symbol, Layout<'a>, Expr<'a>)>,
+    ret_layout: InLayout<'a>,
+    stores: bumpalo::collections::Vec<'a, (Symbol, InLayout<'a>, Expr<'a>)>,
     lhs: Symbol,
     cmp: Comparator,
     rhs: Symbol,
@@ -1717,7 +1755,7 @@ fn compile_test_help<'a>(
 
     cond = Stmt::Switch {
         cond_symbol: test_symbol,
-        cond_layout: Layout::Builtin(Builtin::Bool),
+        cond_layout: Layout::BOOL,
         ret_layout,
         branches,
         default_branch,
@@ -1736,12 +1774,7 @@ fn compile_test_help<'a>(
     });
 
     // write to the test symbol
-    cond = Stmt::Let(
-        test_symbol,
-        test,
-        Layout::Builtin(Builtin::Bool),
-        arena.alloc(cond),
-    );
+    cond = Stmt::Let(test_symbol, test, Layout::BOOL, arena.alloc(cond));
 
     // stores are in top-to-bottom order, so we have to add them in reverse
     for (symbol, layout, expr) in stores.into_iter().rev() {
@@ -1753,7 +1786,7 @@ fn compile_test_help<'a>(
 
 fn compile_tests<'a>(
     env: &mut Env<'a, '_>,
-    ret_layout: Layout<'a>,
+    ret_layout: InLayout<'a>,
     tests: Tests<'a>,
     fail: &'a Stmt<'a>,
     mut cond: Stmt<'a>,
@@ -1777,13 +1810,13 @@ fn compile_tests<'a>(
 enum ConstructorKnown<'a> {
     Both {
         scrutinee: Symbol,
-        layout: Layout<'a>,
+        layout: InLayout<'a>,
         pass: TagIdIntType,
         fail: TagIdIntType,
     },
     OnlyPass {
         scrutinee: Symbol,
-        layout: Layout<'a>,
+        layout: InLayout<'a>,
         tag_id: TagIdIntType,
     },
     Neither,
@@ -1792,7 +1825,7 @@ enum ConstructorKnown<'a> {
 impl<'a> ConstructorKnown<'a> {
     fn from_test_chain(
         cond_symbol: Symbol,
-        cond_layout: &Layout<'a>,
+        cond_layout: InLayout<'a>,
         test_chain: &[(Vec<PathInstruction>, Test)],
     ) -> Self {
         match test_chain {
@@ -1801,14 +1834,14 @@ impl<'a> ConstructorKnown<'a> {
                     if union.alternatives.len() == 2 {
                         // excluded middle: we also know the tag_id in the fail branch
                         ConstructorKnown::Both {
-                            layout: *cond_layout,
+                            layout: cond_layout,
                             scrutinee: cond_symbol,
                             pass: *tag_id,
                             fail: (*tag_id == 0) as _,
                         }
                     } else {
                         ConstructorKnown::OnlyPass {
-                            layout: *cond_layout,
+                            layout: cond_layout,
                             scrutinee: cond_symbol,
                             tag_id: *tag_id,
                         }
@@ -1830,8 +1863,8 @@ fn decide_to_branching<'a>(
     procs: &mut Procs<'a>,
     layout_cache: &mut LayoutCache<'a>,
     cond_symbol: Symbol,
-    cond_layout: Layout<'a>,
-    ret_layout: Layout<'a>,
+    cond_layout: InLayout<'a>,
+    ret_layout: InLayout<'a>,
     decider: Decider<'a, Choice<'a>>,
     jumps: &[(u64, JoinPointId, Stmt<'a>)],
 ) -> Stmt<'a> {
@@ -1885,7 +1918,7 @@ fn decide_to_branching<'a>(
             let decide = crate::ir::cond(
                 env,
                 test_symbol,
-                Layout::Builtin(Builtin::Bool),
+                Layout::BOOL,
                 pass_expr,
                 fail_expr,
                 ret_layout,
@@ -1894,8 +1927,8 @@ fn decide_to_branching<'a>(
             // calculate the guard value
             let param = Param {
                 symbol: test_symbol,
-                layout: Layout::Builtin(Builtin::Bool),
-                borrow: false,
+                layout: Layout::BOOL,
+                ownership: Ownership::Owned,
             };
 
             let join = Stmt::Join {
@@ -1937,9 +1970,15 @@ fn decide_to_branching<'a>(
             );
 
             let chain_branch_info =
-                ConstructorKnown::from_test_chain(cond_symbol, &cond_layout, &test_chain);
+                ConstructorKnown::from_test_chain(cond_symbol, cond_layout, &test_chain);
 
-            let tests = stores_and_condition(env, cond_symbol, &cond_layout, test_chain);
+            let tests = stores_and_condition(
+                env,
+                &mut layout_cache.interner,
+                cond_symbol,
+                &cond_layout,
+                test_chain,
+            );
 
             let number_of_tests = tests.len() as i64;
 
@@ -1986,8 +2025,13 @@ fn decide_to_branching<'a>(
             // the cond_layout can change in the process. E.g. if the cond is a Tag, we actually
             // switch on the tag discriminant (currently an i64 value)
             // NOTE the tag discriminant is not actually loaded, `cond` can point to a tag
-            let (inner_cond_symbol, cond_stores_vec, inner_cond_layout) =
-                path_to_expr_help(env, cond_symbol, &path, cond_layout);
+            let (inner_cond_symbol, cond_stores_vec, inner_cond_layout) = path_to_expr_help(
+                env,
+                &mut layout_cache.interner,
+                cond_symbol,
+                &path,
+                cond_layout,
+            );
 
             let default_branch = decide_to_branching(
                 env,
@@ -2064,7 +2108,8 @@ fn decide_to_branching<'a>(
 
             // We have learned more about the exact layout of the cond (based on the path)
             // but tests are still relative to the original cond symbol
-            let mut switch = if let Layout::Union(union_layout) = inner_cond_layout {
+            let inner_cond_layout_raw = layout_cache.get_in(inner_cond_layout);
+            let mut switch = if let Layout::Union(union_layout) = inner_cond_layout_raw {
                 let tag_id_symbol = env.unique_symbol();
 
                 let temp = Stmt::Switch {
@@ -2086,7 +2131,7 @@ fn decide_to_branching<'a>(
                     union_layout.tag_id_layout(),
                     env.arena.alloc(temp),
                 )
-            } else if let Layout::Builtin(Builtin::List(_)) = inner_cond_layout {
+            } else if let Layout::Builtin(Builtin::List(_)) = inner_cond_layout_raw {
                 let len_symbol = env.unique_symbol();
 
                 let switch = Stmt::Switch {
@@ -2132,7 +2177,7 @@ fn decide_to_branching<'a>(
 }
 
 /*
-fn boolean_all<'a>(arena: &'a Bump, tests: Vec<(Expr<'a>, Expr<'a>, Layout<'a>)>) -> Expr<'a> {
+fn boolean_all<'a>(arena: &'a Bump, tests: Vec<(Expr<'a>, Expr<'a>, InLayout<'a>)>) -> Expr<'a> {
     let mut expr = Expr::Bool(true);
 
     for (lhs, rhs, layout) in tests.into_iter().rev() {
@@ -2168,6 +2213,69 @@ fn test_always_succeeds(test: &Test) -> bool {
     }
 }
 
+fn sort_edge_tests_by_priority(edges: &mut [Edge<'_>]) {
+    use std::cmp::{Ordering, Ordering::*};
+    use GuardedTest::*;
+    edges.sort_by(|(t1, _), (t2, _)| match (t1, t2) {
+        // Guarded takes priority
+        (GuardedNoTest { .. }, GuardedNoTest { .. }) => Equal,
+        (GuardedNoTest { .. }, TestNotGuarded { .. }) | (GuardedNoTest { .. }, Placeholder) => Less,
+        // Interesting case: what test do we pick?
+        (TestNotGuarded { test: t1 }, TestNotGuarded { test: t2 }) => order_tests(t1, t2),
+        // Otherwise we are between guarded and fall-backs
+        (TestNotGuarded { .. }, GuardedNoTest { .. }) => Greater,
+        (TestNotGuarded { .. }, Placeholder) => Less,
+        // Placeholder is always last
+        (Placeholder, Placeholder) => Equal,
+        (Placeholder, GuardedNoTest { .. }) | (Placeholder, TestNotGuarded { .. }) => Greater,
+    });
+
+    fn order_tests(t1: &Test, t2: &Test) -> Ordering {
+        match (t1, t2) {
+            (
+                Test::IsListLen {
+                    bound: bound_l,
+                    len: l,
+                },
+                Test::IsListLen {
+                    bound: bound_m,
+                    len: m,
+                },
+            ) => {
+                // List tests can either check for
+                //   - exact length (= l)
+                //   - a size greater or equal to a given length (>= l)
+                // (>= l) tests can be superset of other tests
+                //   - (>= m) where m > l
+                //   - (= m)
+                // So, if m > l, we enforce the following order for list tests
+                //   (>= m) then (= l) then (>= l)
+                match m.cmp(l) {
+                    Less => Less, // (>= m) then (>= l)
+                    Greater => Greater,
+
+                    Equal => {
+                        use ListLenBound::*;
+                        match (bound_l, bound_m) {
+                            (Exact, AtLeast) => Less, // (= l) then (>= l)
+                            (AtLeast, Exact) => Greater,
+
+                            (AtLeast, AtLeast) | (Exact, Exact) => Equal,
+                        }
+                    }
+                }
+            }
+
+            (Test::IsListLen { .. }, t) | (t, Test::IsListLen { .. }) => internal_error!(
+                "list-length tests should never pair with another test {t:?} at the same level"
+            ),
+            // We don't care about anything other than list-length tests, since all other tests
+            // should be disjoint.
+            _ => Equal,
+        }
+    }
+}
+
 fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
     use Decider::*;
     use DecisionTree::*;
@@ -2179,44 +2287,67 @@ fn tree_to_decider(tree: DecisionTree) -> Decider<u64> {
             path,
             mut edges,
             default,
-        } => match default {
-            None => match edges.len() {
-                0 => panic!("compiler bug, somehow created an empty decision tree"),
-                1 => {
-                    let (_, sub_tree) = edges.remove(0);
+        } => {
+            // Some of the head-constructor tests we generate can be supersets of other tests.
+            // Edges must be ordered so that more general tests always happen after their
+            // specialized variants.
+            //
+            // For example, patterns
+            //
+            //   [1, ..] -> ...
+            //   [2, 1, ..] -> ...
+            //
+            // may generate the edges
+            //
+            //   ListLen(>=1) -> <rest>
+            //   ListLen(>=2) -> <rest>
+            //
+            // but evaluated in exactly this order, the second edge is never reachable.
+            // The necessary ordering is
+            //
+            //   ListLen(>=2) -> <rest>
+            //   ListLen(>=1) -> <rest>
+            sort_edge_tests_by_priority(&mut edges);
 
-                    tree_to_decider(sub_tree)
-                }
-                2 => {
-                    let (_, failure_tree) = edges.remove(1);
-                    let (guarded_test, success_tree) = edges.remove(0);
+            match default {
+                None => match edges.len() {
+                    0 => panic!("compiler bug, somehow created an empty decision tree"),
+                    1 => {
+                        let (_, sub_tree) = edges.remove(0);
 
-                    chain_decider(path, guarded_test, failure_tree, success_tree)
-                }
+                        tree_to_decider(sub_tree)
+                    }
+                    2 => {
+                        let (_, failure_tree) = edges.remove(1);
+                        let (guarded_test, success_tree) = edges.remove(0);
 
-                _ => {
-                    let fallback = edges.remove(edges.len() - 1).1;
+                        chain_decider(path, guarded_test, failure_tree, success_tree)
+                    }
 
-                    fanout_decider(path, fallback, edges)
-                }
-            },
+                    _ => {
+                        let fallback = edges.remove(edges.len() - 1).1;
 
-            Some(last) => match edges.len() {
-                0 => tree_to_decider(*last),
-                1 => {
-                    let failure_tree = *last;
-                    let (guarded_test, success_tree) = edges.remove(0);
+                        fanout_decider(path, fallback, edges)
+                    }
+                },
 
-                    chain_decider(path, guarded_test, failure_tree, success_tree)
-                }
+                Some(last) => match edges.len() {
+                    0 => tree_to_decider(*last),
+                    1 => {
+                        let failure_tree = *last;
+                        let (guarded_test, success_tree) = edges.remove(0);
 
-                _ => {
-                    let fallback = *last;
+                        chain_decider(path, guarded_test, failure_tree, success_tree)
+                    }
 
-                    fanout_decider(path, fallback, edges)
-                }
-            },
-        },
+                    _ => {
+                        let fallback = *last;
+
+                        fanout_decider(path, fallback, edges)
+                    }
+                },
+            }
+        }
     }
 }
 

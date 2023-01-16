@@ -17,7 +17,7 @@ use crate::inc_dec::{collect_stmt, occurring_variables_expr, JPLiveVarMap, LiveV
 use crate::ir::{
     BranchInfo, Call, Expr, ListLiteralElement, Proc, Stmt, UpdateModeId, UpdateModeIds,
 };
-use crate::layout::{Layout, TagIdIntType, UnionLayout};
+use crate::layout::{Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::MutSet;
@@ -25,6 +25,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 pub fn insert_reset_reuse<'a, 'i>(
     arena: &'a Bump,
+    interner: &'i mut STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
@@ -32,6 +33,7 @@ pub fn insert_reset_reuse<'a, 'i>(
 ) -> Proc<'a> {
     let mut env = Env {
         arena,
+        interner,
         home,
         ident_ids,
         update_mode_ids,
@@ -65,6 +67,7 @@ fn may_reuse(tag_layout: UnionLayout, tag_id: TagIdIntType, other: &CtorInfo) ->
 #[derive(Debug)]
 struct Env<'a, 'i> {
     arena: &'a Bump,
+    interner: &'i mut STLayoutInterner<'a>,
 
     /// required for creating new `Symbol`s
     home: ModuleId,
@@ -191,6 +194,27 @@ fn function_s<'a, 'i>(
             }
         }
 
+        Dbg {
+            symbol,
+            variable,
+            remainder,
+        } => {
+            let continuation: &Stmt = remainder;
+            let new_continuation = function_s(env, w, c, continuation);
+
+            if std::ptr::eq(continuation, new_continuation) || continuation == new_continuation {
+                stmt
+            } else {
+                let new_refcounting = Dbg {
+                    symbol: *symbol,
+                    variable: *variable,
+                    remainder: new_continuation,
+                };
+
+                arena.alloc(new_refcounting)
+            }
+        }
+
         Expect {
             condition,
             region,
@@ -311,7 +335,7 @@ fn insert_reset<'a>(
         update_mode: w.update_mode,
     };
 
-    let layout = Layout::Union(union_layout);
+    let layout = env.interner.insert(Layout::Union(union_layout));
 
     stmt = env
         .arena
@@ -433,6 +457,34 @@ fn function_d_main<'a, 'i>(
             } else {
                 let b = try_function_s(env, x, c, b);
                 let refcounting = Refcounting(*modify_rc, b);
+
+                (arena.alloc(refcounting), found)
+            }
+        }
+
+        Dbg {
+            symbol,
+            variable,
+            remainder,
+        } => {
+            let (b, found) = function_d_main(env, x, c, remainder);
+
+            if found || *symbol != x {
+                let refcounting = Dbg {
+                    symbol: *symbol,
+                    variable: *variable,
+                    remainder: b,
+                };
+
+                (arena.alloc(refcounting), found)
+            } else {
+                let b = try_function_s(env, x, c, b);
+
+                let refcounting = Dbg {
+                    symbol: *symbol,
+                    variable: *variable,
+                    remainder: b,
+                };
 
                 (arena.alloc(refcounting), found)
             }
@@ -563,11 +615,11 @@ fn function_r_branch_body<'a, 'i>(
             scrutinee,
             layout,
             tag_id,
-        } => match layout {
+        } => match env.interner.get(*layout) {
             Layout::Union(UnionLayout::NonRecursive(_)) => temp,
             Layout::Union(union_layout) if !union_layout.tag_is_null(*tag_id) => {
                 let ctor_info = CtorInfo {
-                    layout: *union_layout,
+                    layout: union_layout,
                     id: *tag_id,
                 };
                 function_d(env, *scrutinee, &ctor_info, temp)
@@ -656,6 +708,22 @@ fn function_r<'a, 'i>(env: &mut Env<'a, 'i>, stmt: &'a Stmt<'a>) -> &'a Stmt<'a>
             arena.alloc(Refcounting(*modify_rc, b))
         }
 
+        Dbg {
+            symbol,
+            variable,
+            remainder,
+        } => {
+            let b = function_r(env, remainder);
+
+            let expect = Dbg {
+                symbol: *symbol,
+                variable: *variable,
+                remainder: b,
+            };
+
+            arena.alloc(expect)
+        }
+
         Expect {
             condition,
             region,
@@ -726,6 +794,9 @@ fn has_live_var<'a>(jp_live_vars: &JPLiveVarMap, stmt: &'a Stmt<'a>, needle: Sym
         Refcounting(modify_rc, cont) => {
             modify_rc.get_symbol() == needle || has_live_var(jp_live_vars, cont, needle)
         }
+        Dbg {
+            symbol, remainder, ..
+        } => *symbol == needle || has_live_var(jp_live_vars, remainder, needle),
         Expect {
             condition,
             remainder,

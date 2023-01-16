@@ -2,13 +2,13 @@ use crate::llvm::build::Env;
 use inkwell::values::{BasicValueEnum, PointerValue, StructValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
-use roc_mono::layout::Layout;
+use roc_mono::layout::{InLayout, Layout};
 use roc_target::PtrWidth;
 
 use super::bitcode::{call_str_bitcode_fn, BitcodeReturns};
 use super::build::BuilderExt;
 
-pub static CHAR_LAYOUT: Layout = Layout::u8();
+pub static CHAR_LAYOUT: InLayout = Layout::U8;
 
 pub(crate) fn decode_from_utf8_result<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,

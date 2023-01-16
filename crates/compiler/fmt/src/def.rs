@@ -1,10 +1,10 @@
 use crate::annotation::{Formattable, Newlines, Parens};
 use crate::pattern::fmt_pattern;
-use crate::spaces::{fmt_spaces, INDENT};
+use crate::spaces::{fmt_default_newline, fmt_spaces, INDENT};
 use crate::Buf;
 use roc_parse::ast::{
-    AbilityMember, Defs, Expr, ExtractSpaces, Pattern, Spaces, TypeAnnotation, TypeDef, TypeHeader,
-    ValueDef,
+    AbilityMember, Defs, Expr, ExtractSpaces, Pattern, Spaces, StrLiteral, TypeAnnotation, TypeDef,
+    TypeHeader, ValueDef,
 };
 use roc_region::all::Loc;
 
@@ -22,11 +22,17 @@ impl<'a> Formattable for Defs<'a> {
         _newlines: Newlines,
         indent: u16,
     ) {
+        let mut prev_spaces = true;
+
         for (index, def) in self.defs().enumerate() {
             let spaces_before = &self.spaces[self.space_before[index].indices()];
             let spaces_after = &self.spaces[self.space_after[index].indices()];
 
-            fmt_spaces(buf, spaces_before.iter(), indent);
+            if prev_spaces {
+                fmt_spaces(buf, spaces_before.iter(), indent);
+            } else {
+                fmt_default_newline(buf, spaces_before, indent);
+            }
 
             match def {
                 Ok(type_def) => type_def.format(buf, indent),
@@ -34,6 +40,8 @@ impl<'a> Formattable for Defs<'a> {
             }
 
             fmt_spaces(buf, spaces_after.iter(), indent);
+
+            prev_spaces = !spaces_after.is_empty();
         }
     }
 }
@@ -69,6 +77,7 @@ impl<'a> Formattable for TypeDef<'a> {
                 for var in *vars {
                     buf.spaces(1);
                     fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
+                    buf.indent(indent);
                 }
 
                 buf.push_str(" :");
@@ -87,6 +96,7 @@ impl<'a> Formattable for TypeDef<'a> {
                 for var in *vars {
                     buf.spaces(1);
                     fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
+                    buf.indent(indent);
                 }
 
                 buf.push_str(" :=");
@@ -128,6 +138,7 @@ impl<'a> Formattable for TypeDef<'a> {
                 for var in *vars {
                     buf.spaces(1);
                     fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
+                    buf.indent(indent);
                 }
 
                 buf.push_str(" has");
@@ -176,16 +187,18 @@ impl<'a> Formattable for ValueDef<'a> {
         &self,
         buf: &mut Buf<'buf>,
         _parens: Parens,
-        _newlines: Newlines,
+        newlines: Newlines,
         indent: u16,
     ) {
         use roc_parse::ast::ValueDef::*;
         match self {
             Annotation(loc_pattern, loc_annotation) => {
                 loc_pattern.format(buf, indent);
+                buf.indent(indent);
 
                 if loc_annotation.is_multiline() {
                     buf.push_str(" :");
+                    buf.spaces(1);
 
                     let should_outdent = match loc_annotation.value {
                         TypeAnnotation::SpaceBefore(sub_def, spaces) => match sub_def {
@@ -200,7 +213,6 @@ impl<'a> Formattable for ValueDef<'a> {
                     };
 
                     if should_outdent {
-                        buf.spaces(1);
                         match loc_annotation.value {
                             TypeAnnotation::SpaceBefore(sub_def, _) => {
                                 sub_def.format_with_options(
@@ -223,7 +235,7 @@ impl<'a> Formattable for ValueDef<'a> {
                         loc_annotation.format_with_options(
                             buf,
                             Parens::NotNeeded,
-                            Newlines::Yes,
+                            newlines,
                             indent + INDENT,
                         );
                     }
@@ -382,6 +394,7 @@ pub fn fmt_body<'a, 'buf>(
     indent: u16,
 ) {
     pattern.format_with_options(buf, Parens::InApply, Newlines::No, indent);
+    buf.indent(indent);
     buf.push_str(" =");
 
     if body.is_multiline() {
@@ -407,7 +420,7 @@ pub fn fmt_body<'a, 'buf>(
                     );
                 }
             }
-            Expr::BinOps(_, _) => {
+            Expr::Defs(..) | Expr::BinOps(_, _) => {
                 // Binop chains always get a newline. Otherwise you can have things like:
                 //
                 //     something = foo
@@ -421,6 +434,10 @@ pub fn fmt_body<'a, 'buf>(
                 //
                 // This makes it clear what the binop is applying to!
                 buf.newline();
+                body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
+            }
+            Expr::When(..) | Expr::Str(StrLiteral::Block(_)) => {
+                buf.ensure_ends_with_newline();
                 body.format_with_options(buf, Parens::NotNeeded, Newlines::Yes, indent + INDENT);
             }
             _ => {

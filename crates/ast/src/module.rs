@@ -10,8 +10,6 @@ pub fn load_module(
     roc_cache_dir: RocCacheDir<'_>,
     threading: Threading,
 ) -> LoadedModule {
-    let subs_by_module = Default::default();
-
     let load_config = LoadConfig {
         target_info: TargetInfo::default_x86_64(), // editor only needs type info, so this is unused
         render: roc_reporting::report::RenderTarget::ColorTerminal,
@@ -21,13 +19,8 @@ pub fn load_module(
     };
 
     let arena = Bump::new();
-    let loaded = roc_load::load_and_typecheck(
-        &arena,
-        src_file.to_path_buf(),
-        subs_by_module,
-        roc_cache_dir,
-        load_config,
-    );
+    let loaded =
+        roc_load::load_and_typecheck(&arena, src_file.to_path_buf(), roc_cache_dir, load_config);
 
     match loaded {
         Ok(x) => x,

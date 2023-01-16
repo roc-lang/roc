@@ -1,6 +1,6 @@
 use core::ffi::c_void;
 use libc;
-use pulldown_cmark::{html, Parser};
+use pulldown_cmark::{html, Parser, Options};
 use roc_std::RocStr;
 use std::env;
 use std::ffi::CStr;
@@ -192,7 +192,8 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     })?;
 
     let mut content_html = String::new();
-    let parser = Parser::new(&content_md);
+    let options = Options::all();
+    let parser = Parser::new_ext(&content_md, options);
     html::push_html(&mut content_html, parser);
 
     let roc_relpath = RocStr::from(output_relpath.to_str().unwrap());

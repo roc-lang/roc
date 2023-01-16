@@ -45,13 +45,18 @@ const ResultStrStr = extern struct {
     isOk: bool,
 };
 
-extern fn roc__main_1_exposed(RocStr) callconv(.C) ResultStrStr;
+extern fn roc__main_1_exposed(RocStr, RocStr) callconv(.C) ResultStrStr;
+
+const hostJavaScriptBytes = @embedFile("../client-side/host.js");
 
 pub fn main() u8 {
     const json = RocStr.fromSlice("42");
     defer json.deinit();
 
-    const result = roc__main_1_exposed(json);
+    const hostJavaScript = RocStr.fromSlice(hostJavaScriptBytes);
+    defer hostJavaScript.deinit();
+
+    const result = roc__main_1_exposed(json, hostJavaScript);
     defer result.payload.deinit();
 
     const writer = if (result.isOk)

@@ -1,6 +1,6 @@
 use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
 use roc_can::abilities::{PendingAbilitiesStore, PendingMemberType};
-use roc_can::constraint::{Constraint, Constraints};
+use roc_can::constraint::{Constraint, Constraints, Generalizable};
 use roc_can::expected::Expected;
 use roc_can::expr::Declarations;
 use roc_can::pattern::Pattern;
@@ -76,6 +76,7 @@ fn constrain_symbols_from_requires(
                     Constraint::True,
                     constraint,
                     def_pattern_state,
+                    Generalizable(true),
                 )
             } else {
                 // Otherwise, this symbol comes from an app module - we want to check that the type
@@ -158,6 +159,8 @@ pub fn frontload_ability_constraints(
                 Constraint::True,
                 constraint,
                 def_pattern_state,
+                // Ability signatures can always be generalized since they're prototypical
+                Generalizable(true),
             );
         }
     }

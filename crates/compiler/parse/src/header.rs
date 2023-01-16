@@ -45,6 +45,7 @@ pub enum HeaderType<'a> {
         /// usually something other than `pf`
         config_shorthand: &'a str,
         exposes: &'a [Loc<ModuleName<'a>>],
+        exposes_ids: &'a [ModuleId],
     },
     Platform {
         opt_app_module_id: Option<ModuleId>,
@@ -54,6 +55,7 @@ pub enum HeaderType<'a> {
         requires: &'a [Loc<TypedIdent<'a>>],
         requires_types: &'a [Loc<UppercaseIdent<'a>>],
         exposes: &'a [Loc<ModuleName<'a>>],
+        exposes_ids: &'a [ModuleId],
 
         /// usually `pf`
         config_shorthand: &'a str,
@@ -329,7 +331,10 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
 
 pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> {
     then(
-        loc!(specialize(EPackageName::BadPath, string_literal::parse())),
+        loc!(specialize(
+            EPackageName::BadPath,
+            string_literal::parse_str_literal()
+        )),
         move |_arena, state, progress, text| match text.value {
             StrLiteral::PlainLine(text) => Ok((progress, PackageName(text), state)),
             StrLiteral::Line(_) => Err((progress, EPackageName::Escapes(text.region.start()))),

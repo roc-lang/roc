@@ -1,63 +1,4 @@
-interface Str
-    exposes [
-        Utf8Problem,
-        Utf8ByteProblem,
-        concat,
-        isEmpty,
-        joinWith,
-        split,
-        repeat,
-        countGraphemes,
-        countUtf8Bytes,
-        startsWithScalar,
-        toUtf8,
-        fromUtf8,
-        fromUtf8Range,
-        startsWith,
-        endsWith,
-        trim,
-        trimLeft,
-        trimRight,
-        toDec,
-        toF64,
-        toF32,
-        toNat,
-        toU128,
-        toI128,
-        toU64,
-        toI64,
-        toU32,
-        toI32,
-        toU16,
-        toI16,
-        toU8,
-        toI8,
-        toScalars,
-        replaceEach,
-        replaceFirst,
-        replaceLast,
-        splitFirst,
-        splitLast,
-        walkUtf8WithIndex,
-        reserve,
-        appendScalar,
-        walkScalars,
-        walkScalarsUntil,
-        withCapacity,
-        withPrefix,
-        graphemes,
-    ]
-    imports [
-        Bool.{ Bool, Eq },
-        Result.{ Result },
-        List,
-        Num.{ Nat, Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec },
-    ]
-
-## # Types
-##
-## Dealing with text is a deep topic, so by design, Roc's `Str` module sticks
-## to the basics.
+## Working with Unicode strings in Roc.
 ##
 ## ### Unicode
 ##
@@ -128,6 +69,63 @@ interface Str
 ## and you can use it as many times as you like inside a string. The name
 ## between the parentheses must refer to a `Str` value that is currently in
 ## scope, and it must be a name - it can't be an arbitrary expression like a function call.
+interface Str
+    exposes [
+        Utf8Problem,
+        Utf8ByteProblem,
+        concat,
+        isEmpty,
+        joinWith,
+        split,
+        repeat,
+        countGraphemes,
+        countUtf8Bytes,
+        startsWithScalar,
+        toUtf8,
+        fromUtf8,
+        fromUtf8Range,
+        startsWith,
+        endsWith,
+        trim,
+        trimLeft,
+        trimRight,
+        toDec,
+        toF64,
+        toF32,
+        toNat,
+        toU128,
+        toI128,
+        toU64,
+        toI64,
+        toU32,
+        toI32,
+        toU16,
+        toI16,
+        toU8,
+        toI8,
+        toScalars,
+        replaceEach,
+        replaceFirst,
+        replaceLast,
+        splitFirst,
+        splitLast,
+        walkUtf8WithIndex,
+        reserve,
+        appendScalar,
+        walkScalars,
+        walkScalarsUntil,
+        withCapacity,
+        withPrefix,
+        graphemes,
+    ]
+    imports [
+        Bool.{ Bool, Eq },
+        Result.{ Result },
+        List,
+        Num.{ Nat, Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec },
+    ]
+
+## Test
 Utf8ByteProblem : [
     InvalidStartByte,
     UnexpectedEndOfSequence,

@@ -1,30 +1,35 @@
+#![allow(clippy::too_many_arguments)]
+
 use bumpalo::collections::vec::Vec;
-use roc_builtins::bitcode::IntWidth;
-use roc_intern::Interner;
 use roc_module::low_level::{LowLevel, LowLevel::*};
 use roc_module::symbol::{IdentIds, Symbol};
 use roc_target::PtrWidth;
 
+use crate::borrow::Ownership;
 use crate::code_gen_help::let_lowlevel;
 use crate::ir::{
     BranchInfo, Call, CallType, Expr, JoinPointId, Literal, ModifyRc, Param, Stmt, UpdateModeId,
 };
-use crate::layout::{Builtin, Layout, TagIdIntType, UnionLayout};
+use crate::layout::{
+    Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
+};
 
 use super::{CodeGenHelp, Context, HelperOp};
 
-const LAYOUT_BOOL: Layout = Layout::Builtin(Builtin::Bool);
-const LAYOUT_UNIT: Layout = Layout::UNIT;
-const LAYOUT_U32: Layout = Layout::Builtin(Builtin::Int(IntWidth::U32));
+const LAYOUT_BOOL: InLayout = Layout::BOOL;
+const LAYOUT_UNIT: InLayout = Layout::UNIT;
+const LAYOUT_U32: InLayout = Layout::U32;
 
 // TODO: Replace usages with root.union_refcount
-const LAYOUT_PTR: Layout = Layout::RecursivePointer;
+// TODO(recursive-layouts): update once we have disjoint recursive pointers
+const LAYOUT_PTR: InLayout = Layout::RECURSIVE_PTR;
 
 pub fn refcount_stmt<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
-    layout: Layout<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    layout: InLayout<'a>,
     modify: &ModifyRc,
     following: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
@@ -45,6 +50,7 @@ pub fn refcount_stmt<'a>(
                 .call_specialized_op(
                     ident_ids,
                     ctx,
+                    layout_interner,
                     layout,
                     arena.alloc([*structure, amount_sym]),
                 )
@@ -58,18 +64,32 @@ pub fn refcount_stmt<'a>(
             // Call helper proc, passing the Roc structure
             let call_result_empty = root.create_symbol(ident_ids, "call_result_empty");
             let call_expr = root
-                .call_specialized_op(ident_ids, ctx, layout, arena.alloc([*structure]))
+                .call_specialized_op(
+                    ident_ids,
+                    ctx,
+                    layout_interner,
+                    layout,
+                    arena.alloc([*structure]),
+                )
                 .unwrap();
             let call_stmt = Stmt::Let(call_result_empty, call_expr, LAYOUT_UNIT, following);
             arena.alloc(call_stmt)
         }
 
         ModifyRc::DecRef(structure) => {
-            match layout {
+            match layout_interner.get(layout) {
                 // Str has no children, so we might as well do what we normally do and call the helper.
                 Layout::Builtin(Builtin::Str) => {
                     ctx.op = HelperOp::Dec;
-                    refcount_stmt(root, ident_ids, ctx, layout, modify, following)
+                    refcount_stmt(
+                        root,
+                        ident_ids,
+                        ctx,
+                        layout_interner,
+                        layout,
+                        modify,
+                        following,
+                    )
                 }
 
                 // Struct and non-recursive Unions are stack-only, so DecRef is a no-op
@@ -80,7 +100,14 @@ pub fn refcount_stmt<'a>(
                 // and replace any return statements with jumps to the `following` statement.
                 _ => match ctx.op {
                     HelperOp::DecRef(jp_decref) => {
-                        let rc_stmt = refcount_generic(root, ident_ids, ctx, layout, *structure);
+                        let rc_stmt = refcount_generic(
+                            root,
+                            ident_ids,
+                            ctx,
+                            layout_interner,
+                            layout,
+                            *structure,
+                        );
                         let join = Stmt::Join {
                             id: jp_decref,
                             parameters: &[],
@@ -100,37 +127,67 @@ pub fn refcount_generic<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
-    layout: Layout<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    layout: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
-    debug_assert!(is_rc_implemented_yet(root.layout_interner, &layout));
+    debug_assert!(is_rc_implemented_yet(layout_interner, layout));
 
-    match layout {
+    match layout_interner.get(layout) {
         Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
             // Generate a dummy function that immediately returns Unit
             // Some higher-order Zig builtins *always* call an RC function on List elements.
             rc_return_stmt(root, ident_ids, ctx)
         }
         Layout::Builtin(Builtin::Str) => refcount_str(root, ident_ids, ctx),
-        Layout::Builtin(Builtin::List(elem_layout)) => {
-            refcount_list(root, ident_ids, ctx, &layout, elem_layout, structure)
-        }
-        Layout::Struct { field_layouts, .. } => {
-            refcount_struct(root, ident_ids, ctx, field_layouts, structure)
-        }
-        Layout::Union(union_layout) => {
-            refcount_union(root, ident_ids, ctx, union_layout, structure)
-        }
+        Layout::Builtin(Builtin::List(elem_layout)) => refcount_list(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            layout,
+            elem_layout,
+            structure,
+        ),
+        Layout::Struct { field_layouts, .. } => refcount_struct(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            field_layouts,
+            structure,
+        ),
+        Layout::Union(union_layout) => refcount_union(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            union_layout,
+            structure,
+        ),
         Layout::LambdaSet(lambda_set) => {
-            let runtime_layout = lambda_set.runtime_representation(root.layout_interner);
-            refcount_generic(root, ident_ids, ctx, runtime_layout, structure)
+            let runtime_layout = lambda_set.representation;
+            refcount_generic(
+                root,
+                ident_ids,
+                ctx,
+                layout_interner,
+                runtime_layout,
+                structure,
+            )
         }
         Layout::RecursivePointer => unreachable!(
             "We should never call a refcounting helper on a RecursivePointer layout directly"
         ),
-        Layout::Boxed(inner_layout) => {
-            refcount_boxed(root, ident_ids, ctx, &layout, inner_layout, structure)
-        }
+        Layout::Boxed(inner_layout) => refcount_boxed(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            layout,
+            inner_layout,
+            structure,
+        ),
     }
 }
 
@@ -138,7 +195,8 @@ pub fn refcount_reset_proc_body<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
-    layout: Layout<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    layout: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
@@ -147,7 +205,7 @@ pub fn refcount_reset_proc_body<'a>(
     let is_unique = root.create_symbol(ident_ids, "is_unique");
     let addr = root.create_symbol(ident_ids, "addr");
 
-    let union_layout = match layout {
+    let union_layout = match layout_interner.get(layout) {
         Layout::Union(u) => u,
         _ => unimplemented!("Reset is only implemented for UnionLayout"),
     };
@@ -206,7 +264,9 @@ pub fn refcount_reset_proc_body<'a>(
         let alloc_addr_stmt = {
             let alignment = root.create_symbol(ident_ids, "alignment");
             let alignment_expr = Expr::Literal(Literal::Int(
-                (layout.alignment_bytes(root.layout_interner, root.target_info) as i128)
+                (layout_interner
+                    .get(layout)
+                    .alignment_bytes(layout_interner, root.target_info) as i128)
                     .to_ne_bytes(),
             ));
             let alloc_addr = root.create_symbol(ident_ids, "alloc_addr");
@@ -241,6 +301,7 @@ pub fn refcount_reset_proc_body<'a>(
             root,
             ident_ids,
             ctx,
+            layout_interner,
             union_layout,
             tag_layouts,
             null_id,
@@ -260,7 +321,13 @@ pub fn refcount_reset_proc_body<'a>(
     let else_stmt = {
         let decrement_unit = root.create_symbol(ident_ids, "decrement_unit");
         let decrement_expr = root
-            .call_specialized_op(ident_ids, ctx, layout, root.arena.alloc([structure]))
+            .call_specialized_op(
+                ident_ids,
+                ctx,
+                layout_interner,
+                layout,
+                root.arena.alloc([structure]),
+            )
             .unwrap();
         let decrement_stmt = |next| Stmt::Let(decrement_unit, decrement_expr, LAYOUT_UNIT, next);
 
@@ -353,38 +420,36 @@ pub fn refcount_reset_proc_body<'a>(
 // Check if refcounting is implemented yet. In the long term, this will be deleted.
 // In the short term, it helps us to skip refcounting and let it leak, so we can make
 // progress incrementally. Kept in sync with generate_procs using assertions.
-pub fn is_rc_implemented_yet<'a, I>(interner: &I, layout: &Layout<'a>) -> bool
+pub fn is_rc_implemented_yet<'a, I>(interner: &I, layout: InLayout<'a>) -> bool
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     use UnionLayout::*;
 
-    match layout {
+    match interner.get(layout) {
         Layout::Builtin(Builtin::List(elem_layout)) => is_rc_implemented_yet(interner, elem_layout),
         Layout::Builtin(_) => true,
         Layout::Struct { field_layouts, .. } => field_layouts
             .iter()
-            .all(|l| is_rc_implemented_yet(interner, l)),
+            .all(|l| is_rc_implemented_yet(interner, *l)),
         Layout::Union(union_layout) => match union_layout {
             NonRecursive(tags) => tags
                 .iter()
-                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, l))),
+                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, *l))),
             Recursive(tags) => tags
                 .iter()
-                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, l))),
+                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, *l))),
             NonNullableUnwrapped(fields) => {
-                fields.iter().all(|l| is_rc_implemented_yet(interner, l))
+                fields.iter().all(|l| is_rc_implemented_yet(interner, *l))
             }
             NullableWrapped { other_tags, .. } => other_tags
                 .iter()
-                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, l))),
+                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, *l))),
             NullableUnwrapped { other_fields, .. } => other_fields
                 .iter()
-                .all(|l| is_rc_implemented_yet(interner, l)),
+                .all(|l| is_rc_implemented_yet(interner, *l)),
         },
-        Layout::LambdaSet(lambda_set) => {
-            is_rc_implemented_yet(interner, &lambda_set.runtime_representation(interner))
-        }
+        Layout::LambdaSet(lambda_set) => is_rc_implemented_yet(interner, lambda_set.representation),
         Layout::RecursivePointer => true,
         Layout::Boxed(_) => true,
     }
@@ -694,16 +759,17 @@ fn refcount_list<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
-    layout: &Layout,
-    elem_layout: &'a Layout,
+    layout_interner: &mut STLayoutInterner<'a>,
+    layout: InLayout,
+    elem_layout: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
     let layout_isize = root.layout_isize;
     let arena = root.arena;
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_union_layout = UnionLayout::NonNullableUnwrapped(arena.alloc([*elem_layout]));
-    let box_layout = Layout::Union(box_union_layout);
+    let box_union_layout = UnionLayout::NonNullableUnwrapped(arena.alloc([elem_layout]));
+    let box_layout = layout_interner.insert(Layout::Union(box_union_layout));
 
     //
     // Check if the list is empty
@@ -743,7 +809,7 @@ fn refcount_list<'a>(
     //
 
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let alignment = layout.alignment_bytes(root.layout_interner, root.target_info);
+    let alignment = layout_interner.alignment_bytes(layout);
 
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_list = modify_refcount(
@@ -764,21 +830,23 @@ fn refcount_list<'a>(
         arena.alloc(modify_list),
     );
 
-    let modify_elems_and_list = if elem_layout.is_refcounted() && !ctx.op.is_decref() {
-        refcount_list_elems(
-            root,
-            ident_ids,
-            ctx,
-            elem_layout,
-            LAYOUT_UNIT,
-            box_union_layout,
-            len,
-            elements,
-            get_rc_and_modify_list,
-        )
-    } else {
-        get_rc_and_modify_list
-    };
+    let modify_elems_and_list =
+        if layout_interner.get(elem_layout).is_refcounted() && !ctx.op.is_decref() {
+            refcount_list_elems(
+                root,
+                ident_ids,
+                ctx,
+                layout_interner,
+                elem_layout,
+                LAYOUT_UNIT,
+                box_union_layout,
+                len,
+                elements,
+                get_rc_and_modify_list,
+            )
+        } else {
+            get_rc_and_modify_list
+        };
 
     //
     // Do nothing if the list is empty
@@ -814,13 +882,13 @@ fn refcount_list<'a>(
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn refcount_list_elems<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
-    elem_layout: &Layout<'a>,
-    ret_layout: Layout<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
+    elem_layout: InLayout<'a>,
+    ret_layout: InLayout<'a>,
     box_union_layout: UnionLayout<'a>,
     length: Symbol,
     elements: Symbol,
@@ -841,7 +909,7 @@ fn refcount_list_elems<'a>(
     // let size = literal int
     let elem_size = root.create_symbol(ident_ids, "elem_size");
     let elem_size_expr = Expr::Literal(Literal::Int(
-        (elem_layout.stack_size(root.layout_interner, root.target_info) as i128).to_ne_bytes(),
+        (layout_interner.stack_size(elem_layout) as i128).to_ne_bytes(),
     ));
     let elem_size_stmt = |next| Stmt::Let(elem_size, elem_size_expr, layout_isize, next);
 
@@ -871,7 +939,7 @@ fn refcount_list_elems<'a>(
 
     let param_addr = Param {
         symbol: addr,
-        borrow: false,
+        ownership: Ownership::Owned,
         layout: layout_isize,
     };
 
@@ -881,7 +949,7 @@ fn refcount_list_elems<'a>(
 
     // Cast integer to box pointer
     let box_ptr = root.create_symbol(ident_ids, "box");
-    let box_layout = Layout::Union(box_union_layout);
+    let box_layout = layout_interner.insert(Layout::Union(box_union_layout));
     let box_stmt = |next| let_lowlevel(arena, box_layout, box_ptr, PtrCast, &[addr], next);
 
     // Dereference the box pointer to get the current element
@@ -892,7 +960,7 @@ fn refcount_list_elems<'a>(
         tag_id: 0,
         index: 0,
     };
-    let elem_stmt = |next| Stmt::Let(elem, elem_expr, *elem_layout, next);
+    let elem_stmt = |next| Stmt::Let(elem, elem_expr, elem_layout, next);
 
     //
     // Modify element refcount
@@ -901,7 +969,7 @@ fn refcount_list_elems<'a>(
     let mod_elem_unit = root.create_symbol(ident_ids, "mod_elem_unit");
     let mod_elem_args = refcount_args(root, ctx, elem);
     let mod_elem_expr = root
-        .call_specialized_op(ident_ids, ctx, *elem_layout, mod_elem_args)
+        .call_specialized_op(ident_ids, ctx, layout_interner, elem_layout, mod_elem_args)
         .unwrap();
     let mod_elem_stmt = |next| Stmt::Let(mod_elem_unit, mod_elem_expr, LAYOUT_UNIT, next);
 
@@ -984,13 +1052,14 @@ fn refcount_struct<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
-    field_layouts: &'a [Layout<'a>],
+    layout_interner: &mut STLayoutInterner<'a>,
+    field_layouts: &'a [InLayout<'a>],
     structure: Symbol,
 ) -> Stmt<'a> {
     let mut stmt = rc_return_stmt(root, ident_ids, ctx);
 
     for (i, field_layout) in field_layouts.iter().enumerate().rev() {
-        if field_layout.contains_refcounted(root.layout_interner) {
+        if layout_interner.contains_refcounted(*field_layout) {
             let field_val = root.create_symbol(ident_ids, &format!("field_val_{}", i));
             let field_val_expr = Expr::StructAtIndex {
                 index: i as u64,
@@ -1002,7 +1071,7 @@ fn refcount_struct<'a>(
             let mod_unit = root.create_symbol(ident_ids, &format!("mod_field_{}", i));
             let mod_args = refcount_args(root, ctx, field_val);
             let mod_expr = root
-                .call_specialized_op(ident_ids, ctx, *field_layout, mod_args)
+                .call_specialized_op(ident_ids, ctx, layout_interner, *field_layout, mod_args)
                 .unwrap();
             let mod_stmt = |next| Stmt::Let(mod_unit, mod_expr, LAYOUT_UNIT, next);
 
@@ -1023,6 +1092,7 @@ fn refcount_union<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
     union: UnionLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
@@ -1034,14 +1104,41 @@ fn refcount_union<'a>(
     }
 
     let body = match union {
-        NonRecursive(tags) => refcount_union_nonrec(root, ident_ids, ctx, union, tags, structure),
+        NonRecursive(tags) => refcount_union_nonrec(
+            root,
+            ident_ids,
+            ctx,
+            layout_interner,
+            union,
+            tags,
+            structure,
+        ),
 
         Recursive(tags) => {
-            let (is_tailrec, tail_idx) = root.union_tail_recursion_fields(union);
+            let (is_tailrec, tail_idx) = root.union_tail_recursion_fields(layout_interner, union);
             if is_tailrec && !ctx.op.is_decref() {
-                refcount_union_tailrec(root, ident_ids, ctx, union, tags, None, tail_idx, structure)
+                refcount_union_tailrec(
+                    root,
+                    ident_ids,
+                    ctx,
+                    layout_interner,
+                    union,
+                    tags,
+                    None,
+                    tail_idx,
+                    structure,
+                )
             } else {
-                refcount_union_rec(root, ident_ids, ctx, union, tags, None, structure)
+                refcount_union_rec(
+                    root,
+                    ident_ids,
+                    ctx,
+                    layout_interner,
+                    union,
+                    tags,
+                    None,
+                    structure,
+                )
             }
         }
 
@@ -1051,7 +1148,16 @@ fn refcount_union<'a>(
             // a direct RecursionPointer is only possible if there's at least one non-recursive variant.
             // This nesting makes it harder to do tail recursion, so we just don't.
             let tags = root.arena.alloc([field_layouts]);
-            refcount_union_rec(root, ident_ids, ctx, union, tags, None, structure)
+            refcount_union_rec(
+                root,
+                ident_ids,
+                ctx,
+                layout_interner,
+                union,
+                tags,
+                None,
+                structure,
+            )
         }
 
         NullableWrapped {
@@ -1059,13 +1165,30 @@ fn refcount_union<'a>(
             nullable_id,
         } => {
             let null_id = Some(nullable_id);
-            let (is_tailrec, tail_idx) = root.union_tail_recursion_fields(union);
+            let (is_tailrec, tail_idx) = root.union_tail_recursion_fields(layout_interner, union);
             if is_tailrec && !ctx.op.is_decref() {
                 refcount_union_tailrec(
-                    root, ident_ids, ctx, union, tags, null_id, tail_idx, structure,
+                    root,
+                    ident_ids,
+                    ctx,
+                    layout_interner,
+                    union,
+                    tags,
+                    null_id,
+                    tail_idx,
+                    structure,
                 )
             } else {
-                refcount_union_rec(root, ident_ids, ctx, union, tags, null_id, structure)
+                refcount_union_rec(
+                    root,
+                    ident_ids,
+                    ctx,
+                    layout_interner,
+                    union,
+                    tags,
+                    null_id,
+                    structure,
+                )
             }
         }
 
@@ -1075,13 +1198,30 @@ fn refcount_union<'a>(
         } => {
             let null_id = Some(nullable_id as TagIdIntType);
             let tags = root.arena.alloc([other_fields]);
-            let (is_tailrec, tail_idx) = root.union_tail_recursion_fields(union);
+            let (is_tailrec, tail_idx) = root.union_tail_recursion_fields(layout_interner, union);
             if is_tailrec && !ctx.op.is_decref() {
                 refcount_union_tailrec(
-                    root, ident_ids, ctx, union, tags, null_id, tail_idx, structure,
+                    root,
+                    ident_ids,
+                    ctx,
+                    layout_interner,
+                    union,
+                    tags,
+                    null_id,
+                    tail_idx,
+                    structure,
                 )
             } else {
-                refcount_union_rec(root, ident_ids, ctx, union, tags, null_id, structure)
+                refcount_union_rec(
+                    root,
+                    ident_ids,
+                    ctx,
+                    layout_interner,
+                    union,
+                    tags,
+                    null_id,
+                    structure,
+                )
             }
         }
     };
@@ -1095,8 +1235,9 @@ fn refcount_union_nonrec<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
-    tag_layouts: &'a [&'a [Layout<'a>]],
+    tag_layouts: &'a [&'a [InLayout<'a>]],
     structure: Symbol,
 ) -> Stmt<'a> {
     let tag_id_layout = union_layout.tag_id_layout();
@@ -1120,6 +1261,7 @@ fn refcount_union_nonrec<'a>(
         root,
         ident_ids,
         ctx,
+        layout_interner,
         union_layout,
         tag_layouts,
         None,
@@ -1135,17 +1277,17 @@ fn refcount_union_nonrec<'a>(
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn refcount_union_contents<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
-    tag_layouts: &'a [&'a [Layout<'a>]],
+    tag_layouts: &'a [&'a [InLayout<'a>]],
     null_id: Option<TagIdIntType>,
     structure: Symbol,
     tag_id_sym: Symbol,
-    tag_id_layout: Layout<'a>,
+    tag_id_layout: InLayout<'a>,
     next_stmt: Stmt<'a>,
 ) -> Stmt<'a> {
     let jp_contents_modified = JoinPointId(root.create_symbol(ident_ids, "jp_contents_modified"));
@@ -1173,6 +1315,7 @@ fn refcount_union_contents<'a>(
             root,
             ident_ids,
             ctx,
+            layout_interner,
             union_layout,
             field_layouts,
             structure,
@@ -1207,8 +1350,9 @@ fn refcount_union_rec<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
-    tag_layouts: &'a [&'a [Layout<'a>]],
+    tag_layouts: &'a [&'a [InLayout<'a>]],
     null_id: Option<TagIdIntType>,
     structure: Symbol,
 ) -> Stmt<'a> {
@@ -1231,7 +1375,7 @@ fn refcount_union_rec<'a>(
         let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
 
         let alignment =
-            Layout::Union(union_layout).alignment_bytes(root.layout_interner, root.target_info);
+            Layout::Union(union_layout).alignment_bytes(layout_interner, root.target_info);
         let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
         let modify_structure_stmt = modify_refcount(
             root,
@@ -1259,6 +1403,7 @@ fn refcount_union_rec<'a>(
             root,
             ident_ids,
             ctx,
+            layout_interner,
             union_layout,
             tag_layouts,
             null_id,
@@ -1280,13 +1425,13 @@ fn refcount_union_rec<'a>(
 }
 
 // Refcount a recursive union using tail-call elimination to limit stack growth
-#[allow(clippy::too_many_arguments)]
 fn refcount_union_tailrec<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
-    tag_layouts: &'a [&'a [Layout<'a>]],
+    tag_layouts: &'a [&'a [InLayout<'a>]],
     null_id: Option<TagIdIntType>,
     tailrec_indices: Vec<'a, Option<usize>>,
     initial_structure: Symbol,
@@ -1294,7 +1439,7 @@ fn refcount_union_tailrec<'a>(
     let tailrec_loop = JoinPointId(root.create_symbol(ident_ids, "tailrec_loop"));
     let current = root.create_symbol(ident_ids, "current");
     let next_ptr = root.create_symbol(ident_ids, "next_ptr");
-    let layout = Layout::Union(union_layout);
+    let layout = layout_interner.insert(Layout::Union(union_layout));
 
     let tag_id_layout = union_layout.tag_id_layout();
 
@@ -1339,7 +1484,7 @@ fn refcount_union_tailrec<'a>(
             )
         };
 
-        let alignment = layout.alignment_bytes(root.layout_interner, root.target_info);
+        let alignment = layout_interner.alignment_bytes(layout);
         let modify_structure_stmt = modify_refcount(
             root,
             ident_ids,
@@ -1427,6 +1572,7 @@ fn refcount_union_tailrec<'a>(
                 root,
                 ident_ids,
                 ctx,
+                layout_interner,
                 union_layout,
                 non_tailrec_fields,
                 current,
@@ -1451,7 +1597,7 @@ fn refcount_union_tailrec<'a>(
 
         let jp_param = Param {
             symbol: next_ptr,
-            borrow: true,
+            ownership: Ownership::Borrowed,
             layout,
         };
 
@@ -1469,10 +1615,11 @@ fn refcount_union_tailrec<'a>(
     ));
 
     let loop_init = Stmt::Jump(tailrec_loop, root.arena.alloc([initial_structure]));
+    let union_layout = layout_interner.insert(Layout::Union(union_layout));
     let loop_param = Param {
         symbol: current,
-        borrow: true,
-        layout: Layout::Union(union_layout),
+        ownership: Ownership::Borrowed,
+        layout: union_layout,
     };
 
     Stmt::Join {
@@ -1483,13 +1630,13 @@ fn refcount_union_tailrec<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn refcount_tag_fields<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
+    layout_interner: &mut STLayoutInterner<'a>,
     union_layout: UnionLayout<'a>,
-    field_layouts: &'a [Layout<'a>],
+    field_layouts: &'a [InLayout<'a>],
     structure: Symbol,
     tag_id: TagIdIntType,
     following: Stmt<'a>,
@@ -1497,7 +1644,7 @@ fn refcount_tag_fields<'a>(
     let mut stmt = following;
 
     for (i, field_layout) in field_layouts.iter().enumerate().rev() {
-        if field_layout.contains_refcounted(root.layout_interner) {
+        if layout_interner.contains_refcounted(*field_layout) {
             let field_val = root.create_symbol(ident_ids, &format!("field_{}_{}", tag_id, i));
             let field_val_expr = Expr::UnionAtIndex {
                 union_layout,
@@ -1510,7 +1657,7 @@ fn refcount_tag_fields<'a>(
             let mod_unit = root.create_symbol(ident_ids, &format!("mod_field_{}_{}", tag_id, i));
             let mod_args = refcount_args(root, ctx, field_val);
             let mod_expr = root
-                .call_specialized_op(ident_ids, ctx, *field_layout, mod_args)
+                .call_specialized_op(ident_ids, ctx, layout_interner, *field_layout, mod_args)
                 .unwrap();
             let mod_stmt = |next| Stmt::Let(mod_unit, mod_expr, LAYOUT_UNIT, next);
 
@@ -1531,8 +1678,9 @@ fn refcount_boxed<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
-    layout: &Layout,
-    inner_layout: &'a Layout,
+    layout_interner: &mut STLayoutInterner<'a>,
+    layout: InLayout<'a>,
+    inner_layout: InLayout<'a>,
     outer: Symbol,
 ) -> Stmt<'a> {
     let arena = root.arena;
@@ -1544,7 +1692,7 @@ fn refcount_boxed<'a>(
     //
 
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let alignment = layout.alignment_bytes(root.layout_interner, root.target_info);
+    let alignment = layout_interner.alignment_bytes(layout);
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_outer = modify_refcount(
         root,
@@ -1564,20 +1712,26 @@ fn refcount_boxed<'a>(
         arena.alloc(modify_outer),
     );
 
-    if inner_layout.is_refcounted() && !ctx.op.is_decref() {
+    if layout_interner.is_refcounted(inner_layout) && !ctx.op.is_decref() {
         let inner = root.create_symbol(ident_ids, "inner");
         let inner_expr = Expr::ExprUnbox { symbol: outer };
 
         let mod_inner_unit = root.create_symbol(ident_ids, "mod_inner_unit");
         let mod_inner_args = refcount_args(root, ctx, inner);
         let mod_inner_expr = root
-            .call_specialized_op(ident_ids, ctx, *inner_layout, mod_inner_args)
+            .call_specialized_op(
+                ident_ids,
+                ctx,
+                layout_interner,
+                inner_layout,
+                mod_inner_args,
+            )
             .unwrap();
 
         Stmt::Let(
             inner,
             inner_expr,
-            *inner_layout,
+            inner_layout,
             arena.alloc(Stmt::Let(
                 mod_inner_unit,
                 mod_inner_expr,

@@ -20,6 +20,34 @@ impl Problems {
             self.warnings.min(1) as i32
         }
     }
+
+    pub fn print_to_stdout(&self, total_time: std::time::Duration) {
+        const GREEN: usize = 32;
+        const YELLOW: usize = 33;
+
+        print!(
+            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms",
+            match self.errors {
+                0 => GREEN,
+                _ => YELLOW,
+            },
+            self.errors,
+            match self.errors {
+                1 => "error",
+                _ => "errors",
+            },
+            match self.warnings {
+                0 => GREEN,
+                _ => YELLOW,
+            },
+            self.warnings,
+            match self.warnings {
+                1 => "warning",
+                _ => "warnings",
+            },
+            total_time.as_millis(),
+        );
+    }
 }
 
 pub fn report_problems(

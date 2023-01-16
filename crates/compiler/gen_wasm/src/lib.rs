@@ -43,7 +43,6 @@ pub const STACK_POINTER_NAME: &str = "__stack_pointer";
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
-    pub layout_interner: &'a STLayoutInterner<'a>,
     pub module_id: ModuleId,
     pub exposed_to_host: MutSet<Symbol>,
     pub stack_bytes: u32,
@@ -65,13 +64,15 @@ pub fn parse_host<'a>(arena: &'a Bump, host_bytes: &[u8]) -> Result<WasmModule<'
 ///   interns        names of functions and variables (as memory-efficient interned strings)
 ///   host_module    parsed module from a Wasm object file containing all of the non-Roc code
 ///   procedures     Roc code in monomorphized intermediate representation
-pub fn build_app_binary<'a>(
-    env: &'a Env<'a>,
-    interns: &'a mut Interns,
+pub fn build_app_binary<'a, 'r>(
+    env: &'r Env<'a>,
+    layout_interner: &'r mut STLayoutInterner<'a>,
+    interns: &'r mut Interns,
     host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> std::vec::Vec<u8> {
-    let (mut wasm_module, called_fns, _) = build_app_module(env, interns, host_module, procedures);
+    let (mut wasm_module, called_fns, _) =
+        build_app_module(env, layout_interner, interns, host_module, procedures);
 
     wasm_module.eliminate_dead_code(env.arena, called_fns);
 
@@ -84,9 +85,10 @@ pub fn build_app_binary<'a>(
 /// Shared by all consumers of gen_wasm: roc_build, roc_repl_wasm, and test_gen
 /// (roc_repl_wasm and test_gen will add more generated code for a wrapper function
 /// that defines a common interface to `main`, independent of return type.)
-pub fn build_app_module<'a>(
-    env: &'a Env<'a>,
-    interns: &'a mut Interns,
+pub fn build_app_module<'a, 'r>(
+    env: &'r Env<'a>,
+    layout_interner: &'r mut STLayoutInterner<'a>,
+    interns: &'r mut Interns,
     host_module: WasmModule<'a>,
     procedures: MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> (WasmModule<'a>, BitVec<usize>, u32) {
@@ -126,24 +128,20 @@ pub fn build_app_module<'a>(
 
     let mut backend = WasmBackend::new(
         env,
+        layout_interner,
         interns,
         layout_ids,
         proc_lookup,
         host_to_app_map,
         host_module,
         fn_index_offset,
-        CodeGenHelp::new(
-            env.arena,
-            env.layout_interner,
-            TargetInfo::default_wasm32(),
-            env.module_id,
-        ),
+        CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
     );
 
     if DEBUG_SETTINGS.user_procs_ir {
         println!("## procs");
         for proc in procs.iter() {
-            println!("{}", proc.to_pretty(env.layout_interner, 200, true));
+            println!("{}", proc.to_pretty(backend.layout_interner, 200, true));
             // println!("{:?}", proc);
         }
     }
@@ -161,7 +159,7 @@ pub fn build_app_module<'a>(
     if DEBUG_SETTINGS.helper_procs_ir {
         println!("## helper_procs");
         for proc in helper_procs.iter() {
-            println!("{}", proc.to_pretty(env.layout_interner, 200, true));
+            println!("{}", proc.to_pretty(backend.layout_interner, 200, true));
             // println!("{:#?}", proc);
         }
     }

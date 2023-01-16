@@ -3403,7 +3403,6 @@ dependencies = [
  "roc_fmt",
  "roc_gen_llvm",
  "roc_glue",
- "roc_intern",
  "roc_linker",
  "roc_load",
  "roc_module",
@@ -3463,6 +3462,7 @@ dependencies = [
  "roc_error_macros",
  "roc_module",
  "roc_parse",
+ "roc_problem",
  "roc_region",
  "roc_types",
 ]
@@ -3602,14 +3602,10 @@ name = "roc_fmt"
 version = "0.0.1"
 dependencies = [
  "bumpalo",
- "indoc",
- "pretty_assertions",
  "roc_collections",
  "roc_module",
  "roc_parse",
  "roc_region",
- "roc_test_utils",
- "walkdir",
 ]
 
 [[package]]
@@ -3624,7 +3620,6 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_error_macros",
- "roc_intern",
  "roc_module",
  "roc_mono",
  "roc_parse",
@@ -3667,7 +3662,6 @@ dependencies = [
  "roc_builtins",
  "roc_collections",
  "roc_error_macros",
- "roc_intern",
  "roc_module",
  "roc_mono",
  "roc_std",
@@ -3691,7 +3685,6 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_error_macros",
- "roc_intern",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -3719,14 +3712,6 @@ dependencies = [
 [[package]]
 name = "roc_ident"
 version = "0.0.1"
-
-[[package]]
-name = "roc_intern"
-version = "0.0.1"
-dependencies = [
- "parking_lot 0.12.1",
- "roc_collections",
-]
 
 [[package]]
 name = "roc_late_solve"
@@ -3801,7 +3786,6 @@ dependencies = [
  "roc_derive",
  "roc_derive_key",
  "roc_error_macros",
- "roc_intern",
  "roc_late_solve",
  "roc_module",
  "roc_mono",
@@ -3841,6 +3825,7 @@ dependencies = [
  "bitvec 1.0.1",
  "bumpalo",
  "hashbrown 0.12.3",
+ "parking_lot 0.12.1",
  "roc_builtins",
  "roc_can",
  "roc_collections",
@@ -3849,7 +3834,6 @@ dependencies = [
  "roc_derive_key",
  "roc_error_macros",
  "roc_exhaustive",
- "roc_intern",
  "roc_late_solve",
  "roc_module",
  "roc_problem",
@@ -3930,7 +3914,6 @@ dependencies = [
  "roc_builtins",
  "roc_collections",
  "roc_gen_llvm",
- "roc_intern",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -3956,7 +3939,6 @@ dependencies = [
  "roc_can",
  "roc_collections",
  "roc_fmt",
- "roc_intern",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -3986,7 +3968,6 @@ dependencies = [
  "roc_collections",
  "roc_error_macros",
  "roc_gen_llvm",
- "roc_intern",
  "roc_load",
  "roc_module",
  "roc_mono",
@@ -4902,6 +4883,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_syntax"
+version = "0.0.1"
+dependencies = [
+ "bumpalo",
+ "indoc",
+ "pretty_assertions",
+ "roc_collections",
+ "roc_fmt",
+ "roc_module",
+ "roc_parse",
+ "roc_region",
+ "roc_test_utils",
+ "walkdir",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4999,9 +4996,9 @@ checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
 
 [[package]]
 name = "tokio"
-version = "1.22.0"
+version = "1.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d76ce4a75fb488c605c54bf610f221cea8b0dafb53333c1a67e8ee199dcd2ae3"
+checksum = "1d9f76183f91ecfb55e1d7d5602bd1d979e38a3a522fe900241cf195624d67ae"
 dependencies = [
  "autocfg",
  "bytes",
@@ -5011,7 +5008,7 @@ dependencies = [
  "num_cpus",
  "pin-project-lite",
  "socket2",
- "winapi",
+ "windows-sys 0.42.0",
 ]
 
 [[package]]
@@ -5145,7 +5142,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "rand",
  "static_assertions",
 ]
@@ -5246,6 +5243,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd6469f4314d5f1ffec476e05f17cc9a78bc7a27a6a857842170bdf8d6f98d2f"
 dependencies = [
  "getrandom",
+]
+
+[[package]]
+name = "valgrind"
+version = "0.1.0"
+dependencies = [
+ "bumpalo",
+ "cli_utils",
+ "indoc",
+ "roc_build",
+ "roc_cli",
+ "roc_linker",
+ "roc_load",
+ "roc_mono",
+ "roc_packaging",
+ "roc_reporting",
+ "target-lexicon",
+ "tempfile",
 ]
 
 [[package]]

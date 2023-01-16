@@ -90,8 +90,12 @@ pub const RocStr = extern struct {
     }
 
     pub fn deinit(self: RocStr) void {
+        self.decref();
+    }
+
+    fn decref(self: RocStr) void {
         if (!self.isSmallStr()) {
-            utils.decref(self.str_bytes, self.str_len, RocStr.alignment);
+            utils.decref(self.str_bytes, self.str_capacity, RocStr.alignment);
         }
     }
 
@@ -200,7 +204,7 @@ pub const RocStr = extern struct {
         @memcpy(dest_ptr, source_ptr, old_length);
         @memset(dest_ptr + old_length, 0, delta_length);
 
-        self.deinit();
+        self.decref();
 
         return result;
     }
@@ -316,8 +320,16 @@ pub const RocStr = extern struct {
     }
 
     fn isRefcountOne(self: RocStr) bool {
+        return self.refcountMachine() == utils.REFCOUNT_ONE;
+    }
+
+    fn refcountMachine(self: RocStr) usize {
         const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
-        return (ptr - 1)[0] == utils.REFCOUNT_ONE;
+        return (ptr - 1)[0];
+    }
+
+    fn refcountHuman(self: RocStr) usize {
+        return self.refcountMachine() - utils.REFCOUNT_ONE + 1;
     }
 
     pub fn asSlice(self: *const RocStr) []const u8 {
@@ -1539,10 +1551,9 @@ pub fn strConcatC(arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
 }
 
 fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
-    if (arg1.isEmpty()) {
-        // the second argument is borrowed, so we must increment its refcount before returning
-        return RocStr.clone(arg2);
-    } else if (arg2.isEmpty()) {
+    // NOTE: we don't special-case the first argument being empty. That is because it is owned and
+    // may have sufficient capacity to store the rest of the list.
+    if (arg2.isEmpty()) {
         // the first argument is owned, so we can return it without cloning
         return arg1;
     } else {
@@ -2089,7 +2100,13 @@ pub fn strTrim(string: RocStr) callconv(.C) RocStr {
 
         const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
         if (small_or_shared) {
-            return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+            // consume the input string; this will not free the
+            // bytes because the string is small or shared
+            const result = RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+
+            string.decref();
+
+            return result;
         } else {
             // nonempty, large, and unique: shift everything over in-place if necessary.
             // Note: must use memmove over memcpy, because the bytes definitely overlap!
@@ -2320,7 +2337,6 @@ test "strTrim: large to large" {
 test "strTrim: large to small" {
     const original_bytes = "             hello         ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
 
     try expect(!original.isSmallStr());
 

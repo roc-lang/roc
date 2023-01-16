@@ -1,0 +1,8 @@
+UnaryOp(
+    @1-7 Str(
+        Block(
+            [],
+        ),
+    ),
+    @0-1 Not,
+)

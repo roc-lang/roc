@@ -183,6 +183,7 @@ pub struct Palette {
     pub primary: &'static str,
     pub code_block: &'static str,
     pub keyword: &'static str,
+    pub ellipsis: &'static str,
     pub variable: &'static str,
     pub type_variable: &'static str,
     pub structure: &'static str,
@@ -209,6 +210,7 @@ const fn default_palette_from_style_codes(codes: StyleCodes) -> Palette {
         primary: codes.white,
         code_block: codes.white,
         keyword: codes.green,
+        ellipsis: codes.green,
         variable: codes.blue,
         type_variable: codes.yellow,
         structure: codes.green,
@@ -359,6 +361,10 @@ impl<'a> RocDocAllocator<'a> {
         self.text(string).annotate(Annotation::Keyword)
     }
 
+    pub fn ellipsis(&'a self) -> DocBuilder<'a, Self, Annotation> {
+        self.text("…").annotate(Annotation::Ellipsis)
+    }
+
     pub fn parser_suggestion(&'a self, string: &'a str) -> DocBuilder<'a, Self, Annotation> {
         self.text(string).annotate(Annotation::ParserSuggestion)
     }
@@ -459,14 +465,13 @@ impl<'a> RocDocAllocator<'a> {
     }
 
     pub fn module_name(&'a self, name: ModuleName) -> DocBuilder<'a, Self, Annotation> {
-        let name = if name.is_empty() {
+        if name.is_empty() {
             // Render the app module as "app"
-            "app".to_string()
+            self.text("app")
         } else {
-            name.as_str().to_string()
-        };
-
-        self.text(name).annotate(Annotation::Module)
+            self.text(name.as_str().to_string())
+        }
+        .annotate(Annotation::Module)
     }
 
     pub fn binop(
@@ -812,6 +817,7 @@ pub enum Annotation {
     Emphasized,
     Url,
     Keyword,
+    Ellipsis,
     Tag,
     RecordField,
     TypeVariable,
@@ -1010,6 +1016,9 @@ where
             Keyword => {
                 self.write_str(self.palette.keyword)?;
             }
+            Ellipsis => {
+                self.write_str(self.palette.ellipsis)?;
+            }
             GutterBar => {
                 self.write_str(self.palette.gutter_bar)?;
             }
@@ -1050,8 +1059,8 @@ where
             None => {}
             Some(annotation) => match annotation {
                 Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | Error | GutterBar
-                | Typo | TypoSuggestion | ParserSuggestion | Structure | CodeBlock | PlainText
-                | LineNumber | Tip | Module | Header | Keyword => {
+                | Ellipsis | Typo | TypoSuggestion | ParserSuggestion | Structure | CodeBlock
+                | PlainText | LineNumber | Tip | Module | Header | Keyword => {
                     self.write_str(self.palette.reset)?;
                 }
 

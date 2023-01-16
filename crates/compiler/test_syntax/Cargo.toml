@@ -1,0 +1,24 @@
+[package]
+name = "test_syntax"
+version = "0.0.1"
+authors = ["The Roc Contributors"]
+license = "UPL-1.0"
+edition = "2021"
+description = "Tests for the parse + fmt crates."
+
+[features]
+"parse_debug_trace" = ["roc_parse/parse_debug_trace"]
+
+[dependencies]
+roc_collections = { path = "../collections" }
+roc_region = { path = "../region" }
+roc_module = { path = "../module" }
+roc_parse = { path = "../parse" }
+roc_fmt = { path = "../fmt" }
+roc_test_utils = { path = "../../test_utils" }
+bumpalo.workspace = true 
+
+[dev-dependencies]
+pretty_assertions.workspace = true
+indoc.workspace = true
+walkdir.workspace = true

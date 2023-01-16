@@ -3349,12 +3349,12 @@ fn monomorphized_lists() {
     assert_evals_to!(
         indoc!(
             r#"
-            l = [1, 2, 3]
+            l = \{} -> [1, 2, 3]
 
             f : List U8, List U16 -> Nat
             f = \_, _ -> 18
 
-            f l l
+            f (l {}) (l {})
             "#
         ),
         18,
@@ -3461,11 +3461,11 @@ fn issue_3530_uninitialized_capacity_in_list_literal() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn list_let_generalization() {
+fn list_infer_usage() {
     assert_evals_to!(
         indoc!(
             r#"
-            empty : List a
+            empty : List _
             empty = []
 
             xs : List Str
@@ -3712,6 +3712,53 @@ mod pattern_match {
                 210, 210, 210, //
             ]),
             RocList<u16>
+        )
+    }
+
+    #[test]
+    fn order_list_size_tests_issue_4732() {
+        assert_evals_to!(
+            r#"
+            helper : List U8 -> U8
+            helper = \l -> when l is
+                [1, ..]          -> 1
+                [2, 1, ..]       -> 2
+                [3, 2, 1, ..]    -> 3
+                [4, 3, 2, 1, ..] -> 4
+                [4, 3, 2, ..]    -> 5
+                [4, 3, ..]       -> 6
+                [4, ..]          -> 7
+                _                -> 8
+
+            [
+                helper [1], helper [1, 2],
+
+                helper [2, 1], helper [2, 1, 3],
+
+                helper [3, 2, 1], helper [3, 2, 1, 4],
+
+                helper [4, 3, 2, 1], helper [4, 3, 2, 1, 5],
+
+                helper [4, 3, 2], helper [4, 3, 2, 5],
+
+                helper [4, 3], helper [4, 3, 5],
+
+                helper [4], helper [4, 5],
+
+                helper [], helper [7],
+            ]
+            "#,
+            RocList::from_slice(&[
+                1, 1, //
+                2, 2, //
+                3, 3, //
+                4, 4, //
+                5, 5, //
+                6, 6, //
+                7, 7, //
+                8, 8, //
+            ]),
+            RocList<u8>
         )
     }
 }

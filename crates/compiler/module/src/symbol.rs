@@ -281,7 +281,10 @@ impl Interns {
             Some(ident_ids) => match ident_ids.get_id(ident.as_str()) {
                 Some(ident_id) => Symbol::new(module_id, ident_id),
                 None => {
-                    panic!("Interns::symbol could not find ident entry for {:?} for module {:?} in Interns {:?}", ident, module_id, self);
+                    panic!(
+                        "Interns::symbol could not find ident entry for {:?} for module {:?}",
+                        ident, module_id
+                    );
                 }
             },
             None => {
@@ -961,6 +964,14 @@ macro_rules! define_builtins {
                 $(
                     $(
                         $(
+                            // All types should be exposed, and all non-types
+                            // should not be exposed. (Types are uppercase.)
+                            //
+                            // We only check this in debug builds so that in
+                            // release builds, this condition is either `if true`
+                            // or `if false` and will get optimized out.
+                            debug_assert_eq!($exposed_apply_type, $ident_name.chars().next().unwrap().is_uppercase());
+
                             if $exposed_apply_type {
                                 scope.insert($ident_name.into(), (Symbol::new(ModuleId::$module_const, IdentId($ident_id)), Region::zero()));
                             }
