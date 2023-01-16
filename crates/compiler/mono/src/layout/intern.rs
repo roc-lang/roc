@@ -18,7 +18,7 @@ macro_rules! cache_interned_layouts {
         impl<'a> Layout<'a> {
             $(
             #[allow(unused)] // for now
-            pub const $name: InLayout<'static> = unsafe { InLayout::from_reserved_index($i) };
+            pub const $name: InLayout<'static> = unsafe { InLayout::from_index($i) };
             )*
         }
 
@@ -244,7 +244,7 @@ impl<'a> InLayout<'a> {
     /// let inserted = interner.insert("something");
     /// assert_eq!(reserved_interned, inserted);
     /// ```
-    const unsafe fn from_reserved_index(index: usize) -> Self {
+    pub(crate) const unsafe fn from_index(index: usize) -> Self {
         Self(index, PhantomData)
     }
 }
@@ -400,7 +400,10 @@ impl<'a> GlobalLayoutInterner<'a> {
                 let mut map = self.0.map.lock();
                 let mut vec = self.0.vec.write();
 
-                let slot = unsafe { InLayout::from_reserved_index(vec.len()) };
+                let slot = unsafe { InLayout::from_index(vec.len()) };
+
+                // dbg!((normalized, normalized_hash, slot));
+
                 let lambda_set = LambdaSet {
                     full_layout: slot,
                     ..normalized
@@ -595,7 +598,7 @@ impl<'a> LayoutInterner<'a> for STLayoutInterner<'a> {
         }
 
         // This lambda set must be new to the interner, reserve a slot and fill it in.
-        let slot = unsafe { InLayout::from_reserved_index(self.vec.len()) };
+        let slot = unsafe { InLayout::from_index(self.vec.len()) };
         let lambda_set = LambdaSet {
             args,
             ret,

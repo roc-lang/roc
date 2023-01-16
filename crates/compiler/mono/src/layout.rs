@@ -12,7 +12,7 @@ use roc_target::{PtrWidth, TargetInfo};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
     self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs,
-    UnsortedUnionLabels, Variable,
+    UnsortedUnionLabels, Variable, VariableSubsSlice,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
 use std::cmp::Ordering;
@@ -587,7 +587,10 @@ impl<'a> RawFunctionLayout<'a> {
 
                 let fn_args = fn_args.into_bump_slice();
 
-                let lambda_set = cached!(LambdaSet::from_var(env, closure_var), cache_criteria);
+                let lambda_set = cached!(
+                    LambdaSet::from_var(env, args, closure_var, ret_var),
+                    cache_criteria
+                );
 
                 Cacheable(Ok(Self::Function(fn_args, lambda_set, ret)), cache_criteria)
             }
@@ -1207,6 +1210,8 @@ impl std::fmt::Debug for LambdaSet<'_> {
 
         f.debug_struct("LambdaSet")
             .field("set", &Helper { set: self.set })
+            .field("args", &self.args)
+            .field("ret", &self.ret)
             .field("representation", &self.representation)
             .field("full_layout", &self.full_layout)
             .finish()
@@ -1738,19 +1743,23 @@ impl<'a> LambdaSet<'a> {
         cache: &mut LayoutCache<'a>,
         arena: &'a Bump,
         subs: &Subs,
+        args: VariableSubsSlice,
         closure_var: Variable,
+        ret_var: Variable,
         target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
         let mut env = Env::from_components(cache, subs, arena, target_info);
-        Self::from_var(&mut env, closure_var).value()
+        Self::from_var(&mut env, args, closure_var, ret_var).value()
     }
 
     fn from_var(
         env: &mut Env<'a, '_>,
+        args: VariableSubsSlice,
         closure_var: Variable,
+        ret_var: Variable,
     ) -> Cacheable<Result<Self, LayoutProblem>> {
         let Cacheable(result, criteria) = env.cached_or(closure_var, |env| {
-            let Cacheable(result, criteria) = Self::from_var_help(env, closure_var);
+            let Cacheable(result, criteria) = Self::from_var_help(env, args, closure_var, ret_var);
             let result = result.map(|l| l.full_layout);
             Cacheable(result, criteria)
         });
@@ -1764,11 +1773,29 @@ impl<'a> LambdaSet<'a> {
 
     fn from_var_help(
         env: &mut Env<'a, '_>,
+        args: VariableSubsSlice,
         closure_var: Variable,
+        ret_var: Variable,
     ) -> Cacheable<Result<Self, LayoutProblem>> {
         roc_tracing::debug!(var = ?closure_var, size = ?lambda_set_size(env.subs, closure_var), "building lambda set layout");
 
-        match resolve_lambda_set(env.subs, closure_var) {
+        let lambda_set = resolve_lambda_set(env.subs, closure_var);
+
+        let mut cache_criteria = CACHEABLE;
+
+        let mut fn_args = Vec::with_capacity_in(args.len(), env.arena);
+
+        for index in args.into_iter() {
+            let arg_var = env.subs[index];
+            let layout = cached!(Layout::from_var(env, arg_var), cache_criteria);
+            fn_args.push(layout);
+        }
+
+        let ret = cached!(Layout::from_var(env, ret_var), cache_criteria);
+
+        let fn_args = env.arena.alloc(fn_args.into_bump_slice());
+
+        match lambda_set {
             ResolvedLambdaSet::Set(mut lambdas, opt_recursion_var) => {
                 // sort the tags; make sure ordering stays intact!
                 lambdas.sort_by_key(|(sym, _)| *sym);
@@ -1853,30 +1880,27 @@ impl<'a> LambdaSet<'a> {
                     set_with_variables,
                     opt_recursion_var.into_variable(),
                 );
-
-                // TODO
-                let args = &(&[] as &[InLayout]);
-                let ret = Layout::VOID;
+                cache_criteria.and(criteria);
 
                 let lambda_set = env.cache.interner.insert_lambda_set(
-                    args,
+                    fn_args,
                     ret,
                     env.arena.alloc(set.into_bump_slice()),
                     representation,
                 );
 
-                Cacheable(Ok(lambda_set), criteria)
+                Cacheable(Ok(lambda_set), cache_criteria)
             }
             ResolvedLambdaSet::Unbound => {
                 // The lambda set is unbound which means it must be unused. Just give it the empty lambda set.
                 // See also https://github.com/roc-lang/roc/issues/3163.
                 let lambda_set = env.cache.interner.insert_lambda_set(
-                    &(&[] as &[InLayout]),
-                    Layout::UNIT,
+                    fn_args,
+                    ret,
                     &(&[] as &[(Symbol, &[InLayout])]),
                     Layout::UNIT,
                 );
-                cacheable(Ok(lambda_set))
+                Cacheable(Ok(lambda_set), cache_criteria)
             }
         }
     }
@@ -1938,8 +1962,7 @@ enum ResolvedLambdaSet {
         std::vec::Vec<(Symbol, std::vec::Vec<Variable>)>,
         OptVariable,
     ),
-    /// TODO: figure out if this can happen in a correct program, or is the result of a bug in our
-    /// compiler. See https://github.com/roc-lang/roc/issues/3163.
+    /// The lambda set is empty, that means this function is never called.
     Unbound,
 }
 
@@ -3078,7 +3101,7 @@ fn layout_from_flat_type<'a>(
                 }
             }
         }
-        Func(_, closure_var, _) => {
+        Func(args, closure_var, ret_var) => {
             if env.is_seen(closure_var) {
                 // TODO(recursive-layouts): change after disjoint recursive layouts supported
                 let rec_ptr = env.cache.put_in(Layout::RecursivePointer);
@@ -3086,7 +3109,10 @@ fn layout_from_flat_type<'a>(
             } else {
                 let mut criteria = CACHEABLE;
 
-                let lambda_set = cached!(LambdaSet::from_var(env, closure_var,), criteria);
+                let lambda_set = cached!(
+                    LambdaSet::from_var(env, args, closure_var, ret_var),
+                    criteria
+                );
                 let lambda_set = lambda_set.full_layout;
 
                 Cacheable(Ok(lambda_set), criteria)
