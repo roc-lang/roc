@@ -420,7 +420,7 @@ pub fn fmt_body<'a, 'buf>(
                     );
                 }
             }
-            Expr::Defs(..) | Expr::BinOps(_, _) => {
+            Expr::Defs(..) | Expr::BinOps(_, _) | Expr::Backpassing(..) => {
                 // Binop chains always get a newline. Otherwise you can have things like:
                 //
                 //     something = foo
