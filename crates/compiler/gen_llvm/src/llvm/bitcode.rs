@@ -11,8 +11,8 @@ use crate::llvm::refcounting::{
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{
-    BasicValue, BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue,
-    PointerValue, StructValue,
+    BasicValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue, PointerValue,
+    StructValue,
 };
 use inkwell::AddressSpace;
 use roc_error_macros::internal_error;

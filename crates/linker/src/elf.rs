@@ -8,7 +8,6 @@ use object::{
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::{internal_error, user_error};
-use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::mem;
 use std::os::raw::c_char;

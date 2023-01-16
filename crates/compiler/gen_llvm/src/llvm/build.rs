@@ -24,8 +24,8 @@ use inkwell::types::{
 };
 use inkwell::values::BasicValueEnum::{self, *};
 use inkwell::values::{
-    BasicMetadataValueEnum, BasicValue, CallSiteValue, FunctionValue, InstructionValue, IntValue,
-    PhiValue, PointerValue, StructValue,
+    BasicMetadataValueEnum, CallSiteValue, FunctionValue, InstructionValue, IntValue, PhiValue,
+    PointerValue, StructValue,
 };
 use inkwell::OptimizationLevel;
 use inkwell::{AddressSpace, IntPredicate};

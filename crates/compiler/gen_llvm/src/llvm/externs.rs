@@ -4,7 +4,6 @@ use crate::llvm::build::{CCReturn, Env, FunctionSpec};
 use crate::llvm::convert::zig_str_type;
 use inkwell::module::Linkage;
 use inkwell::types::BasicType;
-use inkwell::values::BasicValue;
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
 
