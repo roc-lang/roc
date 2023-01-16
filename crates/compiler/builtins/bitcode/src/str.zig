@@ -324,6 +324,10 @@ pub const RocStr = extern struct {
     }
 
     fn refcountMachine(self: RocStr) usize {
+        if (self.getCapacity() == 0 or self.isSmallStr()) {
+            return utils.REFCOUNT_ONE;
+        }
+
         const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
         return (ptr - 1)[0];
     }

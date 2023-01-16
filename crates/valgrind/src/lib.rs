@@ -194,6 +194,22 @@ fn list_concat_consumes_first_argument() {
 }
 
 #[test]
+fn list_concat_consumes_second_argument() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            a : List U8
+            a = []
+            b = List.reserve [] 11
+            List.concat a b
+            |> List.len
+            |> Num.toStr
+        )
+        "#
+    ));
+}
+
+#[test]
 fn str_capacity_concat() {
     valgrind_test(r#"Str.withCapacity 42 |> Str.concat "foobar""#);
 }
