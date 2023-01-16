@@ -1832,6 +1832,10 @@ impl<'a> LambdaSet<'a> {
                     set_with_variables.push((function_symbol, variables.as_slice()));
 
                     last_function_symbol = Some(function_symbol);
+
+                    if let Some(rec_var) = opt_recursion_var.into_variable() {
+                        env.remove_seen(rec_var);
+                    }
                 }
 
                 let (set, set_with_variables) = if has_duplicate_lambda_names {
