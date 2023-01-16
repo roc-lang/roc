@@ -6357,13 +6357,15 @@ fn register_capturing_closure<'a>(
         let is_self_recursive = !matches!(recursive, roc_can::expr::Recursive::NotRecursive);
 
         let captured_symbols = match *env.subs.get_content_without_compacting(function_type) {
-            Content::Structure(FlatType::Func(_, closure_var, _)) => {
+            Content::Structure(FlatType::Func(args, closure_var, ret)) => {
                 let lambda_set_layout = {
                     LambdaSet::from_var_pub(
                         layout_cache,
                         env.arena,
                         env.subs,
+                        args,
                         closure_var,
+                        ret,
                         env.target_info,
                     )
                 };

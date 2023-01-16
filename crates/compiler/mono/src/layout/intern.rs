@@ -18,7 +18,7 @@ macro_rules! cache_interned_layouts {
         impl<'a> Layout<'a> {
             $(
             #[allow(unused)] // for now
-            pub const $name: InLayout<'static> = unsafe { InLayout::from_reserved_index($i) };
+            pub const $name: InLayout<'static> = unsafe { InLayout::from_index($i) };
             )*
         }
 
@@ -133,6 +133,8 @@ pub trait LayoutInterner<'a>: Sized {
     /// lambda set onto itself.
     fn insert_lambda_set(
         &mut self,
+        args: &'a &'a [InLayout<'a>],
+        ret: InLayout<'a>,
         set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
         representation: InLayout<'a>,
     ) -> LambdaSet<'a>;
@@ -242,7 +244,7 @@ impl<'a> InLayout<'a> {
     /// let inserted = interner.insert("something");
     /// assert_eq!(reserved_interned, inserted);
     /// ```
-    const unsafe fn from_reserved_index(index: usize) -> Self {
+    pub(crate) const unsafe fn from_index(index: usize) -> Self {
         Self(index, PhantomData)
     }
 }
@@ -310,10 +312,14 @@ fn hash<V: std::hash::Hash>(val: V) -> u64 {
 
 #[inline(always)]
 fn make_normalized_lamdba_set<'a>(
+    args: &'a &'a [InLayout<'a>],
+    ret: InLayout<'a>,
     set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
     representation: InLayout<'a>,
 ) -> LambdaSet<'a> {
     LambdaSet {
+        args,
+        ret,
         set,
         representation,
         full_layout: Layout::VOID,
@@ -394,7 +400,10 @@ impl<'a> GlobalLayoutInterner<'a> {
                 let mut map = self.0.map.lock();
                 let mut vec = self.0.vec.write();
 
-                let slot = unsafe { InLayout::from_reserved_index(vec.len()) };
+                let slot = unsafe { InLayout::from_index(vec.len()) };
+
+                // dbg!((normalized, normalized_hash, slot));
+
                 let lambda_set = LambdaSet {
                     full_layout: slot,
                     ..normalized
@@ -460,6 +469,8 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
 
     fn insert_lambda_set(
         &mut self,
+        args: &'a &'a [InLayout<'a>],
+        ret: InLayout<'a>,
         set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
         representation: InLayout<'a>,
     ) -> LambdaSet<'a> {
@@ -475,7 +486,7 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
         //   - if so, use that one immediately
         //   - otherwise, allocate a new (global) slot, intern the lambda set, and then fill the slot in
         let global = &self.parent;
-        let normalized = make_normalized_lamdba_set(set, representation);
+        let normalized = make_normalized_lamdba_set(args, ret, set, representation);
         let normalized_hash = hash(normalized);
         let mut new_interned_layout = None;
         let (_, &mut full_lambda_set) = self
@@ -571,6 +582,8 @@ impl<'a> LayoutInterner<'a> for STLayoutInterner<'a> {
 
     fn insert_lambda_set(
         &mut self,
+        args: &'a &'a [InLayout<'a>],
+        ret: InLayout<'a>,
         set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
         representation: InLayout<'a>,
     ) -> LambdaSet<'a> {
@@ -579,14 +592,16 @@ impl<'a> LayoutInterner<'a> for STLayoutInterner<'a> {
         //     inserted lambda set
         //   - if so, use that one immediately
         //   - otherwise, allocate a new slot, intern the lambda set, and then fill the slot in
-        let normalized_lambda_set = make_normalized_lamdba_set(set, representation);
+        let normalized_lambda_set = make_normalized_lamdba_set(args, ret, set, representation);
         if let Some(lambda_set) = self.normalized_lambda_set_map.get(&normalized_lambda_set) {
             return *lambda_set;
         }
 
         // This lambda set must be new to the interner, reserve a slot and fill it in.
-        let slot = unsafe { InLayout::from_reserved_index(self.vec.len()) };
+        let slot = unsafe { InLayout::from_index(self.vec.len()) };
         let lambda_set = LambdaSet {
+            args,
+            ret,
             set,
             representation,
             full_layout: slot,
@@ -622,6 +637,8 @@ mod insert_lambda_set {
     const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
     const TEST_SET: &&[(Symbol, &[InLayout])] =
         &(&[(Symbol::ATTR_ATTR, &[Layout::UNIT] as &[_])] as &[_]);
+    const TEST_ARGS: &&[InLayout] = &(&[Layout::UNIT] as &[_]);
+    const TEST_RET: InLayout = Layout::UNIT;
 
     #[test]
     fn two_threads_write() {
@@ -634,7 +651,7 @@ mod insert_lambda_set {
             for _ in 0..10 {
                 let mut interner = global.fork();
                 handles.push(std::thread::spawn(move || {
-                    interner.insert_lambda_set(set, repr)
+                    interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr)
                 }));
             }
             let ins: Vec<_> = handles.into_iter().map(|t| t.join().unwrap()).collect();
@@ -648,7 +665,7 @@ mod insert_lambda_set {
         let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
         let mut interner = global.fork();
 
-        let lambda_set = interner.insert_lambda_set(TEST_SET, Layout::UNIT);
+        let lambda_set = interner.insert_lambda_set(TEST_ARGS, TEST_RET, TEST_SET, Layout::UNIT);
         let lambda_set_layout_in = interner.insert(Layout::LambdaSet(lambda_set));
         assert_eq!(lambda_set.full_layout, lambda_set_layout_in);
     }
@@ -661,12 +678,12 @@ mod insert_lambda_set {
 
         let in1 = {
             let mut interner = global.fork();
-            interner.insert_lambda_set(set, repr)
+            interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr)
         };
 
         let in2 = {
             let mut st_interner = global.unwrap().unwrap();
-            st_interner.insert_lambda_set(set, repr)
+            st_interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr)
         };
 
         assert_eq!(in1, in2);
@@ -680,12 +697,12 @@ mod insert_lambda_set {
         let set = TEST_SET;
         let repr = Layout::UNIT;
 
-        let in1 = st_interner.insert_lambda_set(set, repr);
+        let in1 = st_interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr);
 
         let global = st_interner.into_global();
         let mut interner = global.fork();
 
-        let in2 = interner.insert_lambda_set(set, repr);
+        let in2 = interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr);
 
         assert_eq!(in1, in2);
     }
