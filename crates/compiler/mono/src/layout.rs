@@ -587,16 +587,7 @@ impl<'a> RawFunctionLayout<'a> {
 
                 let fn_args = fn_args.into_bump_slice();
 
-                let lambda_set = cached!(
-                    LambdaSet::from_var(
-                        env.cache,
-                        env.arena,
-                        env.subs,
-                        closure_var,
-                        env.target_info,
-                    ),
-                    cache_criteria
-                );
+                let lambda_set = cached!(LambdaSet::from_var(env, closure_var), cache_criteria);
 
                 Cacheable(Ok(Self::Function(fn_args, lambda_set, ret)), cache_criteria)
             }
@@ -1750,31 +1741,21 @@ impl<'a> LambdaSet<'a> {
         closure_var: Variable,
         target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
-        Self::from_var(cache, arena, subs, closure_var, target_info).value()
+        let mut env = Env::from_components(cache, subs, arena, target_info);
+        Self::from_var(&mut env, closure_var).value()
     }
 
     fn from_var(
-        cache: &mut LayoutCache<'a>,
-        arena: &'a Bump,
-        subs: &Subs,
+        env: &mut Env<'a, '_>,
         closure_var: Variable,
-        target_info: TargetInfo,
     ) -> Cacheable<Result<Self, LayoutProblem>> {
-        // Ideally we would pass `env` in directly, but that currently causes problems later on
-        // (in alias analysis) with recursive pointers not appearing under recursive layouts. So,
-        // we have to clear the `seen` cache before building a lambda set layout.
-        //
-        // I think more generally, we need to address https://github.com/roc-lang/roc/issues/2466,
-        // which should also resolve the issue here.
-        let mut env = Env::from_components(cache, subs, arena, target_info);
-
         let Cacheable(result, criteria) = env.cached_or(closure_var, |env| {
             let Cacheable(result, criteria) = Self::from_var_help(env, closure_var);
             let result = result.map(|l| l.full_layout);
             Cacheable(result, criteria)
         });
 
-        match result.map(|l| cache.get_in(l)) {
+        match result.map(|l| env.cache.get_in(l)) {
             Ok(Layout::LambdaSet(lambda_set)) => Cacheable(Ok(lambda_set), criteria),
             Err(err) => Cacheable(Err(err), criteria),
             Ok(layout) => internal_error!("other layout found for lambda set: {:?}", layout),
@@ -3105,16 +3086,7 @@ fn layout_from_flat_type<'a>(
             } else {
                 let mut criteria = CACHEABLE;
 
-                let lambda_set = cached!(
-                    LambdaSet::from_var(
-                        env.cache,
-                        env.arena,
-                        env.subs,
-                        closure_var,
-                        env.target_info,
-                    ),
-                    criteria
-                );
+                let lambda_set = cached!(LambdaSet::from_var(env, closure_var,), criteria);
                 let lambda_set = lambda_set.full_layout;
 
                 Cacheable(Ok(lambda_set), criteria)
