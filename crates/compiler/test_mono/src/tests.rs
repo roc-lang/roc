@@ -2408,3 +2408,43 @@ fn pattern_as_of_symbol() {
         "###
     )
 }
+
+#[mono_test]
+fn function_specialization_information_in_lambda_set_thunk() {
+    // https://github.com/roc-lang/roc/issues/4734
+    // https://rwx.notion.site/Let-generalization-Let-s-not-742a3ab23ff742619129dcc848a271cf#6b08b0a203fb443db2d7238a0eb154eb
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        andThen = \{} ->
+            x = 10
+            \newFn -> Num.add (newFn {}) x
+
+        between = andThen {}
+
+        main = between \{} -> between \{} -> 10
+        "###
+    )
+}
+
+#[mono_test]
+fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
+    // https://github.com/roc-lang/roc/issues/4734
+    // https://rwx.notion.site/Let-generalization-Let-s-not-742a3ab23ff742619129dcc848a271cf#6b08b0a203fb443db2d7238a0eb154eb
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        andThen = \{} ->
+            x = 10u8
+            \newFn -> Num.add (newFn {}) x
+
+        between1 = andThen {}
+
+        between2 = andThen {}
+
+        main = between1 \{} -> between2 \{} -> 10u8
+        "###
+    )
+}
