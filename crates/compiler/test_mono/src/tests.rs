@@ -2448,3 +2448,30 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
         "###
     )
 }
+
+#[mono_test(mode = "test")]
+fn issue_4772_weakened_monomorphic_destructure() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports [Json]
+
+        getNumber =
+            { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") Json.fromUtf8
+                    
+            when result is 
+                Ok val -> 
+                    when Str.toI64 val is 
+                        Ok number ->
+                            Ok {val : number, input : rest}
+                        Err InvalidNumStr ->
+                            Err (ParsingFailure "not a number")
+
+                Err _ -> 
+                    Err (ParsingFailure "not a number")
+
+        expect 
+            result = getNumber
+            result == Ok {val : -1234i64, input : []}
+        "###
+    )
+}
