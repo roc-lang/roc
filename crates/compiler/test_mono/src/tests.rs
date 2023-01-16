@@ -2475,3 +2475,24 @@ fn issue_4772_weakened_monomorphic_destructure() {
         "###
     )
 }
+
+#[mono_test]
+fn weakening_avoids_overspecialization() {
+    // Without weakening of let-bindings, this program would force two specializations of
+    // `index` - to `Nat` and the default integer type, `I64`. The test is to ensure only one
+    // specialization, that of `Nat`, exists.
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        main : (List U8) -> (List U8)
+        main = \input ->
+            index = List.walkUntil input 0 \i, _ -> Break i
+
+            if index == 0 then
+                input
+            else
+                List.drop input index
+        "###
+    )
+}
