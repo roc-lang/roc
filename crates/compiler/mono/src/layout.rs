@@ -37,7 +37,7 @@ roc_error_macros::assert_sizeof_aarch64!(LambdaSet, 5 * 8);
 roc_error_macros::assert_sizeof_wasm!(Builtin, 2 * 4);
 roc_error_macros::assert_sizeof_wasm!(Layout, 6 * 4);
 roc_error_macros::assert_sizeof_wasm!(UnionLayout, 3 * 4);
-roc_error_macros::assert_sizeof_wasm!(LambdaSet, 3 * 4);
+roc_error_macros::assert_sizeof_wasm!(LambdaSet, 5 * 4);
 
 roc_error_macros::assert_sizeof_default!(Builtin, 2 * 8);
 roc_error_macros::assert_sizeof_default!(Layout, 6 * 8);
