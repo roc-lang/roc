@@ -1,10 +1,6 @@
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.257 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.257;
-
-procedure Test.1 (Test.8):
-    let Test.3 : I64 = 10i64;
-    ret Test.3;
+    let Num.256 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.256;
 
 procedure Test.1 (Test.8):
     let Test.3 : I64 = 10i64;
@@ -15,35 +11,34 @@ procedure Test.2 ():
     let Test.12 : I64 = CallByName Test.1 Test.13;
     ret Test.12;
 
-procedure Test.2 ():
-    let Test.24 : {} = Struct {};
-    let Test.23 : I64 = CallByName Test.1 Test.24;
-    ret Test.23;
-
 procedure Test.4 (Test.5, Test.3):
     let Test.18 : {} = Struct {};
-    let Test.17 : I64 = CallByName Test.6 Test.18;
-    let Test.16 : I64 = CallByName Num.19 Test.17 Test.3;
-    ret Test.16;
+    joinpoint Test.19 Test.17:
+        let Test.16 : I64 = CallByName Num.19 Test.17 Test.3;
+        ret Test.16;
+    in
+    switch Test.5:
+        case 0:
+            let Test.20 : I64 = CallByName Test.6 Test.18;
+            jump Test.19 Test.20;
+    
+        default:
+            let Test.21 : I64 = CallByName Test.7 Test.18;
+            jump Test.19 Test.21;
+    
 
-procedure Test.4 (Test.5, Test.3):
-    let Test.29 : {} = Struct {};
-    let Test.28 : I64 = CallByName Test.7 Test.29;
-    let Test.27 : I64 = CallByName Num.19 Test.28 Test.3;
+procedure Test.6 (Test.22):
+    let Test.25 : Int1 = true;
+    let Test.24 : I64 = CallByName Test.2;
+    let Test.23 : I64 = CallByName Test.4 Test.25 Test.24;
+    ret Test.23;
+
+procedure Test.7 (Test.26):
+    let Test.27 : I64 = 10i64;
     ret Test.27;
 
-procedure Test.6 (Test.19):
-    let Test.22 : {} = Struct {};
-    let Test.21 : I64 = CallByName Test.2;
-    let Test.20 : I64 = CallByName Test.4 Test.22 Test.21;
-    ret Test.20;
-
-procedure Test.7 (Test.30):
-    let Test.31 : I64 = 10i64;
-    ret Test.31;
-
 procedure Test.0 ():
-    let Test.11 : {} = Struct {};
+    let Test.11 : Int1 = false;
     let Test.10 : I64 = CallByName Test.2;
     let Test.9 : I64 = CallByName Test.4 Test.11 Test.10;
     ret Test.9;
