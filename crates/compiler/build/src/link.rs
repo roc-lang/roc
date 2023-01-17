@@ -377,7 +377,7 @@ pub fn build_zig_host_native(
     use serde_json::Value;
 
     // Run `zig env` to find the location of zig's std/ directory
-    let zig_env_output = zig().args(&["env"]).output().unwrap();
+    let zig_env_output = zig().args(["env"]).output().unwrap();
 
     let zig_env_json = if zig_env_output.status.success() {
         std::str::from_utf8(&zig_env_output.stdout).unwrap_or_else(|utf8_err| {
@@ -417,19 +417,19 @@ pub fn build_zig_host_native(
     let mut zig_cmd = zig();
     zig_cmd
         .env_clear()
-        .env("PATH", &env_path)
-        .env("HOME", &env_home);
+        .env("PATH", env_path)
+        .env("HOME", env_home);
     if let Some(shared_lib_path) = shared_lib_path {
-        zig_cmd.args(&[
+        zig_cmd.args([
             "build-exe",
             "-fPIE",
             shared_lib_path.to_str().unwrap(),
             builtins_host_path.to_str().unwrap(),
         ]);
     } else {
-        zig_cmd.args(&["build-obj"]);
+        zig_cmd.args(["build-obj"]);
     }
-    zig_cmd.args(&[
+    zig_cmd.args([
         zig_host_src,
         &format!("-femit-bin={}", emit_bin),
         "--pkg-begin",
@@ -446,9 +446,9 @@ pub fn build_zig_host_native(
         "c",
     ]);
     if matches!(opt_level, OptLevel::Optimize) {
-        zig_cmd.args(&["-O", "ReleaseSafe"]);
+        zig_cmd.args(["-O", "ReleaseSafe"]);
     } else if matches!(opt_level, OptLevel::Size) {
-        zig_cmd.args(&["-O", "ReleaseSmall"]);
+        zig_cmd.args(["-O", "ReleaseSmall"]);
     }
 
     zig_cmd
