@@ -17,7 +17,7 @@ use crate::inc_dec::{collect_stmt, occurring_variables_expr, JPLiveVarMap, LiveV
 use crate::ir::{
     BranchInfo, Call, Expr, ListLiteralElement, Proc, Stmt, UpdateModeId, UpdateModeIds,
 };
-use crate::layout::{Layout, TagIdIntType, UnionLayout};
+use crate::layout::{Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::MutSet;
@@ -25,6 +25,7 @@ use roc_module::symbol::{IdentIds, ModuleId, Symbol};
 
 pub fn insert_reset_reuse<'a, 'i>(
     arena: &'a Bump,
+    interner: &'i mut STLayoutInterner<'a>,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
@@ -32,6 +33,7 @@ pub fn insert_reset_reuse<'a, 'i>(
 ) -> Proc<'a> {
     let mut env = Env {
         arena,
+        interner,
         home,
         ident_ids,
         update_mode_ids,
@@ -65,6 +67,7 @@ fn may_reuse(tag_layout: UnionLayout, tag_id: TagIdIntType, other: &CtorInfo) ->
 #[derive(Debug)]
 struct Env<'a, 'i> {
     arena: &'a Bump,
+    interner: &'i mut STLayoutInterner<'a>,
 
     /// required for creating new `Symbol`s
     home: ModuleId,
@@ -332,7 +335,7 @@ fn insert_reset<'a>(
         update_mode: w.update_mode,
     };
 
-    let layout = Layout::Union(union_layout);
+    let layout = env.interner.insert(Layout::Union(union_layout));
 
     stmt = env
         .arena
@@ -612,11 +615,11 @@ fn function_r_branch_body<'a, 'i>(
             scrutinee,
             layout,
             tag_id,
-        } => match layout {
+        } => match env.interner.get(*layout) {
             Layout::Union(UnionLayout::NonRecursive(_)) => temp,
             Layout::Union(union_layout) if !union_layout.tag_is_null(*tag_id) => {
                 let ctor_info = CtorInfo {
-                    layout: *union_layout,
+                    layout: union_layout,
                     id: *tag_id,
                 };
                 function_d(env, *scrutinee, &ctor_info, temp)

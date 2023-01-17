@@ -12,8 +12,8 @@ use roc_module::{
     symbol::{Interns, Symbol},
 };
 use roc_mono::layout::{
-    cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, Layout,
-    LayoutCache, TLLayoutInterner, UnionLayout,
+    cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, InLayout,
+    Layout, LayoutCache, LayoutInterner, TLLayoutInterner, UnionLayout,
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -49,13 +49,11 @@ pub struct Types {
     /// This is important for declaration order in C; we need to output a
     /// type declaration earlier in the file than where it gets referenced by another type.
     deps: VecMap<TypeId, Vec<TypeId>>,
-    target: TargetInfo,
 }
 
 impl Types {
-    pub fn with_capacity(cap: usize, target_info: TargetInfo) -> Self {
+    pub fn with_capacity(cap: usize) -> Self {
         Self {
-            target: target_info,
             types: Vec::with_capacity(cap),
             types_by_name: FnvHashMap::with_capacity_and_hasher(10, Default::default()),
             sizes: Vec::new(),
@@ -365,7 +363,7 @@ impl Types {
         interner: &TLLayoutInterner<'a>,
         name: String,
         typ: RocType,
-        layout: Layout<'a>,
+        layout: InLayout<'a>,
     ) -> TypeId {
         if let Some(existing_type_id) = self.types_by_name.get(&name) {
             let existing_type = self.get_type(*existing_type_id);
@@ -392,7 +390,7 @@ impl Types {
         &mut self,
         interner: &TLLayoutInterner<'a>,
         typ: RocType,
-        layout: Layout<'a>,
+        layout: InLayout<'a>,
     ) -> TypeId {
         for (id, existing_type) in self.types.iter().enumerate() {
             if self.is_equivalent(&typ, existing_type) {
@@ -406,9 +404,8 @@ impl Types {
 
         self.types.push(typ);
         self.sizes
-            .push(layout.stack_size_without_alignment(interner, self.target));
-        self.aligns
-            .push(layout.alignment_bytes(interner, self.target));
+            .push(interner.stack_size_without_alignment(layout));
+        self.aligns.push(interner.alignment_bytes(layout));
 
         id
     }
@@ -694,7 +691,7 @@ impl<'a> Env<'a> {
     where
         I: Iterator<Item = Variable>,
     {
-        let mut types = Types::with_capacity(variables.size_hint().0, self.target);
+        let mut types = Types::with_capacity(variables.size_hint().0);
 
         for var in variables {
             self.add_type(var, &mut types);
@@ -746,7 +743,7 @@ impl<'a> Env<'a> {
 
 fn add_type_help<'a>(
     env: &mut Env<'a>,
-    layout: Layout<'a>,
+    layout: InLayout<'a>,
     var: Variable,
     opt_name: Option<Symbol>,
     types: &mut Types,
@@ -799,7 +796,7 @@ fn add_type_help<'a>(
 
             add_tag_union(env, opt_name, tags, var, types, layout, Some(rec_root))
         }
-        Content::Structure(FlatType::Apply(symbol, _)) => match layout {
+        Content::Structure(FlatType::Apply(symbol, _)) => match env.layout_cache.get_in(layout) {
             Layout::Builtin(builtin) => {
                 add_builtin_type(env, builtin, var, opt_name, types, layout)
             }
@@ -872,7 +869,7 @@ fn add_type_help<'a>(
         }
         Content::Alias(name, alias_vars, real_var, _) => {
             if name.is_builtin() {
-                match layout {
+                match env.layout_cache.get_in(layout) {
                     Layout::Builtin(builtin) => {
                         add_builtin_type(env, builtin, var, opt_name, types, layout)
                     }
@@ -1018,7 +1015,7 @@ fn add_builtin_type<'a>(
     var: Variable,
     opt_name: Option<Symbol>,
     types: &mut Types,
-    layout: Layout<'a>,
+    layout: InLayout<'a>,
 ) -> TypeId {
     use Content::*;
     use FlatType::*;
@@ -1097,8 +1094,7 @@ fn add_builtin_type<'a>(
             let args = env.subs.get_subs_slice(*args);
             debug_assert_eq!(args.len(), 1);
 
-            let elem_layout = env.layout_cache.get_in(elem_layout);
-            let elem_id = add_type_help(env, *elem_layout, args[0], opt_name, types);
+            let elem_id = add_type_help(env, elem_layout, args[0], opt_name, types);
             let list_id = types.add_anonymous(
                 &env.layout_cache.interner,
                 RocType::RocList(elem_id),
@@ -1114,7 +1110,7 @@ fn add_builtin_type<'a>(
             Alias(Symbol::DICT_DICT, _alias_variables, alias_var, AliasKind::Opaque),
         ) => {
             match (
-                *env.layout_cache.get_in(elem_layout),
+                env.layout_cache.get_in(elem_layout),
                 env.subs.get_content_without_compacting(*alias_var),
             ) {
                 (
@@ -1208,7 +1204,7 @@ fn add_struct<'a, I, L, F>(
     name: String,
     fields: I,
     types: &mut Types,
-    layout: Layout<'a>,
+    layout: InLayout<'a>,
     to_type: F,
 ) -> TypeId
 where
@@ -1235,9 +1231,9 @@ where
         cmp_fields(
             &env.layout_cache.interner,
             label1,
-            layout1,
+            *layout1,
             label2,
-            layout2,
+            *layout2,
             env.layout_cache.target_info,
         )
     });
@@ -1265,7 +1261,7 @@ fn add_tag_union<'a>(
     union_tags: &UnionTags,
     var: Variable,
     types: &mut Types,
-    layout: Layout<'a>,
+    layout: InLayout<'a>,
     rec_root: Option<Variable>,
 ) -> TypeId {
     let subs = env.subs;
@@ -1274,7 +1270,7 @@ fn add_tag_union<'a>(
         None => env.enum_names.get_name(var),
     };
 
-    let tag_union_type = match layout {
+    let tag_union_type = match env.layout_cache.get_in(layout) {
         _ if union_tags.is_newtype_wrapper(subs)
             && matches!(
                 subs.get_content_without_compacting(var),
@@ -1456,9 +1452,8 @@ fn add_tag_union<'a>(
             }
         }
         Layout::Boxed(elem_layout) => {
-            let elem_layout = env.layout_cache.get_in(elem_layout);
             let (tag_name, payload_fields) =
-                single_tag_payload_fields(union_tags, subs, &[*elem_layout], env, types);
+                single_tag_payload_fields(union_tags, subs, &[elem_layout], env, types);
 
             RocTagUnion::SingleTagStruct {
                 name: name.clone(),
@@ -1509,7 +1504,7 @@ fn union_tags_to_types<'a>(
     subs: &Subs,
     env: &mut Env<'a>,
     types: &mut Types,
-    layout: Layout<'a>,
+    layout: InLayout<'a>,
     is_recursive: bool,
 ) -> Vec<(String, Option<TypeId>)> {
     let mut tags: Vec<(String, Vec<Variable>)> = union_tags
@@ -1554,7 +1549,7 @@ fn single_tag_payload<'a>(
 fn single_tag_payload_fields<'a, 'b>(
     union_tags: &'b UnionLabels<TagName>,
     subs: &'b Subs,
-    field_layouts: &[Layout<'a>],
+    field_layouts: &[InLayout<'a>],
     env: &mut Env<'a>,
     types: &mut Types,
 ) -> (&'b str, Vec<TypeId>) {
@@ -1575,7 +1570,7 @@ fn tag_to_type<'a, D: Display>(
     tag_name: D,
     payload_vars: &[Variable],
     types: &mut Types,
-    layout: Layout<'a>,
+    layout: InLayout<'a>,
     is_recursive: bool,
 ) -> (D, Option<TypeId>) {
     match struct_fields_needed(env, payload_vars.iter().copied()) {
@@ -1616,7 +1611,7 @@ fn struct_fields_needed<I: IntoIterator<Item = Variable>>(env: &mut Env<'_>, var
     vars.into_iter().fold(0, |count, var| {
         let layout = env.layout_cache.from_var(arena, var, subs).unwrap();
 
-        if layout.is_dropped_because_empty() {
+        if env.layout_cache.get_in(layout).is_dropped_because_empty() {
             count
         } else {
             count + 1

@@ -4,7 +4,7 @@ use bumpalo::collections::Vec;
 use packed_struct::prelude::*;
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
-use roc_mono::layout::{Layout, STLayoutInterner};
+use roc_mono::layout::{InLayout, STLayoutInterner};
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
 #[allow(dead_code)]
@@ -316,8 +316,8 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
             AArch64Call,
         >,
         _layout_interner: &mut STLayoutInterner<'a>,
-        _args: &'a [(Layout<'a>, Symbol)],
-        _ret_layout: &Layout<'a>,
+        _args: &'a [(InLayout<'a>, Symbol)],
+        _ret_layout: &InLayout<'a>,
     ) {
         todo!("Loading args for AArch64");
     }
@@ -336,8 +336,8 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         _layout_interner: &mut STLayoutInterner<'a>,
         _dst: &Symbol,
         _args: &[Symbol],
-        _arg_layouts: &[Layout<'a>],
-        _ret_layout: &Layout<'a>,
+        _arg_layouts: &[InLayout<'a>],
+        _ret_layout: &InLayout<'a>,
     ) {
         todo!("Storing args for AArch64");
     }
@@ -354,7 +354,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         >,
         _layout_interner: &mut STLayoutInterner<'a>,
         _sym: &Symbol,
-        _layout: &Layout<'a>,
+        _layout: &InLayout<'a>,
     ) {
         todo!("Returning complex symbols for AArch64");
     }
@@ -371,7 +371,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
         >,
         _layout_interner: &mut STLayoutInterner<'a>,
         _sym: &Symbol,
-        _layout: &Layout<'a>,
+        _layout: &InLayout<'a>,
     ) {
         todo!("Loading returned complex symbols for AArch64");
     }

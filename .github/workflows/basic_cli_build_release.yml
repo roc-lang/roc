@@ -1,0 +1,125 @@
+on: [workflow_dispatch]
+
+# this cancels workflows currently in progress if you start a new one
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  build-linux-x86_64-files:
+    runs-on: [ubuntu-20.04]
+    steps:
+      - uses: actions/checkout@v3
+
+      # note: moving this step to a bash script will not work, the GITHUB_TOKEN is not passed properly
+      - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting.
+        run: |
+          curl --request GET \
+          --url https://api.github.com/repos/roc-lang/roc/releases \
+          --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
+          --header 'content-type: application/json' \
+          --output roc_releases.json
+
+      # does a build with the surgical linker and also with the legacy linker
+      - run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
+
+      - name: Save .rh1, .rm1 and .o file 
+        uses: actions/upload-artifact@v3
+        with:
+          name: linux-x86_64-files
+          path: |
+            basic-cli/src/linux-x86_64.rh1
+            basic-cli/src/metadata_linux-x86_64.rm1
+            basic-cli/src/linux-x86_64.o
+
+  build-macos-x86_64-files:
+    runs-on: [macos-11] # I expect the generated files to work on macOS 12
+    steps:
+      - uses: actions/checkout@v3
+
+      # note: moving this step to a bash script will not work, the GITHUB_TOKEN is not passed properly
+      - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting due to shared IP of github's macos ci servers.
+        run: |
+          curl --request GET \
+          --url https://api.github.com/repos/roc-lang/roc/releases \
+          --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
+          --header 'content-type: application/json' \
+          --output roc_releases.json
+
+      - run: ./ci/build_basic_cli.sh macos_x86_64
+
+      - name: Save .o files
+        uses: actions/upload-artifact@v3
+        with:
+          name: macos-x86_64-files
+          path: |
+            basic-cli/src/macos-x86_64.o
+
+  build-macos-apple-silicon-files:
+    name: build apple silicon .o file
+    runs-on: [self-hosted, macOS, ARM64]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: fetch releases data and save to file
+        run: curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
+
+      - run: ./ci/build_basic_cli.sh silicon
+
+      - name: Save macos-arm64.o file
+        uses: actions/upload-artifact@v3
+        with:
+          name: macos-apple-silicon-files
+          path: |
+            basic-cli/src/macos-arm64.o
+
+  create-brotli-archive:
+    needs: [build-linux-x86_64-files, build-macos-x86_64-files, build-macos-apple-silicon-files]
+    name: create brotli archive
+    runs-on: [ubuntu-20.04]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: remove all folders except the ci folder
+        run: ls | grep -v  ci | xargs rm -rf
+
+      # note: moving this step to a bash script will not work, the GITHUB_TOKEN is not passed properly
+      - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting.
+        run: |
+          curl --request GET \
+          --url https://api.github.com/repos/roc-lang/roc/releases \
+          --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
+          --header 'content-type: application/json' \
+          --output roc_releases.json
+
+      - run: echo "ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh linux_x86_64)" >> $GITHUB_ENV
+
+      - name: Get the archive from the url.
+        run: curl -OL ${{ env.ROC_RELEASE_URL }}
+
+      - name: decompress the tar
+        run: ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
+
+      - run: git clone https://github.com/roc-lang/basic-cli.git
+
+      - name: Download the previously uploaded files
+        uses: actions/download-artifact@v3
+
+      - run: cp macos-apple-silicon-files/* ./basic-cli/src
+      
+      - run: cp linux-x86_64-files/* ./basic-cli/src
+
+      - run: cp macos-x86_64-files/* ./basic-cli/src
+
+      - run: ./roc build --bundle=.tar.br ./basic-cli/src/main.roc
+
+      - run: echo "TAR_FILENAME=$(ls -d basic-cli/src/* | grep '.tar.br')" >> $GITHUB_ENV
+
+      - name: Upload platform archive
+        uses: actions/upload-artifact@v3
+        with:
+          name: basic-cli-platform
+          path: |
+            ${{ env.TAR_FILENAME }}
+

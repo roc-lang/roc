@@ -1072,7 +1072,7 @@ impl<'a> State<'a> {
             exec_mode,
             make_specializations_pass: MakeSpecializationsPass::Pass(1),
             world_abilities: Default::default(),
-            layout_interner: GlobalLayoutInterner::with_capacity(128),
+            layout_interner: GlobalLayoutInterner::with_capacity(128, target_info),
         }
     }
 }
@@ -3072,16 +3072,13 @@ fn update<'a>(
                     }
 
                     let layout_interner = {
-                        let mut taken = GlobalLayoutInterner::with_capacity(0);
+                        let mut taken = GlobalLayoutInterner::with_capacity(0, state.target_info);
                         std::mem::swap(&mut state.layout_interner, &mut taken);
                         taken
                     };
-                    let layout_interner = layout_interner
+                    let mut layout_interner = layout_interner
                         .unwrap()
                         .expect("outstanding references to global layout interener, but we just drained all layout caches");
-
-                    #[cfg(debug_assertions)]
-                    let mut layout_interner = layout_interner;
 
                     log!("specializations complete from {:?}", module_id);
 
@@ -3092,6 +3089,7 @@ fn update<'a>(
 
                     Proc::insert_reset_reuse_operations(
                         arena,
+                        &mut layout_interner,
                         module_id,
                         ident_ids,
                         &mut update_mode_ids,
@@ -3100,6 +3098,11 @@ fn update<'a>(
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
+                    let host_exposed_procs = bumpalo::collections::Vec::from_iter_in(
+                        state.exposed_to_host.values.keys().copied(),
+                        arena,
+                    );
+
                     Proc::insert_refcount_operations(
                         arena,
                         &layout_interner,
@@ -3107,6 +3110,7 @@ fn update<'a>(
                         ident_ids,
                         &mut update_mode_ids,
                         &mut state.procedures,
+                        &host_exposed_procs,
                     );
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_REFCOUNT);
@@ -3424,7 +3428,7 @@ fn proc_layout_for<'a>(
             // is a function value
             roc_mono::ir::ProcLayout {
                 arguments: &[],
-                result: Layout::struct_no_name_order(&[]),
+                result: Layout::UNIT,
                 niche: Niche::NONE,
             }
         }
@@ -4462,23 +4466,7 @@ fn build_header<'a>(
         //
         // Also build a list of imported_values_to_expose (like `bar` above.)
         for (qualified_module_name, exposed_idents, region) in imported.into_iter() {
-            let cloned_module_name = qualified_module_name.module.clone();
-            let pq_module_name = if qualified_module_name.is_builtin() {
-                // If this is a builtin, it must be unqualified, and we should *never* prefix it
-                // with the package shorthand! The user intended to import the module as-is here.
-                debug_assert!(qualified_module_name.opt_package.is_none());
-                PQModuleName::Unqualified(qualified_module_name.module)
-            } else {
-                match qualified_module_name.opt_package {
-                    None => match opt_shorthand {
-                        Some(shorthand) => {
-                            PQModuleName::Qualified(shorthand, qualified_module_name.module)
-                        }
-                        None => PQModuleName::Unqualified(qualified_module_name.module),
-                    },
-                    Some(package) => PQModuleName::Qualified(package, cloned_module_name),
-                }
-            };
+            let pq_module_name = qualified_module_name.into_pq_module_name(opt_shorthand);
 
             let module_id = module_ids.get_or_insert(&pq_module_name);
 
@@ -4491,18 +4479,14 @@ fn build_header<'a>(
             // to the same symbols as the ones we're using here.
             let ident_ids = ident_ids_by_module.get_or_insert(module_id);
 
-            for Loc {
-                region,
-                value: ident,
-            } in exposed_idents
-            {
-                let ident_id = ident_ids.get_or_insert(ident.as_str());
+            for loc_ident in exposed_idents {
+                let ident_id = ident_ids.get_or_insert(loc_ident.value.as_str());
                 let symbol = Symbol::new(module_id, ident_id);
 
                 // Since this value is exposed, add it to our module's default scope.
-                debug_assert!(!scope.contains_key(&ident));
+                debug_assert!(!scope.contains_key(&loc_ident.value));
 
-                scope.insert(ident, (symbol, region));
+                scope.insert(loc_ident.value, (symbol, loc_ident.region));
             }
         }
 

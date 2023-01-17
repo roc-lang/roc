@@ -1055,6 +1055,7 @@ pub fn constrain_expr(
                 pattern_headers,
                 pattern_constraints,
                 body_constraints,
+                // Never generalize identifiers introduced in branch-patterns
                 Generalizable(false),
             );
 
@@ -2282,6 +2283,7 @@ fn constrain_when_branch_help(
                 [],
                 guard_constraint,
                 ret_constraint,
+                // Never generalize identifiers introduced in branch guards
                 Generalizable(false),
             );
 
@@ -3604,7 +3606,9 @@ pub fn rec_defs_help_simple(
             }
             _ => true, // this must be a function
         });
-        Generalizable(generalizable)
+        // TODO(weakening)
+        #[allow(clippy::logic_bug)]
+        Generalizable(generalizable || true)
     };
 
     for index in range {
@@ -3821,8 +3825,44 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
         match expr {
             Num(..) | Int(..) | Float(..) => return true,
             Closure(_) => return true,
+            Accessor(_) => {
+                // Accessor functions `.field` are equivalent to closures `\r -> r.field`, no need to weaken them.
+                return true;
+            }
+            OpaqueWrapFunction(_) => {
+                // Opaque wrapper functions `@Q` are equivalent to closures `\x -> @Q x`, no need to weaken them.
+                return true;
+            }
+            RuntimeError(roc_problem::can::RuntimeError::NoImplementation)
+            | RuntimeError(roc_problem::can::RuntimeError::NoImplementationNamed { .. }) => {
+                // Allow generalization of signatures with no implementation
+                return true;
+            }
             OpaqueRef { argument, .. } => expr = &argument.1.value,
-            _ => return false,
+            Str(_)
+            | List { .. }
+            | SingleQuote(_, _, _, _)
+            | When { .. }
+            | If { .. }
+            | LetRec(_, _, _)
+            | LetNonRec(_, _)
+            | Call(_, _, _)
+            | RunLowLevel { .. }
+            | ForeignCall { .. }
+            | EmptyRecord
+            | Expr::Record { .. }
+            | Crash { .. }
+            | Access { .. }
+            | Update { .. }
+            | Expect { .. }
+            | ExpectFx { .. }
+            | Dbg { .. }
+            | TypedHole(_)
+            | RuntimeError(..) => return false,
+            // TODO(weakening)
+            Var(_, _) | AbilityMember(_, _, _) | Tag { .. } | ZeroArgumentTag { .. } => {
+                return true
+            }
         }
     }
 }
@@ -3858,7 +3898,9 @@ fn rec_defs_help(
         let generalizable = defs
             .iter()
             .all(|d| is_generalizable_expr(&d.loc_expr.value));
-        Generalizable(generalizable)
+        // TODO(weakening)
+        #[allow(clippy::logic_bug)]
+        Generalizable(generalizable || true)
     };
 
     for def in defs {

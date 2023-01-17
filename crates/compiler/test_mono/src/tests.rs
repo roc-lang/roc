@@ -385,7 +385,7 @@ fn when_on_two_values() {
 #[mono_test]
 fn dict() {
     r#"
-    Dict.len Dict.empty
+    Dict.len (Dict.empty {})
     "#
 }
 
@@ -1231,12 +1231,12 @@ fn monomorphized_list() {
         app "test" provides [main] to "./platform"
 
         main =
-            l = [1, 2, 3]
+            l = \{} -> [1, 2, 3]
 
             f : List U8, List U16 -> Nat
             f = \_, _ -> 18
 
-            f l l
+            f (l {}) (l {})
         "#
     )
 }
@@ -1273,7 +1273,7 @@ fn aliased_polymorphic_closure() {
 }
 
 #[mono_test]
-fn issue_2535_polymorphic_fields_referenced_in_list() {
+fn issue_2535_let_weakened_fields_referenced_in_list() {
     indoc!(
         r#"
         app "test" provides [nums] to "./platform"
@@ -2217,7 +2217,7 @@ fn issue_4749() {
 
         expect
             input = [82, 111, 99]
-            got = Decode.fromBytes input Json.fromUtf8 
+            got = Decode.fromBytes input Json.fromUtf8
             got == Ok "Roc"
         "###
     )
@@ -2246,7 +2246,7 @@ fn lambda_set_with_imported_toplevels_issue_4733() {
 fn order_list_size_tests_issue_4732() {
     indoc!(
         r###"
-        when [] is 
+        when [] is
             [1, ..]          -> "B1"
             [2, 1, ..]       -> "B2"
             [3, 2, 1, ..]    -> "B3"
@@ -2336,6 +2336,115 @@ fn nullable_wrapped_with_non_nullable_singleton_tags() {
             g (A (B))
             |> Str.concat (g B)
             |> Str.concat (g C)
+        "###
+    )
+}
+
+#[mono_test]
+fn nullable_wrapped_with_nullable_not_last_index() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        Parser : [
+            OneOrMore Parser,
+            Keyword Str,
+            CharLiteral,
+        ]
+
+        toIdParser : Parser -> Str
+        toIdParser = \parser ->
+            when parser is
+                OneOrMore _ -> "a"
+                Keyword _ -> "b"
+                CharLiteral -> "c"
+
+        main = toIdParser CharLiteral == "c"
+        "###
+    )
+}
+
+#[mono_test]
+fn pattern_as_toplevel() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        record = { a: 42i64, b: "foo" }
+
+        main =
+            when record is
+                { a: 42i64 } as r -> record == r
+                _ -> Bool.false
+        "###
+    )
+}
+
+#[mono_test]
+fn pattern_as_nested() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        record = { a: 42i64, b: "foo" }
+
+        main =
+            when Pair {} record is
+                Pair {} ({ a: 42i64 } as r) -> record == r
+                _ -> Bool.false
+        "###
+    )
+}
+
+#[mono_test]
+fn pattern_as_of_symbol() {
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        main =
+            when "foo" is
+                a as b -> a == b
+        "###
+    )
+}
+
+#[mono_test]
+fn function_specialization_information_in_lambda_set_thunk() {
+    // https://github.com/roc-lang/roc/issues/4734
+    // https://rwx.notion.site/Let-generalization-Let-s-not-742a3ab23ff742619129dcc848a271cf#6b08b0a203fb443db2d7238a0eb154eb
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        andThen = \{} ->
+            x = 10
+            \newFn -> Num.add (newFn {}) x
+
+        between = andThen {}
+
+        main = between \{} -> between \{} -> 10
+        "###
+    )
+}
+
+#[mono_test]
+fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
+    // https://github.com/roc-lang/roc/issues/4734
+    // https://rwx.notion.site/Let-generalization-Let-s-not-742a3ab23ff742619129dcc848a271cf#6b08b0a203fb443db2d7238a0eb154eb
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        andThen = \{} ->
+            x = 10u8
+            \newFn -> Num.add (newFn {}) x
+
+        between1 = andThen {}
+
+        between2 = andThen {}
+
+        main = between1 \{} -> between2 \{} -> 10u8
         "###
     )
 }

@@ -2183,11 +2183,12 @@ const fn unnamed_flex_var() -> Content {
 pub struct Rank(u32);
 
 impl Rank {
-    pub const NONE: Rank = Rank(0);
+    /// Reserved rank for variables that are generalized
+    pub const GENERALIZED: Rank = Rank(0);
 
     /// The generalized rank
-    pub fn is_none(&self) -> bool {
-        *self == Self::NONE
+    pub fn is_generalized(&self) -> bool {
+        *self == Self::GENERALIZED
     }
 
     pub const fn toplevel() -> Self {
@@ -2270,7 +2271,7 @@ impl From<Content> for Descriptor {
     fn from(content: Content) -> Descriptor {
         Descriptor {
             content,
-            rank: Rank::NONE,
+            rank: Rank::GENERALIZED,
             mark: Mark::NONE,
             copy: OptVariable::NONE,
         }
@@ -4048,11 +4049,11 @@ fn flat_type_to_err_type(
                     ErrorType::RecursiveTagUnion(rec_error_type, sub_tags.union(err_tags), sub_ext, pol)
                 }
 
-                ErrorType::FlexVar(var) => {
+                ErrorType::FlexVar(var) | ErrorType::FlexAbleVar(var, _) => {
                     ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::FlexOpen(var), pol)
                 }
 
-                ErrorType::RigidVar(var) => {
+                ErrorType::RigidVar(var) | ErrorType::RigidAbleVar(var, _) => {
                     ErrorType::RecursiveTagUnion(rec_error_type, err_tags, TypeExt::RigidOpen(var), pol)
                 }
 
@@ -4562,7 +4563,7 @@ fn storage_copy_var_to_help(env: &mut StorageCopyVarToEnv<'_>, var: Variable) ->
     if let Some(&copy) = env.copy_table.get(&var) {
         debug_assert!(env.target.contains(copy));
         return copy;
-    } else if desc.rank != Rank::NONE {
+    } else if desc.rank != Rank::GENERALIZED {
         // DO NOTHING, Fall through
         //
         // The original deep_copy_var can do
@@ -5007,7 +5008,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
     if let Some(&copy) = env.copy_table.get(&var) {
         debug_assert!(env.target.contains(copy));
         return copy;
-    } else if desc.rank != Rank::NONE {
+    } else if desc.rank != Rank::GENERALIZED {
         // DO NOTHING, Fall through
         //
         // The original copy_import can do
@@ -5324,7 +5325,7 @@ fn copy_import_to_help(env: &mut CopyImportEnv<'_>, max_rank: Rank, var: Variabl
 /// Function that converts rigids variables to flex variables
 /// this is used during the monomorphization process and deriving
 pub fn instantiate_rigids(subs: &mut Subs, var: Variable) {
-    let rank = Rank::NONE;
+    let rank = Rank::GENERALIZED;
 
     instantiate_rigids_help(subs, rank, var);
 
@@ -5350,7 +5351,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
         }
 
         subs.modify(var, |desc| {
-            desc.rank = Rank::NONE;
+            desc.rank = Rank::GENERALIZED;
             desc.mark = Mark::NONE;
             desc.copy = OptVariable::from(var);
         });
@@ -5483,7 +5484,7 @@ fn instantiate_rigids_help(subs: &mut Subs, max_rank: Rank, initial: Variable) {
     for var in visited {
         subs.modify(var, |descriptor| {
             if descriptor.copy.is_some() {
-                descriptor.rank = Rank::NONE;
+                descriptor.rank = Rank::GENERALIZED;
                 descriptor.mark = Mark::NONE;
                 descriptor.copy = OptVariable::NONE;
             }

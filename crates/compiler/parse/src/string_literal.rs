@@ -326,8 +326,12 @@ pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EStri
 
                         if state.bytes().starts_with(b"\"\"\"") {
                             // ending the string; don't use the last newline
-                            segments
-                                .push(StrSegment::Plaintext(utf8(state.clone(), without_newline)?));
+                            if !without_newline.is_empty() {
+                                segments.push(StrSegment::Plaintext(utf8(
+                                    state.clone(),
+                                    without_newline,
+                                )?));
+                            }
                         } else {
                             segments
                                 .push(StrSegment::Plaintext(utf8(state.clone(), with_newline)?));

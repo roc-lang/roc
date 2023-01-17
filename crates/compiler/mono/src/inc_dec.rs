@@ -1,9 +1,9 @@
-use crate::borrow::{ParamMap, BORROWED, OWNED};
+use crate::borrow::{Ownership, ParamMap, BORROWED, OWNED};
 use crate::ir::{
     CallType, Expr, HigherOrderLowLevel, JoinPointId, ModifyRc, Param, Proc, ProcLayout, Stmt,
     UpdateModeIds,
 };
-use crate::layout::{Layout, STLayoutInterner};
+use crate::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
@@ -61,13 +61,13 @@ impl DataFunction {
         use DataFunction::*;
 
         let data_borrowed = !vars[&lowlevel_argument].consume;
-        let function_borrows = passed_function_argument.borrow;
+        let function_ownership = passed_function_argument.ownership;
 
-        match (data_borrowed, function_borrows) {
-            (BORROWED, BORROWED) => DataBorrowedFunctionBorrows,
-            (BORROWED, OWNED) => DataBorrowedFunctionOwns,
-            (OWNED, BORROWED) => DataOwnedFunctionBorrows,
-            (OWNED, OWNED) => DataOwnedFunctionOwns,
+        match (data_borrowed, function_ownership) {
+            (BORROWED, Ownership::Borrowed) => DataBorrowedFunctionBorrows,
+            (BORROWED, Ownership::Owned) => DataBorrowedFunctionOwns,
+            (OWNED, Ownership::Borrowed) => DataOwnedFunctionBorrows,
+            (OWNED, Ownership::Owned) => DataOwnedFunctionOwns,
         }
     }
 }
@@ -302,7 +302,10 @@ where
 fn is_borrow_param(x: Symbol, ys: &[Symbol], ps: &[Param]) -> bool {
     // default to owned arguments
     let is_owned = |i: usize| match ps.get(i) {
-        Some(param) => !param.borrow,
+        Some(param) => match param.ownership {
+            Ownership::Owned => true,
+            Ownership::Borrowed => false,
+        },
         None => unreachable!("or?"),
     };
     is_borrow_param_help(x, ys, is_owned)
@@ -473,7 +476,10 @@ impl<'a, 'i> Context<'a, 'i> {
     ) -> &'a Stmt<'a> {
         // default to owned arguments
         let pred = |i: usize| match ps.get(i) {
-            Some(param) => !param.borrow,
+            Some(param) => match param.ownership {
+                Ownership::Owned => true,
+                Ownership::Borrowed => false,
+            },
             None => unreachable!("or?"),
         };
         self.add_inc_before_help(xs, pred, b, live_vars_after)
@@ -553,7 +559,7 @@ impl<'a, 'i> Context<'a, 'i> {
         z: Symbol,
         call_type: crate::ir::CallType<'a>,
         arguments: &'a [Symbol],
-        l: Layout<'a>,
+        l: InLayout<'a>,
         b: &'a Stmt<'a>,
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
@@ -594,8 +600,7 @@ impl<'a, 'i> Context<'a, 'i> {
                 arg_layouts,
                 ..
             } => {
-                let top_level =
-                    ProcLayout::new(self.arena, arg_layouts, name.niche(), **ret_layout);
+                let top_level = ProcLayout::new(self.arena, arg_layouts, name.niche(), *ret_layout);
 
                 // get the borrow signature
                 let ps = self
@@ -623,7 +628,7 @@ impl<'a, 'i> Context<'a, 'i> {
         z: Symbol,
         lowlevel: &'a crate::ir::HigherOrderLowLevel,
         arguments: &'a [Symbol],
-        l: Layout<'a>,
+        l: InLayout<'a>,
         b: &'a Stmt<'a>,
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
@@ -851,7 +856,7 @@ impl<'a, 'i> Context<'a, 'i> {
         codegen: &mut CodegenTools<'i>,
         z: Symbol,
         v: Expr<'a>,
-        l: Layout<'a>,
+        l: InLayout<'a>,
         b: &'a Stmt<'a>,
         b_live_vars: &LiveVarSet,
     ) -> (&'a Stmt<'a>, LiveVarSet) {
@@ -949,7 +954,7 @@ impl<'a, 'i> Context<'a, 'i> {
         (new_b, live_vars)
     }
 
-    fn update_var_info(&self, symbol: Symbol, layout: &Layout<'a>, expr: &Expr<'a>) -> Self {
+    fn update_var_info(&self, symbol: Symbol, layout: &InLayout<'a>, expr: &Expr<'a>) -> Self {
         // is this value a constant? TODO do function pointers also fall into this category?
         let persistent = false;
 
@@ -964,13 +969,13 @@ impl<'a, 'i> Context<'a, 'i> {
     fn update_var_info_help(
         &self,
         symbol: Symbol,
-        layout: &Layout<'a>,
+        layout: &InLayout<'a>,
         persistent: bool,
         consume: bool,
         reset: bool,
     ) -> Self {
         // should we perform incs and decs on this value?
-        let reference = layout.contains_refcounted(self.layout_interner);
+        let reference = self.layout_interner.contains_refcounted(*layout);
 
         let info = VarInfo {
             reference,
@@ -991,8 +996,11 @@ impl<'a, 'i> Context<'a, 'i> {
 
         for p in ps.iter() {
             let info = VarInfo {
-                reference: p.layout.contains_refcounted(self.layout_interner),
-                consume: !p.borrow,
+                reference: self.layout_interner.contains_refcounted(p.layout),
+                consume: match p.ownership {
+                    Ownership::Owned => true,
+                    Ownership::Borrowed => false,
+                },
                 persistent: false,
                 reset: false,
             };
@@ -1014,8 +1022,8 @@ impl<'a, 'i> Context<'a, 'i> {
         b_live_vars: &LiveVarSet,
     ) -> &'a Stmt<'a> {
         for p in ps.iter() {
-            if !p.borrow
-                && p.layout.contains_refcounted(self.layout_interner)
+            if p.ownership == Ownership::Owned
+                && self.layout_interner.contains_refcounted(p.layout)
                 && !b_live_vars.contains(&p.symbol)
             {
                 b = self.add_dec(p.symbol, b)
@@ -1291,7 +1299,7 @@ fn branch_on_list_uniqueness<'a, 'i>(
     arena: &'a Bump,
     codegen: &mut CodegenTools<'i>,
     list_symbol: Symbol,
-    return_layout: Layout<'a>,
+    return_layout: InLayout<'a>,
     then_branch_stmt: Stmt<'a>,
     else_branch_stmt: &'a Stmt<'a>,
 ) -> Stmt<'a> {
@@ -1322,7 +1330,7 @@ fn branch_on_list_uniqueness<'a, 'i>(
     Stmt::Let(
         condition_symbol,
         Expr::Call(condition_call),
-        Layout::bool(),
+        Layout::BOOL,
         stmt,
     )
 }
@@ -1334,7 +1342,7 @@ fn create_holl_call<'a>(
     arguments: &'a [Symbol],
 ) -> Expr<'a> {
     let call = crate::ir::Call {
-        call_type: if let Some(OWNED) = param.map(|p| p.borrow) {
+        call_type: if let Some(Ownership::Owned) = param.map(|p| p.ownership) {
             let mut passed_function = holl.passed_function;
             passed_function.owns_captured_environment = true;
 
@@ -1519,7 +1527,7 @@ fn visit_proc<'a, 'i>(
         None => Vec::from_iter_in(
             proc.args.iter().cloned().map(|(layout, symbol)| Param {
                 symbol,
-                borrow: false,
+                ownership: Ownership::Owned,
                 layout,
             }),
             arena,

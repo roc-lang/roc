@@ -767,8 +767,6 @@ fn solve(
                 let offset = let_con.defs_and_ret_constraint.index();
                 let ret_constraint = &constraints.constraints[offset + 1];
 
-                let next_rank = rank.next();
-
                 let mark = state.mark;
                 let saved_env = state.env;
 
@@ -776,10 +774,16 @@ fn solve(
                 let visit_mark = young_mark.next();
                 let final_mark = visit_mark.next();
 
+                let intro_rank = if let_con.generalizable.0 {
+                    rank.next()
+                } else {
+                    rank
+                };
+
                 // Add a variable for each def to local_def_vars.
                 let local_def_vars = LocalDefVarsVec::from_def_types(
                     constraints,
-                    next_rank,
+                    intro_rank,
                     pools,
                     problems,
                     abilities_store,
@@ -790,17 +794,26 @@ fn solve(
                     let_con.def_types,
                 );
 
-                pools.get_mut(next_rank).extend(pool_variables);
+                // If the let-binding can be generalized, introduce all variables at the next rank;
+                // those that persist at the next rank after rank-adjustment will be generalized.
+                //
+                // Otherwise, introduce all variables at the current rank; since none of them will
+                // end up at the next rank, none will be generalized.
+                if let_con.generalizable.0 {
+                    pools.get_mut(rank.next()).extend(pool_variables);
+                } else {
+                    pools.get_mut(rank).extend(pool_variables);
+                }
 
                 debug_assert_eq!(
                     // Check that no variable ended up in a higher rank than the next rank.. that
                     // would mean we generalized one level more than we need to!
                     {
                         let offenders = pools
-                            .get(next_rank)
+                            .get(rank.next())
                             .iter()
                             .filter(|var| {
-                                subs.get_rank(**var).into_usize() > next_rank.into_usize()
+                                subs.get_rank(**var).into_usize() > rank.next().into_usize()
                             })
                             .collect::<Vec<_>>();
 
@@ -817,9 +830,12 @@ fn solve(
                     0
                 );
 
-                // pop pool
-                generalize(subs, young_mark, visit_mark, next_rank, pools);
-                debug_assert!(pools.get(next_rank).is_empty());
+                // If the let-binding is eligible for generalization, it was solved at the
+                // next rank. The variables introduced in the let-binding that are still at
+                // that rank (intuitively, they did not "escape" into the lower level
+                // before or after the let-binding) now get to be generalized.
+                generalize(subs, young_mark, visit_mark, rank.next(), pools);
+                debug_assert!(pools.get(rank.next()).is_empty(), "variables left over in let-binding scope, but they should all be in a lower scope or generalized now");
 
                 // check that things went well
                 dbg_do!(ROC_VERIFY_RIGID_LET_GENERALIZED, {
@@ -831,7 +847,9 @@ fn solve(
                     // or that it just never came up in elm.
                     let mut it = rigid_vars
                         .iter()
-                        .filter(|&var| !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE)
+                        .filter(|&var| {
+                            !subs.redundant(*var) && subs.get_rank(*var) != Rank::GENERALIZED
+                        })
                         .peekable();
 
                     if it.peek().is_some() {
@@ -1245,39 +1263,45 @@ fn solve(
 
                     state
                 } else {
-                    // work in the next pool to localize header
-                    let next_rank = rank.next();
-
-                    // introduce variables
-                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
-                        subs.set_rank(var, next_rank);
-                    }
+                    // If the let-binding is generalizable, work at the next rank (which will be
+                    // the rank at which introduced variables will become generalized, if they end up
+                    // staying there); otherwise, stay at the current level.
+                    let binding_rank = if let_con.generalizable.0 {
+                        rank.next()
+                    } else {
+                        rank
+                    };
 
                     // determine the next pool
-                    if next_rank.into_usize() < pools.len() {
+                    if binding_rank.into_usize() < pools.len() {
                         // Nothing to do, we already accounted for the next rank, no need to
                         // adjust the pools
                     } else {
                         // we should be off by one at this point
-                        debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
-                        pools.extend_to(next_rank.into_usize());
+                        debug_assert_eq!(binding_rank.into_usize(), 1 + pools.len());
+                        pools.extend_to(binding_rank.into_usize());
                     }
 
-                    let pool: &mut Vec<Variable> = pools.get_mut(next_rank);
+                    let pool: &mut Vec<Variable> = pools.get_mut(binding_rank);
 
-                    // Replace the contents of this pool with rigid_vars and flex_vars
-                    pool.clear();
+                    // Introduce the variables of this binding, and extend the pool at our binding
+                    // rank.
+                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
+                        subs.set_rank(var, binding_rank);
+                    }
                     pool.reserve(rigid_vars.len() + flex_vars.len());
                     pool.extend(rigid_vars.iter());
                     pool.extend(flex_vars.iter());
 
-                    // run solver in next pool
-
-                    // items are popped from the stack in reverse order. That means that we'll
-                    // first solve then defs_constraint, and then (eventually) the ret_constraint.
+                    // Now, run our binding constraint, generalize, then solve the rest of the
+                    // program.
                     //
-                    // Note that the LetConSimple gets the current env and rank,
-                    // and not the env/rank from after solving the defs_constraint
+                    // Items are popped from the stack in reverse order. That means that we'll
+                    // first solve the defs_constraint, and then (eventually) the ret_constraint.
+                    //
+                    // NB: LetCon gets the current scope's env and rank, not the env/rank from after solving the defs_constraint.
+                    // That's because the defs constraints will be solved in next_rank if it is eligible for generalization.
+                    // The LetCon will then generalize variables that are at a higher rank than the rank of the current scope.
                     stack.push(Work::LetConIntroducesVariables {
                         env,
                         rank,
@@ -1286,7 +1310,7 @@ fn solve(
                     });
                     stack.push(Work::Constraint {
                         env,
-                        rank: next_rank,
+                        rank: binding_rank,
                         constraint: defs_constraint,
                     });
 
@@ -2316,7 +2340,7 @@ impl RegisterVariable {
             | TypeTag::HostExposedAlias { shared, .. } => {
                 let AliasShared { symbol, .. } = types[shared];
                 if let Some(reserved) = Variable::get_reserved(symbol) {
-                    let direct_var = if rank.is_none() {
+                    let direct_var = if rank.is_generalized() {
                         // reserved variables are stored with rank NONE
                         reserved
                     } else {
@@ -3479,6 +3503,12 @@ fn circular_error(
     problems.push(problem);
 }
 
+/// Generalizes variables at the `young_rank`, which did not escape a let-binding
+/// into a lower scope.
+///
+/// Ensures that variables introduced at the `young_rank`, but that should be
+/// stuck at a lower level, are marked at that level and not generalized at the
+/// present `young_rank`. See [adjust_rank].
 fn generalize(
     subs: &mut Subs,
     young_mark: Mark,
@@ -3503,29 +3533,26 @@ fn generalize(
     // the appropriate old pool if they are not redundant.
     for vars in all_but_last_pool {
         for var in vars {
-            if !subs.redundant(var) {
-                let rank = subs.get_rank(var);
+            let rank = subs.get_rank(var);
 
-                pools.get_mut(rank).push(var);
-            }
+            pools.get_mut(rank).push(var);
         }
     }
 
     // For variables with rank young_rank, if rank < young_rank: register in old pool,
     // otherwise generalize
     for var in last_pool.drain(..) {
-        if !subs.redundant(var) {
-            let desc_rank = subs.get_rank(var);
+        let desc_rank = subs.get_rank(var);
 
-            if desc_rank < young_rank {
-                pools.get_mut(desc_rank).push(var);
-            } else {
-                subs.set_rank(var, Rank::NONE);
-            }
+        if desc_rank < young_rank {
+            pools.get_mut(desc_rank).push(var);
+        } else {
+            subs.set_rank(var, Rank::GENERALIZED);
         }
     }
 
-    // re-use the last_vector (which likely has a good capacity for future runs
+    // re-use the last_vector (which likely has a good capacity for future runs)
+    debug_assert!(last_pool.is_empty());
     *pools.get_mut(young_rank) = last_pool;
 }
 
@@ -3566,6 +3593,23 @@ fn pool_to_rank_table(
 
 /// Adjust variable ranks such that ranks never increase as you move deeper.
 /// This way the outermost rank is representative of the entire structure.
+///
+/// This procedure also catches type variables at a given rank that contain types at a higher rank.
+/// In such cases, the contained types must be lowered to the rank of the outer type. This is
+/// critical for soundness of the type inference; for example consider
+///
+/// ```ignore(illustrative)
+/// \f ->              # rank=1
+///     g = \x -> f x  # rank=2
+///     g
+/// ```
+///
+/// say that during the solving of the outer body at rank 1 we conditionally give `f` the type
+/// `a -> b (rank=1)`. Without rank-adjustment, the type of `g` would be solved as `c -> d (rank=2)` for
+/// some `c ~ a`, `d ~ b`, and hence would be generalized to the function `c -> d`, even though `c`
+/// and `d` are individually at rank 1 after unfication with `a` and `b` respectively.
+/// This is incorrect; the whole of `c -> d` must lie at rank 1, and only be generalized at the
+/// level that `f` is introduced.
 fn adjust_rank(
     subs: &mut Subs,
     young_mark: Mark,
@@ -3579,15 +3623,14 @@ fn adjust_rank(
     let desc_mark = subs.get_mark_unchecked(var);
 
     if desc_mark == young_mark {
-        let content = {
-            let ptr = subs.get_content_unchecked(var) as *const _;
-            unsafe { &*ptr }
-        };
+        let content = *subs.get_content_unchecked(var);
 
         // Mark the variable as visited before adjusting content, as it may be cyclic.
         subs.set_mark_unchecked(var, visit_mark);
 
-        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
+        // Adjust the nested types' ranks, making sure that no nested unbound type variable is at a
+        // higher rank than the group rank this `var` is at
+        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, &content);
 
         subs.set_rank_unchecked(var, max_rank);
         subs.set_mark_unchecked(var, visit_mark);
@@ -3718,7 +3761,7 @@ fn adjust_rank_content(
                     // we'll wind up with [Z, S a]{}, but it will be at rank 0, and "a" will get
                     // over-generalized. Really, the empty tag union should be introduced at
                     // whatever current group rank we're at, and so that's how we encode it here.
-                    if *ext_var == Variable::EMPTY_TAG_UNION && rank.is_none() {
+                    if *ext_var == Variable::EMPTY_TAG_UNION && rank.is_generalized() {
                         rank = group_rank;
                     }
 
@@ -3918,7 +3961,7 @@ fn has_trivial_copy(subs: &Subs, root_var: Variable) -> Option<Variable> {
 
     if let Some(copy) = existing_copy.into_variable() {
         Some(copy)
-    } else if subs.get_rank_unchecked(root_var) != Rank::NONE {
+    } else if subs.get_rank_unchecked(root_var) != Rank::GENERALIZED {
         Some(root_var)
     } else {
         None

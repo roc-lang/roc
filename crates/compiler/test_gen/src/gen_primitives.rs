@@ -3170,6 +3170,7 @@ fn alias_defined_out_of_order() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[ignore = "TODO https://github.com/roc-lang/roc/issues/4905"]
 fn recursively_build_effect() {
     assert_evals_to!(
         indoc!(
@@ -3418,7 +3419,9 @@ fn polymorphic_lambda_set_multiple_specializations() {
             r#"
             id1 = \x -> x
             id2 = \y -> y
-            id = if Bool.true then id1 else id2
+            id = \z ->
+                f = if Bool.true then id1 else id2
+                f z
 
             (id 9u8) + Num.toU8 (id 16u16)
             "#
@@ -4143,5 +4146,111 @@ fn issue_4712() {
         ),
         RocStr::from("ab,cd"),
         RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn pattern_as_toplevel() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            record = { a: 42i64, b: "foo" }
+
+            main =
+                when record is
+                    { a: 42i64 } as r -> record == r
+                    _ -> Bool.false
+            "#
+        ),
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn pattern_as_nested() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            record = { a: 42i64, b: "foo" }
+
+            main =
+                when Pair {} record is
+                    Pair {} ({ a: 42i64 } as r) -> record == r
+                    _ -> Bool.false
+            "#
+        ),
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn pattern_as_of_symbol() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main =
+                when "foo" is
+                    a as b -> a == b
+            "#
+        ),
+        true,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn function_specialization_information_in_lambda_set_thunk() {
+    assert_evals_to!(
+        indoc!(
+            r###"
+            app "test" provides [main] to "./platform"
+
+            andThen = \{} ->
+                x = 10u8
+                \newFn -> Num.add (newFn {}) x
+
+            between = andThen {}
+
+            main = between \{} -> between \{} -> 10u8
+            "###
+        ),
+        30,
+        u8
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
+    assert_evals_to!(
+        indoc!(
+            r###"
+            app "test" provides [main] to "./platform"
+
+            andThen = \{} ->
+                x = 10u8
+                \newFn -> Num.add (newFn {}) x
+
+            between1 = andThen {}
+
+            between2 = andThen {}
+
+            main = between1 \{} -> between2 \{} -> 10u8
+            "###
+        ),
+        30,
+        u8
     );
 }

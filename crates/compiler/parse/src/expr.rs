@@ -4,7 +4,7 @@ use crate::ast::{
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
-    space0_e, spaces, spaces_around, spaces_before,
+    space0_before_optional_after, space0_e, spaces, spaces_around, spaces_before,
 };
 use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
@@ -42,7 +42,7 @@ pub fn test_parse_expr<'a>(
     state: State<'a>,
 ) -> Result<Loc<Expr<'a>>, EExpr<'a>> {
     let parser = skip_second!(
-        space0_before_e(loc_expr(true), EExpr::IndentStart,),
+        space0_before_optional_after(loc_expr(true), EExpr::IndentStart, EExpr::IndentEnd),
         expr_end()
     );
 
@@ -255,7 +255,10 @@ fn loc_possibly_negative_or_negated_term<'a>(
         // this will parse negative numbers, which the unary negate thing up top doesn't (for now)
         loc!(specialize(EExpr::Number, number_literal_help())),
         loc!(map_with_arena!(
-            and!(loc!(word1(b'!', EExpr::Start)), loc_term(options)),
+            and!(
+                loc!(word1(b'!', EExpr::Start)),
+                space0_before_e(loc_term(options), EExpr::IndentStart)
+            ),
             |arena: &'a Bump, (loc_op, loc_expr): (Loc<_>, _)| {
                 Expr::UnaryOp(arena.alloc(loc_expr), Loc::at(loc_op.region, UnaryOp::Not))
             }
@@ -668,7 +671,7 @@ pub fn parse_single_def<'a>(
                     let (_, ann_type, state) = parser.parse(arena, state, min_indent)?;
                     let region = Region::span_across(&loc_pattern.region, &ann_type.region);
 
-                    match &loc_pattern.value {
+                    match &loc_pattern.value.extract_spaces().item {
                         Pattern::Apply(
                             Loc {
                                 value: Pattern::Tag(name),
@@ -740,7 +743,7 @@ pub fn parse_single_def<'a>(
                         opaque_signature_with_space_before().parse(arena, state, min_indent + 1)?;
                     let region = Region::span_across(&loc_pattern.region, &signature.region);
 
-                    match &loc_pattern.value {
+                    match &loc_pattern.value.extract_spaces().item {
                         Pattern::Apply(
                             Loc {
                                 value: Pattern::Tag(name),
@@ -921,7 +924,7 @@ macro_rules! join_alias_to_body {
 }
 
 fn parse_defs_end<'a>(
-    _options: ExprParseOptions,
+    options: ExprParseOptions,
     min_indent: u32,
     mut defs: Defs<'a>,
     arena: &'a Bump,
@@ -932,7 +935,7 @@ fn parse_defs_end<'a>(
     loop {
         let state = global_state;
 
-        global_state = match parse_single_def(_options, min_indent, arena, state) {
+        global_state = match parse_single_def(options, min_indent, arena, state) {
             Ok((_, Some(single_def), next_state)) => {
                 let region = single_def.region;
                 let spaces_before_current = single_def.spaces_before;
@@ -1890,7 +1893,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(*string)),
         Expr::SingleQuote(string) => Ok(Pattern::SingleQuote(string)),
-        Expr::MalformedIdent(string, _problem) => Ok(Pattern::Malformed(string)),
+        Expr::MalformedIdent(string, problem) => Ok(Pattern::MalformedIdent(string, *problem)),
     }
 }
 
@@ -1950,7 +1953,7 @@ pub fn toplevel_defs<'a>() -> impl Parser<'a, Defs<'a>, EExpr<'a>> {
         let start_column = state.column();
 
         let options = ExprParseOptions {
-            accept_multi_backpassing: false,
+            accept_multi_backpassing: true,
             check_for_arrow: true,
         };
 

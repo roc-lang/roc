@@ -2,10 +2,10 @@
 
 use bumpalo::Bump;
 use roc_gen_wasm::Env;
+use roc_target::TargetInfo;
 use std::fs;
 use std::process::Command;
 
-use roc_builtins::bitcode::IntWidth;
 use roc_collections::{MutMap, MutSet};
 use roc_module::ident::{ForeignSymbol, ModuleName};
 use roc_module::low_level::LowLevel;
@@ -17,7 +17,7 @@ use roc_mono::ir::{
     Call, CallType, Expr, HostExposedLayouts, Literal, Proc, ProcLayout, SelfRecursive, Stmt,
     UpdateModeId,
 };
-use roc_mono::layout::{Builtin, LambdaName, Layout, Niche, STLayoutInterner};
+use roc_mono::layout::{LambdaName, Layout, Niche, STLayoutInterner};
 use roc_wasm_interp::{wasi, ImportDispatcher, Instance, WasiDispatcher};
 use roc_wasm_module::{Value, WasmModule};
 
@@ -36,8 +36,7 @@ fn build_app_mono<'a>(
     home: ModuleId,
     ident_ids: &mut IdentIds,
 ) -> (Symbol, MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>) {
-    let int_layout = Layout::Builtin(Builtin::Int(IntWidth::I32));
-    let int_layout_ref = arena.alloc(int_layout);
+    let int_layout = Layout::I32;
 
     let app_proc = create_symbol(home, ident_ids, "app_proc");
     let js_call_result = create_symbol(home, ident_ids, "js_call_result");
@@ -49,7 +48,7 @@ fn build_app_mono<'a>(
     let js_call = Expr::Call(Call {
         call_type: CallType::Foreign {
             foreign_symbol: ForeignSymbol::from("js_called_directly_from_roc"),
-            ret_layout: int_layout_ref,
+            ret_layout: int_layout,
         },
         arguments: &[],
     });
@@ -57,7 +56,7 @@ fn build_app_mono<'a>(
     let host_call = Expr::Call(Call {
         call_type: CallType::Foreign {
             foreign_symbol: ForeignSymbol::from("host_called_directly_from_roc"),
-            ret_layout: int_layout_ref,
+            ret_layout: int_layout,
         },
         arguments: &[],
     });
@@ -262,7 +261,7 @@ fn test_help(
     dump_filename: &str,
 ) {
     let arena = Bump::new();
-    let mut layout_interner = STLayoutInterner::with_capacity(4);
+    let mut layout_interner = STLayoutInterner::with_capacity(4, TargetInfo::default_wasm32());
 
     let BackendInputs {
         env,

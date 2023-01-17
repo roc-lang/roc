@@ -7,7 +7,8 @@ interface Parser.Core
         fail,
         const,
         alt,
-        apply,
+        keep,
+        skip,
         oneOf,
         map,
         map2,
@@ -87,14 +88,14 @@ parse = \parser, input, isParsingCompleted ->
 ## in a `oneOf` or `alt` have failed, to provide some more descriptive error message.
 fail : Str -> Parser * *
 fail = \msg ->
-    buildPrimitiveParser \_input -> Err (ParsingFailure msg)
+    @Parser \_input -> Err (ParsingFailure msg)
 
 ## Parser that will always produce the given `val`, without looking at the actual input.
 ## This is useful as basic building block, especially in combination with
-## `map` and `apply`.
+## `map` and `keep`.
 const : a -> Parser * a
 const = \val ->
-    buildPrimitiveParser \input ->
+    @Parser \input ->
         Ok { val: val, input: input }
 
 ## Try the `first` parser and (only) if it fails, try the `second` parser as fallback.
@@ -121,26 +122,58 @@ alt = \first, second ->
 ## >>> |> map3 Parser.Str.nat Parser.Str.nat Parser.Str.nat
 ##
 ## >>> const (\x -> \y -> \z -> Triple x y z)
-## >>> |> apply Parser.Str.nat
-## >>> |> apply Parser.Str.nat
-## >>> |> apply Parser.Str.nat
+## >>> |> keep Parser.Str.nat
+## >>> |> keep Parser.Str.nat
+## >>> |> keep Parser.Str.nat
 ##
 ## (And indeed, this is how `map`, `map2`, `map3` etc. are implemented under the hood.)
 ##
 ## # Currying
-## Be aware that when using `apply`, you need to explicitly 'curry' the parameters to the construction function.
+## Be aware that when using `keep`, you need to explicitly 'curry' the parameters to the construction function.
 ## This means that instead of writing `\x, y, z -> ...`
 ## you'll need to write `\x -> \y -> \z -> ...`.
 ## This is because the parameters to the function will be applied one-by-one as parsing continues.
-apply : Parser input (a -> b), Parser input a -> Parser input b
-apply = \funParser, valParser ->
-    combined = \input ->
-        { val: funVal, input: rest } <- Result.try (parsePartial funParser input)
-        parsePartial valParser rest
-        |> Result.map \{ val: val, input: rest2 } ->
-            { val: funVal val, input: rest2 }
+keep : Parser input (a -> b), Parser input a -> Parser input b
+keep = \funParser, valParser ->
+    @Parser \input ->
+        when parsePartial funParser input is
+            Ok { val: funVal, input: rest } ->
+                when parsePartial valParser rest is
+                    Ok { val: val, input: rest2 } ->
+                        Ok { val: funVal val, input: rest2 }
 
-    buildPrimitiveParser combined
+                    Err e ->
+                        Err e
+
+            Err e ->
+                Err e
+
+## Skip over a parsed item as part of a pipeline
+##
+## This is useful if you are using a pipeline of parsers with `keep` but
+## some parsed items are not part of the final result
+##
+## >>> const (\x -> \y -> \z -> Triple x y z)
+## >>> |> keep Parser.Str.nat
+## >>> |> skip (codeunit ',')
+## >>> |> keep Parser.Str.nat
+## >>> |> skip (codeunit ',')
+## >>> |> keep Parser.Str.nat
+##
+skip : Parser input kept, Parser input skipped -> Parser input kept
+skip = \kept, skipped ->
+    @Parser \input ->
+        when parsePartial kept input is
+            Ok step1 ->
+                when parsePartial skipped step1.input is
+                    Ok step2 ->
+                        Ok { val: step1.val, input: step2.input }
+
+                    Err e ->
+                        Err e
+
+            Err e ->
+                Err e
 
 # Internal utility function. Not exposed to users, since usage is discouraged!
 #
@@ -149,17 +182,18 @@ apply = \funParser, valParser ->
 # This function returns a new parser, which is finally run.
 #
 # `andThen` is usually more flexible than necessary, and less efficient
-# than using `const` with `map` and/or `apply`.
+# than using `const` with `map` and/or `keep`.
 # Consider using those functions first.
 andThen : Parser input a, (a -> Parser input b) -> Parser input b
-andThen = \firstParser, buildNextParser ->
-    fun = \input ->
-        { val: firstVal, input: rest } <- Result.try (parsePartial firstParser input)
-        nextParser = buildNextParser firstVal
+andThen = \@Parser firstParser, buildNextParser ->
+    @Parser \input ->
+        when firstParser input is
+            Ok step ->
+                (@Parser nextParser) = buildNextParser step.val
+                nextParser step.input
 
-        parsePartial nextParser rest
-
-    buildPrimitiveParser fun
+            Err e ->
+                Err e
 
 ## Try a list of parsers in turn, until one of them succeeds
 oneOf : List (Parser input a) -> Parser input a
@@ -169,29 +203,56 @@ oneOf = \parsers ->
 ## Transforms the result of parsing into something else,
 ## using the given transformation function.
 map : Parser input a, (a -> b) -> Parser input b
-map = \simpleParser, transform ->
-    const transform
-    |> apply simpleParser
+map = \@Parser simpleParser, transform ->
+    @Parser \input ->
+        when simpleParser input is
+            Ok step ->
+                Ok { val: transform step.val, input: step.input }
+
+            Err e ->
+                Err e
 
 ## Transforms the result of parsing into something else,
 ## using the given two-parameter transformation function.
 map2 : Parser input a, Parser input b, (a, b -> c) -> Parser input c
-map2 = \parserA, parserB, transform ->
-    const (\a -> \b -> transform a b)
-    |> apply parserA
-    |> apply parserB
+map2 = \@Parser parserA, @Parser parserB, transform ->
+    @Parser \input ->
+        when parserA input is
+            Ok step1 ->
+                when parserB step1.input is
+                    Ok step2 ->
+                        Ok { val: transform step1.val step2.val, input: step2.input }
+
+                    Err e ->
+                        Err e
+
+            Err e ->
+                Err e
 
 ## Transforms the result of parsing into something else,
 ## using the given three-parameter transformation function.
 ##
 ## If you need transformations with more inputs,
-## take a look at `apply`.
+## take a look at `keep`.
 map3 : Parser input a, Parser input b, Parser input c, (a, b, c -> d) -> Parser input d
-map3 = \parserA, parserB, parserC, transform ->
-    const (\a -> \b -> \c -> transform a b c)
-    |> apply parserA
-    |> apply parserB
-    |> apply parserC
+map3 = \@Parser parserA, @Parser parserB, @Parser parserC, transform ->
+    @Parser \input ->
+        when parserA input is
+            Ok step1 ->
+                when parserB step1.input is
+                    Ok step2 ->
+                        when parserC step2.input is
+                            Ok step3 ->
+                                Ok { val: transform step1.val step2.val step3.val, input: step3.input }
+
+                            Err e ->
+                                Err e
+
+                    Err e ->
+                        Err e
+
+            Err e ->
+                Err e
 
 # ^ And this could be repeated for as high as we want, of course.
 # Removes a layer of 'result' from running the parser.
@@ -230,15 +291,15 @@ maybe = \parser ->
     alt (parser |> map (\val -> Ok val)) (const (Err Nothing))
 
 manyImpl : Parser input a, List a, input -> ParseResult input (List a)
-manyImpl = \parser, vals, input ->
-    result = parsePartial parser input
+manyImpl = \@Parser parser, vals, input ->
+    result = parser input
 
     when result is
         Err _ ->
             Ok { val: vals, input: input }
 
         Ok { val: val, input: inputRest } ->
-            manyImpl parser (List.append vals val) inputRest
+            manyImpl (@Parser parser) (List.append vals val) inputRest
 
 ## A parser which runs the element parser *zero* or more times on the input,
 ## returning a list containing all the parsed elements.
@@ -246,7 +307,7 @@ manyImpl = \parser, vals, input ->
 ## Also see `oneOrMore`.
 many : Parser input a -> Parser input (List a)
 many = \parser ->
-    buildPrimitiveParser \input ->
+    @Parser \input ->
         manyImpl parser [] input
 
 ## A parser which runs the element parser *one* or more times on the input,
@@ -254,10 +315,14 @@ many = \parser ->
 ##
 ## Also see `many`.
 oneOrMore : Parser input a -> Parser input (List a)
-oneOrMore = \parser ->
-    const (\val -> \vals -> List.prepend vals val)
-    |> apply parser
-    |> apply (many parser)
+oneOrMore = \@Parser parser ->
+    @Parser \input ->
+        when parser input is
+            Ok step ->
+                manyImpl (@Parser parser) [step.val] step.input
+
+            Err e ->
+                Err e
 
 ## Runs a parser for an 'opening' delimiter, then your main parser, then the 'closing' delimiter,
 ## and only returns the result of your main parser.
@@ -267,21 +332,18 @@ oneOrMore = \parser ->
 ## >>> betweenBraces  = \parser -> parser |> between (scalar '[') (scalar ']')
 between : Parser input a, Parser input open, Parser input close -> Parser input a
 between = \parser, open, close ->
-    const (\_ -> \val -> \_ -> val)
-    |> apply open
-    |> apply parser
-    |> apply close
+    map3 open parser close (\_, val, _ -> val)
 
 sepBy1 : Parser input a, Parser input sep -> Parser input (List a)
 sepBy1 = \parser, separator ->
     parserFollowedBySep =
         const (\_ -> \val -> val)
-        |> apply separator
-        |> apply parser
+        |> keep separator
+        |> keep parser
 
     const (\val -> \vals -> List.prepend vals val)
-    |> apply parser
-    |> apply (many parserFollowedBySep)
+    |> keep parser
+    |> keep (many parserFollowedBySep)
 
 sepBy : Parser input a, Parser input sep -> Parser input (List a)
 sepBy = \parser, separator ->

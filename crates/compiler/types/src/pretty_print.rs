@@ -413,6 +413,8 @@ fn name_all_type_vars(variable: Variable, subs: &mut Subs, debug_print: DebugPri
                 {
                     recursion_structs_to_expand.push(*structure);
                     letters_used = name_root(letters_used, root, subs, &mut taken, debug_print);
+                } else if debug_print.print_weakened_vars && is_weakened_unbound(subs, root) {
+                    letters_used = name_root(letters_used, root, subs, &mut taken, debug_print);
                 }
             }
             _ => {}
@@ -427,8 +429,8 @@ fn name_all_type_vars(variable: Variable, subs: &mut Subs, debug_print: DebugPri
 fn is_weakened_unbound(subs: &Subs, var: Variable) -> bool {
     use Content::*;
     let desc = subs.get_without_compacting(var);
-    !desc.rank.is_none()
-        && !matches!(
+    !desc.rank.is_generalized()
+        && matches!(
             desc.content,
             FlexVar(_) | RigidVar(_) | FlexAbleVar(..) | RigidAbleVar(..)
         )

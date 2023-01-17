@@ -3349,12 +3349,12 @@ fn monomorphized_lists() {
     assert_evals_to!(
         indoc!(
             r#"
-            l = [1, 2, 3]
+            l = \{} -> [1, 2, 3]
 
             f : List U8, List U16 -> Nat
             f = \_, _ -> 18
 
-            f l l
+            f (l {}) (l {})
             "#
         ),
         18,
@@ -3461,11 +3461,11 @@ fn issue_3530_uninitialized_capacity_in_list_literal() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn list_let_generalization() {
+fn list_infer_usage() {
     assert_evals_to!(
         indoc!(
             r#"
-            empty : List a
+            empty : List _
             empty = []
 
             xs : List Str
