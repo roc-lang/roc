@@ -1372,7 +1372,7 @@ pub fn constrain_expr(
             // TODO: better expectation here
             let link_type_variables_con = {
                 let specialized_type_index = {
-                    let typ = types.from_old_type(&**specialized_def_type);
+                    let typ = types.from_old_type(specialized_def_type);
                     constraints.push_type(types, typ)
                 };
                 let expected_index =

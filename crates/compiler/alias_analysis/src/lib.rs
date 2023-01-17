@@ -1,3 +1,6 @@
+// https://github.com/morphic-lang/morphic_lib/issues/19
+#![allow(clippy::result_large_err)]
+
 use bumpalo::Bump;
 use morphic_lib::TypeContext;
 use morphic_lib::{

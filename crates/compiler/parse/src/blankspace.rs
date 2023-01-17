@@ -399,7 +399,7 @@ where
                     let is_doc_comment = state.bytes().first() == Some(&b'#')
                         && (state.bytes().get(1) == Some(&b' ')
                             || state.bytes().get(1) == Some(&b'\n')
-                            || state.bytes().get(1) == None);
+                            || Option::is_none(&state.bytes().get(1)));
 
                     if is_doc_comment {
                         state.advance_mut(1);

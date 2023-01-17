@@ -441,9 +441,9 @@ mod test_snapshots {
     fn compare_snapshots(result_path: &Path, actual_result: Option<&str>) {
         if std::env::var("ROC_SNAPSHOT_TEST_OVERWRITE").is_ok() {
             if let Some(actual_result) = actual_result {
-                std::fs::write(&result_path, actual_result).unwrap();
+                std::fs::write(result_path, actual_result).unwrap();
             } else {
-                std::fs::remove_file(&result_path)
+                std::fs::remove_file(result_path)
                     .or_else(|e| {
                         if e.kind() == std::io::ErrorKind::NotFound {
                             Ok(())
@@ -454,7 +454,7 @@ mod test_snapshots {
                     .unwrap();
             }
         } else if let Some(actual_result) = actual_result {
-            let expected_result = std::fs::read_to_string(&result_path).unwrap_or_else(|e| {
+            let expected_result = std::fs::read_to_string(result_path).unwrap_or_else(|e| {
                 panic!(
                     "Error opening test output file {}:\n\
                         {:?}

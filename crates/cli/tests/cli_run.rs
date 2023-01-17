@@ -728,7 +728,7 @@ mod cli_run {
     #[serial(cli_platform)]
     fn cli_args_check() {
         let path = file_path_from_root("examples/cli", "args.roc");
-        let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
 
@@ -737,7 +737,7 @@ mod cli_run {
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
     fn check_virtual_dom_server() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-server.roc");
-        let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
 
@@ -746,7 +746,7 @@ mod cli_run {
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
     fn check_virtual_dom_client() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-client.roc");
-        let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
 
