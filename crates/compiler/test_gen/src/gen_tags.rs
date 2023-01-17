@@ -1237,10 +1237,10 @@ fn monomorphized_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-            b = Bar
+            b = \{} -> Bar
             f : [Foo, Bar], [Bar, Baz] -> U8
             f = \_, _ -> 18
-            f b b
+            f (b {}) (b {})
             "#
         ),
         18,
@@ -1279,8 +1279,8 @@ fn monomorphized_tag_with_polymorphic_arg() {
             app "test" provides [main] to "./platform"
 
             main =
-                a = A
-                wrap = Wrapped a
+                a = \{} -> A
+                wrap = \{} -> Wrapped (a {})
 
                 useWrap1 : [Wrapped [A], Other] -> U8
                 useWrap1 =
@@ -1294,7 +1294,7 @@ fn monomorphized_tag_with_polymorphic_arg() {
                         Wrapped A -> 5
                         Wrapped B -> 7
 
-                useWrap1 wrap * useWrap2 wrap
+                useWrap1 (wrap {}) * useWrap2 (wrap {})
             "#
         ),
         10,
@@ -1313,8 +1313,8 @@ fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
             main =
                 mono : U8
                 mono = 15
-                poly = A
-                wrap = Wrapped poly mono
+                poly = \{} -> A
+                wrap = \{} -> Wrapped (poly {}) mono
 
                 useWrap1 : [Wrapped [A] U8, Other] -> U8
                 useWrap1 =
@@ -1328,7 +1328,7 @@ fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
                         Wrapped A n -> n
                         Wrapped B _ -> 0
 
-                useWrap1 wrap * useWrap2 wrap
+                useWrap1 (wrap {}) * useWrap2 (wrap {})
             "#
         ),
         225,
@@ -1428,7 +1428,7 @@ fn issue_2445() {
             r#"
             app "test" provides [main] to "./platform"
 
-            none : [None, Update a]
+            none : [None, Update _]
             none = None
 
             press : [None, Update U8]

@@ -268,7 +268,7 @@ fn find_chain(subs: &Subs, left: Variable, right: Variable) -> impl Iterator<Ite
                         subs.get_subs_slice(*left_sym),
                         subs.get_subs_slice(*right_sym)
                     );
-                    let mut chain = help(subs, needle, *left_var, *right_var)?;
+                    let mut chain = help(subs, needle, left_var.var(), right_var.var())?;
                     chain.push((left, right));
                     Ok(chain)
                 }
