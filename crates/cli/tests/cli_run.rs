@@ -422,12 +422,7 @@ mod cli_run {
                 return;
             }
             "args" => {
-                eprintln!(
-                    "WARNING: skipping testing example {} because it is known to be bad, pending investigation!",
-                    roc_filename
-                );
-                return;
-                // custom_flags = vec![LINKER_FLAG, "legacy"];
+                custom_flags = vec![LINKER_FLAG, "legacy"];
             }
             _ => {}
         }
