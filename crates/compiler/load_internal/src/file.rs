@@ -37,9 +37,7 @@ use roc_mono::ir::{
 use roc_mono::layout::{
     GlobalLayoutInterner, LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner,
 };
-use roc_packaging::cache::{self, RocCacheDir};
-#[cfg(not(target_family = "wasm"))]
-use roc_packaging::https::PackageMetadata;
+use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{
     self, CommentOrNewline, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation,
 };
@@ -67,6 +65,11 @@ use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 use std::{env, fs};
+#[cfg(not(target_family = "wasm"))]
+use {
+    roc_packaging::cache::{self},
+    roc_packaging::https::PackageMetadata,
+};
 
 pub use crate::work::Phase;
 use crate::work::{DepCycle, Dependencies};
