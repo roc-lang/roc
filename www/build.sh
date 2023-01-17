@@ -79,8 +79,8 @@ curl -OL $ROC_RELEASE_URL
 ls | grep "roc_nightly" | xargs tar --one-top-level=roc_nightly -xzvf
 # delete archive
 ls | grep "roc_nightly.*tar.gz" | xargs rm
-# simplify dir name
-mv roc_nightly* roc_nightly
+# TODO enable once new nightlies are uploaded
+# mv roc_nightly* roc_nightly
 
 echo 'Building tutorial.html from tutorial.md...'
 mkdir www/build/tutorial
