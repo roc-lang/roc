@@ -101,6 +101,12 @@ jobs:
       - name: decompress the tar
         run: ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 
+      - name: delete tar
+        run: ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
+
+      - name: rename nightly folder
+        run: mv roc_nightly* roc_nightly
+
       - run: git clone https://github.com/roc-lang/basic-cli.git
 
       - name: Download the previously uploaded files
@@ -112,7 +118,7 @@ jobs:
 
       - run: cp macos-x86_64-files/* ./basic-cli/src
 
-      - run: ./roc build --bundle=.tar.br ./basic-cli/src/main.roc
+      - run: ./roc_nightly/roc build --bundle=.tar.br ./basic-cli/src/main.roc
 
       - run: echo "TAR_FILENAME=$(ls -d basic-cli/src/* | grep '.tar.br')" >> $GITHUB_ENV
 

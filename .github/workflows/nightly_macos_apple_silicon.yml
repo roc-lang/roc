@@ -29,7 +29,7 @@ jobs:
         env:
             DATE: ${{ env.DATE }}
             SHA: ${{ env.SHA }}
-        run: echo "RELEASE_TAR_FILENAME=roc_nightly-macos_apple_silicon-$DATE-$SHA.tar.gz" >> $GITHUB_ENV  
+        run: echo "RELEASE_FOLDER_NAME=roc_nightly-macos_apple_silicon-$DATE-$SHA" >> $GITHUB_ENV  
 
       - name: write version to file
         run: ./ci/write_version.sh
@@ -38,7 +38,7 @@ jobs:
         run: cargo build --locked --release
 
       - name: package release
-        run: ./ci/package_release.sh ${{ env.RELEASE_TAR_FILENAME }}
+        run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
 
       - name: print short commit SHA
         run: git rev-parse --short "$GITHUB_SHA"
@@ -47,6 +47,6 @@ jobs:
       - name: Upload artifact Actually uploading to github releases has to be done manually
         uses: actions/upload-artifact@v3
         with:
-           name: ${{ env.RELEASE_TAR_FILENAME }}
-           path: ${{ env.RELEASE_TAR_FILENAME }}
+           name: ${{ env.RELEASE_FOLDER_NAME }}
+           path: ${{ env.RELEASE_FOLDER_NAME }}
            retention-days: 4
