@@ -334,7 +334,7 @@ mod cli_run {
     // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
     fn test_roc_expect(dir_name: &str, roc_filename: &str) {
         let path = file_path_from_root(dir_name, roc_filename);
-        let out = run_roc(&[CMD_TEST, path.to_str().unwrap()], &[], &[]);
+        let out = run_roc([CMD_TEST, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
 

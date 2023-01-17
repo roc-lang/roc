@@ -66,7 +66,7 @@ roc_error_macros::assert_sizeof_wasm!(CallType, 36);
 
 roc_error_macros::assert_sizeof_non_wasm!(Literal, 3 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(Expr, 9 * 8);
-roc_error_macros::assert_sizeof_non_wasm!(Stmt, 14 * 8);
+roc_error_macros::assert_sizeof_non_wasm!(Stmt, 12 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(ProcLayout, 5 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(Call, 9 * 8);
 roc_error_macros::assert_sizeof_non_wasm!(CallType, 7 * 8);
