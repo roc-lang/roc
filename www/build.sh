@@ -76,7 +76,7 @@ export ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh linux_x86_64)
 # get roc release archive
 curl -OL $ROC_RELEASE_URL
 # extract archive
-ls | grep "roc_nightly" | xargs tar -xzvf
+ls | grep "roc_nightly" | xargs tar --one-top-level=roc_nightly -xzvf
 # delete archive
 ls | grep "roc_nightly.*tar.gz" | xargs rm
 # simplify dir name
