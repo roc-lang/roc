@@ -666,10 +666,10 @@ mod test {
 
                 When it failed, these variables had these values:
 
-                a : [Ok Str]
+                a : [Err Str, Ok Str]
                 a = Ok "Astra mortemque praestare gradatim"
 
-                b : [Err Str]
+                b : [Err Str, Ok Str]
                 b = Err "Profundum et fundamentum"
                 "#
             ),

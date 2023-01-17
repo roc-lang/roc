@@ -3609,9 +3609,7 @@ pub fn rec_defs_help_simple(
             }
             _ => true, // this must be a function
         });
-        // TODO(weakening)
-        #[allow(clippy::logic_bug)]
-        Generalizable(generalizable || true)
+        Generalizable(generalizable)
     };
 
     for index in range {
@@ -3861,11 +3859,11 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | ExpectFx { .. }
             | Dbg { .. }
             | TypedHole(_)
-            | RuntimeError(..) => return false,
-            // TODO(weakening)
-            Var(_, _) | AbilityMember(_, _, _) | Tag { .. } | ZeroArgumentTag { .. } => {
-                return true
-            }
+            | RuntimeError(..)
+            | ZeroArgumentTag { .. }
+            | Tag { .. }
+            | AbilityMember(..)
+            | Var(..) => return false,
         }
     }
 }
@@ -3901,9 +3899,7 @@ fn rec_defs_help(
         let generalizable = defs
             .iter()
             .all(|d| is_generalizable_expr(&d.loc_expr.value));
-        // TODO(weakening)
-        #[allow(clippy::logic_bug)]
-        Generalizable(generalizable || true)
+        Generalizable(generalizable)
     };
 
     for def in defs {
