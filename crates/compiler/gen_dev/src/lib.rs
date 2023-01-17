@@ -516,6 +516,22 @@ trait Backend<'a> {
                 );
                 self.build_num_sub(sym, &args[0], &args[1], ret_layout)
             }
+            LowLevel::NumSubWrap => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumSubWrap: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumSubWrap: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumSubWrap: expected to have the same argument and return layout"
+                );
+                self.build_num_sub_wrap(sym, &args[0], &args[1], ret_layout)
+            }
             LowLevel::NumBitwiseAnd => {
                 if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
                     self.build_int_bitwise_and(sym, &args[0], &args[1], int_width)
@@ -794,6 +810,15 @@ trait Backend<'a> {
 
     /// build_num_sub stores the `src1 - src2` difference into dst.
     fn build_num_sub(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
+
+    /// build_num_sub_wrap stores the `src1 - src2` difference into dst.
+    fn build_num_sub_wrap(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
+    );
 
     /// stores the `src1 & src2` into dst.
     fn build_int_bitwise_and(
