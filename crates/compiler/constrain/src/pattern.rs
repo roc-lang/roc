@@ -578,7 +578,7 @@ pub fn constrain_pattern(
             let record_type = {
                 let typ = types.from_old_type(&Type::Record(
                     field_types,
-                    TypeExtension::from_type(ext_type),
+                    TypeExtension::from_non_annotation_type(ext_type),
                 ));
                 constraints.push_type(types, typ)
             };
