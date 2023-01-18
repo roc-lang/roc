@@ -2,7 +2,6 @@ use crate::roc_type;
 use crate::types::{Env, Types};
 use bumpalo::Bump;
 use libloading::Library;
-use roc_intern::GlobalInterner;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_mono::layout::GlobalLayoutInterner;
 use roc_packaging::cache::{self, RocCacheDir};
@@ -29,7 +28,7 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
         Threading::AllAvailable,
         IgnoreErrors::NONE,
     ) {
-        Ok(types) => {
+        Ok(types_by_target) => {
             // TODO: correctly setup building the glue spec. Then use the dylib it generates here.
             // For now, I am just passing in the dylib as the spec.
             // Also, it would be best if we directly call the internal build function from here instead of launch roc from the cli.
@@ -47,8 +46,10 @@ pub fn generate(input_path: &Path, output_path: &Path, spec_path: &Path) -> io::
                     .ok_or(format!("Unable to load glue function"))
                     .expect("errored")
             };
-            let roc_types: roc_std::RocList<roc_type::Types> =
-                types.iter().map(|x| x.into()).collect();
+            let roc_types: roc_std::RocList<roc_type::Types> = types_by_target
+                .iter()
+                .map(|(target_info, types)| types.as_roc_type_types((*target_info).into()))
+                .collect();
             let mut files = roc_std::RocResult::err(roc_std::RocStr::empty());
             unsafe { make_glue(&mut files, &roc_types) };
 
@@ -133,7 +134,7 @@ pub fn load_types(
     full_file_path: PathBuf,
     threading: Threading,
     ignore_errors: IgnoreErrors,
-) -> Result<Vec<Types>, io::Error> {
+) -> Result<Vec<(TargetInfo, Types)>, io::Error> {
     let target_info = (&Triple::host()).into();
     let arena = &Bump::new();
     let LoadedModule {
@@ -218,7 +219,7 @@ pub fn load_types(
             env.vars_to_types(variables.clone())
         };
 
-        arch_types.push(types);
+        arch_types.push((target_info, types));
     }
 
     Ok(arch_types)

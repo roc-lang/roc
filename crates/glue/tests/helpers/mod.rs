@@ -25,7 +25,7 @@ pub fn generate_bindings(decl_src: &str) -> Vec<roc_glue::types::File> {
 
     src.push_str(decl_src);
 
-    let types = {
+    let types_by_target = {
         let dir = tempdir().expect("Unable to create tempdir");
         let filename = PathBuf::from("platform.roc");
         let file_path = dir.path().join(filename);
@@ -45,7 +45,7 @@ pub fn generate_bindings(decl_src: &str) -> Vec<roc_glue::types::File> {
         result.expect("had problems loading")
     };
 
-    rust_glue::emit(&types)
+    rust_glue::emit(&types_by_target)
 }
 
 #[allow(dead_code)]

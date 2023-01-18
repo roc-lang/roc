@@ -57,13 +57,13 @@ fn add_decl(impls: &mut Impls, opt_impl: Impl, target_info: TargetInfo, body: St
     targets.push(target_info);
 }
 
-pub fn emit(types: &[Types]) -> Vec<File> {
+pub fn emit(types_by_target: &[(TargetInfo, Types)]) -> Vec<File> {
     let mut buf = std::str::from_utf8(HEADER).unwrap().to_string();
     let mut impls: Impls = IndexMap::default();
 
-    for types in types {
+    for (target_info, types) in types_by_target {
         for id in types.sorted_ids() {
-            add_type(types.target(), id, types, &mut impls);
+            add_type(*target_info, id, types, &mut impls);
         }
     }
 

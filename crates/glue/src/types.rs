@@ -497,30 +497,24 @@ impl Types {
         }
     }
 
-    pub fn target(&self) -> TargetInfo {
-        self.target
-    }
-}
-
-impl From<&Types> for roc_type::Types {
-    fn from(types: &Types) -> Self {
-        let deps = types
+    pub fn as_roc_type_types(&self, target: roc_type::Target) -> roc_type::Types {
+        let deps = self
             .deps
             .iter()
             .map(|(k, v)| roc_type::Tuple2::T(k.0 as _, v.iter().map(|x| x.0 as _).collect()))
             .collect();
-        let types_by_name = types
+        let types_by_name = self
             .types_by_name
             .iter()
             .map(|(k, v)| roc_type::Tuple1::T(k.as_str().into(), v.0 as _))
             .collect();
         roc_type::Types {
-            aligns: types.aligns.as_slice().into(),
+            aligns: self.aligns.as_slice().into(),
             deps,
-            sizes: types.sizes.as_slice().into(),
-            types: types.types.iter().map(|t| t.into()).collect(),
+            sizes: self.sizes.as_slice().into(),
+            types: self.types.iter().map(|t| t.into()).collect(),
             typesByName: types_by_name,
-            target: types.target.into(),
+            target,
         }
     }
 }
