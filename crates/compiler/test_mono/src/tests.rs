@@ -1838,16 +1838,16 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
         main =
             Value : [Nil, Array (List Value)]
 
-            foo : [Nil]_
-            foo = Nil
+            foo : {} -> [Nil]_
+            foo = \{} -> Nil
 
             v1 : Value
-            v1 = foo
+            v1 = foo {}
 
             Value2 : [Nil, B U16, Array (List Value)]
 
             v2 : Value2
-            v2 = foo
+            v2 = foo {}
 
             {v1, v2}
         "#

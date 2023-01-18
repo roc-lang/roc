@@ -9,10 +9,18 @@ git clone https://github.com/roc-lang/basic-cli.git
 RELEASE_URL=$(./ci/get_latest_release_url.sh $1)
 
 # get the archive from the url
-mkdir roc_nightly && cd roc_nightly && curl -OL $RELEASE_URL
+curl -OL $RELEASE_URL
 
 # decompress the tar
 ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
+
+# delete tar
+ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
+
+# simplify dir name
+mv roc_nightly* roc_nightly
+
+cd roc_nightly
 
 # build the basic cli platform
 ./roc build ../basic-cli/examples/file.roc
