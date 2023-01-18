@@ -1382,7 +1382,7 @@ fn gte_u8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lt_u64() {
     assert_evals_to!("1u64 < 2u64", true, bool);
     assert_evals_to!("1u64 < 1u64", false, bool);
@@ -1422,7 +1422,7 @@ fn gte_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lt_i64() {
     assert_evals_to!("1 < 2", true, bool);
     assert_evals_to!("1 < 1", false, bool);
