@@ -4,7 +4,7 @@ use crate::ast::{
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
-    space0_e, spaces, spaces_around, spaces_before,
+    space0_before_optional_after, space0_e, spaces, spaces_around, spaces_before,
 };
 use crate::ident::{integer_ident, lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
@@ -16,6 +16,7 @@ use crate::parser::{
 };
 use crate::pattern::{closure_param, loc_has_parser};
 use crate::state::State;
+use crate::string_literal::StrLikeLiteral;
 use crate::type_annotation;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -41,7 +42,7 @@ pub fn test_parse_expr<'a>(
     state: State<'a>,
 ) -> Result<Loc<Expr<'a>>, EExpr<'a>> {
     let parser = skip_second!(
-        space0_before_e(loc_expr(true), EExpr::IndentStart,),
+        space0_before_optional_after(loc_expr(true), EExpr::IndentStart, EExpr::IndentEnd),
         expr_end()
     );
 
@@ -161,8 +162,7 @@ fn loc_term_or_underscore_or_conditional<'a>(
         loc_expr_in_parens_etc_help(),
         loc!(specialize(EExpr::If, if_expr_help(options))),
         loc!(specialize(EExpr::When, when::expr_help(options))),
-        loc!(specialize(EExpr::Str, string_literal_help())),
-        loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
+        loc!(specialize(EExpr::Str, string_like_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Closure, closure_help(options))),
         loc!(crash_kw()),
@@ -183,8 +183,7 @@ fn loc_term_or_underscore<'a>(
 ) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
         loc_expr_in_parens_etc_help(),
-        loc!(specialize(EExpr::Str, string_literal_help())),
-        loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
+        loc!(specialize(EExpr::Str, string_like_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Closure, closure_help(options))),
         loc!(underscore_expression()),
@@ -200,8 +199,7 @@ fn loc_term_or_underscore<'a>(
 fn loc_term<'a>(options: ExprParseOptions) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     one_of!(
         loc_expr_in_parens_etc_help(),
-        loc!(specialize(EExpr::Str, string_literal_help())),
-        loc!(specialize(EExpr::SingleQuote, single_quote_literal_help())),
+        loc!(specialize(EExpr::Str, string_like_literal_help())),
         loc!(specialize(EExpr::Number, positive_number_literal_help())),
         loc!(specialize(EExpr::Closure, closure_help(options))),
         loc!(record_literal_help()),
@@ -257,7 +255,10 @@ fn loc_possibly_negative_or_negated_term<'a>(
         // this will parse negative numbers, which the unary negate thing up top doesn't (for now)
         loc!(specialize(EExpr::Number, number_literal_help())),
         loc!(map_with_arena!(
-            and!(loc!(word1(b'!', EExpr::Start)), loc_term(options)),
+            and!(
+                loc!(word1(b'!', EExpr::Start)),
+                space0_before_e(loc_term(options), EExpr::IndentStart)
+            ),
             |arena: &'a Bump, (loc_op, loc_expr): (Loc<_>, _)| {
                 Expr::UnaryOp(arena.alloc(loc_expr), Loc::at(loc_op.region, UnaryOp::Not))
             }
@@ -670,7 +671,7 @@ pub fn parse_single_def<'a>(
                     let (_, ann_type, state) = parser.parse(arena, state, min_indent)?;
                     let region = Region::span_across(&loc_pattern.region, &ann_type.region);
 
-                    match &loc_pattern.value {
+                    match &loc_pattern.value.extract_spaces().item {
                         Pattern::Apply(
                             Loc {
                                 value: Pattern::Tag(name),
@@ -742,7 +743,7 @@ pub fn parse_single_def<'a>(
                         opaque_signature_with_space_before().parse(arena, state, min_indent + 1)?;
                     let region = Region::span_across(&loc_pattern.region, &signature.region);
 
-                    match &loc_pattern.value {
+                    match &loc_pattern.value.extract_spaces().item {
                         Pattern::Apply(
                             Loc {
                                 value: Pattern::Tag(name),
@@ -923,7 +924,7 @@ macro_rules! join_alias_to_body {
 }
 
 fn parse_defs_end<'a>(
-    _options: ExprParseOptions,
+    options: ExprParseOptions,
     min_indent: u32,
     mut defs: Defs<'a>,
     arena: &'a Bump,
@@ -934,7 +935,7 @@ fn parse_defs_end<'a>(
     loop {
         let state = global_state;
 
-        global_state = match parse_single_def(_options, min_indent, arena, state) {
+        global_state = match parse_single_def(options, min_indent, arena, state) {
             Ok((_, Some(single_def), next_state)) => {
                 let region = single_def.region;
                 let spaces_before_current = single_def.spaces_before;
@@ -1892,7 +1893,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
 
         Expr::Str(string) => Ok(Pattern::StrLiteral(*string)),
         Expr::SingleQuote(string) => Ok(Pattern::SingleQuote(string)),
-        Expr::MalformedIdent(string, _problem) => Ok(Pattern::Malformed(string)),
+        Expr::MalformedIdent(string, problem) => Ok(Pattern::MalformedIdent(string, *problem)),
     }
 }
 
@@ -1952,7 +1953,7 @@ pub fn toplevel_defs<'a>() -> impl Parser<'a, Defs<'a>, EExpr<'a>> {
         let start_column = state.column();
 
         let options = ExprParseOptions {
-            accept_multi_backpassing: false,
+            accept_multi_backpassing: true,
             check_for_arrow: true,
         };
 
@@ -2584,14 +2585,16 @@ fn apply_expr_access_chain<'a>(
         })
 }
 
-fn string_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
-    map!(crate::string_literal::parse(), Expr::Str)
-}
-
-fn single_quote_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
-    map!(
-        crate::string_literal::parse_single_quote(),
-        Expr::SingleQuote
+fn string_like_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EString<'a>> {
+    map_with_arena!(
+        crate::string_literal::parse_str_like_literal(),
+        |arena, lit| match lit {
+            StrLikeLiteral::Str(s) => Expr::Str(s),
+            StrLikeLiteral::SingleQuote(s) => {
+                // TODO: preserve the original escaping
+                Expr::SingleQuote(s.to_str_in(arena))
+            }
+        }
     )
 }
 

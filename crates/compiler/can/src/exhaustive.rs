@@ -301,6 +301,7 @@ fn sketch_pattern(pattern: &crate::pattern::Pattern) -> SketchedPattern {
     use SketchedPattern as SP;
 
     match pattern {
+        As(subpattern, _) => sketch_pattern(&subpattern.value),
         &NumLiteral(_, _, IntValue::I128(n), _) | &IntLiteral(_, _, _, IntValue::I128(n), _) => {
             SP::Literal(Literal::Int(n))
         }
@@ -612,7 +613,7 @@ fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, 
 
             // DEVIATION: model openness by attaching a #Open constructor, that can never
             // be matched unless there's an `Anything` pattern.
-            let opt_openness_tag = match subs.get_content_without_compacting(ext) {
+            let opt_openness_tag = match subs.get_content_without_compacting(ext.var()) {
                 FlexVar(_) | RigidVar(_) => {
                     let openness_tag = TagName(NONEXHAUSIVE_CTOR.into());
                     num_tags += 1;

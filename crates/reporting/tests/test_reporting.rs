@@ -2002,7 +2002,11 @@ mod test_reporting {
 
     But the type annotation on `x` says it should be:
 
-        { a : Int *, b : Frac *, c : Str }
+        {
+            a : Int *,
+            b : Frac *,
+            c : Str,
+        }
 
     Tip: Looks like the c and a fields are missing.
     "###
@@ -3759,11 +3763,11 @@ mod test_reporting {
 
     The argument is a pattern that matches record values of type:
 
-        { x : I64, y ? Str }
+        { y ? Str, … }
 
     But the annotation on `f` says the 1st argument should be:
 
-        { x : I64, y ? I64 }
+        { y ? I64, … }
     "###
     );
 
@@ -3788,11 +3792,11 @@ mod test_reporting {
 
     The body is a value of type:
 
-        { x : I64, y : Str }
+        { y : Str, … }
 
     But the type annotation says it should be:
 
-        { x : I64, y ? Str }
+        { y ? Str, … }
 
     Tip: To extract the `.y` field it must be non-optional, but the type
     says this field is optional. Learn more about optional fields at TODO.
@@ -3819,11 +3823,11 @@ mod test_reporting {
 
     The argument is a pattern that matches record values of type:
 
-        { x : I64, y : I64 }
+        { y : I64, … }
 
     But the annotation on `f` says the 1st argument should be:
 
-        { x : I64, y ? I64 }
+        { y ? I64, … }
 
     Tip: To extract the `.y` field it must be non-optional, but the type
     says this field is optional. Learn more about optional fields at TODO.
@@ -3852,11 +3856,11 @@ mod test_reporting {
 
     This `r` value is a:
 
-        { x : I64, y ? I64 }
+        { y ? I64, … }
 
     But the branch patterns have type:
 
-        { x : I64, y : I64 }
+        { y : I64, … }
 
     The branches must be cases of the `when` condition's type!
 
@@ -3885,11 +3889,11 @@ mod test_reporting {
 
     This `r` value is a:
 
-        { x : I64, y ? I64 }
+        { y ? I64, … }
 
     But you are trying to use it as:
 
-        { x : I64, y : I64 }
+        { y : I64, … }
 
     Tip: To extract the `.y` field it must be non-optional, but the type
     says this field is optional. Learn more about optional fields at TODO.
@@ -3916,11 +3920,11 @@ mod test_reporting {
 
     This `r` value is a:
 
-        { x : I64, y ? I64 }
+        { y ? I64, … }
 
     But this function needs its 1st argument to be:
 
-        { x : I64, y : I64 }
+        { y : I64, … }
 
     Tip: To extract the `.y` field it must be non-optional, but the type
     says this field is optional. Learn more about optional fields at TODO.
@@ -3951,11 +3955,11 @@ mod test_reporting {
 
     This `r` value is a:
 
-        { x : I64, y : I64 }
+        { y : I64, … }
 
     But the branch patterns have type:
 
-        { x : I64, y : Str }
+        { y : Str, … }
 
     The branches must be cases of the `when` condition's type!
     "###
@@ -3985,11 +3989,11 @@ mod test_reporting {
 
     This `r` value is a:
 
-        { x : I64, y ? I64 }
+        { y ? I64, … }
 
     But the branch patterns have type:
 
-        { x : I64, y ? Str }
+        { y ? Str, … }
 
     The branches must be cases of the `when` condition's type!
     "###
@@ -4773,7 +4777,7 @@ Tab characters are not allowed."###,
             app "dict" imports [ Dict ] provides [main] to "./platform"
 
             myDict : Dict.Dict Num.I64 Str
-            myDict = Dict.insert Dict.empty "foo" 42
+            myDict = Dict.insert (Dict.empty {}) "foo" 42
 
             main = myDict
             "#
@@ -4784,8 +4788,8 @@ Tab characters are not allowed."###,
     Something is off with the body of the `myDict` definition:
 
     3│  myDict : Dict.Dict Num.I64 Str
-    4│  myDict = Dict.insert Dict.empty "foo" 42
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    4│  myDict = Dict.insert (Dict.empty {}) "foo" 42
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
     This `insert` call produces:
 
@@ -5300,6 +5304,23 @@ Tab characters are not allowed."###,
         - An escaped backslash: \\
         - A unicode code point: \u(00FF)
         - An interpolated string: \(myVariable)
+    "###
+    );
+
+    test_report!(
+        single_quote_too_long,
+        r#"'abcdef'"#,
+        @r###"
+    ── INVALID SCALAR ───────────────────────── tmp/single_quote_too_long/Test.roc ─
+
+    I am part way through parsing this scalar literal (character literal),
+    but it's too long to fit in a U32 so it's not a valid scalar.
+
+    4│      'abcdef'
+             ^
+
+    You could change it to something like 'a' or '\n'. Note, roc strings
+    use double quotes, like "hello".
     "###
     );
 
@@ -6457,7 +6478,11 @@ In roc, functions are always written as a lambda, like{}
     The type annotation on `f` says the body is a record should have the
     type:
 
-        { x : a, y : b, z : * }
+        {
+            x : a,
+            y : b,
+            z : *,
+        }
 
     However, the type of the body is a record is connected to another type
     in a way that isn't reflected in this annotation.
@@ -10514,11 +10539,17 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     The body is a record of type:
 
-        { a : Str, b : Str }
+        {
+            a : Str,
+            b : Str,
+        }
 
     But the type annotation on `f` says it should be:
 
-        { a : Str, b ? Str }
+        {
+            a : Str,
+            b ? Str,
+        }
 
     Tip: To extract the `.b` field it must be non-optional, but the type
     says this field is optional. Learn more about optional fields at TODO.
@@ -10549,7 +10580,10 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     But the type annotation on `f` says it should be:
 
-        { a : Str, b ? Str }
+        {
+            a : Str,
+            b ? Str,
+        }
 
     Tip: Looks like the b field is missing.
     "###
@@ -10628,7 +10662,10 @@ I recommend using camelCase. It's the standard style in Roc code!
 
     I can't generate an implementation of the `Decoding` ability for
 
-        { x : Str, y ? Str }
+        {
+            x : Str,
+            y ? Str,
+        }
 
     Note: I can't derive decoding for a record with an optional field,
     which in this case is `.y`. Optional record fields are polymorphic over
@@ -12799,5 +12836,196 @@ I recommend using camelCase. It's the standard style in Roc code!
         ),
     @r###"
     "###
+    );
+
+    // TODO(weakening-reports)
+    test_report!(
+        concat_different_types,
+        indoc!(
+            r#"
+            empty = []
+            one = List.concat [1] empty
+            str = List.concat ["blah"] empty
+
+            {one, str}
+        "#),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This 2nd argument to `concat` has an unexpected type:
+
+    6│      str = List.concat ["blah"] empty
+                                       ^^^^^
+
+    This `empty` value is a:
+
+        List (Num *)
+
+    But `concat` needs its 2nd argument to be:
+
+        List Str
+    "###
+    );
+
+    test_report!(
+        implicit_inferred_open_in_output_position_cannot_grow,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main : {} -> [One]
+            main = \{} ->
+                if Bool.true
+                then One
+                else Two
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the `else` branch of this `if` expression:
+
+    3│  main : {} -> [One]
+    4│  main = \{} ->
+    5│      if Bool.true
+    6│      then One
+    7│      else Two
+                 ^^^
+
+    This `Two` tag has the type:
+
+        [Two]
+
+    But the type annotation on `main` says it should be:
+
+        [One]
+    "###
+    );
+
+    test_report!(
+        implicit_inferred_open_in_output_position_cannot_grow_alias,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            R : [One]
+
+            main : {} -> R
+            main = \{} ->
+                if Bool.true
+                then One
+                else Two
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the `else` branch of this `if` expression:
+
+    5│  main : {} -> R
+    6│  main = \{} ->
+    7│      if Bool.true
+    8│      then One
+    9│      else Two
+                 ^^^
+
+    This `Two` tag has the type:
+
+        [Two]
+
+    But the type annotation on `main` says it should be:
+
+        [One]
+    "###
+    );
+
+    test_report!(
+        implicit_inferred_open_in_output_position_cannot_grow_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main : List [One, Two] -> List [One]
+            main = \tags ->
+                List.map tags \tag ->
+                    when tag is
+                        One -> One
+                        Two -> Two
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `main` definition:
+
+    3│   main : List [One, Two] -> List [One]
+    4│   main = \tags ->
+    5│>      List.map tags \tag ->
+    6│>          when tag is
+    7│>              One -> One
+    8│>              Two -> Two
+
+    This `map` call produces:
+
+        List [One, Two]
+
+    But the type annotation on `main` says it should be:
+
+        List [One]
+    "###
+    );
+
+    test_report!(
+        implicit_inferred_open_in_output_position_cannot_grow_nested_alias,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            R : [One]
+
+            main : List [One, Two] -> List R
+            main = \tags ->
+                List.map tags \tag ->
+                    when tag is
+                        One -> One
+                        Two -> Two
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `main` definition:
+
+     5│   main : List [One, Two] -> List R
+     6│   main = \tags ->
+     7│>      List.map tags \tag ->
+     8│>          when tag is
+     9│>              One -> One
+    10│>              Two -> Two
+
+    This `map` call produces:
+
+        List [One, Two]
+
+    But the type annotation on `main` says it should be:
+
+        List [One]
+    "###
+    );
+
+    test_no_problem!(
+        explicit_inferred_open_in_output_position_can_grow,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main : List [One, Two] -> List [One]_
+            main = \tags ->
+                List.map tags \tag ->
+                    when tag is
+                        One -> One
+                        Two -> Two
+            "#
+        )
     );
 }

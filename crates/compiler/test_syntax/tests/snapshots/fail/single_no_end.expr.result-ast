@@ -1,1 +1,1 @@
-Expr(Str(EndlessSingle(@1), @0), @0)
+Expr(Str(EndlessSingleLine(@1), @0), @0)

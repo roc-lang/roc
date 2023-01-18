@@ -21,7 +21,7 @@ fn dict_empty_len() {
     assert_evals_to!(
         indoc!(
             r#"
-            Dict.len Dict.empty
+            Dict.len (Dict.empty {})
             "#
         ),
         0,
@@ -35,7 +35,7 @@ fn dict_insert_empty() {
     assert_evals_to!(
         indoc!(
             r#"
-            Dict.empty
+            Dict.empty {}
                 |> Dict.insert 42 32
                 |> Dict.len
             "#
@@ -52,7 +52,7 @@ fn dict_empty_contains() {
         indoc!(
             r#"
             empty : Dict.Dict I64 F64
-            empty = Dict.empty
+            empty = Dict.empty {}
 
             Dict.contains empty 42
             "#
@@ -69,7 +69,7 @@ fn dict_nonempty_contains() {
         indoc!(
             r#"
             empty : Dict.Dict I64 F64
-            empty = Dict.insert Dict.empty 42 1.23
+            empty = Dict.insert (Dict.empty {}) 42 1.23
 
             Dict.contains empty 42
             "#
@@ -87,7 +87,7 @@ fn dict_empty_remove() {
         indoc!(
             r#"
             empty : Dict.Dict I64 F64
-            empty = Dict.empty
+            empty = Dict.empty {}
 
             empty
                 |> Dict.remove 42
@@ -106,7 +106,7 @@ fn dict_nonempty_remove() {
         indoc!(
             r#"
             empty : Dict.Dict I64 F64
-            empty = Dict.insert Dict.empty 42 1.23
+            empty = Dict.insert (Dict.empty {}) 42 1.23
 
             empty
                 |> Dict.remove 42
@@ -126,7 +126,7 @@ fn dict_nonempty_get() {
         indoc!(
             r#"
             empty : Dict.Dict I64 F64
-            empty = Dict.insert Dict.empty 42 1.23
+            empty = Dict.insert (Dict.empty {}) 42 1.23
 
             withDefault = \x, def ->
                 when  x is
@@ -151,7 +151,7 @@ fn dict_nonempty_get() {
                     Ok v -> v
                     Err _ -> def
 
-            Dict.empty
+            Dict.empty {}
                 |> Dict.insert 42 1.23
                 |> Dict.get 43
                 |> withDefault 0
@@ -170,7 +170,7 @@ fn keys() {
             r#"
             myDict : Dict.Dict I64 I64
             myDict =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert 0 100
                     |> Dict.insert 1 100
                     |> Dict.insert 2 100
@@ -192,7 +192,7 @@ fn values() {
             r#"
             myDict : Dict.Dict I64 I64
             myDict =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert 0 100
                     |> Dict.insert 1 200
                     |> Dict.insert 2 300
@@ -215,7 +215,7 @@ fn from_list_with_fold_simple() {
             myDict : Dict.Dict I64 I64
             myDict =
                 [1,2,3]
-                    |> List.walk Dict.empty (\accum, value -> Dict.insert accum value value)
+                    |> List.walk (Dict.empty {}) (\accum, value -> Dict.insert accum value value)
 
             Dict.values myDict
             "#
@@ -242,7 +242,7 @@ fn from_list_with_fold_reallocates() {
             myDict =
                 # 25 elements (8 + 16 + 1) is guaranteed to overflow/reallocate at least twice
                 range 0 25 []
-                    |> List.walk Dict.empty (\accum, value -> Dict.insert accum value value)
+                    |> List.walk (Dict.empty {}) (\accum, value -> Dict.insert accum value value)
 
             Dict.values myDict
             "#
@@ -267,7 +267,7 @@ fn small_str_keys() {
             r#"
             myDict : Dict.Dict Str I64
             myDict =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert "a" 100
                     |> Dict.insert "b" 100
                     |> Dict.insert "c" 100
@@ -289,7 +289,7 @@ fn big_str_keys() {
             r#"
             myDict : Dict.Dict Str I64
             myDict =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert "Leverage agile frameworks to provide a robust" 100
                     |> Dict.insert "synopsis for high level overviews. Iterative approaches" 200
                     |> Dict.insert "to corporate strategy foster collaborative thinking to" 300
@@ -314,7 +314,7 @@ fn big_str_values() {
             r#"
             myDict : Dict.Dict I64 Str
             myDict =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert 100 "Leverage agile frameworks to provide a robust"
                     |> Dict.insert 200 "synopsis for high level overviews. Iterative approaches"
                     |> Dict.insert 300 "to corporate strategy foster collaborative thinking to"
@@ -339,7 +339,7 @@ fn unit_values() {
             r#"
             myDict : Dict.Dict I64 {}
             myDict =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert 0 {}
                     |> Dict.insert 1 {}
                     |> Dict.insert 2 {}
@@ -417,7 +417,7 @@ fn keep_shared() {
             r#"
             dict1 : Dict.Dict I64 {}
             dict1 =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert 1 {}
                     |> Dict.insert 2 {}
                     |> Dict.insert 3 {}
@@ -426,7 +426,7 @@ fn keep_shared() {
 
             dict2 : Dict.Dict I64 {}
             dict2 =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert 0 {}
                     |> Dict.insert 2 {}
                     |> Dict.insert 4 {}
@@ -449,7 +449,7 @@ fn keep_shared_prefer_first() {
             r#"
             dict1 : Dict.Dict I64 I64
             dict1 =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert 1 1
                     |> Dict.insert 2 2
                     |> Dict.insert 3 3
@@ -458,7 +458,7 @@ fn keep_shared_prefer_first() {
 
             dict2 : Dict.Dict I64 I64
             dict2 =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert 0 100
                     |> Dict.insert 2 200
                     |> Dict.insert 4 300
@@ -480,7 +480,7 @@ fn remove_all() {
             r#"
             dict1 : Dict.Dict I64 {}
             dict1 =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert 1 {}
                     |> Dict.insert 2 {}
                     |> Dict.insert 3 {}
@@ -489,7 +489,7 @@ fn remove_all() {
 
             dict2 : Dict.Dict I64 {}
             dict2 =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert 0 {}
                     |> Dict.insert 2 {}
                     |> Dict.insert 4 {}
@@ -512,7 +512,7 @@ fn remove_all_prefer_first() {
             r#"
             dict1 : Dict.Dict I64 I64
             dict1 =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert 1 1
                     |> Dict.insert 2 2
                     |> Dict.insert 3 3
@@ -521,7 +521,7 @@ fn remove_all_prefer_first() {
 
             dict2 : Dict.Dict I64 I64
             dict2 =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert 0 100
                     |> Dict.insert 2 200
                     |> Dict.insert 4 300
@@ -543,7 +543,7 @@ fn walk_sum_keys() {
             r#"
             dict1 : Dict.Dict I64 I64
             dict1 =
-                Dict.empty
+                Dict.empty {}
                     |> Dict.insert 1 1
                     |> Dict.insert 2 2
                     |> Dict.insert 3 3

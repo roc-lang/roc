@@ -251,10 +251,10 @@ pub fn run_with_valgrind<'a, I: IntoIterator<Item = &'a str>>(
     let mut cmd = Command::new("valgrind");
     let named_tempfile =
         NamedTempFile::new().expect("Unable to create tempfile for valgrind results");
-    let filepath = named_tempfile.path().to_str().unwrap();
 
     cmd.arg("--tool=memcheck");
     cmd.arg("--xml=yes");
+    cmd.arg(format!("--xml-file={}", named_tempfile.path().display()));
 
     // If you are having valgrind issues on MacOS, you may need to suppress some
     // of the errors. Read more here: https://github.com/roc-lang/roc/issues/746
@@ -273,8 +273,6 @@ pub fn run_with_valgrind<'a, I: IntoIterator<Item = &'a str>>(
             }
         }
     }
-
-    cmd.arg(format!("--xml-file={}", filepath));
 
     for arg in args {
         cmd.arg(arg);

@@ -331,6 +331,13 @@ mod cli_run {
         }
     }
 
+    // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
+    fn test_roc_expect(dir_name: &str, roc_filename: &str) {
+        let path = file_path_from_root(dir_name, roc_filename);
+        let out = run_roc(&[CMD_TEST, path.to_str().unwrap()], &[], &[]);
+        assert!(out.status.success());
+    }
+
     // when you don't need args, stdin or extra_env
     fn test_roc_app_slim(
         dir_name: &str,
@@ -415,12 +422,7 @@ mod cli_run {
                 return;
             }
             "args" => {
-                eprintln!(
-                    "WARNING: skipping testing example {} because it is known to be bad, pending investigation!",
-                    roc_filename
-                );
-                return;
-                // custom_flags = vec![LINKER_FLAG, "legacy"];
+                custom_flags = vec![LINKER_FLAG, "legacy"];
             }
             _ => {}
         }
@@ -859,6 +861,12 @@ mod cli_run {
             "Parse success!\n",
             UseValgrind::No,
         )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
+    fn parse_http() {
+        test_roc_expect("examples/parser/Parser", "Http.roc")
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]

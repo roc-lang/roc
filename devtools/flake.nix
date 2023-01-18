@@ -3,7 +3,7 @@
 
   inputs = {
     # change this path to the path of your roc folder
-    roc.url = "path:/home/anton/gitrepos/roc3/roc";
+    roc.url = "path:/home/username/gitrepos/roc1/roc";
     # to easily make configs for multiple architectures
     flake-utils.url = "github:numtide/flake-utils";
   };
@@ -20,23 +20,24 @@
       in {
         devShell = pkgs.mkShell {
           packages = let
-            devInputs = (with pkgs; [ less gdb ]);
+            devInputs = (with pkgs; [ less gdb bashInteractive]);
             vscodeWithExtensions = pkgs.vscode-with-extensions.override {
               vscodeExtensions = with pkgs.vscode-extensions; [
                 matklad.rust-analyzer
                 eamodio.gitlens
                 bbenoist.nix
                 vadimcn.vscode-lldb
+                tamasfe.even-better-toml
               ]
-                  #++ pkgs.vscode-utils.extensionsFromVscodeMarketplace [
-                  #   {
-                  #      name = "";
-                  #      publisher = "";
-                  #      version = "";
+                  ++ pkgs.vscode-utils.extensionsFromVscodeMarketplace [
+                     {
+                        name = "roc-lang-support";
+                        publisher = "benjamin-thomas";
+                        version = "0.0.3";
                         # keep this sha for the first run, nix will tell you the correct one to change it to
-                  #      sha256 = "I1kTVTBZXvp9x3sB+59OgIc1Ttq0WAZy8VCZhEtwrm4=";
-                  #    }
-                  #  ]
+                        sha256 = "sha256-mabNegZ+XPQ6EIHFk6jz2mAPLHAU6Pm3w0SiFB7IE+s=";
+                      }
+                    ]
                   ;
 
             };
@@ -52,4 +53,3 @@
         };
       });
 }
-

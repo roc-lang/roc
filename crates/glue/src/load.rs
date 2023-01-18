@@ -4,6 +4,7 @@ use bumpalo::Bump;
 use libloading::Library;
 use roc_intern::GlobalInterner;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
+use roc_mono::layout::GlobalLayoutInterner;
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::{Architecture, OperatingSystem, TargetInfo};
@@ -201,7 +202,7 @@ pub fn load_types(
         }
     });
 
-    let layout_interner = GlobalInterner::with_capacity(128);
+    let layout_interner = GlobalLayoutInterner::with_capacity(128, target_info);
 
     let architectures = Architecture::iter();
     let mut arch_types = Vec::with_capacity(architectures.len());

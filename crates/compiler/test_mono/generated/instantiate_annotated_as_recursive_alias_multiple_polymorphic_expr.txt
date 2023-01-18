@@ -1,5 +1,5 @@
 procedure Test.0 ():
-    let Test.4 : [<rnu><null>, C List *self] = TagId(1) ;
-    let Test.5 : [C List [<rnu><null>, C List *self], C U16, C ] = TagId(2) ;
-    let Test.12 : {[<rnu><null>, C List *self], [C List [<rnu><null>, C List *self], C U16, C ]} = Struct {Test.4, Test.5};
+    let Test.4 : [<rnw>C List *self, C U16, <null>] = TagId(2) ;
+    inc Test.4;
+    let Test.12 : {[<rnw>C List *self, C U16, <null>], [<rnw>C List *self, C U16, <null>]} = Struct {Test.4, Test.4};
     ret Test.12;

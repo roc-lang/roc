@@ -4,7 +4,7 @@ use std::hash::Hash;
 use crate::ir::{
     Expr, HigherOrderLowLevel, JoinPointId, Param, PassedFunction, Proc, ProcLayout, Stmt,
 };
-use crate::layout::Layout;
+use crate::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner};
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::all::{MutMap, MutSet};
@@ -15,15 +15,27 @@ use roc_module::symbol::Symbol;
 pub(crate) const OWNED: bool = false;
 pub(crate) const BORROWED: bool = true;
 
-/// For reference-counted types (lists, (big) strings, recursive tags), owning a value
-/// means incrementing its reference count. Hence, we prefer borrowing for these types
-fn should_borrow_layout(layout: &Layout) -> bool {
-    layout.is_refcounted()
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ownership {
+    Owned,
+    Borrowed,
 }
 
+impl Ownership {
+    /// For reference-counted types (lists, (big) strings, recursive tags), owning a value
+    /// means incrementing its reference count. Hence, we prefer borrowing for these types
+    fn from_layout(layout: &Layout) -> Self {
+        match layout.is_refcounted() {
+            true => Ownership::Borrowed,
+            false => Ownership::Owned,
+        }
+    }
+}
 pub fn infer_borrow<'a>(
     arena: &'a Bump,
+    interner: &STLayoutInterner<'a>,
     procs: &MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
+    host_exposed_procs: &[Symbol],
 ) -> ParamMap<'a> {
     // intern the layouts
 
@@ -38,7 +50,7 @@ pub fn infer_borrow<'a>(
     };
 
     for (key, proc) in procs {
-        param_map.visit_proc(arena, proc, *key);
+        param_map.visit_proc(arena, interner, proc, *key);
     }
 
     let mut env = BorrowInfState {
@@ -84,8 +96,12 @@ pub fn infer_borrow<'a>(
         loop {
             for index in group.iter_ones() {
                 let (key, proc) = &procs.iter().nth(index).unwrap();
+
+                // host-exposed functions must always own their arguments.
+                let is_host_exposed = host_exposed_procs.contains(&key.0);
+
                 let param_offset = param_map.get_param_offset(key.0, key.1);
-                env.collect_proc(&mut param_map, proc, param_offset);
+                env.collect_proc(&mut param_map, proc, param_offset, is_host_exposed);
             }
 
             if !env.modified {
@@ -106,7 +122,7 @@ pub struct ParamOffset(usize);
 
 impl From<ParamOffset> for usize {
     fn from(id: ParamOffset) -> Self {
-        id.0 as usize
+        id.0
     }
 }
 
@@ -217,10 +233,14 @@ impl<'a> ParamMap<'a> {
 }
 
 impl<'a> ParamMap<'a> {
-    fn init_borrow_params(arena: &'a Bump, ps: &'a [Param<'a>]) -> &'a [Param<'a>] {
+    fn init_borrow_params(
+        arena: &'a Bump,
+        interner: &STLayoutInterner<'a>,
+        ps: &'a [Param<'a>],
+    ) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|p| Param {
-                borrow: p.layout.is_refcounted(),
+                ownership: Ownership::from_layout(&interner.get(p.layout)),
                 layout: p.layout,
                 symbol: p.symbol,
             }),
@@ -229,10 +249,14 @@ impl<'a> ParamMap<'a> {
         .into_bump_slice()
     }
 
-    fn init_borrow_args(arena: &'a Bump, ps: &'a [(Layout<'a>, Symbol)]) -> &'a [Param<'a>] {
+    fn init_borrow_args(
+        arena: &'a Bump,
+        interner: &STLayoutInterner<'a>,
+        ps: &'a [(InLayout<'a>, Symbol)],
+    ) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
-                borrow: should_borrow_layout(layout),
+                ownership: Ownership::from_layout(&interner.get(*layout)),
                 layout: *layout,
                 symbol: *symbol,
             }),
@@ -243,11 +267,11 @@ impl<'a> ParamMap<'a> {
 
     fn init_borrow_args_always_owned(
         arena: &'a Bump,
-        ps: &'a [(Layout<'a>, Symbol)],
+        ps: &'a [(InLayout<'a>, Symbol)],
     ) -> &'a [Param<'a>] {
         Vec::from_iter_in(
             ps.iter().map(|(layout, symbol)| Param {
-                borrow: false,
+                ownership: Ownership::Owned,
                 layout: *layout,
                 symbol: *symbol,
             }),
@@ -256,15 +280,21 @@ impl<'a> ParamMap<'a> {
         .into_bump_slice()
     }
 
-    fn visit_proc(&mut self, arena: &'a Bump, proc: &Proc<'a>, key: (Symbol, ProcLayout<'a>)) {
+    fn visit_proc(
+        &mut self,
+        arena: &'a Bump,
+        interner: &STLayoutInterner<'a>,
+        proc: &Proc<'a>,
+        key: (Symbol, ProcLayout<'a>),
+    ) {
         if proc.must_own_arguments {
-            self.visit_proc_always_owned(arena, proc, key);
+            self.visit_proc_always_owned(arena, interner, proc, key);
             return;
         }
 
         let index: usize = self.get_param_offset(key.0, key.1).into();
 
-        for (i, param) in Self::init_borrow_args(arena, proc.args)
+        for (i, param) in Self::init_borrow_args(arena, interner, proc.args)
             .iter()
             .copied()
             .enumerate()
@@ -272,12 +302,13 @@ impl<'a> ParamMap<'a> {
             self.declarations[index + i] = param;
         }
 
-        self.visit_stmt(arena, proc.name.name(), &proc.body);
+        self.visit_stmt(arena, interner, proc.name.name(), &proc.body);
     }
 
     fn visit_proc_always_owned(
         &mut self,
         arena: &'a Bump,
+        interner: &STLayoutInterner<'a>,
         proc: &Proc<'a>,
         key: (Symbol, ProcLayout<'a>),
     ) {
@@ -291,10 +322,16 @@ impl<'a> ParamMap<'a> {
             self.declarations[index + i] = param;
         }
 
-        self.visit_stmt(arena, proc.name.name(), &proc.body);
+        self.visit_stmt(arena, interner, proc.name.name(), &proc.body);
     }
 
-    fn visit_stmt(&mut self, arena: &'a Bump, _fnid: Symbol, stmt: &Stmt<'a>) {
+    fn visit_stmt(
+        &mut self,
+        arena: &'a Bump,
+        interner: &STLayoutInterner<'a>,
+        _fnid: Symbol,
+        stmt: &Stmt<'a>,
+    ) {
         use Stmt::*;
 
         let mut stack = bumpalo::vec![in arena; stmt];
@@ -308,7 +345,7 @@ impl<'a> ParamMap<'a> {
                     body: b,
                 } => {
                     self.join_points
-                        .insert(*j, Self::init_borrow_params(arena, xs));
+                        .insert(*j, Self::init_borrow_params(arena, interner, xs));
 
                     stack.push(v);
                     stack.push(b);
@@ -390,12 +427,12 @@ impl<'a> BorrowInfState<'a> {
     fn update_param_map_help(&mut self, ps: &[Param<'a>]) -> &'a [Param<'a>] {
         let mut new_ps = Vec::with_capacity_in(ps.len(), self.arena);
         new_ps.extend(ps.iter().map(|p| {
-            if !p.borrow {
+            if p.ownership == Ownership::Owned {
                 *p
             } else if self.is_owned(p.symbol) {
                 self.modified = true;
                 let mut p = *p;
-                p.borrow = false;
+                p.ownership = Ownership::Owned;
 
                 p
             } else {
@@ -412,15 +449,15 @@ impl<'a> BorrowInfState<'a> {
         start: ParamOffset,
         length: usize,
     ) {
-        let index: usize = start.into();
+        let ParamOffset(index) = start;
         let ps = &mut param_map.declarations[index..][..length];
 
         for p in ps.iter_mut() {
-            if !p.borrow {
+            if p.ownership == Ownership::Owned {
                 // do nothing
             } else if self.is_owned(p.symbol) {
                 self.modified = true;
-                p.borrow = false;
+                p.ownership = Ownership::Owned;
             } else {
                 // do nothing
             }
@@ -440,7 +477,7 @@ impl<'a> BorrowInfState<'a> {
         debug_assert_eq!(xs.len(), ps.len());
 
         for (x, p) in xs.iter().zip(ps.iter()) {
-            if !p.borrow {
+            if p.ownership == Ownership::Owned {
                 self.own_var(*x);
             }
         }
@@ -512,8 +549,7 @@ impl<'a> BorrowInfState<'a> {
                 arg_layouts,
                 ..
             } => {
-                let top_level =
-                    ProcLayout::new(self.arena, arg_layouts, name.niche(), **ret_layout);
+                let top_level = ProcLayout::new(self.arena, arg_layouts, name.niche(), *ret_layout);
 
                 // get the borrow signature of the applied function
                 let ps = param_map
@@ -568,44 +604,44 @@ impl<'a> BorrowInfState<'a> {
                 match op {
                     ListMap { xs } => {
                         // own the list if the function wants to own the element
-                        if !function_ps[0].borrow {
+                        if function_ps[0].ownership == Ownership::Owned {
                             self.own_var(*xs);
                         }
                     }
                     ListMap2 { xs, ys } => {
                         // own the lists if the function wants to own the element
-                        if !function_ps[0].borrow {
+                        if function_ps[0].ownership == Ownership::Owned {
                             self.own_var(*xs);
                         }
 
-                        if !function_ps[1].borrow {
+                        if function_ps[1].ownership == Ownership::Owned {
                             self.own_var(*ys);
                         }
                     }
                     ListMap3 { xs, ys, zs } => {
                         // own the lists if the function wants to own the element
-                        if !function_ps[0].borrow {
+                        if function_ps[0].ownership == Ownership::Owned {
                             self.own_var(*xs);
                         }
-                        if !function_ps[1].borrow {
+                        if function_ps[1].ownership == Ownership::Owned {
                             self.own_var(*ys);
                         }
-                        if !function_ps[2].borrow {
+                        if function_ps[2].ownership == Ownership::Owned {
                             self.own_var(*zs);
                         }
                     }
                     ListMap4 { xs, ys, zs, ws } => {
                         // own the lists if the function wants to own the element
-                        if !function_ps[0].borrow {
+                        if function_ps[0].ownership == Ownership::Owned {
                             self.own_var(*xs);
                         }
-                        if !function_ps[1].borrow {
+                        if function_ps[1].ownership == Ownership::Owned {
                             self.own_var(*ys);
                         }
-                        if !function_ps[2].borrow {
+                        if function_ps[2].ownership == Ownership::Owned {
                             self.own_var(*zs);
                         }
-                        if !function_ps[3].borrow {
+                        if function_ps[3].ownership == Ownership::Owned {
                             self.own_var(*ws);
                         }
                     }
@@ -617,7 +653,9 @@ impl<'a> BorrowInfState<'a> {
 
                 // own the closure environment if the function needs to own it
                 let function_env_position = op.function_arity();
-                if let Some(false) = function_ps.get(function_env_position).map(|p| p.borrow) {
+                if let Some(Ownership::Owned) =
+                    function_ps.get(function_env_position).map(|p| p.ownership)
+                {
                     self.own_var(passed_function.captured_environment);
                 }
             }
@@ -739,7 +777,7 @@ impl<'a> BorrowInfState<'a> {
             Stmt::Ret(z),
         ) = (v, b)
         {
-            let top_level = ProcLayout::new(self.arena, arg_layouts, g.niche(), **ret_layout);
+            let top_level = ProcLayout::new(self.arena, arg_layouts, g.niche(), *ret_layout);
 
             if self.current_proc == g.name() && x == *z {
                 // anonymous functions (for which the ps may not be known)
@@ -856,6 +894,7 @@ impl<'a> BorrowInfState<'a> {
         param_map: &mut ParamMap<'a>,
         proc: &Proc<'a>,
         param_offset: ParamOffset,
+        is_host_exposed: bool,
     ) {
         let old = self.param_set.clone();
 
@@ -864,7 +903,14 @@ impl<'a> BorrowInfState<'a> {
         self.current_proc = proc.name.name();
 
         // ensure that current_proc is in the owned map
-        self.owned.entry(proc.name.name()).or_default();
+        let owned_entry = self.owned.entry(proc.name.name()).or_default();
+
+        // host-exposed must own all its params
+        if is_host_exposed {
+            let ParamOffset(index) = param_offset;
+            let params = &param_map.declarations[index..][..proc.args.len()];
+            owned_entry.extend(params.iter().map(|p| p.symbol));
+        }
 
         self.collect_stmt(param_map, &proc.body);
         self.update_param_map_declaration(param_map, param_offset, proc.args.len());

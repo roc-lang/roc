@@ -2412,6 +2412,7 @@ fn to_doc_help<'b>(
                     })
                     .collect(),
                 record_ext_to_doc(alloc, ext),
+                0, // zero fields omitted, since this isn't a diff
             )
         }
 
@@ -2690,7 +2691,7 @@ fn to_diff<'b>(
         (Function(args1, _, ret1), Function(args2, _, ret2)) => {
             if args1.len() == args2.len() {
                 let mut status = Status::Similar;
-                let arg_diff = traverse(alloc, Parens::InFn, args1, args2);
+                let arg_diff = diff_args(alloc, Parens::InFn, args1, args2);
                 let ret_diff = to_diff(alloc, Parens::InFn, *ret1, *ret2);
                 status.merge(arg_diff.status);
                 status.merge(ret_diff.status);
@@ -2726,7 +2727,7 @@ fn to_diff<'b>(
             }
         }
         (Type(symbol1, args1), Type(symbol2, args2)) if symbol1 == symbol2 => {
-            let args_diff = traverse(alloc, Parens::InTypeParam, args1, args2);
+            let args_diff = diff_args(alloc, Parens::InTypeParam, args1, args2);
             let left = report_text::apply(
                 alloc,
                 parens,
@@ -2750,7 +2751,7 @@ fn to_diff<'b>(
         }
 
         (Alias(symbol1, args1, _, _), Alias(symbol2, args2, _, _)) if symbol1 == symbol2 => {
-            let args_diff = traverse(alloc, Parens::InTypeParam, args1, args2);
+            let args_diff = diff_args(alloc, Parens::InTypeParam, args1, args2);
             let left = report_text::apply(
                 alloc,
                 parens,
@@ -2908,7 +2909,7 @@ fn to_diff<'b>(
     }
 }
 
-fn traverse<'b, I>(
+fn diff_args<'b, I>(
     alloc: &'b RocDocAllocator<'b>,
     parens: Parens,
     args1: I,
@@ -2956,61 +2957,57 @@ fn diff_record<'b>(
     alloc: &'b RocDocAllocator<'b>,
     fields1: SendMap<Lowercase, RecordField<ErrorType>>,
     ext1: TypeExt,
-    fields2: SendMap<Lowercase, RecordField<ErrorType>>,
+    mut fields2: SendMap<Lowercase, RecordField<ErrorType>>,
     ext2: TypeExt,
 ) -> Diff<RocDocBuilder<'b>> {
-    let to_overlap_docs = |(field, (t1, t2)): (
-        &Lowercase,
-        &(RecordField<ErrorType>, RecordField<ErrorType>),
-    )| {
-        let diff = to_diff(
-            alloc,
-            Parens::Unnecessary,
-            t1.clone().into_inner(),
-            t2.clone().into_inner(),
-        );
+    let to_overlap_docs =
+        |(field, (t1, t2)): (Lowercase, (RecordField<ErrorType>, RecordField<ErrorType>))| {
+            let diff = to_diff(
+                alloc,
+                Parens::Unnecessary,
+                t1.clone().into_inner(),
+                t2.clone().into_inner(),
+            );
 
-        Diff {
-            left: (
-                field.clone(),
-                alloc.string(field.as_str().to_string()),
-                t1.replace(diff.left),
-            ),
-            right: (
-                field.clone(),
-                alloc.string(field.as_str().to_string()),
-                t2.replace(diff.right),
-            ),
-            status: {
-                match (&t1, &t2) {
-                    (RecordField::Demanded(_), RecordField::Optional(_))
-                    | (RecordField::Optional(_), RecordField::Demanded(_))
-                    | (
-                        RecordField::Demanded(_) | RecordField::Required(_),
-                        RecordField::RigidOptional(_),
-                    )
-                    | (
-                        RecordField::RigidOptional(_),
-                        RecordField::Demanded(_) | RecordField::Required(_),
-                    ) => match diff.status {
-                        Status::Similar => {
-                            Status::Different(vec![Problem::OptionalRequiredMismatch(
-                                field.clone(),
-                            )])
-                        }
-                        Status::Different(mut problems) => {
-                            problems.push(Problem::OptionalRequiredMismatch(field.clone()));
+            Diff {
+                left: (
+                    field.clone(),
+                    alloc.string(field.as_str().to_string()),
+                    t1.replace(diff.left),
+                ),
+                right: (
+                    field.clone(),
+                    alloc.string(field.as_str().to_string()),
+                    t2.replace(diff.right),
+                ),
+                status: {
+                    match (&t1, &t2) {
+                        (RecordField::Demanded(_), RecordField::Optional(_))
+                        | (RecordField::Optional(_), RecordField::Demanded(_))
+                        | (
+                            RecordField::Demanded(_) | RecordField::Required(_),
+                            RecordField::RigidOptional(_),
+                        )
+                        | (
+                            RecordField::RigidOptional(_),
+                            RecordField::Demanded(_) | RecordField::Required(_),
+                        ) => match diff.status {
+                            Status::Similar => {
+                                Status::Different(vec![Problem::OptionalRequiredMismatch(field)])
+                            }
+                            Status::Different(mut problems) => {
+                                problems.push(Problem::OptionalRequiredMismatch(field));
 
-                            Status::Different(problems)
-                        }
-                    },
-                    _ => diff.status,
-                }
-            },
-            left_able: diff.left_able,
-            right_able: diff.right_able,
-        }
-    };
+                                Status::Different(problems)
+                            }
+                        },
+                        _ => diff.status,
+                    }
+                },
+                left_able: diff.left_able,
+                right_able: diff.right_able,
+            }
+        };
 
     let to_unknown_docs = |(field, tipe): (&Lowercase, &RecordField<ErrorType>)| {
         (
@@ -3019,15 +3016,38 @@ fn diff_record<'b>(
             tipe.map(|t| to_doc(alloc, Parens::Unnecessary, t.clone()).0),
         )
     };
-    let shared_keys = fields1
-        .clone()
-        .intersection_with(fields2.clone(), |v1, v2| (v1, v2));
-    let left_keys = fields1.clone().relative_complement(fields2.clone());
-    let right_keys = fields2.clone().relative_complement(fields1.clone());
+    let mut same_fields_different_types = VecMap::default();
+    let mut fields_in_left_only = Vec::default();
+    let mut same_fields_same_types = 0;
 
-    let both = shared_keys.iter().map(to_overlap_docs);
-    let mut left = left_keys.iter().map(to_unknown_docs).peekable();
-    let mut right = right_keys.iter().map(to_unknown_docs).peekable();
+    for (k1, v1) in fields1.into_iter() {
+        match fields2.remove(&k1) {
+            Some(v2) if should_show_field_diff(&v1, &v2) => {
+                // The field names are the same but the types are different
+                // (or at least should be rendered as different)
+                same_fields_different_types.insert(k1, (v1, v2));
+            }
+            Some(_) => {
+                // They're both the same fields and the same types
+                same_fields_same_types += 1;
+            }
+            None => {
+                // Only fields1 has this field.
+                fields_in_left_only.push((k1, v1));
+            }
+        }
+    }
+
+    // We've removed all the fields that they had in common, so the remaining entries in fields2
+    // are ones that appear on the right only.
+    let fields_in_right_only = fields2;
+
+    let both = same_fields_different_types.into_iter().map(to_overlap_docs);
+    let mut left = fields_in_left_only
+        .iter()
+        .map(|(k, v)| to_unknown_docs((k, v)))
+        .peekable();
+    let mut right = fields_in_right_only.iter().map(to_unknown_docs).peekable();
 
     let all_fields_shared = left.peek().is_none() && right.peek().is_none();
 
@@ -3035,7 +3055,7 @@ fn diff_record<'b>(
         (true, true) => match left.peek() {
             Some((f, _, _)) => Status::Different(vec![Problem::FieldTypo(
                 f.clone(),
-                fields2.keys().cloned().collect(),
+                fields_in_right_only.keys().cloned().collect(),
             )]),
             None => {
                 if right.peek().is_none() {
@@ -3045,7 +3065,7 @@ fn diff_record<'b>(
                         right.map(|v| v.0).collect(),
                     )]);
                     // we just used the values in `right`.  in
-                    right = right_keys.iter().map(to_unknown_docs).peekable();
+                    right = fields_in_right_only.iter().map(to_unknown_docs).peekable();
                     result
                 }
             }
@@ -3053,14 +3073,17 @@ fn diff_record<'b>(
         (false, true) => match left.peek() {
             Some((f, _, _)) => Status::Different(vec![Problem::FieldTypo(
                 f.clone(),
-                fields2.keys().cloned().collect(),
+                fields_in_right_only.keys().cloned().collect(),
             )]),
             None => Status::Similar,
         },
         (true, false) => match right.peek() {
             Some((f, _, _)) => Status::Different(vec![Problem::FieldTypo(
                 f.clone(),
-                fields1.keys().cloned().collect(),
+                fields_in_left_only
+                    .iter()
+                    .map(|(field, _)| field.clone())
+                    .collect(),
             )]),
             None => Status::Similar,
         },
@@ -3104,6 +3127,7 @@ fn diff_record<'b>(
             .map(|(_, b, c)| (b, c))
             .collect(),
         ext_diff.left,
+        same_fields_same_types,
     );
     let doc2 = report_text::record(
         alloc,
@@ -3113,6 +3137,7 @@ fn diff_record<'b>(
             .map(|(_, b, c)| (b, c))
             .collect(),
         ext_diff.right,
+        same_fields_same_types,
     );
 
     fields_diff.status.merge(status);
@@ -3126,6 +3151,211 @@ fn diff_record<'b>(
     }
 }
 
+/// This is a helper for should_show_field_diff - see its doc comment for details.
+fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
+    use ErrorType::*;
+
+    match (t1, t2) {
+        (Type(sym1, types1), Type(sym2, types2)) => {
+            if sym1 != sym2 || types1.len() != types2.len() {
+                return true;
+            }
+
+            types1
+                .iter()
+                .zip(types2.iter())
+                .any(|(t1, t2)| should_show_diff(t1, t2))
+        }
+        (Infinite, Infinite) | (Error, Error) => false,
+        (FlexVar(v1), FlexVar(v2)) | (RigidVar(v1), RigidVar(v2)) => v1 != v2,
+        (FlexAbleVar(v1, _set1), FlexAbleVar(v2, _set2))
+        | (RigidAbleVar(v1, _set1), RigidAbleVar(v2, _set2)) => {
+            #[cfg(debug_assertions)]
+            {
+                if v1 == v2 {
+                    // If v1 == v2, then the sets should be equal too!
+                    debug_assert_eq!(_set1.len(), _set2.len());
+                    debug_assert!(_set1
+                        .sorted_iter()
+                        .zip(_set2.sorted_iter())
+                        .all(|(t1, t2)| t1 == t2));
+                }
+            }
+
+            v1 != v2
+        }
+        (Record(fields1, ext1), Record(fields2, ext2)) => {
+            if fields1.len() != fields1.len() || ext1 != ext2 {
+                return true;
+            }
+
+            fields1
+                .iter()
+                .zip(fields2.iter())
+                .any(|((name1, f1), (name2, f2))| name1 != name2 || should_show_field_diff(f1, f2))
+        }
+        (TagUnion(tags1, ext1, polarity1), TagUnion(tags2, ext2, polarity2)) => {
+            debug_assert_eq!(
+                polarity1, polarity2,
+                "Any two tag unions we're comparing should have the same polarity!"
+            );
+
+            if tags1.len() != tags2.len() || ext1 != ext2 {
+                return true;
+            }
+
+            tags1
+                .iter()
+                .zip(tags2.iter())
+                .any(|((name1, payload1), (name2, payload2))| {
+                    if name1 != name2 || payload1.len() != payload2.len() {
+                        return true;
+                    }
+
+                    payload1
+                        .iter()
+                        .zip(payload2.iter())
+                        .any(|(p1, p2)| should_show_diff(p1, p2))
+                })
+        }
+        (
+            RecursiveTagUnion(rec1, tags1, ext1, _polarity1),
+            RecursiveTagUnion(rec2, tags2, ext2, _polarity2),
+        ) => {
+            // If two tag unions differ only in polarity, don't show that as a diff;
+            // polarity is invisible to the reader!
+
+            if tags1.len() != tags2.len() || ext1 != ext2 || should_show_diff(rec1, rec2) {
+                return true;
+            }
+
+            tags1
+                .iter()
+                .zip(tags2.iter())
+                .any(|((name1, payload1), (name2, payload2))| {
+                    if name1 != name2 || payload1.len() != payload2.len() {
+                        return true;
+                    }
+
+                    payload1
+                        .iter()
+                        .zip(payload2.iter())
+                        .any(|(p1, p2)| should_show_diff(p1, p2))
+                })
+        }
+        (Function(params1, ret1, l1), Function(params2, ret2, l2)) => {
+            if params1.len() != params2.len()
+                || should_show_diff(ret1, ret2)
+                || should_show_diff(l1, l2)
+            {
+                return true;
+            }
+
+            params1
+                .iter()
+                .zip(params2.iter())
+                .any(|(p1, p2)| should_show_diff(p1, p2))
+        }
+        (Alias(sym1, params1, t1, kind1), Alias(sym2, params2, t2, kind2)) => {
+            if sym1 != sym2
+                || kind1 != kind2
+                || params1.len() != params2.len()
+                || should_show_diff(t1, t2)
+            {
+                return true;
+            }
+
+            params1
+                .iter()
+                .zip(params2.iter())
+                .any(|(p1, p2)| should_show_diff(p1, p2))
+        }
+        (Range(types1), Range(types2)) => {
+            if types1.len() != types2.len() {
+                return true;
+            }
+
+            types1
+                .iter()
+                .zip(types2.iter())
+                .any(|(t1, t2)| should_show_diff(t1, t2))
+        }
+        (Alias(_sym, _params, aliased, AliasKind::Structural), other)
+        | (other, Alias(_sym, _params, aliased, AliasKind::Structural)) => {
+            // Check to see if we should show the diff after unwrapping the alias
+            should_show_diff(aliased, other)
+        }
+        (Alias(_, _, _, AliasKind::Opaque), _)
+        | (_, Alias(_, _, _, AliasKind::Opaque))
+        | (Infinite, _)
+        | (_, Infinite)
+        | (Error, _)
+        | (_, Error)
+        | (Type(_, _), _)
+        | (_, Type(_, _))
+        | (FlexVar(_), _)
+        | (_, FlexVar(_))
+        | (RigidVar(_), _)
+        | (_, RigidVar(_))
+        | (FlexAbleVar(_, _), _)
+        | (_, FlexAbleVar(_, _))
+        | (RigidAbleVar(_, _), _)
+        | (_, RigidAbleVar(_, _))
+        | (Record(_, _), _)
+        | (_, Record(_, _))
+        | (TagUnion(_, _, _), _)
+        | (_, TagUnion(_, _, _))
+        | (RecursiveTagUnion(_, _, _, _), _)
+        | (_, RecursiveTagUnion(_, _, _, _))
+        | (Function(_, _, _), _)
+        | (_, Function(_, _, _)) => true,
+    }
+}
+
+/// If these are equivalent, we shouldn't bother showing them in a diff.
+/// (For example, if one is Required and the other is Demanded, showing
+/// them in a diff will be unhelpful; they'll both be rendered using : and will look
+/// exactly the same to the reader!)
+fn should_show_field_diff(
+    field1: &RecordField<ErrorType>,
+    field2: &RecordField<ErrorType>,
+) -> bool {
+    use RecordField::*;
+
+    match (field1, field2) {
+        // If they're both the same, they don't need a diff
+        (Demanded(t1), Demanded(t2))
+        | (Required(t1), Required(t2))
+        | (RigidRequired(t1), RigidRequired(t2))
+        | (RigidOptional(t1), RigidOptional(t2))
+        | (Optional(t1), Optional(t2))
+        // Demanded and Required don't need a diff
+        | (Demanded(t1), Required(t2))
+        | (Required(t1), Demanded(t2))
+        // Demanded and RigidRequired don't need a diff
+        | (Demanded(t1), RigidRequired(t2))
+        | (RigidRequired(t1), Demanded(t2))
+        => should_show_diff(t1, t2),
+        // Everything else needs a diff
+        (Demanded(_), Optional(_))
+        | (Demanded(_), RigidOptional(_))
+        | (Required(_), RigidRequired(_))
+        | (Required(_), Optional(_))
+        | (Optional(_), Demanded(_))
+        | (Optional(_), RigidRequired(_))
+        | (Optional(_), RigidOptional(_))
+        | (Optional(_), Required(_))
+        | (RigidRequired(_), Required(_))
+        | (RigidRequired(_), Optional(_))
+        | (RigidRequired(_), RigidOptional(_))
+        | (Required(_), RigidOptional(_))
+        | (RigidOptional(_), Demanded(_))
+        | (RigidOptional(_), Required(_))
+        | (RigidOptional(_), Optional(_))
+        | (RigidOptional(_), RigidRequired(_)) => true,
+    }
+}
+
 fn same_tag_name_overlap_diff<'b>(
     alloc: &'b RocDocAllocator<'b>,
     field: TagName,
@@ -3133,7 +3363,7 @@ fn same_tag_name_overlap_diff<'b>(
     args2: Vec<ErrorType>,
 ) -> Diff<(TagName, RocDocBuilder<'b>, Vec<RocDocBuilder<'b>>)> {
     if args1.len() == args2.len() {
-        let diff = traverse(alloc, Parens::InTypeParam, args1, args2);
+        let diff = diff_args(alloc, Parens::InTypeParam, args1, args2);
 
         Diff {
             left: (field.clone(), alloc.tag_name(field.clone()), diff.left),
@@ -3440,6 +3670,7 @@ mod report_text {
         alloc: &'b RocDocAllocator<'b>,
         entries: Vec<(RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)>,
         opt_ext: Option<RocDocBuilder<'b>>,
+        fields_omitted: usize,
     ) -> RocDocBuilder<'b> {
         let ext_doc = if let Some(t) = opt_ext {
             t
@@ -3447,34 +3678,66 @@ mod report_text {
             alloc.nil()
         };
 
-        if entries.is_empty() {
-            alloc.text("{}").append(ext_doc)
-        } else {
-            let entry_to_doc =
-                |(field_name, field_type): (RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)| {
-                    match field_type {
-                        RecordField::Demanded(field)
-                        | RecordField::Required(field)
-                        | RecordField::RigidRequired(field) => {
-                            field_name.append(alloc.text(" : ")).append(field)
-                        }
-                        RecordField::Optional(field) | RecordField::RigidOptional(field) => {
-                            field_name.append(alloc.text(" ? ")).append(field)
-                        }
+        let entry_to_doc =
+            |(field_name, field_type): (RocDocBuilder<'b>, RecordField<RocDocBuilder<'b>>)| {
+                match field_type {
+                    RecordField::Demanded(field)
+                    | RecordField::Required(field)
+                    | RecordField::RigidRequired(field) => {
+                        field_name.append(alloc.text(" : ")).append(field)
                     }
-                };
+                    RecordField::Optional(field) | RecordField::RigidOptional(field) => {
+                        field_name.append(alloc.text(" ? ")).append(field)
+                    }
+                }
+            };
 
-            let starts =
-                std::iter::once(alloc.reflow("{ ")).chain(std::iter::repeat(alloc.reflow(", ")));
+        if entries.is_empty() {
+            if fields_omitted == 0 {
+                alloc.text("{}")
+            } else {
+                alloc
+                    .text("{ ")
+                    .append(alloc.ellipsis().append(alloc.text(" }")))
+            }
+            .append(ext_doc)
+        } else if entries.len() == 1 {
+            // Single-field records get printed on one line; multi-field records get multiple lines
+            alloc
+                .text("{ ")
+                .append(entry_to_doc(entries.into_iter().next().unwrap()))
+                .append(if fields_omitted == 0 {
+                    alloc.text("")
+                } else {
+                    alloc.text(", ").append(alloc.ellipsis())
+                })
+                .append(alloc.text(" }"))
+                .append(ext_doc)
+        } else {
+            let ending = if fields_omitted == 0 {
+                alloc.reflow("}")
+            } else {
+                alloc.vcat([
+                    alloc.ellipsis().indent(super::RECORD_FIELD_INDENT),
+                    alloc.reflow("}"),
+                ])
+            };
 
-            let entries_doc = alloc.concat(
-                entries
-                    .into_iter()
-                    .zip(starts)
-                    .map(|(entry, start)| start.append(entry_to_doc(entry))),
-            );
-
-            entries_doc.append(alloc.reflow(" }")).append(ext_doc)
+            // Multi-field records get printed on multiple lines, as do records with fields omitted.
+            alloc
+                .vcat(
+                    std::iter::once(alloc.reflow("{")).chain(
+                        entries
+                            .into_iter()
+                            .map(|entry| {
+                                entry_to_doc(entry)
+                                    .indent(super::RECORD_FIELD_INDENT)
+                                    .append(alloc.reflow(","))
+                            })
+                            .chain(std::iter::once(ending)),
+                    ),
+                )
+                .append(ext_doc)
         }
     }
 
@@ -4358,6 +4621,7 @@ fn exhaustive_pattern_to_doc<'b>(
 }
 
 const AFTER_TAG_INDENT: &str = "    ";
+const RECORD_FIELD_INDENT: usize = 4;
 
 fn pattern_to_doc_help<'b>(
     alloc: &'b RocDocAllocator<'b>,

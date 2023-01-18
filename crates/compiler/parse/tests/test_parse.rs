@@ -19,9 +19,9 @@ mod test_parse {
     use bumpalo::collections::vec::Vec;
     use bumpalo::{self, Bump};
     use roc_parse::ast::Expr::{self, *};
-    use roc_parse::ast::StrLiteral::*;
     use roc_parse::ast::StrSegment::*;
     use roc_parse::ast::{self, EscapedChar};
+    use roc_parse::ast::{CommentOrNewline, StrLiteral::*};
     use roc_parse::module::module_defs;
     use roc_parse::parser::{Parser, SyntaxError};
     use roc_parse::state::State;
@@ -66,7 +66,7 @@ mod test_parse {
             ("\\n", EscapedChar::Newline),
             ("\\r", EscapedChar::CarriageReturn),
             ("\\t", EscapedChar::Tab),
-            ("\\\"", EscapedChar::Quote),
+            ("\\\"", EscapedChar::DoubleQuote),
         ] {
             let actual = parse_expr_with(&arena, arena.alloc(to_input(string)));
             let expected_slice = to_expected(*escaped, &arena);
@@ -320,6 +320,22 @@ mod test_parse {
     #[test]
     fn parse_expr_size() {
         assert_eq!(std::mem::size_of::<roc_parse::ast::Expr>(), 40);
+    }
+
+    #[test]
+    fn parse_two_line_comment_with_crlf() {
+        let src = "# foo\r\n# bar\r\n42";
+        assert_parses_to(
+            src,
+            Expr::SpaceBefore(
+                &Expr::Num("42"),
+                &[
+                    CommentOrNewline::LineComment(" foo"),
+                    // We used to have a bug where there was an extra CommentOrNewline::Newline between these.
+                    CommentOrNewline::LineComment(" bar"),
+                ],
+            ),
+        );
     }
 
     // PARSE ERROR

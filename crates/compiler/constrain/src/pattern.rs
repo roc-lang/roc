@@ -60,16 +60,30 @@ fn headers_from_annotation_help(
     match pattern {
         Identifier(symbol)
         | Shadowed(_, _, symbol)
-        // TODO(abilities): handle linking the member def to the specialization ident
         | AbilityMemberSpecialization {
             ident: symbol,
             specializes: _,
         } => {
-            let annotation_index = { let typ = types.from_old_type(annotation.value); constraints.push_type(types, typ) };
+            let annotation_index = {
+                let typ = types.from_old_type(annotation.value);
+                constraints.push_type(types, typ)
+            };
             let typ = Loc::at(annotation.region, annotation_index);
             headers.insert(*symbol, typ);
             true
         }
+
+        As(subpattern, symbol) => {
+            let annotation_index = {
+                let typ = types.from_old_type(annotation.value);
+                constraints.push_type(types, typ)
+            };
+            let typ = Loc::at(annotation.region, annotation_index);
+            headers.insert(*symbol, typ);
+
+            headers_from_annotation_help(types, constraints, &subpattern.value, annotation, headers)
+        }
+
         Underscore
         | MalformedPattern(_, _)
         | UnsupportedPattern(_)
@@ -93,7 +107,10 @@ fn headers_from_annotation_help(
                     // `{ x ? 0 } = rec` or `{ x: 5 } -> ...` in all cases
                     // the type of `x` within the binding itself is the same.
                     if let Some(field_type) = fields.get(&destruct.label) {
-                        let field_type_index = { let typ = types.from_old_type(&field_type.as_inner().clone()); constraints.push_type(types, typ) };
+                        let field_type_index = {
+                            let typ = types.from_old_type(&field_type.as_inner().clone());
+                            constraints.push_type(types, typ)
+                        };
                         headers.insert(
                             destruct.symbol,
                             Loc::at(annotation.region, field_type_index),
@@ -108,13 +125,24 @@ fn headers_from_annotation_help(
             _ => false,
         },
 
-        List { .. } => {
-            // There are no interesting headers to introduce for list patterns, since the only
-            // exhaustive list pattern is
-            //   \[..] -> <body>
-            // which does not introduce any symbols.
-            false
-        },
+        List { patterns, .. } => {
+            if let Some((_, Some(rest))) = patterns.opt_rest {
+                let annotation_index = {
+                    let typ = types.from_old_type(annotation.value);
+                    constraints.push_type(types, typ)
+                };
+                let typ = Loc::at(annotation.region, annotation_index);
+                headers.insert(rest, typ);
+
+                false
+            } else {
+                // There are no interesting headers to introduce for list patterns, since the only
+                // exhaustive list pattern is
+                //   \[..] -> <body>
+                // which does not introduce any symbols.
+                false
+            }
+        }
 
         AppliedTag {
             tag_name,
@@ -165,7 +193,10 @@ fn headers_from_annotation_help(
                 && type_arguments.len() == pat_type_arguments.len()
                 && lambda_set_variables.len() == pat_lambda_set_variables.len() =>
             {
-                let annotation_index = { let typ = types.from_old_type(annotation.value); constraints.push_type(types, typ) };
+                let annotation_index = {
+                    let typ = types.from_old_type(annotation.value);
+                    constraints.push_type(types, typ)
+                };
                 let typ = Loc::at(annotation.region, annotation_index);
                 headers.insert(*opaque, typ);
 
@@ -215,8 +246,7 @@ pub fn constrain_pattern(
         }
 
         Identifier(symbol) | Shadowed(_, _, symbol) => {
-            let expected = &constraints[expected];
-            let type_index = *expected.get_type_ref();
+            let type_index = *constraints[expected].get_type_ref();
 
             if could_be_a_tag_union(types, type_index) {
                 state
@@ -231,6 +261,29 @@ pub fn constrain_pattern(
                     value: type_index,
                 },
             );
+        }
+
+        As(subpattern, symbol) => {
+            // NOTE: we don't use `could_be_a_tag_union` here. The `PATTERN as name` should
+            // just use the type of the PATTERN, and not influence what type is inferred for PATTERN
+
+            state.headers.insert(
+                *symbol,
+                Loc {
+                    region,
+                    value: *constraints[expected].get_type_ref(),
+                },
+            );
+
+            constrain_pattern(
+                types,
+                constraints,
+                env,
+                &subpattern.value,
+                subpattern.region,
+                expected,
+                state,
+            )
         }
 
         AbilityMemberSpecialization {
@@ -525,7 +578,7 @@ pub fn constrain_pattern(
             let record_type = {
                 let typ = types.from_old_type(&Type::Record(
                     field_types,
-                    TypeExtension::from_type(ext_type),
+                    TypeExtension::from_non_annotation_type(ext_type),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -554,13 +607,19 @@ pub fn constrain_pattern(
         List {
             list_var,
             elem_var,
-            patterns:
-                ListPatterns {
-                    patterns,
-                    opt_rest: _,
-                },
+            patterns: ListPatterns { patterns, opt_rest },
         } => {
             let elem_var_index = constraints.push_variable(*elem_var);
+
+            if let Some((_, Some(rest))) = opt_rest {
+                state.headers.insert(
+                    *rest,
+                    Loc {
+                        region,
+                        value: *constraints[expected].get_type_ref(),
+                    },
+                );
+            }
 
             for loc_pat in patterns.iter() {
                 let expected = constraints.push_pat_expected_type(PExpected::ForReason(

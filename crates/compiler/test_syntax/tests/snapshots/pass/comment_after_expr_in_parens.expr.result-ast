@@ -1,0 +1,13 @@
+ParensAround(
+    SpaceAfter(
+        Var {
+            module_name: "",
+            ident: "i",
+        },
+        [
+            LineComment(
+                "abc",
+            ),
+        ],
+    ),
+)

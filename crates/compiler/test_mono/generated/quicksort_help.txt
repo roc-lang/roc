@@ -15,11 +15,11 @@ procedure Test.1 (Test.24, Test.25, Test.26):
         let Test.14 : Int1 = CallByName Num.22 Test.3 Test.4;
         if Test.14 then
             dec Test.2;
-            let Test.23 : List [] = Array [];
+            let Test.23 : List I64 = Array [];
             let Test.22 : I64 = 0i64;
-            let Test.21 : {I64, List []} = Struct {Test.22, Test.23};
+            let Test.21 : {I64, List I64} = Struct {Test.22, Test.23};
             let Test.5 : I64 = StructAtIndex 0 Test.21;
-            let Test.6 : List [] = StructAtIndex 1 Test.21;
+            let Test.6 : List I64 = StructAtIndex 1 Test.21;
             inc Test.6;
             dec Test.21;
             let Test.20 : I64 = 1i64;

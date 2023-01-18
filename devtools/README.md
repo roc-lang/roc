@@ -3,23 +3,21 @@
 To make rust-analyzer and other vscode extensions work well you want them using the same rustc, glibc, zig... as specified in the roc nix flake.
 The easiest way to do this is to use another flake for all your dev tools that takes the roc flake as an input.
 
-Use the flake in this folder that uses your editor of choice as a starting template. If your editor is not listed, feel free to make a PR and add your flake.
+The flake in this folder is meant for vscode, feel free to create a PR if you'like to add a flake for a different editor.
 
 Further steps:
 
-1. Copy the flake for your favorite editor to a new folder outside of the roc repo folder.
+1. Copy the flake.nix and flake.lock file to a new folder outside of the roc repo folder.
 1. Run `git init` in the new folder.
-1. Rename the copied flake to `flake.nix`.
 1. Execute `git add flake.nix`, nix will error if you don't do this.
-1. Change `roc.url = "path:/home/anton/gitrepos/roc3/roc";` to the location of the roc folder on your machine.
+1. Change `roc.url = "path:/home/username/gitrepos/roc1/roc";` to the location of the roc folder on your machine.
 1. Follow instructions about vscode extensions [here](#extensions).
 1. add other dev tools you like in the `devInputs` list. You can search for those [here](https://search.nixos.org/packages).
-1. From the roc folder run `nix develop path-to-your-dev-flake-folder`.
-1. Run the `code` command to start vscode.
+1. Run `nix develop`.
+1. `cd` to the folder of the roc repo
+1. Run `code .` to start vscode.
 
 vscode is able to share settings between this nix version and your regular vscode so there is no need to set everything up from scratch.
-
-I recommend creating a git repository to save this custom flake.
 
 If you use lorri or direnv it is possible to load the dev flake instead of the roc flake.
 For lorri:

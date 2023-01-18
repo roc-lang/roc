@@ -26,7 +26,7 @@ pub struct Root {
 
 impl Root {
     const NONE: Self = Self {
-        rank: Rank::NONE,
+        rank: Rank::GENERALIZED,
         mark: Mark::NONE,
         copy: OptVariable::NONE,
     };

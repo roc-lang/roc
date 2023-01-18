@@ -1,0 +1,23 @@
+Apply(
+    @0-1 Var {
+        module_name: "",
+        ident: "e",
+    },
+    [
+        @1-10 Str(
+            Block(
+                [
+                    [
+                        Plaintext(
+                            "\"",
+                        ),
+                        EscapedChar(
+                            DoubleQuote,
+                        ),
+                    ],
+                ],
+            ),
+        ),
+    ],
+    Space,
+)

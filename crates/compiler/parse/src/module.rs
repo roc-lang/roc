@@ -181,7 +181,7 @@ fn app_header<'a>() -> impl Parser<'a, AppHeader<'a>, EHeader<'a>> {
         before_name: space0_e(EHeader::IndentStart),
         name: loc!(crate::parser::specialize(
             EHeader::AppName,
-            string_literal::parse()
+            string_literal::parse_str_literal()
         )),
         packages: optional(specialize(EHeader::Packages, packages())),
         imports: optional(specialize(EHeader::Imports, imports())),

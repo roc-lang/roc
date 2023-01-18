@@ -213,7 +213,6 @@ mod test_fmt {
             indoc!(
                 r#"
                 x = 0 # comment
-
                 x
                 "#
             ),
@@ -1410,6 +1409,7 @@ mod test_fmt {
                 r#"
                 f = \x ->
                     # 1st
+
                     # 2nd
                     x
 
@@ -1693,6 +1693,7 @@ mod test_fmt {
             ),
         );
 
+        // TODO: do we want to override the user's intent like this?
         expr_formats_to(
             indoc!(
                 r#"
@@ -1821,6 +1822,7 @@ mod test_fmt {
             ),
         );
 
+        // TODO: do we want to override the user's intent like this?
         expr_formats_to(
             indoc!(
                 r#"

@@ -349,7 +349,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 
 ### Inspiration
 
-- [10x editor](http://www.10xeditor.com/) IDE/Editor targeted at the professional developer with an emphasis on performance and scalability.
+- [10x editor](https://www.10xeditor.com/) IDE/Editor targeted at the professional developer with an emphasis on performance and scalability.
 
 ## Positive feedback
 
