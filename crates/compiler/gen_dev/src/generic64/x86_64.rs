@@ -1369,6 +1369,28 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     }
 
     #[inline(always)]
+    fn igt_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        cmp_reg64_reg64(buf, src1, src2);
+        setg_reg64(buf, dst);
+    }
+
+    #[inline(always)]
+    fn ugt_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src1: X86_64GeneralReg,
+        src2: X86_64GeneralReg,
+    ) {
+        cmp_reg64_reg64(buf, src1, src2);
+        seta_reg64(buf, dst);
+    }
+
+    #[inline(always)]
     fn to_float_freg32_reg64(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, src: X86_64GeneralReg) {
         cvtsi2ss_freg64_reg64(buf, dst, src);
     }
@@ -2171,6 +2193,18 @@ fn setl_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
 #[inline(always)]
 fn setb_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
     set_reg64_help(0x92, buf, reg);
+}
+
+/// `SETG r/m64` -> Set byte if greater (ZF=0 and SF=OF).
+#[inline(always)]
+fn setg_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x9f, buf, reg);
+}
+
+/// `SETA r/m64` -> Set byte if above (CF=0 and ZF=0).
+#[inline(always)]
+fn seta_reg64(buf: &mut Vec<'_, u8>, reg: X86_64GeneralReg) {
+    set_reg64_help(0x97, buf, reg);
 }
 
 /// `SETLE r/m64` -> Set byte if less or equal (ZF=1 or SF≠ OF).

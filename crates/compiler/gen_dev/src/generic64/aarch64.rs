@@ -789,6 +789,26 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn igt_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("registers signed greater than for AArch64");
+    }
+
+    #[inline(always)]
+    fn ugt_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("registers unsigned greater than for AArch64");
+    }
+
+    #[inline(always)]
     fn to_float_freg64_reg64(
         _buf: &mut Vec<'_, u8>,
         _dst: AArch64FloatReg,

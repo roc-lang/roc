@@ -584,6 +584,23 @@ trait Backend<'a> {
                 );
                 self.build_num_lt(sym, &args[0], &args[1], &arg_layouts[0])
             }
+            LowLevel::NumGt => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumGt: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumGt: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    Layout::BOOL,
+                    *ret_layout,
+                    "NumGt: expected to have return layout of type Bool"
+                );
+                self.build_num_gt(sym, &args[0], &args[1], &arg_layouts[0])
+            }
             LowLevel::NumToFrac => {
                 debug_assert_eq!(
                     1,
@@ -830,6 +847,15 @@ trait Backend<'a> {
 
     /// build_num_lt stores the result of `src1 < src2` into dst.
     fn build_num_lt(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &InLayout<'a>,
+    );
+
+    /// build_num_gt stores the result of `src1 > src2` into dst.
+    fn build_num_gt(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
