@@ -422,12 +422,7 @@ mod cli_run {
                 return;
             }
             "args" => {
-                eprintln!(
-                    "WARNING: skipping testing example {} because it is known to be bad, pending investigation!",
-                    roc_filename
-                );
-                return;
-                // custom_flags = vec![LINKER_FLAG, "legacy"];
+                custom_flags = vec![LINKER_FLAG, "legacy"];
             }
             _ => {}
         }
@@ -673,6 +668,7 @@ mod cli_run {
     }
 
     #[test]
+    #[ignore = "https://github.com/roc-lang/roc/issues/4919"]
     fn hello_gui() {
         test_roc_app_slim(
             "examples/gui",

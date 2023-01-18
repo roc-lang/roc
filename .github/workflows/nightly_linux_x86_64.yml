@@ -29,16 +29,16 @@ jobs:
         env:
             DATE: ${{ env.DATE }}
             SHA: ${{ env.SHA }}
-        run: echo "RELEASE_TAR_FILENAME=roc_nightly-linux_x86_64-$DATE-$SHA.tar.gz" >> $GITHUB_ENV
+        run: echo "RELEASE_FOLDER_NAME=roc_nightly-linux_x86_64-$DATE-$SHA" >> $GITHUB_ENV
        
       - name: Make nightly release tar archive
-        run: ./ci/package_release.sh ${{ env.RELEASE_TAR_FILENAME }}
+        run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
 
       - name: Upload roc nightly tar. Actually uploading to github releases has to be done manually.
         uses: actions/upload-artifact@v3
         with:
-           name: ${{ env.RELEASE_TAR_FILENAME }}
-           path: ${{ env.RELEASE_TAR_FILENAME }}
+           name: ${{ env.RELEASE_FOLDER_NAME }}
+           path: ${{ env.RELEASE_FOLDER_NAME }}
            retention-days: 4
 
       - name: build wasm repl

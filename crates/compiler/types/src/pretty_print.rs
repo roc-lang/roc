@@ -242,7 +242,7 @@ fn find_names_needed(
             }
 
             find_names_needed(
-                *ext_var,
+                ext_var.var(),
                 subs,
                 roots,
                 root_appearances,
@@ -252,7 +252,7 @@ fn find_names_needed(
         }
         Structure(FunctionOrTagUnion(_, _, ext_var)) => {
             find_names_needed(
-                *ext_var,
+                ext_var.var(),
                 subs,
                 roots,
                 root_appearances,
@@ -277,7 +277,7 @@ fn find_names_needed(
             }
 
             find_names_needed(
-                *ext_var,
+                ext_var.var(),
                 subs,
                 roots,
                 root_appearances,
@@ -1209,7 +1209,7 @@ fn write_flat_type<'a>(
                 ctx,
                 subs,
                 buf,
-                ExtContent::for_tag(subs, new_ext_var, pol, &env.debug),
+                ExtContent::for_tag(subs, new_ext_var.var(), pol, &env.debug),
                 parens,
                 pol,
             )
@@ -1224,7 +1224,7 @@ fn write_flat_type<'a>(
                     .iter()
                     .map(|t| (t.clone(), vec![])),
             );
-            let ext_content = write_sorted_tags(env, ctx, subs, buf, &tags, *ext_var, pol);
+            let ext_content = write_sorted_tags(env, ctx, subs, buf, &tags, ext_var.var(), pol);
 
             buf.push(']');
 
@@ -1253,7 +1253,7 @@ fn write_flat_type<'a>(
                     ctx,
                     subs,
                     buf,
-                    ExtContent::for_tag(subs, new_ext_var, pol, &env.debug),
+                    ExtContent::for_tag(subs, new_ext_var.var(), pol, &env.debug),
                     parens,
                     pol,
                 );
@@ -1306,12 +1306,12 @@ pub fn chase_ext_tag_union(
         Content::Structure(EmptyTagUnion) => ChasedExt::Empty,
         Content::Structure(TagUnion(tags, ext_var)) => {
             push_union(subs, tags, fields);
-            chase_ext_tag_union(subs, *ext_var, fields)
+            chase_ext_tag_union(subs, ext_var.var(), fields)
         }
 
         Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
             push_union(subs, tags, fields);
-            chase_ext_tag_union(subs, *ext_var, fields)
+            chase_ext_tag_union(subs, ext_var.var(), fields)
         }
         Content::Structure(FunctionOrTagUnion(tag_names, _, ext_var)) => {
             fields.extend(
@@ -1320,7 +1320,7 @@ pub fn chase_ext_tag_union(
                     .map(|t| (t.clone(), vec![])),
             );
 
-            chase_ext_tag_union(subs, *ext_var, fields)
+            chase_ext_tag_union(subs, ext_var.var(), fields)
         }
 
         Content::Alias(_, _, var, _) => chase_ext_tag_union(subs, *var, fields),

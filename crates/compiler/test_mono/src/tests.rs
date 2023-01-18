@@ -1199,10 +1199,10 @@ fn monomorphized_tag() {
         app "test" provides [main] to "./platform"
 
         main =
-            b = Bar
+            b = \{} -> Bar
             f : [Foo, Bar], [Bar, Baz] -> U8
             f = \_, _ -> 18
-            f b b
+            f (b {}) (b {})
         "#
     )
 }
@@ -1800,7 +1800,7 @@ fn instantiate_annotated_as_recursive_alias_toplevel() {
 
         Value : [Nil, Array (List Value)]
 
-        foo : [Nil]*
+        foo : [Nil]_
         foo = Nil
 
         it : Value
@@ -1818,7 +1818,7 @@ fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
         main =
             Value : [Nil, Array (List Value)]
 
-            foo : [Nil]*
+            foo : [Nil]_
             foo = Nil
 
             it : Value
@@ -1838,16 +1838,16 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
         main =
             Value : [Nil, Array (List Value)]
 
-            foo : [Nil]*
-            foo = Nil
+            foo : {} -> [Nil]_
+            foo = \{} -> Nil
 
             v1 : Value
-            v1 = foo
+            v1 = foo {}
 
             Value2 : [Nil, B U16, Array (List Value)]
 
             v2 : Value2
-            v2 = foo
+            v2 = foo {}
 
             {v1, v2}
         "#
@@ -2405,6 +2405,46 @@ fn pattern_as_of_symbol() {
         main =
             when "foo" is
                 a as b -> a == b
+        "###
+    )
+}
+
+#[mono_test]
+fn function_specialization_information_in_lambda_set_thunk() {
+    // https://github.com/roc-lang/roc/issues/4734
+    // https://rwx.notion.site/Let-generalization-Let-s-not-742a3ab23ff742619129dcc848a271cf#6b08b0a203fb443db2d7238a0eb154eb
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        andThen = \{} ->
+            x = 10
+            \newFn -> Num.add (newFn {}) x
+
+        between = andThen {}
+
+        main = between \{} -> between \{} -> 10
+        "###
+    )
+}
+
+#[mono_test]
+fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
+    // https://github.com/roc-lang/roc/issues/4734
+    // https://rwx.notion.site/Let-generalization-Let-s-not-742a3ab23ff742619129dcc848a271cf#6b08b0a203fb443db2d7238a0eb154eb
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        andThen = \{} ->
+            x = 10u8
+            \newFn -> Num.add (newFn {}) x
+
+        between1 = andThen {}
+
+        between2 = andThen {}
+
+        main = between1 \{} -> between2 \{} -> 10u8
         "###
     )
 }

@@ -12848,8 +12848,7 @@ I recommend using camelCase. It's the standard style in Roc code!
             str = List.concat ["blah"] empty
 
             {one, str}
-        "#
-        ),
+        "#),
     @r###"
     ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
 
@@ -12866,5 +12865,167 @@ I recommend using camelCase. It's the standard style in Roc code!
 
         List Str
     "###
+    );
+
+    test_report!(
+        implicit_inferred_open_in_output_position_cannot_grow,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main : {} -> [One]
+            main = \{} ->
+                if Bool.true
+                then One
+                else Two
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the `else` branch of this `if` expression:
+
+    3│  main : {} -> [One]
+    4│  main = \{} ->
+    5│      if Bool.true
+    6│      then One
+    7│      else Two
+                 ^^^
+
+    This `Two` tag has the type:
+
+        [Two]
+
+    But the type annotation on `main` says it should be:
+
+        [One]
+    "###
+    );
+
+    test_report!(
+        implicit_inferred_open_in_output_position_cannot_grow_alias,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            R : [One]
+
+            main : {} -> R
+            main = \{} ->
+                if Bool.true
+                then One
+                else Two
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the `else` branch of this `if` expression:
+
+    5│  main : {} -> R
+    6│  main = \{} ->
+    7│      if Bool.true
+    8│      then One
+    9│      else Two
+                 ^^^
+
+    This `Two` tag has the type:
+
+        [Two]
+
+    But the type annotation on `main` says it should be:
+
+        [One]
+    "###
+    );
+
+    test_report!(
+        implicit_inferred_open_in_output_position_cannot_grow_nested,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main : List [One, Two] -> List [One]
+            main = \tags ->
+                List.map tags \tag ->
+                    when tag is
+                        One -> One
+                        Two -> Two
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `main` definition:
+
+    3│   main : List [One, Two] -> List [One]
+    4│   main = \tags ->
+    5│>      List.map tags \tag ->
+    6│>          when tag is
+    7│>              One -> One
+    8│>              Two -> Two
+
+    This `map` call produces:
+
+        List [One, Two]
+
+    But the type annotation on `main` says it should be:
+
+        List [One]
+    "###
+    );
+
+    test_report!(
+        implicit_inferred_open_in_output_position_cannot_grow_nested_alias,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            R : [One]
+
+            main : List [One, Two] -> List R
+            main = \tags ->
+                List.map tags \tag ->
+                    when tag is
+                        One -> One
+                        Two -> Two
+            "#
+        ),
+    @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    Something is off with the body of the `main` definition:
+
+     5│   main : List [One, Two] -> List R
+     6│   main = \tags ->
+     7│>      List.map tags \tag ->
+     8│>          when tag is
+     9│>              One -> One
+    10│>              Two -> Two
+
+    This `map` call produces:
+
+        List [One, Two]
+
+    But the type annotation on `main` says it should be:
+
+        List [One]
+    "###
+    );
+
+    test_no_problem!(
+        explicit_inferred_open_in_output_position_can_grow,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            main : List [One, Two] -> List [One]_
+            main = \tags ->
+                List.map tags \tag ->
+                    when tag is
+                        One -> One
+                        Two -> Two
+            "#
+        )
     );
 }

@@ -11,8 +11,8 @@ use roc_problem::can::RuntimeError;
 use roc_target::{PtrWidth, TargetInfo};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
-    self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs,
-    UnsortedUnionLabels, Variable,
+    self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs, TagExt,
+    UnsortedUnionLabels, Variable, VariableSubsSlice,
 };
 use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
 use std::cmp::Ordering;
@@ -30,19 +30,19 @@ pub use intern::{
 // please change it to the lower number.
 // if it went up, maybe check that the change is really required
 roc_error_macros::assert_sizeof_aarch64!(Builtin, 2 * 8);
-roc_error_macros::assert_sizeof_aarch64!(Layout, 4 * 8);
+roc_error_macros::assert_sizeof_aarch64!(Layout, 6 * 8);
 roc_error_macros::assert_sizeof_aarch64!(UnionLayout, 3 * 8);
-roc_error_macros::assert_sizeof_aarch64!(LambdaSet, 3 * 8);
+roc_error_macros::assert_sizeof_aarch64!(LambdaSet, 5 * 8);
 
 roc_error_macros::assert_sizeof_wasm!(Builtin, 2 * 4);
 roc_error_macros::assert_sizeof_wasm!(Layout, 6 * 4);
 roc_error_macros::assert_sizeof_wasm!(UnionLayout, 3 * 4);
-roc_error_macros::assert_sizeof_wasm!(LambdaSet, 3 * 4);
+roc_error_macros::assert_sizeof_wasm!(LambdaSet, 5 * 4);
 
 roc_error_macros::assert_sizeof_default!(Builtin, 2 * 8);
-roc_error_macros::assert_sizeof_default!(Layout, 4 * 8);
+roc_error_macros::assert_sizeof_default!(Layout, 6 * 8);
 roc_error_macros::assert_sizeof_default!(UnionLayout, 3 * 8);
-roc_error_macros::assert_sizeof_default!(LambdaSet, 3 * 8);
+roc_error_macros::assert_sizeof_default!(LambdaSet, 5 * 8);
 
 type LayoutResult<'a> = Result<InLayout<'a>, LayoutProblem>;
 type RawFunctionLayoutResult<'a> = Result<RawFunctionLayout<'a>, LayoutProblem>;
@@ -588,13 +588,7 @@ impl<'a> RawFunctionLayout<'a> {
                 let fn_args = fn_args.into_bump_slice();
 
                 let lambda_set = cached!(
-                    LambdaSet::from_var(
-                        env.cache,
-                        env.arena,
-                        env.subs,
-                        closure_var,
-                        env.target_info,
-                    ),
+                    LambdaSet::from_var(env, args, closure_var, ret_var),
                     cache_criteria
                 );
 
@@ -1216,6 +1210,8 @@ impl std::fmt::Debug for LambdaSet<'_> {
 
         f.debug_struct("LambdaSet")
             .field("set", &Helper { set: self.set })
+            .field("args", &self.args)
+            .field("ret", &self.ret)
             .field("representation", &self.representation)
             .field("full_layout", &self.full_layout)
             .finish()
@@ -1339,6 +1335,8 @@ impl<'a> LambdaName<'a> {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LambdaSet<'a> {
+    pub(crate) args: &'a &'a [InLayout<'a>],
+    pub(crate) ret: InLayout<'a>,
     /// collection of function names and their closure arguments
     // Double reference to cut from fat slice (16 bytes) to 8 bytes
     pub(crate) set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
@@ -1745,34 +1743,28 @@ impl<'a> LambdaSet<'a> {
         cache: &mut LayoutCache<'a>,
         arena: &'a Bump,
         subs: &Subs,
+        args: VariableSubsSlice,
         closure_var: Variable,
+        ret_var: Variable,
         target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
-        Self::from_var(cache, arena, subs, closure_var, target_info).value()
+        let mut env = Env::from_components(cache, subs, arena, target_info);
+        Self::from_var(&mut env, args, closure_var, ret_var).value()
     }
 
     fn from_var(
-        cache: &mut LayoutCache<'a>,
-        arena: &'a Bump,
-        subs: &Subs,
+        env: &mut Env<'a, '_>,
+        args: VariableSubsSlice,
         closure_var: Variable,
-        target_info: TargetInfo,
+        ret_var: Variable,
     ) -> Cacheable<Result<Self, LayoutProblem>> {
-        // Ideally we would pass `env` in directly, but that currently causes problems later on
-        // (in alias analysis) with recursive pointers not appearing under recursive layouts. So,
-        // we have to clear the `seen` cache before building a lambda set layout.
-        //
-        // I think more generally, we need to address https://github.com/roc-lang/roc/issues/2466,
-        // which should also resolve the issue here.
-        let mut env = Env::from_components(cache, subs, arena, target_info);
-
         let Cacheable(result, criteria) = env.cached_or(closure_var, |env| {
-            let Cacheable(result, criteria) = Self::from_var_help(env, closure_var);
+            let Cacheable(result, criteria) = Self::from_var_help(env, args, closure_var, ret_var);
             let result = result.map(|l| l.full_layout);
             Cacheable(result, criteria)
         });
 
-        match result.map(|l| cache.get_in(l)) {
+        match result.map(|l| env.cache.get_in(l)) {
             Ok(Layout::LambdaSet(lambda_set)) => Cacheable(Ok(lambda_set), criteria),
             Err(err) => Cacheable(Err(err), criteria),
             Ok(layout) => internal_error!("other layout found for lambda set: {:?}", layout),
@@ -1781,11 +1773,29 @@ impl<'a> LambdaSet<'a> {
 
     fn from_var_help(
         env: &mut Env<'a, '_>,
+        args: VariableSubsSlice,
         closure_var: Variable,
+        ret_var: Variable,
     ) -> Cacheable<Result<Self, LayoutProblem>> {
         roc_tracing::debug!(var = ?closure_var, size = ?lambda_set_size(env.subs, closure_var), "building lambda set layout");
 
-        match resolve_lambda_set(env.subs, closure_var) {
+        let lambda_set = resolve_lambda_set(env.subs, closure_var);
+
+        let mut cache_criteria = CACHEABLE;
+
+        let mut fn_args = Vec::with_capacity_in(args.len(), env.arena);
+
+        for index in args.into_iter() {
+            let arg_var = env.subs[index];
+            let layout = cached!(Layout::from_var(env, arg_var), cache_criteria);
+            fn_args.push(layout);
+        }
+
+        let ret = cached!(Layout::from_var(env, ret_var), cache_criteria);
+
+        let fn_args = env.arena.alloc(fn_args.into_bump_slice());
+
+        match lambda_set {
             ResolvedLambdaSet::Set(mut lambdas, opt_recursion_var) => {
                 // sort the tags; make sure ordering stays intact!
                 lambdas.sort_by_key(|(sym, _)| *sym);
@@ -1830,6 +1840,10 @@ impl<'a> LambdaSet<'a> {
                     set_with_variables.push((function_symbol, variables.as_slice()));
 
                     last_function_symbol = Some(function_symbol);
+
+                    if let Some(rec_var) = opt_recursion_var.into_variable() {
+                        env.remove_seen(rec_var);
+                    }
                 }
 
                 let (set, set_with_variables) = if has_duplicate_lambda_names {
@@ -1866,22 +1880,27 @@ impl<'a> LambdaSet<'a> {
                     set_with_variables,
                     opt_recursion_var.into_variable(),
                 );
+                cache_criteria.and(criteria);
 
-                let lambda_set = env
-                    .cache
-                    .interner
-                    .insert_lambda_set(env.arena.alloc(set.into_bump_slice()), representation);
+                let lambda_set = env.cache.interner.insert_lambda_set(
+                    fn_args,
+                    ret,
+                    env.arena.alloc(set.into_bump_slice()),
+                    representation,
+                );
 
-                Cacheable(Ok(lambda_set), criteria)
+                Cacheable(Ok(lambda_set), cache_criteria)
             }
             ResolvedLambdaSet::Unbound => {
                 // The lambda set is unbound which means it must be unused. Just give it the empty lambda set.
                 // See also https://github.com/roc-lang/roc/issues/3163.
-                let lambda_set = env
-                    .cache
-                    .interner
-                    .insert_lambda_set(&(&[] as &[(Symbol, &[InLayout])]), Layout::UNIT);
-                cacheable(Ok(lambda_set))
+                let lambda_set = env.cache.interner.insert_lambda_set(
+                    fn_args,
+                    ret,
+                    &(&[] as &[(Symbol, &[InLayout])]),
+                    Layout::UNIT,
+                );
+                Cacheable(Ok(lambda_set), cache_criteria)
             }
         }
     }
@@ -1943,8 +1962,7 @@ enum ResolvedLambdaSet {
         std::vec::Vec<(Symbol, std::vec::Vec<Variable>)>,
         OptVariable,
     ),
-    /// TODO: figure out if this can happen in a correct program, or is the result of a bug in our
-    /// compiler. See https://github.com/roc-lang/roc/issues/3163.
+    /// The lambda set is empty, that means this function is never called.
     Unbound,
 }
 
@@ -2061,7 +2079,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                     stack.push((*ext, depth_any + 1, depth_lset));
                 }
                 FlatType::FunctionOrTagUnion(_, _, ext) => {
-                    stack.push((*ext, depth_any + 1, depth_lset));
+                    stack.push((ext.var(), depth_any + 1, depth_lset));
                 }
                 FlatType::TagUnion(tags, ext) => {
                     for (_, payloads) in tags.iter_from_subs(subs) {
@@ -2069,7 +2087,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                             stack.push((*payload, depth_any + 1, depth_lset));
                         }
                     }
-                    stack.push((*ext, depth_any + 1, depth_lset));
+                    stack.push((ext.var(), depth_any + 1, depth_lset));
                 }
                 FlatType::RecursiveTagUnion(rec_var, tags, ext) => {
                     seen_rec_vars.insert(*rec_var);
@@ -2078,7 +2096,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                             stack.push((*payload, depth_any + 1, depth_lset));
                         }
                     }
-                    stack.push((*ext, depth_any + 1, depth_lset));
+                    stack.push((ext.var(), depth_any + 1, depth_lset));
                 }
                 FlatType::EmptyRecord | FlatType::EmptyTagUnion => {}
             },
@@ -3083,7 +3101,7 @@ fn layout_from_flat_type<'a>(
                 }
             }
         }
-        Func(_, closure_var, _) => {
+        Func(args, closure_var, ret_var) => {
             if env.is_seen(closure_var) {
                 // TODO(recursive-layouts): change after disjoint recursive layouts supported
                 let rec_ptr = env.cache.put_in(Layout::RecursivePointer);
@@ -3092,13 +3110,7 @@ fn layout_from_flat_type<'a>(
                 let mut criteria = CACHEABLE;
 
                 let lambda_set = cached!(
-                    LambdaSet::from_var(
-                        env.cache,
-                        env.arena,
-                        env.subs,
-                        closure_var,
-                        env.target_info,
-                    ),
+                    LambdaSet::from_var(env, args, closure_var, ret_var),
                     criteria
                 );
                 let lambda_set = lambda_set.full_layout;
@@ -4110,13 +4122,13 @@ pub fn ext_var_is_empty_record(_subs: &Subs, _ext_var: Variable) -> bool {
 }
 
 #[cfg(debug_assertions)]
-pub fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
+pub fn ext_var_is_empty_tag_union(subs: &Subs, tag_ext: TagExt) -> bool {
     use roc_types::pretty_print::ChasedExt;
     use Content::*;
 
     // the ext_var is empty
     let mut ext_fields = std::vec::Vec::new();
-    match roc_types::pretty_print::chase_ext_tag_union(subs, ext_var, &mut ext_fields) {
+    match roc_types::pretty_print::chase_ext_tag_union(subs, tag_ext.var(), &mut ext_fields) {
         ChasedExt::Empty => ext_fields.is_empty(),
         ChasedExt::NonEmpty { content, .. } => {
             match content {
@@ -4133,7 +4145,7 @@ pub fn ext_var_is_empty_tag_union(subs: &Subs, ext_var: Variable) -> bool {
 }
 
 #[cfg(not(debug_assertions))]
-pub fn ext_var_is_empty_tag_union(_: &Subs, _: Variable) -> bool {
+pub fn ext_var_is_empty_tag_union(_: &Subs, _: TagExt) -> bool {
     // This should only ever be used in debug_assert! macros
     unreachable!();
 }
@@ -4381,6 +4393,8 @@ mod test {
         let mut interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
 
         let lambda_set = LambdaSet {
+            args: &(&[] as &[InLayout]),
+            ret: Layout::VOID,
             set: &(&[(Symbol::LIST_MAP, &[] as &[InLayout])] as &[(Symbol, &[InLayout])]),
             representation: Layout::UNIT,
             full_layout: Layout::VOID,

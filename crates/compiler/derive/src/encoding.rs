@@ -14,7 +14,7 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
     Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
-    RedundantMark, SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+    RedundantMark, SubsSlice, TagExt, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::RecordField;
 
@@ -67,7 +67,10 @@ pub(crate) fn derive_to_encoder(
             let union_tags = UnionTags::insert_slices_into_subs(env.subs, flex_tag_labels);
             let tag_union_var = synth_var(
                 env.subs,
-                Content::Structure(FlatType::TagUnion(union_tags, Variable::EMPTY_TAG_UNION)),
+                Content::Structure(FlatType::TagUnion(
+                    union_tags,
+                    TagExt::Any(Variable::EMPTY_TAG_UNION),
+                )),
             );
 
             to_encoder_tag_union(env, tag_union_var, union_tags, def_symbol)
