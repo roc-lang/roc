@@ -5,13 +5,24 @@ app "example"
     }
     imports [
         cli.Stdout,
+        cli.Stderr,
         parser.ParserCore.{ Parser, buildPrimitiveParser, many },
         parser.ParserStr.{ parseStr },
     ]
     provides [ main ] to cli
 
-main = 
-    Stdout.line "Hello"
+main =
+    lettersInput = "AAAiBByAABBwBtCCCiAyArBBx"
+    ifLetterA = \l -> l == A
+    when parseStr (many letterParser) lettersInput is
+        Ok letters ->
+            letters
+            |> List.keepIf ifLetterA
+            |> List.map \_ -> 1
+            |> List.sum
+            |> Num.toStr
+            |> \countLetterA -> Stdout.line "I counted \(countLetterA) letter A's!"
+        Err _ -> Stderr.line "Ooops, something went wrong parsing letters"
 
 Letter : [A, B, C, Other]
 

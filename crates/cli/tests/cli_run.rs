@@ -870,8 +870,20 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
+    fn parse_letter_counts() {
+        test_roc_app_slim(
+            "examples/parser/examples",
+            "letter-counts.roc",
+            "example",
+            "I counted 7 letter A's!\n",
+            UseValgrind::No,
+        )
+    }
+
+    #[test]
+    #[cfg_attr(windows, ignore)]
     fn parse_http() {
-        test_roc_expect("examples/package", "ParserHttp.roc")
+        test_roc_expect("examples/parser/package", "ParserHttp.roc")
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]
