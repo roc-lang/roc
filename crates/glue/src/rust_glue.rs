@@ -1858,7 +1858,7 @@ fn add_function(
     writeln!(buf, "{INDENT}{INDENT}extern \"C\" {{").unwrap();
     writeln!(
         buf,
-        "{INDENT}{INDENT}{INDENT} fn {extern_name}(output: *mut {return_type_str}, {argument_types});"
+        "{INDENT}{INDENT}{INDENT} fn {extern_name}(output: *mut {return_type_str}, {argument_types}, closure_data: *mut u8);"
     )
     .unwrap();
     writeln!(buf, "{INDENT}{INDENT}}}").unwrap();
@@ -1873,7 +1873,7 @@ fn add_function(
 
     writeln!(
         buf,
-        "{INDENT}{INDENT}unsafe {{ {extern_name}(output.as_mut_ptr(), {argument_names}) }};"
+        "{INDENT}{INDENT}unsafe {{ {extern_name}(output.as_mut_ptr(), {argument_names}, self.closure_data) }};"
     )
     .unwrap();
 

@@ -997,8 +997,8 @@ fn add_type_help<'a>(
                 _ => unreachable!(),
             };
 
-            // String::from("roc__mainForHost_1__Fx2_caller");
-            let extern_name = env.extern_names.get(&lambda_set).cloned().unwrap();
+            let extern_name = String::from("roc__mainForHost_1__Fx2_caller");
+            // let extern_name = env.extern_names.get(&lambda_set).cloned().unwrap();
 
             dbg!(&extern_name, &name);
 
