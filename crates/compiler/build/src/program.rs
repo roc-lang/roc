@@ -264,14 +264,21 @@ fn gen_from_mono_module_llvm<'a>(
                 "address" => passes.push("asan-module"),
                 "memory" => passes.push("msan-module"),
                 "thread" => passes.push("tsan-module"),
-                "fuzzer" => {
+                "cargo-fuzz" => {
+                    passes.push("sancov-module");
+                    extra_args.extend_from_slice(&[
+                        "-sanitizer-coverage-level=3",
+                        "-sanitizer-coverage-prune-blocks=0",
+                        "-sanitizer-coverage-inline-8bit-counters",
+                        "-sanitizer-coverage-pc-table",
+                    ]);
+                }
+                "afl.rs" => {
                     passes.push("sancov-module");
                     extra_args.extend_from_slice(&[
                         "-sanitizer-coverage-level=3",
                         "-sanitizer-coverage-prune-blocks=0",
                         "-sanitizer-coverage-trace-pc-guard",
-                        // This can be used instead of the line above to enable working with `cargo fuzz` and libFuzzer.
-                        // "-sanitizer-coverage-inline-8bit-counters",
                     ]);
                 }
                 x => unrecognized.push(x.to_owned()),
@@ -283,7 +290,8 @@ fn gen_from_mono_module_llvm<'a>(
                 .map(|x| format!("{:?}", x))
                 .collect::<Vec<String>>()
                 .join(", ");
-            eprintln!("Unrecognized sanitizer: {}\nSupported options are \"address\", \"memory\", \"thread\", and \"fuzzer\"", out);
+            eprintln!("Unrecognized sanitizer: {}\nSupported options are \"address\", \"memory\", \"thread\", \"cargo-fuzz\", and \"afl.rs\".", out);
+            eprintln!("Note: \"cargo-fuzz\" and \"afl.rs\" both enable sanitizer coverage for fuzzing. They just use different parameters to match the respective libraries.")
         }
 
         use std::process::Command;

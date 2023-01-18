@@ -1967,6 +1967,12 @@ fn pattern_to_vars_by_symbol(
             vars_by_symbol.insert(*symbol, expr_var);
         }
 
+        As(subpattern, symbol) => {
+            vars_by_symbol.insert(*symbol, expr_var);
+
+            pattern_to_vars_by_symbol(vars_by_symbol, &subpattern.value, expr_var);
+        }
+
         AbilityMemberSpecialization {
             ident,
             specializes: _,

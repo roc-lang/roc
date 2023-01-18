@@ -10,8 +10,8 @@ use roc_types::num::{FloatWidth, IntLitWidth, NumericRange};
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, LambdaSet, Mark,
-    OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, UlsOfVar, UnionLabels, UnionLambdas,
-    UnionTags, Variable, VariableSubsSlice,
+    OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, TagExt, UlsOfVar, UnionLabels,
+    UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
     AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, Polarity, RecordField, Uls,
@@ -2335,10 +2335,10 @@ where
 fn separate_union_tags(
     subs: &Subs,
     fields1: UnionTags,
-    ext1: Variable,
+    ext1: TagExt,
     fields2: UnionTags,
-    ext2: Variable,
-) -> (Separate<TagName, VariableSubsSlice>, Variable, Variable) {
+    ext2: TagExt,
+) -> (Separate<TagName, VariableSubsSlice>, TagExt, TagExt) {
     let (it1, new_ext1) = fields1.sorted_slices_iterator_and_ext(subs, ext1);
     let (it2, new_ext2) = fields2.sorted_slices_iterator_and_ext(subs, ext2);
 
@@ -2375,11 +2375,11 @@ enum Rec {
 /// of the variables under unification
 fn should_extend_ext_with_uninhabited_type(
     subs: &Subs,
-    ext1: Variable,
+    ext1: TagExt,
     candidate_type: Variable,
 ) -> bool {
     matches!(
-        subs.get_content_without_compacting(ext1),
+        subs.get_content_without_compacting(ext1.var()),
         Content::Structure(FlatType::EmptyTagUnion)
     ) && !subs.is_inhabited(candidate_type)
 }
@@ -2398,10 +2398,64 @@ fn close_uninhabited_extended_union(subs: &mut Subs, mut var: Variable) {
             }
             Structure(FlatType::TagUnion(_, ext))
             | Structure(FlatType::RecursiveTagUnion(_, _, ext)) => {
-                var = *ext;
+                var = ext.var();
             }
             _ => internal_error!("not a tag union"),
         }
+    }
+}
+
+enum UnifySides<T, U> {
+    Left(T, U),
+    Right(U, T),
+}
+
+#[must_use]
+fn unify_tag_ext<M: MetaCollector>(
+    env: &mut Env,
+    pool: &mut Pool,
+    vars: UnifySides<TagExt, Variable>,
+    mode: Mode,
+) -> Outcome<M> {
+    let (ext, var, flip_for_unify) = match vars {
+        UnifySides::Left(ext, var) => (ext, var, false),
+        UnifySides::Right(var, ext) => (ext, var, true),
+    };
+    let legal_unification = match ext {
+        TagExt::Openness(_) => {
+            // Openness extensions can only unify with flex/rigids.
+            // Anything else is a change in the monomorphic size of the tag and not
+            // a reflection of the polymorphism of the tag, an error.
+            matches!(
+                env.subs.get_content_without_compacting(var),
+                FlexVar(..)
+                    | RigidVar(..)
+                    | FlexAbleVar(..)
+                    | RigidAbleVar(..)
+                    // errors propagate
+                    | Error,
+            )
+        }
+        TagExt::Any(_) => true,
+    }
+    // Tag unions are always extendable during specialization
+    || M::IS_LATE;
+    if legal_unification {
+        if flip_for_unify {
+            unify_pool(env, pool, var, ext.var(), mode)
+        } else {
+            unify_pool(env, pool, ext.var(), var, mode)
+        }
+    } else {
+        mismatch!()
+    }
+}
+
+#[must_use]
+fn merge_tag_exts(ext1: TagExt, ext2: TagExt) -> TagExt {
+    match (ext1, ext2) {
+        (_, TagExt::Openness(v)) | (TagExt::Openness(v), _) => TagExt::Openness(v),
+        (TagExt::Any(v), TagExt::Any(_)) => TagExt::Any(v),
     }
 }
 
@@ -2412,9 +2466,9 @@ fn unify_tag_unions<M: MetaCollector>(
     pool: &mut Pool,
     ctx: &Context,
     tags1: UnionTags,
-    initial_ext1: Variable,
+    initial_ext1: TagExt,
     tags2: UnionTags,
-    initial_ext2: Variable,
+    initial_ext2: TagExt,
     recursion_var: Rec,
 ) -> Outcome<M> {
     let (separate, mut ext1, mut ext2) =
@@ -2423,7 +2477,7 @@ fn unify_tag_unions<M: MetaCollector>(
     let shared_tags = separate.in_both;
 
     if let (true, Content::Structure(FlatType::EmptyTagUnion)) =
-        (ctx.mode.is_present(), env.subs.get(ext1).content)
+        (ctx.mode.is_present(), env.subs.get(ext1.var()).content)
     {
         if !separate.only_in_2.is_empty() {
             // Create a new extension variable that we'll fill in with the
@@ -2440,7 +2494,8 @@ fn unify_tag_unions<M: MetaCollector>(
             //    [A M, B] += [A N]
             // the nested tag `A` **will** grow, but we don't need to modify
             // the top level extension variable for that!
-            let new_ext = fresh(env, pool, ctx, Content::FlexVar(None));
+            debug_assert!(ext1.is_any());
+            let new_ext = TagExt::Any(fresh(env, pool, ctx, Content::FlexVar(None)));
             let new_union = Structure(FlatType::TagUnion(tags1, new_ext));
             let mut new_desc = ctx.first_desc;
             new_desc.content = new_union;
@@ -2453,7 +2508,11 @@ fn unify_tag_unions<M: MetaCollector>(
     if separate.only_in_1.is_empty() {
         if separate.only_in_2.is_empty() {
             let ext_outcome = if ctx.mode.is_eq() {
-                unify_pool(env, pool, ext1, ext2, ctx.mode)
+                // Neither extension can grow in monomorphic tag sizes,
+                // so the extension must either be [] or a polymorphic extension variable like `a`.
+                // As such we can always unify directly even if the extensions are measuring
+                // openness.
+                unify_pool(env, pool, ext1.var(), ext2.var(), ctx.mode)
             } else {
                 // In a presence context, we don't care about ext2 being equal to ext1
                 Outcome::default()
@@ -2463,13 +2522,13 @@ fn unify_tag_unions<M: MetaCollector>(
                 return ext_outcome;
             }
 
-            let mut shared_tags_outcome = unify_shared_tags_new(
+            let mut shared_tags_outcome = unify_shared_tags(
                 env,
                 pool,
                 ctx,
                 shared_tags,
                 OtherTags2::Empty,
-                ext1,
+                merge_tag_exts(ext1, ext2),
                 recursion_var,
             );
 
@@ -2488,7 +2547,8 @@ fn unify_tag_unions<M: MetaCollector>(
             let extend_ext_with_uninhabited =
                 should_extend_ext_with_uninhabited_type(env.subs, ext1, extra_tags_in_2);
             if extend_ext_with_uninhabited {
-                let new_ext = fresh(env, pool, ctx, Content::FlexVar(None));
+                debug_assert!(ext1.is_any());
+                let new_ext = TagExt::Any(fresh(env, pool, ctx, Content::FlexVar(None)));
                 let new_union = Structure(FlatType::TagUnion(tags1, new_ext));
                 let mut new_desc = ctx.first_desc;
                 new_desc.content = new_union;
@@ -2497,19 +2557,22 @@ fn unify_tag_unions<M: MetaCollector>(
                 ext1 = new_ext;
             }
 
-            let ext_outcome = unify_pool(env, pool, ext1, extra_tags_in_2, ctx.mode);
+            let ext_outcome =
+                unify_tag_ext(env, pool, UnifySides::Left(ext1, extra_tags_in_2), ctx.mode);
 
             if !ext_outcome.mismatches.is_empty() {
                 return ext_outcome;
             }
 
-            let mut shared_tags_outcome = unify_shared_tags_new(
+            let combined_ext = ext1.map(|_| extra_tags_in_2);
+
+            let mut shared_tags_outcome = unify_shared_tags(
                 env,
                 pool,
                 ctx,
                 shared_tags,
                 OtherTags2::Empty,
-                extra_tags_in_2,
+                combined_ext,
                 recursion_var,
             );
 
@@ -2537,7 +2600,8 @@ fn unify_tag_unions<M: MetaCollector>(
             let extend_ext_with_uninhabited =
                 should_extend_ext_with_uninhabited_type(env.subs, ext2, extra_tags_in_1);
             if extend_ext_with_uninhabited {
-                let new_ext = fresh(env, pool, ctx, Content::FlexVar(None));
+                debug_assert!(ext2.is_any());
+                let new_ext = TagExt::Any(fresh(env, pool, ctx, Content::FlexVar(None)));
                 let new_union = Structure(FlatType::TagUnion(tags2, new_ext));
                 let mut new_desc = ctx.second_desc;
                 new_desc.content = new_union;
@@ -2546,7 +2610,12 @@ fn unify_tag_unions<M: MetaCollector>(
                 ext2 = new_ext;
             }
 
-            let ext_outcome = unify_pool(env, pool, extra_tags_in_1, ext2, ctx.mode);
+            let ext_outcome = unify_tag_ext(
+                env,
+                pool,
+                UnifySides::Right(extra_tags_in_1, ext2),
+                ctx.mode,
+            );
 
             if !ext_outcome.mismatches.is_empty() {
                 return ext_outcome;
@@ -2558,13 +2627,15 @@ fn unify_tag_unions<M: MetaCollector>(
             false
         };
 
-        let shared_tags_outcome = unify_shared_tags_new(
+        let combined_ext = ext2.map(|_| extra_tags_in_1);
+
+        let shared_tags_outcome = unify_shared_tags(
             env,
             pool,
             ctx,
             shared_tags,
             OtherTags2::Empty,
-            extra_tags_in_1,
+            combined_ext,
             recursion_var,
         );
         total_outcome.union(shared_tags_outcome);
@@ -2585,7 +2656,11 @@ fn unify_tag_unions<M: MetaCollector>(
         } else {
             Content::FlexVar(None)
         };
-        let ext = fresh(env, pool, ctx, ext_content);
+        // If ext1 or ext2 are `Openness`, we will necessarily get an error below when unifying
+        // the separate tags since `Openness` cannot grow in terms of width of tags. As such, the
+        // unified type, when it exists, must always be include an `Any` extension.
+        let ext = TagExt::Any(fresh(env, pool, ctx, ext_content));
+
         let flat_type1 = FlatType::TagUnion(unique_tags1, ext);
         let flat_type2 = FlatType::TagUnion(unique_tags2, ext);
 
@@ -2609,7 +2684,7 @@ fn unify_tag_unions<M: MetaCollector>(
         let mut total_outcome = Outcome::default();
         let snapshot = env.subs.snapshot();
 
-        let ext1_outcome = unify_pool(env, pool, ext1, sub2, ctx.mode);
+        let ext1_outcome = unify_tag_ext(env, pool, UnifySides::Left(ext1, sub2), ctx.mode);
         if !ext1_outcome.mismatches.is_empty() {
             env.subs.rollback_to(snapshot);
             return ext1_outcome;
@@ -2617,7 +2692,7 @@ fn unify_tag_unions<M: MetaCollector>(
         total_outcome.union(ext1_outcome);
 
         if ctx.mode.is_eq() {
-            let ext2_outcome = unify_pool(env, pool, sub1, ext2, ctx.mode);
+            let ext2_outcome = unify_tag_ext(env, pool, UnifySides::Right(sub1, ext2), ctx.mode);
             if !ext2_outcome.mismatches.is_empty() {
                 env.subs.rollback_to(snapshot);
                 return ext2_outcome;
@@ -2628,7 +2703,7 @@ fn unify_tag_unions<M: MetaCollector>(
         env.subs.commit_snapshot(snapshot);
 
         let shared_tags_outcome =
-            unify_shared_tags_new(env, pool, ctx, shared_tags, other_tags, ext, recursion_var);
+            unify_shared_tags(env, pool, ctx, shared_tags, other_tags, ext, recursion_var);
         total_outcome.union(shared_tags_outcome);
         total_outcome
     }
@@ -2740,13 +2815,13 @@ fn choose_merged_var(subs: &Subs, var1: Variable, var2: Variable) -> Variable {
 }
 
 #[must_use]
-fn unify_shared_tags_new<M: MetaCollector>(
+fn unify_shared_tags<M: MetaCollector>(
     env: &mut Env,
     pool: &mut Pool,
     ctx: &Context,
     shared_tags: Vec<(TagName, (VariableSubsSlice, VariableSubsSlice))>,
     other_tags: OtherTags2,
-    ext: Variable,
+    ext: TagExt,
     recursion_var: Rec,
 ) -> Outcome<M> {
     let mut matching_tags = Vec::default();
@@ -2856,8 +2931,7 @@ fn unify_shared_tags_new<M: MetaCollector>(
             }
         };
 
-        let merge_outcome =
-            unify_shared_tags_merge_new(env, ctx, new_tags, new_ext_var, recursion_var);
+        let merge_outcome = unify_shared_tags_merge(env, ctx, new_tags, new_ext_var, recursion_var);
 
         total_outcome.union(merge_outcome);
         total_outcome
@@ -2871,11 +2945,11 @@ fn unify_shared_tags_new<M: MetaCollector>(
 }
 
 #[must_use]
-fn unify_shared_tags_merge_new<M: MetaCollector>(
+fn unify_shared_tags_merge<M: MetaCollector>(
     env: &mut Env,
     ctx: &Context,
     new_tags: UnionTags,
-    new_ext_var: Variable,
+    new_ext: TagExt,
     recursion_var: Rec,
 ) -> Outcome<M> {
     if env.was_fixed(ctx.first) && env.was_fixed(ctx.second) {
@@ -2889,10 +2963,10 @@ fn unify_shared_tags_merge_new<M: MetaCollector>(
     }
 
     let flat_type = match recursion_var {
-        Rec::None => FlatType::TagUnion(new_tags, new_ext_var),
+        Rec::None => FlatType::TagUnion(new_tags, new_ext),
         Rec::Left(rec) | Rec::Right(rec) | Rec::Both(rec, _) => {
             debug_assert!(is_recursion_var(env.subs, rec), "{:?}", env.subs.dbg(rec));
-            FlatType::RecursiveTagUnion(rec, new_tags, new_ext_var)
+            FlatType::RecursiveTagUnion(rec, new_tags, new_ext)
         }
     };
 
@@ -2928,11 +3002,11 @@ fn unify_flat_type<M: MetaCollector>(
         (EmptyTagUnion, EmptyTagUnion) => merge(env, ctx, Structure(*left)),
 
         (TagUnion(tags, ext), EmptyTagUnion) if tags.is_empty() => {
-            unify_pool(env, pool, *ext, ctx.second, ctx.mode)
+            unify_pool(env, pool, ext.var(), ctx.second, ctx.mode)
         }
 
         (EmptyTagUnion, TagUnion(tags, ext)) if tags.is_empty() => {
-            unify_pool(env, pool, ctx.first, *ext, ctx.mode)
+            unify_pool(env, pool, ctx.first, ext.var(), ctx.mode)
         }
 
         (TagUnion(tags1, ext1), TagUnion(tags2, ext2)) => {
@@ -3600,7 +3674,7 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     ctx: &Context,
     tag_names_slice: SubsSlice<TagName>,
     tag_fn_lambdas: SubsSlice<Symbol>,
-    tag_ext: Variable,
+    tag_ext: TagExt,
     function_arguments: VariableSubsSlice,
     function_return: Variable,
     function_lambda_set: Variable,
@@ -3679,10 +3753,10 @@ fn unify_two_function_or_tag_unions<M: MetaCollector>(
     ctx: &Context,
     tag_names_1: SubsSlice<TagName>,
     tag_symbols_1: SubsSlice<Symbol>,
-    ext1: Variable,
+    ext1: TagExt,
     tag_names_2: SubsSlice<TagName>,
     tag_symbols_2: SubsSlice<Symbol>,
-    ext2: Variable,
+    ext2: TagExt,
 ) -> Outcome<M> {
     let merged_tags = {
         let mut all_tags: Vec<_> = (env.subs.get_subs_slice(tag_names_1).iter())
@@ -3703,7 +3777,7 @@ fn unify_two_function_or_tag_unions<M: MetaCollector>(
         SubsSlice::extend_new(&mut env.subs.symbol_names, all_lambdas)
     };
 
-    let mut outcome = unify_pool(env, pool, ext1, ext2, ctx.mode);
+    let mut outcome = unify_pool(env, pool, ext1.var(), ext2.var(), ctx.mode);
     if !outcome.mismatches.is_empty() {
         return outcome;
     }

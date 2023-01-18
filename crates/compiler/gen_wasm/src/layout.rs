@@ -1,7 +1,7 @@
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_mono::layout::{Layout, STLayoutInterner, UnionLayout};
+use roc_mono::layout::{InLayout, Layout, LayoutInterner, STLayoutInterner, UnionLayout};
 
-use crate::{PTR_SIZE, PTR_TYPE, TARGET_INFO};
+use crate::{PTR_SIZE, PTR_TYPE};
 use roc_wasm_module::ValueType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,14 +40,14 @@ pub enum WasmLayout {
 }
 
 impl WasmLayout {
-    pub fn new<'a>(interner: &STLayoutInterner<'a>, layout: &Layout<'a>) -> Self {
+    pub fn new<'a>(interner: &STLayoutInterner<'a>, layout: InLayout<'a>) -> Self {
         use roc_mono::layout::Builtin::*;
         use UnionLayout::*;
         use ValueType::*;
 
-        let (size, alignment_bytes) = layout.stack_size_and_alignment(interner, TARGET_INFO);
+        let (size, alignment_bytes) = interner.stack_size_and_alignment(layout);
 
-        match layout {
+        match interner.get(layout) {
             Layout::Builtin(Int(int_width)) => {
                 use IntWidth::*;
 
@@ -80,7 +80,7 @@ impl WasmLayout {
             },
 
             Layout::LambdaSet(lambda_set) => {
-                WasmLayout::new(interner, &lambda_set.runtime_representation(interner))
+                WasmLayout::new(interner, lambda_set.runtime_representation())
             }
 
             Layout::Builtin(Str | List(_))

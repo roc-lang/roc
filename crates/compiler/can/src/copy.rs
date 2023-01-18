@@ -654,6 +654,7 @@ fn deep_copy_pattern_help<C: CopyEnv>(
 
     match pat {
         Identifier(s) => Identifier(*s),
+        As(subpattern, s) => As(Box::new(subpattern.map(|p| go_help!(p))), *s),
         AppliedTag {
             whole_var,
             ext_var,
@@ -903,7 +904,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                     })
                 }
                 TagUnion(tags, ext_var) => {
-                    let new_ext_var = descend_var!(ext_var);
+                    let new_ext_var = ext_var.map(|v| descend_var!(v));
 
                     for variables_slice_index in tags.variables() {
                         let variables_slice = env.source()[variables_slice_index];
@@ -928,7 +929,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                     })
                 }
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let new_ext_var = descend_var!(ext_var);
+                    let new_ext_var = ext_var.map(|v| descend_var!(v));
                     let new_rec_var = descend_var!(rec_var);
 
                     for variables_slice_index in tags.variables() {
@@ -955,7 +956,7 @@ fn deep_copy_type_vars<C: CopyEnv>(
                     })
                 }
                 FunctionOrTagUnion(tag_names, symbols, ext_var) => {
-                    let new_ext_var = descend_var!(ext_var);
+                    let new_ext_var = ext_var.map(|v| descend_var!(v));
                     let new_tag_names = env.clone_tag_names(tag_names);
                     let new_symbols = env.clone_lambda_names(symbols);
                     perform_clone!(Structure(FunctionOrTagUnion(

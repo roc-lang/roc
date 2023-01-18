@@ -708,13 +708,13 @@ trait DerivableVisitor {
                             for i in tags.variables() {
                                 push_var_slice!(subs[i]);
                             }
-                            stack.push(ext);
+                            stack.push(ext.var());
                         }
                     }
                     FunctionOrTagUnion(_tag_name, _fn_name, ext) => {
                         let descend = Self::visit_function_or_tag_union(var)?;
                         if descend.0 {
-                            stack.push(ext);
+                            stack.push(ext.var());
                         }
                     }
                     RecursiveTagUnion(rec, tags, ext) => {
@@ -724,7 +724,7 @@ trait DerivableVisitor {
                             for i in tags.variables() {
                                 push_var_slice!(subs[i]);
                             }
-                            stack.push(ext);
+                            stack.push(ext.var());
                         }
                     }
                     EmptyRecord => Self::visit_empty_record(var)?,

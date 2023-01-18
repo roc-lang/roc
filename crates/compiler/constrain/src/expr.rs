@@ -8,7 +8,7 @@ use crate::builtins::{
 use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::annotation::IntroducedVariables;
 use roc_can::constraint::{
-    Constraint, Constraints, ExpectedTypeIndex, OpportunisticResolve, TypeOrVar,
+    Constraint, Constraints, ExpectedTypeIndex, Generalizable, OpportunisticResolve, TypeOrVar,
 };
 use roc_can::def::Def;
 use roc_can::exhaustive::{sketch_pattern_to_rows, sketch_when_branches, ExhaustiveContext};
@@ -176,6 +176,7 @@ fn constrain_untyped_closure(
             pattern_state.headers,
             pattern_state_constraints,
             ret_constraint,
+            Generalizable(true),
         ),
         constraints.equal_types_with_storage(
             function_type,
@@ -278,7 +279,7 @@ pub fn constrain_expr(
             let fields_type = {
                 let typ = types.from_old_type(&Type::Record(
                     fields,
-                    TypeExtension::from_type(Type::Variable(*ext_var)),
+                    TypeExtension::from_non_annotation_type(Type::Variable(*ext_var)),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -1054,6 +1055,8 @@ pub fn constrain_expr(
                 pattern_headers,
                 pattern_constraints,
                 body_constraints,
+                // Never generalize identifiers introduced in branch-patterns
+                Generalizable(false),
             );
 
             let result_con =
@@ -1087,7 +1090,7 @@ pub fn constrain_expr(
             let record_type = {
                 let typ = types.from_old_type(&Type::Record(
                     rec_field_types,
-                    TypeExtension::from_type(ext_type),
+                    TypeExtension::from_non_annotation_type(ext_type),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -1131,7 +1134,10 @@ pub fn constrain_expr(
             let mut field_types = SendMap::default();
             let label = field.clone();
             field_types.insert(label, RecordField::Demanded(field_type.clone()));
-            let record_type = Type::Record(field_types, TypeExtension::from_type(ext_type));
+            let record_type = Type::Record(
+                field_types,
+                TypeExtension::from_non_annotation_type(ext_type),
+            );
             let record_type_index = {
                 let typ = types.from_old_type(&record_type);
                 constraints.push_type(types, typ)
@@ -1264,7 +1270,7 @@ pub fn constrain_expr(
             let tag_union_type = {
                 let typ = types.from_old_type(&Type::TagUnion(
                     vec![(name.clone(), payload_types)],
-                    TypeExtension::from_type(Type::Variable(*ext_var)),
+                    TypeExtension::from_non_annotation_type(Type::Variable(*ext_var)),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -1296,7 +1302,7 @@ pub fn constrain_expr(
                 let typ = types.from_old_type(&Type::FunctionOrTagUnion(
                     name.clone(),
                     *closure_name,
-                    TypeExtension::from_type(Type::Variable(*ext_var)),
+                    TypeExtension::from_non_annotation_type(Type::Variable(*ext_var)),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -1874,6 +1880,8 @@ fn constrain_function_def(
                     argument_pattern_state.headers,
                     defs_constraint,
                     ret_constraint,
+                    // This is a syntactic function, it can be generalized
+                    Generalizable(true),
                 ),
                 constraints.equal_types_var(
                     closure_var,
@@ -1927,6 +1935,7 @@ fn constrain_function_def(
                 loc_symbol,
                 expr_var,
                 expr_type,
+                Generalizable(true), // this is a syntactic function
             )
         }
     }
@@ -2057,6 +2066,8 @@ fn constrain_value_def(
     let expr_var = declarations.variables[index];
     let opt_annotation = &declarations.annotations[index];
 
+    let generalizable = Generalizable(is_generalizable_expr(&loc_expr.value));
+
     match opt_annotation {
         Some(annotation) => {
             let arity = 1;
@@ -2122,6 +2133,7 @@ fn constrain_value_def(
                 loc_symbol,
                 expr_var,
                 signature_index,
+                generalizable,
             )
         }
         None => {
@@ -2148,6 +2160,7 @@ fn constrain_value_def(
                 loc_symbol,
                 expr_var,
                 expr_type,
+                generalizable,
             )
         }
     }
@@ -2267,7 +2280,15 @@ fn constrain_when_branch_help(
             // must introduce the headers from the pattern before constraining the guard
             let delayed_is_open_constraints = state.delayed_is_open_constraints;
             let state_constraints = constraints.and_constraint(state.constraints);
-            let inner = constraints.let_constraint([], [], [], guard_constraint, ret_constraint);
+            let inner = constraints.let_constraint(
+                [],
+                [],
+                [],
+                guard_constraint,
+                ret_constraint,
+                // Never generalize identifiers introduced in branch guards
+                Generalizable(false),
+            );
 
             (state_constraints, delayed_is_open_constraints, inner)
         } else {
@@ -2377,7 +2398,14 @@ pub fn constrain_decls(
                     expected,
                 );
 
-                constraint = constraints.let_constraint([], [], [], expect_constraint, constraint)
+                constraint = constraints.let_constraint(
+                    [],
+                    [],
+                    [],
+                    expect_constraint,
+                    constraint,
+                    Generalizable(false),
+                )
             }
             ExpectationFx => {
                 let loc_expr = &declarations.expressions[index];
@@ -2398,7 +2426,14 @@ pub fn constrain_decls(
                     expected,
                 );
 
-                constraint = constraints.let_constraint([], [], [], expect_constraint, constraint)
+                constraint = constraints.let_constraint(
+                    [],
+                    [],
+                    [],
+                    expect_constraint,
+                    constraint,
+                    Generalizable(false),
+                )
             }
             Function(function_def_index) => {
                 constraint = constrain_function_def(
@@ -2653,6 +2688,8 @@ fn constrain_typed_def(
                     argument_pattern_state.headers,
                     defs_constraint,
                     ret_constraint,
+                    // This is a syntactic function, it can be generalized
+                    Generalizable(true),
                 ),
                 constraints.equal_types_var(
                     closure_var,
@@ -2675,6 +2712,7 @@ fn constrain_typed_def(
                 expr_con,
                 body_con,
                 def_pattern_state,
+                Generalizable(true),
             )
         }
 
@@ -2698,6 +2736,8 @@ fn constrain_typed_def(
             );
             let expr_con = attach_resolution_constraints(constraints, env, ret_constraint);
 
+            let generalizable = Generalizable(is_generalizable_expr(&def.loc_expr.value));
+
             constrain_def_make_constraint(
                 constraints,
                 new_rigid_variables.into_iter(),
@@ -2705,6 +2745,7 @@ fn constrain_typed_def(
                 expr_con,
                 body_con,
                 def_pattern_state,
+                generalizable,
             )
         }
     }
@@ -3011,6 +3052,8 @@ fn constrain_def(
             );
             let expr_con = attach_resolution_constraints(constraints, env, expr_con);
 
+            let generalizable = Generalizable(is_generalizable_expr(&def.loc_expr.value));
+
             constrain_def_make_constraint(
                 constraints,
                 std::iter::empty(),
@@ -3018,6 +3061,7 @@ fn constrain_def(
                 expr_con,
                 body_con,
                 def_pattern_state,
+                generalizable,
             )
         }
     }
@@ -3032,6 +3076,7 @@ pub(crate) fn constrain_def_make_constraint(
     def_expr_con: Constraint,
     after_def_con: Constraint,
     def_pattern_state: PatternState,
+    generalizable: Generalizable,
 ) -> Constraint {
     let all_flex_variables = (def_pattern_state.vars.into_iter()).chain(annotation_infer_variables);
 
@@ -3044,6 +3089,7 @@ pub(crate) fn constrain_def_make_constraint(
         def_pattern_state.headers,
         def_pattern_and_body_con,
         after_def_con,
+        generalizable,
     )
 }
 
@@ -3056,6 +3102,7 @@ fn constrain_value_def_make_constraint(
     symbol: Loc<Symbol>,
     expr_var: Variable,
     expr_type: TypeOrVar,
+    generalizable: Generalizable,
 ) -> Constraint {
     let def_con = constraints.let_constraint(
         [],
@@ -3063,11 +3110,19 @@ fn constrain_value_def_make_constraint(
         [], // empty, because our functions have no arguments!
         Constraint::True,
         expr_con,
+        generalizable,
     );
 
     let headers = [(symbol.value, Loc::at(symbol.region, expr_type))];
 
-    constraints.let_constraint(new_rigid_variables, [expr_var], headers, def_con, body_con)
+    constraints.let_constraint(
+        new_rigid_variables,
+        [expr_var],
+        headers,
+        def_con,
+        body_con,
+        generalizable,
+    )
 }
 
 fn constrain_function_def_make_constraint(
@@ -3086,6 +3141,7 @@ fn constrain_function_def_make_constraint(
         [], // empty, because our functions have no arguments!
         and_constraint,
         expr_con,
+        Generalizable(true),
     );
 
     constraints.let_constraint(
@@ -3094,6 +3150,7 @@ fn constrain_function_def_make_constraint(
         def_pattern_state.headers,
         def_con,
         body_con,
+        Generalizable(true),
     )
 }
 
@@ -3469,6 +3526,8 @@ fn constraint_recursive_function(
                     argument_pattern_state.headers,
                     state_constraints,
                     expr_con,
+                    // Syntactic function can be generalized
+                    Generalizable(true),
                 ),
                 constraints.equal_types(fn_type, annotation_expected, Category::Lambda, region),
                 // "fn_var is equal to the closure's type" - fn_var is used in code gen
@@ -3512,6 +3571,7 @@ fn constraint_recursive_function(
                     def_pattern_state.headers.clone(),
                     def_con,
                     Constraint::True,
+                    Generalizable(true),
                 )
             });
             rigid_info.def_types.extend(def_pattern_state.headers);
@@ -3539,6 +3599,18 @@ pub fn rec_defs_help_simple(
 
     let mut loc_symbols = Vec::with_capacity(length);
     let mut expr_regions = Vec::with_capacity(length);
+
+    // Rec defs are generalizable only if everything in the cycle is generalizable.
+    let generalizable = {
+        let generalizable = range.clone().all(|i| match declarations.declarations[i] {
+            DeclarationTag::Value => {
+                let loc_expr = &declarations.expressions[i];
+                is_generalizable_expr(&loc_expr.value)
+            }
+            _ => true, // this must be a function
+        });
+        Generalizable(generalizable)
+    };
 
     for index in range {
         // Clear the rigids from the previous iteration.
@@ -3654,6 +3726,7 @@ pub fn rec_defs_help_simple(
                                 [], // no headers introduced (at this level)
                                 def_con,
                                 Constraint::True,
+                                generalizable,
                             ));
                             rigid_info.def_types.insert(loc_symbol.value, loc_type);
                         }
@@ -3712,6 +3785,7 @@ pub fn rec_defs_help_simple(
         hybrid_and_flex_info.def_types.clone(),
         Constraint::True,
         untyped_body_constraints,
+        generalizable,
     );
 
     // an extra constraint that propagates information to the solver to check for invalid recursion
@@ -3730,6 +3804,7 @@ pub fn rec_defs_help_simple(
         hybrid_and_flex_info.def_types,
         untyped_def_symbols_constr,
         typed_body_and_final_constr,
+        generalizable,
     );
 
     // 1. Let-generalize annotations we know.
@@ -3739,7 +3814,58 @@ pub fn rec_defs_help_simple(
         rigid_info.def_types,
         Constraint::True,
         inner,
+        generalizable,
     )
+}
+
+/// A let-bound expression is generalizable if it is
+///   - a syntactic function under an opaque wrapper
+///   - a number literal under an opaque wrapper
+fn is_generalizable_expr(mut expr: &Expr) -> bool {
+    loop {
+        match expr {
+            Num(..) | Int(..) | Float(..) => return true,
+            Closure(_) => return true,
+            Accessor(_) => {
+                // Accessor functions `.field` are equivalent to closures `\r -> r.field`, no need to weaken them.
+                return true;
+            }
+            OpaqueWrapFunction(_) => {
+                // Opaque wrapper functions `@Q` are equivalent to closures `\x -> @Q x`, no need to weaken them.
+                return true;
+            }
+            RuntimeError(roc_problem::can::RuntimeError::NoImplementation)
+            | RuntimeError(roc_problem::can::RuntimeError::NoImplementationNamed { .. }) => {
+                // Allow generalization of signatures with no implementation
+                return true;
+            }
+            OpaqueRef { argument, .. } => expr = &argument.1.value,
+            Str(_)
+            | List { .. }
+            | SingleQuote(_, _, _, _)
+            | When { .. }
+            | If { .. }
+            | LetRec(_, _, _)
+            | LetNonRec(_, _)
+            | Call(_, _, _)
+            | RunLowLevel { .. }
+            | ForeignCall { .. }
+            | EmptyRecord
+            | Expr::Record { .. }
+            | Crash { .. }
+            | Access { .. }
+            | Update { .. }
+            | Expect { .. }
+            | ExpectFx { .. }
+            | Dbg { .. }
+            | TypedHole(_)
+            | RuntimeError(..)
+            | ZeroArgumentTag { .. }
+            | Tag { .. }
+            | AbilityMember(..)
+            | Var(..) => return false,
+        }
+    }
 }
 
 fn constrain_recursive_defs(
@@ -3767,6 +3893,14 @@ fn rec_defs_help(
     //   flex: those without a type annotation
     let mut rigid_info = Info::with_capacity(defs.len());
     let mut hybrid_and_flex_info = Info::with_capacity(defs.len());
+
+    // Rec defs are generalizable only if everything in the cycle is generalizable.
+    let generalizable = {
+        let generalizable = defs
+            .iter()
+            .all(|d| is_generalizable_expr(&d.loc_expr.value));
+        Generalizable(generalizable)
+    };
 
     for def in defs {
         let expr_var = def.expr_var;
@@ -3927,6 +4061,7 @@ fn rec_defs_help(
                                 state.headers,
                                 state_constraints,
                                 expr_con,
+                                generalizable,
                             ),
                             constraints.equal_types(
                                 fn_type_index,
@@ -3968,6 +4103,7 @@ fn rec_defs_help(
                                 [], // no headers introduced (at this level)
                                 def_con,
                                 Constraint::True,
+                                generalizable,
                             ));
                             rigid_info.def_types.extend(def_pattern_state.headers);
                         }
@@ -4013,6 +4149,7 @@ fn rec_defs_help(
                                 [], // no headers introduced (at this level)
                                 def_con,
                                 Constraint::True,
+                                generalizable,
                             ));
                             rigid_info.def_types.extend(def_pattern_state.headers);
                         }
@@ -4056,6 +4193,7 @@ fn rec_defs_help(
         hybrid_and_flex_info.def_types.clone(),
         Constraint::True,
         untyped_body_constraints,
+        generalizable,
     );
 
     // an extra constraint that propagates information to the solver to check for invalid recursion
@@ -4082,6 +4220,7 @@ fn rec_defs_help(
         untyped_def_symbols_constr,
         // 4 + 5. Solve the typed body defs, and the rest of the program.
         typed_body_and_final_constr,
+        generalizable,
     );
 
     // 1. Let-generalize annotations we know.
@@ -4091,6 +4230,7 @@ fn rec_defs_help(
         rigid_info.def_types,
         Constraint::True,
         inner,
+        generalizable,
     )
 }
 

@@ -29,12 +29,12 @@ use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, LambdaSet, Mark,
-    OptVariable, Rank, RecordFields, Subs, SubsSlice, UlsOfVar, UnionLabels, UnionLambdas,
+    OptVariable, Rank, RecordFields, Subs, SubsSlice, TagExt, UlsOfVar, UnionLabels, UnionLambdas,
     UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasKind, AliasShared, Category, OptAbleVar, Polarity, Reason,
-    RecordField, Type, TypeExtension, TypeTag, Types, Uls,
+    gather_fields_unsorted_iter, AliasKind, AliasShared, Category, ExtImplicitOpenness, OptAbleVar,
+    Polarity, Reason, RecordField, Type, TypeExtension, TypeTag, Types, Uls,
 };
 use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Env as UEnv, Mode, Obligated,
@@ -217,7 +217,7 @@ impl Aliases {
             SubsSlice::extend_new(&mut subs.variable_slices, [err_slice, ok_slice]);
 
         let union_tags = UnionTags::from_slices(tag_names_slice, variable_slices);
-        let ext_var = Variable::EMPTY_TAG_UNION;
+        let ext_var = TagExt::Any(Variable::EMPTY_TAG_UNION);
         let flat_type = FlatType::TagUnion(union_tags, ext_var);
         let content = Content::Structure(flat_type);
 
@@ -767,8 +767,6 @@ fn solve(
                 let offset = let_con.defs_and_ret_constraint.index();
                 let ret_constraint = &constraints.constraints[offset + 1];
 
-                let next_rank = rank.next();
-
                 let mark = state.mark;
                 let saved_env = state.env;
 
@@ -776,10 +774,16 @@ fn solve(
                 let visit_mark = young_mark.next();
                 let final_mark = visit_mark.next();
 
+                let intro_rank = if let_con.generalizable.0 {
+                    rank.next()
+                } else {
+                    rank
+                };
+
                 // Add a variable for each def to local_def_vars.
                 let local_def_vars = LocalDefVarsVec::from_def_types(
                     constraints,
-                    next_rank,
+                    intro_rank,
                     pools,
                     problems,
                     abilities_store,
@@ -790,17 +794,26 @@ fn solve(
                     let_con.def_types,
                 );
 
-                pools.get_mut(next_rank).extend(pool_variables);
+                // If the let-binding can be generalized, introduce all variables at the next rank;
+                // those that persist at the next rank after rank-adjustment will be generalized.
+                //
+                // Otherwise, introduce all variables at the current rank; since none of them will
+                // end up at the next rank, none will be generalized.
+                if let_con.generalizable.0 {
+                    pools.get_mut(rank.next()).extend(pool_variables);
+                } else {
+                    pools.get_mut(rank).extend(pool_variables);
+                }
 
                 debug_assert_eq!(
                     // Check that no variable ended up in a higher rank than the next rank.. that
                     // would mean we generalized one level more than we need to!
                     {
                         let offenders = pools
-                            .get(next_rank)
+                            .get(rank.next())
                             .iter()
                             .filter(|var| {
-                                subs.get_rank(**var).into_usize() > next_rank.into_usize()
+                                subs.get_rank(**var).into_usize() > rank.next().into_usize()
                             })
                             .collect::<Vec<_>>();
 
@@ -817,9 +830,12 @@ fn solve(
                     0
                 );
 
-                // pop pool
-                generalize(subs, young_mark, visit_mark, next_rank, pools);
-                debug_assert!(pools.get(next_rank).is_empty());
+                // If the let-binding is eligible for generalization, it was solved at the
+                // next rank. The variables introduced in the let-binding that are still at
+                // that rank (intuitively, they did not "escape" into the lower level
+                // before or after the let-binding) now get to be generalized.
+                generalize(subs, young_mark, visit_mark, rank.next(), pools);
+                debug_assert!(pools.get(rank.next()).is_empty(), "variables left over in let-binding scope, but they should all be in a lower scope or generalized now");
 
                 // check that things went well
                 dbg_do!(ROC_VERIFY_RIGID_LET_GENERALIZED, {
@@ -831,7 +847,9 @@ fn solve(
                     // or that it just never came up in elm.
                     let mut it = rigid_vars
                         .iter()
-                        .filter(|&var| !subs.redundant(*var) && subs.get_rank(*var) != Rank::NONE)
+                        .filter(|&var| {
+                            !subs.redundant(*var) && subs.get_rank(*var) != Rank::GENERALIZED
+                        })
                         .peekable();
 
                     if it.peek().is_some() {
@@ -1245,39 +1263,45 @@ fn solve(
 
                     state
                 } else {
-                    // work in the next pool to localize header
-                    let next_rank = rank.next();
-
-                    // introduce variables
-                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
-                        subs.set_rank(var, next_rank);
-                    }
+                    // If the let-binding is generalizable, work at the next rank (which will be
+                    // the rank at which introduced variables will become generalized, if they end up
+                    // staying there); otherwise, stay at the current level.
+                    let binding_rank = if let_con.generalizable.0 {
+                        rank.next()
+                    } else {
+                        rank
+                    };
 
                     // determine the next pool
-                    if next_rank.into_usize() < pools.len() {
+                    if binding_rank.into_usize() < pools.len() {
                         // Nothing to do, we already accounted for the next rank, no need to
                         // adjust the pools
                     } else {
                         // we should be off by one at this point
-                        debug_assert_eq!(next_rank.into_usize(), 1 + pools.len());
-                        pools.extend_to(next_rank.into_usize());
+                        debug_assert_eq!(binding_rank.into_usize(), 1 + pools.len());
+                        pools.extend_to(binding_rank.into_usize());
                     }
 
-                    let pool: &mut Vec<Variable> = pools.get_mut(next_rank);
+                    let pool: &mut Vec<Variable> = pools.get_mut(binding_rank);
 
-                    // Replace the contents of this pool with rigid_vars and flex_vars
-                    pool.clear();
+                    // Introduce the variables of this binding, and extend the pool at our binding
+                    // rank.
+                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
+                        subs.set_rank(var, binding_rank);
+                    }
                     pool.reserve(rigid_vars.len() + flex_vars.len());
                     pool.extend(rigid_vars.iter());
                     pool.extend(flex_vars.iter());
 
-                    // run solver in next pool
-
-                    // items are popped from the stack in reverse order. That means that we'll
-                    // first solve then defs_constraint, and then (eventually) the ret_constraint.
+                    // Now, run our binding constraint, generalize, then solve the rest of the
+                    // program.
                     //
-                    // Note that the LetConSimple gets the current env and rank,
-                    // and not the env/rank from after solving the defs_constraint
+                    // Items are popped from the stack in reverse order. That means that we'll
+                    // first solve the defs_constraint, and then (eventually) the ret_constraint.
+                    //
+                    // NB: LetCon gets the current scope's env and rank, not the env/rank from after solving the defs_constraint.
+                    // That's because the defs constraints will be solved in next_rank if it is eligible for generalization.
+                    // The LetCon will then generalize variables that are at a higher rank than the rank of the current scope.
                     stack.push(Work::LetConIntroducesVariables {
                         env,
                         rank,
@@ -1286,7 +1310,7 @@ fn solve(
                     });
                     stack.push(Work::Constraint {
                         env,
-                        rank: next_rank,
+                        rank: binding_rank,
                         constraint: defs_constraint,
                     });
 
@@ -1805,9 +1829,9 @@ fn open_tag_union(subs: &mut Subs, var: Variable) {
         let desc = subs.get(var);
         match desc.content {
             Structure(TagUnion(tags, ext)) => {
-                if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext) {
-                    let new_ext = subs.fresh_unnamed_flex_var();
-                    subs.set_rank(new_ext, desc.rank);
+                if let Structure(EmptyTagUnion) = subs.get_content_without_compacting(ext.var()) {
+                    let new_ext = TagExt::Any(subs.fresh_unnamed_flex_var());
+                    subs.set_rank(new_ext.var(), desc.rank);
                     let new_union = Structure(TagUnion(tags, new_ext));
                     subs.set_content(var, new_union);
                 }
@@ -1856,12 +1880,15 @@ fn close_pattern_matched_tag_unions(subs: &mut Subs, var: Variable) {
             Structure(TagUnion(tags, mut ext)) => {
                 // Close the extension, chasing it as far as it goes.
                 loop {
-                    match subs.get_content_without_compacting(ext) {
+                    match subs.get_content_without_compacting(ext.var()) {
                         Structure(FlatType::EmptyTagUnion) => {
                             break;
                         }
                         FlexVar(..) | FlexAbleVar(..) => {
-                            subs.set_content_unchecked(ext, Structure(FlatType::EmptyTagUnion));
+                            subs.set_content_unchecked(
+                                ext.var(),
+                                Structure(FlatType::EmptyTagUnion),
+                            );
                             break;
                         }
                         RigidVar(..) | RigidAbleVar(..) => {
@@ -2316,7 +2343,7 @@ impl RegisterVariable {
             | TypeTag::HostExposedAlias { shared, .. } => {
                 let AliasShared { symbol, .. } = types[shared];
                 if let Some(reserved) = Variable::get_reserved(symbol) {
-                    let direct_var = if rank.is_none() {
+                    let direct_var = if rank.is_generalized() {
                         // reserved variables are stored with rank NONE
                         reserved
                     } else {
@@ -2631,7 +2658,7 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
 
-            TagUnion(tags) => {
+            TagUnion(tags, ext_openness) => {
                 let ext_slice = types.get_type_arguments(typ_index);
 
                 // An empty tags is inefficient (but would be correct)
@@ -2639,26 +2666,37 @@ fn type_to_variable<'a>(
                 debug_assert!(!tags.is_empty() || !ext_slice.is_empty());
 
                 let (union_tags, ext) = type_to_union_tags(
-                    subs, rank, pools, arena, types, tags, ext_slice, &mut stack,
+                    subs,
+                    rank,
+                    pools,
+                    arena,
+                    types,
+                    tags,
+                    ext_slice,
+                    ext_openness,
+                    &mut stack,
                 );
                 let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
-            FunctionOrTagUnion(symbol) => {
+            FunctionOrTagUnion(symbol, ext_openness) => {
                 let ext_slice = types.get_type_arguments(typ_index);
                 let tag_name = types.get_tag_name(&typ_index).clone();
 
                 debug_assert!(ext_slice.len() <= 1);
-                let temp_ext_var = match ext_slice.into_iter().next() {
-                    Some(ext) => helper!(ext),
-                    None => roc_types::subs::Variable::EMPTY_TAG_UNION,
+                let temp_ext = match ext_slice.into_iter().next() {
+                    Some(ext) => {
+                        let var = helper!(ext);
+                        TagExt::from_can(var, ext_openness)
+                    }
+                    None => TagExt::Any(roc_types::subs::Variable::EMPTY_TAG_UNION),
                 };
 
                 let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
                     subs,
                     UnionTags::default(),
-                    temp_ext_var,
+                    temp_ext,
                 )
                 .expect("extension var could not be seen as a tag union");
 
@@ -2674,7 +2712,7 @@ fn type_to_variable<'a>(
 
                 register_with_known_var(subs, destination, rank, pools, content)
             }
-            RecursiveTagUnion(rec_var, tags) => {
+            RecursiveTagUnion(rec_var, tags, ext_openness) => {
                 let ext_slice = types.get_type_arguments(typ_index);
 
                 // An empty tags is inefficient (but would be correct)
@@ -2682,7 +2720,15 @@ fn type_to_variable<'a>(
                 debug_assert!(!tags.is_empty() || !ext_slice.is_empty());
 
                 let (union_tags, ext) = type_to_union_tags(
-                    subs, rank, pools, arena, types, tags, ext_slice, &mut stack,
+                    subs,
+                    rank,
+                    pools,
+                    arena,
+                    types,
+                    tags,
+                    ext_slice,
+                    ext_openness,
+                    &mut stack,
                 );
                 let content =
                     Content::Structure(FlatType::RecursiveTagUnion(rec_var, union_tags, ext));
@@ -3049,7 +3095,7 @@ fn roc_result_to_var(
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
 ) -> Variable {
     match types[result_type] {
-        TypeTag::TagUnion(tags) => {
+        TypeTag::TagUnion(tags, _ext_openness) => {
             let ext_slice = types.get_type_arguments(result_type);
 
             debug_assert!(ext_slice.is_empty());
@@ -3088,7 +3134,7 @@ fn roc_result_to_var(
                     subs.variable_slices.push(ok_slice);
 
                     let union_tags = UnionTags::from_slices(Subs::RESULT_TAG_NAMES, variables);
-                    let ext = Variable::EMPTY_TAG_UNION;
+                    let ext = TagExt::Any(Variable::EMPTY_TAG_UNION);
 
                     let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
 
@@ -3358,8 +3404,9 @@ fn type_to_union_tags(
     types: &mut Types,
     union_tags: UnionTags,
     opt_ext_slice: Slice<TypeTag>,
+    ext_openness: ExtImplicitOpenness,
     stack: &mut bumpalo::collections::Vec<'_, TypeToVar>,
-) -> (UnionTags, Variable) {
+) -> (UnionTags, TagExt) {
     use bumpalo::collections::Vec;
 
     let (tags, _) = types.union_tag_slices(union_tags);
@@ -3379,19 +3426,19 @@ fn type_to_union_tags(
                 insert_tags_slow_path(subs, rank, pools, arena, types, union_tags, tag_vars, stack)
             };
 
-            (union_tags, ext)
+            (union_tags, TagExt::Any(ext))
         }
         Some(ext) => {
             let mut tag_vars = Vec::with_capacity_in(tags.len(), arena);
 
-            let temp_ext_var =
-                RegisterVariable::with_stack(subs, rank, pools, arena, types, ext, stack);
-            let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
-                subs,
-                UnionTags::default(),
-                temp_ext_var,
-            )
-            .expect("extension var could not be seen as tag union");
+            let temp_ext = {
+                let temp_ext_var =
+                    RegisterVariable::with_stack(subs, rank, pools, arena, types, ext, stack);
+                TagExt::from_can(temp_ext_var, ext_openness)
+            };
+            let (it, ext) =
+                roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext)
+                    .expect("extension var could not be seen as tag union");
 
             tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
 
@@ -3479,6 +3526,12 @@ fn circular_error(
     problems.push(problem);
 }
 
+/// Generalizes variables at the `young_rank`, which did not escape a let-binding
+/// into a lower scope.
+///
+/// Ensures that variables introduced at the `young_rank`, but that should be
+/// stuck at a lower level, are marked at that level and not generalized at the
+/// present `young_rank`. See [adjust_rank].
 fn generalize(
     subs: &mut Subs,
     young_mark: Mark,
@@ -3503,29 +3556,26 @@ fn generalize(
     // the appropriate old pool if they are not redundant.
     for vars in all_but_last_pool {
         for var in vars {
-            if !subs.redundant(var) {
-                let rank = subs.get_rank(var);
+            let rank = subs.get_rank(var);
 
-                pools.get_mut(rank).push(var);
-            }
+            pools.get_mut(rank).push(var);
         }
     }
 
     // For variables with rank young_rank, if rank < young_rank: register in old pool,
     // otherwise generalize
     for var in last_pool.drain(..) {
-        if !subs.redundant(var) {
-            let desc_rank = subs.get_rank(var);
+        let desc_rank = subs.get_rank(var);
 
-            if desc_rank < young_rank {
-                pools.get_mut(desc_rank).push(var);
-            } else {
-                subs.set_rank(var, Rank::NONE);
-            }
+        if desc_rank < young_rank {
+            pools.get_mut(desc_rank).push(var);
+        } else {
+            subs.set_rank(var, Rank::GENERALIZED);
         }
     }
 
-    // re-use the last_vector (which likely has a good capacity for future runs
+    // re-use the last_vector (which likely has a good capacity for future runs)
+    debug_assert!(last_pool.is_empty());
     *pools.get_mut(young_rank) = last_pool;
 }
 
@@ -3566,6 +3616,23 @@ fn pool_to_rank_table(
 
 /// Adjust variable ranks such that ranks never increase as you move deeper.
 /// This way the outermost rank is representative of the entire structure.
+///
+/// This procedure also catches type variables at a given rank that contain types at a higher rank.
+/// In such cases, the contained types must be lowered to the rank of the outer type. This is
+/// critical for soundness of the type inference; for example consider
+///
+/// ```ignore(illustrative)
+/// \f ->              # rank=1
+///     g = \x -> f x  # rank=2
+///     g
+/// ```
+///
+/// say that during the solving of the outer body at rank 1 we conditionally give `f` the type
+/// `a -> b (rank=1)`. Without rank-adjustment, the type of `g` would be solved as `c -> d (rank=2)` for
+/// some `c ~ a`, `d ~ b`, and hence would be generalized to the function `c -> d`, even though `c`
+/// and `d` are individually at rank 1 after unfication with `a` and `b` respectively.
+/// This is incorrect; the whole of `c -> d` must lie at rank 1, and only be generalized at the
+/// level that `f` is introduced.
 fn adjust_rank(
     subs: &mut Subs,
     young_mark: Mark,
@@ -3579,15 +3646,14 @@ fn adjust_rank(
     let desc_mark = subs.get_mark_unchecked(var);
 
     if desc_mark == young_mark {
-        let content = {
-            let ptr = subs.get_content_unchecked(var) as *const _;
-            unsafe { &*ptr }
-        };
+        let content = *subs.get_content_unchecked(var);
 
         // Mark the variable as visited before adjusting content, as it may be cyclic.
         subs.set_mark_unchecked(var, visit_mark);
 
-        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, content);
+        // Adjust the nested types' ranks, making sure that no nested unbound type variable is at a
+        // higher rank than the group rank this `var` is at
+        let max_rank = adjust_rank_content(subs, young_mark, visit_mark, group_rank, &content);
 
         subs.set_rank_unchecked(var, max_rank);
         subs.set_mark_unchecked(var, visit_mark);
@@ -3702,7 +3768,8 @@ fn adjust_rank_content(
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+                    let mut rank =
+                        adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var.var());
                     // For performance reasons, we only keep one representation of empty tag unions
                     // in subs. That representation exists at rank 0, which we don't always want to
                     // reflect the whole tag union as, because doing so may over-generalize free
@@ -3718,7 +3785,7 @@ fn adjust_rank_content(
                     // we'll wind up with [Z, S a]{}, but it will be at rank 0, and "a" will get
                     // over-generalized. Really, the empty tag union should be introduced at
                     // whatever current group rank we're at, and so that's how we encode it here.
-                    if *ext_var == Variable::EMPTY_TAG_UNION && rank.is_none() {
+                    if ext_var.var() == Variable::EMPTY_TAG_UNION && rank.is_generalized() {
                         rank = group_rank;
                     }
 
@@ -3735,11 +3802,12 @@ fn adjust_rank_content(
                 }
 
                 FunctionOrTagUnion(_, _, ext_var) => {
-                    adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var)
+                    adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var.var())
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+                    let mut rank =
+                        adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var.var());
 
                     for (_, index) in tags.iter_all() {
                         let slice = subs[index];
@@ -3918,7 +3986,7 @@ fn has_trivial_copy(subs: &Subs, root_var: Variable) -> Option<Variable> {
 
     if let Some(copy) = existing_copy.into_variable() {
         Some(copy)
-    } else if subs.get_rank_unchecked(root_var) != Rank::NONE {
+    } else if subs.get_rank_unchecked(root_var) != Rank::GENERALIZED {
         Some(root_var)
     } else {
         None
@@ -4020,6 +4088,16 @@ fn deep_copy_var_help(
         }};
     }
 
+    // When generalizing annotations with `Openness` extensions
+    // we want to promote them to `Any`, so that usages at
+    // specialized sites can grow unboundedly and are not bound to
+    // openness-polymorphism.
+    macro_rules! copy_tag_ext {
+        ($ext:expr) => {
+            TagExt::Any(work!($ext.var()))
+        };
+    }
+
     while let Some(DeepCopyVarWork { source: var, copy }) = stack.pop() {
         visited.push(var);
         pool.push(copy);
@@ -4093,17 +4171,17 @@ fn deep_copy_var_help(
                     TagUnion(tags, ext_var) => {
                         let union_tags = copy_union!(tags);
 
-                        TagUnion(union_tags, work!(ext_var))
+                        TagUnion(union_tags, copy_tag_ext!(ext_var))
                     }
 
                     FunctionOrTagUnion(tag_name, symbol, ext_var) => {
-                        FunctionOrTagUnion(tag_name, symbol, work!(ext_var))
+                        FunctionOrTagUnion(tag_name, symbol, copy_tag_ext!(ext_var))
                     }
 
                     RecursiveTagUnion(rec_var, tags, ext_var) => {
                         let union_tags = copy_union!(tags);
 
-                        RecursiveTagUnion(work!(rec_var), union_tags, work!(ext_var))
+                        RecursiveTagUnion(work!(rec_var), union_tags, copy_tag_ext!(ext_var))
                     }
                 };
 

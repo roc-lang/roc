@@ -260,7 +260,7 @@ pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
             &mut module,
             WRAPPER_NAME,
             main_fn_index,
-            &main_fn_layout.result,
+            main_fn_layout.result,
         );
         called_fns.push(true);
 

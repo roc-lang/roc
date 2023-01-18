@@ -725,7 +725,7 @@ formatError = \err ->
 ## ```
 withParser = \arg1, arg2 -> andMap arg2 arg1
 
-mark = \args -> { args, taken: Set.empty }
+mark = \args -> { args, taken: Set.empty {} }
 
 # boolean undashed long optional is missing
 expect

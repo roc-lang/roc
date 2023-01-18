@@ -1,8 +1,9 @@
-use crate::ast::{EscapedChar, StrLiteral, StrSegment};
+use crate::ast::{EscapedChar, SingleQuoteLiteral, StrLiteral, StrSegment};
 use crate::expr;
 use crate::parser::Progress::{self, *};
 use crate::parser::{
-    allocated, loc, reset_min_indent, specialize_ref, word1, BadInputError, EString, Parser,
+    allocated, loc, reset_min_indent, specialize_ref, then, word1, BadInputError, ESingleQuote,
+    EString, Parser,
 };
 use crate::state::State;
 use bumpalo::collections::vec::Vec;
@@ -28,97 +29,6 @@ fn ascii_hex_digits<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
         }
 
         Err((NoProgress, EString::CodePtEnd(state.pos())))
-    }
-}
-
-pub fn parse_single_quote<'a>() -> impl Parser<'a, &'a str, EString<'a>> {
-    move |arena: &'a Bump, mut state: State<'a>, _min_indent: u32| {
-        if state.consume_mut("\'") {
-            // we will be parsing a single-quote-string
-        } else {
-            return Err((NoProgress, EString::Open(state.pos())));
-        }
-
-        // Handle back slaches in byte literal
-        // - starts with a backslash and used as an escape character. ex: '\n', '\t'
-        // - single quote floating (un closed single quote) should be an error
-        match state.bytes().first() {
-            Some(b'\\') => {
-                state.advance_mut(1);
-                match state.bytes().first() {
-                    Some(&ch) => {
-                        state.advance_mut(1);
-                        if (ch == b'n' || ch == b'r' || ch == b't' || ch == b'\'' || ch == b'\\')
-                            && (state.bytes().first() == Some(&b'\''))
-                        {
-                            state.advance_mut(1);
-                            let test = match ch {
-                                b'n' => '\n',
-                                b't' => '\t',
-                                b'r' => '\r',
-                                // since we checked the current char between the single quotes we
-                                // know they are valid UTF-8, allowing us to use 'from_u32_unchecked'
-                                _ => unsafe { char::from_u32_unchecked(ch as u32) },
-                            };
-
-                            return Ok((MadeProgress, &*arena.alloc_str(&test.to_string()), state));
-                        }
-                        // invalid error, backslah escaping something we do not recognize
-                        return Err((NoProgress, EString::CodePtEnd(state.pos())));
-                    }
-                    None => {
-                        // no close quote found
-                        return Err((NoProgress, EString::CodePtEnd(state.pos())));
-                    }
-                }
-            }
-            Some(_) => {
-                // do nothing for other characters, handled below
-            }
-            None => return Err((NoProgress, EString::CodePtEnd(state.pos()))),
-        }
-
-        let mut bytes = state.bytes().iter();
-        let mut end_index = 1;
-
-        // Copy paste problem in mono
-
-        loop {
-            match bytes.next() {
-                Some(b'\'') => {
-                    break;
-                }
-                Some(_) => end_index += 1,
-                None => {
-                    return Err((NoProgress, EString::Open(state.pos())));
-                }
-            }
-        }
-
-        if end_index == 1 {
-            // no progress was made
-            // this case is a double single quote, ex: ''
-            // not supporting empty single quotes
-            return Err((NoProgress, EString::Open(state.pos())));
-        }
-
-        if end_index > (std::mem::size_of::<u32>() + 1) {
-            // bad case: too big to fit into u32
-            return Err((NoProgress, EString::Open(state.pos())));
-        }
-
-        // happy case -> we have some bytes that will fit into a u32
-        // ending up w/ a slice of bytes that we want to convert into an integer
-        let raw_bytes = &state.bytes()[0..end_index - 1];
-
-        state.advance_mut(end_index);
-        match std::str::from_utf8(raw_bytes) {
-            Ok(string) => Ok((MadeProgress, string, state)),
-            Err(_) => {
-                // invalid UTF-8
-                return Err((NoProgress, EString::CodePtEnd(state.pos())));
-            }
-        }
     }
 }
 
@@ -156,11 +66,28 @@ fn utf8<'a>(state: State<'a>, string_bytes: &'a [u8]) -> Result<&'a str, (Progre
     })
 }
 
-pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
-    use StrLiteral::*;
+pub enum StrLikeLiteral<'a> {
+    SingleQuote(SingleQuoteLiteral<'a>),
+    Str(StrLiteral<'a>),
+}
 
+pub fn parse_str_literal<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
+    then(
+        loc!(parse_str_like_literal()),
+        |_arena, state, progress, str_like| match str_like.value {
+            StrLikeLiteral::SingleQuote(_) => Err((
+                progress,
+                EString::ExpectedDoubleQuoteGotSingleQuote(str_like.region.start()),
+            )),
+            StrLikeLiteral::Str(str_literal) => Ok((progress, str_literal, state)),
+        },
+    )
+}
+
+pub fn parse_str_like_literal<'a>() -> impl Parser<'a, StrLikeLiteral<'a>, EString<'a>> {
     move |arena: &'a Bump, mut state: State<'a>, min_indent: u32| {
         let is_multiline;
+        let is_single_quote;
 
         let indent = state.column();
 
@@ -171,6 +98,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
 
             // we will be parsing a multi-line string
             is_multiline = true;
+            is_single_quote = false;
 
             if state.consume_mut("\n") {
                 state = consume_indent(state, indent)?;
@@ -180,6 +108,12 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
 
             // we will be parsing a single-line string
             is_multiline = false;
+            is_single_quote = false;
+        } else if state.consume_mut("'") {
+            start_state = state.clone();
+
+            is_multiline = false;
+            is_single_quote = true;
         } else {
             return Err((NoProgress, EString::Open(state.pos())));
         }
@@ -244,12 +178,16 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
             segment_parsed_bytes += 1;
 
             match byte {
-                b'"' => {
+                b'"' if !is_single_quote => {
                     if segment_parsed_bytes == 1 && segments.is_empty() {
                         // special case of the empty string
                         if is_multiline {
                             if bytes.as_slice().starts_with(b"\"\"") {
-                                return Ok((MadeProgress, Block(&[]), state.advance(3)));
+                                return Ok((
+                                    MadeProgress,
+                                    StrLikeLiteral::Str(StrLiteral::Block(&[])),
+                                    state.advance(3),
+                                ));
                             } else {
                                 // this quote is in a block string
                                 continue;
@@ -257,7 +195,11 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                         } else {
                             // This is the end of the string!
                             // Advance 1 for the close quote
-                            return Ok((MadeProgress, PlainLine(""), state.advance(1)));
+                            return Ok((
+                                MadeProgress,
+                                StrLikeLiteral::Str(StrLiteral::PlainLine("")),
+                                state.advance(1),
+                            ));
                         }
                     } else {
                         // the string is non-empty, which means we need to convert any previous segments
@@ -276,10 +218,14 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                                         other => StrLiteral::Line(arena.alloc([other])),
                                     }
                                 } else {
-                                    Block(arena.alloc([segments.into_bump_slice()]))
+                                    StrLiteral::Block(arena.alloc([segments.into_bump_slice()]))
                                 };
 
-                                return Ok((MadeProgress, expr, state.advance(3)));
+                                return Ok((
+                                    MadeProgress,
+                                    StrLikeLiteral::Str(expr),
+                                    state.advance(3),
+                                ));
                             } else {
                                 // this quote is in a block string
                                 continue;
@@ -295,13 +241,79 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                                     other => StrLiteral::Line(arena.alloc([other])),
                                 }
                             } else {
-                                Line(segments.into_bump_slice())
+                                StrLiteral::Line(segments.into_bump_slice())
                             };
 
                             // Advance the state 1 to account for the closing `"`
-                            return Ok((MadeProgress, expr, state.advance(1)));
+                            return Ok((MadeProgress, StrLikeLiteral::Str(expr), state.advance(1)));
                         }
                     };
+                }
+                b'\'' if is_single_quote => {
+                    end_segment!(StrSegment::Plaintext);
+
+                    let expr = if segments.len() == 1 {
+                        // We had exactly one segment, so this is a candidate
+                        // to be SingleQuoteLiteral::Plaintext
+                        match segments.pop().unwrap() {
+                            StrSegment::Plaintext(string) => SingleQuoteLiteral::PlainLine(string),
+                            other => {
+                                let o = other.try_into().map_err(|e| {
+                                    (
+                                        MadeProgress,
+                                        EString::InvalidSingleQuote(e, start_state.pos()),
+                                    )
+                                })?;
+                                SingleQuoteLiteral::Line(arena.alloc([o]))
+                            }
+                        }
+                    } else {
+                        let mut new_segments = Vec::with_capacity_in(segments.len(), arena);
+                        for segment in segments {
+                            let segment = segment.try_into().map_err(|e| {
+                                (
+                                    MadeProgress,
+                                    EString::InvalidSingleQuote(e, start_state.pos()),
+                                )
+                            })?;
+                            new_segments.push(segment);
+                        }
+
+                        SingleQuoteLiteral::Line(new_segments.into_bump_slice())
+                    };
+
+                    // Validate that the string is a valid char literal.
+                    // Note that currently, we accept anything that:
+                    // * Is between 1 and 5 bytes long
+                    //   -> utf-8 encoding is trivial to extend to 5 bytes, even tho 4 is the technical max
+                    //   -> TODO: do we want to change this?
+                    // * Decodes as valid UTF-8
+                    //   -> Might be a single code point, or multiple code points
+                    //   -> TODO: do we want to change this?
+
+                    // Simply by decoding this, it's guaranteed to be valid utf-8
+                    let text = expr.to_str_in(arena);
+
+                    if text.len() > 5 {
+                        return Err((
+                            MadeProgress,
+                            EString::InvalidSingleQuote(ESingleQuote::TooLong, start_state.pos()),
+                        ));
+                    }
+
+                    if text.is_empty() {
+                        return Err((
+                            MadeProgress,
+                            EString::InvalidSingleQuote(ESingleQuote::Empty, start_state.pos()),
+                        ));
+                    }
+
+                    // Advance the state 1 to account for the closing `'`
+                    return Ok((
+                        MadeProgress,
+                        StrLikeLiteral::SingleQuote(expr),
+                        state.advance(1),
+                    ));
                 }
                 b'\n' => {
                     if is_multiline {
@@ -314,8 +326,12 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
 
                         if state.bytes().starts_with(b"\"\"\"") {
                             // ending the string; don't use the last newline
-                            segments
-                                .push(StrSegment::Plaintext(utf8(state.clone(), without_newline)?));
+                            if !without_newline.is_empty() {
+                                segments.push(StrSegment::Plaintext(utf8(
+                                    state.clone(),
+                                    without_newline,
+                                )?));
+                            }
                         } else {
                             segments
                                 .push(StrSegment::Plaintext(utf8(state.clone(), with_newline)?));
@@ -330,7 +346,7 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                         // all remaining chars. This will mask all other errors, but
                         // it should make it easiest to debug; the file will be a giant
                         // error starting from where the open quote appeared.
-                        return Err((MadeProgress, EString::EndlessSingle(start_state.pos())));
+                        return Err((MadeProgress, EString::EndlessSingleLine(start_state.pos())));
                     }
                 }
                 b'\\' => {
@@ -407,7 +423,10 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
                             escaped_char!(EscapedChar::Backslash);
                         }
                         Some(b'"') => {
-                            escaped_char!(EscapedChar::Quote);
+                            escaped_char!(EscapedChar::DoubleQuote);
+                        }
+                        Some(b'\'') => {
+                            escaped_char!(EscapedChar::SingleQuote);
                         }
                         Some(b'r') => {
                             escaped_char!(EscapedChar::CarriageReturn);
@@ -435,10 +454,12 @@ pub fn parse<'a>() -> impl Parser<'a, StrLiteral<'a>, EString<'a>> {
         // We ran out of characters before finding a closed quote
         Err((
             MadeProgress,
-            if is_multiline {
-                EString::EndlessMulti(start_state.pos())
+            if is_single_quote {
+                EString::EndlessSingleQuote(start_state.pos())
+            } else if is_multiline {
+                EString::EndlessMultiLine(start_state.pos())
             } else {
-                EString::EndlessSingle(start_state.pos())
+                EString::EndlessSingleLine(start_state.pos())
             },
         ))
     }

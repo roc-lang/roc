@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader};
-use crate::ident::Ident;
+use crate::parser::ESingleQuote;
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
 use roc_collections::soa::{EitherIndex, Index, Slice};
@@ -117,10 +117,19 @@ pub enum StrSegment<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SingleQuoteSegment<'a> {
+    Plaintext(&'a str),    // e.g. 'f'
+    Unicode(Loc<&'a str>), // e.g. '00A0' in '\u(00A0)'
+    EscapedChar(EscapedChar), // e.g. '\n'
+                           // No interpolated expressions in single-quoted strings
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EscapedChar {
     Newline,        // \n
     Tab,            // \t
-    Quote,          // \"
+    DoubleQuote,    // \"
+    SingleQuote,    // \'
     Backslash,      // \\
     CarriageReturn, // \r
 }
@@ -132,10 +141,69 @@ impl EscapedChar {
 
         match self {
             Backslash => '\\',
-            Quote => '"',
+            SingleQuote => '\'',
+            DoubleQuote => '"',
             CarriageReturn => 'r',
             Tab => 't',
             Newline => 'n',
+        }
+    }
+
+    pub fn unescape(self) -> char {
+        use EscapedChar::*;
+
+        match self {
+            Backslash => '\\',
+            SingleQuote => '\'',
+            DoubleQuote => '"',
+            CarriageReturn => '\r',
+            Tab => '\t',
+            Newline => '\n',
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SingleQuoteLiteral<'a> {
+    /// The most common case: a plain character with no escapes
+    PlainLine(&'a str),
+    Line(&'a [SingleQuoteSegment<'a>]),
+}
+
+impl<'a> SingleQuoteLiteral<'a> {
+    pub fn to_str_in(&self, arena: &'a Bump) -> &'a str {
+        match self {
+            SingleQuoteLiteral::PlainLine(s) => s,
+            SingleQuoteLiteral::Line(segments) => {
+                let mut s = String::new_in(arena);
+                for segment in *segments {
+                    match segment {
+                        SingleQuoteSegment::Plaintext(s2) => s.push_str(s2),
+                        SingleQuoteSegment::Unicode(loc) => {
+                            let s2 = loc.value;
+                            let c = u32::from_str_radix(s2, 16).expect("Invalid unicode escape");
+                            s.push(char::from_u32(c).expect("Invalid unicode codepoint"));
+                        }
+                        SingleQuoteSegment::EscapedChar(c) => {
+                            s.push(c.unescape());
+                        }
+                    }
+                }
+                s.into_bump_str()
+            }
+        }
+    }
+}
+
+impl<'a> TryFrom<StrSegment<'a>> for SingleQuoteSegment<'a> {
+    type Error = ESingleQuote;
+
+    fn try_from(value: StrSegment<'a>) -> Result<Self, Self::Error> {
+        match value {
+            StrSegment::Plaintext(s) => Ok(SingleQuoteSegment::Plaintext(s)),
+            StrSegment::Unicode(s) => Ok(SingleQuoteSegment::Unicode(s)),
+            StrSegment::EscapedChar(s) => Ok(SingleQuoteSegment::EscapedChar(s)),
+            StrSegment::Interpolated(_) => Err(ESingleQuote::InterpolationNotAllowed),
         }
     }
 }
@@ -738,51 +806,6 @@ pub enum Base {
 }
 
 impl<'a> Pattern<'a> {
-    pub fn from_ident(arena: &'a Bump, ident: Ident<'a>) -> Pattern<'a> {
-        match ident {
-            Ident::Tag(string) => Pattern::Tag(string),
-            Ident::OpaqueRef(string) => Pattern::OpaqueRef(string),
-            Ident::Access { module_name, parts } => {
-                if parts.len() == 1 {
-                    // This is valid iff there is no module.
-                    let ident = parts.iter().next().unwrap();
-
-                    if module_name.is_empty() {
-                        Pattern::Identifier(ident)
-                    } else {
-                        Pattern::QualifiedIdentifier { module_name, ident }
-                    }
-                } else {
-                    // This is definitely malformed.
-                    let mut buf =
-                        String::with_capacity_in(module_name.len() + (2 * parts.len()), arena);
-                    let mut any_parts_printed = if module_name.is_empty() {
-                        false
-                    } else {
-                        buf.push_str(module_name);
-
-                        true
-                    };
-
-                    for part in parts.iter() {
-                        if any_parts_printed {
-                            buf.push('.');
-                        } else {
-                            any_parts_printed = true;
-                        }
-
-                        buf.push_str(part);
-                    }
-
-                    Pattern::Malformed(buf.into_bump_str())
-                }
-            }
-            Ident::RecordAccessorFunction(string) => Pattern::Malformed(string),
-            Ident::TupleAccessorFunction(string) => Pattern::Malformed(string),
-            Ident::Malformed(string, _problem) => Pattern::Malformed(string),
-        }
-    }
-
     /// Check that patterns are equivalent, meaning they have the same shape, but may have
     /// different locations/whitespace
     pub fn equivalent(&self, other: &Self) -> bool {

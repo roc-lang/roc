@@ -19,14 +19,14 @@ fn width_and_alignment_u8_u8() {
     use roc_mono::layout::Layout;
     use roc_mono::layout::UnionLayout;
 
-    let interner = STLayoutInterner::with_capacity(4);
+    let target_info = roc_target::TargetInfo::default_x86_64();
+    let interner = STLayoutInterner::with_capacity(4, target_info);
 
-    let t = &[Layout::u8()] as &[_];
+    let t = &[Layout::U8] as &[_];
     let tt = [t, t];
 
     let layout = Layout::Union(UnionLayout::NonRecursive(&tt));
 
-    let target_info = roc_target::TargetInfo::default_x86_64();
     assert_eq!(layout.alignment_bytes(&interner, target_info), 1);
     assert_eq!(layout.stack_size(&interner, target_info), 2);
 }
@@ -1237,10 +1237,10 @@ fn monomorphized_tag() {
     assert_evals_to!(
         indoc!(
             r#"
-            b = Bar
+            b = \{} -> Bar
             f : [Foo, Bar], [Bar, Baz] -> U8
             f = \_, _ -> 18
-            f b b
+            f (b {}) (b {})
             "#
         ),
         18,
@@ -1279,8 +1279,8 @@ fn monomorphized_tag_with_polymorphic_arg() {
             app "test" provides [main] to "./platform"
 
             main =
-                a = A
-                wrap = Wrapped a
+                a = \{} -> A
+                wrap = \{} -> Wrapped (a {})
 
                 useWrap1 : [Wrapped [A], Other] -> U8
                 useWrap1 =
@@ -1294,7 +1294,7 @@ fn monomorphized_tag_with_polymorphic_arg() {
                         Wrapped A -> 5
                         Wrapped B -> 7
 
-                useWrap1 wrap * useWrap2 wrap
+                useWrap1 (wrap {}) * useWrap2 (wrap {})
             "#
         ),
         10,
@@ -1313,8 +1313,8 @@ fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
             main =
                 mono : U8
                 mono = 15
-                poly = A
-                wrap = Wrapped poly mono
+                poly = \{} -> A
+                wrap = \{} -> Wrapped (poly {}) mono
 
                 useWrap1 : [Wrapped [A] U8, Other] -> U8
                 useWrap1 =
@@ -1328,7 +1328,7 @@ fn monomorphized_tag_with_polymorphic_arg_and_monomorphic_arg() {
                         Wrapped A n -> n
                         Wrapped B _ -> 0
 
-                useWrap1 wrap * useWrap2 wrap
+                useWrap1 (wrap {}) * useWrap2 (wrap {})
             "#
         ),
         225,
@@ -1428,7 +1428,7 @@ fn issue_2445() {
             r#"
             app "test" provides [main] to "./platform"
 
-            none : [None, Update a]
+            none : [None, Update _]
             none = None
 
             press : [None, Update U8]
@@ -2161,6 +2161,38 @@ fn nullable_wrapped_with_non_nullable_singleton_tags() {
             "#
         ),
         RocStr::from("ABC"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn nullable_wrapped_with_nullable_not_last_index() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            Parser : [
+                OneOrMore Parser,
+                Keyword Str,
+                CharLiteral,
+            ]
+
+            toIdParser : Parser -> Str
+            toIdParser = \parser ->
+                when parser is
+                    OneOrMore _ -> "a"
+                    Keyword _ -> "b"
+                    CharLiteral -> "c"
+
+            main =
+                toIdParser (OneOrMore CharLiteral)
+                |> Str.concat (toIdParser (Keyword "try"))
+                |> Str.concat (toIdParser CharLiteral)
+            "#
+        ),
+        RocStr::from("abc"),
         RocStr
     );
 }

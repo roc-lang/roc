@@ -1,12 +1,11 @@
 use std::fmt::Display;
 
-use roc_intern::Interner;
 use roc_module::symbol::{Interns, Symbol};
 use ven_pretty::{Arena, DocAllocator, DocBuilder};
 
 use crate::{
     ir::{Parens, ProcLayout},
-    layout::Layout,
+    layout::{Layout, LayoutInterner},
 };
 
 use super::{
@@ -20,7 +19,7 @@ pub fn format_problems<'a, I>(
     problems: Problems<'a>,
 ) -> impl Display
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     let Problems(problems) = problems;
     let f = Arena::new();
@@ -44,7 +43,7 @@ fn format_problem<'a, 'd, I>(
 ) -> Doc<'d>
 where
     'a: 'd,
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     let Problem {
         proc,
@@ -118,7 +117,7 @@ fn format_kind<'a, 'd, I>(
     kind: ProblemKind<'a>,
 ) -> (&'static str, Vec<(usize, Doc<'d>)>, Doc<'d>)
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     let title;
     let docs_before;
@@ -158,7 +157,7 @@ where
                 f.concat([
                     format_symbol(f, interns, symbol),
                     f.reflow(" defined here with layout "),
-                    def_layout.to_doc(f, interner, Parens::NotNeeded),
+                    interner.to_doc(def_layout, f, Parens::NotNeeded),
                 ]),
             )];
             f.concat([
@@ -166,7 +165,7 @@ where
                 f.reflow(" used as a "),
                 f.reflow(format_use_kind(use_kind)),
                 f.reflow(" here with layout "),
-                use_layout.to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc(use_layout, f, Parens::NotNeeded),
             ])
         }
         ProblemKind::SymbolDefMismatch {
@@ -179,9 +178,9 @@ where
             f.concat([
                 format_symbol(f, interns, symbol),
                 f.reflow(" is defined as "),
-                def_layout.to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc(def_layout, f, Parens::NotNeeded),
                 f.reflow(" but its initializer is "),
-                expr_layout.to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc(expr_layout, f, Parens::NotNeeded),
             ])
         }
         ProblemKind::BadSwitchConditionLayout { found_layout } => {
@@ -189,7 +188,7 @@ where
             docs_before = vec![];
             f.concat([
                 f.reflow("This switch condition is a "),
-                found_layout.to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc(found_layout, f, Parens::NotNeeded),
             ])
         }
         ProblemKind::DuplicateSwitchBranch {} => {
@@ -445,7 +444,7 @@ fn format_proc_spec<'a, 'd, I>(
     proc_layout: ProcLayout<'a>,
 ) -> Doc<'d>
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     f.concat([
         f.as_string(symbol.as_str(interns)),
@@ -460,7 +459,7 @@ fn format_proc_layout<'a, 'd, I>(
     proc_layout: ProcLayout<'a>,
 ) -> Doc<'d>
 where
-    I: Interner<'a, Layout<'a>>,
+    I: LayoutInterner<'a>,
 {
     let ProcLayout {
         arguments,
@@ -470,13 +469,13 @@ where
     let args = f.intersperse(
         arguments
             .iter()
-            .map(|a| a.to_doc(f, interner, Parens::InFunction)),
+            .map(|a| interner.to_doc(*a, f, Parens::InFunction)),
         f.reflow(", "),
     );
     let fun = f.concat([
         f.concat([f.reflow("("), args, f.reflow(")")]),
         f.reflow(" -> "),
-        result.to_doc(f, interner, Parens::NotNeeded),
+        interner.to_doc(result, f, Parens::NotNeeded),
     ]);
     let niche = (f.text("("))
         .append(captures_niche.to_doc(f, interner))

@@ -12,7 +12,7 @@ use roc_region::all::Loc;
 
 /// Does an AST node need parens around it?
 ///
-/// Usually not, but there are two cases where it may be required
+/// Usually not, but there are a few cases where it may be required
 ///
 /// 1. In a function type, function types are in parens
 ///
@@ -25,11 +25,19 @@ use roc_region::all::Loc;
 ///     Just (Just a)
 ///     List (List a)
 ///     reverse (reverse l)
+///
+///  3. In a chain of binary operators, things like nested defs require parens.
+///
+///    a + (
+///       x = 3
+///       x + 1
+///    )
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Parens {
     NotNeeded,
     InFunctionType,
     InApply,
+    InOperator,
 }
 
 /// In an AST node, do we show newlines around it
@@ -263,7 +271,6 @@ impl<'a> Formattable for TypeAnnotation<'a> {
             }
             Apply(pkg, name, arguments) => {
                 buf.indent(indent);
-                // NOTE apply is never multiline
                 let write_parens = parens == Parens::InApply && !arguments.is_empty();
 
                 if write_parens {
@@ -277,11 +284,38 @@ impl<'a> Formattable for TypeAnnotation<'a> {
 
                 buf.push_str(name);
 
-                for argument in *arguments {
-                    buf.spaces(1);
-                    argument
-                        .value
-                        .format_with_options(buf, Parens::InApply, Newlines::No, indent);
+                let needs_indent = except_last(arguments).any(|a| a.is_multiline())
+                    || arguments
+                        .last()
+                        .map(|a| {
+                            a.is_multiline()
+                                && (!a.extract_spaces().before.is_empty()
+                                    || !is_outdentable(&a.value))
+                        })
+                        .unwrap_or_default();
+
+                let arg_indent = if needs_indent {
+                    indent + INDENT
+                } else {
+                    indent
+                };
+
+                for arg in arguments.iter() {
+                    if needs_indent {
+                        let arg = arg.extract_spaces();
+                        fmt_spaces(buf, arg.before.iter(), arg_indent);
+                        buf.ensure_ends_with_newline();
+                        arg.item.format_with_options(
+                            buf,
+                            Parens::InApply,
+                            Newlines::Yes,
+                            arg_indent,
+                        );
+                        fmt_spaces(buf, arg.after.iter(), arg_indent);
+                    } else {
+                        buf.spaces(1);
+                        arg.format_with_options(buf, Parens::InApply, Newlines::No, arg_indent);
+                    }
                 }
 
                 if write_parens {
@@ -370,6 +404,13 @@ impl<'a> Formattable for TypeAnnotation<'a> {
             }
         }
     }
+}
+
+fn is_outdentable(ann: &TypeAnnotation) -> bool {
+    matches!(
+        ann.extract_spaces().item,
+        TypeAnnotation::Tuple { .. } | TypeAnnotation::Record { .. }
+    )
 }
 
 /// Fields are subtly different on the type and term level:
@@ -689,5 +730,13 @@ impl<'a> Formattable for HasAbilities<'a> {
                 fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
             }
         }
+    }
+}
+
+pub fn except_last<T>(items: &[T]) -> impl Iterator<Item = &T> {
+    if items.is_empty() {
+        items.iter()
+    } else {
+        items[..items.len() - 1].iter()
     }
 }

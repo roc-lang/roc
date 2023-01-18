@@ -219,7 +219,7 @@ impl<'a> Input<'a> {
                 * * * AST after formatting:\n{:#?}\n\n",
                 self.as_str(),
                 output.as_ref().as_str(),
-                ast_normalized,
+                actual,
                 reparsed_ast_normalized
             );
         }
@@ -229,7 +229,10 @@ impl<'a> Input<'a> {
             let reformatted = reparsed_ast.format();
 
             if output != reformatted {
-                eprintln!("Formatting bug; formatting is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\n", self.as_str(), output.as_ref().as_str());
+                eprintln!("Formatting bug; formatting is not stable.\nOriginal code:\n{}\n\nFormatted code:\n{}\n\nAST:\n{:#?}\n\n",
+                    self.as_str(),
+                    output.as_ref().as_str(),
+                    actual);
                 eprintln!("Reformatting the formatted code changed it again, as follows:\n\n");
 
                 assert_multiline_str_eq!(output.as_ref().as_str(), reformatted.as_ref().as_str());

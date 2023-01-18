@@ -2,10 +2,9 @@ use crate::rust_glue;
 use crate::types::Types;
 use bumpalo::Bump;
 use roc_collections::MutMap;
-use roc_intern::GlobalInterner;
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_mono::ir::{generate_glue_procs, GlueProc};
-use roc_mono::layout::LayoutCache;
+use roc_mono::layout::{GlobalLayoutInterner, LayoutCache, LayoutInterner};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::{Architecture, TargetInfo};
@@ -133,8 +132,6 @@ pub fn load_types(
         );
     }
 
-    let layout_interner = GlobalInterner::with_capacity(128);
-
     // Get the variables for all the exposed_to_host symbols
     let variables = (0..decls.len()).filter_map(|index| {
         if exposed_to_host.contains_key(&decls.symbols[index].value) {
@@ -148,6 +145,8 @@ pub fn load_types(
     let architectures = Architecture::iter();
     let mut types_and_targets = Vec::with_capacity(architectures.len());
 
+    let layout_interner = GlobalLayoutInterner::with_capacity(128, target_info);
+
     for architecture in architectures {
         let mut interns = interns.clone(); // TODO there may be a way to avoid this.
         let target_info = TargetInfo {
@@ -160,11 +159,13 @@ pub fn load_types(
 
         // Populate glue getters/setters for all relevant variables
         for var in variables.clone() {
-            let layout = layout_cache
+            let in_layout = layout_cache
                 .from_var(arena, var, subs)
                 .expect("Something weird ended up in the content");
 
-            if layout.has_varying_stack_size(arena) {
+            let layout = layout_cache.interner.get(in_layout);
+
+            if layout.has_varying_stack_size(&layout_cache.interner, arena) {
                 let answer = generate_glue_procs(
                     home,
                     &mut interns,

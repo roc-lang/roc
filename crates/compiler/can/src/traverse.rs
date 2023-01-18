@@ -476,6 +476,9 @@ pub fn walk_pattern<V: Visitor>(visitor: &mut V, pattern: &Pattern) {
 
     match pattern {
         Identifier(..) => { /* terminal */ }
+        As(subpattern, _symbol) => {
+            visitor.visit_pattern(&subpattern.value, subpattern.region, None)
+        }
         AppliedTag { arguments, .. } => arguments
             .iter()
             .for_each(|(v, lp)| visitor.visit_pattern(&lp.value, lp.region, Some(*v))),

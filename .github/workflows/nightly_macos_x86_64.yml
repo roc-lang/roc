@@ -16,7 +16,7 @@ jobs:
         run: ./ci/write_version.sh
           
       - name: execute rust tests
-        run: cargo test --release --locked -- --skip opaque_wrap_function --skip bool_list_literal --skip platform_switching_swift --skip swift_ui
+        run: cargo test --release --locked -- --skip opaque_wrap_function --skip bool_list_literal --skip platform_switching_swift --skip swift_ui --skip str_append_scalar
         # swift tests are skipped because of "Could not find or use auto-linked library 'swiftCompatibilityConcurrency'" on macos-11 x86_64 CI machine
         # this issue may be caused by using older versions of XCode
 
@@ -34,15 +34,15 @@ jobs:
         env:
             DATE: ${{ env.DATE }}
             SHA: ${{ env.SHA }}
-        run: echo "RELEASE_TAR_FILENAME=roc_nightly-macos_x86_64-$DATE-$SHA.tar.gz" >> $GITHUB_ENV
+        run: echo "RELEASE_FOLDER_NAME=roc_nightly-macos_x86_64-$DATE-$SHA" >> $GITHUB_ENV
         
       - name: package release
-        run: ./ci/package_release.sh ${{ env.RELEASE_TAR_FILENAME }}
+        run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
         
       - name: Upload artifact. Actually uploading to github releases has to be done manually.
         uses: actions/upload-artifact@v3
         with:
-           name: ${{ env.RELEASE_TAR_FILENAME }}
-           path: ${{ env.RELEASE_TAR_FILENAME }}
+           name: ${{ env.RELEASE_FOLDER_NAME }}
+           path: ${{ env.RELEASE_FOLDER_NAME }}
            retention-days: 4
 

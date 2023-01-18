@@ -56,6 +56,7 @@ pub struct DebugPrint {
     pub print_lambda_sets: bool,
     pub print_only_under_alias: bool,
     pub ignore_polarity: bool,
+    pub print_weakened_vars: bool,
 }
 
 impl DebugPrint {
@@ -63,6 +64,7 @@ impl DebugPrint {
         print_lambda_sets: false,
         print_only_under_alias: false,
         ignore_polarity: false,
+        print_weakened_vars: false,
     };
 }
 
@@ -240,7 +242,7 @@ fn find_names_needed(
             }
 
             find_names_needed(
-                *ext_var,
+                ext_var.var(),
                 subs,
                 roots,
                 root_appearances,
@@ -250,7 +252,7 @@ fn find_names_needed(
         }
         Structure(FunctionOrTagUnion(_, _, ext_var)) => {
             find_names_needed(
-                *ext_var,
+                ext_var.var(),
                 subs,
                 roots,
                 root_appearances,
@@ -275,7 +277,7 @@ fn find_names_needed(
             }
 
             find_names_needed(
-                *ext_var,
+                ext_var.var(),
                 subs,
                 roots,
                 root_appearances,
@@ -380,11 +382,7 @@ struct NamedResult {
     recursion_structs_to_expand: Vec<Variable>,
 }
 
-fn name_all_type_vars(
-    variable: Variable,
-    subs: &mut Subs,
-    find_names_under_alias: bool,
-) -> NamedResult {
+fn name_all_type_vars(variable: Variable, subs: &mut Subs, debug_print: DebugPrint) -> NamedResult {
     let mut roots = Vec::new();
     let mut letters_used = 0;
     let mut appearances = MutMap::default();
@@ -397,7 +395,7 @@ fn name_all_type_vars(
         &mut roots,
         &mut appearances,
         &mut taken,
-        find_names_under_alias,
+        debug_print.print_only_under_alias,
     );
 
     let mut recursion_structs_to_expand = vec![];
@@ -407,14 +405,16 @@ fn name_all_type_vars(
         // set_root_name(root, (format!("<{:?}>", root).into()), subs);
         match appearances.get(&root) {
             Some(Appearances::Multiple) => {
-                letters_used = name_root(letters_used, root, subs, &mut taken);
+                letters_used = name_root(letters_used, root, subs, &mut taken, debug_print);
             }
             Some(Appearances::Single) => {
                 if let Content::RecursionVar { structure, .. } =
                     subs.get_content_without_compacting(root)
                 {
                     recursion_structs_to_expand.push(*structure);
-                    letters_used = name_root(letters_used, root, subs, &mut taken);
+                    letters_used = name_root(letters_used, root, subs, &mut taken, debug_print);
+                } else if debug_print.print_weakened_vars && is_weakened_unbound(subs, root) {
+                    letters_used = name_root(letters_used, root, subs, &mut taken, debug_print);
                 }
             }
             _ => {}
@@ -426,12 +426,29 @@ fn name_all_type_vars(
     }
 }
 
+fn is_weakened_unbound(subs: &Subs, var: Variable) -> bool {
+    use Content::*;
+    let desc = subs.get_without_compacting(var);
+    !desc.rank.is_generalized()
+        && matches!(
+            desc.content,
+            FlexVar(_) | RigidVar(_) | FlexAbleVar(..) | RigidAbleVar(..)
+        )
+}
+
 fn name_root(
     letters_used: u32,
     root: Variable,
     subs: &mut Subs,
     taken: &mut MutMap<Lowercase, Variable>,
+    debug_print: DebugPrint,
 ) -> u32 {
+    let prefix = if debug_print.print_weakened_vars && is_weakened_unbound(subs, root) {
+        "w_" // weakened variable
+    } else {
+        ""
+    };
+
     let (generated_name, new_letters_used) = match subs.get_content_unchecked(root) {
         Content::FlexVar(Some(name))
         | Content::RigidVar(name)
@@ -444,19 +461,21 @@ fn name_root(
             let name_hint = &subs[*name];
             if name_hint.as_str() == "*" {
                 // Give a proper name to named wildcards!
-                name_type_var(letters_used, &mut taken.keys(), |var, str| {
+                name_type_var(prefix, letters_used, &mut taken.keys(), |var, str| {
                     var.as_str() == str
                 })
             } else {
-                let generated =
-                    name_type_var_with_hint(name_hint.as_str(), &mut taken.keys(), |var, str| {
-                        var.as_str() == str
-                    });
+                let generated = name_type_var_with_hint(
+                    prefix,
+                    name_hint.as_str(),
+                    &mut taken.keys(),
+                    |var, str| var.as_str() == str,
+                );
 
                 (generated, letters_used)
             }
         }
-        _ => name_type_var(letters_used, &mut taken.keys(), |var, str| {
+        _ => name_type_var(prefix, letters_used, &mut taken.keys(), |var, str| {
             var.as_str() == str
         }),
     };
@@ -568,7 +587,7 @@ pub fn name_and_print_var(
     interns: &Interns,
     debug_print: DebugPrint,
 ) -> String {
-    let named_result = name_all_type_vars(var, subs, debug_print.print_only_under_alias);
+    let named_result = name_all_type_vars(var, subs, debug_print);
     let content = subs.get_content_without_compacting(var);
     content_to_string(
         content,
@@ -1190,7 +1209,7 @@ fn write_flat_type<'a>(
                 ctx,
                 subs,
                 buf,
-                ExtContent::for_tag(subs, new_ext_var, pol, &env.debug),
+                ExtContent::for_tag(subs, new_ext_var.var(), pol, &env.debug),
                 parens,
                 pol,
             )
@@ -1205,7 +1224,7 @@ fn write_flat_type<'a>(
                     .iter()
                     .map(|t| (t.clone(), vec![])),
             );
-            let ext_content = write_sorted_tags(env, ctx, subs, buf, &tags, *ext_var, pol);
+            let ext_content = write_sorted_tags(env, ctx, subs, buf, &tags, ext_var.var(), pol);
 
             buf.push(']');
 
@@ -1234,7 +1253,7 @@ fn write_flat_type<'a>(
                     ctx,
                     subs,
                     buf,
-                    ExtContent::for_tag(subs, new_ext_var, pol, &env.debug),
+                    ExtContent::for_tag(subs, new_ext_var.var(), pol, &env.debug),
                     parens,
                     pol,
                 );
@@ -1287,12 +1306,12 @@ pub fn chase_ext_tag_union(
         Content::Structure(EmptyTagUnion) => ChasedExt::Empty,
         Content::Structure(TagUnion(tags, ext_var)) => {
             push_union(subs, tags, fields);
-            chase_ext_tag_union(subs, *ext_var, fields)
+            chase_ext_tag_union(subs, ext_var.var(), fields)
         }
 
         Content::Structure(RecursiveTagUnion(_, tags, ext_var)) => {
             push_union(subs, tags, fields);
-            chase_ext_tag_union(subs, *ext_var, fields)
+            chase_ext_tag_union(subs, ext_var.var(), fields)
         }
         Content::Structure(FunctionOrTagUnion(tag_names, _, ext_var)) => {
             fields.extend(
@@ -1301,7 +1320,7 @@ pub fn chase_ext_tag_union(
                     .map(|t| (t.clone(), vec![])),
             );
 
-            chase_ext_tag_union(subs, *ext_var, fields)
+            chase_ext_tag_union(subs, ext_var.var(), fields)
         }
 
         Content::Alias(_, _, var, _) => chase_ext_tag_union(subs, *var, fields),
