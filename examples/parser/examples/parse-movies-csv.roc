@@ -1,6 +1,6 @@
 app "example"
     packages { 
-        pf: "platform/main.roc",
+        pf: "../../platform-switching/zig-platform/main.roc",
         parser: "../package/main.roc", 
     }
     imports [

@@ -860,9 +860,9 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
-            "examples/parser",
+            "examples/parser/examples",
             "parse-movies-csv.roc",
-            "parse-movies-csv",
+            "example",
             "Parse success!\n",
             UseValgrind::No,
         )
@@ -871,7 +871,7 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn parse_http() {
-        test_roc_expect("examples/parser/Parser", "Http.roc")
+        test_roc_expect("examples/package", "ParserHttp.roc")
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]

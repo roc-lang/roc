@@ -5,7 +5,8 @@ app "example"
     }
     imports [
         cli.Stdout,
-        parser.ParserCore.{ Parser, parsePartial, buildPrimitiveParser },
+        parser.ParserCore.{ Parser, buildPrimitiveParser, many },
+        parser.ParserStr.{ parseStr },
     ]
     provides [ main ] to cli
 
@@ -18,23 +19,24 @@ letterParser : Parser (List U8) Letter
 letterParser =
     input <- buildPrimitiveParser
 
-    val = when input is 
-        ['A', .. ] -> A
-        ['B', .. ] -> B
-        ['C', .. ] -> C
-        _ -> Other
+    valResult = when input is
+        [] -> Err (ParsingFailure "Nothing to parse")
+        ['A', .. ] -> Ok A
+        ['B', .. ] -> Ok B
+        ['C', .. ] -> Ok C
+        _ -> Ok Other
 
-    Ok { val, input : List.dropFirst input }    
+    valResult
+    |> Result.map \val -> { val, input : List.dropFirst input }
 
 expect
-    input = [ 'B', 'C', 'X' ,'A' ]
+    input = "B"
     parser = letterParser
-    result = parsePartial parser input
-    result == Ok { val : B, input : ['C', 'X' ,'A'] }
+    result = parseStr parser input
+    result == Ok B 
 
-# Currently hangs the compiler refer [Issue 4904](https://github.com/roc-lang/roc/issues/4904) 
-# expect
-#     input = [ 'B', 'C', 'X' ,'A' ]
-#     parser = many letterParser
-#     result = parsePartial parser input
-#     result == Ok { val : [ B, C, Other, A ], input : [] }
+expect
+    input = "BCXA"
+    parser = many letterParser
+    result = parseStr parser input
+    result == Ok [ B, C, Other, A ]
