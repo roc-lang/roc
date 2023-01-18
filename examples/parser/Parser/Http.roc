@@ -16,7 +16,6 @@ interface Parser.Http
             codeunitSatisfies,
             strFromRaw,
             anyRawString,
-            digit,
             digits,
         },
     ]
