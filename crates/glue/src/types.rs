@@ -114,6 +114,7 @@ impl Types {
         };
 
         match (a, b) {
+            (Unsized, Unsized) => true,
             (RocStr, RocStr) | (Bool, Bool) | (EmptyTagUnion, EmptyTagUnion) | (Unit, Unit) => true,
             (RocResult(ok_a, err_a), RocResult(ok_b, err_b)) => {
                 self.is_equivalent_help(
@@ -459,7 +460,9 @@ impl Types {
             | (RecursivePointer(_), _)
             | (_, RecursivePointer(_))
             | (Function { .. }, _)
-            | (_, Function { .. }) => false,
+            | (_, Function { .. })
+            | (Unsized, _)
+            | (_, Unsized) => false,
         }
     }
 
@@ -666,6 +669,8 @@ pub enum RocType {
     Function(RocFn),
     /// A zero-sized type, such as an empty record or a single-tag union with no payload
     Unit,
+    /// A type that has a size that is not statically known
+    Unsized,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]

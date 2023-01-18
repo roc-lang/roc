@@ -285,7 +285,8 @@ fn add_type(target_info: TargetInfo, id: TypeId, types: &Types, impls: &mut Impl
         | RocType::RocDict(_, _)
         | RocType::RocSet(_)
         | RocType::RocList(_)
-        | RocType::RocBox(_) => {}
+        | RocType::RocBox(_)
+        | RocType::Unsized => {}
         RocType::RecursivePointer { .. } => {
             // This is recursively pointing to a type that should already have been added,
             // so no extra work needs to happen.
@@ -1100,6 +1101,7 @@ pub struct {name} {{
                             "arg".to_string()
                         };
                     }
+                    RocType::Unsized => todo!(),
                     RocType::Function(RocFn { .. }) => todo!(),
                 };
 
@@ -1715,6 +1717,7 @@ pub struct {name} {{
 
                                 buf.join("\n")
                             }
+                            RocType::Unsized => todo!(),
                             RocType::Function(RocFn { .. }) => todo!(),
                         };
 
@@ -1960,6 +1963,7 @@ fn type_name(id: TypeId, types: &Types) -> String {
         RocType::RocSet(elem_id) => format!("roc_std::RocSet<{}>", type_name(*elem_id, types)),
         RocType::RocList(elem_id) => format!("roc_std::RocList<{}>", type_name(*elem_id, types)),
         RocType::RocBox(elem_id) => format!("roc_std::RocBox<{}>", type_name(*elem_id, types)),
+        RocType::Unsized => "*mut u8".to_string(),
         RocType::RocResult(ok_id, err_id) => {
             format!(
                 "roc_std::RocResult<{}, {}>",
@@ -2020,6 +2024,7 @@ fn has_functions(typ: &RocType, types: &Types) -> bool {
         | RocType::Unit
         | RocType::Num(_)
         | RocType::EmptyTagUnion
+        | RocType::Unsized
         | RocType::TagUnion(RocTagUnion::Enumeration { .. }) => false,
         RocType::TagUnion(RocTagUnion::NonRecursive { tags, .. })
         | RocType::TagUnion(RocTagUnion::Recursive { tags, .. })
@@ -2177,45 +2182,36 @@ pub struct {name} {{
                 owned_ret = "payload".to_string();
                 borrowed_ret = format!("&{owned_ret}");
             }
-            RocType::Struct {
-                fields: RocStructFields::HasNoClosure { fields },
-                name,
-            } => {
-                let answer = tag_union_struct_help(name, fields, non_null_payload, types, false);
+            RocType::Struct { fields, name } => match fields {
+                RocStructFields::HasNoClosure { fields } => {
+                    let answer =
+                        tag_union_struct_help(name, fields, non_null_payload, types, false);
 
-                payload_args = answer.payload_args;
-                args_to_payload = answer.args_to_payload;
-                owned_ret = answer.owned_ret;
-                borrowed_ret = answer.borrowed_ret;
-                owned_ret_type = answer.owned_ret_type;
-                borrowed_ret_type = answer.borrowed_ret_type;
-            }
-            RocType::TagUnionPayload {
-                fields: RocStructFields::HasNoClosure { fields },
-                name,
-            } => {
-                let answer = tag_union_struct_help(name, fields, non_null_payload, types, true);
+                    payload_args = answer.payload_args;
+                    args_to_payload = answer.args_to_payload;
+                    owned_ret = answer.owned_ret;
+                    borrowed_ret = answer.borrowed_ret;
+                    owned_ret_type = answer.owned_ret_type;
+                    borrowed_ret_type = answer.borrowed_ret_type;
+                }
 
-                payload_args = answer.payload_args;
-                args_to_payload = answer.args_to_payload;
-                owned_ret = answer.owned_ret;
-                borrowed_ret = answer.borrowed_ret;
-                owned_ret_type = answer.owned_ret_type;
-                borrowed_ret_type = answer.borrowed_ret_type;
-            }
-            RocType::Struct {
-                fields: RocStructFields::HasClosure { fields: _ },
-                name: _,
-            } => {
-                todo!("ok struct!");
-            }
-            RocType::TagUnionPayload {
-                fields: RocStructFields::HasClosure { fields: _ },
-                name: _,
-            } => {
-                todo!("ok tag union payload!");
-            }
-            RocType::Function(RocFn { .. }) => todo!(),
+                RocStructFields::HasClosure { .. } => todo!(),
+            },
+            RocType::TagUnionPayload { fields, name } => match fields {
+                RocStructFields::HasNoClosure { fields } => {
+                    let answer = tag_union_struct_help(name, fields, non_null_payload, types, true);
+
+                    payload_args = answer.payload_args;
+                    args_to_payload = answer.args_to_payload;
+                    owned_ret = answer.owned_ret;
+                    borrowed_ret = answer.borrowed_ret;
+                    owned_ret_type = answer.owned_ret_type;
+                    borrowed_ret_type = answer.borrowed_ret_type;
+                }
+                RocStructFields::HasClosure { .. } => todo!(),
+            },
+            RocType::Function { .. } => todo!(),
+            RocType::Unsized => todo!(),
         };
 
         // Add a convenience constructor function for the tag with the payload, e.g.
@@ -2468,7 +2464,8 @@ pub struct {name} {{
 
                 buf.join(&format!("\n{INDENT}{INDENT}{INDENT}{INDENT}{INDENT}"))
             }
-            RocType::Function(RocFn { .. }) => todo!(),
+            RocType::Unsized => todo!(),
+            RocType::Function { .. } => todo!(),
         };
 
         let body = format!(
@@ -2535,7 +2532,7 @@ struct StructIngredients {
     borrowed_ret_type: String,
 }
 
-fn tag_union_struct_help<'a>(
+fn tag_union_struct_help(
     name: &str,
     fields: &[(String, TypeId)],
     payload_id: TypeId,
@@ -2679,7 +2676,8 @@ fn cannot_derive_default(roc_type: &RocType, types: &Types) -> bool {
             fields: RocStructFields::HasClosure { .. },
             ..
         }
-        | RocType::Function(_) => true,
+        | RocType::Unsized => true,
+        RocType::Function { .. } => true,
         RocType::RocStr | RocType::Bool | RocType::Num(_) => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
             cannot_derive_default(types.get_type(*id), types)
@@ -2711,7 +2709,8 @@ fn cannot_derive_copy(roc_type: &RocType, types: &Types) -> bool {
         | RocType::Bool
         | RocType::Num(_)
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
-        | RocType::Function(_) => false,
+        | RocType::Unsized
+        | RocType::Function { .. } => false,
         RocType::RocStr
         | RocType::RocList(_)
         | RocType::RocDict(_, _)
@@ -2788,7 +2787,8 @@ fn has_float_help(roc_type: &RocType, types: &Types, do_not_recurse: &[TypeId]) 
         | RocType::RocStr
         | RocType::Bool
         | RocType::TagUnion(RocTagUnion::Enumeration { .. })
-        | RocType::Function(_) => false,
+        | RocType::Function { .. }
+        | RocType::Unsized => false,
         RocType::RocList(id) | RocType::RocSet(id) | RocType::RocBox(id) => {
             has_float_help(types.get_type(*id), types, do_not_recurse)
         }
