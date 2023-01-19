@@ -2,9 +2,9 @@ use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::MmapMut;
 use object::{elf, endian};
 use object::{
-    CompressedFileRange, CompressionFormat, LittleEndian as LE, NativeEndian, Object,
-    ObjectSection, ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex,
-    SectionKind, Symbol, SymbolIndex, SymbolSection,
+    CompressedFileRange, CompressionFormat, LittleEndian as LE, Object, ObjectSection,
+    ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex, SectionKind, Symbol,
+    SymbolIndex, SymbolSection,
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::{internal_error, user_error};
@@ -548,12 +548,12 @@ fn gen_elf_le(
     verbose: bool,
 ) -> MmapMut {
     let exec_header = load_struct_inplace::<elf::FileHeader64<LE>>(exec_data, 0);
-    let ph_offset = exec_header.e_phoff.get(NativeEndian);
-    let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
-    let ph_num = exec_header.e_phnum.get(NativeEndian);
-    let sh_offset = exec_header.e_shoff.get(NativeEndian);
-    let sh_ent_size = exec_header.e_shentsize.get(NativeEndian);
-    let sh_num = exec_header.e_shnum.get(NativeEndian);
+    let ph_offset = exec_header.e_phoff.get(LE);
+    let ph_ent_size = exec_header.e_phentsize.get(LE);
+    let ph_num = exec_header.e_phnum.get(LE);
+    let sh_offset = exec_header.e_shoff.get(LE);
+    let sh_ent_size = exec_header.e_shentsize.get(LE);
+    let sh_num = exec_header.e_shnum.get(LE);
 
     if verbose {
         println!();
@@ -573,12 +573,12 @@ fn gen_elf_le(
         md.dynamic_section_offset as usize,
         dynamic_lib_count,
     ) {
-        match d.d_tag.get(NativeEndian) as u32 {
+        match d.d_tag.get(LE) as u32 {
             elf::DT_RELA => {
-                original_rela_offset = d.d_val.get(NativeEndian);
+                original_rela_offset = d.d_val.get(LE);
             }
             elf::DT_RELASZ => {
-                original_rela_size = d.d_val.get(NativeEndian);
+                original_rela_size = d.d_val.get(LE);
             }
             _ => {}
         }
@@ -610,20 +610,20 @@ fn gen_elf_le(
     );
     let mut first_load_found = false;
     for ph in program_headers.iter() {
-        let p_type = ph.p_type.get(NativeEndian);
-        let p_offset = ph.p_offset.get(NativeEndian);
+        let p_type = ph.p_type.get(LE);
+        let p_offset = ph.p_offset.get(LE);
         if p_type == elf::PT_LOAD && p_offset == 0 {
             first_load_found = true;
-            md.load_align_constraint = ph.p_align.get(NativeEndian);
-            md.ph_virtual_shift_start = md.ph_physical_shift_start + ph.p_vaddr.get(NativeEndian);
+            md.load_align_constraint = ph.p_align.get(LE);
+            md.ph_virtual_shift_start = md.ph_physical_shift_start + ph.p_vaddr.get(LE);
         }
         if p_type == elf::PT_LOAD
             && p_offset <= md.original_rela_paddr
-            && md.original_rela_paddr < p_offset + ph.p_filesz.get(NativeEndian)
+            && md.original_rela_paddr < p_offset + ph.p_filesz.get(LE)
         {
             // TODO: Simply adding vaddr is probably not valid.
             // We probably need to make sure the vaddr is after all possible vaddrs in this executable.
-            let p_vaddr = ph.p_vaddr.get(NativeEndian);
+            let p_vaddr = ph.p_vaddr.get(LE);
             md.rela_virtual_shift_start = md.rela_physical_shift_start + p_vaddr;
             md.rela_virtual_shift_end = md.rela_physical_shift_end + p_vaddr;
             md.original_rela_vaddr = md.original_rela_paddr + p_vaddr;
@@ -642,19 +642,19 @@ fn gen_elf_le(
 
     // Shift all of the program headers.
     for ph in program_headers.iter_mut() {
-        let p_type = ph.p_type.get(NativeEndian);
-        let p_offset = ph.p_offset.get(NativeEndian);
+        let p_type = ph.p_type.get(LE);
+        let p_offset = ph.p_offset.get(LE);
         if (p_type == elf::PT_LOAD && p_offset == 0) || p_type == elf::PT_PHDR {
             // Extend length for the first segment and the program header.
-            ph.p_filesz = endian::U64::new(LE, ph.p_filesz.get(NativeEndian) + md.ph_shift_bytes);
-            ph.p_memsz = endian::U64::new(LE, ph.p_memsz.get(NativeEndian) + md.ph_shift_bytes);
+            ph.p_filesz = endian::U64::new(LE, ph.p_filesz.get(LE) + md.ph_shift_bytes);
+            ph.p_memsz = endian::U64::new(LE, ph.p_memsz.get(LE) + md.ph_shift_bytes);
         } else {
             // Shift if needed.
             ph.p_offset = endian::U64::new(LE, update_physical_offset(md, p_offset));
 
-            let p_vaddr = ph.p_vaddr.get(NativeEndian);
+            let p_vaddr = ph.p_vaddr.get(LE);
             ph.p_vaddr = endian::U64::new(LE, update_virtual_offset(md, p_vaddr));
-            let p_paddr = ph.p_paddr.get(NativeEndian);
+            let p_paddr = ph.p_paddr.get(LE);
             ph.p_paddr = endian::U64::new(LE, update_physical_offset(md, p_paddr));
             // if virtual_shift_start <= p_vaddr {
             // ph.p_vaddr = endian::U64::new(LE, p_vaddr + md.added_byte_count);
@@ -679,8 +679,8 @@ fn gen_elf_le(
     let last_segment_vaddr = program_headers
         .iter()
         .filter_map(|ph| {
-            if ph.p_type.get(NativeEndian) != elf::PT_GNU_STACK {
-                Some(ph.p_vaddr.get(NativeEndian) + ph.p_memsz.get(NativeEndian))
+            if ph.p_type.get(LE) != elf::PT_GNU_STACK {
+                Some(ph.p_vaddr.get(LE) + ph.p_memsz.get(LE))
             } else {
                 None
             }
@@ -722,8 +722,8 @@ fn gen_elf_le(
     let mut rel_sections: Vec<(u64, u64)> = vec![];
     let mut rela_sections: Vec<(usize, u64, u64)> = vec![];
     for (i, sh) in section_headers.iter_mut().enumerate() {
-        let sh_offset = sh.sh_offset.get(NativeEndian);
-        let sh_addr = sh.sh_addr.get(NativeEndian);
+        let sh_offset = sh.sh_offset.get(LE);
+        let sh_addr = sh.sh_addr.get(LE);
 
         sh.sh_offset = endian::U64::new(LE, update_physical_offset(md, sh_offset));
         // if virtual_shift_start <= sh_addr {
@@ -732,18 +732,18 @@ fn gen_elf_le(
         sh.sh_addr = endian::U64::new(LE, update_virtual_offset(md, sh_addr));
 
         // Record every relocation section.
-        let sh_type = sh.sh_type.get(NativeEndian);
+        let sh_type = sh.sh_type.get(LE);
         if sh_type == elf::SHT_REL {
-            rel_sections.push((sh_offset, sh.sh_size.get(NativeEndian)));
+            rel_sections.push((sh_offset, sh.sh_size.get(LE)));
         } else if sh_type == elf::SHT_RELA {
-            rela_sections.push((i, sh_offset, sh.sh_size.get(NativeEndian)));
+            rela_sections.push((i, sh_offset, sh.sh_size.get(LE)));
         }
     }
 
     // Get last section virtual address.
     let last_section_vaddr = section_headers
         .iter()
-        .map(|sh| sh.sh_addr.get(NativeEndian) + sh.sh_size.get(NativeEndian))
+        .map(|sh| sh.sh_addr.get(LE) + sh.sh_size.get(LE))
         .max()
         .unwrap();
 
@@ -760,7 +760,7 @@ fn gen_elf_le(
             sec_size as usize / mem::size_of::<elf::Rel64<LE>>(),
         );
         for rel in relocations.iter_mut() {
-            let r_offset = rel.r_offset.get(NativeEndian);
+            let r_offset = rel.r_offset.get(LE);
             // if virtual_shift_start <= r_offset {
             // rel.r_offset = endian::U64::new(LE, r_offset + md.added_byte_count);
             // }
@@ -776,7 +776,7 @@ fn gen_elf_le(
             sec_size as usize / mem::size_of::<elf::Rela64<LE>>(),
         );
         for (i, rel) in relocations.iter_mut().enumerate() {
-            let r_offset = rel.r_offset.get(NativeEndian);
+            let r_offset = rel.r_offset.get(LE);
             rel.r_offset = endian::U64::new(LE, update_virtual_offset(md, r_offset));
             // if md.ph_virtual_shift_start <= r_offset {
             // rel.r_offset = endian::U64::new(LE, r_offset + md.added_byte_count);
@@ -791,9 +791,9 @@ fn gen_elf_le(
             }
             // }
             // If the relocation goes to a roc function, we need to surgically link it and change it to relative.
-            let r_type = rel.r_type(NativeEndian, false);
+            let r_type = rel.r_type(LE, false);
             if r_type == elf::R_X86_64_GLOB_DAT {
-                let r_sym = rel.r_sym(NativeEndian, false);
+                let r_sym = rel.r_sym(LE, false);
                 for (name, index) in got_app_syms.iter() {
                     if *index as u32 == r_sym {
                         rel.set_r_info(LE, false, 0, elf::R_X86_64_RELATIVE);
@@ -822,8 +822,8 @@ fn gen_elf_le(
             .iter()
             .enumerate()
             .filter_map(|(i, rel)| {
-                let r_type = rel.r_type(NativeEndian, false);
-                let r_sym = rel.r_sym(NativeEndian, false);
+                let r_type = rel.r_type(LE, false);
+                let r_sym = rel.r_sym(LE, false);
                 if r_type == elf::R_X86_64_JUMP_SLOT && app_sym_indices.contains(&(r_sym as usize))
                 {
                     Some(i)
@@ -840,7 +840,7 @@ fn gen_elf_le(
         let mut j = relocations.len() - 1;
         for i in to_remove.iter() {
             relocations.swap(*i, j);
-            let r_sym = relocations[j].r_sym(NativeEndian, false);
+            let r_sym = relocations[j].r_sym(LE, false);
             relocations[j].set_r_info(LE, false, r_sym, elf::R_X86_64_NONE);
             j -= 1;
         }
@@ -851,7 +851,7 @@ fn gen_elf_le(
             sh_num as usize,
         );
 
-        let old_size = section_headers[sec_index].sh_size.get(NativeEndian);
+        let old_size = section_headers[sec_index].sh_size.get(LE);
         let removed_count = to_remove.len();
         let removed_size = removed_count * std::mem::size_of::<elf::Rela64<LE>>();
         section_headers[sec_index]
@@ -866,30 +866,30 @@ fn gen_elf_le(
         let is_rela_dyn = dyns
             .iter()
             .filter(|d| {
-                let tag = d.d_tag.get(NativeEndian) as u32;
+                let tag = d.d_tag.get(LE) as u32;
                 tag == elf::DT_RELA
             })
-            .any(|d| d.d_val.get(NativeEndian) == sec_offset);
+            .any(|d| d.d_val.get(LE) == sec_offset);
         let is_rela_plt = dyns
             .iter()
             .filter(|d| {
-                let tag = d.d_tag.get(NativeEndian) as u32;
+                let tag = d.d_tag.get(LE) as u32;
                 tag == elf::DT_JMPREL
             })
-            .any(|d| d.d_val.get(NativeEndian) == sec_offset);
+            .any(|d| d.d_val.get(LE) == sec_offset);
 
         for d in dyns.iter_mut() {
-            match d.d_tag.get(NativeEndian) as u32 {
+            match d.d_tag.get(LE) as u32 {
                 elf::DT_RELACOUNT if is_rela_dyn => {
-                    let old_count = d.d_val.get(NativeEndian);
+                    let old_count = d.d_val.get(LE);
                     d.d_val.set(LE, old_count - removed_count as u64);
                 }
                 elf::DT_RELASZ if is_rela_dyn => {
-                    let old_size = d.d_val.get(NativeEndian);
+                    let old_size = d.d_val.get(LE);
                     d.d_val.set(LE, old_size - removed_size as u64);
                 }
                 elf::DT_PLTRELSZ if is_rela_plt => {
-                    let old_size = d.d_val.get(NativeEndian);
+                    let old_size = d.d_val.get(LE);
                     d.d_val.set(LE, old_size - removed_size as u64);
                 }
                 _ => {}
@@ -904,7 +904,7 @@ fn gen_elf_le(
         dynamic_lib_count,
     );
     for mut d in dyns {
-        match d.d_tag.get(NativeEndian) as u32 {
+        match d.d_tag.get(LE) as u32 {
             // TODO: Double check these. I am pretty sure a number of them are physical and not virtual addresses.
             // I believe this is the list of symbols that need to be update if addresses change.
             // I am less sure about the symbols from GNU_HASH down.
@@ -927,7 +927,7 @@ fn gen_elf_le(
             | elf::DT_VERSYM
             | elf::DT_VERDEF
             | elf::DT_VERNEED => {
-                let d_addr = d.d_val.get(NativeEndian);
+                let d_addr = d.d_val.get(LE);
                 // if virtual_shift_start <= d_addr {
                 // d.d_val = endian::U64::new(LE, d_addr + md.added_byte_count);
                 // }
@@ -942,7 +942,7 @@ fn gen_elf_le(
             | elf::DT_FINI_ARRAY
             | elf::DT_PREINIT_ARRAY
             | elf::DT_RELA => {
-                let d_addr = d.d_val.get(NativeEndian);
+                let d_addr = d.d_val.get(LE);
                 d.d_val = endian::U64::new(LE, update_physical_offset(md, d_addr));
             }
             _ => {}
@@ -960,7 +960,7 @@ fn gen_elf_le(
     );
 
     for sym in symbols {
-        let addr = sym.st_value.get(NativeEndian);
+        let addr = sym.st_value.get(LE);
         // if virtual_shift_start <= addr {
         //     sym.st_value = endian::U64::new(LE, addr + md.added_byte_count);
         // }
@@ -975,7 +975,7 @@ fn gen_elf_le(
             size / mem::size_of::<endian::U64<LE>>(),
         );
         for go in global_offsets.iter_mut() {
-            let go_addr = go.get(NativeEndian);
+            let go_addr = go.get(LE);
             go.set(LE, update_physical_offset(md, go_addr));
         }
     }
@@ -994,11 +994,9 @@ fn gen_elf_le(
 
     // Update main elf header for extra data.
     let mut file_header = load_struct_inplace_mut::<elf::FileHeader64<LE>>(&mut out_mmap, 0);
-    file_header.e_shoff = endian::U64::new(
-        LE,
-        update_physical_offset(md, file_header.e_shoff.get(NativeEndian)),
-    );
-    let e_entry = file_header.e_entry.get(NativeEndian);
+    file_header.e_shoff =
+        endian::U64::new(LE, update_physical_offset(md, file_header.e_shoff.get(LE)));
+    let e_entry = file_header.e_entry.get(LE);
     // if virtual_shift_start <= e_entry {
     // file_header.e_entry = endian::U64::new(LE, e_entry + md.added_byte_count);
     // }
@@ -1298,12 +1296,12 @@ fn surgery_elf_help(
     }
     let exec_header = load_struct_inplace::<elf::FileHeader64<LE>>(exec_mmap, 0);
 
-    let ph_offset = exec_header.e_phoff.get(NativeEndian);
-    let ph_ent_size = exec_header.e_phentsize.get(NativeEndian);
-    let ph_num = exec_header.e_phnum.get(NativeEndian);
-    let sh_offset = exec_header.e_shoff.get(NativeEndian);
-    let sh_ent_size = exec_header.e_shentsize.get(NativeEndian);
-    let sh_num = exec_header.e_shnum.get(NativeEndian);
+    let ph_offset = exec_header.e_phoff.get(LE);
+    let ph_ent_size = exec_header.e_phentsize.get(LE);
+    let ph_num = exec_header.e_phnum.get(LE);
+    let sh_offset = exec_header.e_shoff.get(LE);
+    let sh_ent_size = exec_header.e_shentsize.get(LE);
+    let sh_num = exec_header.e_shnum.get(LE);
 
     if verbose {
         println!();
