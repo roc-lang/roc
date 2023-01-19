@@ -5744,8 +5744,10 @@ fn build_pending_specializations<'a>(
         let tag = declarations.declarations[index];
         match tag {
             Value => {
-                // mark this symbols as a top-level thunk before any other work on the procs
-                module_thunks.push(symbol);
+                if !matches!(body.value, roc_can::expr::Expr::Accessor(..)) {
+                    // mark this symbols as a top-level thunk before any other work on the procs
+                    module_thunks.push(symbol);
+                }
 
                 // If this is an exposed symbol, we need to
                 // register it as such. Otherwise, since it

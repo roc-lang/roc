@@ -1101,7 +1101,7 @@ impl<'a> Procs<'a> {
                 // if we've already specialized this one, no further work is needed.
                 if !already_specialized {
                     if self.is_module_thunk(name.name()) {
-                        debug_assert!(layout.arguments.is_empty());
+                        debug_assert!(layout.arguments.is_empty(), "{:?}", name);
                     }
 
                     let needs_suspended_specialization =
@@ -2391,12 +2391,9 @@ fn from_can_let<'a>(
             }
             Accessor(accessor_data) => {
                 let fresh_record_symbol = env.unique_symbol();
-                register_noncapturing_closure(
-                    env,
-                    procs,
-                    *symbol,
-                    accessor_data.to_closure_data(fresh_record_symbol),
-                );
+                let closure_data = accessor_data.to_closure_data(fresh_record_symbol);
+                debug_assert_eq!(*symbol, closure_data.name);
+                register_noncapturing_closure(env, procs, *symbol, closure_data);
 
                 lower_rest!(variable, cont.value)
             }
