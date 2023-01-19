@@ -1881,7 +1881,7 @@ fn int_sub_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn int_sub_wrap() {
     assert_evals_to!(
         indoc!(
