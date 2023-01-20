@@ -474,10 +474,7 @@ mod cli_run {
     }
 
     #[test]
-    #[serial(cli_platform)]
-    #[ignore]
-    // ignored because downloaded prebuilt platforms cause problems with nix and NixOS
-    // this is explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)
+    #[ignore = "Prebuilt platforms cause problems with nix and NixOS. This is run explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)"]
     fn hello_world() {
         test_roc_app_slim(
             "examples",
@@ -865,7 +862,7 @@ mod cli_run {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
+    #[ignore = "Prebuilt platforms cause problems with nix and NixOS. This is run explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)"]
     fn parse_letter_counts() {
         test_roc_app_slim(
             "examples/parser/examples",
