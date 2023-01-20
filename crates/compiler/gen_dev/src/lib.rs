@@ -687,6 +687,14 @@ trait Backend<'a> {
                 );
                 self.build_list_with_capacity(sym, args[0], arg_layouts[0], ret_layout)
             }
+            LowLevel::ListReserve => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "ListReserve: expected to have exactly two arguments"
+                );
+                self.build_list_reserve(sym, args, arg_layouts, ret_layout)
+            }
             LowLevel::ListGetUnsafe => {
                 debug_assert_eq!(
                     2,
@@ -932,6 +940,15 @@ trait Backend<'a> {
         dst: &Symbol,
         capacity: Symbol,
         capacity_layout: InLayout<'a>,
+        ret_layout: &InLayout<'a>,
+    );
+
+    /// build_list_reserve enlarges a list to at least accommodate the given capacity.
+    fn build_list_reserve(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     );
 

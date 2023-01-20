@@ -3402,6 +3402,45 @@ fn with_capacity_append() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn reserve() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.reserve [] 15
+            "#
+        ),
+        (15, RocList::empty()),
+        RocList<u64>,
+        |value: RocList<u64>| (value.capacity(), value)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn reserve_unchanged() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            a = []
+            b = List.reserve a 15
+            {a, b}
+            "#
+        ),
+        // a's capacity is unchanged when we reserve 15 more capcity
+        // both lists are empty.
+        (0, RocList::empty(), 15, RocList::empty()),
+        (RocList<u64>, RocList<u64>),
+        |(value_a, value_b): (RocList<u64>, RocList<u64>)| ((
+            value_a.capacity(),
+            value_a,
+            value_b.capacity(),
+            value_b
+        ))
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn call_function_in_empty_list() {
     assert_evals_to!(
