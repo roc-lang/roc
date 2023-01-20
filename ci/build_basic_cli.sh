@@ -17,7 +17,7 @@ mkdir roc_nightly && cd roc_nightly && curl -OL $RELEASE_URL
 ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 
 # delete tar
-ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
+# ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
 
 # simplify dir name
 # mv roc_nightly* roc_nightly
