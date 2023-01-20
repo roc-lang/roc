@@ -80,6 +80,11 @@ httpVersion =
     |> skip (codeunit '.')
     |> keep digits
 
+expect
+    actual = parseStr httpVersion "HTTP/1.1"
+    expected = Ok { major: 1, minor: 1 }
+    actual == expected
+
 Header : [Header Str Str]
 
 stringWithoutColon : Parser RawStr Str
