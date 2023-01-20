@@ -32,6 +32,7 @@ pub struct Metadata {
     pub plt_addresses: MutMap<String, (u64, u64)>,
     pub surgeries: MutMap<String, Vec<SurgeryEntry>>,
     pub dynamic_symbol_indices: MutMap<String, u64>,
+    pub static_symbol_indices: MutMap<String, u64>,
     pub roc_symbol_vaddresses: MutMap<String, u64>,
     pub exec_len: u64,
     pub load_align_constraint: u64,
