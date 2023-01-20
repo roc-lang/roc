@@ -7784,7 +7784,7 @@ fn store_tag_pattern<'a>(
     for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
         let mut arg_layout = *arg_layout;
 
-        if let Layout::RecursivePointer = layout_cache.get_in(arg_layout) {
+        if let Layout::RecursivePointer(_) = layout_cache.get_in(arg_layout) {
             // TODO(recursive-layouts): fix after disjoint rec ptrs
             arg_layout = layout_cache.put_in(Layout::Union(union_layout));
         }
@@ -7868,7 +7868,7 @@ fn store_newtype_pattern<'a>(
     for (index, (argument, arg_layout)) in arguments.iter().enumerate().rev() {
         let mut arg_layout = *arg_layout;
 
-        if let Layout::RecursivePointer = layout_cache.get_in(arg_layout) {
+        if let Layout::RecursivePointer(_) = layout_cache.get_in(arg_layout) {
             arg_layout = layout;
         }
 

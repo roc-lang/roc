@@ -62,7 +62,7 @@ cache_interned_layouts! {
     14, F64,  Layout::Builtin(Builtin::Float(FloatWidth::F64))
     15, DEC,  Layout::Builtin(Builtin::Decimal)
     16, STR,  Layout::Builtin(Builtin::Str)
-    17, RECURSIVE_PTR,  Layout::RecursivePointer
+    17, RECURSIVE_PTR,  Layout::RecursivePointer(Layout::VOID)
 
     ; 18
 }

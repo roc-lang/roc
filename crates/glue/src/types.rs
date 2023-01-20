@@ -1464,7 +1464,7 @@ fn add_tag_union<'a>(
         Layout::LambdaSet(_) => {
             todo!();
         }
-        Layout::RecursivePointer => {
+        Layout::RecursivePointer(_) => {
             // A single-tag union which only wraps itself is erroneous and should have
             // been turned into an error earlier in the process.
             unreachable!();

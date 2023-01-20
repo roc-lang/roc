@@ -1727,7 +1727,8 @@ fn layout_spec_help<'a>(
 
             builder.add_tuple_type(&[cell_type, inner_type])
         }
-        RecursivePointer => match when_recursive {
+        // TODO(recursive-layouts): update once we have recursive pointer loops
+        RecursivePointer(_) => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!()
             }

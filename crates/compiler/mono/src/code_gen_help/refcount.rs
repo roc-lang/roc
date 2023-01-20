@@ -176,7 +176,7 @@ pub fn refcount_generic<'a>(
                 structure,
             )
         }
-        Layout::RecursivePointer => unreachable!(
+        Layout::RecursivePointer(_) => unreachable!(
             "We should never call a refcounting helper on a RecursivePointer layout directly"
         ),
         Layout::Boxed(inner_layout) => refcount_boxed(
@@ -450,7 +450,7 @@ where
                 .all(|l| is_rc_implemented_yet(interner, *l)),
         },
         Layout::LambdaSet(lambda_set) => is_rc_implemented_yet(interner, lambda_set.representation),
-        Layout::RecursivePointer => true,
+        Layout::RecursivePointer(_) => true,
         Layout::Boxed(_) => true,
     }
 }

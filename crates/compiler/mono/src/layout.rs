@@ -675,7 +675,7 @@ pub enum Layout<'a> {
     Boxed(InLayout<'a>),
     Union(UnionLayout<'a>),
     LambdaSet(LambdaSet<'a>),
-    RecursivePointer,
+    RecursivePointer(InLayout<'a>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -880,7 +880,7 @@ impl<'a> UnionLayout<'a> {
         };
 
         // TODO(recursive-layouts): simplify after we have disjoint recursive pointers
-        if let Layout::RecursivePointer = interner.get(result) {
+        if let Layout::RecursivePointer(_) = interner.get(result) {
             interner.insert(Layout::Union(self))
         } else {
             result
@@ -1523,7 +1523,7 @@ impl<'a> LambdaSet<'a> {
         let left = interner.get(*left);
         let right = interner.get(*right);
 
-        let left = if left == Layout::RecursivePointer {
+        let left = if matches!(left, Layout::RecursivePointer(_)) {
             let runtime_repr = self.runtime_representation();
             debug_assert!(matches!(
                 interner.get(runtime_repr),
@@ -1534,7 +1534,7 @@ impl<'a> LambdaSet<'a> {
             left
         };
 
-        let right = if right == Layout::RecursivePointer {
+        let right = if matches!(right, Layout::RecursivePointer(_)) {
             let runtime_repr = self.runtime_representation();
             debug_assert!(matches!(
                 interner.get(runtime_repr),
@@ -2253,7 +2253,7 @@ impl<'a, 'b> Env<'a, 'b> {
         if self.is_seen(var) {
             // Always return recursion pointers directly, NEVER cache them as naked!
             // TODO(recursive-layouts): after we have disjoint recursive pointers, change this
-            let rec_ptr = self.cache.put_in(Layout::RecursivePointer);
+            let rec_ptr = self.cache.put_in(Layout::RecursivePointer(Layout::VOID));
             return Cacheable(Ok(rec_ptr), NAKED_RECURSION_PTR);
         }
 
@@ -2443,7 +2443,7 @@ impl<'a> Layout<'a> {
             LambdaSet(lambda_set) => interner
                 .get(lambda_set.runtime_representation())
                 .safe_to_memcpy(interner),
-            Boxed(_) | RecursivePointer => {
+            Boxed(_) | RecursivePointer(_) => {
                 // We cannot memcpy pointers, because then we would have the same pointer in multiple places!
                 false
             }
@@ -2529,7 +2529,7 @@ impl<'a> Layout<'a> {
             LambdaSet(lambda_set) => interner
                 .get(lambda_set.runtime_representation())
                 .stack_size_without_alignment(interner, target_info),
-            RecursivePointer => target_info.ptr_width() as u32,
+            RecursivePointer(_) => target_info.ptr_width() as u32,
             Boxed(_) => target_info.ptr_width() as u32,
         }
     }
@@ -2581,7 +2581,7 @@ impl<'a> Layout<'a> {
                 .get(lambda_set.runtime_representation())
                 .alignment_bytes(interner, target_info),
             Layout::Builtin(builtin) => builtin.alignment_bytes(target_info),
-            Layout::RecursivePointer => target_info.ptr_width() as u32,
+            Layout::RecursivePointer(_) => target_info.ptr_width() as u32,
             Layout::Boxed(_) => target_info.ptr_width() as u32,
         }
     }
@@ -2601,7 +2601,9 @@ impl<'a> Layout<'a> {
             Layout::LambdaSet(lambda_set) => interner
                 .get(lambda_set.runtime_representation())
                 .allocation_alignment_bytes(interner, target_info),
-            Layout::RecursivePointer => unreachable!("should be looked up to get an actual layout"),
+            Layout::RecursivePointer(_) => {
+                unreachable!("should be looked up to get an actual layout")
+            }
             Layout::Boxed(inner) => interner
                 .get(*inner)
                 .allocation_alignment_bytes(interner, target_info),
@@ -2646,7 +2648,7 @@ impl<'a> Layout<'a> {
 
             Union(_) => true,
 
-            RecursivePointer => true,
+            RecursivePointer(_) => true,
 
             Builtin(List(_)) | Builtin(Str) => true,
 
@@ -2685,7 +2687,7 @@ impl<'a> Layout<'a> {
             LambdaSet(lambda_set) => interner
                 .get(lambda_set.runtime_representation())
                 .contains_refcounted(interner),
-            RecursivePointer => true,
+            RecursivePointer(_) => true,
             Boxed(_) => true,
         }
     }
@@ -2720,7 +2722,7 @@ impl<'a> Layout<'a> {
             LambdaSet(lambda_set) => interner
                 .get(lambda_set.runtime_representation())
                 .to_doc(alloc, interner, parens),
-            RecursivePointer => alloc.text("*self"),
+            RecursivePointer(_) => alloc.text("*self"),
             Boxed(inner) => alloc
                 .text("Boxed(")
                 .append(interner.get(inner).to_doc(alloc, interner, parens))
@@ -3104,7 +3106,7 @@ fn layout_from_flat_type<'a>(
         Func(args, closure_var, ret_var) => {
             if env.is_seen(closure_var) {
                 // TODO(recursive-layouts): change after disjoint recursive layouts supported
-                let rec_ptr = env.cache.put_in(Layout::RecursivePointer);
+                let rec_ptr = env.cache.put_in(Layout::RecursivePointer(Layout::VOID));
                 Cacheable(Ok(rec_ptr), NAKED_RECURSION_PTR)
             } else {
                 let mut criteria = CACHEABLE;
@@ -3791,7 +3793,7 @@ where
 
                             let arg_layout = if self_recursion {
                                 // TODO(recursive-layouts): fix after disjoint recursive pointers supported
-                                env.cache.put_in(Layout::RecursivePointer)
+                                env.cache.put_in(Layout::RecursivePointer(Layout::VOID))
                             } else {
                                 in_layout
                             };
@@ -4056,7 +4058,8 @@ where
         for &var in variables {
             // TODO does this cause problems with mutually recursive unions?
             if rec_var == subs.get_root_key_without_compacting(var) {
-                tag_layout.push(env.cache.put_in(Layout::RecursivePointer));
+                // TODO(recursive-layouts): fix after disjoint recursive pointers supported
+                tag_layout.push(env.cache.put_in(Layout::RecursivePointer(Layout::VOID)));
                 continue;
             }
 

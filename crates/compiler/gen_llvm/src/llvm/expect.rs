@@ -380,7 +380,7 @@ fn build_clone<'a, 'ctx, 'env>(
             )
         }
 
-        Layout::RecursivePointer => match when_recursive {
+        Layout::RecursivePointer(_) => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers should never be compared directly")
             }
