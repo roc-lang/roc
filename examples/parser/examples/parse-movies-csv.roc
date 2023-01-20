@@ -1,12 +1,12 @@
 app "example"
-    packages { 
+    packages {
         pf: "../../platform-switching/zig-platform/main.roc",
-        parser: "../package/main.roc", 
+        parser: "../package/main.roc",
     }
     imports [
-        parser.ParserCore.{ Parser, map, keep }, 
-        parser.ParserStr.{ RawStr, strFromRaw }, 
-        parser.ParserCSV.{ CSV, record, field, string, nat, parseStr }
+        parser.ParserCore.{ Parser, map, keep },
+        parser.ParserStr.{ RawStr, strFromRaw },
+        parser.ParserCSV.{ CSV, record, field, string, nat, parseStr },
     ]
     provides [main] to pf
 
