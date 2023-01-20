@@ -11,7 +11,7 @@ cd basic-cli && git checkout 0.1.3 && cd ..
 RELEASE_URL=$(./ci/get_latest_release_url.sh $1)
 
 # get the archive from the url
-curl -OL $RELEASE_URL
+mkdir roc_nightly && cd roc_nightly && curl -OL $RELEASE_URL
 
 # decompress the tar
 ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
@@ -20,9 +20,9 @@ ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
 
 # simplify dir name
-mv roc_nightly* roc_nightly
+# mv roc_nightly* roc_nightly
 
-cd roc_nightly
+# cd roc_nightly
 
 # build the basic cli platform
 ./roc build ../basic-cli/examples/file.roc
