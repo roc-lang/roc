@@ -5744,11 +5744,6 @@ fn build_pending_specializations<'a>(
         let tag = declarations.declarations[index];
         match tag {
             Value => {
-                if !matches!(body.value, roc_can::expr::Expr::Accessor(..)) {
-                    // mark this symbols as a top-level thunk before any other work on the procs
-                    module_thunks.push(symbol);
-                }
-
                 // If this is an exposed symbol, we need to
                 // register it as such. Otherwise, since it
                 // never gets called by Roc code, it will never
@@ -5786,19 +5781,40 @@ fn build_pending_specializations<'a>(
                     );
                 }
 
-                let proc = PartialProc {
-                    annotation: expr_var,
-                    // This is a 0-arity thunk, so it has no arguments.
-                    pattern_symbols: &[],
-                    // This is a top-level definition, so it cannot capture anything
-                    captured_symbols: CapturedSymbols::None,
-                    body: body.value,
-                    body_var: expr_var,
-                    // This is a 0-arity thunk, so it cannot be recursive
-                    is_self_recursive: false,
-                };
+                match body.value {
+                    roc_can::expr::Expr::Accessor(accessor_data) => {
+                        let fresh_record_symbol = mono_env.unique_symbol();
+                        let closure_data = accessor_data.to_closure_data(fresh_record_symbol);
+                        register_toplevel_function_into_procs_base(
+                            &mut mono_env,
+                            &mut procs_base,
+                            closure_data.name,
+                            expr_var,
+                            closure_data.arguments,
+                            closure_data.return_type,
+                            *closure_data.loc_body,
+                            false,
+                        );
+                    }
+                    _ => {
+                        // mark this symbols as a top-level thunk before any other work on the procs
+                        module_thunks.push(symbol);
 
-                procs_base.partial_procs.insert(symbol, proc);
+                        let proc = PartialProc {
+                            annotation: expr_var,
+                            // This is a 0-arity thunk, so it has no arguments.
+                            pattern_symbols: &[],
+                            // This is a top-level definition, so it cannot capture anything
+                            captured_symbols: CapturedSymbols::None,
+                            body: body.value,
+                            body_var: expr_var,
+                            // This is a 0-arity thunk, so it cannot be recursive
+                            is_self_recursive: false,
+                        };
+
+                        procs_base.partial_procs.insert(symbol, proc);
+                    }
+                }
             }
             Function(f_index) | Recursive(f_index) | TailRecursive(f_index) => {
                 let function_def = &declarations.function_bodies[f_index.index()].value;
@@ -5848,17 +5864,16 @@ fn build_pending_specializations<'a>(
 
                 let is_recursive = matches!(tag, Recursive(_) | TailRecursive(_));
 
-                let partial_proc = PartialProc::from_named_function(
+                register_toplevel_function_into_procs_base(
                     &mut mono_env,
+                    &mut procs_base,
+                    symbol,
                     expr_var,
                     function_def.arguments.clone(),
-                    body,
-                    CapturedSymbols::None,
-                    is_recursive,
                     function_def.return_type,
+                    body,
+                    is_recursive,
                 );
-
-                procs_base.partial_procs.insert(symbol, partial_proc);
             }
             Destructure(d_index) => {
                 let loc_pattern = &declarations.destructs[d_index.index()].loc_pattern;
@@ -6107,6 +6122,33 @@ fn build_pending_specializations<'a>(
         toplevel_expects,
         expectations,
     }
+}
+
+fn register_toplevel_function_into_procs_base<'a>(
+    mono_env: &mut roc_mono::ir::Env<'a, '_>,
+    procs_base: &mut ProcsBase<'a>,
+    symbol: Symbol,
+    expr_var: Variable,
+    arguments: Vec<(
+        Variable,
+        roc_can::expr::AnnotatedMark,
+        Loc<roc_can::pattern::Pattern>,
+    )>,
+    return_type: Variable,
+    body: Loc<roc_can::expr::Expr>,
+    is_recursive: bool,
+) {
+    let partial_proc = PartialProc::from_named_function(
+        mono_env,
+        expr_var,
+        arguments,
+        body,
+        CapturedSymbols::None,
+        is_recursive,
+        return_type,
+    );
+
+    procs_base.partial_procs.insert(symbol, partial_proc);
 }
 
 /// Loads derived ability members up for specialization into the Derived module, prior to making
