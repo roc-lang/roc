@@ -250,3 +250,31 @@ fn list_concat_empty_list_zero_sized_type() {
         "#
     ));
 }
+
+#[test]
+fn str_trim_right_capacity() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            str = "a" |> Str.reserve 30
+            out = str |> Str.trimRight
+
+            if out == "" then "A" else "B"
+        )
+        "#
+    ));
+}
+
+#[test]
+fn str_trim_left_capacity() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            str = "    a" |> Str.reserve 30
+            out = str |> Str.trimLeft
+
+            if out == "" then "A" else "B"
+        )
+        "#
+    ));
+}
