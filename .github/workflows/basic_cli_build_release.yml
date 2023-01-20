@@ -12,14 +12,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      # note: moving this step to a bash script will not work, the GITHUB_TOKEN is not passed properly
-      - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting.
-        run: |
-          curl --request GET \
-          --url https://api.github.com/repos/roc-lang/roc/releases \
-          --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
-          --header 'content-type: application/json' \
-          --output roc_releases.json
+      - name: Build roc release
+        run: cargo build --release --locked
 
       # does a build with the surgical linker and also with the legacy linker
       - run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
