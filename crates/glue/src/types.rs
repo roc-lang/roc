@@ -1005,15 +1005,11 @@ fn add_type_help<'a>(
             let extern_name = String::from("roc__mainForHost_1__Fx2_caller");
             // let extern_name = env.extern_names.get(&lambda_set).cloned().unwrap();
 
-            dbg!(&extern_name, &name);
-
             for arg_var in args {
                 let arg_layout = env
                     .layout_cache
                     .from_var(env.arena, *arg_var, env.subs)
                     .expect("Something weird ended up in the content");
-
-                dbg!(&arg_layout);
 
                 arg_type_ids.push(add_type_help(env, arg_layout, *arg_var, None, types));
             }
@@ -1026,8 +1022,6 @@ fn add_type_help<'a>(
                     .layout_cache
                     .from_var(env.arena, *ret_var, env.subs)
                     .expect("Something weird ended up in the content");
-
-                dbg!(ret_layout);
 
                 add_type_help(env, ret_layout, *ret_var, None, types)
             };
@@ -1202,7 +1196,7 @@ fn add_type_help<'a>(
 
             if tags.is_empty() {
                 // this function does not capture anything. Represent that at runtime as a unit value
-                types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
+                types.add_anonymous(&env.layout_cache.interner, RocType::Unsized, layout)
             } else {
                 add_tag_union(env, opt_name, &tags, var, types, layout, None)
             }

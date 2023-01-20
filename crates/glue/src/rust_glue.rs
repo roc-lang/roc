@@ -637,7 +637,6 @@ fn add_tag_union(
     types: &Types,
     impls: &mut Impls,
 ) {
-    dbg!("adding", name);
     let name = escape_kw(name.to_string());
 
     // We should never be attempting to generate glue for empty tag unions;
@@ -1844,26 +1843,35 @@ fn add_function(
     buf.push('\n');
     buf.push('\n');
 
-    let arguments = "";
-    let argument_types = "";
-    let argument_names = "";
     let extern_name = &roc_fn.extern_name;
 
     let return_type_str = type_name(roc_fn.ret, types);
 
     writeln!(buf, "impl {name} {{").unwrap();
-    writeln!(
+
+    write!(buf, "{INDENT}pub fn force_thunk(self").unwrap();
+    for (i, argument_type) in roc_fn.args.iter().enumerate() {
+        write!(buf, ", arg_{i}: {}", type_name(*argument_type, types)).unwrap();
+    }
+    writeln!(buf, ") -> {return_type_str} {{").unwrap();
+
+    writeln!(buf, "{INDENT}{INDENT}extern \"C\" {{").unwrap();
+
+    // fn extern_name(output: *mut return_type, arg1: arg1_type, ..., closure_data: *mut u8);
+    write!(
         buf,
-        "{INDENT}pub fn force_thunk(self, {arguments}) -> {return_type_str} {{"
+        "{INDENT}{INDENT}{INDENT} fn {extern_name}(output: *mut {return_type_str}, "
     )
     .unwrap();
 
-    writeln!(buf, "{INDENT}{INDENT}extern \"C\" {{").unwrap();
-    writeln!(
-        buf,
-        "{INDENT}{INDENT}{INDENT} fn {extern_name}(output: *mut {return_type_str}, {argument_types}, closure_data: *mut u8);"
-    )
-    .unwrap();
+    for (i, argument_type) in roc_fn.args.iter().enumerate() {
+        write!(buf, "arg_{i}: {}, ", type_name(*argument_type, types)).unwrap();
+    }
+
+    writeln!(buf, "closure_data: *mut u8);").unwrap();
+
+    // {argument_types} "
+
     writeln!(buf, "{INDENT}{INDENT}}}").unwrap();
 
     writeln!(buf).unwrap();
@@ -1874,11 +1882,17 @@ fn add_function(
     )
     .unwrap();
 
-    writeln!(
+    write!(
         buf,
-        "{INDENT}{INDENT}unsafe {{ {extern_name}(output.as_mut_ptr(), {argument_names}, self.closure_data) }};"
+        "{INDENT}{INDENT}unsafe {{ {extern_name}(output.as_mut_ptr(), "
     )
     .unwrap();
+
+    for (i, _) in roc_fn.args.iter().enumerate() {
+        write!(buf, "arg_{i}, ").unwrap();
+    }
+
+    writeln!(buf, "self.closure_data) }};").unwrap();
 
     writeln!(buf, "{INDENT}{INDENT}unsafe {{ output.assume_init() }}").unwrap();
 

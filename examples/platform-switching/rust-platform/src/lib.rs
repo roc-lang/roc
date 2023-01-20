@@ -105,7 +105,7 @@ pub extern "C" fn rust_main() -> i32 {
         match dbg!(op.discriminant()) {
             StdoutWrite => {
                 let output: RocStr = unsafe { op.get_StdoutWrite_0() };
-                op = unsafe { op.get_StdoutWrite_1().force_thunk() };
+                op = unsafe { op.get_StdoutWrite_1().force_thunk(()) };
 
                 dbg!(&output);
 
