@@ -665,7 +665,6 @@ mod cli_run {
     }
 
     #[test]
-    #[ignore = "https://github.com/roc-lang/roc/issues/4919"]
     fn hello_gui() {
         test_roc_app_slim(
             "examples/gui",
