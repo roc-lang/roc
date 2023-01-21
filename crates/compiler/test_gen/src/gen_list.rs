@@ -1754,19 +1754,19 @@ fn list_concat_large() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn empty_list_len() {
     assert_evals_to!("List.len []", 0, usize);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn basic_int_list_len() {
     assert_evals_to!("List.len [12, 9, 6, 3]", 4, usize);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn loaded_int_list_len() {
     assert_evals_to!(
         indoc!(
@@ -1782,7 +1782,7 @@ fn loaded_int_list_len() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn fn_int_list_len() {
     assert_evals_to!(
         indoc!(
@@ -2188,7 +2188,7 @@ fn get_unique_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_wrap_len() {
     assert_evals_to!(
         indoc!(
@@ -2501,7 +2501,7 @@ fn quicksort_singleton() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn empty_list_increment_decrement() {
     assert_evals_to!(
         indoc!(
@@ -2518,7 +2518,7 @@ fn empty_list_increment_decrement() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_literal_increment_decrement() {
     assert_evals_to!(
         indoc!(

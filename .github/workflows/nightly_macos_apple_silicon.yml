@@ -47,6 +47,6 @@ jobs:
       - name: Upload artifact Actually uploading to github releases has to be done manually
         uses: actions/upload-artifact@v3
         with:
-           name: ${{ env.RELEASE_FOLDER_NAME }}
-           path: ${{ env.RELEASE_FOLDER_NAME }}
+           name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+           path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
            retention-days: 4

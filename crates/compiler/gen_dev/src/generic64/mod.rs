@@ -318,7 +318,28 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         src2: GeneralReg,
     );
 
-    fn lt_reg64_reg64_reg64(
+    fn ilt_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+
+    fn ult_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+
+    fn igt_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+
+    fn ugt_reg64_reg64_reg64(
         buf: &mut Vec<'_, u8>,
         dst: GeneralReg,
         src1: GeneralReg,
@@ -1029,6 +1050,28 @@ impl<
         }
     }
 
+    fn build_num_sub_wrap(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
+    ) {
+        match self.layout_interner.get(*layout) {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+                ASM::sub_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            x => todo!("NumSubWrap: layout, {:?}", x),
+        }
+    }
+
     fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
         match *arg_layout {
             single_register_int_builtins!() => {
@@ -1069,7 +1112,7 @@ impl<
         arg_layout: &InLayout<'a>,
     ) {
         match self.layout_interner.get(*arg_layout) {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+            Layout::Builtin(Builtin::Int(IntWidth::I64)) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -1077,9 +1120,51 @@ impl<
                 let src2_reg = self
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
-                ASM::lt_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+                ASM::ilt_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::Builtin(Builtin::Int(IntWidth::U64)) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+                ASM::ult_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
             x => todo!("NumLt: layout, {:?}", x),
+        }
+    }
+
+    fn build_num_gt(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &InLayout<'a>,
+    ) {
+        match self.layout_interner.get(*arg_layout) {
+            Layout::Builtin(Builtin::Int(IntWidth::I64)) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+                ASM::igt_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::Builtin(Builtin::Int(IntWidth::U64)) => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+                ASM::ugt_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            x => todo!("NumGt: layout, {:?}", x),
         }
     }
 

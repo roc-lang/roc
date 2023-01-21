@@ -194,6 +194,22 @@ fn list_concat_consumes_first_argument() {
 }
 
 #[test]
+fn list_concat_consumes_second_argument() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            a : List U8
+            a = []
+            b = List.reserve [] 11
+            List.concat a b
+            |> List.len
+            |> Num.toStr
+        )
+        "#
+    ));
+}
+
+#[test]
 fn str_capacity_concat() {
     valgrind_test(r#"Str.withCapacity 42 |> Str.concat "foobar""#);
 }
@@ -246,6 +262,34 @@ fn list_concat_empty_list_zero_sized_type() {
             List.concat a b
             |> List.len
             |> Num.toStr
+        )
+        "#
+    ));
+}
+
+#[test]
+fn str_trim_right_capacity() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            str = "a" |> Str.reserve 30
+            out = str |> Str.trimRight
+
+            if out == "" then "A" else "B"
+        )
+        "#
+    ));
+}
+
+#[test]
+fn str_trim_left_capacity() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            str = "    a" |> Str.reserve 30
+            out = str |> Str.trimLeft
+
+            if out == "" then "A" else "B"
         )
         "#
     ));
