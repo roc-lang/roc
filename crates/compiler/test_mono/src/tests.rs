@@ -2448,3 +2448,51 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
         "###
     )
 }
+
+#[mono_test(mode = "test")]
+fn issue_4772_weakened_monomorphic_destructure() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports [Json]
+
+        getNumber =
+            { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") Json.fromUtf8
+                    
+            when result is 
+                Ok val -> 
+                    when Str.toI64 val is 
+                        Ok number ->
+                            Ok {val : number, input : rest}
+                        Err InvalidNumStr ->
+                            Err (ParsingFailure "not a number")
+
+                Err _ -> 
+                    Err (ParsingFailure "not a number")
+
+        expect 
+            result = getNumber
+            result == Ok {val : -1234i64, input : []}
+        "###
+    )
+}
+
+#[mono_test]
+fn weakening_avoids_overspecialization() {
+    // Without weakening of let-bindings, this program would force two specializations of
+    // `index` - to `Nat` and the default integer type, `I64`. The test is to ensure only one
+    // specialization, that of `Nat`, exists.
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        main : (List U8) -> (List U8)
+        main = \input ->
+            index = List.walkUntil input 0 \i, _ -> Break i
+
+            if index == 0 then
+                input
+            else
+                List.drop input index
+        "###
+    )
+}

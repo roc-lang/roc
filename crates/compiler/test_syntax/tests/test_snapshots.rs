@@ -325,6 +325,7 @@ mod test_snapshots {
         pass/negative_in_apply_def.expr,
         pass/negative_int.expr,
         pass/nested_def_annotation.moduledefs,
+        pass/nested_backpassing_no_newline_before.expr,
         pass/nested_def_without_newline.expr,
         pass/nested_if.expr,
         pass/nested_module.header,

@@ -76,7 +76,7 @@ pub const RocList = extern struct {
     }
 
     pub fn deinit(self: RocList, comptime T: type) void {
-        utils.decref(self.bytes, self.len(), @alignOf(T));
+        utils.decref(self.bytes, self.capacity, @alignOf(T));
     }
 
     pub fn elements(self: RocList, comptime T: type) ?[*]T {
@@ -84,14 +84,21 @@ pub const RocList = extern struct {
     }
 
     pub fn isUnique(self: RocList) bool {
-        // the empty list is unique (in the sense that copying it will not leak memory)
-        if (self.isEmpty()) {
-            return true;
+        return self.refcountMachine() == utils.REFCOUNT_ONE;
+    }
+
+    fn refcountMachine(self: RocList) usize {
+        if (self.capacity == 0) {
+            // the zero-capacity is Clone, copying it will not leak memory
+            return utils.REFCOUNT_ONE;
         }
 
-        // otherwise, check if the refcount is one
         const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.bytes));
-        return (ptr - 1)[0] == utils.REFCOUNT_ONE;
+        return (ptr - 1)[0];
+    }
+
+    fn refcountHuman(self: RocList) usize {
+        return self.refcountMachine() - utils.REFCOUNT_ONE + 1;
     }
 
     pub fn makeUniqueExtra(self: RocList, alignment: u32, element_width: usize, update_mode: UpdateMode) RocList {
@@ -740,10 +747,14 @@ fn swapElements(source_ptr: [*]u8, element_width: usize, index_1: usize, index_2
 pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_width: usize) callconv(.C) RocList {
     // NOTE we always use list_a! because it is owned, we must consume it, and it may have unused capacity
     if (list_b.isEmpty()) {
-        // we must consume this list. Even though it has no elements, it could still have capacity
-        list_b.deinit(usize);
+        if (list_a.capacity == 0) {
+            return list_b;
+        } else {
+            // we must consume this list. Even though it has no elements, it could still have capacity
+            list_b.deinit(usize);
 
-        return list_a;
+            return list_a;
+        }
     } else if (list_a.isUnique()) {
         const total_length: usize = list_a.len() + list_b.len();
 
