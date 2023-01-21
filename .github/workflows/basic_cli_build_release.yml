@@ -25,7 +25,7 @@ jobs:
       - run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
 
       # for debugging
-      - run: ls
+      - run: ls basic-cli/src
 
       - name: Save .rh1, .rm2 and .o file 
         uses: actions/upload-artifact@v3
