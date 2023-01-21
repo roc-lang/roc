@@ -9,6 +9,8 @@ jobs:
 
   build-linux-x86_64-files:
     runs-on: [ubuntu-20.04]
+    env:
+      ACTIONS_STEP_DEBUG: true
     steps:
       - uses: actions/checkout@v3
 
