@@ -1,4 +1,4 @@
-on: [workflow_dispatch]
+on: [workflow_dispatch, pull_request]
 
 # this cancels workflows currently in progress if you start a new one
 concurrency:

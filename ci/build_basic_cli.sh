@@ -6,7 +6,16 @@ set -euxo pipefail
 git clone https://github.com/roc-lang/basic-cli.git
 
 # Get the url of the latest release. We're not using the latest main source code for easier reproducibility.
-RELEASE_URL=$(./ci/get_latest_release_url.sh $1)
+if [[ "$(uname -s)" == "Linux" ]]; then
+    RELEASE_URL="https://github.com/roc-lang/roc/releases/download/nightly/temp_linux_rm2.tar.gz"
+elif [[ "$(uname -s)" == "Darwin" ]]; then
+    if [[ "$(uname -m)" == "x86_64" ]]; then
+        RELEASE_URL="https://github.com/roc-lang/roc/releases/download/nightly/temp_macos_x86_64_rm2.tar.gz"
+    else
+        RELEASE_URL="https://github.com/roc-lang/roc/releases/download/nightly/temp_macos_arm64_rm2.tar.gz"
+else
+    echo "Unknown operating system: $(uname -s)"
+fi
 
 # get the archive from the url
 mkdir roc_nightly && cd roc_nightly && curl -OL $RELEASE_URL
