@@ -1754,19 +1754,19 @@ fn list_concat_large() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn empty_list_len() {
     assert_evals_to!("List.len []", 0, usize);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn basic_int_list_len() {
     assert_evals_to!("List.len [12, 9, 6, 3]", 4, usize);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn loaded_int_list_len() {
     assert_evals_to!(
         indoc!(
@@ -1782,7 +1782,7 @@ fn loaded_int_list_len() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn fn_int_list_len() {
     assert_evals_to!(
         indoc!(
@@ -2188,7 +2188,7 @@ fn get_unique_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_wrap_len() {
     assert_evals_to!(
         indoc!(
@@ -2501,7 +2501,7 @@ fn quicksort_singleton() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn empty_list_increment_decrement() {
     assert_evals_to!(
         indoc!(
@@ -2518,7 +2518,7 @@ fn empty_list_increment_decrement() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_literal_increment_decrement() {
     assert_evals_to!(
         indoc!(
@@ -3349,12 +3349,12 @@ fn monomorphized_lists() {
     assert_evals_to!(
         indoc!(
             r#"
-            l = [1, 2, 3]
+            l = \{} -> [1, 2, 3]
 
             f : List U8, List U16 -> Nat
             f = \_, _ -> 18
 
-            f l l
+            f (l {}) (l {})
             "#
         ),
         18,
@@ -3461,11 +3461,11 @@ fn issue_3530_uninitialized_capacity_in_list_literal() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn list_let_generalization() {
+fn list_infer_usage() {
     assert_evals_to!(
         indoc!(
             r#"
-            empty : List a
+            empty : List _
             empty = []
 
             xs : List Str

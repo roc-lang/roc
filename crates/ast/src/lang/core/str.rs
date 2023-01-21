@@ -117,7 +117,7 @@ fn flatten_str_lines<'a>(
                         todo!()
                     }
                 }
-                EscapedChar(escaped) => buf.push(roc_can::expr::unescape_char(escaped)),
+                EscapedChar(escaped) => buf.push(escaped.unescape()),
             }
         }
     }

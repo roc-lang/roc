@@ -9,7 +9,6 @@ edition = "2021"
 [dependencies]
 roc_alias_analysis = { path = "../alias_analysis" }
 roc_collections = { path = "../collections" }
-roc_intern = { path = "../intern" }
 roc_module = { path = "../module" }
 roc_builtins = { path = "../builtins" }
 roc_error_macros = { path = "../../error_macros" }

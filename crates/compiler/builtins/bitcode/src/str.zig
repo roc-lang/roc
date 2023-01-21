@@ -90,13 +90,13 @@ pub const RocStr = extern struct {
     }
 
     pub fn deinit(self: RocStr) void {
-        if (!self.isSmallStr()) {
-            utils.decref(self.str_bytes, self.str_len, RocStr.alignment);
-        }
+        self.decref();
     }
 
     fn decref(self: RocStr) void {
-        self.deinit();
+        if (!self.isSmallStr()) {
+            utils.decref(self.str_bytes, self.str_capacity, RocStr.alignment);
+        }
     }
 
     pub fn eq(self: RocStr, other: RocStr) bool {
@@ -204,7 +204,7 @@ pub const RocStr = extern struct {
         @memcpy(dest_ptr, source_ptr, old_length);
         @memset(dest_ptr + old_length, 0, delta_length);
 
-        self.deinit();
+        self.decref();
 
         return result;
     }
@@ -320,8 +320,20 @@ pub const RocStr = extern struct {
     }
 
     fn isRefcountOne(self: RocStr) bool {
+        return self.refcountMachine() == utils.REFCOUNT_ONE;
+    }
+
+    fn refcountMachine(self: RocStr) usize {
+        if (self.getCapacity() == 0 or self.isSmallStr()) {
+            return utils.REFCOUNT_ONE;
+        }
+
         const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
-        return (ptr - 1)[0] == utils.REFCOUNT_ONE;
+        return (ptr - 1)[0];
+    }
+
+    fn refcountHuman(self: RocStr) usize {
+        return self.refcountMachine() - utils.REFCOUNT_ONE + 1;
     }
 
     pub fn asSlice(self: *const RocStr) []const u8 {
@@ -2136,9 +2148,14 @@ pub fn strTrimLeft(string: RocStr) callconv(.C) RocStr {
 
         const new_len = original_len - leading_bytes;
 
-        const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
-        if (small_or_shared) {
-            return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+        if (string.isSmallStr() or !string.isRefcountOne()) {
+            // if the trimmed string fits in a small string,
+            // make the result a small string and decref the original string
+            const result = RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+
+            string.decref();
+
+            return result;
         } else {
             // nonempty, large, and unique: shift everything over in-place if necessary.
             // Note: must use memmove over memcpy, because the bytes definitely overlap!
@@ -2176,9 +2193,12 @@ pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
 
         const new_len = original_len - trailing_bytes;
 
-        const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
-        if (small_or_shared) {
-            return RocStr.init(string.asU8ptr(), new_len);
+        if (string.isSmallStr() or !string.isRefcountOne()) {
+            const result = RocStr.init(string.asU8ptr(), new_len);
+
+            string.decref();
+
+            return result;
         }
 
         // nonempty, large, and unique:
@@ -2397,9 +2417,9 @@ test "strTrimLeft: large to large" {
 }
 
 test "strTrimLeft: large to small" {
+    // `original` will be consumed by the concat; do not free explicitly
     const original_bytes = "                    hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
 
     try expect(!original.isSmallStr());
 
@@ -2410,9 +2430,10 @@ test "strTrimLeft: large to small" {
     try expect(expected.isSmallStr());
 
     const trimmed = strTrimLeft(original);
+    defer trimmed.deinit();
 
     try expect(trimmed.eq(expected));
-    try expect(trimmed.isSmallStr());
+    try expect(!trimmed.isSmallStr());
 }
 
 test "strTrimLeft: small to small" {
@@ -2468,9 +2489,9 @@ test "strTrimRight: large to large" {
 }
 
 test "strTrimRight: large to small" {
+    // `original` will be consumed by the concat; do not free explicitly
     const original_bytes = " hello                    ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
 
     try expect(!original.isSmallStr());
 
@@ -2481,9 +2502,10 @@ test "strTrimRight: large to small" {
     try expect(expected.isSmallStr());
 
     const trimmed = strTrimRight(original);
+    defer trimmed.deinit();
 
     try expect(trimmed.eq(expected));
-    try expect(trimmed.isSmallStr());
+    try expect(!trimmed.isSmallStr());
 }
 
 test "strTrimRight: small to small" {

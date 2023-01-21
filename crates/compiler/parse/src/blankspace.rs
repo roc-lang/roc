@@ -27,6 +27,15 @@ where
     )
 }
 
+pub fn spaces_around<'a, P, S, E>(parser: P) -> impl Parser<'a, Loc<S>, E>
+where
+    S: 'a + Spaceable<'a>,
+    P: 'a + Parser<'a, Loc<S>, E>,
+    E: 'a + SpaceProblem,
+{
+    parser::map_with_arena(and(spaces(), and(parser, spaces())), spaces_around_help)
+}
+
 pub fn space0_around_e_no_after_indent_check<'a, P, S, E>(
     parser: P,
     indent_before_problem: fn(Position) -> E,
@@ -369,6 +378,10 @@ where
     }
 }
 
+fn begins_with_crlf(bytes: &[u8]) -> bool {
+    bytes.len() >= 2 && bytes[0] == b'\r' && bytes[1] == b'\n'
+}
+
 pub fn spaces<'a, E>() -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
 where
     E: 'a + SpaceProblem,
@@ -390,6 +403,7 @@ where
                     let is_doc_comment = state.bytes().first() == Some(&b'#')
                         && (state.bytes().get(1) == Some(&b' ')
                             || state.bytes().get(1) == Some(&b'\n')
+                            || begins_with_crlf(&state.bytes()[1..])
                             || state.bytes().get(1) == None);
 
                     if is_doc_comment {
@@ -413,7 +427,10 @@ where
                     newlines.push(comment);
                     state.advance_mut(len);
 
-                    if state.bytes().first() == Some(&b'\n') {
+                    if begins_with_crlf(state.bytes()) {
+                        state.advance_mut(1);
+                        state = state.advance_newline();
+                    } else if state.bytes().first() == Some(&b'\n') {
                         state = state.advance_newline();
                     }
 

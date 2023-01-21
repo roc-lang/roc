@@ -74,8 +74,8 @@ setStyle : NodeId, Str, Str -> Effect {}
 ## setListener nodeId eventType accessorsJson handlerId
 setListener : NodeId, EventType, List U8, HandlerId -> Effect {}
 
-## removeListener nodeId eventType
-removeListener : NodeId, EventType -> Effect {}
+## removeListener nodeId handlerId
+removeListener : NodeId, HandlerId -> Effect {}
 
 # Enable a special memory allocator for virtual DOM
 # This consists of two arenas, "even" and "odd", which alternately hold the "old" and "new" VDOM.

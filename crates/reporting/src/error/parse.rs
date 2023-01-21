@@ -1,4 +1,4 @@
-use roc_parse::parser::{ENumber, FileError, PList, SyntaxError};
+use roc_parse::parser::{ENumber, ESingleQuote, FileError, PList, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
@@ -967,7 +967,96 @@ fn to_str_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        EString::EndlessSingle(pos) => {
+        EString::EndlessSingleQuote(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I cannot find the end of this scalar literal (character literal):"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow(r"You could change it to something like "),
+                    alloc.parser_suggestion("'a'"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("'\n'"),
+                    alloc.reflow("."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "ENDLESS SCALAR".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        EString::InvalidSingleQuote(e, pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = match e {
+                ESingleQuote::Empty => {
+                    alloc.stack([
+                        alloc.concat([
+                            alloc.reflow(r"I am part way through parsing this scalar literal (character literal), "),
+                            alloc.reflow(r"but it appears to be empty - which is not a valid scalar."),
+                        ]),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.concat([
+                            alloc.reflow(r"You could change it to something like "),
+                            alloc.parser_suggestion("'a'"),
+                            alloc.reflow(" or "),
+                            alloc.parser_suggestion("'\\n'"),
+                            alloc.reflow(". "),
+                            alloc.reflow("Note, roc strings use double quotes, like \"hello\".")
+                        ]),
+                    ])
+                }
+                ESingleQuote::TooLong => {
+                    alloc.stack([
+                        alloc.concat([
+                            alloc.reflow(r"I am part way through parsing this scalar literal (character literal), "),
+                            alloc.reflow(r"but it's too long to fit in a U32 so it's not a valid scalar."),
+                        ]),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.concat([
+                            alloc.reflow(r"You could change it to something like "),
+                            alloc.parser_suggestion("'a'"),
+                            alloc.reflow(" or "),
+                            alloc.parser_suggestion("'\\n'"),
+                            alloc.reflow(". "),
+                            alloc.reflow("Note, roc strings use double quotes, like \"hello\".")
+                        ]),
+                    ])
+                }
+                ESingleQuote::InterpolationNotAllowed => {
+                    alloc.stack([
+                        alloc.concat([
+                            alloc.reflow("I am part way through parsing this scalar literal (character literal), "),
+                            alloc.reflow("but I encountered a string interpolation like \"\\(this)\", which is not "),
+                            alloc.reflow("allowed in scalar literals."),
+                        ]),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                        alloc.concat([
+                            alloc.reflow(r"You could change it to something like "),
+                            alloc.parser_suggestion("'a'"),
+                            alloc.reflow(" or "),
+                            alloc.parser_suggestion("'\\n'"),
+                            alloc.reflow(". "),
+                            alloc.reflow("Note, roc strings use double quotes, like \"hello\".")
+                        ]),
+                    ])
+                }
+            };
+
+            Report {
+                filename,
+                doc,
+                title: "INVALID SCALAR".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        EString::EndlessSingleLine(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -990,7 +1079,31 @@ fn to_str_report<'a>(
                 severity: Severity::RuntimeError,
             }
         }
-        EString::EndlessMulti(pos) => {
+        EString::ExpectedDoubleQuoteGotSingleQuote(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I was expecting to see a string here, but I got a scalar literal."),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow(r"You could change it to something like "),
+                    alloc.parser_suggestion("\"to be or not to be\""),
+                    alloc.reflow(" or even just "),
+                    alloc.parser_suggestion("\"\""),
+                    alloc.reflow(". "),
+                    alloc.reflow("Note, roc strings use double quotes."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "EXPECTED STRING".to_string(),
+                severity: Severity::RuntimeError,
+            }
+        }
+        EString::EndlessMultiLine(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 

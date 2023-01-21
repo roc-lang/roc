@@ -4,7 +4,7 @@ app "app"
     provides [main] to pf
 
 main =
-    Set.empty
+    Set.empty {}
     |> Set.insert "foo"
     |> Set.insert "bar"
     |> Set.insert "foo"

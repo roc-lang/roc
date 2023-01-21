@@ -1382,7 +1382,7 @@ fn gte_u8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lt_u64() {
     assert_evals_to!("1u64 < 2u64", true, bool);
     assert_evals_to!("1u64 < 1u64", false, bool);
@@ -1402,7 +1402,7 @@ fn lte_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gt_u64() {
     assert_evals_to!("2u64 > 1u64", true, bool);
     assert_evals_to!("2u64 > 2u64", false, bool);
@@ -1422,7 +1422,7 @@ fn gte_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn lt_i64() {
     assert_evals_to!("1 < 2", true, bool);
     assert_evals_to!("1 < 1", false, bool);
@@ -1440,7 +1440,7 @@ fn lte_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gt_i64() {
     assert_evals_to!("2 > 1", true, bool);
     assert_evals_to!("2 > 2", false, bool);
@@ -1881,7 +1881,7 @@ fn int_sub_overflow() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn int_sub_wrap() {
     assert_evals_to!(
         indoc!(
@@ -3507,9 +3507,9 @@ fn monomorphized_ints_aliased() {
             app "test" provides [main] to "./platform"
 
             main =
-                y = 100
-                w1 = y
-                w2 = y
+                y = \{} -> 100
+                w1 = \{} -> y {}
+                w2 = \{} -> y {}
 
                 f1 : U8, U32 -> U8
                 f1 = \_, _ -> 1
@@ -3517,7 +3517,7 @@ fn monomorphized_ints_aliased() {
                 f2 : U32, U8 -> U8
                 f2 = \_, _ -> 2
 
-                f1 w1 w2 + f2 w1 w2
+                f1 (w1 {}) (w2 {}) + f2 (w1 {}) (w2 {})
             "#
         ),
         3,

@@ -47,7 +47,7 @@ interface Dict
 ## its population as the associated value.
 ##
 ##     populationByCity =
-##         Dict.empty
+##         Dict.empty {}
 ##         |> Dict.insert "London" 8_961_989
 ##         |> Dict.insert "Philadelphia" 1_603_797
 ##         |> Dict.insert "Shanghai" 24_870_895
@@ -100,8 +100,8 @@ Dict k v := {
 } | k has Hash & Eq
 
 ## Return an empty dictionary.
-empty : Dict k v | k has Hash & Eq
-empty =
+empty : {} -> Dict k v | k has Hash & Eq
+empty = \{} ->
     @Dict {
         metadata: List.repeat emptySlot 8,
         dataIndices: List.repeat 0 8,
@@ -122,16 +122,16 @@ capacity = \@Dict { dataIndices } ->
 withCapacity : Nat -> Dict k v | k has Hash & Eq
 withCapacity = \_ ->
     # TODO: power of 2 * 8 and actual implementation
-    empty
+    empty {}
 
 ## Returns a dictionary containing the key and value provided as input.
 ##
 ##     expect
 ##         Dict.single "A" "B"
-##         |> Bool.isEq (Dict.insert Dict.empty "A" "B")
+##         |> Bool.isEq (Dict.insert (Dict.empty {}) "A" "B")
 single : k, v -> Dict k v | k has Hash & Eq
 single = \k, v ->
-    insert empty k v
+    insert (empty {}) k v
 
 ## Returns dictionary with the keys and values specified by the input [List].
 ##
@@ -144,12 +144,12 @@ single = \k, v ->
 fromList : List (T k v) -> Dict k v | k has Hash & Eq
 fromList = \data ->
     # TODO: make this efficient. Should just set data and then set all indicies in the hashmap.
-    List.walk data empty (\dict, T k v -> insert dict k v)
+    List.walk data (empty {}) (\dict, T k v -> insert dict k v)
 
 ## Returns the number of values in the dictionary.
 ##
 ##     expect
-##         Dict.empty
+##         Dict.empty {}
 ##         |> Dict.insert "One" "A Song"
 ##         |> Dict.insert "Two" "Candy Canes"
 ##         |> Dict.insert "Three" "Boughs of Holly"
@@ -166,7 +166,7 @@ clear = \@Dict { metadata, dataIndices, data } ->
 
     # Only clear large allocations.
     if cap > 128 * 8 then
-        empty
+        empty {}
     else
         @Dict {
             metadata: List.map metadata (\_ -> emptySlot),
@@ -182,7 +182,7 @@ clear = \@Dict { metadata, dataIndices, data } ->
 ## initial `state` value provided for the first call.
 ##
 ##     expect
-##         Dict.empty
+##         Dict.empty {}
 ##         |> Dict.insert "Apples" 12
 ##         |> Dict.insert "Orange" 24
 ##         |> Dict.walk 0 (\count, _, qty -> count + qty)
@@ -210,7 +210,7 @@ walkUntil = \@Dict { data }, initialState, transform ->
 ## will return [Ok value], otherwise return [Err KeyNotFound].
 ##
 ##     dictionary =
-##         Dict.empty
+##         Dict.empty {}
 ##         |> Dict.insert 1 "Apple"
 ##         |> Dict.insert 2 "Orange"
 ##
@@ -239,7 +239,7 @@ get = \@Dict { metadata, dataIndices, data }, key ->
 ## Check if the dictionary has a value for a specified key.
 ##
 ##     expect
-##         Dict.empty
+##         Dict.empty {}
 ##         |> Dict.insert 1234 "5678"
 ##         |> Dict.contains 1234
 ##         |> Bool.isEq Bool.true
@@ -263,7 +263,7 @@ contains = \@Dict { metadata, dataIndices, data }, key ->
 ## Insert a value into the dictionary at a specified key.
 ##
 ##     expect
-##         Dict.empty
+##         Dict.empty {}
 ##         |> Dict.insert "Apples" 12
 ##         |> Dict.get "Apples"
 ##         |> Bool.isEq (Ok 12)
@@ -307,7 +307,7 @@ insert = \@Dict { metadata, dataIndices, data, size }, key, value ->
 ## Remove a value from the dictionary for a specified key.
 ##
 ##     expect
-##         Dict.empty
+##         Dict.empty {}
 ##         |> Dict.insert "Some" "Value"
 ##         |> Dict.remove "Some"
 ##         |> Dict.len
@@ -352,9 +352,9 @@ remove = \@Dict { metadata, dataIndices, data, size }, key ->
 ##             Missing -> Present Bool.false
 ##             Present value -> if value then Missing else Present Bool.true
 ##
-##     expect Dict.update Dict.empty "a" alterValue == Dict.single "a" Bool.false
+##     expect Dict.update (Dict.empty {}) "a" alterValue == Dict.single "a" Bool.false
 ##     expect Dict.update (Dict.single "a" Bool.false) "a" alterValue == Dict.single "a" Bool.true
-##     expect Dict.update (Dict.single "a" Bool.true) "a" alterValue == Dict.empty
+##     expect Dict.update (Dict.single "a" Bool.true) "a" alterValue == Dict.empty {}
 update : Dict k v, k, ([Present v, Missing] -> [Present v, Missing]) -> Dict k v | k has Hash & Eq
 update = \dict, key, alter ->
     # TODO: look into optimizing by merging substeps and reducing lookups.
@@ -457,7 +457,7 @@ keepShared : Dict k v, Dict k v -> Dict k v | k has Hash & Eq
 keepShared = \xs, ys ->
     walk
         xs
-        empty
+        (empty {})
         (\state, k, v ->
             if contains ys k then
                 insert state k v
@@ -688,7 +688,7 @@ h2 = \hashKey ->
 
 expect
     val =
-        empty
+        empty {}
         |> insert "foo" "bar"
         |> get "foo"
 
@@ -696,7 +696,7 @@ expect
 
 expect
     val =
-        empty
+        empty {}
         |> insert "foo" "bar"
         |> insert "foo" "baz"
         |> get "foo"
@@ -705,20 +705,20 @@ expect
 
 expect
     val =
-        empty
+        empty {}
         |> insert "foo" "bar"
         |> get "bar"
 
     val == Err KeyNotFound
 
 expect
-    empty
+    empty {}
     |> insert "foo" {}
     |> contains "foo"
 
 expect
     dict =
-        empty
+        empty {}
         |> insert "foo" {}
         |> insert "bar" {}
         |> insert "baz" {}
@@ -746,7 +746,7 @@ expect
 # Reach capacity, no rehash.
 expect
     val =
-        empty
+        empty {}
         |> insert "a" 0
         |> insert "b" 1
         |> insert "c" 2
@@ -760,7 +760,7 @@ expect
 
 expect
     dict =
-        empty
+        empty {}
         |> insert "a" 0
         |> insert "b" 1
         |> insert "c" 2
@@ -780,7 +780,7 @@ expect
 # Force rehash.
 expect
     val =
-        empty
+        empty {}
         |> insert "a" 0
         |> insert "b" 1
         |> insert "c" 2
@@ -795,7 +795,7 @@ expect
 
 expect
     dict =
-        empty
+        empty {}
         |> insert "a" 0
         |> insert "b" 1
         |> insert "c" 2
@@ -815,7 +815,7 @@ expect
     && (get dict "h" == Ok 7)
 
 expect
-    empty
+    empty {}
     |> insert "Some" "Value"
     |> remove "Some"
     |> len
@@ -823,7 +823,7 @@ expect
 
 # Makes sure a Dict with Nat keys works
 expect
-    empty
+    empty {}
     |> insert 7nat "Testing"
     |> get 7
     |> Bool.isEq (Ok "Testing")

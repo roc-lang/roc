@@ -18,7 +18,8 @@ use roc_mono::ir::{
     SelfRecursive, Stmt,
 };
 use roc_mono::layout::{
-    Builtin, Layout, LayoutId, LayoutIds, STLayoutInterner, TagIdIntType, UnionLayout,
+    Builtin, InLayout, Layout, LayoutId, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
+    UnionLayout,
 };
 
 mod generic64;
@@ -63,6 +64,7 @@ pub enum Relocation {
 trait Backend<'a> {
     fn env(&self) -> &Env<'a>;
     fn interns(&self) -> &Interns;
+    fn interner(&self) -> &STLayoutInterner<'a>;
 
     // This method is suboptimal, but it seems to be the only way to make rust understand
     // that all of these values can be mutable at the same time. By returning them together,
@@ -104,7 +106,7 @@ trait Backend<'a> {
 
     // load_args is used to let the backend know what the args are.
     // The backend should track these args so it can use them as needed.
-    fn load_args(&mut self, args: &'a [(Layout<'a>, Symbol)], ret_layout: &Layout<'a>);
+    fn load_args(&mut self, args: &'a [(InLayout<'a>, Symbol)], ret_layout: &InLayout<'a>);
 
     /// Used for generating wrappers for malloc/realloc/free
     fn build_wrapped_jmp(&mut self) -> (&'a [u8], u64);
@@ -140,7 +142,7 @@ trait Backend<'a> {
     }
 
     /// build_stmt builds a statement and outputs at the end of the buffer.
-    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &Layout<'a>) {
+    fn build_stmt(&mut self, stmt: &Stmt<'a>, ret_layout: &InLayout<'a>) {
         match stmt {
             Stmt::Let(sym, expr, layout, following) => {
                 self.build_expr(sym, expr, layout);
@@ -210,7 +212,7 @@ trait Backend<'a> {
                 self.free_symbols(stmt);
             }
             Stmt::Jump(id, args) => {
-                let mut arg_layouts: bumpalo::collections::Vec<Layout<'a>> =
+                let mut arg_layouts: bumpalo::collections::Vec<InLayout<'a>> =
                     bumpalo::vec![in self.env().arena];
                 arg_layouts.reserve(args.len());
                 let layout_map = self.layout_map();
@@ -231,10 +233,10 @@ trait Backend<'a> {
     fn build_switch(
         &mut self,
         cond_symbol: &Symbol,
-        cond_layout: &Layout<'a>,
+        cond_layout: &InLayout<'a>,
         branches: &'a [(u64, BranchInfo<'a>, Stmt<'a>)],
         default_branch: &(BranchInfo<'a>, &'a Stmt<'a>),
-        ret_layout: &Layout<'a>,
+        ret_layout: &InLayout<'a>,
     );
 
     // build_join generates a instructions for a join statement.
@@ -244,7 +246,7 @@ trait Backend<'a> {
         parameters: &'a [Param<'a>],
         body: &'a Stmt<'a>,
         remainder: &'a Stmt<'a>,
-        ret_layout: &Layout<'a>,
+        ret_layout: &InLayout<'a>,
     );
 
     // build_jump generates a instructions for a jump statement.
@@ -252,13 +254,13 @@ trait Backend<'a> {
         &mut self,
         id: &JoinPointId,
         args: &[Symbol],
-        arg_layouts: &[Layout<'a>],
-        ret_layout: &Layout<'a>,
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
     );
 
     /// build_expr builds the expressions for the specified symbol.
     /// The builder must keep track of the symbol because it may be referred to later.
-    fn build_expr(&mut self, sym: &Symbol, expr: &Expr<'a>, layout: &Layout<'a>) {
+    fn build_expr(&mut self, sym: &Symbol, expr: &Expr<'a>, layout: &InLayout<'a>) {
         match expr {
             Expr::Literal(lit) => {
                 if self.env().lazy_literals {
@@ -306,7 +308,7 @@ trait Backend<'a> {
                     }
 
                     CallType::LowLevel { op: lowlevel, .. } => {
-                        let mut arg_layouts: bumpalo::collections::Vec<Layout<'a>> =
+                        let mut arg_layouts: bumpalo::collections::Vec<InLayout<'a>> =
                             bumpalo::vec![in self.env().arena];
                         arg_layouts.reserve(arguments.len());
                         let layout_map = self.layout_map();
@@ -389,8 +391,8 @@ trait Backend<'a> {
         sym: &Symbol,
         lowlevel: &LowLevel,
         args: &'a [Symbol],
-        arg_layouts: &[Layout<'a>],
-        ret_layout: &Layout<'a>,
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
     ) {
         // Now that the arguments are needed, load them if they are literals.
         self.load_literal_symbols(args);
@@ -514,23 +516,39 @@ trait Backend<'a> {
                 );
                 self.build_num_sub(sym, &args[0], &args[1], ret_layout)
             }
+            LowLevel::NumSubWrap => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumSubWrap: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumSubWrap: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumSubWrap: expected to have the same argument and return layout"
+                );
+                self.build_num_sub_wrap(sym, &args[0], &args[1], ret_layout)
+            }
             LowLevel::NumBitwiseAnd => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = ret_layout {
-                    self.build_int_bitwise_and(sym, &args[0], &args[1], *int_width)
+                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                    self.build_int_bitwise_and(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("bitwise and on a non-integer")
                 }
             }
             LowLevel::NumBitwiseOr => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = ret_layout {
-                    self.build_int_bitwise_or(sym, &args[0], &args[1], *int_width)
+                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                    self.build_int_bitwise_or(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("bitwise or on a non-integer")
                 }
             }
             LowLevel::NumBitwiseXor => {
-                if let Layout::Builtin(Builtin::Int(int_width)) = ret_layout {
-                    self.build_int_bitwise_xor(sym, &args[0], &args[1], *int_width)
+                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                    self.build_int_bitwise_xor(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("bitwise xor on a non-integer")
                 }
@@ -542,7 +560,7 @@ trait Backend<'a> {
                     "Eq: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::Builtin(Builtin::Bool),
+                    Layout::BOOL,
                     *ret_layout,
                     "Eq: expected to have return layout of type Bool"
                 );
@@ -559,7 +577,7 @@ trait Backend<'a> {
                     "NotEq: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::Builtin(Builtin::Bool),
+                    Layout::BOOL,
                     *ret_layout,
                     "NotEq: expected to have return layout of type Bool"
                 );
@@ -576,11 +594,28 @@ trait Backend<'a> {
                     "NumLt: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::Builtin(Builtin::Bool),
+                    Layout::BOOL,
                     *ret_layout,
                     "NumLt: expected to have return layout of type Bool"
                 );
                 self.build_num_lt(sym, &args[0], &args[1], &arg_layouts[0])
+            }
+            LowLevel::NumGt => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumGt: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumGt: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    Layout::BOOL,
+                    *ret_layout,
+                    "NumGt: expected to have return layout of type Bool"
+                );
+                self.build_num_gt(sym, &args[0], &args[1], &arg_layouts[0])
             }
             LowLevel::NumToFrac => {
                 debug_assert_eq!(
@@ -590,10 +625,7 @@ trait Backend<'a> {
                 );
 
                 debug_assert!(
-                    matches!(
-                        *ret_layout,
-                        Layout::Builtin(Builtin::Float(FloatWidth::F32 | FloatWidth::F64)),
-                    ),
+                    matches!(*ret_layout, Layout::F32 | Layout::F64),
                     "NumToFrac: expected to have return layout of type Float"
                 );
                 self.build_num_to_frac(sym, &args[0], &arg_layouts[0], ret_layout)
@@ -609,7 +641,7 @@ trait Backend<'a> {
                     "NumLte: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::Builtin(Builtin::Bool),
+                    Layout::BOOL,
                     *ret_layout,
                     "NumLte: expected to have return layout of type Bool"
                 );
@@ -626,7 +658,7 @@ trait Backend<'a> {
                     "NumGte: expected all arguments of to have the same layout"
                 );
                 debug_assert_eq!(
-                    Layout::Builtin(Builtin::Bool),
+                    Layout::BOOL,
                     *ret_layout,
                     "NumGte: expected to have return layout of type Bool"
                 );
@@ -703,8 +735,8 @@ trait Backend<'a> {
         sym: &Symbol,
         func_sym: Symbol,
         args: &'a [Symbol],
-        arg_layouts: &[Layout<'a>],
-        ret_layout: &Layout<'a>,
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
     ) {
         self.load_literal_symbols(args);
         match func_sym {
@@ -715,7 +747,7 @@ trait Backend<'a> {
                     "NumIsZero: expected to have exactly one argument"
                 );
                 debug_assert_eq!(
-                    Layout::Builtin(Builtin::Bool),
+                    Layout::BOOL,
                     *ret_layout,
                     "NumIsZero: expected to have return layout of type Bool"
                 );
@@ -744,12 +776,12 @@ trait Backend<'a> {
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
             Symbol::BOOL_TRUE => {
-                let bool_layout = Layout::Builtin(Builtin::Bool);
+                let bool_layout = Layout::BOOL;
                 self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(true));
                 self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
             }
             Symbol::BOOL_FALSE => {
-                let bool_layout = Layout::Builtin(Builtin::Bool);
+                let bool_layout = Layout::BOOL;
                 self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(false));
                 self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
             }
@@ -764,15 +796,15 @@ trait Backend<'a> {
         dst: &Symbol,
         fn_name: String,
         args: &[Symbol],
-        arg_layouts: &[Layout<'a>],
-        ret_layout: &Layout<'a>,
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
     );
 
     /// build_num_abs stores the absolute value of src into dst.
-    fn build_num_abs(&mut self, dst: &Symbol, src: &Symbol, layout: &Layout<'a>);
+    fn build_num_abs(&mut self, dst: &Symbol, src: &Symbol, layout: &InLayout<'a>);
 
     /// build_num_add stores the sum of src1 and src2 into dst.
-    fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
+    fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
 
     /// build_num_add_checked stores the sum of src1 and src2 into dst.
     fn build_num_add_checked(
@@ -780,21 +812,30 @@ trait Backend<'a> {
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
-        num_layout: &Layout<'a>,
-        return_layout: &Layout<'a>,
+        num_layout: &InLayout<'a>,
+        return_layout: &InLayout<'a>,
     );
 
     /// build_num_mul stores `src1 * src2` into dst.
-    fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
+    fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
 
     /// build_num_mul stores `src1 / src2` into dst.
-    fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
+    fn build_num_div(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
 
     /// build_num_neg stores the negated value of src into dst.
-    fn build_num_neg(&mut self, dst: &Symbol, src: &Symbol, layout: &Layout<'a>);
+    fn build_num_neg(&mut self, dst: &Symbol, src: &Symbol, layout: &InLayout<'a>);
 
     /// build_num_sub stores the `src1 - src2` difference into dst.
-    fn build_num_sub(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &Layout<'a>);
+    fn build_num_sub(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
+
+    /// build_num_sub_wrap stores the `src1 - src2` difference into dst.
+    fn build_num_sub_wrap(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
+    );
 
     /// stores the `src1 & src2` into dst.
     fn build_int_bitwise_and(
@@ -824,21 +865,36 @@ trait Backend<'a> {
     );
 
     /// build_eq stores the result of `src1 == src2` into dst.
-    fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>);
+    fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>);
 
     /// build_neq stores the result of `src1 != src2` into dst.
-    fn build_neq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>);
+    fn build_neq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>);
 
     /// build_num_lt stores the result of `src1 < src2` into dst.
-    fn build_num_lt(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &Layout<'a>);
+    fn build_num_lt(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &InLayout<'a>,
+    );
+
+    /// build_num_gt stores the result of `src1 > src2` into dst.
+    fn build_num_gt(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &InLayout<'a>,
+    );
 
     /// build_num_to_frac convert Number to Frac
     fn build_num_to_frac(
         &mut self,
         dst: &Symbol,
         src: &Symbol,
-        arg_layout: &Layout<'a>,
-        ret_layout: &Layout<'a>,
+        arg_layout: &InLayout<'a>,
+        ret_layout: &InLayout<'a>,
     );
 
     /// build_num_lte stores the result of `src1 <= src2` into dst.
@@ -847,7 +903,7 @@ trait Backend<'a> {
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
-        arg_layout: &Layout<'a>,
+        arg_layout: &InLayout<'a>,
     );
 
     /// build_num_gte stores the result of `src1 >= src2` into dst.
@@ -856,7 +912,7 @@ trait Backend<'a> {
         dst: &Symbol,
         src1: &Symbol,
         src2: &Symbol,
-        arg_layout: &Layout<'a>,
+        arg_layout: &InLayout<'a>,
     );
 
     /// build_list_len returns the length of a list.
@@ -868,7 +924,7 @@ trait Backend<'a> {
         dst: &Symbol,
         list: &Symbol,
         index: &Symbol,
-        ret_layout: &Layout<'a>,
+        ret_layout: &InLayout<'a>,
     );
 
     /// build_list_replace_unsafe returns the old element and new list with the list having the new element inserted.
@@ -876,15 +932,15 @@ trait Backend<'a> {
         &mut self,
         dst: &Symbol,
         args: &'a [Symbol],
-        arg_layouts: &[Layout<'a>],
-        ret_layout: &Layout<'a>,
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
     );
 
     /// build_refcount_getptr loads the pointer to the reference count of src into dst.
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol);
 
     /// literal_map gets the map from symbol to literal and layout, used for lazy loading and literal folding.
-    fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const Layout<'a>)>;
+    fn literal_map(&mut self) -> &mut MutMap<Symbol, (*const Literal<'a>, *const InLayout<'a>)>;
 
     fn load_literal_symbols(&mut self, syms: &[Symbol]) {
         if self.env().lazy_literals {
@@ -901,7 +957,7 @@ trait Backend<'a> {
     }
 
     /// load_literal sets a symbol to be equal to a literal.
-    fn load_literal(&mut self, sym: &Symbol, layout: &Layout<'a>, lit: &Literal<'a>);
+    fn load_literal(&mut self, sym: &Symbol, layout: &InLayout<'a>, lit: &Literal<'a>);
 
     /// create_empty_array creates an empty array with nullptr, zero length, and zero capacity.
     fn create_empty_array(&mut self, sym: &Symbol);
@@ -910,12 +966,12 @@ trait Backend<'a> {
     fn create_array(
         &mut self,
         sym: &Symbol,
-        elem_layout: &Layout<'a>,
+        elem_layout: &InLayout<'a>,
         elems: &'a [ListLiteralElement<'a>],
     );
 
     /// create_struct creates a struct with the elements specified loaded into it as data.
-    fn create_struct(&mut self, sym: &Symbol, layout: &Layout<'a>, fields: &'a [Symbol]);
+    fn create_struct(&mut self, sym: &Symbol, layout: &InLayout<'a>, fields: &'a [Symbol]);
 
     /// load_struct_at_index loads into `sym` the value at `index` in `structure`.
     fn load_struct_at_index(
@@ -923,7 +979,7 @@ trait Backend<'a> {
         sym: &Symbol,
         structure: &Symbol,
         index: u64,
-        field_layouts: &'a [Layout<'a>],
+        field_layouts: &'a [InLayout<'a>],
     );
 
     /// load_union_at_index loads into `sym` the value at `index` for `tag_id`.
@@ -949,7 +1005,7 @@ trait Backend<'a> {
     );
 
     /// return_symbol moves a symbol to the correct return location for the backend and adds a jump to the end of the function.
-    fn return_symbol(&mut self, sym: &Symbol, layout: &Layout<'a>);
+    fn return_symbol(&mut self, sym: &Symbol, layout: &InLayout<'a>);
 
     /// free_symbols will free all symbols for the given statement.
     fn free_symbols(&mut self, stmt: &Stmt<'a>) {
@@ -973,7 +1029,7 @@ trait Backend<'a> {
     fn last_seen_map(&mut self) -> &mut MutMap<Symbol, *const Stmt<'a>>;
 
     /// set_layout_map sets the layout for a specific symbol.
-    fn set_layout_map(&mut self, sym: Symbol, layout: &Layout<'a>) {
+    fn set_layout_map(&mut self, sym: Symbol, layout: &InLayout<'a>) {
         if let Some(old_layout) = self.layout_map().insert(sym, *layout) {
             // Layout map already contains the symbol. We should never need to overwrite.
             // If the layout is not the same, that is a bug.
@@ -989,7 +1045,7 @@ trait Backend<'a> {
     }
 
     /// layout_map gets the map from symbol to layout.
-    fn layout_map(&mut self) -> &mut MutMap<Symbol, Layout<'a>>;
+    fn layout_map(&mut self) -> &mut MutMap<Symbol, InLayout<'a>>;
 
     fn create_free_map(&mut self) {
         let mut free_map = MutMap::default();

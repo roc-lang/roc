@@ -7,10 +7,8 @@ The user needs to analyse the Wasm module's memory to decode the result.
 use bumpalo::{collections::Vec, Bump};
 
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
-use roc_intern::Interner;
-use roc_mono::layout::{Builtin, Layout, UnionLayout};
+use roc_mono::layout::{Builtin, InLayout, Layout, LayoutInterner, UnionLayout};
 use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
-use roc_target::TargetInfo;
 use roc_wasm_module::{
     linking::SymInfo, linking::WasmObjectSymbol, Align, Export, ExportType, LocalId, Signature,
     ValueType, WasmModule,
@@ -39,14 +37,14 @@ pub trait Wasm32Result {
 /// Layout-driven wrapper generation
 pub fn insert_wrapper_for_layout<'a>(
     arena: &'a Bump,
-    interner: &impl Interner<'a, Layout<'a>>,
+    interner: &impl LayoutInterner<'a>,
     module: &mut WasmModule<'a>,
     wrapper_name: &'static str,
     main_fn_index: u32,
-    layout: &Layout<'a>,
+    layout: InLayout<'a>,
 ) {
     let mut stack_data_structure = || {
-        let size = layout.stack_size(interner, TargetInfo::default_wasm32());
+        let size = interner.stack_size(layout);
         if size == 0 {
             <() as Wasm32Result>::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         } else {
@@ -57,7 +55,7 @@ pub fn insert_wrapper_for_layout<'a>(
         }
     };
 
-    match layout {
+    match interner.get(layout) {
         Layout::Builtin(Builtin::Int(IntWidth::U8 | IntWidth::I8)) => {
             i8::insert_wrapper(arena, module, wrapper_name, main_fn_index);
         }

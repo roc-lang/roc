@@ -63,7 +63,6 @@ roc_editor = { path = "../editor", optional = true }
 roc_linker = { path = "../linker" }
 roc_repl_cli = { path = "../repl_cli", optional = true }
 roc_tracing = { path = "../tracing" }
-roc_intern = { path = "../compiler/intern" }
 roc_gen_llvm = {path = "../compiler/gen_llvm"}
 roc_wasm_interp = { path = "../wasm_interp", optional = true }
 

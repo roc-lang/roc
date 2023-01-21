@@ -1,7 +1,7 @@
 use crate::num::NumericRange;
 use crate::pretty_print::Parens;
 use crate::subs::{
-    GetSubsSlice, RecordFields, Subs, UnionTags, VarStore, Variable, VariableSubsSlice,
+    GetSubsSlice, RecordFields, Subs, TagExt, UnionTags, VarStore, Variable, VariableSubsSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_collections::soa::{Index, Slice};
@@ -301,6 +301,10 @@ impl AbilitySet {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 impl FromIterator<Symbol> for AbilitySet {
@@ -393,7 +397,7 @@ pub enum TypeTag {
     },
     // type extension is implicit
     // tag name is in the `single_tag_union_tag_names` map
-    FunctionOrTagUnion(Symbol),
+    FunctionOrTagUnion(Symbol, ExtImplicitOpenness),
     UnspecializedLambdaSet {
         unspecialized: Uls,
     },
@@ -427,9 +431,10 @@ pub enum TypeTag {
     Error,
 
     // TypeExtension is implicit in the type slice
-    // it is length zero for closed, length 1 for open
-    TagUnion(UnionTags),
-    RecursiveTagUnion(Variable, UnionTags),
+    // it is length zero for closed, length 1 for existing
+    // if not closed, IsImplicitOpennessVar is whether the extension is an Openness variable
+    TagUnion(UnionTags, ExtImplicitOpenness),
+    RecursiveTagUnion(Variable, UnionTags, ExtImplicitOpenness),
     Record(RecordFields),
 }
 
@@ -660,7 +665,7 @@ impl Types {
         };
 
         let type_slice = match extension {
-            TypeExtension::Open(ext) => self.from_old_type(ext).as_slice(),
+            TypeExtension::Open(ext, _) => self.from_old_type(ext).as_slice(),
             TypeExtension::Closed => Slice::default(),
         };
 
@@ -780,24 +785,32 @@ impl Types {
             Type::TagUnion(tags, extension) => {
                 let (union_tags, type_slice) = self.tag_union_help(tags, extension);
 
-                self.set_type_tag(index, TypeTag::TagUnion(union_tags), type_slice)
+                self.set_type_tag(
+                    index,
+                    TypeTag::TagUnion(union_tags, extension.is_implicit_openness()),
+                    type_slice,
+                )
             }
             Type::RecursiveTagUnion(rec_var, tags, extension) => {
                 let (union_tags, type_slice) = self.tag_union_help(tags, extension);
-                let tag = TypeTag::RecursiveTagUnion(*rec_var, union_tags);
+                let tag = TypeTag::RecursiveTagUnion(
+                    *rec_var,
+                    union_tags,
+                    extension.is_implicit_openness(),
+                );
 
                 self.set_type_tag(index, tag, type_slice)
             }
             Type::FunctionOrTagUnion(tag_name, symbol, extension) => {
                 let type_slice = match extension {
-                    TypeExtension::Open(ext) => self.from_old_type(ext).as_slice(),
+                    TypeExtension::Open(ext, _) => self.from_old_type(ext).as_slice(),
                     TypeExtension::Closed => Slice::default(),
                 };
 
                 self.single_tag_union_tag_names
                     .insert(index, tag_name.clone());
 
-                let tag = TypeTag::FunctionOrTagUnion(*symbol);
+                let tag = TypeTag::FunctionOrTagUnion(*symbol, extension.is_implicit_openness());
                 self.set_type_tag(index, tag, type_slice)
             }
             Type::UnspecializedLambdaSet { unspecialized } => {
@@ -808,7 +821,7 @@ impl Types {
             }
             Type::Record(fields, extension) => {
                 let type_slice = match extension {
-                    TypeExtension::Open(ext) => self.from_old_type(ext).as_slice(),
+                    TypeExtension::Open(ext, _) => self.from_old_type(ext).as_slice(),
                     TypeExtension::Closed => Slice::default(),
                 };
 
@@ -1112,14 +1125,14 @@ impl Types {
                         new_captures,
                     )
                 }
-                FunctionOrTagUnion(symbol) => {
+                FunctionOrTagUnion(symbol, ext_openness) => {
                     let ext = self.get_type_arguments(typ);
 
                     let new_ext = defer_slice!(ext);
                     self.single_tag_union_tag_names
                         .insert(dest_index, self.get_tag_name(&typ).clone());
 
-                    (FunctionOrTagUnion(symbol), new_ext)
+                    (FunctionOrTagUnion(symbol, ext_openness), new_ext)
                 }
                 UnspecializedLambdaSet {
                     unspecialized: Uls(var, sym, region),
@@ -1210,15 +1223,15 @@ impl Types {
                         new_type_arguments,
                     )
                 }
-                TagUnion(union_tags) => {
+                TagUnion(union_tags, ext_openness) => {
                     let ext_slice = self.get_type_arguments(typ);
 
                     let new_ext_slice = defer_slice!(ext_slice);
                     let new_union_tags = do_union_tags!(union_tags);
 
-                    (TagUnion(new_union_tags), new_ext_slice)
+                    (TagUnion(new_union_tags, ext_openness), new_ext_slice)
                 }
-                RecursiveTagUnion(rec_var, union_tags) => {
+                RecursiveTagUnion(rec_var, union_tags, ext_openness) => {
                     let ext_slice = self.get_type_arguments(typ);
 
                     let new_rec_var = subst!(rec_var);
@@ -1226,7 +1239,7 @@ impl Types {
                     let new_union_tags = do_union_tags!(union_tags);
 
                     (
-                        RecursiveTagUnion(new_rec_var, new_union_tags),
+                        RecursiveTagUnion(new_rec_var, new_union_tags, ext_openness),
                         new_ext_slice,
                     )
                 }
@@ -1347,7 +1360,7 @@ mod debug_types {
                     .append(f.text(format!(", ^{ambient_function:?}")))
                     .append(f.text("]"))
             }
-            TypeTag::FunctionOrTagUnion(_) => {
+            TypeTag::FunctionOrTagUnion(_, _) => {
                 let tag_name = types.get_tag_name(&tag);
                 f.text(tag_name.0.as_str())
             }
@@ -1396,10 +1409,10 @@ mod debug_types {
             TypeTag::Variable(var) => f.text(format!("{var:?}")),
             TypeTag::RangedNumber(range) => ranged(f, range),
             TypeTag::Error => f.text("ERROR"),
-            TypeTag::TagUnion(tags) => {
+            TypeTag::TagUnion(tags, _) => {
                 tag_union(types, f, f.nil(), tags, types.get_type_arguments(tag))
             }
-            TypeTag::RecursiveTagUnion(rec, tags) => tag_union(
+            TypeTag::RecursiveTagUnion(rec, tags, _) => tag_union(
                 types,
                 f,
                 f.text(format!("<rec {rec:?}>")),
@@ -1780,25 +1793,43 @@ impl Clone for OptAbleType {
     }
 }
 
+/// `true` if an extension variable is inferred-open-in-output-position, and should be treated as a
+/// marker of openness-polymorphism - it can only be inferred to be polymorphic in size, or closed,
+/// but can't grow more monomorphic tags.
+/// E.g. `[]_a` can unify with `[]` or `[]*` but not `[A, B]`.
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+pub enum ExtImplicitOpenness {
+    Yes,
+    No,
+}
+
 #[derive(PartialEq, Eq, Clone)]
 pub enum TypeExtension {
-    Open(Box<Type>),
+    Open(Box<Type>, ExtImplicitOpenness),
     Closed,
 }
 
 impl TypeExtension {
     #[inline(always)]
-    pub fn from_type(typ: Type) -> Self {
+    pub fn from_type(typ: Type, is_implicit_openness: ExtImplicitOpenness) -> Self {
         match typ {
             Type::EmptyTagUnion | Type::EmptyRec => Self::Closed,
-            _ => Self::Open(Box::new(typ)),
+            _ => Self::Open(Box::new(typ), is_implicit_openness),
+        }
+    }
+
+    #[inline(always)]
+    pub fn from_non_annotation_type(typ: Type) -> Self {
+        match typ {
+            Type::EmptyTagUnion | Type::EmptyRec => Self::Closed,
+            _ => Self::Open(Box::new(typ), ExtImplicitOpenness::No),
         }
     }
 
     #[inline(always)]
     pub fn is_closed(&self) -> bool {
         match self {
-            TypeExtension::Open(_) => false,
+            TypeExtension::Open(..) => false,
             TypeExtension::Closed => true,
         }
     }
@@ -1806,8 +1837,16 @@ impl TypeExtension {
     #[inline(always)]
     fn iter_mut(&mut self) -> impl Iterator<Item = &mut Type> {
         match self {
-            TypeExtension::Open(ext) => Some(ext.as_mut()).into_iter(),
+            TypeExtension::Open(ext, _) => Some(ext.as_mut()).into_iter(),
             TypeExtension::Closed => None.into_iter(),
+        }
+    }
+
+    #[inline(always)]
+    fn is_implicit_openness(&self) -> ExtImplicitOpenness {
+        match self {
+            TypeExtension::Open(_, is_implicit_openness) => *is_implicit_openness,
+            TypeExtension::Closed => ExtImplicitOpenness::No,
         }
     }
 }
@@ -1819,7 +1858,7 @@ impl<'a> IntoIterator for &'a TypeExtension {
 
     fn into_iter(self) -> Self::IntoIter {
         match self {
-            TypeExtension::Open(ext) => Some(ext.as_ref()).into_iter(),
+            TypeExtension::Open(ext, _) => Some(ext.as_ref()).into_iter(),
             TypeExtension::Closed => None.into_iter(),
         }
     }
@@ -1993,7 +2032,7 @@ impl fmt::Debug for Type {
                         // This is a closed record. We're done!
                         Ok(())
                     }
-                    TypeExtension::Open(other) => {
+                    TypeExtension::Open(other, _) => {
                         // This is an open record, so print the variable
                         // right after the '}'
                         //
@@ -2011,7 +2050,7 @@ impl fmt::Debug for Type {
                         // This is a closed variant. We're done!
                         Ok(())
                     }
-                    TypeExtension::Open(other) => {
+                    TypeExtension::Open(other, _) => {
                         // This is an open tag union, so print the variable
                         // right after the ']'
                         //
@@ -2031,7 +2070,7 @@ impl fmt::Debug for Type {
                         // This is a closed variant. We're done!
                         Ok(())
                     }
-                    TypeExtension::Open(other) => {
+                    TypeExtension::Open(other, _) => {
                         // This is an open tag union, so print the variable
                         // right after the ']'
                         //
@@ -2063,7 +2102,7 @@ impl fmt::Debug for Type {
                         // This is a closed variant. We're done!
                         Ok(())
                     }
-                    TypeExtension::Open(other) => {
+                    TypeExtension::Open(other, _) => {
                         // This is an open tag union, so print the variable
                         // right after the ']'
                         //
@@ -2146,12 +2185,12 @@ impl Type {
                         stack.extend(args.iter_mut());
                     }
 
-                    if let TypeExtension::Open(ext) = ext {
+                    if let TypeExtension::Open(ext, _) = ext {
                         stack.push(ext);
                     }
                 }
                 FunctionOrTagUnion(_, _, ext) => {
-                    if let TypeExtension::Open(ext) = ext {
+                    if let TypeExtension::Open(ext, _) = ext {
                         stack.push(ext);
                     }
                 }
@@ -2160,7 +2199,7 @@ impl Type {
                         stack.extend(args.iter_mut());
                     }
 
-                    if let TypeExtension::Open(ext) = ext {
+                    if let TypeExtension::Open(ext, _) = ext {
                         stack.push(ext);
                     }
                 }
@@ -2169,7 +2208,7 @@ impl Type {
                         stack.push(x.as_inner_mut());
                     }
 
-                    if let TypeExtension::Open(ext) = ext {
+                    if let TypeExtension::Open(ext, _) = ext {
                         stack.push(ext);
                     }
                 }
@@ -2275,12 +2314,12 @@ impl Type {
                         stack.extend(args.iter_mut());
                     }
 
-                    if let TypeExtension::Open(ext) = ext {
+                    if let TypeExtension::Open(ext, _) = ext {
                         stack.push(ext);
                     }
                 }
                 FunctionOrTagUnion(_, _, ext) => {
-                    if let TypeExtension::Open(ext) = ext {
+                    if let TypeExtension::Open(ext, _) = ext {
                         stack.push(ext);
                     }
                 }
@@ -2293,7 +2332,7 @@ impl Type {
                         stack.extend(args.iter_mut());
                     }
 
-                    if let TypeExtension::Open(ext) = ext {
+                    if let TypeExtension::Open(ext, _) = ext {
                         stack.push(ext);
                     }
                 }
@@ -2301,7 +2340,7 @@ impl Type {
                     for (_, x) in fields.iter_mut() {
                         stack.push(x.as_inner_mut());
                     }
-                    if let TypeExtension::Open(ext) = ext {
+                    if let TypeExtension::Open(ext, _) = ext {
                         stack.push(ext);
                     }
                 }
@@ -2395,7 +2434,7 @@ impl Type {
                 ret.substitute_alias(rep_symbol, rep_args, actual)
             }
             FunctionOrTagUnion(_, _, ext) => match ext {
-                TypeExtension::Open(ext) => ext.substitute_alias(rep_symbol, rep_args, actual),
+                TypeExtension::Open(ext, _) => ext.substitute_alias(rep_symbol, rep_args, actual),
                 TypeExtension::Closed => Ok(()),
             },
             RecursiveTagUnion(_, tags, ext) | TagUnion(tags, ext) => {
@@ -2406,7 +2445,9 @@ impl Type {
                 }
 
                 match ext {
-                    TypeExtension::Open(ext) => ext.substitute_alias(rep_symbol, rep_args, actual),
+                    TypeExtension::Open(ext, _) => {
+                        ext.substitute_alias(rep_symbol, rep_args, actual)
+                    }
                     TypeExtension::Closed => Ok(()),
                 }
             }
@@ -2416,7 +2457,9 @@ impl Type {
                 }
 
                 match ext {
-                    TypeExtension::Open(ext) => ext.substitute_alias(rep_symbol, rep_args, actual),
+                    TypeExtension::Open(ext, _) => {
+                        ext.substitute_alias(rep_symbol, rep_args, actual)
+                    }
                     TypeExtension::Closed => Ok(()),
                 }
             }
@@ -2480,7 +2523,7 @@ impl Type {
 
     fn contains_symbol_ext(ext: &TypeExtension, rep_symbol: Symbol) -> bool {
         match ext {
-            TypeExtension::Open(ext) => ext.contains_symbol(rep_symbol),
+            TypeExtension::Open(ext, _) => ext.contains_symbol(rep_symbol),
             TypeExtension::Closed => false,
         }
     }
@@ -2542,7 +2585,7 @@ impl Type {
 
     fn contains_variable_ext(ext: &TypeExtension, rep_variable: Variable) -> bool {
         match ext {
-            TypeExtension::Open(ext) => ext.contains_variable(rep_variable),
+            TypeExtension::Open(ext, _) => ext.contains_variable(rep_variable),
             TypeExtension::Closed => false,
         }
     }
@@ -2661,7 +2704,7 @@ impl Type {
                 );
             }
             FunctionOrTagUnion(_, _, ext) => {
-                if let TypeExtension::Open(ext) = ext {
+                if let TypeExtension::Open(ext, _) = ext {
                     ext.instantiate_aliases(
                         region,
                         aliases,
@@ -2684,7 +2727,7 @@ impl Type {
                     }
                 }
 
-                if let TypeExtension::Open(ext) = ext {
+                if let TypeExtension::Open(ext, _) = ext {
                     ext.instantiate_aliases(
                         region,
                         aliases,
@@ -2705,7 +2748,7 @@ impl Type {
                     );
                 }
 
-                if let TypeExtension::Open(ext) = ext {
+                if let TypeExtension::Open(ext, _) = ext {
                     ext.instantiate_aliases(
                         region,
                         aliases,
@@ -2934,7 +2977,7 @@ impl Type {
                                 typ.substitute(&substitution);
                             }
 
-                            if let TypeExtension::Open(ext) = &mut ext {
+                            if let TypeExtension::Open(ext, _) = &mut ext {
                                 ext.substitute(&substitution);
                             }
 
@@ -3016,7 +3059,7 @@ impl Type {
                 tags.len() == 1 && tags[0].1.len() == 1 && tags[0].1[0].is_narrow()
             }
             Type::Record(fields, ext) => match ext {
-                TypeExtension::Open(ext) => {
+                TypeExtension::Open(ext, _) => {
                     fields.values().all(|field| field.as_inner().is_narrow()) && ext.is_narrow()
                 }
                 TypeExtension::Closed => fields.values().all(|field| field.as_inner().is_narrow()),
@@ -3134,7 +3177,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 variables_help(field.as_inner(), accum);
             }
 
-            if let TypeExtension::Open(ext) = ext {
+            if let TypeExtension::Open(ext, _) = ext {
                 variables_help(ext, accum);
             }
         }
@@ -3159,12 +3202,12 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 }
             }
 
-            if let TypeExtension::Open(ext) = ext {
+            if let TypeExtension::Open(ext, _) = ext {
                 variables_help(ext, accum);
             }
         }
         FunctionOrTagUnion(_, _, ext) => {
-            if let TypeExtension::Open(ext) = ext {
+            if let TypeExtension::Open(ext, _) = ext {
                 variables_help(ext, accum);
             }
         }
@@ -3175,7 +3218,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 }
             }
 
-            if let TypeExtension::Open(ext) = ext {
+            if let TypeExtension::Open(ext, _) = ext {
                 variables_help(ext, accum);
             }
 
@@ -3269,7 +3312,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 variables_help_detailed(field.as_inner(), accum);
             }
 
-            if let TypeExtension::Open(ext) = ext {
+            if let TypeExtension::Open(ext, _) = ext {
                 variables_help_detailed(ext, accum);
             }
         }
@@ -3289,12 +3332,12 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 }
             }
 
-            if let TypeExtension::Open(ext) = ext {
+            if let TypeExtension::Open(ext, _) = ext {
                 variables_help_detailed(ext, accum);
             }
         }
         FunctionOrTagUnion(_, _, ext) => {
-            if let TypeExtension::Open(ext) = ext {
+            if let TypeExtension::Open(ext, _) = ext {
                 variables_help_detailed(ext, accum);
             }
         }
@@ -3310,7 +3353,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 }
             }
 
-            if let TypeExtension::Open(ext) = ext {
+            if let TypeExtension::Open(ext, _) = ext {
                 variables_help_detailed(ext, accum);
             }
 
@@ -3381,7 +3424,7 @@ pub struct RecordStructure {
 pub struct TagUnionStructure<'a> {
     /// Invariant: these should be sorted!
     pub fields: Vec<(TagName, &'a [Variable])>,
-    pub ext: Variable,
+    pub ext: TagExt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4095,13 +4138,16 @@ static THE_LETTER_A: u32 = 'a' as u32;
 
 /// Generates a fresh type variable name, composed of lowercase alphabetic characters in sequence.
 pub fn name_type_var<I, F: FnMut(&I, &str) -> bool>(
+    prefix: &str,
     letters_used: u32,
     taken: &mut impl Iterator<Item = I>,
     mut predicate: F,
 ) -> (Lowercase, u32) {
     // TODO we should arena-allocate this String,
     // so all the strings in the entire pass only require ~1 allocation.
-    let mut buf = String::with_capacity((letters_used as usize) / 26 + 1);
+    let mut buf = String::with_capacity(prefix.len() + (letters_used as usize) / 26 + 1);
+
+    buf.push_str(prefix);
 
     let is_taken = {
         let mut remaining = letters_used as i32;
@@ -4118,7 +4164,7 @@ pub fn name_type_var<I, F: FnMut(&I, &str) -> bool>(
 
     if is_taken {
         // If the generated name is already taken, try again.
-        name_type_var(letters_used + 1, taken, predicate)
+        name_type_var(prefix, letters_used + 1, taken, predicate)
     } else {
         (buf.into(), letters_used + 1)
     }
@@ -4127,18 +4173,19 @@ pub fn name_type_var<I, F: FnMut(&I, &str) -> bool>(
 /// Generates a fresh type variable name given a hint, composed of the hint as a prefix and a
 /// number as a suffix. For example, given hint `a` we'll name the variable `a`, `a1`, or `a27`.
 pub fn name_type_var_with_hint<I, F: FnMut(&I, &str) -> bool>(
+    prefix: &str,
     hint: &str,
     taken: &mut impl Iterator<Item = I>,
     mut predicate: F,
 ) -> Lowercase {
     if !taken.any(|item| predicate(&item, hint)) {
-        return hint.into();
+        return format!("{prefix}{hint}").into();
     }
 
     let mut i = 0;
     loop {
         i += 1;
-        let cand = format!("{}{}", hint, i);
+        let cand = format!("{prefix}{hint}{i}");
 
         if !taken.any(|item| predicate(&item, &cand)) {
             return cand.into();
@@ -4242,11 +4289,11 @@ pub enum GatherTagsError {
 pub fn gather_tags_unsorted_iter(
     subs: &Subs,
     other_fields: UnionTags,
-    mut var: Variable,
+    mut ext: TagExt,
 ) -> Result<
     (
         impl Iterator<Item = (&TagName, VariableSubsSlice)> + '_,
-        Variable,
+        TagExt,
     ),
     GatherTagsError,
 > {
@@ -4255,12 +4302,21 @@ pub fn gather_tags_unsorted_iter(
 
     let mut stack = vec![other_fields];
 
+    #[cfg(debug_assertions)]
+    let mut seen_head_union = false;
+
     loop {
-        match subs.get_content_without_compacting(var) {
+        match subs.get_content_without_compacting(ext.var()) {
             Structure(TagUnion(sub_fields, sub_ext)) => {
+                #[cfg(debug_assertions)]
+                {
+                    assert!(!seen_head_union, "extension variable is another tag union, but I expected it to be either open or closed!");
+                    seen_head_union = true;
+                }
+
                 stack.push(*sub_fields);
 
-                var = *sub_ext;
+                ext = *sub_ext;
             }
 
             Structure(FunctionOrTagUnion(_tag_name_index, _, _sub_ext)) => {
@@ -4279,7 +4335,8 @@ pub fn gather_tags_unsorted_iter(
             }
 
             Alias(_, _, actual_var, _) => {
-                var = *actual_var;
+                debug_assert!(matches!(ext, TagExt::Any(..)));
+                ext = TagExt::Any(*actual_var);
             }
 
             Structure(EmptyTagUnion) => break,
@@ -4290,7 +4347,7 @@ pub fn gather_tags_unsorted_iter(
 
             Error => break,
 
-            _ => return Err(GatherTagsError::NotATagUnion(var)),
+            _ => return Err(GatherTagsError::NotATagUnion(ext.var())),
         }
     }
 
@@ -4304,15 +4361,15 @@ pub fn gather_tags_unsorted_iter(
             (tag_name, subs_slice)
         });
 
-    Ok((it, var))
+    Ok((it, ext))
 }
 
 pub fn gather_tags_slices(
     subs: &Subs,
     other_fields: UnionTags,
-    var: Variable,
-) -> Result<(Vec<(TagName, VariableSubsSlice)>, Variable), GatherTagsError> {
-    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var)?;
+    ext: TagExt,
+) -> Result<(Vec<(TagName, VariableSubsSlice)>, TagExt), GatherTagsError> {
+    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, ext)?;
 
     let mut result: Vec<_> = it
         .map(|(ref_label, field): (_, VariableSubsSlice)| (ref_label.clone(), field))
@@ -4326,9 +4383,9 @@ pub fn gather_tags_slices(
 pub fn gather_tags(
     subs: &Subs,
     other_fields: UnionTags,
-    var: Variable,
+    ext: TagExt,
 ) -> Result<TagUnionStructure, GatherTagsError> {
-    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, var)?;
+    let (it, ext) = gather_tags_unsorted_iter(subs, other_fields, ext)?;
 
     let mut result: Vec<_> = it
         .map(|(ref_label, field): (_, VariableSubsSlice)| {

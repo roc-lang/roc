@@ -6,10 +6,9 @@ use roc_collections::all::MutSet;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_gen_llvm::llvm::externs::add_default_roc_externs;
 use roc_gen_llvm::{run_jit_function, run_jit_function_dynamic_type};
-use roc_intern::SingleThreadedInterner;
 use roc_load::{EntryPoint, MonomorphizedModule};
 use roc_mono::ir::OptLevel;
-use roc_mono::layout::Layout;
+use roc_mono::layout::STLayoutInterner;
 use roc_parse::ast::Expr;
 use roc_repl_eval::eval::jit_to_ast;
 use roc_repl_eval::gen::{compile_to_mono, format_answer, Problems, ReplOutput};
@@ -181,15 +180,7 @@ fn mono_module_to_dylib<'a>(
     target: Triple,
     loaded: MonomorphizedModule<'a>,
     opt_level: OptLevel,
-) -> Result<
-    (
-        libloading::Library,
-        &'a str,
-        Subs,
-        SingleThreadedInterner<'a, Layout<'a>>,
-    ),
-    libloading::Error,
-> {
+) -> Result<(libloading::Library, &'a str, Subs, STLayoutInterner<'a>), libloading::Error> {
     let target_info = TargetInfo::from(&target);
 
     let MonomorphizedModule {

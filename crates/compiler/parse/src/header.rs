@@ -331,7 +331,10 @@ pub fn package_entry<'a>() -> impl Parser<'a, Spaced<'a, PackageEntry<'a>>, EPac
 
 pub fn package_name<'a>() -> impl Parser<'a, PackageName<'a>, EPackageName<'a>> {
     then(
-        loc!(specialize(EPackageName::BadPath, string_literal::parse())),
+        loc!(specialize(
+            EPackageName::BadPath,
+            string_literal::parse_str_literal()
+        )),
         move |_arena, state, progress, text| match text.value {
             StrLiteral::PlainLine(text) => Ok((progress, PackageName(text), state)),
             StrLiteral::Line(_) => Err((progress, EPackageName::Escapes(text.region.start()))),
