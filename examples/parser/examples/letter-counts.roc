@@ -1,6 +1,6 @@
 app "example"
     packages {
-        cli: "https://github.com/roc-lang/basic-cli/releases/download/0.1.4/ZucbkSga8hGGXBkR3ipMdF-qp-kurRHeV8fF2vrWaKw.tar.br",
+        cli: "https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br",
         parser: "../package/main.roc",
     }
     imports [
