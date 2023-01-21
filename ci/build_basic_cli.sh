@@ -13,6 +13,7 @@ elif [[ "$(uname -s)" == "Darwin" ]]; then
         RELEASE_URL="https://github.com/roc-lang/roc/releases/download/nightly/temp_macos_x86_64_rm2.tar.gz"
     else
         RELEASE_URL="https://github.com/roc-lang/roc/releases/download/nightly/temp_macos_arm64_rm2.tar.gz"
+    fi
 else
     echo "Unknown operating system: $(uname -s)"
 fi
