@@ -24,6 +24,9 @@ jobs:
       # does a build with the surgical linker and also with the legacy linker
       - run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
 
+      # for debugging
+      - run: ls
+
       - name: Save .rh1, .rm2 and .o file 
         uses: actions/upload-artifact@v3
         with:
