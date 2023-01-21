@@ -24,7 +24,9 @@ mkdir roc_nightly && cd roc_nightly && curl -OL $RELEASE_URL
 # decompress the tar
 ls | grep "temp.*tar\.gz" | xargs tar -xzvf
 
-echo $(ls | grep "roc_nightly.*tar\.gz")
+ls
+
+echo $(ls)
 
 # delete tar
 ls | grep "roc_nightly.*tar\.gz" | xargs rm -rf
