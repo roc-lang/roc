@@ -34,9 +34,7 @@ jobs:
         with:
           name: linux-x86_64-files
           path: |
-            basic-cli/src/linux-x86_64.rh1
             basic-cli/src/metadata_linux-x86_64.rm2
-            basic-cli/src/linux-x86_64.o
 
   build-macos-x86_64-files:
     runs-on: [macos-11] # I expect the generated files to work on macOS 12
