@@ -36,8 +36,11 @@ jobs:
       - name: regular rust tests
         run: cargo test --locked --release && sccache --show-stats
 
-      - name: test examples/helloWorld.roc separately because it is ignored by default
+      - name: test hellow_world separately because it is ignored by default, the use of url platforms causes issues within nix
         run: cargo test --locked --release -p roc_cli cli_run::hello_world -- --ignored && sccache --show-stats
+
+      - name: test parse_letter_counts separately because it is ignored by default, the use of url platforms causes issues within nix
+        run: cargo test --locked --release -p roc_cli cli_run::parse_letter_counts -- --ignored && sccache --show-stats
 
       - name: check that the platform`s produced dylib is loadable
         run: cd examples/platform-switching/rust-platform && LD_LIBRARY_PATH=. cargo test --release --locked
