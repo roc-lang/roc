@@ -104,12 +104,12 @@ jobs:
         run: curl -OL https://github.com/roc-lang/roc/releases/download/nightly/temp_linux_rm2.tar.gz
 
       - name: decompress the tar
-        run: ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
+        run: ls | grep "temp.*tar\.gz" | xargs tar -xzvf
 
       - run: ls
 
       - name: delete tar
-        run: ls | grep "roc_nightly.*tar\.gz" | xargs rm -rf
+        run: ls | grep "temp.*tar\.gz" | xargs rm -rf
 
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
