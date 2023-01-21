@@ -25,15 +25,15 @@ mkdir roc_nightly && cd roc_nightly && curl -OL $RELEASE_URL
 ls | grep "temp.*tar\.gz" | xargs tar -xzvf
 
 # delete tar
-# ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
+ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
 
 # simplify dir name
-# mv roc_nightly* roc_nightly
+mv roc_nightly* roc_nightly
 
 # cd roc_nightly
 
 # build the basic cli platform
-./roc build ../basic-cli/examples/file.roc
+./roc_nightly/roc build ../basic-cli/examples/file.roc
 
 # We need this extra variable so we can safely check if $2 is empty later
 EXTRA_ARGS=${2:-}
