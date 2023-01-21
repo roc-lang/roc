@@ -1,8 +1,7 @@
-procedure Test.1 ():
-    let Test.4 : {} = Struct {};
-    ret Test.4;
+procedure Test.1 (Test.2):
+    ret Test.2;
 
 procedure Test.0 ():
     let Test.6 : U8 = 15i64;
-    let Test.2 : U8 = CallByName Test.1 Test.6;
-    ret Test.2;
+    let Test.3 : U8 = CallByName Test.1 Test.6;
+    ret Test.3;
