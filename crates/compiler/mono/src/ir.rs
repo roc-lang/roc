@@ -425,7 +425,7 @@ impl<'a> Proc<'a> {
         update_mode_ids: &'i mut UpdateModeIds,
         procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
     ) {
-        for (_, proc) in procs.iter_mut() {
+        for proc in procs.values_mut() {
             let new_proc = crate::reset_reuse::insert_reset_reuse(
                 arena,
                 layout_interner,
