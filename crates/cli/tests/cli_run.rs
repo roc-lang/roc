@@ -800,7 +800,7 @@ mod cli_run {
 
     #[test]
     #[cfg_attr(windows, ignore)]
-    fn arena_allocator {
+    fn arena_allocator() {
         test_roc_app(
             "examples/cli/arena-allocator",
             "ArenaAlloc.roc",
