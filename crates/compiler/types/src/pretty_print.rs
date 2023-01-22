@@ -1227,13 +1227,25 @@ fn write_flat_type<'a>(
             buf.push_str("( ");
 
             let mut any_written_yet = false;
+            let mut expected_next_index = 0;
 
-            for (_, var) in sorted_elems {
+            for (index, var) in sorted_elems {
                 if any_written_yet {
                     buf.push_str(", ");
                 } else {
                     any_written_yet = true;
                 }
+
+                if index - expected_next_index > 4 {
+                    // Don't write out a large number of _'s - just write out a count
+                    buf.push_str(&format!("... {} omitted, ", index - expected_next_index));
+                } else if index - expected_next_index > 1 {
+                    // Write out a bunch of _'s
+                    for _ in expected_next_index..index {
+                        buf.push_str("_, ");
+                    }
+                }
+                expected_next_index = index + 1;
 
                 write_content(
                     env,

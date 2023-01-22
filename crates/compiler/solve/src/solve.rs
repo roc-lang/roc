@@ -3801,8 +3801,15 @@ fn adjust_rank_content(
                     rank
                 }
 
-                Tuple(_elems, _ext_var) => {
-                    todo!()
+                Tuple(elems, ext_var) => {
+                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+
+                    for (_, var_index) in elems.iter_all() {
+                        let var = subs[var_index];
+                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
+                    }
+
+                    rank
                 }
 
                 TagUnion(tags, ext_var) => {
