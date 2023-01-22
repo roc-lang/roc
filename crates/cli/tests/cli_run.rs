@@ -799,6 +799,22 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore)]
+    fn arena_allocator {
+        test_roc_app(
+            "examples/cli/arena-allocator",
+            "ArenaAlloc.roc",
+            "arena-alloc",
+            &["abcdefgh\n"],
+            &[],
+            &[],
+            "Bytes: 97,98,99,100,101,102,103,104,\n[pop]\n",
+            UseValgrind::Yes,
+            TestCliCommands::Run,
+        )
+    }
+
+    #[test]
     fn swift_ui() {
         test_roc_app_slim(
             "examples/swiftui",
