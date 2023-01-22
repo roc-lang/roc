@@ -24,13 +24,13 @@ jobs:
       # does a build with the surgical linker and also with the legacy linker
       - run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
 
-      - name: Save .rh1, .rm1 and .o file 
+      - name: Save .rh1, .rm2 and .o file 
         uses: actions/upload-artifact@v3
         with:
           name: linux-x86_64-files
           path: |
+            basic-cli/src/metadata_linux-x86_64.rm2
             basic-cli/src/linux-x86_64.rh1
-            basic-cli/src/metadata_linux-x86_64.rm1
             basic-cli/src/linux-x86_64.o
 
   build-macos-x86_64-files:
