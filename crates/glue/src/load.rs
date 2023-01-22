@@ -8,6 +8,7 @@ use roc_mono::layout::{GlobalLayoutInterner, LayoutCache, LayoutInterner};
 use roc_packaging::cache::{self, RocCacheDir};
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::{Architecture, TargetInfo};
+use roc_types::subs::{Subs, Variable};
 use std::fs::File;
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -77,6 +78,119 @@ pub fn generate(input_path: &Path, output_path: &Path) -> io::Result<i32> {
             }
         },
     }
+}
+
+fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
+    let mut lambda_sets = vec![];
+    let mut stack = vec![initial];
+
+    macro_rules! var_slice {
+        ($variable_subs_slice:expr) => {{
+            let slice = $variable_subs_slice;
+            subs.variables[slice.indices()].iter().rev()
+        }};
+    }
+
+    while let Some(var) = stack.pop() {
+        use roc_types::subs::Content::*;
+        use roc_types::subs::FlatType::*;
+
+        use roc_types::subs::GetSubsSlice;
+        use roc_types::types::Uls;
+
+        match subs.get_content_without_compacting(var) {
+            RigidVar(_) | RigidAbleVar(_, _) | FlexVar(_) | FlexAbleVar(_, _) | Error => (),
+
+            RecursionVar { structure, .. } => {
+                // can we skip this?
+                // stack.push(*structure);
+            }
+
+            Structure(flat_type) => match flat_type {
+                Apply(_, args) => {
+                    stack.extend(var_slice!(*args));
+                }
+
+                Func(arg_vars, closure_var, ret_var) => {
+                    lambda_sets.push(subs.get_root_key_without_compacting(*closure_var));
+
+                    stack.push(*ret_var);
+                    stack.push(*closure_var);
+                    stack.extend(var_slice!(arg_vars));
+                }
+
+                EmptyRecord => (),
+                EmptyTagUnion => (),
+
+                Record(fields, ext) => {
+                    let fields = *fields;
+                    let ext = *ext;
+
+                    stack.push(ext);
+                    stack.extend(var_slice!(fields.variables()));
+                }
+                TagUnion(tags, ext) => {
+                    let tags = *tags;
+                    let ext = *ext;
+
+                    stack.push(ext.var());
+
+                    for slice_index in tags.variables() {
+                        let slice = subs.variable_slices[slice_index.index as usize];
+                        stack.extend(var_slice!(slice));
+                    }
+                }
+                FunctionOrTagUnion(_, _, ext) => {
+                    stack.push(ext.var());
+                }
+
+                RecursiveTagUnion(rec_var, tags, ext) => {
+                    let tags = *tags;
+                    let ext = *ext;
+                    let rec_var = *rec_var;
+
+                    stack.push(ext.var());
+
+                    for slice_index in tags.variables() {
+                        let slice = subs.variable_slices[slice_index.index as usize];
+                        stack.extend(var_slice!(slice));
+                    }
+
+                    stack.push(rec_var);
+                }
+            },
+            Alias(_, args, var, _) => {
+                let var = *var;
+                let args = *args;
+
+                stack.extend(var_slice!(args.all_variables()));
+
+                stack.push(var);
+            }
+            LambdaSet(roc_types::subs::LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized,
+                ambient_function: _,
+            }) => {
+                for slice_index in solved.variables() {
+                    let slice = subs.variable_slices[slice_index.index as usize];
+                    stack.extend(var_slice!(slice));
+                }
+
+                if let Some(rec_var) = recursion_var.into_variable() {
+                    stack.push(rec_var);
+                }
+
+                for Uls(var, _, _) in subs.get_subs_slice(*unspecialized) {
+                    stack.push(*var);
+                }
+            }
+            &RangedNumber(_) => {}
+        }
+    }
+
+    lambda_sets
 }
 
 pub fn load_types(
@@ -155,15 +269,22 @@ pub fn load_types(
         };
         let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
         let mut glue_procs_by_layout = MutMap::default();
+
         let mut extern_names = MutMap::default();
 
         // Populate glue getters/setters for all relevant variables
         for var in variables.clone() {
+            for (i, v) in number_lambda_sets(subs, var).iter().enumerate() {
+                extern_names.insert(*v, i.to_string());
+            }
+
             let in_layout = layout_cache
                 .from_var(arena, var, subs)
                 .expect("Something weird ended up in the content");
 
             let layout = layout_cache.interner.get(in_layout);
+
+            // dbg!(layout);
 
             if layout.has_varying_stack_size(&layout_cache.interner, arena) {
                 let answer = generate_glue_procs(
@@ -173,8 +294,6 @@ pub fn load_types(
                     &mut layout_interner.fork(),
                     arena.alloc(layout),
                 );
-
-                extern_names.extend(answer.extern_names);
 
                 // Even though generate_glue_procs does more work than we need it to,
                 // it's important that we use it in order to make sure we get exactly

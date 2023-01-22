@@ -3399,6 +3399,7 @@ fn finish_specialization<'a>(
         let module_id = platform_data.as_ref().unwrap().module_id;
 
         for (_name, proc_layout) in exposed_to_host.iter() {
+            dbg!(_name);
             let ret = &proc_layout.result;
             for in_layout in proc_layout.arguments.iter().chain([ret]) {
                 let layout = layout_interner.get(*in_layout);

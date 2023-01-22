@@ -36,6 +36,7 @@ use roc_types::subs::{
     instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
     StorageSubs, Subs, Variable, VariableSubsSlice,
 };
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
 
@@ -11059,8 +11060,11 @@ pub struct GlueProc<'a> {
 
 pub struct GlueProcs<'a> {
     pub getters: Vec<'a, (Layout<'a>, Vec<'a, GlueProc<'a>>)>,
-    pub extern_names: Vec<'a, (LambdaSet<'a>, String)>,
+    pub extern_names: Vec<'a, (LambdaSetPathHash, String)>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LambdaSetPathHash(u64);
 
 pub fn generate_glue_procs<'a, 'i, I>(
     home: ModuleId,
@@ -11072,16 +11076,21 @@ pub fn generate_glue_procs<'a, 'i, I>(
 where
     I: LayoutInterner<'a>,
 {
+    use std::hash::Hasher;
+
     let mut answer = GlueProcs {
         getters: Vec::new_in(arena),
         extern_names: Vec::new_in(arena),
     };
 
-    let mut stack: Vec<'a, Layout<'a>> = Vec::from_iter_in([*layout], arena);
+    let mut hasher = DefaultHasher::default();
+
+    let mut stack: Vec<'a, (Layout<'a>, DefaultHasher)> =
+        Vec::from_iter_in([(*layout, hasher)], arena);
     let mut next_unique_id = 0;
 
     macro_rules! handle_struct_field_layouts {
-        ($field_layouts: expr) => {{
+        ($hasher:expr, $field_layouts: expr) => {{
             if $field_layouts.iter().any(|l| {
                 layout_interner
                     .get(*l)
@@ -11100,12 +11109,16 @@ where
                 answer.getters.push((*layout, procs));
             }
 
-            stack.extend($field_layouts.iter().map(|i| layout_interner.get(*i)));
+            for (i, in_layout) in $field_layouts.iter().enumerate() {
+                let mut hasher = $hasher.clone();
+                hasher.write(i.to_ne_bytes().as_slice());
+                stack.push((layout_interner.get(*in_layout), hasher));
+            }
         }};
     }
 
     macro_rules! handle_tag_field_layouts {
-        ($tag_id:expr, $union_layout:expr, $field_layouts: expr) => {{
+        ($hasher:expr, $tag_id:expr, $union_layout:expr, $field_layouts: expr) => {{
             if $field_layouts.iter().any(|l| {
                 layout_interner
                     .get(*l)
@@ -11126,11 +11139,15 @@ where
                 answer.getters.push((*layout, procs));
             }
 
-            stack.extend($field_layouts.iter().map(|i| layout_interner.get(*i)));
+            for (i, in_layout) in $field_layouts.iter().enumerate() {
+                let mut hasher = $hasher.clone();
+                hasher.write(i.to_ne_bytes().as_slice());
+                stack.push((layout_interner.get(*in_layout), hasher));
+            }
         }};
     }
 
-    while let Some(layout) = stack.pop() {
+    while let Some((layout, mut hasher)) = stack.pop() {
         match layout {
             Layout::Builtin(builtin) => match builtin {
                 Builtin::Int(_)
@@ -11138,42 +11155,78 @@ where
                 | Builtin::Bool
                 | Builtin::Decimal
                 | Builtin::Str => { /* do nothing */ }
-                Builtin::List(element) => stack.push(layout_interner.get(element)),
+                Builtin::List(element) => {
+                    hasher.write(b"List");
+                    stack.push((layout_interner.get(element), hasher))
+                }
             },
             Layout::Struct { field_layouts, .. } => {
-                handle_struct_field_layouts!(field_layouts);
+                handle_struct_field_layouts!(hasher, field_layouts);
             }
-            Layout::Boxed(boxed) => stack.push(layout_interner.get(boxed)),
+            Layout::Boxed(boxed) => {
+                hasher.write(b"Boxed");
+                stack.push((layout_interner.get(boxed), hasher));
+            }
             Layout::Union(union_layout) => match union_layout {
-                UnionLayout::NonRecursive(tags) | UnionLayout::Recursive(tags) => {
-                    for tag in tags.iter() {
-                        stack.extend(tag.iter().map(|i| layout_interner.get(*i)));
+                UnionLayout::NonRecursive(tags) => {
+                    hasher.write(b"NonRecursive");
+                    for (i, in_layout) in tags.iter().flat_map(|e| e.iter()).enumerate() {
+                        let mut hasher = hasher.clone();
+                        hasher.write(i.to_ne_bytes().as_slice());
+                        stack.push((layout_interner.get(*in_layout), hasher));
+                    }
+                }
+                UnionLayout::Recursive(tags) => {
+                    hasher.write(b"Recursive");
+                    for (i, in_layout) in tags.iter().flat_map(|e| e.iter()).enumerate() {
+                        let mut hasher = hasher.clone();
+                        hasher.write(i.to_ne_bytes().as_slice());
+                        stack.push((layout_interner.get(*in_layout), hasher));
                     }
                 }
                 UnionLayout::NonNullableUnwrapped(field_layouts) => {
-                    handle_tag_field_layouts!(0, union_layout, field_layouts);
+                    hasher.write(b"NonNullableUnwrapped");
+                    handle_tag_field_layouts!(hasher, 0, union_layout, field_layouts);
                 }
                 UnionLayout::NullableWrapped {
                     other_tags,
                     nullable_id,
                 } => {
+                    hasher.write(b"NullableWrapped");
                     let tag_ids =
                         (0..nullable_id).chain(nullable_id + 1..other_tags.len() as u16 + 1);
                     for (i, field_layouts) in tag_ids.zip(other_tags) {
-                        handle_tag_field_layouts!(i, union_layout, *field_layouts);
+                        handle_tag_field_layouts!(hasher, i, union_layout, *field_layouts);
                     }
                 }
                 UnionLayout::NullableUnwrapped { other_fields, .. } => {
-                    stack.extend(other_fields.iter().map(|i| layout_interner.get(*i)));
+                    hasher.write(b"NullableUnwrapped");
+                    for (i, in_layout) in other_fields.iter().enumerate() {
+                        let mut hasher = hasher.clone();
+                        hasher.write(i.to_ne_bytes().as_slice());
+                        stack.push((layout_interner.get(*in_layout), hasher));
+                    }
                 }
             },
             Layout::LambdaSet(lambda_set) => {
+                hasher.write(b"LambdaSet");
+
                 let symbol = unique_glue_symbol(arena, &mut next_unique_id, home, interns);
                 let string = String::from(symbol.as_str(interns));
-                answer.extern_names.push((lambda_set, string));
+
+                let path_hash = LambdaSetPathHash(hasher.finish());
+                dbg!(path_hash);
+                answer.extern_names.push((path_hash, string));
+
+                // let alloc = ven_pretty::Arena::<()>::new();
+                // let doc = layout.to_doc(&alloc, layout_interner, Parens::NotNeeded);
+                // dbg!(doc.1.pretty(100).to_string());
 
                 // TODO generate closure caller
-                stack.push(layout_interner.get(lambda_set.runtime_representation()))
+                stack.push((
+                    layout_interner.get(lambda_set.runtime_representation()),
+                    hasher,
+                ));
             }
             Layout::RecursivePointer => {
                 /* do nothing, we've already generated for this type through the Union(_) */

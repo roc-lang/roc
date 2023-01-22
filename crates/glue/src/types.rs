@@ -11,9 +11,12 @@ use roc_module::{
     ident::TagName,
     symbol::{Interns, Symbol},
 };
-use roc_mono::layout::{
-    cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant, InLayout,
-    LambdaSet, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, UnionLayout,
+use roc_mono::{
+    ir::LambdaSetPathHash,
+    layout::{
+        cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant,
+        InLayout, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, UnionLayout,
+    },
 };
 use roc_target::TargetInfo;
 use roc_types::{
@@ -72,7 +75,7 @@ impl Types {
         variables: I,
         interns: &'a Interns,
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
-        extern_names: MutMap<LambdaSet<'a>, String>,
+        extern_names: MutMap<Variable, String>,
         layout_cache: LayoutCache<'a>,
         target: TargetInfo,
     ) -> Self {
@@ -823,7 +826,7 @@ struct Env<'a> {
     subs: &'a Subs,
     layout_cache: LayoutCache<'a>,
     glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
-    extern_names: MutMap<LambdaSet<'a>, String>,
+    extern_names: MutMap<Variable, String>,
     interns: &'a Interns,
     struct_names: Structs,
     enum_names: Enums,
@@ -839,7 +842,7 @@ impl<'a> Env<'a> {
         interns: &'a Interns,
         layout_interner: TLLayoutInterner<'a>,
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
-        extern_names: MutMap<LambdaSet<'a>, String>,
+        extern_names: MutMap<Variable, String>,
         target: TargetInfo,
     ) -> Self {
         Env {
@@ -872,17 +875,6 @@ impl<'a> Env<'a> {
         types
     }
 
-    fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
-        roc_tracing::debug!(content=?roc_types::subs::SubsFmtContent(self.subs.get_content_without_compacting(var), self.subs), "adding type");
-
-        let layout = self
-            .layout_cache
-            .from_var(self.arena, var, self.subs)
-            .expect("Something weird ended up in the content");
-
-        add_type_help(self, layout, var, None, types)
-    }
-
     fn resolve_pending_recursive_types(&mut self, types: &mut Types) {
         // TODO if VecMap gets a drain() method, use that instead of doing take() and into_iter
         let pending = core::mem::take(&mut self.pending_recursive_types);
@@ -908,6 +900,17 @@ impl<'a> Env<'a> {
             // a RecursivePointer, it's just pointing to something else.
             types.replace(type_id, RocType::RecursivePointer(actual_type_id));
         }
+    }
+
+    fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
+        roc_tracing::debug!(content=?roc_types::subs::SubsFmtContent(self.subs.get_content_without_compacting(var), self.subs), "adding type");
+
+        let layout = self
+            .layout_cache
+            .from_var(self.arena, var, self.subs)
+            .expect("Something weird ended up in the content");
+
+        add_type_help(self, layout, var, None, types)
     }
 }
 
@@ -1002,8 +1005,9 @@ fn add_type_help<'a>(
                 _ => unreachable!(),
             };
 
-            let extern_name = String::from("roc__mainForHost_1__Fx2_caller");
-            // let extern_name = env.extern_names.get(&lambda_set).cloned().unwrap();
+            let extern_name = env.extern_names.get(closure_var).cloned().unwrap();
+            // let extern_name = String::from("roc__mainForHost_1__Fx1_caller");
+            let extern_name = format!("roc__mainForHost_1__Fx{}_caller", extern_name);
 
             for arg_var in args {
                 let arg_layout = env
