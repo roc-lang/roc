@@ -20,22 +20,20 @@ comptime {
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-usingnamespace struct {
-    extern fn roc__mainForHost_1_exposed(output: [*]u8) void;
-    pub const roc_main = roc__mainForHost_1_exposed;
+extern fn roc__mainForHost_1_exposed(output: [*]u8) void;
+const roc_main = roc__mainForHost_1_exposed;
 
-    extern fn roc__mainForHost_size() i64;
-    pub const roc_main_size = roc__mainForHost_size;
+extern fn roc__mainForHost_size() i64;
+const roc_main_size = roc__mainForHost_size;
 
-    extern fn roc__mainForHost_1_Fx_caller(flags: *const u8, closure_data: [*]u8, output: [*]u8) void;
-    pub const call_fx = roc__mainForHost_1_Fx_caller;
+extern fn roc__mainForHost_1_Fx_caller(flags: *const u8, closure_data: [*]u8, output: [*]u8) void;
+const call_fx = roc__mainForHost_1_Fx_caller;
 
-    extern fn roc__mainForHost_1_Fx_size() i64;
-    pub const fx_size = roc__mainForHost_1_Fx_size;
+extern fn roc__mainForHost_1_Fx_size() i64;
+const fx_size = roc__mainForHost_1_Fx_size;
 
-    extern fn roc__mainForHost_1_Fx_result_size() i64;
-    pub const fx_result_size = roc__mainForHost_1_Fx_result_size;
-};
+extern fn roc__mainForHost_1_Fx_result_size() i64;
+const fx_result_size = roc__mainForHost_1_Fx_result_size;
 
 extern fn memcpy(dst: [*]u8, src: [*]u8, size: usize) callconv(.C) void;
 extern fn memset(dst: [*]u8, value: i32, size: usize) callconv(.C) void;
