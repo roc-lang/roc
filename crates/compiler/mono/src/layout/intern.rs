@@ -588,7 +588,7 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
         let global = &self.parent;
         let normalized_hash = hash(normalized_layout);
         let mut new_interned_full_layout = None;
-        let (&mut normalized_layout, &mut interned) = self
+        let (&mut _, &mut interned) = self
             .map
             .raw_entry_mut()
             .from_key_hashed_nocheck(normalized_hash, &normalized_layout)
