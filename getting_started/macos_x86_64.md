@@ -21,7 +21,7 @@ which includes the Roc compiler and various helpful utilities.
 
     ```sh
     mkdir roc_nightly-macos_x86_64-<VERSION>
-    tar xf roc_nightly-macos_x86_64-<VERSION>.tar.gz --directory roc_nightly-macos_x86_64-<VERSION>
+    tar xf roc_nightly-macos_x86_64-<VERSION>.tar.gz
     cd roc_night<TAB TO AUTOCOMPLETE>
     ```
 
