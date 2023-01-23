@@ -1851,7 +1851,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx, 'env>(
                     mode.to_call_mode(fn_val),
                     when_recursive,
                     recursive_ptr_field_value,
-                    Layout::RECURSIVE_PTR,
+                    *field_layout,
                 )
             } else if layout_interner.contains_refcounted(*field_layout) {
                 let field_ptr = env

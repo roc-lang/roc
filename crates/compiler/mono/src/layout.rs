@@ -4102,7 +4102,10 @@ where
     };
     criteria.pass_through_recursive_union(rec_var);
 
-    let union_layout = env.cache.put_in(Layout::Union(union_layout));
+    let union_layout = env
+        .cache
+        .interner
+        .insert_recursive(env.arena, Layout::Union(union_layout));
 
     Cacheable(Ok(union_layout), criteria)
 }

@@ -214,6 +214,12 @@ pub trait LayoutInterner<'a>: Sized {
     {
         self.get(layout).to_doc(alloc, self, parens)
     }
+
+    fn dbg(&self, layout: InLayout<'a>) -> String {
+        let alloc: ven_pretty::Arena<()> = ven_pretty::Arena::new();
+        let doc = self.to_doc(layout, &alloc, crate::ir::Parens::NotNeeded);
+        doc.1.pretty(80).to_string()
+    }
 }
 
 /// An interned layout.
@@ -415,8 +421,6 @@ impl<'a> GlobalLayoutInterner<'a> {
                 let mut vec = self.0.vec.write();
 
                 let slot = unsafe { InLayout::from_index(vec.len()) };
-
-                // dbg!((normalized, normalized_hash, slot));
 
                 let lambda_set = LambdaSet {
                     full_layout: slot,
@@ -790,12 +794,9 @@ mod reify {
             Layout::Union(un) => Layout::Union(reify_union(arena, interner, slot, un)),
             Layout::LambdaSet(ls) => Layout::LambdaSet(reify_lambda_set(arena, interner, slot, ls)),
             Layout::RecursivePointer(l) => {
-                debug_assert_eq!(
-                    l,
-                    Layout::VOID,
-                    "normalized layouts must always have VOID as the recursive pointer!"
-                );
-                Layout::RecursivePointer(slot)
+                // If the layout is not void at its point then it has already been solved as
+                // another recursive union's layout, do not change it.
+                Layout::RecursivePointer(if l == Layout::VOID { slot } else { l })
             }
         }
     }
