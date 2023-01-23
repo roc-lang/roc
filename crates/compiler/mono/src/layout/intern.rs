@@ -1057,12 +1057,12 @@ mod insert_recursive_layout {
 
         let in1 = {
             let mut interner = global.fork();
-            interner.insert_recursive(arena, layout);
+            interner.insert_recursive(arena, layout)
         };
 
         let in2 = {
             let mut interner = global.fork();
-            interner.insert_recursive(arena, layout);
+            interner.insert_recursive(arena, layout)
         };
 
         assert_eq!(in1, in2);
@@ -1103,7 +1103,7 @@ mod insert_recursive_layout {
     #[test]
     fn many_threads_read_write() {
         for _ in 0..100 {
-            let mut arenas: Vec<_> = std::iter::repeat_with(|| Bump::new()).take(10).collect();
+            let mut arenas: Vec<_> = std::iter::repeat_with(Bump::new).take(10).collect();
             let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
             std::thread::scope(|s| {
                 let mut handles = Vec::with_capacity(10);
@@ -1148,12 +1148,12 @@ mod insert_recursive_layout {
 
         let in1 = {
             let mut interner = global.fork();
-            interner.insert_recursive(arena, layout);
+            interner.insert_recursive(arena, layout)
         };
 
         let in2 = {
             let mut st_interner = global.unwrap().unwrap();
-            st_interner.insert_recursive(arena, layout);
+            st_interner.insert_recursive(arena, layout)
         };
 
         assert_eq!(in1, in2);
