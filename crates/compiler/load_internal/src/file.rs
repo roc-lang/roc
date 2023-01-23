@@ -1544,7 +1544,7 @@ pub enum Threading {
 ///     determine all the specializations this module *wants*. We compute the hashes
 ///     and report them to the coordinator thread, along with the mono::expr::Expr values of
 ///     the current function's body. At this point, we have not yet begun to assemble Procs;
-///     all we've done is send a list of requetsted specializations to the coordinator.
+///     all we've done is send a list of requested specializations to the coordinator.
 /// 11. The coordinator works through the specialization requests in parallel, adding them
 ///     to a global map once they're finished. Performing one specialization may result
 ///     in requests for others; these are added to the queue and worked through as normal.

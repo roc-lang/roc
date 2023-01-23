@@ -30,16 +30,10 @@ const PLT_ADDRESS_OFFSET: u64 = 0x10;
 struct ElfDynamicDeps {
     got_app_syms: Vec<(String, usize)>,
     got_sections: Vec<(usize, usize)>,
+    app_sym_indices: Vec<usize>,
     dynamic_lib_count: usize,
     shared_lib_index: usize,
 }
-
-// struct MachoDynamicDeps {
-//     got_app_syms: Vec<(String, usize)>,
-//     got_sections: Vec<(usize, usize)>,
-//     dynamic_lib_count: usize,
-//     shared_lib_index: usize,
-// }
 
 fn report_timing(label: &str, duration: Duration) {
     println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
@@ -393,6 +387,11 @@ pub(crate) fn preprocess_elf(
         md.app_functions.push(name.clone());
         md.dynamic_symbol_indices.insert(name, sym.index().0 as u64);
     }
+    for sym in exec_obj.symbols().filter(is_roc_undefined) {
+        let name = sym.name().unwrap().to_string();
+        md.static_symbol_indices.insert(name, sym.index().0 as u64);
+    }
+
     if verbose {
         println!();
         println!("PLT Symbols for App Functions");
@@ -424,6 +423,7 @@ pub(crate) fn preprocess_elf(
             let ElfDynamicDeps {
                 got_app_syms,
                 got_sections,
+                app_sym_indices,
                 dynamic_lib_count,
                 shared_lib_index,
             } = scan_elf_dynamic_deps(
@@ -441,6 +441,7 @@ pub(crate) fn preprocess_elf(
                 preprocessed_path,
                 &got_app_syms,
                 &got_sections,
+                &app_sym_indices,
                 dynamic_lib_count,
                 shared_lib_index,
                 verbose,
@@ -510,6 +511,7 @@ fn gen_elf_le(
     preprocessed_path: &Path,
     got_app_syms: &[(String, usize)],
     got_sections: &[(usize, usize)],
+    app_sym_indices: &[usize],
     dynamic_lib_count: usize,
     shared_lib_index: usize,
     verbose: bool,
@@ -616,8 +618,8 @@ fn gen_elf_le(
     );
 
     let mut rel_sections: Vec<(u64, u64)> = vec![];
-    let mut rela_sections: Vec<(u64, u64)> = vec![];
-    for sh in section_headers.iter_mut() {
+    let mut rela_sections: Vec<(usize, u64, u64)> = vec![];
+    for (i, sh) in section_headers.iter_mut().enumerate() {
         let sh_offset = sh.sh_offset.get(NativeEndian);
         let sh_addr = sh.sh_addr.get(NativeEndian);
         if physical_shift_start <= sh_offset {
@@ -632,7 +634,7 @@ fn gen_elf_le(
         if sh_type == elf::SHT_REL {
             rel_sections.push((sh_offset, sh.sh_size.get(NativeEndian)));
         } else if sh_type == elf::SHT_RELA {
-            rela_sections.push((sh_offset, sh.sh_size.get(NativeEndian)));
+            rela_sections.push((i, sh_offset, sh.sh_size.get(NativeEndian)));
         }
     }
 
@@ -662,7 +664,9 @@ fn gen_elf_le(
             }
         }
     }
-    for (sec_offset, sec_size) in rela_sections {
+
+    let dyn_offset = md.dynamic_section_offset + md.added_byte_count;
+    for (sec_index, sec_offset, sec_size) in rela_sections {
         let relocations = load_structs_inplace_mut::<elf::Rela64<LE>>(
             &mut out_mmap,
             sec_offset as usize + md.added_byte_count as usize,
@@ -702,11 +706,91 @@ fn gen_elf_le(
                 }
             }
         }
+        // To correctly remove the JUMP_SLOT relocations for Roc functions we:
+        //     1. collect the indicies of all of them.
+        //     2. move them all to the end of the relocation sections.
+        //     3. shrink the relocation section to ignore them.
+        //     4. update the dynamic section to reflect the shrink as well.
+        let mut to_remove = relocations
+            .iter()
+            .enumerate()
+            .filter_map(|(i, rel)| {
+                let r_type = rel.r_type(NativeEndian, false);
+                let r_sym = rel.r_sym(NativeEndian, false);
+                if r_type == elf::R_X86_64_JUMP_SLOT && app_sym_indices.contains(&(r_sym as usize))
+                {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // We must remove in descending order to avoid swapping an element more than once and messing up the removal.
+        to_remove.sort();
+        to_remove.reverse();
+
+        let mut j = relocations.len() - 1;
+        for i in to_remove.iter() {
+            relocations.swap(*i, j);
+            let r_sym = relocations[j].r_sym(NativeEndian, false);
+            relocations[j].set_r_info(LE, false, r_sym, elf::R_X86_64_NONE);
+            j -= 1;
+        }
+
+        let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LE>>(
+            &mut out_mmap,
+            sh_offset as usize + md.added_byte_count as usize,
+            sh_num as usize,
+        );
+
+        let old_size = section_headers[sec_index].sh_size.get(NativeEndian);
+        let removed_count = to_remove.len();
+        let removed_size = removed_count * std::mem::size_of::<elf::Rela64<LE>>();
+        section_headers[sec_index]
+            .sh_size
+            .set(NativeEndian, old_size - removed_size as u64);
+
+        let dyns = load_structs_inplace_mut::<elf::Dyn64<LE>>(
+            &mut out_mmap,
+            dyn_offset as usize,
+            dynamic_lib_count,
+        );
+        let is_rela_dyn = dyns
+            .iter()
+            .filter(|d| {
+                let tag = d.d_tag.get(NativeEndian) as u32;
+                tag == elf::DT_RELA
+            })
+            .any(|d| d.d_val.get(NativeEndian) == sec_offset);
+        let is_rela_plt = dyns
+            .iter()
+            .filter(|d| {
+                let tag = d.d_tag.get(NativeEndian) as u32;
+                tag == elf::DT_JMPREL
+            })
+            .any(|d| d.d_val.get(NativeEndian) == sec_offset);
+
+        for d in dyns.iter_mut() {
+            match d.d_tag.get(NativeEndian) as u32 {
+                elf::DT_RELACOUNT if is_rela_dyn => {
+                    let old_count = d.d_val.get(NativeEndian);
+                    d.d_val.set(LE, old_count - removed_count as u64);
+                }
+                elf::DT_RELASZ if is_rela_dyn => {
+                    let old_size = d.d_val.get(NativeEndian);
+                    d.d_val.set(LE, old_size - removed_size as u64);
+                }
+                elf::DT_PLTRELSZ if is_rela_plt => {
+                    let old_size = d.d_val.get(NativeEndian);
+                    d.d_val.set(LE, old_size - removed_size as u64);
+                }
+                _ => {}
+            }
+        }
     }
 
     // Update dynamic table entries for shift for extra program headers.
-    let dyn_offset = md.dynamic_section_offset + md.added_byte_count;
-
     let dyns = load_structs_inplace_mut::<elf::Dyn64<LE>>(
         &mut out_mmap,
         dyn_offset as usize,
@@ -960,7 +1044,7 @@ fn scan_elf_dynamic_deps(
         }
     })
     .filter_map(|(_, reloc)| {
-        if let RelocationKind::Elf(6) = reloc.kind() {
+        if let RelocationKind::Elf(elf::R_X86_64_GLOB_DAT) = reloc.kind() {
             for symbol in app_syms.iter() {
                 if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
                     return Some((symbol.name().unwrap().to_string(), symbol.index().0));
@@ -971,9 +1055,29 @@ fn scan_elf_dynamic_deps(
     })
     .collect();
 
+    let app_sym_indices: Vec<usize> = (match exec_obj.dynamic_relocations() {
+        Some(relocs) => relocs,
+        None => {
+            eprintln!("Executable never calls any application functions.");
+            panic!("No work to do. Probably an invalid input.");
+        }
+    })
+    .filter_map(|(_, reloc)| {
+        if let RelocationKind::Elf(elf::R_X86_64_JUMP_SLOT) = reloc.kind() {
+            for symbol in app_syms.iter() {
+                if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
+                    return Some(symbol.index().0);
+                }
+            }
+        }
+        None
+    })
+    .collect();
+
     ElfDynamicDeps {
         got_app_syms,
         got_sections,
+        app_sym_indices,
         dynamic_lib_count,
         shared_lib_index,
     }
@@ -1422,6 +1526,7 @@ fn surgery_elf_help(
 
     // Update calls from platform and dynamic symbols.
     let dynsym_offset = md.dynamic_symbol_table_section_offset + md.added_byte_count;
+    let symtab_offset = md.symbol_table_section_offset + md.added_byte_count;
 
     for func_name in md.app_functions.iter() {
         let func_virt_offset = match app_func_vaddr_map.get(func_name) {
@@ -1494,6 +1599,23 @@ fn surgery_elf_help(
             let sym = load_struct_inplace_mut::<elf::Sym64<LE>>(
                 exec_mmap,
                 dynsym_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LE>>(),
+            );
+            sym.st_shndx = endian::U16::new(LE, new_text_section_index as u16);
+            sym.st_value = endian::U64::new(LE, func_virt_offset as u64);
+            sym.st_size = endian::U64::new(
+                LE,
+                match app_func_size_map.get(func_name) {
+                    Some(size) => *size,
+                    None => internal_error!("Size missing for: {func_name}"),
+                },
+            );
+        }
+
+        // Also update symbols in the regular symbol table as well.
+        if let Some(i) = md.static_symbol_indices.get(func_name) {
+            let sym = load_struct_inplace_mut::<elf::Sym64<LE>>(
+                exec_mmap,
+                symtab_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LE>>(),
             );
             sym.st_shndx = endian::U16::new(LE, new_text_section_index as u16);
             sym.st_value = endian::U64::new(LE, func_virt_offset as u64);

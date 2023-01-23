@@ -474,10 +474,7 @@ mod cli_run {
     }
 
     #[test]
-    #[serial(cli_platform)]
-    #[ignore]
-    // ignored because downloaded prebuilt platforms cause problems with nix and NixOS
-    // this is explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)
+    #[ignore = "Prebuilt platforms cause problems with nix and NixOS. This is run explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)"]
     fn hello_world() {
         test_roc_app_slim(
             "examples",
@@ -668,7 +665,6 @@ mod cli_run {
     }
 
     #[test]
-    #[ignore = "https://github.com/roc-lang/roc/issues/4919"]
     fn hello_gui() {
         test_roc_app_slim(
             "examples/gui",
@@ -856,10 +852,22 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
-            "examples/parser",
+            "examples/parser/examples",
             "parse-movies-csv.roc",
-            "parse-movies-csv",
+            "example",
             "Parse success!\n",
+            UseValgrind::No,
+        )
+    }
+
+    #[test]
+    #[ignore = "Prebuilt platforms cause problems with nix and NixOS. This is run explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)"]
+    fn parse_letter_counts() {
+        test_roc_app_slim(
+            "examples/parser/examples",
+            "letter-counts.roc",
+            "example",
+            "I counted 7 letter A's!\n",
             UseValgrind::No,
         )
     }
@@ -867,7 +875,7 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn parse_http() {
-        test_roc_expect("examples/parser/Parser", "Http.roc")
+        test_roc_expect("examples/parser/package", "ParserHttp.roc")
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]

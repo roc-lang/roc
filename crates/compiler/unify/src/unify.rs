@@ -304,17 +304,27 @@ pub struct Outcome<M: MetaCollector> {
     /// We defer resolution of these lambda sets to the caller of [unify].
     /// See also [merge_flex_able_with_concrete].
     lambda_sets_to_specialize: UlsOfVar,
+    /// Whether any variable in the path has changed (been merged with new content).
+    has_changed: bool,
     extra_metadata: M,
 }
 
 impl<M: MetaCollector> Outcome<M> {
     fn union(&mut self, other: Self) {
-        self.mismatches.extend(other.mismatches);
-        self.must_implement_ability
-            .extend(other.must_implement_ability);
+        let Self {
+            mismatches,
+            must_implement_ability,
+            lambda_sets_to_specialize,
+            has_changed,
+            extra_metadata,
+        } = other;
+
+        self.mismatches.extend(mismatches);
+        self.must_implement_ability.extend(must_implement_ability);
         self.lambda_sets_to_specialize
-            .union(other.lambda_sets_to_specialize);
-        self.extra_metadata.union(other.extra_metadata);
+            .union(lambda_sets_to_specialize);
+        self.has_changed = self.has_changed || has_changed;
+        self.extra_metadata.union(extra_metadata);
     }
 }
 
@@ -437,6 +447,7 @@ fn unify_help<M: MetaCollector>(
         must_implement_ability,
         lambda_sets_to_specialize,
         extra_metadata,
+        has_changed: _,
     } = unify_pool(env, &mut vars, var1, var2, mode);
 
     if mismatches.is_empty() {
@@ -568,7 +579,7 @@ fn unify_context<M: MetaCollector>(env: &mut Env, pool: &mut Pool, ctx: Context)
 
     // This #[allow] is needed in release builds, where `result` is no longer used.
     #[allow(clippy::let_and_return)]
-    let result = match &ctx.first_desc.content {
+    let mut result: Outcome<M> = match &ctx.first_desc.content {
         FlexVar(opt_name) => unify_flex(env, &ctx, opt_name, &ctx.second_desc.content),
         FlexAbleVar(opt_name, abilities) => {
             unify_flex_able(env, &ctx, opt_name, *abilities, &ctx.second_desc.content)
@@ -605,6 +616,15 @@ fn unify_context<M: MetaCollector>(env: &mut Env, pool: &mut Pool, ctx: Context)
         }
     };
 
+    if result.has_changed {
+        result
+            .extra_metadata
+            .record_changed_variable(env.subs, ctx.first);
+        result
+            .extra_metadata
+            .record_changed_variable(env.subs, ctx.second);
+    }
+
     #[cfg(debug_assertions)]
     debug_print_unified_types(env, &ctx, Some(&result));
 
@@ -616,6 +636,7 @@ fn not_in_range_mismatch<M: MetaCollector>() -> Outcome<M> {
         mismatches: vec![Mismatch::TypeNotInRange],
         must_implement_ability: Default::default(),
         lambda_sets_to_specialize: Default::default(),
+        has_changed: false,
         extra_metadata: Default::default(),
     }
 }
@@ -3624,15 +3645,9 @@ pub fn merge<M: MetaCollector>(env: &mut Env, ctx: &Context, content: Content) -
         copy: OptVariable::NONE,
     };
 
-    outcome
-        .extra_metadata
-        .record_changed_variable(env.subs, ctx.first);
-    outcome
-        .extra_metadata
-        .record_changed_variable(env.subs, ctx.second);
-
     env.subs.union(ctx.first, ctx.second, desc);
 
+    outcome.has_changed = true;
     outcome
 }
 

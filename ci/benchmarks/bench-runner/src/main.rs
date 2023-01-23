@@ -66,6 +66,8 @@ fn finish(all_regressed_benches: HashSet<String>, nr_repeat_benchmarks: usize) {
 
     FAILED: The following benchmarks have shown a regression {:?} times: {:?}
 
+    TIP: It may be the case that you do not have a speedup that is on main, I recommend pulling in main to make sure.
+
     "#,
             nr_repeat_benchmarks, all_regressed_benches
         );
