@@ -20,18 +20,18 @@ DESIGN_ASSETS_COMMIT="4d949642ebc56ca455cf270b288382788bce5873"
 DESIGN_ASSETS_TARFILE="roc-lang-design-assets-4d94964.tar.gz"
 DESIGN_ASSETS_DIR="roc-lang-design-assets-4d94964"
 
-wget -O $DESIGN_ASSETS_TARFILE https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT
+curl -LJO https://github.com/roc-lang/design-assets/tarball/$DESIGN_ASSETS_COMMIT  
 tar -xzf $DESIGN_ASSETS_TARFILE
 mv $DESIGN_ASSETS_DIR/fonts build/
 rm -rf $DESIGN_ASSETS_TARFILE $DESIGN_ASSETS_DIR
 
 # grab the source code and copy it to Netlify's server; if it's not there, fail the build.
 pushd build
-wget https://github.com/roc-lang/roc/archive/www.tar.gz
+curl -LJO https://github.com/roc-lang/roc/archive/www.tar.gz
 
 # Download the latest pre-built Web REPL as a zip file. (Build takes longer than Netlify's timeout.)
 REPL_TARFILE="roc_repl_wasm.tar.gz"
-wget https://github.com/roc-lang/roc/releases/download/nightly/$REPL_TARFILE
+curl -LJO https://github.com/roc-lang/roc/releases/download/nightly/$REPL_TARFILE
 tar -xzf $REPL_TARFILE -C repl
 rm $REPL_TARFILE
 ls -lh repl
