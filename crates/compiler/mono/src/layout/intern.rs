@@ -15,11 +15,11 @@ use roc_target::TargetInfo;
 use super::{Builtin, FieldOrderHash, LambdaSet, Layout, UnionLayout};
 
 macro_rules! cache_interned_layouts {
-    ($($i:literal, $name:ident, $layout:expr)*; $total_constants:literal) => {
+    ($($i:literal, $name:ident, $vis:vis, $layout:expr)*; $total_constants:literal) => {
         impl<'a> Layout<'a> {
             $(
             #[allow(unused)] // for now
-            pub const $name: InLayout<'static> = unsafe { InLayout::from_index($i) };
+            $vis const $name: InLayout<'static> = unsafe { InLayout::from_index($i) };
             )*
         }
 
@@ -46,26 +46,27 @@ macro_rules! cache_interned_layouts {
 }
 
 cache_interned_layouts! {
-    0,  VOID, Layout::VOID_NAKED
-    1,  UNIT, Layout::UNIT_NAKED
-    2,  BOOL, Layout::Builtin(Builtin::Bool)
-    3,  U8,   Layout::Builtin(Builtin::Int(IntWidth::U8))
-    4,  U16,  Layout::Builtin(Builtin::Int(IntWidth::U16))
-    5,  U32,  Layout::Builtin(Builtin::Int(IntWidth::U32))
-    6,  U64,  Layout::Builtin(Builtin::Int(IntWidth::U64))
-    7,  U128, Layout::Builtin(Builtin::Int(IntWidth::U128))
-    8,  I8,   Layout::Builtin(Builtin::Int(IntWidth::I8))
-    9,  I16,  Layout::Builtin(Builtin::Int(IntWidth::I16))
-    10, I32,  Layout::Builtin(Builtin::Int(IntWidth::I32))
-    11, I64,  Layout::Builtin(Builtin::Int(IntWidth::I64))
-    12, I128, Layout::Builtin(Builtin::Int(IntWidth::I128))
-    13, F32,  Layout::Builtin(Builtin::Float(FloatWidth::F32))
-    14, F64,  Layout::Builtin(Builtin::Float(FloatWidth::F64))
-    15, DEC,  Layout::Builtin(Builtin::Decimal)
-    16, STR,  Layout::Builtin(Builtin::Str)
-    17, RECURSIVE_PTR,  Layout::RecursivePointer(Layout::VOID)
+    0,  VOID, pub, Layout::VOID_NAKED
+    1,  UNIT, pub, Layout::UNIT_NAKED
+    2,  BOOL, pub, Layout::Builtin(Builtin::Bool)
+    3,  U8,   pub, Layout::Builtin(Builtin::Int(IntWidth::U8))
+    4,  U16,  pub, Layout::Builtin(Builtin::Int(IntWidth::U16))
+    5,  U32,  pub, Layout::Builtin(Builtin::Int(IntWidth::U32))
+    6,  U64,  pub, Layout::Builtin(Builtin::Int(IntWidth::U64))
+    7,  U128, pub, Layout::Builtin(Builtin::Int(IntWidth::U128))
+    8,  I8,   pub, Layout::Builtin(Builtin::Int(IntWidth::I8))
+    9,  I16,  pub, Layout::Builtin(Builtin::Int(IntWidth::I16))
+    10, I32,  pub, Layout::Builtin(Builtin::Int(IntWidth::I32))
+    11, I64,  pub, Layout::Builtin(Builtin::Int(IntWidth::I64))
+    12, I128, pub, Layout::Builtin(Builtin::Int(IntWidth::I128))
+    13, F32,  pub, Layout::Builtin(Builtin::Float(FloatWidth::F32))
+    14, F64,  pub, Layout::Builtin(Builtin::Float(FloatWidth::F64))
+    15, DEC,  pub, Layout::Builtin(Builtin::Decimal)
+    16, STR,  pub, Layout::Builtin(Builtin::Str)
+    17, OPAQUE_PTR,  pub, Layout::Boxed(Layout::VOID)
+    18, NAKED_RECURSIVE_PTR,  pub(super), Layout::RecursivePointer(Layout::VOID)
 
-    ; 18
+    ; 19
 }
 
 macro_rules! impl_to_from_int_width {
@@ -1011,9 +1012,11 @@ mod insert_recursive_layout {
 
     fn make_layout<'a>(arena: &'a Bump, interner: &mut impl LayoutInterner<'a>) -> Layout<'a> {
         Layout::Union(UnionLayout::Recursive(&*arena.alloc([
-            &*arena.alloc([interner.insert(Layout::Builtin(Builtin::List(Layout::RECURSIVE_PTR)))]),
+            &*arena.alloc([
+                interner.insert(Layout::Builtin(Builtin::List(Layout::NAKED_RECURSIVE_PTR))),
+            ]),
             &*arena.alloc_slice_fill_iter([interner.insert(Layout::struct_no_name_order(
-                &*arena.alloc([Layout::RECURSIVE_PTR]),
+                &*arena.alloc([Layout::NAKED_RECURSIVE_PTR]),
             ))]),
         ])))
     }
