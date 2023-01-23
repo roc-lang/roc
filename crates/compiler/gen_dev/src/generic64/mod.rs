@@ -1874,7 +1874,7 @@ macro_rules! single_register_int_builtins {
 #[macro_export]
 macro_rules! single_register_integers {
     () => {
-        Layout::BOOL | single_register_int_builtins!()
+        Layout::BOOL | single_register_int_builtins!() | Layout::OPAQUE_PTR
     };
 }
 
