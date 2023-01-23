@@ -2252,8 +2252,11 @@ impl<'a, 'b> Env<'a, 'b> {
     ) -> Cacheable<LayoutResult<'a>> {
         if self.is_seen(var) {
             // Always return recursion pointers directly, NEVER cache them as naked!
-            // TODO(recursive-layouts): after we have disjoint recursive pointers, change this
-            let rec_ptr = self.cache.put_in(Layout::RecursivePointer(Layout::VOID));
+            // When this recursion pointer gets used in a recursive union, it will be filled to
+            // looop back to the correct layout.
+            // TODO(recursive-layouts): after the naked pointer is updated, we can cache `var` to
+            // point to the updated layout.
+            let rec_ptr = Layout::NAKED_RECURSIVE_PTR;
             return Cacheable(Ok(rec_ptr), NAKED_RECURSION_PTR);
         }
 
@@ -3105,8 +3108,9 @@ fn layout_from_flat_type<'a>(
         }
         Func(args, closure_var, ret_var) => {
             if env.is_seen(closure_var) {
-                // TODO(recursive-layouts): change after disjoint recursive layouts supported
-                let rec_ptr = env.cache.put_in(Layout::RecursivePointer(Layout::VOID));
+                // TODO(recursive-layouts): after the naked pointer is updated, we can cache `var` to
+                // point to the updated layout.
+                let rec_ptr = Layout::NAKED_RECURSIVE_PTR;
                 Cacheable(Ok(rec_ptr), NAKED_RECURSION_PTR)
             } else {
                 let mut criteria = CACHEABLE;
@@ -3792,8 +3796,7 @@ where
                                 && is_recursive_tag_union(&layout);
 
                             let arg_layout = if self_recursion {
-                                // TODO(recursive-layouts): fix after disjoint recursive pointers supported
-                                env.cache.put_in(Layout::RecursivePointer(Layout::VOID))
+                                Layout::NAKED_RECURSIVE_PTR
                             } else {
                                 in_layout
                             };
@@ -4058,8 +4061,9 @@ where
         for &var in variables {
             // TODO does this cause problems with mutually recursive unions?
             if rec_var == subs.get_root_key_without_compacting(var) {
-                // TODO(recursive-layouts): fix after disjoint recursive pointers supported
-                tag_layout.push(env.cache.put_in(Layout::RecursivePointer(Layout::VOID)));
+                // The naked pointer will get fixed-up to loopback to the union below when we
+                // intern the union.
+                tag_layout.push(Layout::NAKED_RECURSIVE_PTR);
                 continue;
             }
 
