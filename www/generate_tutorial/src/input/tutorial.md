@@ -527,7 +527,7 @@ You can also pattern match on lists, like so:
 
 This can be both more concise and more efficient (at runtime) than calling [`List.get`](https://www.roc-lang.org/builtins/List#get) multiple times, since each call to `get` requires a separate conditional to handle the different `Result`s they return.
 
-> **Note:** Each list pattern can only have one `..`, which is known as the "rest pattern" because it's where the _rest_ of the list goes. 
+> **Note:** Each list pattern can only have one `..`, which is known as the "rest pattern" because it's where the _rest_ of the list goes.
 
 ## [Booleans](#booleans) {#booleans}
 
@@ -670,31 +670,6 @@ There's also `List.dropIf`, which does the reverse:
 <span class="comment"># returns [1, 3, 5]</span>
 </samp></pre>
 
-### [Custom operations that walk over a list](#custom-operations-that-walk-over-a-list) {#custom-operations-that-walk-over-a-list}
-
-You can make your own custom operations that walk over all the elements in a list, using `List.walk`. Let's look at an example and then walk (ha!) through it.
-
-<pre><samp>List.walk [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] { evens <span class="colon">:</span> [], odds <span class="colon">:</span> [] } <span class="kw">\</span>state, elem <span class="kw">-&gt;</span>
-    <span class="kw">if</span> Num.isEven elem <span class="kw">then</span>
-        { state &amp; evens <span class="colon">:</span> List.append state.evens elem }
-    <span class="kw">else</span>
-        { state &amp; odds <span class="colon">:</span> List.append state.odds elem }
-
-<span class="comment"># returns { evens : [2, 4], odds : [1, 3, 5] }</span>
-</samp></pre>
-
-`List.walk` walks through each element of the list, building up a state as it goes. At the end, it returns the final state, whatever that ended up being after processing the last element. The `\state, elem -> ...` function it takes as its last argument takes the current state and the current list element. It then returns the new state based on whatever it decides to do with that element.
-
-In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to either the `evens` or `odds` field of a `state` record: `{ evens, odds }`. By the end, that record has a list of all the even numbers in the list and a list of all the odd numbers.
-
-The state doesn't have to be a record; it can be anything you want. For example, if you made it a boolean, you could implement `List.any` using `List.walk`. You could also make the state be a list, and implement `List.map`, `List.keepIf`, or `List.dropIf`. There are a lot of things you can do with `List.walk`, it's very flexible!
-
-It can be tricky to remember the argument order for `List.walk` at first. A helpful trick is that the arguments follow the same pattern as what we've seen with `List.map`, `List.any`, `List.keepIf`, and `List.dropIf`: the first argument is a list, and the last argument is a function. The difference here is that `List.walk` has one more argument than those other functions; the only place it could go while preserving that pattern is the middle!
-
-That third argument specifies the initial `state`; what it's set to before the `\state, elem -> ...` function has been called on it even once. (If the list is empty, the `\state, elem -> ...` function will never get called and the initial state gets returned immediately.)
-
-> **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`.
-
 ### [Getting an individual element from a list](#getting-an-individual-element-from-a-list) {#getting-an-individual-element-from-a-list}
 
 Another thing we can do with a list is to get an individual element out of it. `List.get` is a common way to do this; it takes a list and an index, and then returns the element at that index... if there is one. But what if there isn't?
@@ -727,6 +702,93 @@ These functions demonstrate a common pattern in Roc: operations that can fail re
 
 <span class="comment"># Note: There's a Result.isErr function that works similarly.</span>
 </samp></pre>
+
+### [Walking the elements in a list](#walking-the-elements-in-a-list) {#walking-the-elements-in-a-list}
+
+We've now seen a few different ways you can transform lists. Sometimes, though, there's nothing
+that quite does what you want, and you might find yourself calling `List.get` repeatedly to
+retrieve every element in the list and use it to build up the new value you want. That approach
+can work, but it has a few downsides:
+
+* Each `List.get` call returns a `Result` that must be dealt with, even though you plan to use every element in the list anyway
+* There's a runtime performance overhead associated with each of these `Result`s, which you won't find in other "look at every element in the list" operations like `List.keepIf`.
+* It's more verbose than the alternative we're about to discuss
+
+The `List.walk` function gives you a way to walk over the elements in a list and build up whatever
+return value you like. It's a great alternative to calling `List.get` on every element in the list
+because it's more concise, runs faster, and doesn't give you any `Result`s to deal with.
+
+Here's an example:
+
+<pre><samp>List.walk [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] { evens <span class="colon">:</span> [], odds <span class="colon">:</span> [] } <span class="kw">\</span>state, elem <span class="kw">-&gt;</span>
+    <span class="kw">if</span> Num.isEven elem <span class="kw">then</span>
+        { state &amp; evens <span class="colon">:</span> List.append state.evens elem }
+    <span class="kw">else</span>
+        { state &amp; odds <span class="colon">:</span> List.append state.odds elem }
+
+<span class="comment"># returns { evens : [2, 4], odds : [1, 3, 5] }</span>
+</samp></pre>
+
+In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to either the `evens` or `odds` field of a `state` record: `{ evens, odds }`. By the end, that record has a list of all the even numbers in the list and a list of all the odd numbers.
+
+`List.walk` takes a few ingredients:
+
+1. A list. (`[1, 2, 3, 4, 5]`)
+2. An initial `state` value. (`{ evens : [], odds : [] }`)
+3. A function which takes the current `state` and element, and returns a new `state`. (`\state, elem -> …`)
+
+It then proceeds to walk over each element in the list and call that function. Each time, the state that function returns becomes the argument to the next function call. Here are the arguments the function will receive, and what it will return, as `List.walk` walks over the list `[1, 2, 3, 4, 5]`:
+
+<pre>
+<table>
+<thead>
+<tr>
+    <th>state</th>
+    <th>element</th>
+    <th>return value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+    <td><code>{ evens : [], odds : [] }</code></td>
+    <td><code>1</code></td>
+    <td><code>{ evens : [], odds : [1] }</code></td>
+</tr>
+<tr>
+    <td><code>{ evens : [], odds : [1] }</code></td>
+    <td><code>2</code></td>
+    <td><code>{ evens : [2], odds : [1] }</code></td>
+</tr>
+<tr>
+    <td><code>{ evens : [2], odds : [1] }</code></td>
+    <td><code>3</code></td>
+    <td><code>{ evens : [2], odds : [1, 3] }</code></td>
+</tr>
+<tr>
+    <td><code>{ evens : [2], odds : [1, 3] }</code></td>
+    <td><code>4</code></td>
+    <td><code>{ evens : [2, 4], odds : [1, 3] }</code></td>
+</tr>
+<tr>
+    <td><code>{ evens : [2, 4], odds : [1, 3] }</code></td>
+    <td><code>4</code></td>
+    <td><code>{ evens : [2, 4], odds : [1, 3, 5] }</code></td>
+</tr>
+</tbody>
+</table>
+</pre>
+
+Note that the initial `state` argument is `{ evens: [], odds: [] }` because that's the argument
+we passed `List.walk` for its initial state. From then on, each `state` argument is whatever the
+previous function call returned.
+
+Once the list has run out of elements, `List.walk` retunrs whatever teh final function call returned—in this case, `{ evens : [2, 4], odds : [1, 3, 5] }`. (If the list was empty, the function never gets called and `List.walk` returns the initial state.)
+
+Note that the state doesn't have to be a record; it can be anything you want. For example, if you made it a `Bool`, you could implement `List.any` using `List.walk`. You could also make the state be a list, and implement `List.map`, `List.keepIf`, or `List.dropIf`. There are a lot of things you can do with `List.walk`!
+
+A helpful way to remember the argument order for `List.walk` is that that its arguments follow the same pattern as what we've seen with `List.map`, `List.any`, `List.keepIf`, and `List.dropIf`: the first argument is a list, and the last argument is a function. The difference here is that `List.walk` has one more argument than those other functions; the only place it could go while preserving that pattern is in the middle!
+
+> **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`. Some languages also have operations like `forEach` or `for…in` syntax, which walk across every element and perform potentially side-effecting operations on them; `List.walk` can be used to replace these too, if you include a `Task` in the state. We'll talk about tasks, and how to use them with `List.walk`, later on.
 
 ### [The pipe operator](#the-pipe-operator) {#the-pipe-operator}
 
@@ -1143,7 +1205,7 @@ Expects do not have to be at the top level:
 
 <pre><samp>pluralize <span class="kw">=</span> <span class="kw">\</span>singular, plural, count <span class="kw">-&gt;</span>
     countStr <span class="kw">=</span> <span class="hljs-type">Num</span>.toStr count
-    
+
     <span class="kw">if</span> count <span class="op">==</span> <span class="number">1</span> <span class="kw">then</span>
         <span class="str">"<span class="hljs-subst">\(countStr)</span> <span class="hljs-subst">\(singular)</span>"</span>
     <span class="kw">else</span>
