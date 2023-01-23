@@ -72,7 +72,17 @@ else
 fi
 
 # get the url of the latest release
-export ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh linux_x86_64)
+if [ "$(uname)" == "Linux" ]; then
+  RELEASE_MACHINE="linux_x86_64"
+elif [ "$(uname)" == "Darwin" ] && [ "$(uname -m)" == "aarch64" ]; then
+  RELEASE_MACHINE="macos_apple_silicon"
+elif [ "$(uname)" == "Darwin" ] && [ "$(uname -m)" == "x86_64" ]; then
+  RELEASE_MACHINE="macos_x86_64"
+else
+  RELEASE_MACHINE="UNSUPPORTED_MACHINE"
+fi
+
+export ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh $RELEASE_MACHINE)
 # get roc release archive
 curl -OL $ROC_RELEASE_URL
 # extract archive
