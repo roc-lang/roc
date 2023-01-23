@@ -127,7 +127,7 @@ Let's move out of the REPL and create our first Roc application!
 Make a file named `main.roc` and put this in it:
 
 <pre><samp><span class="kw">app</span> <span class="str">"hello"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
     <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 
@@ -1191,7 +1191,7 @@ Besides being built into the compiler, the builtin modules are different from ot
 Let's take a closer look at the part of `main.roc` above the `main` def:
 
 <pre><samp><span class="kw">app</span> "<span class="hljs-selector-tag">hello</span>"
-    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> <span class="hljs-selector-attr">[pf.Stdout]</span>
     <span class="kw">provides</span> <span class="hljs-selector-tag">main</span> <span class="kw">to</span> <span class="hljs-selector-tag">pf</span>
 </samp></pre>
@@ -1202,7 +1202,7 @@ The line `app "hello"` states that this module defines a Roc application, and th
 
 The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
 
-<pre><samp><span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
+<pre><samp><span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
 <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
 <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 </samp></pre>
@@ -1247,7 +1247,7 @@ We'll use these four operations to learn about tasks.
 Let's start with a basic "Hello World" program.
 
 <pre><samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> [pf.Stdout]
     <span class="kw">provides</span> [main] <span class="kw">to</span> pf
 
@@ -1274,7 +1274,7 @@ In contrast, `Stdin.line` produces a `Str` when it finishes reading from [standa
 Let's change `main` to read a line from `stdin`, and then print it back out again:
 
 <pre><samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> [pf.Stdout, pf.Stdin, pf.Task]
     <span class="kw">provides</span> [main] <span class="kw">to</span> pf
 
@@ -1311,7 +1311,7 @@ For example, we can print a prompt before we pause to read from `stdin`, so it n
 This works, but we can make it a little nicer to read. Let's change it to the following:
 
 <pre><samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     <span class="kw">provides</span> [main] <span class="kw">to</span> pf
 
