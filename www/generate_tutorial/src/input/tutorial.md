@@ -177,10 +177,11 @@ Once we have a def, we can use its name in other expressions. For example, the `
 
 You can name a def using any combination of letters and numbers, but they have to start with a letter.
 
-> **Note:** Definitions are constant and must be unique within a scope. Once we've assigned a name to an expression, we can't reassign it! We'd get an error if we wrote these two defs in the same scope:
-
-<pre><samp>birds <span class="kw">=</span> 3
-birds <span class="kw">=</span> 2</samp></pre>
+<aside>
+    <p><b>Note:</b> Defs are constant; they can't be reassigned. We'd get an error if we wrote these two defs in the same scope:</p>
+    <pre><samp>birds <span class="kw">=</span> 3
+    birds <span class="kw">=</span> 2</samp></pre>
+</aside>
 
 ## [Defining Functions](#defining-functions) {#defining-functions}
 
@@ -201,7 +202,7 @@ addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <s
 
 This new `addAndStringify` function we've defined accepts two numbers, adds them, calls `Num.toStr` on the result, and returns that.
 
-The `\num1, num2 ->` syntax defines a function's arguments, and the expression after the `->` is the body of the function, `Num.toStr (num1 + num2)` in this case. When a function runs, its body expression gets evaluated and returned.
+The `\num1, num2 ->` syntax defines a function's arguments, and the expression after the `->` is the body of the function. Whenever a function gets called, its body expression gets evaluated and returned.
 
 ## [if-then-else](#if-then-else) {#if-then-else}
 
@@ -218,10 +219,10 @@ Let's modify this function to return an empty string if the numbers add to zero.
 
 We did two things here:
 
-- We introduced a _local def_ named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it will not be accessible outside that function.
+- We introduced a _local def_ named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it's _local_ to that scope and can't be accessed outside that function.
 - We added an `if`\-`then`\-`else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
 
-Every `if` must be accompanied by both `then` and also `else`. Having an `if` without an `else` is an error, because `if` is an an expression, and all expressions must evaluate to a value. If there were ever an `if` without an `else`, that would be an expression that might not evaluate to a value!
+Every `if` must be accompanied by both `then` and also `else`. Having an `if` without an `else` is an error, because `if` is an expression, and all expressions must evaluate to a value. If there were ever an `if` without an `else`, that would be an expression that might not evaluate to a value!
 
 ### [else if](#else-if) {#else-if}
 
@@ -254,6 +255,27 @@ Note that `else if` is not a separate language keyword! It's just an `if`/`else`
 
 This differently-indented version is equivalent to writing `else if sum < 0 then` on the same line, although the convention is to use the original version's style.
 
+### [Comments](#comments) {#comments}
+
+This is a comment in Roc:
+
+<samp><span class="comment"># The `name` field is unused by addAndStringify</span></samp>
+
+Whenever you write `#` it means that the rest of the line is a comment, and will not affect the
+running program. Roc does not have multiline comment syntax.
+
+### [Doc Comments](#doc-comments) {#doc-comments}
+
+Comments that begin with `##` are "doc comments" which will be included in generated documentation (`roc docs`). They can include code blocks by adding five spaces after `##`.
+
+<pre><samp><span class="comment">## This is a comment for documentation, and includes a code block.
+##
+##     x = 2
+##     expect x == 2</span>
+</samp></pre>
+
+Like other comments, doc comments do not affect the running program.
+
 ## [Debugging](#debugging) {#debugging}
 
 [Print debugging](https://en.wikipedia.org/wiki/Debugging#Techniques) is the most common debugging technique in the history of programming, and Roc has a `dbg` keyword to facilitate it. Here's an example of how to use `dbg`:
@@ -270,6 +292,8 @@ This differently-indented version is equivalent to writing `else if sum < 0 then
 Whenever this `dbg` line of code is reached, the value of `count` will be printed to [stderr](<https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)>), along with the source code file and line number where the `dbg` itself was written:
 
 <samp><span class="kw">[pluralize.roc 6:8]</span> 5</samp>
+
+Here, `[pluralize.roc 6:8]` tells us that this `dbg` was written in the file `pluralize.roc` on line 6, column 8.
 
 You can give `dbg` any expression you like, for example:
 
@@ -291,9 +315,9 @@ addAndStringify <span class="kw">=</span> <span class="kw">\</span>counts <span 
     Num.toStr <span class="paren">(</span>counts.birds <span class="op">+</span> counts.iguanas<span class="paren">)</span>
 </samp></pre>
 
-The function now takes a _record_, which is a group of named values. Records are not objects; they don't have methods or inheritance, they just store values.
+The function now takes a _record_, which is a group of named values. Records are not [objects](https://en.wikipedia.org/wiki/Object_(computer_science)); they don't have methods or inheritance, they just store information.
 
-We create the record when we write `{ birds: 5, iguanas: 7 }`. This defines a record with two _fields_ (the `birds` field and the `iguanas` field) and then assigns the number `5` to the `birds` field and the number `7` to the `iguanas` field. Order doesn't matter with record fields; we could have also specified `iguanas` first and `birds` second, and Roc would consider it the exact same record.
+The expression `{ birds: 5, iguanas: 7 }` defines a record with two _fields_ (the `birds` field and the `iguanas` field) and then assigns the number `5` to the `birds` field and the number `7` to the `iguanas` field. Order doesn't matter with record fields; we could have also specified `iguanas` first and `birds` second, and Roc would consider it the exact same record.
 
 When we write `counts.birds`, it accesses the `birds` field of the `counts` record, and when we write `counts.iguanas` it accesses the `iguanas` field.
 
@@ -315,26 +339,6 @@ totalWithNote <span class="kw">=</span> addAndStringify <span class="brace">{</s
 
 This works because `addAndStringify` only uses `counts.birds` and `counts.iguanas`. If we were to use `counts.note` inside `addAndStringify`, then we would get an error because `total` is calling `addAndStringify` passing a record that doesn't have a `note` field.
 
-### [Comments](#comments) {#comments}
-
-By the way, this is a comment in Roc:
-
-<samp><span class="comment"># The `name` field is unused by addAndStringify</span></samp>
-
-Whenever you write `#` it means that the rest of the line is a comment, and will not affect the program.
-
-### [Doc Comments](#doc-comments) {#doc-comments}
-
-Comments that begin with `##` will be included in generated documentation (`roc docs`). They can include code blocks by adding five spaces after `##`.
-
-<pre><samp><span class="comment">## This is a comment for documentation, and includes a code block.
-##
-##     x = 2
-##     expect x == 2</span>
-</samp></pre>
-
-Roc does not have multiline comment syntax.
-
 ### [Record shorthands](#record-shorthands) {#record-shorthands}
 
 Roc has a couple of shorthands you can use to express some record-related operations more concisely.
@@ -349,7 +353,13 @@ returnFoo <span class="brace">{</span> foo <span class="colon">:</span> <span cl
 <span class="comment"># returns "hi!"</span>
 </samp></pre>
 
-Whenever we're setting a field to be equal to a def that has the same name as the field—for example, `{ x: x }`—we can shorten it to just writing the name of the def alone—for example, `{ x }`. We can do this with as many fields as we like, e.g. `{ x: x, y: y }` can alternately be written `{ x, y }`, `{ x: x, y }`, or `{ x, y: y }`.
+Sometimes we assign a def to a field that happens to have the same name—for example, `{ x: x }`.
+In these cases, we shorten it to writing the name of the def alone—for example, `{ x }`. We can do this with as many fields as we like; here are several different ways to define the same record:
+
+- `{ x: x, y: y }`
+- `{ x, y }`
+- `{ x: x, y }`
+- `{ x, y: y }`
 
 ### [Record destructuring](#record-destructuring) {#record-destructuring}
 
@@ -385,7 +395,8 @@ The `fromScratch` and `fromOriginal` records are equal, although they're defined
 - `fromScratch` was built using the same record syntax we've been using up to this point.
 - `fromOriginal` created a new record using the contents of `original` as defaults for fields that it didn't specify after the `&`.
 
-Note that when we do this, the fields you're overriding must all be present on the original record, and their values must have the same type as the corresponding values in the original record.
+Note that `&` can't introduce new fields to a record, or change the types of existing fields.
+(Trying to do either of these will result in an error at build time!)
 
 ## [Tags](#tags) {#tags}
 
@@ -431,7 +442,7 @@ Besides being more concise, there are other advantages to using `when` here.
 1.  We don't have to specify an `else` branch, so the code can be more self-documenting about exactly what all the options are.
 2.  We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplightColor` could be `Green`. It knows this because `Green` is one of the possibilities in our `stoplightColor = if …` definition.
 
-We can still have the equivalent of an `else` branch in our `when` if we like. Instead of writing "else", we write "\_ \->" like so:
+We can still have the equivalent of an `else` branch in our `when` if we like. Instead of writing `else`, we write `\_ ->` like so:
 
 <pre><samp>stoplightStr <span class="kw">=</span>
 <span class="kw">    when</span> stoplightColor <span class="kw">is</span>
@@ -479,7 +490,7 @@ Either style can be a reasonable choice depending on the circumstances.
 
 ### [Tags with payloads](#tags-with-payloads) {#tags-with-payloads}
 
-Tags can have _payloads_ - that is, values inside them. For example:
+Tags can have _payloads_—that is, values inside them. For example:
 
 <pre><samp>stoplightColor <span class="kw">=</span>
     <span class="kw">if</span> something <span class="op">&gt;</span> <span class="number">100</span> <span class="kw">then</span>
@@ -500,8 +511,8 @@ stoplightStr <span class="kw">=</span>
 
 This makes two changes to our earlier `stoplightColor` / `stoplightStr` example.
 
-1.  We sometimes set `stoplightColor` to be `Custom "some other color"`. When we did this, we gave the `Custom` tag a _payload_ of the string `"some other color"`.
-2.  We added a `Custom` tag in our `when`, with a payload which we named `description`. Because we did this, we were able to refer to `description` in the body of the branch (that is, the part after the `->`) just like any other def.
+1.  We sometimes chose to set `stoplightColor` to be `Custom "some other color"`. When we did this, we gave the `Custom` tag a _payload_ of the string `"some other color"`.
+2.  We added a `Custom` tag in our `when`, with a payload which we named `description`. Because we did this, we were able to refer to `description` in the body of the branch (that is, the part after the `->`) just like a def or a function argument.
 
 Any tag can be given a payload like this. A payload doesn't have to be a string; we could also have said (for example) `Custom { r: 40, g: 60, b: 80 }` to specify an RGB color instead of a string. Then in our `when` we could have written `Custom record ->` and then after the `->` used `record.r`, `record.g`, and `record.b` to access the `40`, `60`, `80` values. We could also have written `Custom { r, g, b } ->` to _destructure_ the record, and then accessed these `r`, `g`, and `b` defs after the `->` instead.
 
@@ -531,7 +542,7 @@ This can be both more concise and more efficient (at runtime) than calling [`Lis
 
 ## [Booleans](#booleans) {#booleans}
 
-In many programming languages, `true` and `false` are special language keywords that refer to the two boolean values. In Roc, booleans do not get special keywords; instead, they are exposed as the ordinary values `Bool.true` and `Bool.false`.
+In many programming languages, `true` and `false` are special language keywords that refer to the two [boolean](https://en.wikipedia.org/wiki/Boolean_data_type) values. In Roc, booleans do not get special keywords; instead, they are exposed as the ordinary values `Bool.true` and `Bool.false`.
 
 This design is partly to keep the number of special keywords in the language smaller, but mainly to suggest how booleans are intended be used in Roc: for [_boolean logic_](https://en.wikipedia.org/wiki/Boolean_algebra) (`&&`, `||`, and so on) as opposed to for data modeling. Tags are the preferred choice for data modeling, and having tag values be more concise than boolean values helps make this preference clear.
 
@@ -553,10 +564,12 @@ This returns a **new** list with `"Jess"` after `"Ari"`, and doesn't modify the 
 
 A common way to transform one list into another is to use `List.map`. Here's an example of how to use it:
 
-<pre><samp>List.map <span class="brace">[</span><span class="number">1</span><span class="comma">,</span> <span class="number">2</span><span class="comma">,</span> <span class="number">3</span><span class="brace">]</span> <span class="kw">\</span>num <span class="kw">-&gt;</span> num <span class="op">*<span> <span class="number">2</span>
-</samp></pre>
+<samp>List.map <span class="brace">[</span><span class="number">1</span><span class="comma">,</span> <span class="number">2</span><span class="comma">,</span> <span class="number">3</span><span class="brace">]</span> <span class="kw">&bsol;</span>num <span class="kw">-&gt;</span> num <span class="op">*<span> <span class="number">2</span>
+</samp>
 
-This returns `[2, 4, 6]`. `List.map` takes two arguments:
+This returns `[2, 4, 6]`.
+
+`List.map` takes two arguments:
 
 1.  An input list
 2.  A function that will be called on each element of that list
@@ -565,7 +578,9 @@ It then returns a list which it creates by calling the given function on each el
 
 We can also give `List.map` a named function, instead of an anonymous one:
 
-For example, the `Num.isOdd` function returns `true` if it's given an odd number, and `false` otherwise. So `Num.isOdd 5` returns `true` and `Num.isOdd 2` returns `false`.
+<samp>List.map <span class="brace">[</span><span class="number">1</span><span class="comma">,</span> <span class="number">2</span><span class="comma">,</span> <span class="number">3</span><span class="brace">]</span> Num.isOdd</samp>
+
+This `Num.isOdd` function returns `Bool.true` if it's given an odd number, and `Bool.false` otherwise. So `Num.isOdd 5` returns true and `Num.isOdd 2` returns false.
 
 As such, calling `List.map [1, 2, 3] Num.isOdd` returns a new list of `[Bool.true, Bool.false, Bool.true]`.
 
@@ -664,7 +679,7 @@ Another way is to use `List.keepIf`, which passes each of the list's elements to
 <span class="comment"># returns [2, 4]</span>
 </samp></pre>
 
-There's also `List.dropIf`, which does the reverse:
+There's also `List.dropIf`, which does the opposite:
 
 <pre><samp>List.dropIf [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] Num.isEven
 <span class="comment"># returns [1, 3, 5]</span>
@@ -782,7 +797,7 @@ Note that the initial `state` argument is `{ evens: [], odds: [] }` because that
 we passed `List.walk` for its initial state. From then on, each `state` argument is whatever the
 previous function call returned.
 
-Once the list has run out of elements, `List.walk` retunrs whatever teh final function call returned—in this case, `{ evens : [2, 4], odds : [1, 3, 5] }`. (If the list was empty, the function never gets called and `List.walk` returns the initial state.)
+Once the list has run out of elements, `List.walk` retunrs whatever the final function call returned—in this case, `{ evens : [2, 4], odds : [1, 3, 5] }`. (If the list was empty, the function never gets called and `List.walk` returns the initial state.)
 
 Note that the state doesn't have to be a record; it can be anything you want. For example, if you made it a `Bool`, you could implement `List.any` using `List.walk`. You could also make the state be a list, and implement `List.map`, `List.keepIf`, or `List.dropIf`. There are a lot of things you can do with `List.walk`!
 
