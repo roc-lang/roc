@@ -3363,8 +3363,27 @@ fn monomorphized_lists() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn with_capacity() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            l : List U64
+            l = List.withCapacity 10
+            
+            l
+            "#
+        ),
+        // Equality check for RocList does not account for capacity
+        (10, RocList::with_capacity(10)),
+        RocList<u64>,
+        |value: RocList<u64>| (value.capacity(), value)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn with_capacity_append() {
     // see https://github.com/roc-lang/roc/issues/1732
     assert_evals_to!(
         indoc!(
@@ -3376,8 +3395,9 @@ fn with_capacity() {
                 |> List.append 3u64
             "#
         ),
-        RocList::from_slice(&[0, 1, 2, 3]),
-        RocList<u64>
+        (10, RocList::from_slice(&[0, 1, 2, 3])),
+        RocList<u64>,
+        |value: RocList<u64>| (value.capacity(), value)
     );
 }
 

@@ -679,6 +679,14 @@ trait Backend<'a> {
                 );
                 self.build_list_len(sym, &args[0])
             }
+            LowLevel::ListWithCapacity => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "ListWithCapacity: expected to have exactly one argument"
+                );
+                self.build_list_with_capacity(sym, args[0], arg_layouts[0], ret_layout)
+            }
             LowLevel::ListGetUnsafe => {
                 debug_assert_eq!(
                     2,
@@ -917,6 +925,15 @@ trait Backend<'a> {
 
     /// build_list_len returns the length of a list.
     fn build_list_len(&mut self, dst: &Symbol, list: &Symbol);
+
+    /// build_list_with_capacity creates and returns a list with the given capacity.
+    fn build_list_with_capacity(
+        &mut self,
+        dst: &Symbol,
+        capacity: Symbol,
+        capacity_layout: InLayout<'a>,
+        ret_layout: &InLayout<'a>,
+    );
 
     /// build_list_get_unsafe loads the element from the list at the index.
     fn build_list_get_unsafe(

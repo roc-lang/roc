@@ -541,12 +541,6 @@ impl<'a> LowLevelCall<'a> {
                 let elem_layout = backend.layout_interner.get(elem_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
-                let (spare_local, spare_offset, _) = ensure_symbol_is_in_memory(
-                    backend,
-                    spare,
-                    Layout::usize(TARGET_INFO),
-                    backend.env.arena,
-                );
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -568,11 +562,9 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(elem_align as i32);
 
-                backend.code_builder.get_local(spare_local);
-                if spare_offset > 0 {
-                    backend.code_builder.i32_const(spare_offset as i32);
-                    backend.code_builder.i32_add();
-                }
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[spare]);
 
                 backend.code_builder.i32_const(elem_width as i32);
 

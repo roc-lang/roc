@@ -1274,6 +1274,73 @@ impl<
         self.storage_manager.list_len(&mut self.buf, dst, list);
     }
 
+    fn build_list_with_capacity(
+        &mut self,
+        dst: &Symbol,
+        capacity: Symbol,
+        capacity_layout: InLayout<'a>,
+        ret_layout: &InLayout<'a>,
+    ) {
+        // List alignment argument (u32).
+        let u32_layout = Layout::U32;
+        let list_alignment = self.layout_interner.alignment_bytes(*ret_layout);
+        self.load_literal(
+            &Symbol::DEV_TMP,
+            &u32_layout,
+            &Literal::Int((list_alignment as i128).to_ne_bytes()),
+        );
+
+        // Load element_width argument (usize).
+        let u64_layout = Layout::U64;
+        let element_width = self.layout_interner.stack_size(*ret_layout);
+        self.load_literal(
+            &Symbol::DEV_TMP2,
+            &u64_layout,
+            &Literal::Int((element_width as i128).to_ne_bytes()),
+        );
+
+        // Setup the return location.
+        let base_offset = self
+            .storage_manager
+            .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
+
+        let lowlevel_args = bumpalo::vec![
+        in self.env.arena;
+            capacity,
+            // alignment
+            Symbol::DEV_TMP,
+            // element_width
+            Symbol::DEV_TMP2,
+         ];
+        let lowlevel_arg_layouts = bumpalo::vec![
+        in self.env.arena;
+            capacity_layout,
+            u32_layout,
+            u64_layout,
+        ];
+
+        self.build_fn_call(
+            &Symbol::DEV_TMP3,
+            bitcode::LIST_WITH_CAPACITY.to_string(),
+            &lowlevel_args,
+            &lowlevel_arg_layouts,
+            ret_layout,
+        );
+        self.free_symbol(&Symbol::DEV_TMP);
+        self.free_symbol(&Symbol::DEV_TMP2);
+
+        // Copy from list to the output record.
+        self.storage_manager.copy_symbol_to_stack_offset(
+            self.layout_interner,
+            &mut self.buf,
+            base_offset,
+            &Symbol::DEV_TMP3,
+            ret_layout,
+        );
+
+        self.free_symbol(&Symbol::DEV_TMP3);
+    }
+
     fn build_list_get_unsafe(
         &mut self,
         dst: &Symbol,
