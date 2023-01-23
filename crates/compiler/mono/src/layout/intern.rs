@@ -608,7 +608,6 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
 
                 (normalized_layout, interned_layout)
             });
-        self.record(normalized_layout, interned);
         if let Some(full_layout) = new_interned_full_layout {
             self.record(full_layout, interned);
         }
@@ -1005,7 +1004,7 @@ mod insert_recursive_layout {
 
     use crate::layout::{Builtin, InLayout, Layout, UnionLayout};
 
-    use super::{GlobalLayoutInterner, LayoutInterner, TLLayoutInterner};
+    use super::{GlobalLayoutInterner, LayoutInterner};
 
     const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
 
@@ -1018,7 +1017,7 @@ mod insert_recursive_layout {
         ])))
     }
 
-    fn get_rec_ptr_index<'a>(interner: &TLLayoutInterner<'a>, layout: InLayout<'a>) -> usize {
+    fn get_rec_ptr_index<'a>(interner: &impl LayoutInterner<'a>, layout: InLayout<'a>) -> usize {
         match interner.get(layout) {
             Layout::Union(UnionLayout::Recursive(&[&[l1], &[l2]])) => {
                 match (interner.get(l1), interner.get(l2)) {
@@ -1063,6 +1062,38 @@ mod insert_recursive_layout {
         };
 
         assert_eq!(in1, in2);
+    }
+
+    #[test]
+    fn write_twice_thread_local_single_thread() {
+        let arena = &Bump::new();
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let mut interner = global.fork();
+        let layout = make_layout(arena, &mut interner);
+
+        let in1 = interner.insert_recursive(arena, layout);
+        let rec1 = get_rec_ptr_index(&interner, in1);
+        let in2 = interner.insert_recursive(arena, layout);
+        let rec2 = get_rec_ptr_index(&interner, in2);
+
+        assert_eq!(in1, in2);
+        assert_eq!(rec1, rec2);
+    }
+
+    #[test]
+    fn write_twice_single_thread() {
+        let arena = &Bump::new();
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let mut interner = GlobalLayoutInterner::unwrap(global).unwrap();
+        let layout = make_layout(arena, &mut interner);
+
+        let in1 = interner.insert_recursive(arena, layout);
+        let rec1 = get_rec_ptr_index(&interner, in1);
+        let in2 = interner.insert_recursive(arena, layout);
+        let rec2 = get_rec_ptr_index(&interner, in2);
+
+        assert_eq!(in1, in2);
+        assert_eq!(rec1, rec2);
     }
 
     #[test]
