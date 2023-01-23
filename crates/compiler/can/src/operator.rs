@@ -141,7 +141,16 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
         | OpaqueRef(_)
         | Crash => loc_expr,
 
-        TupleAccess(_sub_expr, _paths) => todo!("Handle TupleAccess"),
+        TupleAccess(sub_expr, paths) => {
+            let region = loc_expr.region;
+            let loc_sub_expr = Loc {
+                region,
+                value: **sub_expr,
+            };
+            let value = TupleAccess(&desugar_expr(arena, arena.alloc(loc_sub_expr)).value, paths);
+
+            arena.alloc(Loc { region, value })
+        }
         RecordAccess(sub_expr, paths) => {
             let region = loc_expr.region;
             let loc_sub_expr = Loc {
@@ -176,9 +185,10 @@ pub fn desugar_expr<'a>(arena: &'a Bump, loc_expr: &'a Loc<Expr<'a>>) -> &'a Loc
                 }
             })),
         }),
-        Tuple(_fields) => {
-            todo!("desugar_expr: Tuple");
-        }
+        Tuple(fields) => arena.alloc(Loc {
+            region: loc_expr.region,
+            value: Tuple(fields.map_items(arena, |field| desugar_expr(arena, field))),
+        }),
         RecordUpdate { fields, update } => {
             // NOTE the `update` field is always a `Var { .. }`, we only desugar it to get rid of
             // any spaces before/after

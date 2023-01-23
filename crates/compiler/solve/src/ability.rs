@@ -14,7 +14,7 @@ use roc_solve_problem::{
 use roc_types::num::NumericRange;
 use roc_types::subs::{
     instantiate_rigids, Content, FlatType, GetSubsSlice, Rank, RecordFields, Subs, SubsSlice,
-    Variable,
+    TupleElems, Variable,
 };
 use roc_types::types::{AliasKind, Category, MemberImpl, PatternCategory, Polarity, Types};
 use roc_unify::unify::{Env, MustImplementConstraints};
@@ -543,6 +543,18 @@ trait DerivableVisitor {
     }
 
     #[inline(always)]
+    fn visit_tuple(
+        _subs: &Subs,
+        var: Variable,
+        _elems: TupleElems,
+    ) -> Result<Descend, NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
     fn visit_tag_union(var: Variable) -> Result<Descend, NotDerivable> {
         Err(NotDerivable {
             var,
@@ -568,6 +580,14 @@ trait DerivableVisitor {
 
     #[inline(always)]
     fn visit_empty_record(var: Variable) -> Result<(), NotDerivable> {
+        Err(NotDerivable {
+            var,
+            context: NotDerivableContext::NoContext,
+        })
+    }
+
+    #[inline(always)]
+    fn visit_empty_tuple(var: Variable) -> Result<(), NotDerivable> {
         Err(NotDerivable {
             var,
             context: NotDerivableContext::NoContext,
@@ -702,6 +722,18 @@ trait DerivableVisitor {
                             }
                         }
                     }
+                    Tuple(elems, ext) => {
+                        let descend = Self::visit_tuple(subs, var, elems)?;
+                        if descend.0 {
+                            push_var_slice!(elems.variables());
+                            if !matches!(
+                                subs.get_content_without_compacting(ext),
+                                Content::FlexVar(_) | Content::RigidVar(_)
+                            ) {
+                                stack.push(ext);
+                            }
+                        }
+                    }
                     TagUnion(tags, ext) => {
                         let descend = Self::visit_tag_union(var)?;
                         if descend.0 {
@@ -728,6 +760,7 @@ trait DerivableVisitor {
                         }
                     }
                     EmptyRecord => Self::visit_empty_record(var)?,
+                    EmptyTuple => Self::visit_empty_tuple(var)?,
                     EmptyTagUnion => Self::visit_empty_tag_union(var)?,
                 },
                 Alias(

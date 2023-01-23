@@ -10,8 +10,8 @@ use roc_types::num::{FloatWidth, IntLitWidth, NumericRange};
 use roc_types::subs::Content::{self, *};
 use roc_types::subs::{
     AliasVariables, Descriptor, ErrorTypeContext, FlatType, GetSubsSlice, LambdaSet, Mark,
-    OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, TagExt, UlsOfVar, UnionLabels,
-    UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+    OptVariable, RecordFields, Subs, SubsIndex, SubsSlice, TagExt, TupleElems, UlsOfVar,
+    UnionLabels, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
     AliasKind, DoesNotImplementAbility, ErrorType, Mismatch, Polarity, RecordField, Uls,
@@ -2029,6 +2029,118 @@ fn unify_record<M: MetaCollector>(
     }
 }
 
+#[must_use]
+fn unify_tuple<M: MetaCollector>(
+    env: &mut Env,
+    pool: &mut Pool,
+    ctx: &Context,
+    elems1: TupleElems,
+    ext1: Variable,
+    elems2: TupleElems,
+    ext2: Variable,
+) -> Outcome<M> {
+    let subs = &mut env.subs;
+
+    let (separate, ext1, ext2) = separate_tuple_elems(subs, elems1, ext1, elems2, ext2);
+
+    let shared_elems = separate.in_both;
+
+    if separate.only_in_1.is_empty() {
+        if separate.only_in_2.is_empty() {
+            // these variable will be the empty tuple, but we must still unify them
+            let ext_outcome = unify_pool(env, pool, ext1, ext2, ctx.mode);
+
+            if !ext_outcome.mismatches.is_empty() {
+                return ext_outcome;
+            }
+
+            let mut field_outcome =
+                unify_shared_tuple_elems(env, pool, ctx, shared_elems, OtherTupleElems::None, ext1);
+
+            field_outcome.union(ext_outcome);
+
+            field_outcome
+        } else {
+            let only_in_2 = TupleElems::insert_into_subs(subs, separate.only_in_2);
+            let flat_type = FlatType::Tuple(only_in_2, ext2);
+            let sub_record = fresh(env, pool, ctx, Structure(flat_type));
+            let ext_outcome = unify_pool(env, pool, ext1, sub_record, ctx.mode);
+
+            if !ext_outcome.mismatches.is_empty() {
+                return ext_outcome;
+            }
+
+            let mut field_outcome = unify_shared_tuple_elems(
+                env,
+                pool,
+                ctx,
+                shared_elems,
+                OtherTupleElems::None,
+                sub_record,
+            );
+
+            field_outcome.union(ext_outcome);
+
+            field_outcome
+        }
+    } else if separate.only_in_2.is_empty() {
+        let only_in_1 = TupleElems::insert_into_subs(subs, separate.only_in_1);
+        let flat_type = FlatType::Tuple(only_in_1, ext1);
+        let sub_record = fresh(env, pool, ctx, Structure(flat_type));
+        let ext_outcome = unify_pool(env, pool, sub_record, ext2, ctx.mode);
+
+        if !ext_outcome.mismatches.is_empty() {
+            return ext_outcome;
+        }
+
+        let mut field_outcome = unify_shared_tuple_elems(
+            env,
+            pool,
+            ctx,
+            shared_elems,
+            OtherTupleElems::None,
+            sub_record,
+        );
+
+        field_outcome.union(ext_outcome);
+
+        field_outcome
+    } else {
+        let only_in_1 = TupleElems::insert_into_subs(subs, separate.only_in_1);
+        let only_in_2 = TupleElems::insert_into_subs(subs, separate.only_in_2);
+
+        let other_fields = OtherTupleElems::Other(only_in_1, only_in_2);
+
+        let ext = fresh(env, pool, ctx, Content::FlexVar(None));
+        let flat_type1 = FlatType::Tuple(only_in_1, ext);
+        let flat_type2 = FlatType::Tuple(only_in_2, ext);
+
+        let sub1 = fresh(env, pool, ctx, Structure(flat_type1));
+        let sub2 = fresh(env, pool, ctx, Structure(flat_type2));
+
+        let rec1_outcome = unify_pool(env, pool, ext1, sub2, ctx.mode);
+        if !rec1_outcome.mismatches.is_empty() {
+            return rec1_outcome;
+        }
+
+        let rec2_outcome = unify_pool(env, pool, sub1, ext2, ctx.mode);
+        if !rec2_outcome.mismatches.is_empty() {
+            return rec2_outcome;
+        }
+
+        let mut field_outcome =
+            unify_shared_tuple_elems(env, pool, ctx, shared_elems, other_fields, ext);
+
+        field_outcome
+            .mismatches
+            .reserve(rec1_outcome.mismatches.len() + rec2_outcome.mismatches.len());
+        field_outcome.union(rec1_outcome);
+        field_outcome.union(rec2_outcome);
+
+        field_outcome
+    }
+}
+
 enum OtherFields {
     None,
     Other(RecordFields, RecordFields),
@@ -2172,6 +2284,89 @@ fn unify_shared_fields<M: MetaCollector>(
     }
 }
 
+enum OtherTupleElems {
+    None,
+    Other(TupleElems, TupleElems),
+}
+
+type SharedTupleElems = Vec<(usize, (Variable, Variable))>;
+
+#[must_use]
+fn unify_shared_tuple_elems<M: MetaCollector>(
+    env: &mut Env,
+    pool: &mut Pool,
+    ctx: &Context,
+    shared_elems: SharedTupleElems,
+    other_elems: OtherTupleElems,
+    ext: Variable,
+) -> Outcome<M> {
+    let mut matching_elems = Vec::with_capacity(shared_elems.len());
+    let num_shared_elems = shared_elems.len();
+
+    let mut whole_outcome = Outcome::default();
+
+    for (name, (actual, expected)) in shared_elems {
+        let local_outcome = unify_pool(env, pool, actual, expected, ctx.mode);
+
+        if local_outcome.mismatches.is_empty() {
+            let actual = choose_merged_var(env.subs, actual, expected);
+
+            matching_elems.push((name, actual));
+            whole_outcome.union(local_outcome);
+        }
+    }
+
+    if num_shared_elems == matching_elems.len() {
+        // pull elems in from the ext_var
+
+        let (ext_elems, new_ext_var) = TupleElems::empty().sorted_iterator_and_ext(env.subs, ext);
+        let ext_elems: Vec<_> = ext_elems.into_iter().collect();
+
+        let elems: TupleElems = match other_elems {
+            OtherTupleElems::None => {
+                if ext_elems.is_empty() {
+                    TupleElems::insert_into_subs(env.subs, matching_elems)
+                } else {
+                    let all_elems = merge_sorted(matching_elems, ext_elems);
+                    TupleElems::insert_into_subs(env.subs, all_elems)
+                }
+            }
+            OtherTupleElems::Other(other1, other2) => {
+                let mut all_elems = merge_sorted(matching_elems, ext_elems);
+                all_elems = merge_sorted(
+                    all_elems,
+                    other1.iter_all().map(|(i1, i2)| {
+                        let elem_index: usize = env.subs[i1];
+                        let variable = env.subs[i2];
+
+                        (elem_index, variable)
+                    }),
+                );
+
+                all_elems = merge_sorted(
+                    all_elems,
+                    other2.iter_all().map(|(i1, i2)| {
+                        let elem_index: usize = env.subs[i1];
+                        let variable = env.subs[i2];
+
+                        (elem_index, variable)
+                    }),
+                );
+
+                TupleElems::insert_into_subs(env.subs, all_elems)
+            }
+        };
+
+        let flat_type = FlatType::Tuple(elems, new_ext_var);
+
+        let merge_outcome = merge(env, ctx, Structure(flat_type));
+        whole_outcome.union(merge_outcome);
+        whole_outcome
+    } else {
+        mismatch!("in unify_shared_tuple_elems")
+    }
+}
+
 fn separate_record_fields(
     subs: &Subs,
     fields1: RecordFields,
@@ -2185,6 +2380,22 @@ fn separate_record_fields(
 ) {
     let (it1, new_ext1) = fields1.sorted_iterator_and_ext(subs, ext1);
     let (it2, new_ext2) = fields2.sorted_iterator_and_ext(subs, ext2);
+
+    let it1 = it1.collect::<Vec<_>>();
+    let it2 = it2.collect::<Vec<_>>();
+
+    (separate(it1, it2), new_ext1, new_ext2)
+}
+
+fn separate_tuple_elems(
+    subs: &Subs,
+    elems1: TupleElems,
+    ext1: Variable,
+    elems2: TupleElems,
+    ext2: Variable,
+) -> (Separate<usize, Variable>, Variable, Variable) {
+    let (it1, new_ext1) = elems1.sorted_iterator_and_ext(subs, ext1);
+    let (it2, new_ext2) = elems2.sorted_iterator_and_ext(subs, ext2);
 
     let it1 = it1.collect::<Vec<_>>();
     let it2 = it2.collect::<Vec<_>>();
@@ -3018,6 +3229,10 @@ fn unify_flat_type<M: MetaCollector>(
 
         (Record(fields1, ext1), Record(fields2, ext2)) => {
             unify_record(env, pool, ctx, *fields1, *ext1, *fields2, *ext2)
+        }
+
+        (Tuple(elems1, ext1), Tuple(elems2, ext2)) => {
+            unify_tuple(env, pool, ctx, *elems1, *ext1, *elems2, *ext2)
         }
 
         (EmptyTagUnion, EmptyTagUnion) => merge(env, ctx, Structure(*left)),

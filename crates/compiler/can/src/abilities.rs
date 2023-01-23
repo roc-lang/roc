@@ -90,7 +90,7 @@ impl AbilityMemberData<Resolved> {
 pub type SpecializationLambdaSets = VecMap<u8, Variable>;
 
 /// A particular specialization of an ability member.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberSpecializationInfo<Phase: ResolvePhase> {
     _phase: std::marker::PhantomData<Phase>,
     pub symbol: Symbol,

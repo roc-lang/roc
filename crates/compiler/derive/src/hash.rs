@@ -96,7 +96,7 @@ fn hash_record(env: &mut Env<'_>, fn_name: Symbol, fields: Vec<Lowercase>) -> (V
             let field_name = env.subs[field_name].clone();
             let field_var = env.subs[field_var];
 
-            let field_access = Expr::Access {
+            let field_access = Expr::RecordAccess {
                 record_var,
                 field_var,
                 ext_var: env.subs.fresh_unnamed_flex_var(),

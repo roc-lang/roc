@@ -1087,7 +1087,8 @@ fn fix_values_captured_in_closure_expr(
         | TypedHole { .. }
         | RuntimeError(_)
         | ZeroArgumentTag { .. }
-        | Accessor { .. } => {}
+        | RecordAccessor { .. }
+        | TupleAccessor { .. } => {}
 
         List { loc_elems, .. } => {
             for elem in loc_elems.iter_mut() {
@@ -1181,7 +1182,7 @@ fn fix_values_captured_in_closure_expr(
         }
 
         Record { fields, .. }
-        | Update {
+        | RecordUpdate {
             updates: fields, ..
         } => {
             for (_, field) in fields.iter_mut() {
@@ -1193,7 +1194,17 @@ fn fix_values_captured_in_closure_expr(
             }
         }
 
-        Access { loc_expr, .. } => {
+        Tuple { elems, .. } => {
+            for (_var, expr) in elems.iter_mut() {
+                fix_values_captured_in_closure_expr(
+                    &mut expr.value,
+                    no_capture_symbols,
+                    closure_captures,
+                );
+            }
+        }
+
+        RecordAccess { loc_expr, .. } | TupleAccess { loc_expr, .. } => {
             fix_values_captured_in_closure_expr(
                 &mut loc_expr.value,
                 no_capture_symbols,

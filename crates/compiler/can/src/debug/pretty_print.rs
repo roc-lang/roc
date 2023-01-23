@@ -306,17 +306,37 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
             .append(f.line())
             .append(f.text("}"))
             .group(),
+        Tuple { elems, .. } => f
+            .reflow("(")
+            .append(
+                f.intersperse(
+                    elems.iter().map(|(_var, elem)| {
+                        f.line()
+                            .append(expr(c, Free, f, &elem.value))
+                            .nest(2)
+                            .group()
+                    }),
+                    f.reflow(","),
+                )
+                .nest(2)
+                .group(),
+            )
+            .append(f.line())
+            .append(f.text(")"))
+            .group(),
         EmptyRecord => f.text("{}"),
-        Access {
+        RecordAccess {
             loc_expr, field, ..
         } => expr(c, AppArg, f, &loc_expr.value)
             .append(f.text(format!(".{}", field.as_str())))
             .group(),
+        TupleAccess { .. } => todo!(),
         OpaqueWrapFunction(OpaqueWrapFunctionData { opaque_name, .. }) => {
             f.text(format!("@{}", opaque_name.as_str(c.interns)))
         }
-        Accessor(_) => todo!(),
-        Update {
+        RecordAccessor(_) => todo!(),
+        TupleAccessor(_) => todo!(),
+        RecordUpdate {
             symbol, updates, ..
         } => f
             .reflow("{")

@@ -1470,6 +1470,34 @@ mod solve_expr {
     }
 
     #[test]
+    fn record_literal_accessor_function() {
+        infer_eq(".x { x: 5, y : 3.14 }", "Num *");
+    }
+
+    #[test]
+    fn tuple_literal_accessor() {
+        infer_eq("(5, 3.14 ).0", "Num *");
+    }
+
+    #[test]
+    fn tuple_literal_accessor_function() {
+        infer_eq(".0 (5, 3.14 )", "Num *");
+    }
+
+    #[test]
+    fn tuple_literal_ty() {
+        infer_eq("(5, 3.14 )", "( Num *, Float * )*");
+    }
+
+    #[test]
+    fn tuple_literal_accessor_ty() {
+        infer_eq(".0", "( a )* -> a");
+        infer_eq(".4", "( _, _, _, _, a )* -> a");
+        infer_eq(".5", "( ... 5 omitted, a )* -> a");
+        infer_eq(".200", "( ... 200 omitted, a )* -> a");
+    }
+
+    #[test]
     fn record_arg() {
         infer_eq("\\rec -> rec.x", "{ x : a }* -> a");
     }
