@@ -511,7 +511,7 @@ fn modify_refcount_layout_help<'a, 'ctx, 'env>(
     };
 
     match layout_interner.get(layout) {
-        Layout::RecursivePointer => match when_recursive {
+        Layout::RecursivePointer(_) => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers should never be hashed directly")
             }
@@ -640,7 +640,7 @@ fn modify_refcount_layout_build_function<'a, 'ctx, 'env>(
             Some(function)
         }
 
-        Layout::RecursivePointer => match when_recursive {
+        Layout::RecursivePointer(_) => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers cannot be in/decremented directly")
             }
@@ -1326,7 +1326,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         let mut deferred_nonrec = Vec::new_in(env.arena);
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
-            if let Layout::RecursivePointer = layout_interner.get(*field_layout) {
+            if let Layout::RecursivePointer(_) = layout_interner.get(*field_layout) {
                 // this field has type `*i64`, but is really a pointer to the data we want
                 let elem_pointer = env
                     .builder
@@ -1810,7 +1810,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx, 'env>(
         );
 
         for (i, field_layout) in field_layouts.iter().enumerate() {
-            if let Layout::RecursivePointer = layout_interner.get(*field_layout) {
+            if let Layout::RecursivePointer(_) = layout_interner.get(*field_layout) {
                 let recursive_union_layout = match when_recursive {
                     WhenRecursive::Unreachable => {
                         panic!("non-recursive tag unions cannot contain naked recursion pointers!");
@@ -1851,7 +1851,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx, 'env>(
                     mode.to_call_mode(fn_val),
                     when_recursive,
                     recursive_ptr_field_value,
-                    Layout::RECURSIVE_PTR,
+                    *field_layout,
                 )
             } else if layout_interner.contains_refcounted(*field_layout) {
                 let field_ptr = env

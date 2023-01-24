@@ -657,7 +657,7 @@ fn resolve_recursive_layout<'a>(
 
     // TODO check if recursive pointer not in recursive union
     let layout = match interner.get(layout) {
-        Layout::RecursivePointer => Layout::Union(when_recursive),
+        Layout::RecursivePointer(_) => Layout::Union(when_recursive),
         Layout::Union(union_layout) => match union_layout {
             UnionLayout::NonRecursive(payloads) => {
                 let payloads = payloads.iter().map(|args| {

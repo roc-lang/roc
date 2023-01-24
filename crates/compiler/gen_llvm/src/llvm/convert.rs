@@ -47,7 +47,7 @@ pub fn basic_type_from_layout<'a, 'ctx, 'env>(
             inner_type.ptr_type(AddressSpace::Generic).into()
         }
         Union(union_layout) => basic_type_from_union_layout(env, layout_interner, &union_layout),
-        RecursivePointer => env
+        RecursivePointer(_) => env
             .context
             .i64_type()
             .ptr_type(AddressSpace::Generic)

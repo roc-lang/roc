@@ -208,7 +208,7 @@ fn build_eq<'a, 'ctx, 'env>(
             rhs_val,
         ),
 
-        Layout::RecursivePointer => match when_recursive {
+        Layout::RecursivePointer(_) => match when_recursive {
             WhenRecursive::Unreachable => {
                 unreachable!("recursion pointers should never be compared directly")
             }
@@ -417,7 +417,7 @@ fn build_neq<'a, 'ctx, 'env>(
             result.into()
         }
 
-        Layout::RecursivePointer => {
+        Layout::RecursivePointer(_) => {
             unreachable!("recursion pointers should never be compared directly")
         }
         Layout::LambdaSet(_) => unreachable!("cannot compare closure"),
@@ -761,7 +761,7 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
             .build_extract_value(struct2, index as u32, "eq_field")
             .unwrap();
 
-        let are_equal = if let Layout::RecursivePointer = layout_interner.get(*field_layout) {
+        let are_equal = if let Layout::RecursivePointer(_) = layout_interner.get(*field_layout) {
             match &when_recursive {
                 WhenRecursive::Unreachable => {
                     unreachable!("The current layout should not be recursive, but is")
