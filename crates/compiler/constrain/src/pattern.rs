@@ -785,7 +785,7 @@ pub fn constrain_pattern(
             // all constructors are covered in this branch!
             let arg_pattern_type = constraints.push_variable(*arg_pattern_var);
             let specialized_type_index = {
-                let typ = types.from_old_type(&(**specialized_def_type));
+                let typ = types.from_old_type(specialized_def_type);
                 constraints.push_type(types, typ)
             };
             let specialized_type_expected = constraints

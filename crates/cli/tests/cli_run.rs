@@ -334,7 +334,7 @@ mod cli_run {
     // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
     fn test_roc_expect(dir_name: &str, roc_filename: &str) {
         let path = file_path_from_root(dir_name, roc_filename);
-        let out = run_roc(&[CMD_TEST, path.to_str().unwrap()], &[], &[]);
+        let out = run_roc([CMD_TEST, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
 
@@ -727,7 +727,7 @@ mod cli_run {
     #[serial(cli_platform)]
     fn cli_args_check() {
         let path = file_path_from_root("examples/cli", "args.roc");
-        let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
 
@@ -736,7 +736,7 @@ mod cli_run {
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
     fn check_virtual_dom_server() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-server.roc");
-        let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
 
@@ -745,7 +745,7 @@ mod cli_run {
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
     fn check_virtual_dom_client() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-client.roc");
-        let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
 

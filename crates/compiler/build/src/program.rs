@@ -314,7 +314,7 @@ fn gen_from_mono_module_llvm<'a>(
         // different systems name this executable differently, so we shotgun for
         // the most common ones and then give up.
         let bc_to_object = Command::new("llc")
-            .args(&[
+            .args([
                 "-relocation-model=pic",
                 "-filetype=obj",
                 app_bc_file.to_str().unwrap(),
@@ -370,7 +370,7 @@ fn gen_from_mono_module_llvm<'a>(
                 // different systems name this executable differently, so we shotgun for
                 // the most common ones and then give up.
                 let ll_to_object = Command::new("llc")
-                    .args(&[
+                    .args([
                         "-relocation-model=pic",
                         "-filetype=obj",
                         app_ll_dbg_file.to_str().unwrap(),
