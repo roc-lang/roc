@@ -23,7 +23,7 @@ interface Parser.Http
 # https://www.ietf.org/rfc/rfc2616.txt
 Method : [Options, Get, Post, Put, Delete, Head, Trace, Connect, Patch]
 
-HttpVersion : { major: U8, minor: U8}
+HttpVersion : { major : U8, minor : U8 }
 
 Request : {
     method : Method,
