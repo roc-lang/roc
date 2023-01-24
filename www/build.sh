@@ -41,7 +41,6 @@ popd
 pushd ..
 echo 'Generating builtin docs...'
 cargo --version
-rustc --version
 
 # We set ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
 # "/builtins/" rather than "/" - which is what we want based on how the server
