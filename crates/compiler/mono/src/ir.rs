@@ -2389,7 +2389,7 @@ fn from_can_let<'a>(
 
                 lower_rest!(variable, cont.value)
             }
-            Accessor(accessor_data) => {
+            RecordAccessor(accessor_data) => {
                 let fresh_record_symbol = env.unique_symbol();
                 let closure_data = accessor_data.to_closure_data(fresh_record_symbol);
                 debug_assert_eq!(*symbol, closure_data.name);
