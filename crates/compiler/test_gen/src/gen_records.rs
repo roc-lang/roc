@@ -1104,7 +1104,7 @@ fn toplevel_accessor_fn_thunk() {
             ra = .field
 
             main =
-            ra { field : 15u8 }
+                ra { field : 15u8 }
             "#
         ),
         15u8,
