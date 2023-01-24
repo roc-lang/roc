@@ -73,7 +73,7 @@ fi
 # get the url of the latest release
 if [ "$(uname)" == "Linux" ]; then
   RELEASE_MACHINE="linux_x86_64"
-elif [ "$(uname)" == "Darwin" ] && [ "$(uname -m)" == "aarch64" ]; then
+elif [ "$(uname)" == "Darwin" ] && [ "$(uname -m)" == "arm64" ]; then
   RELEASE_MACHINE="macos_apple_silicon"
 elif [ "$(uname)" == "Darwin" ] && [ "$(uname -m)" == "x86_64" ]; then
   RELEASE_MACHINE="macos_x86_64"
