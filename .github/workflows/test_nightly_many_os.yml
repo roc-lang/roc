@@ -1,4 +1,5 @@
 on:
+  pull_request:
   schedule:
     - cron:  '0 13 * * *'
 
@@ -29,11 +30,11 @@ jobs:
 
       - name: get the url of today`s release for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu')
-        run: echo "RELEASE_URL=$(./ci/get_today_release_url.sh linux_x86_64)" >> $GITHUB_ENV
+        run: echo "RELEASE_URL=$(./ci/get_latest_release_url.sh linux_x86_64)" >> $GITHUB_ENV
 
       - name: get the url of today`s release for macos (x86_64)
         if: startsWith(matrix.os, 'macos')
-        run: echo "RELEASE_URL=$(./ci/get_today_release_url.sh macos_x86_64)" >> $GITHUB_ENV
+        run: echo "RELEASE_URL=$(./ci/get_latest_release_url.sh macos_x86_64)" >> $GITHUB_ENV
 
       - name: get the archive from the url
         run: curl -OL ${{ env.RELEASE_URL }}
@@ -51,10 +52,10 @@ jobs:
         run: mv roc_nightly* roc_nightly
 
       - name: test roc hello world
-        run: ./roc_nightly/roc examples/helloWorld.roc
+        run: cd roc_nightly && ./roc examples/helloWorld.roc
 
       - name: test platform switching rust
-        run: ./roc_nightly/roc examples/platform-switching/rocLovesRust.roc
+        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesRust.roc
 
       - name: get OS to use for zig download
         if: startsWith(matrix.os, 'ubuntu')
@@ -72,10 +73,10 @@ jobs:
         run: zig version
 
       - name: test platform switching zig
-        run: ./roc_nightly/roc examples/platform-switching/rocLovesZig.roc
+        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesZig.roc
 
       - name: test platform switching c
-        run: ./roc_nightly/roc examples/platform-switching/rocLovesC.roc
+        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesC.roc
 
 
 
