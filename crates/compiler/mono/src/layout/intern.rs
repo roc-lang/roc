@@ -692,7 +692,7 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
         if let Some(full_layout) = new_interned_full_layout {
             self.record(full_layout, interned);
         }
-        interned
+        self.insert(Layout::RecursivePointer(interned))
     }
 
     fn get(&self, key: InLayout<'a>) -> Layout<'a> {
@@ -824,7 +824,7 @@ macro_rules! st_impl {
                 self.map.insert(normalized_layout, slot);
                 self.map.insert(full_layout, slot);
 
-                slot
+                self.insert(Layout::RecursivePointer(slot))
             }
 
             fn get(&self, key: InLayout<'a>) -> Layout<'a> {
