@@ -135,9 +135,11 @@ pub trait LayoutInterner<'a>: Sized {
     /// lambda set onto itself.
     fn insert_lambda_set(
         &mut self,
+        arena: &'a Bump,
         args: &'a &'a [InLayout<'a>],
         ret: InLayout<'a>,
         set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
+        set_may_have_naked_rec_ptr: bool,
         representation: InLayout<'a>,
     ) -> LambdaSet<'a>;
 
@@ -515,40 +517,65 @@ impl<'a> GlobalLayoutInterner<'a> {
 
     fn get_or_insert_hashed_normalized_lambda_set(
         &self,
+        arena: &'a Bump,
         normalized: LambdaSet<'a>,
+        set_may_have_naked_rec_ptr: bool,
         normalized_hash: u64,
     ) -> WrittenGlobalLambdaSet<'a> {
         let mut normalized_lambda_set_map = self.0.normalized_lambda_set_map.lock();
-        let (_, full_lambda_set) = normalized_lambda_set_map
-            .raw_entry_mut()
+        if let Some((_, &full_lambda_set)) = normalized_lambda_set_map
+            .raw_entry()
             .from_key_hashed_nocheck(normalized_hash, &normalized)
-            .or_insert_with(|| {
-                // We don't already have an entry for the lambda set, which means it must be new to
-                // the world. Reserve a slot, insert the lambda set, and that should fill the slot
-                // in.
-                let mut map = self.0.map.lock();
-                let mut vec = self.0.vec.write();
+        {
+            let full_layout = self.0.vec.read()[full_lambda_set.full_layout.0];
+            return WrittenGlobalLambdaSet {
+                full_lambda_set,
+                full_layout,
+            };
+        }
 
-                let slot = unsafe { InLayout::from_index(vec.len()) };
+        // We don't already have an entry for the lambda set, which means it must be new to
+        // the world. Reserve a slot, insert the lambda set, and that should fill the slot
+        // in.
+        let mut map = self.0.map.lock();
+        let mut vec = self.0.vec.write();
 
-                let lambda_set = LambdaSet {
-                    full_layout: slot,
-                    ..normalized
-                };
-                let lambda_set_layout = Layout::LambdaSet(lambda_set);
+        let slot = unsafe { InLayout::from_index(vec.len()) };
+        vec.push(Layout::VOID_NAKED);
 
-                vec.push(lambda_set_layout);
+        let set = if set_may_have_naked_rec_ptr {
+            let mut interner = LockedGlobalInterner {
+                map: &mut map,
+                normalized_lambda_set_map: &mut normalized_lambda_set_map,
+                vec: &mut vec,
+                target_info: self.0.target_info,
+            };
+            let done = reify::reify_lambda_set_captures(arena, &mut interner, slot, normalized.set);
+            done
+        } else {
+            normalized.set
+        };
 
-                // TODO: Is it helpful to persist the hash and give it back to the thread-local
-                // interner?
-                let _old = map.insert(lambda_set_layout, slot);
-                debug_assert!(_old.is_none());
+        let full_lambda_set = LambdaSet {
+            full_layout: slot,
+            set,
+            ..normalized
+        };
+        let lambda_set_layout = Layout::LambdaSet(full_lambda_set);
 
-                (normalized, lambda_set)
-            });
-        let full_layout = self.0.vec.read()[full_lambda_set.full_layout.0];
+        vec[slot.0] = lambda_set_layout;
+
+        // TODO: Is it helpful to persist the hash and give it back to the thread-local
+        // interner?
+        let _old = map.insert(lambda_set_layout, slot);
+        debug_assert!(_old.is_none());
+
+        let _old_normalized = normalized_lambda_set_map.insert(normalized, full_lambda_set);
+        debug_assert!(_old_normalized.is_none());
+
+        let full_layout = vec[full_lambda_set.full_layout.0];
         WrittenGlobalLambdaSet {
-            full_lambda_set: *full_lambda_set,
+            full_lambda_set,
             full_layout,
         }
     }
@@ -647,9 +674,11 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
 
     fn insert_lambda_set(
         &mut self,
+        arena: &'a Bump,
         args: &'a &'a [InLayout<'a>],
         ret: InLayout<'a>,
         set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
+        set_may_have_naked_rec_ptr: bool,
         representation: InLayout<'a>,
     ) -> LambdaSet<'a> {
         // The tricky bit of inserting a lambda set is we need to fill in the `full_layout` only
@@ -675,7 +704,12 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
                 let WrittenGlobalLambdaSet {
                     full_lambda_set,
                     full_layout,
-                } = global.get_or_insert_hashed_normalized_lambda_set(normalized, normalized_hash);
+                } = global.get_or_insert_hashed_normalized_lambda_set(
+                    arena,
+                    normalized,
+                    set_may_have_naked_rec_ptr,
+                    normalized_hash,
+                );
 
                 // The Layout(lambda_set) isn't present in our thread; make sure it is for future
                 // reference.
@@ -797,9 +831,11 @@ macro_rules! st_impl {
 
             fn insert_lambda_set(
                 &mut self,
+                arena: &'a Bump,
                 args: &'a &'a [InLayout<'a>],
                 ret: InLayout<'a>,
                 set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
+                set_may_have_naked_rec_ptr: bool,
                 representation: InLayout<'a>,
             ) -> LambdaSet<'a> {
                 // IDEA:
@@ -816,6 +852,14 @@ macro_rules! st_impl {
 
                 // This lambda set must be new to the interner, reserve a slot and fill it in.
                 let slot = unsafe { InLayout::from_index(self.vec.len()) };
+                self.vec.push(Layout::VOID_NAKED);
+
+                let set = if set_may_have_naked_rec_ptr {
+                    reify::reify_lambda_set_captures(arena, self, slot, set)
+                } else {
+                    set
+                };
+
                 let lambda_set = LambdaSet {
                     args,
                     ret,
@@ -823,11 +867,14 @@ macro_rules! st_impl {
                     representation,
                     full_layout: slot,
                 };
-                let filled_slot = self.insert(Layout::LambdaSet(lambda_set));
-                assert_eq!(slot, filled_slot);
+                self.vec[slot.0] = Layout::LambdaSet(lambda_set);
 
-                self.normalized_lambda_set_map
+                let _old = self.map.insert(Layout::LambdaSet(lambda_set), slot);
+                debug_assert!(_old.is_none());
+
+                let _old = self.normalized_lambda_set_map
                     .insert(normalized_lambda_set, lambda_set);
+                debug_assert!(_old.is_none());
 
                 lambda_set
             }
@@ -876,6 +923,7 @@ st_impl!('r LockedGlobalInterner);
 
 mod reify {
     use bumpalo::{collections::Vec, Bump};
+    use roc_module::symbol::Symbol;
 
     use crate::layout::{Builtin, LambdaSet, Layout, UnionLayout};
 
@@ -1020,12 +1068,33 @@ mod reify {
         };
         let representation = reify_layout(arena, interner, slot, representation);
 
-        interner.insert_lambda_set(arena.alloc(args), ret, arena.alloc(set), representation)
+        interner.insert_lambda_set(
+            arena,
+            arena.alloc(args),
+            ret,
+            arena.alloc(set),
+            true,
+            representation,
+        )
+    }
+
+    pub fn reify_lambda_set_captures<'a>(
+        arena: &'a Bump,
+        interner: &mut impl LayoutInterner<'a>,
+        slot: InLayout<'a>,
+        set: &[(Symbol, &'a [InLayout<'a>])],
+    ) -> &'a &'a [(Symbol, &'a [InLayout<'a>])] {
+        let mut reified_set = Vec::with_capacity_in(set.len(), arena);
+        for (f, captures) in set.iter() {
+            let reified_captures = reify_layout_slice(arena, interner, slot, captures);
+            reified_set.push((*f, reified_captures));
+        }
+        arena.alloc(reified_set.into_bump_slice())
     }
 }
 
 mod equiv {
-    use crate::layout::{Layout, UnionLayout};
+    use crate::layout::{self, Layout, UnionLayout};
 
     use super::{InLayout, LayoutInterner};
 
@@ -1169,6 +1238,7 @@ mod equiv {
 
 #[cfg(test)]
 mod insert_lambda_set {
+    use bumpalo::Bump;
     use roc_module::symbol::Symbol;
     use roc_target::TargetInfo;
 
@@ -1184,48 +1254,53 @@ mod insert_lambda_set {
 
     #[test]
     fn two_threads_write() {
-        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
-        let set = TEST_SET;
-        let repr = Layout::UNIT;
-
         for _ in 0..100 {
-            let mut handles = Vec::with_capacity(10);
-            for _ in 0..10 {
-                let mut interner = global.fork();
-                handles.push(std::thread::spawn(move || {
-                    interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr)
-                }))
-            }
-            let ins: Vec<LambdaSet> = handles.into_iter().map(|t| t.join().unwrap()).collect();
-            let interned = ins[0];
-            assert!(ins.iter().all(|in2| interned == *in2));
+            let mut arenas: Vec<_> = std::iter::repeat_with(Bump::new).take(10).collect();
+            let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+            let set = TEST_SET;
+            let repr = Layout::UNIT;
+            std::thread::scope(|s| {
+                let mut handles = Vec::with_capacity(10);
+                for arena in arenas.iter_mut() {
+                    let mut interner = global.fork();
+                    handles.push(s.spawn(move || {
+                        interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr)
+                    }))
+                }
+                let ins: Vec<LambdaSet> = handles.into_iter().map(|t| t.join().unwrap()).collect();
+                let interned = ins[0];
+                assert!(ins.iter().all(|in2| interned == *in2));
+            });
         }
     }
 
     #[test]
     fn insert_then_reintern() {
+        let arena = &Bump::new();
         let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
         let mut interner = global.fork();
 
-        let lambda_set = interner.insert_lambda_set(TEST_ARGS, TEST_RET, TEST_SET, Layout::UNIT);
+        let lambda_set =
+            interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, TEST_SET, true, Layout::UNIT);
         let lambda_set_layout_in = interner.insert(Layout::LambdaSet(lambda_set));
         assert_eq!(lambda_set.full_layout, lambda_set_layout_in);
     }
 
     #[test]
     fn write_global_then_single_threaded() {
+        let arena = &Bump::new();
         let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
         let set = TEST_SET;
         let repr = Layout::UNIT;
 
         let in1 = {
             let mut interner = global.fork();
-            interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr)
+            interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr)
         };
 
         let in2 = {
             let mut st_interner = global.unwrap().unwrap();
-            st_interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr)
+            st_interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr)
         };
 
         assert_eq!(in1, in2);
@@ -1233,18 +1308,19 @@ mod insert_lambda_set {
 
     #[test]
     fn write_single_threaded_then_global() {
+        let arena = &Bump::new();
         let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
         let mut st_interner = global.unwrap().unwrap();
 
         let set = TEST_SET;
         let repr = Layout::UNIT;
 
-        let in1 = st_interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr);
+        let in1 = st_interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr);
 
         let global = st_interner.into_global();
         let mut interner = global.fork();
 
-        let in2 = interner.insert_lambda_set(TEST_ARGS, TEST_RET, set, repr);
+        let in2 = interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr);
 
         assert_eq!(in1, in2);
     }

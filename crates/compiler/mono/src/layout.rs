@@ -1523,35 +1523,7 @@ impl<'a> LambdaSet<'a> {
     where
         I: LayoutInterner<'a>,
     {
-        if left == right {
-            return true;
-        }
-        let left = interner.get(*left);
-        let right = interner.get(*right);
-
-        let left = if matches!(left, Layout::RecursivePointer(_)) {
-            let runtime_repr = self.runtime_representation();
-            debug_assert!(matches!(
-                interner.get(runtime_repr),
-                Layout::Union(UnionLayout::Recursive(_) | UnionLayout::NullableUnwrapped { .. })
-            ));
-            Layout::LambdaSet(*self)
-        } else {
-            left
-        };
-
-        let right = if matches!(right, Layout::RecursivePointer(_)) {
-            let runtime_repr = self.runtime_representation();
-            debug_assert!(matches!(
-                interner.get(runtime_repr),
-                Layout::Union(UnionLayout::Recursive(_) | UnionLayout::NullableUnwrapped { .. })
-            ));
-            Layout::LambdaSet(*self)
-        } else {
-            right
-        };
-
-        left == right
+        interner.equiv(*left, *right)
     }
 
     fn layout_for_member<I, F>(&self, interner: &I, comparator: F) -> ClosureRepresentation<'a>
@@ -1564,7 +1536,7 @@ impl<'a> LambdaSet<'a> {
             return ClosureRepresentation::UnwrappedCapture(self.representation);
         }
 
-        let repr = interner.get(self.representation);
+        let repr = interner.chase_recursive(self.representation);
 
         match repr {
             Layout::Union(union) => {
@@ -1648,7 +1620,7 @@ impl<'a> LambdaSet<'a> {
                 ClosureRepresentation::AlphabeticOrderStruct(fields)
             }
             layout => {
-                debug_assert!(self.has_enum_dispatch_repr(),);
+                debug_assert!(self.has_enum_dispatch_repr());
                 let enum_repr = match layout {
                     Layout::Builtin(Builtin::Bool) => EnumDispatch::Bool,
                     Layout::Builtin(Builtin::Int(IntWidth::U8)) => EnumDispatch::U8,
@@ -1675,7 +1647,7 @@ impl<'a> LambdaSet<'a> {
             return ClosureCallOptions::UnwrappedCapture(self.representation);
         }
 
-        let repr = interner.get(self.representation);
+        let repr = interner.chase_recursive(self.representation);
 
         match repr {
             Layout::Union(union_layout) => {
@@ -1770,7 +1742,7 @@ impl<'a> LambdaSet<'a> {
             Cacheable(result, criteria)
         });
 
-        match result.map(|l| env.cache.get_in(l)) {
+        match result.map(|l| env.cache.interner.chase_recursive(l)) {
             Ok(Layout::LambdaSet(lambda_set)) => Cacheable(Ok(lambda_set), criteria),
             Err(err) => Cacheable(Err(err), criteria),
             Ok(layout) => internal_error!("other layout found for lambda set: {:?}", layout),
@@ -1810,6 +1782,7 @@ impl<'a> LambdaSet<'a> {
                     Vec::with_capacity_in(lambdas.len(), env.arena);
                 let mut set_with_variables: std::vec::Vec<(&Symbol, &[Variable])> =
                     std::vec::Vec::with_capacity(lambdas.len());
+                let mut set_captures_have_naked_rec_ptr = false;
 
                 let mut last_function_symbol = None;
                 let mut lambdas_it = lambdas.iter().peekable();
@@ -1828,6 +1801,8 @@ impl<'a> LambdaSet<'a> {
                         let mut criteria = CACHEABLE;
                         let arg = cached!(Layout::from_var(env, *var), criteria);
                         arguments.push(arg);
+                        set_captures_have_naked_rec_ptr =
+                            set_captures_have_naked_rec_ptr || criteria.has_naked_recursion_pointer;
                     }
 
                     let arguments = arguments.into_bump_slice();
@@ -1889,9 +1864,11 @@ impl<'a> LambdaSet<'a> {
                 cache_criteria.and(criteria);
 
                 let lambda_set = env.cache.interner.insert_lambda_set(
+                    env.arena,
                     fn_args,
                     ret,
                     env.arena.alloc(set.into_bump_slice()),
+                    set_captures_have_naked_rec_ptr,
                     representation,
                 );
 
@@ -1901,9 +1878,11 @@ impl<'a> LambdaSet<'a> {
                 // The lambda set is unbound which means it must be unused. Just give it the empty lambda set.
                 // See also https://github.com/roc-lang/roc/issues/3163.
                 let lambda_set = env.cache.interner.insert_lambda_set(
+                    env.arena,
                     fn_args,
                     ret,
                     &(&[] as &[(Symbol, &[InLayout])]),
+                    false,
                     Layout::UNIT,
                 );
                 Cacheable(Ok(lambda_set), cache_criteria)
