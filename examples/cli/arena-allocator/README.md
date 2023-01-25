@@ -9,4 +9,5 @@ This is an example of custom memory management in Roc. It uses arena allocation,
 3. The arena is freed, causing the memory used by the task to be freed all at once.
 4. The previous allocator is used as the current allocator. It could be another arena allocator if `useArenaAlloc` is nested. Otherwise, it uses the same allocation used by other examples.
 
+
 The program in this example asks for a string, then it outputs the string's bytes in decimal notation.

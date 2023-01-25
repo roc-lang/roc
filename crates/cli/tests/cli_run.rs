@@ -810,7 +810,7 @@ mod cli_run {
             &[],
             "Bytes: 97,98,99,100,101,102,103,104,\n[pop]\n",
             UseValgrind::Yes,
-            TestCliCommands::Run,
+            TestCliCommands::Many,
         )
     }
 
