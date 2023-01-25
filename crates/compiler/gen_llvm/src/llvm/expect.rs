@@ -9,6 +9,7 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use roc_builtins::bitcode;
+use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_mono::ir::LookupType;
 use roc_mono::layout::{
@@ -19,7 +20,7 @@ use roc_region::all::Region;
 use super::build::BuilderExt;
 use super::build::{
     add_func, load_roc_value, load_symbol_and_layout, use_roc_value, FunctionSpec, LlvmBackendMode,
-    Scope, WhenRecursive,
+    Scope,
 };
 use super::convert::struct_type_from_union_layout;
 
@@ -220,7 +221,6 @@ pub(crate) fn clone_to_shared_memory<'a, 'ctx, 'env>(
             cursors,
             value,
             layout,
-            WhenRecursive::Unreachable,
         );
 
         offset = extra_offset;
@@ -286,7 +286,6 @@ fn build_clone<'a, 'ctx, 'env>(
     cursors: Cursors<'ctx>,
     value: BasicValueEnum<'ctx>,
     layout: InLayout<'a>,
-    when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
     match layout_interner.get(layout) {
         Layout::Builtin(builtin) => build_clone_builtin(
@@ -297,7 +296,6 @@ fn build_clone<'a, 'ctx, 'env>(
             cursors,
             value,
             builtin,
-            when_recursive,
         ),
 
         Layout::Struct { field_layouts, .. } => build_clone_struct(
@@ -308,7 +306,6 @@ fn build_clone<'a, 'ctx, 'env>(
             cursors,
             value,
             field_layouts,
-            when_recursive,
         ),
 
         // Since we will never actually display functions (and hence lambda sets)
@@ -343,7 +340,6 @@ fn build_clone<'a, 'ctx, 'env>(
                     cursors,
                     value,
                     union_layout,
-                    WhenRecursive::Loop(union_layout),
                 )
             }
         }
@@ -376,39 +372,39 @@ fn build_clone<'a, 'ctx, 'env>(
                 cursors,
                 value,
                 inner_layout,
-                when_recursive,
             )
         }
 
-        Layout::RecursivePointer(_) => match when_recursive {
-            WhenRecursive::Unreachable => {
-                unreachable!("recursion pointers should never be compared directly")
-            }
+        Layout::RecursivePointer(rec_layout) => {
+            let layout = rec_layout;
 
-            WhenRecursive::Loop(union_layout) => {
-                let layout = layout_interner.insert(Layout::Union(union_layout));
+            let bt = basic_type_from_layout(env, layout_interner, layout);
 
-                let bt = basic_type_from_layout(env, layout_interner, layout);
+            // cast the i64 pointer to a pointer to block of memory
+            let field1_cast = env.builder.build_pointer_cast(
+                value.into_pointer_value(),
+                bt.into_pointer_type(),
+                "i64_to_opaque",
+            );
 
-                // cast the i64 pointer to a pointer to block of memory
-                let field1_cast = env.builder.build_pointer_cast(
-                    value.into_pointer_value(),
-                    bt.into_pointer_type(),
-                    "i64_to_opaque",
-                );
+            let union_layout = match layout_interner.get(rec_layout) {
+                Layout::Union(union_layout) => {
+                    debug_assert!(!matches!(union_layout, UnionLayout::NonRecursive(..)));
+                    union_layout
+                }
+                _ => internal_error!(),
+            };
 
-                build_clone_tag(
-                    env,
-                    layout_interner,
-                    layout_ids,
-                    ptr,
-                    cursors,
-                    field1_cast.into(),
-                    union_layout,
-                    WhenRecursive::Loop(union_layout),
-                )
-            }
-        },
+            build_clone_tag(
+                env,
+                layout_interner,
+                layout_ids,
+                ptr,
+                cursors,
+                field1_cast.into(),
+                union_layout,
+            )
+        }
     }
 }
 
@@ -420,7 +416,6 @@ fn build_clone_struct<'a, 'ctx, 'env>(
     cursors: Cursors<'ctx>,
     value: BasicValueEnum<'ctx>,
     field_layouts: &[InLayout<'a>],
-    when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
     let layout = Layout::struct_no_name_order(field_layouts);
 
@@ -447,7 +442,6 @@ fn build_clone_struct<'a, 'ctx, 'env>(
                 cursors,
                 field,
                 *field_layout,
-                when_recursive,
             );
 
             let field_width = env
@@ -472,7 +466,6 @@ fn build_clone_tag<'a, 'ctx, 'env>(
     cursors: Cursors<'ctx>,
     value: BasicValueEnum<'ctx>,
     union_layout: UnionLayout<'a>,
-    when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
     let layout = layout_interner.insert(Layout::Union(union_layout));
     let layout_id = layout_ids.get(Symbol::CLONE, &layout);
@@ -512,7 +505,6 @@ fn build_clone_tag<'a, 'ctx, 'env>(
                 layout_interner,
                 layout_ids,
                 union_layout,
-                when_recursive,
                 function_value,
             );
 
@@ -575,7 +567,6 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
     union_layout: UnionLayout<'a>,
-    when_recursive: WhenRecursive<'a>,
     fn_val: FunctionValue<'ctx>,
 ) {
     use bumpalo::collections::Vec;
@@ -643,16 +634,8 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                     basic_type,
                 );
 
-                let answer = build_clone(
-                    env,
-                    layout_interner,
-                    layout_ids,
-                    ptr,
-                    cursors,
-                    data,
-                    layout,
-                    when_recursive,
-                );
+                let answer =
+                    build_clone(env, layout_interner, layout_ids, ptr, cursors, data, layout);
 
                 env.builder.build_return(Some(&answer));
 
@@ -712,17 +695,8 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                     ),
                 };
 
-                let when_recursive = WhenRecursive::Loop(union_layout);
-                let answer = build_clone(
-                    env,
-                    layout_interner,
-                    layout_ids,
-                    ptr,
-                    cursors,
-                    data,
-                    layout,
-                    when_recursive,
-                );
+                let answer =
+                    build_clone(env, layout_interner, layout_ids, ptr, cursors, data, layout);
 
                 env.builder.build_return(Some(&answer));
 
@@ -762,17 +736,7 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
 
             let data = load_tag_data(env, layout_interner, union_layout, tag_value, basic_type);
 
-            let when_recursive = WhenRecursive::Loop(union_layout);
-            let answer = build_clone(
-                env,
-                layout_interner,
-                layout_ids,
-                ptr,
-                cursors,
-                data,
-                layout,
-                when_recursive,
-            );
+            let answer = build_clone(env, layout_interner, layout_ids, ptr, cursors, data, layout);
 
             env.builder.build_return(Some(&answer));
         }
@@ -831,17 +795,8 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                     let data =
                         load_tag_data(env, layout_interner, union_layout, tag_value, basic_type);
 
-                    let when_recursive = WhenRecursive::Loop(union_layout);
-                    let answer = build_clone(
-                        env,
-                        layout_interner,
-                        layout_ids,
-                        ptr,
-                        cursors,
-                        data,
-                        layout,
-                        when_recursive,
-                    );
+                    let answer =
+                        build_clone(env, layout_interner, layout_ids, ptr, cursors, data, layout);
 
                     env.builder.build_return(Some(&answer));
 
@@ -917,17 +872,8 @@ fn build_clone_tag_help<'a, 'ctx, 'env>(
                     basic_type,
                 );
 
-                let when_recursive = WhenRecursive::Loop(union_layout);
-                let answer = build_clone(
-                    env,
-                    layout_interner,
-                    layout_ids,
-                    ptr,
-                    cursors,
-                    data,
-                    layout,
-                    when_recursive,
-                );
+                let answer =
+                    build_clone(env, layout_interner, layout_ids, ptr, cursors, data, layout);
 
                 env.builder.build_return(Some(&answer));
             }
@@ -997,7 +943,6 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
     cursors: Cursors<'ctx>,
     value: BasicValueEnum<'ctx>,
     builtin: Builtin<'a>,
-    when_recursive: WhenRecursive<'a>,
 ) -> IntValue<'ctx> {
     use Builtin::*;
 
@@ -1102,7 +1047,6 @@ fn build_clone_builtin<'a, 'ctx, 'env>(
                         cursors,
                         element,
                         elem,
-                        when_recursive,
                     );
 
                     bd.build_store(rest_offset, new_offset);
