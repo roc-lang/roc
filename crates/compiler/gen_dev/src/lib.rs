@@ -695,6 +695,14 @@ trait Backend<'a> {
                 );
                 self.build_list_reserve(sym, args, arg_layouts, ret_layout)
             }
+            LowLevel::ListAppendUnsafe => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "ListAppendUnsafe: expected to have exactly two arguments"
+                );
+                self.build_list_append_unsafe(sym, args, arg_layouts, ret_layout)
+            }
             LowLevel::ListGetUnsafe => {
                 debug_assert_eq!(
                     2,
@@ -776,7 +784,7 @@ trait Backend<'a> {
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
-            Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE => {
+            Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE | Symbol::LIST_APPEND => {
                 // TODO: This is probably simple enough to be worth inlining.
                 let layout_id = LayoutIds::default().get(func_sym, ret_layout);
                 let fn_name = self.symbol_to_string(func_sym, layout_id);
@@ -945,6 +953,15 @@ trait Backend<'a> {
 
     /// build_list_reserve enlarges a list to at least accommodate the given capacity.
     fn build_list_reserve(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
+    );
+
+    /// build_list_append_unsafe returns a new list with a given element appended.
+    fn build_list_append_unsafe(
         &mut self,
         dst: &Symbol,
         args: &'a [Symbol],

@@ -145,7 +145,7 @@ fn variously_sized_list_literals() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_append_basic() {
     assert_evals_to!(
         "List.append [1] 2",
@@ -702,13 +702,13 @@ fn list_swap() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_append_to_empty_list() {
     assert_evals_to!("List.append [] 3", RocList::from_slice(&[3]), RocList<i64>);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_append_to_empty_list_of_int() {
     assert_evals_to!(
         indoc!(
@@ -736,7 +736,7 @@ fn list_append_bools() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_append_longer_list() {
     assert_evals_to!(
         "List.append [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22] 23",
