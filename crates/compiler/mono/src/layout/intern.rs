@@ -1133,7 +1133,32 @@ mod equiv {
                         _ => return false,
                     }
                 }
-                (LambdaSet(_), LambdaSet(_)) => todo!(),
+                (
+                    LambdaSet(layout::LambdaSet {
+                        args: args1,
+                        ret: ret1,
+                        set: set1,
+                        representation: repr1,
+                        full_layout: _,
+                    }),
+                    LambdaSet(layout::LambdaSet {
+                        args: args2,
+                        ret: ret2,
+                        set: set2,
+                        representation: repr2,
+                        full_layout: _,
+                    }),
+                ) => {
+                    for ((fn1, captures1), (fn2, captures2)) in (**set1).iter().zip(*set2) {
+                        if fn1 != fn2 {
+                            return false;
+                        }
+                        equiv_fields!(captures1, captures2);
+                    }
+                    equiv_fields!(args1, args2);
+                    stack.push((ret1, ret2));
+                    stack.push((repr1, repr2));
+                }
                 _ => return false,
             }
         }
