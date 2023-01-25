@@ -1192,7 +1192,6 @@ fn recursive_tag_variant<'a>(
     env: &mut Env<'a>,
     builder: &mut impl TypeContext,
     interner: &STLayoutInterner<'a>,
-    union_layout: &UnionLayout,
     fields: &[InLayout<'a>],
 ) -> Result<TypeId> {
     build_recursive_tuple_type(env, builder, interner, fields)
@@ -1216,23 +1215,11 @@ fn recursive_variant_types<'a>(
             result = Vec::with_capacity(tags.len());
 
             for tag in tags.iter() {
-                result.push(recursive_tag_variant(
-                    env,
-                    builder,
-                    interner,
-                    union_layout,
-                    tag,
-                )?);
+                result.push(recursive_tag_variant(env, builder, interner, tag)?);
             }
         }
         NonNullableUnwrapped(fields) => {
-            result = vec![recursive_tag_variant(
-                env,
-                builder,
-                interner,
-                union_layout,
-                fields,
-            )?];
+            result = vec![recursive_tag_variant(env, builder, interner, fields)?];
         }
         NullableWrapped {
             nullable_id,
@@ -1243,39 +1230,21 @@ fn recursive_variant_types<'a>(
             let cutoff = *nullable_id as usize;
 
             for tag in tags[..cutoff].iter() {
-                result.push(recursive_tag_variant(
-                    env,
-                    builder,
-                    interner,
-                    union_layout,
-                    tag,
-                )?);
+                result.push(recursive_tag_variant(env, builder, interner, tag)?);
             }
 
-            result.push(recursive_tag_variant(
-                env,
-                builder,
-                interner,
-                union_layout,
-                &[],
-            )?);
+            result.push(recursive_tag_variant(env, builder, interner, &[])?);
 
             for tag in tags[cutoff..].iter() {
-                result.push(recursive_tag_variant(
-                    env,
-                    builder,
-                    interner,
-                    union_layout,
-                    tag,
-                )?);
+                result.push(recursive_tag_variant(env, builder, interner, tag)?);
             }
         }
         NullableUnwrapped {
             nullable_id,
             other_fields: fields,
         } => {
-            let unit = recursive_tag_variant(env, builder, interner, union_layout, &[])?;
-            let other_type = recursive_tag_variant(env, builder, interner, union_layout, fields)?;
+            let unit = recursive_tag_variant(env, builder, interner, &[])?;
+            let other_type = recursive_tag_variant(env, builder, interner, fields)?;
 
             if *nullable_id {
                 // nullable_id == 1
