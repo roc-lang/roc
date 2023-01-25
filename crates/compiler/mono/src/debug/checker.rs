@@ -10,8 +10,7 @@ use crate::{
         ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
     layout::{
-        Builtin, InLayout, LambdaSet, Layout, LayoutInterner, STLayoutInterner, TagIdIntType,
-        UnionLayout,
+        Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
     },
 };
 
@@ -543,12 +542,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                         });
                         return None;
                     }
-                    let layout = resolve_recursive_layout(
-                        ctx.arena,
-                        ctx.interner,
-                        payloads[index as usize],
-                        union_layout,
-                    );
+                    let layout = payloads[index as usize];
                     Some(layout)
                 }
             }
@@ -652,94 +646,6 @@ impl<'a, 'r> Ctx<'a, 'r> {
             }
         }
     }
-}
-
-fn resolve_recursive_layout<'a>(
-    arena: &'a Bump,
-    interner: &mut STLayoutInterner<'a>,
-    layout: InLayout<'a>,
-    when_recursive: UnionLayout<'a>,
-) -> InLayout<'a> {
-    macro_rules! go {
-        ($lay:expr) => {
-            resolve_recursive_layout(arena, interner, $lay, when_recursive)
-        };
-    }
-
-    // TODO check if recursive pointer not in recursive union
-    let layout = match interner.get(layout) {
-        Layout::RecursivePointer(_) => Layout::Union(when_recursive),
-        Layout::Union(union_layout) => match union_layout {
-            UnionLayout::NonRecursive(payloads) => {
-                let payloads = payloads.iter().map(|args| {
-                    let args = args.iter().map(|lay| go!(*lay));
-                    &*arena.alloc_slice_fill_iter(args)
-                });
-                let payloads = arena.alloc_slice_fill_iter(payloads);
-                Layout::Union(UnionLayout::NonRecursive(payloads))
-            }
-            UnionLayout::Recursive(_)
-            | UnionLayout::NonNullableUnwrapped(_)
-            | UnionLayout::NullableWrapped { .. }
-            | UnionLayout::NullableUnwrapped { .. } => {
-                // This is the recursive layout.
-                // TODO will need fixing to be modified once we support multiple
-                // recursive pointers in one structure.
-                return layout;
-            }
-        },
-        Layout::Boxed(inner) => {
-            let inner = go!(inner);
-            Layout::Boxed(inner)
-        }
-        Layout::Struct {
-            field_order_hash,
-            field_layouts,
-        } => {
-            let field_layouts = field_layouts
-                .iter()
-                .map(|lay| resolve_recursive_layout(arena, interner, *lay, when_recursive));
-            let field_layouts = arena.alloc_slice_fill_iter(field_layouts);
-            Layout::Struct {
-                field_order_hash,
-                field_layouts,
-            }
-        }
-        Layout::Builtin(builtin) => match builtin {
-            Builtin::List(inner) => {
-                let inner = resolve_recursive_layout(arena, interner, inner, when_recursive);
-                Layout::Builtin(Builtin::List(inner))
-            }
-            Builtin::Int(_)
-            | Builtin::Float(_)
-            | Builtin::Bool
-            | Builtin::Decimal
-            | Builtin::Str => return layout,
-        },
-        Layout::LambdaSet(LambdaSet {
-            args,
-            ret,
-            set,
-            representation,
-            full_layout,
-        }) => {
-            let set = set.iter().map(|(symbol, captures)| {
-                let captures = captures.iter().map(|lay_in| go!(*lay_in));
-                let captures = &*arena.alloc_slice_fill_iter(captures);
-                (*symbol, captures)
-            });
-            let set = arena.alloc_slice_fill_iter(set);
-            Layout::LambdaSet(LambdaSet {
-                args,
-                ret,
-                set: arena.alloc(&*set),
-                representation,
-                full_layout,
-            })
-        }
-    };
-
-    interner.insert(layout)
 }
 
 enum TagPayloads<'a> {
