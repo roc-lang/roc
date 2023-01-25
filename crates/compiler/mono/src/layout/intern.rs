@@ -220,6 +220,38 @@ pub trait LayoutInterner<'a>: Sized {
         self.get(layout).safe_to_memcpy(self)
     }
 
+    /// Checks if two layouts are equivalent up to isomorphism.
+    ///
+    /// This is only to be used when layouts need to be compared across statements and depths,
+    /// for example
+    ///   - when looking up a layout index in a lambda set
+    ///   - in the [checker][crate::debug::check_procs], where `x = UnionAtIndex(f, 0)` may have
+    ///     that the recorded layout of `x` is at a different depth than that determined when we
+    ///     index the recorded layout of `f` at 0. Hence the two layouts may have different
+    ///     interned representations, even if they are in fact isomorphic.
+    fn equiv(&self, l1: InLayout<'a>, l2: InLayout<'a>) -> bool {
+        std::thread_local! {
+            static SCRATCHPAD: RefCell<Option<Vec<(InLayout<'static>, InLayout<'static>)>>> = RefCell::new(Some(Vec::with_capacity(64)));
+        }
+
+        let answer = SCRATCHPAD.with(|f| {
+            // SAFETY: the promotion to lifetime 'a only lasts during equivalence-checking; the
+            // scratchpad stack is cleared after every use.
+            let mut stack: Vec<(InLayout<'a>, InLayout<'a>)> =
+                unsafe { std::mem::transmute(f.take().unwrap()) };
+
+            let answer = equiv::equivalent(&mut stack, self, l1, l2);
+            stack.clear();
+
+            let stack: Vec<(InLayout<'static>, InLayout<'static>)> =
+                unsafe { std::mem::transmute(stack) };
+            f.replace(Some(stack));
+            answer
+        });
+
+        answer
+    }
+
     fn to_doc<'b, D, A>(
         &self,
         layout: InLayout<'a>,
@@ -989,6 +1021,124 @@ mod reify {
         let representation = reify_layout(arena, interner, slot, representation);
 
         interner.insert_lambda_set(arena.alloc(args), ret, arena.alloc(set), representation)
+    }
+}
+
+mod equiv {
+    use crate::layout::{Layout, UnionLayout};
+
+    use super::{InLayout, LayoutInterner};
+
+    pub fn equivalent<'a>(
+        stack: &mut Vec<(InLayout<'a>, InLayout<'a>)>,
+        interner: &impl LayoutInterner<'a>,
+        l1: InLayout<'a>,
+        l2: InLayout<'a>,
+    ) -> bool {
+        stack.push((l1, l2));
+
+        macro_rules! equiv_fields {
+            ($fields1:expr, $fields2:expr) => {{
+                if $fields1.len() != $fields2.len() {
+                    return false;
+                }
+                stack.extend($fields1.iter().copied().zip($fields2.iter().copied()));
+            }};
+        }
+
+        macro_rules! equiv_unions {
+            ($tags1:expr, $tags2:expr) => {{
+                if $tags1.len() != $tags2.len() {
+                    return false;
+                }
+                for (payloads1, payloads2) in $tags1.iter().zip($tags2) {
+                    equiv_fields!(payloads1, payloads2)
+                }
+            }};
+        }
+
+        while let Some((l1, l2)) = stack.pop() {
+            if l1 == l2 {
+                continue;
+            }
+            use Layout::*;
+            match (interner.get(l1), interner.get(l2)) {
+                (RecursivePointer(rec), _) => stack.push((rec, l2)),
+                (_, RecursivePointer(rec)) => stack.push((l1, rec)),
+                (Builtin(b1), Builtin(b2)) => {
+                    use crate::layout::Builtin::*;
+                    match (b1, b2) {
+                        (List(e1), List(e2)) => stack.push((e1, e2)),
+                        (b1, b2) => {
+                            if b1 != b2 {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                (
+                    Struct {
+                        field_order_hash: foh1,
+                        field_layouts: fl1,
+                    },
+                    Struct {
+                        field_order_hash: foh2,
+                        field_layouts: fl2,
+                    },
+                ) => {
+                    if foh1 != foh2 {
+                        return false;
+                    }
+                    equiv_fields!(fl1, fl2)
+                }
+                (Boxed(b1), Boxed(b2)) => stack.push((b1, b2)),
+                (Union(u1), Union(u2)) => {
+                    use UnionLayout::*;
+                    match (u1, u2) {
+                        (NonRecursive(tags1), NonRecursive(tags2)) => equiv_unions!(tags1, tags2),
+                        (Recursive(tags1), Recursive(tags2)) => equiv_unions!(tags1, tags2),
+                        (NonNullableUnwrapped(fields1), NonNullableUnwrapped(fields2)) => {
+                            equiv_fields!(fields1, fields2)
+                        }
+                        (
+                            NullableWrapped {
+                                nullable_id: null_id1,
+                                other_tags: tags1,
+                            },
+                            NullableWrapped {
+                                nullable_id: null_id2,
+                                other_tags: tags2,
+                            },
+                        ) => {
+                            if null_id1 != null_id2 {
+                                return false;
+                            }
+                            equiv_unions!(tags1, tags2)
+                        }
+                        (
+                            NullableUnwrapped {
+                                nullable_id: null_id1,
+                                other_fields: fields1,
+                            },
+                            NullableUnwrapped {
+                                nullable_id: null_id2,
+                                other_fields: fields2,
+                            },
+                        ) => {
+                            if null_id1 != null_id2 {
+                                return false;
+                            }
+                            equiv_fields!(fields1, fields2)
+                        }
+                        _ => return false,
+                    }
+                }
+                (LambdaSet(_), LambdaSet(_)) => todo!(),
+                _ => return false,
+            }
+        }
+
+        true
     }
 }
 
