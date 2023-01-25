@@ -34,6 +34,8 @@ jobs:
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
 
+      - run: ls
+
       - name: test roc hello world
         run: cd roc_nightly && ./roc examples/helloWorld.roc
 
