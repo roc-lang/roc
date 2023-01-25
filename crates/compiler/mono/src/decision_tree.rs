@@ -1406,7 +1406,7 @@ fn path_to_expr_help<'a>(
             PathInstruction::TagIndex { index, tag_id } => {
                 let index = *index;
 
-                match layout_interner.get(layout) {
+                match layout_interner.chase_recursive(layout) {
                     Layout::Union(union_layout) => {
                         let inner_expr = Expr::UnionAtIndex {
                             tag_id: *tag_id,
@@ -1506,7 +1506,7 @@ fn test_to_comparison<'a>(
             // (e.g. record pattern guard matches)
             debug_assert!(union.alternatives.len() > 1);
 
-            match layout_interner.get(test_layout) {
+            match layout_interner.chase_recursive(test_layout) {
                 Layout::Union(union_layout) => {
                     let lhs = Expr::Literal(Literal::Int((tag_id as i128).to_ne_bytes()));
 
@@ -2108,7 +2108,7 @@ fn decide_to_branching<'a>(
 
             // We have learned more about the exact layout of the cond (based on the path)
             // but tests are still relative to the original cond symbol
-            let inner_cond_layout_raw = layout_cache.get_in(inner_cond_layout);
+            let inner_cond_layout_raw = layout_cache.interner.chase_recursive(inner_cond_layout);
             let mut switch = if let Layout::Union(union_layout) = inner_cond_layout_raw {
                 let tag_id_symbol = env.unique_symbol();
 

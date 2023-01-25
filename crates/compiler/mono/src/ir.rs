@@ -5927,7 +5927,7 @@ fn convert_tag_union<'a>(
                 layout_cache.from_var(env.arena, variant_var, env.subs),
                 "Wrapped"
             );
-            let union_layout = match layout_cache.get_in(variant_layout) {
+            let union_layout = match layout_cache.interner.chase_recursive(variant_layout) {
                 Layout::Union(ul) => ul,
                 other => internal_error!(
                     "unexpected layout {:?} for {:?}",
@@ -9466,10 +9466,11 @@ fn from_can_pattern_help<'a>(
                     // problems down the line because we hash layouts and an unrolled
                     // version is not the same as the minimal version.
                     let whole_var_layout = layout_cache.from_var(env.arena, *whole_var, env.subs);
-                    let layout = match whole_var_layout.map(|l| layout_cache.get_in(l)) {
-                        Ok(Layout::Union(ul)) => ul,
-                        _ => unreachable!(),
-                    };
+                    let layout =
+                        match whole_var_layout.map(|l| layout_cache.interner.chase_recursive(l)) {
+                            Ok(Layout::Union(ul)) => ul,
+                            _ => internal_error!(),
+                        };
 
                     use WrappedVariant::*;
                     match variant {
