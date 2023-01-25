@@ -183,6 +183,7 @@ fn build_eq<'a, 'ctx, 'env>(
             env,
             layout_interner,
             layout_ids,
+            *lhs_layout,
             &union_layout,
             lhs_val,
             rhs_val,
@@ -228,6 +229,7 @@ fn build_eq<'a, 'ctx, 'env>(
                 env,
                 layout_interner,
                 layout_ids,
+                rec_layout,
                 &union_layout,
                 field1_cast.into(),
                 field2_cast.into(),
@@ -242,6 +244,7 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
+    builtin_layout: InLayout<'a>,
     builtin: &Builtin<'a>,
 ) -> BasicValueEnum<'ctx> {
     let int_cmp = |pred, label| {
@@ -307,7 +310,6 @@ fn build_neq_builtin<'a, 'ctx, 'env>(
             result.into()
         }
         Builtin::List(elem) => {
-            let builtin_layout = layout_interner.insert(Layout::Builtin(*builtin));
             let is_equal = build_list_eq(
                 env,
                 layout_interner,
@@ -343,9 +345,15 @@ fn build_neq<'a, 'ctx, 'env>(
     }
 
     match layout_interner.get(lhs_layout) {
-        Layout::Builtin(builtin) => {
-            build_neq_builtin(env, layout_interner, layout_ids, lhs_val, rhs_val, &builtin)
-        }
+        Layout::Builtin(builtin) => build_neq_builtin(
+            env,
+            layout_interner,
+            layout_ids,
+            lhs_val,
+            rhs_val,
+            lhs_layout,
+            &builtin,
+        ),
 
         Layout::Struct { field_layouts, .. } => {
             let is_equal = build_struct_eq(
@@ -369,6 +377,7 @@ fn build_neq<'a, 'ctx, 'env>(
                 env,
                 layout_interner,
                 layout_ids,
+                lhs_layout,
                 &union_layout,
                 lhs_val,
                 rhs_val,
@@ -811,6 +820,7 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
+    tag_layout: InLayout<'a>,
     union_layout: &UnionLayout<'a>,
     tag1: BasicValueEnum<'ctx>,
     tag2: BasicValueEnum<'ctx>,
@@ -818,7 +828,6 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
 
-    let tag_layout = layout_interner.insert(Layout::Union(*union_layout));
     let symbol = Symbol::GENERIC_EQ;
     let fn_name = layout_ids
         .get(symbol, &tag_layout)
