@@ -31,8 +31,8 @@ jobs:
       - name: delete tar
         run: ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
 
-      - name: rename nightly folder
-        run: mv roc_nightly* roc_nightly
+      #- name: rename nightly folder
+      #  run: mv roc_nightly* roc_nightly
 
       - run: ls
 
