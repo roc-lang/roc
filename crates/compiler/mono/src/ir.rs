@@ -344,11 +344,9 @@ impl<'a> Proc<'a> {
         let args_doc = self.args.iter().map(|(layout, symbol)| {
             let arg_doc = symbol_to_doc(alloc, *symbol, pretty);
             if pretty_print_ir_symbols() {
-                arg_doc.append(alloc.reflow(": ")).append(interner.to_doc(
-                    *layout,
-                    alloc,
-                    Parens::NotNeeded,
-                ))
+                arg_doc
+                    .append(alloc.reflow(": "))
+                    .append(interner.to_doc_top(*layout, alloc))
             } else {
                 arg_doc
             }
@@ -359,7 +357,7 @@ impl<'a> Proc<'a> {
                 .text("procedure : ")
                 .append(symbol_to_doc(alloc, self.name.name(), pretty))
                 .append(" ")
-                .append(interner.to_doc(self.ret_layout, alloc, Parens::NotNeeded))
+                .append(interner.to_doc_top(self.ret_layout, alloc))
                 .append(alloc.hardline())
                 .append(alloc.text("procedure = "))
                 .append(symbol_to_doc(alloc, self.name.name(), pretty))
@@ -2152,7 +2150,7 @@ impl<'a> Stmt<'a> {
                 .text("let ")
                 .append(symbol_to_doc(alloc, *symbol, pretty))
                 .append(" : ")
-                .append(interner.to_doc(*layout, alloc, Parens::NotNeeded))
+                .append(interner.to_doc_top(*layout, alloc))
                 .append(" = ")
                 .append(expr.to_doc(alloc, pretty))
                 .append(";")

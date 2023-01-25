@@ -4,6 +4,7 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::all::{default_hasher, FnvMap, MutMap};
+use roc_collections::VecSet;
 use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
@@ -727,6 +728,7 @@ impl<'a> UnionLayout<'a> {
         self,
         alloc: &'b D,
         interner: &I,
+        seen_rec: &mut SeenRecPtrs<'a>,
         _parens: Parens,
     ) -> DocBuilder<'b, D, A>
     where
@@ -740,14 +742,14 @@ impl<'a> UnionLayout<'a> {
         match self {
             NonRecursive(tags) => {
                 let tags_doc = tags.iter().map(|fields| {
-                    alloc.text("C ").append(alloc.intersperse(
-                        fields.iter().map(|x| {
-                            interner
-                                .get(*x)
-                                .to_doc(alloc, interner, Parens::InTypeParam)
-                        }),
-                        " ",
-                    ))
+                    alloc.text("C ").append(
+                        alloc.intersperse(
+                            fields
+                                .iter()
+                                .map(|x| interner.to_doc(*x, alloc, seen_rec, Parens::InTypeParam)),
+                            " ",
+                        ),
+                    )
                 });
 
                 alloc
@@ -757,14 +759,14 @@ impl<'a> UnionLayout<'a> {
             }
             Recursive(tags) => {
                 let tags_doc = tags.iter().map(|fields| {
-                    alloc.text("C ").append(alloc.intersperse(
-                        fields.iter().map(|x| {
-                            interner
-                                .get(*x)
-                                .to_doc(alloc, interner, Parens::InTypeParam)
-                        }),
-                        " ",
-                    ))
+                    alloc.text("C ").append(
+                        alloc.intersperse(
+                            fields
+                                .iter()
+                                .map(|x| interner.to_doc(*x, alloc, seen_rec, Parens::InTypeParam)),
+                            " ",
+                        ),
+                    )
                 });
                 alloc
                     .text("[<r>")
@@ -772,14 +774,14 @@ impl<'a> UnionLayout<'a> {
                     .append(alloc.text("]"))
             }
             NonNullableUnwrapped(fields) => {
-                let fields_doc = alloc.text("C ").append(alloc.intersperse(
-                    fields.iter().map(|x| {
-                        interner
-                            .get(*x)
-                            .to_doc(alloc, interner, Parens::InTypeParam)
-                    }),
-                    " ",
-                ));
+                let fields_doc = alloc.text("C ").append(
+                    alloc.intersperse(
+                        fields
+                            .iter()
+                            .map(|x| interner.to_doc(*x, alloc, seen_rec, Parens::InTypeParam)),
+                        " ",
+                    ),
+                );
                 alloc
                     .text("[<rnnu>")
                     .append(fields_doc)
@@ -789,14 +791,14 @@ impl<'a> UnionLayout<'a> {
                 nullable_id,
                 other_fields,
             } => {
-                let fields_doc = alloc.text("C ").append(alloc.intersperse(
-                    other_fields.iter().map(|x| {
-                        interner
-                            .get(*x)
-                            .to_doc(alloc, interner, Parens::InTypeParam)
-                    }),
-                    " ",
-                ));
+                let fields_doc = alloc.text("C ").append(
+                    alloc.intersperse(
+                        other_fields
+                            .iter()
+                            .map(|x| interner.to_doc(*x, alloc, seen_rec, Parens::InTypeParam)),
+                        " ",
+                    ),
+                );
                 let tags_doc = if nullable_id {
                     alloc.concat(vec![alloc.text("<null>, "), fields_doc])
                 } else {
@@ -812,21 +814,20 @@ impl<'a> UnionLayout<'a> {
                 other_tags,
             } => {
                 let nullable_id = nullable_id as usize;
-                let tags_docs = (0..(other_tags.len() + 1)).map(|i| {
-                    if i == nullable_id {
-                        alloc.text("<null>")
-                    } else {
-                        let idx = if i > nullable_id { i - 1 } else { i };
-                        alloc.text("C ").append(alloc.intersperse(
-                            other_tags[idx].iter().map(|x| {
-                                interner
-                                    .get(*x)
-                                    .to_doc(alloc, interner, Parens::InTypeParam)
-                            }),
-                            " ",
-                        ))
-                    }
-                });
+                let tags_docs =
+                    (0..(other_tags.len() + 1)).map(|i| {
+                        if i == nullable_id {
+                            alloc.text("<null>")
+                        } else {
+                            let idx = if i > nullable_id { i - 1 } else { i };
+                            alloc.text("C ").append(alloc.intersperse(
+                                other_tags[idx].iter().map(|x| {
+                                    interner.to_doc(*x, alloc, seen_rec, Parens::InTypeParam)
+                                }),
+                                " ",
+                            ))
+                        }
+                    });
                 let tags_docs = alloc.intersperse(tags_docs, alloc.text(", "));
                 alloc
                     .text("[<rnw>")
@@ -1273,7 +1274,12 @@ pub struct Niche<'a>(NichePriv<'a>);
 impl<'a> Niche<'a> {
     pub const NONE: Niche<'a> = Niche(NichePriv::Captures(&[]));
 
-    pub fn to_doc<'b, D, A, I>(self, alloc: &'b D, interner: &I) -> DocBuilder<'b, D, A>
+    pub fn to_doc<'b, D, A, I>(
+        self,
+        alloc: &'b D,
+        interner: &I,
+        seen_rec: &mut SeenRecPtrs<'a>,
+    ) -> DocBuilder<'b, D, A>
     where
         D: DocAllocator<'b, A>,
         D::Doc: Clone,
@@ -1286,7 +1292,7 @@ impl<'a> Niche<'a> {
                 alloc.intersperse(
                     captures
                         .iter()
-                        .map(|c| interner.get(*c).to_doc(alloc, interner, Parens::NotNeeded)),
+                        .map(|c| interner.to_doc(*c, alloc, seen_rec, Parens::NotNeeded)),
                     alloc.reflow(", "),
                 ),
                 alloc.reflow("})"),
@@ -2702,44 +2708,6 @@ impl<'a> Layout<'a> {
         }
     }
 
-    pub fn to_doc<'b, D, A, I>(
-        self,
-        alloc: &'b D,
-        interner: &I,
-        parens: Parens,
-    ) -> DocBuilder<'b, D, A>
-    where
-        D: DocAllocator<'b, A>,
-        D::Doc: Clone,
-        A: Clone,
-        I: LayoutInterner<'a>,
-    {
-        use Layout::*;
-
-        match self {
-            Builtin(builtin) => builtin.to_doc(alloc, interner, parens),
-            Struct { field_layouts, .. } => {
-                let fields_doc = field_layouts
-                    .iter()
-                    .map(|x| interner.get(*x).to_doc(alloc, interner, parens));
-
-                alloc
-                    .text("{")
-                    .append(alloc.intersperse(fields_doc, ", "))
-                    .append(alloc.text("}"))
-            }
-            Union(union_layout) => union_layout.to_doc(alloc, interner, parens),
-            LambdaSet(lambda_set) => interner
-                .get(lambda_set.runtime_representation())
-                .to_doc(alloc, interner, parens),
-            RecursivePointer(_) => alloc.text("*self"),
-            Boxed(inner) => alloc
-                .text("Boxed(")
-                .append(interner.get(inner).to_doc(alloc, interner, parens))
-                .append(")"),
-        }
-    }
-
     /// Used to build a `Layout::Struct` where the field name order is irrelevant.
     pub fn struct_no_name_order(field_layouts: &'a [InLayout]) -> Self {
         if field_layouts.is_empty() {
@@ -2772,6 +2740,8 @@ impl<'a> Layout<'a> {
         }
     }
 }
+
+pub type SeenRecPtrs<'a> = VecSet<InLayout<'a>>;
 
 impl<'a> Layout<'a> {
     pub fn usize(target_info: TargetInfo) -> InLayout<'a> {
@@ -2900,6 +2870,7 @@ impl<'a> Builtin<'a> {
         self,
         alloc: &'b D,
         interner: &I,
+        seen_rec: &mut SeenRecPtrs<'a>,
         _parens: Parens,
     ) -> DocBuilder<'b, D, A>
     where
@@ -2941,12 +2912,12 @@ impl<'a> Builtin<'a> {
             Decimal => alloc.text("Decimal"),
 
             Str => alloc.text("Str"),
-            List(layout) => {
-                let layout = interner.get(layout);
-                alloc
-                    .text("List ")
-                    .append(layout.to_doc(alloc, interner, Parens::InTypeParam))
-            }
+            List(layout) => alloc.text("List ").append(interner.to_doc(
+                layout,
+                alloc,
+                seen_rec,
+                Parens::InTypeParam,
+            )),
         }
     }
 

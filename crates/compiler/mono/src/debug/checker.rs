@@ -87,7 +87,7 @@ pub enum ProblemKind<'a> {
         structure: Symbol,
         def_line: usize,
         tag_id: u16,
-        union_layout: UnionLayout<'a>,
+        union_layout: InLayout<'a>,
     },
     TagUnionStructIndexOOB {
         structure: Symbol,
@@ -100,7 +100,7 @@ pub enum ProblemKind<'a> {
         structure: Symbol,
         def_line: usize,
         tag_id: u16,
-        union_layout: UnionLayout<'a>,
+        union_layout: InLayout<'a>,
     },
     UnboxNotABox {
         symbol: Symbol,
@@ -108,7 +108,7 @@ pub enum ProblemKind<'a> {
     },
     CreatingTagIdNotInUnion {
         tag_id: u16,
-        union_layout: UnionLayout<'a>,
+        union_layout: InLayout<'a>,
     },
     CreateTagPayloadMismatch {
         num_needed: usize,
@@ -198,6 +198,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         // here because we need strict equality, and so cannot unwrap lambda sets
         // lazily.
         loop {
+            layout = self.interner.chase_recursive_in(layout);
             match self.interner.get(layout) {
                 Layout::LambdaSet(ls) => layout = ls.representation,
                 _ => return layout,
@@ -390,8 +391,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 tag_id,
                 arguments,
             } => {
-                self.check_tag_expr(tag_layout, tag_id, arguments);
-                Some(self.interner.insert(Layout::Union(tag_layout)))
+                let interned_layout = self.interner.insert(Layout::Union(tag_layout));
+                self.check_tag_expr(interned_layout, tag_layout, tag_id, arguments);
+                Some(interned_layout)
             }
             Expr::Struct(syms) => {
                 for sym in syms.iter() {
@@ -415,7 +417,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 tag_id,
                 union_layout,
                 index,
-            } => self.check_union_at_index(structure, union_layout, tag_id, index),
+            } => self.with_sym_layout(structure, |ctx, _def_line, layout| {
+                ctx.check_union_at_index(structure, layout, union_layout, tag_id, index)
+            }),
             Expr::Array { elem_layout, elems } => {
                 for elem in elems.iter() {
                     match elem {
@@ -503,6 +507,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
     fn check_union_at_index(
         &mut self,
         structure: Symbol,
+        interned_union_layout: InLayout<'a>,
         union_layout: UnionLayout<'a>,
         tag_id: u16,
         index: u64,
@@ -517,7 +522,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                         structure,
                         def_line,
                         tag_id,
-                        union_layout,
+                        union_layout: interned_union_layout,
                     });
                     None
                 }
@@ -605,12 +610,18 @@ impl<'a, 'r> Ctx<'a, 'r> {
         }
     }
 
-    fn check_tag_expr(&mut self, union_layout: UnionLayout<'a>, tag_id: u16, arguments: &[Symbol]) {
+    fn check_tag_expr(
+        &mut self,
+        interned_union_layout: InLayout<'a>,
+        union_layout: UnionLayout<'a>,
+        tag_id: u16,
+        arguments: &[Symbol],
+    ) {
         match get_tag_id_payloads(union_layout, tag_id) {
             TagPayloads::IdNotInUnion => {
                 self.problem(ProblemKind::CreatingTagIdNotInUnion {
                     tag_id,
-                    union_layout,
+                    union_layout: interned_union_layout,
                 });
             }
             TagPayloads::Payloads(payloads) => {

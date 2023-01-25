@@ -12,7 +12,7 @@ use roc_collections::{default_hasher, BumpMap};
 use roc_module::symbol::Symbol;
 use roc_target::TargetInfo;
 
-use super::{Builtin, FieldOrderHash, LambdaSet, Layout, UnionLayout};
+use super::{Builtin, FieldOrderHash, LambdaSet, Layout, SeenRecPtrs, UnionLayout};
 
 macro_rules! cache_interned_layouts {
     ($($i:literal, $name:ident, $vis:vis, $layout:expr)*; $total_constants:literal) => {
@@ -198,6 +198,24 @@ pub trait LayoutInterner<'a>: Sized {
         Layout::runtime_representation_in(layout, self)
     }
 
+    fn chase_recursive(&self, mut layout: InLayout<'a>) -> Layout<'a> {
+        loop {
+            match self.get(layout) {
+                Layout::RecursivePointer(l) => layout = l,
+                other => return other,
+            }
+        }
+    }
+
+    fn chase_recursive_in(&self, mut layout: InLayout<'a>) -> InLayout<'a> {
+        loop {
+            match self.get(layout) {
+                Layout::RecursivePointer(l) => layout = l,
+                _ => return layout,
+            }
+        }
+    }
+
     fn safe_to_memcpy(&self, layout: InLayout<'a>) -> bool {
         self.get(layout).safe_to_memcpy(self)
     }
@@ -206,6 +224,7 @@ pub trait LayoutInterner<'a>: Sized {
         &self,
         layout: InLayout<'a>,
         alloc: &'b D,
+        seen_rec: &mut SeenRecPtrs<'a>,
         parens: crate::ir::Parens,
     ) -> ven_pretty::DocBuilder<'b, D, A>
     where
@@ -213,12 +232,69 @@ pub trait LayoutInterner<'a>: Sized {
         D::Doc: Clone,
         A: Clone,
     {
-        self.get(layout).to_doc(alloc, self, parens)
+        use Layout::*;
+
+        match self.get(layout) {
+            Builtin(builtin) => builtin.to_doc(alloc, self, seen_rec, parens),
+            Struct { field_layouts, .. } => {
+                let fields_doc = field_layouts
+                    .iter()
+                    .map(|x| self.to_doc(*x, alloc, seen_rec, parens));
+
+                alloc
+                    .text("{")
+                    .append(alloc.intersperse(fields_doc, ", "))
+                    .append(alloc.text("}"))
+            }
+            Union(union_layout) => {
+                let is_recursive = !matches!(union_layout, UnionLayout::NonRecursive(..));
+                if is_recursive {
+                    seen_rec.insert(layout);
+                }
+                let doc = union_layout.to_doc(alloc, self, seen_rec, parens);
+                if is_recursive {
+                    seen_rec.remove(&layout);
+                }
+                doc
+            }
+            LambdaSet(lambda_set) => {
+                self.to_doc(lambda_set.runtime_representation(), alloc, seen_rec, parens)
+            }
+            RecursivePointer(rec_layout) => {
+                if seen_rec.contains(&rec_layout) {
+                    alloc.text("*self")
+                } else {
+                    self.to_doc(rec_layout, alloc, seen_rec, parens)
+                }
+            }
+            Boxed(inner) => alloc
+                .text("Boxed(")
+                .append(self.to_doc(inner, alloc, seen_rec, parens))
+                .append(")"),
+        }
+    }
+
+    fn to_doc_top<'b, D, A>(
+        &self,
+        layout: InLayout<'a>,
+        alloc: &'b D,
+    ) -> ven_pretty::DocBuilder<'b, D, A>
+    where
+        D: ven_pretty::DocAllocator<'b, A>,
+        D::Doc: Clone,
+        A: Clone,
+    {
+        self.to_doc(
+            layout,
+            alloc,
+            &mut Default::default(),
+            crate::ir::Parens::NotNeeded,
+        )
     }
 
     fn dbg(&self, layout: InLayout<'a>) -> String {
         let alloc: ven_pretty::Arena<()> = ven_pretty::Arena::new();
-        let doc = self.to_doc(layout, &alloc, crate::ir::Parens::NotNeeded);
+        let doc = self.to_doc_top(layout, &alloc);
         doc.1.pretty(80).to_string()
     }
 }
