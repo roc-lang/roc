@@ -29,12 +29,10 @@ jobs:
         run: ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 
       - name: delete tar
-        run: ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
+        run: ls | grep "roc_nightly.*tar\.gz" | xargs rm -rf
 
-      #- name: rename nightly folder
-      #  run: mv roc_nightly* roc_nightly
-
-      - run: ls
+      - name: rename nightly folder
+        run: mv roc_nightly* roc_nightly
 
       - name: test roc hello world
         run: cd roc_nightly && ./roc examples/helloWorld.roc
