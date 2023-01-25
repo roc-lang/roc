@@ -8,6 +8,7 @@ version = "0.0.1"
 [dependencies]
 morphic_lib = {path = "../../vendor/morphic_lib"}
 roc_collections = {path = "../collections"}
+roc_error_macros = {path = "../../error_macros"}
 roc_module = {path = "../module"}
 roc_mono = {path = "../mono"}
 roc_debug_flags = {path = "../debug_flags"}
