@@ -1,4 +1,5 @@
 on:
+  pull_request:
   schedule:
     - cron:  '0 9 * * *'
 
@@ -39,6 +40,14 @@ jobs:
 
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
+
+      - name: delete everything except the tar
+        run: ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
+
+      - name: extract tar for a quick test
+        run: ls | grep tar | xargs tar -xf
+
+      - name: cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc examples/platform-switching/rocLovesRust.roc
 
       - name: print short commit SHA
         run: git rev-parse --short "$GITHUB_SHA"
