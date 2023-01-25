@@ -1213,7 +1213,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 env.builder.position_at_end(block);
 
                 let struct_layout =
-                    layout_interner.insert(Layout::struct_no_name_order(&field_layouts));
+                    layout_interner.insert(Layout::struct_no_name_order(field_layouts));
 
                 let answer = eq_ptr_to_struct(
                     env,
@@ -1253,8 +1253,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             env.builder.position_at_end(compare_fields);
 
-            let struct_layout =
-                layout_interner.insert(Layout::struct_no_name_order(&field_layouts));
+            let struct_layout = layout_interner.insert(Layout::struct_no_name_order(field_layouts));
 
             let answer = eq_ptr_to_struct(
                 env,
