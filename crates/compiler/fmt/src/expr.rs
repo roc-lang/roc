@@ -12,6 +12,7 @@ use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
+use roc_parse::ident::Accessor;
 use roc_region::all::Loc;
 
 impl<'a> Formattable for Expr<'a> {
@@ -35,9 +36,8 @@ impl<'a> Formattable for Expr<'a> {
             | NonBase10Int { .. }
             | SingleQuote(_)
             | RecordAccess(_, _)
-            | RecordAccessorFunction(_)
+            | AccessorFunction(_)
             | TupleAccess(_, _)
-            | TupleAccessorFunction(_)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
@@ -434,18 +434,16 @@ impl<'a> Formattable for Expr<'a> {
 
                 sub_expr.format_with_options(buf, Parens::InApply, newlines, indent);
             }
-            RecordAccessorFunction(key) => {
+            AccessorFunction(key) => {
                 buf.indent(indent);
                 buf.push('.');
-                buf.push_str(key);
+                match key {
+                    Accessor::RecordField(key) => buf.push_str(key),
+                    Accessor::TupleIndex(key) => buf.push_str(key),
+                }
             }
             RecordAccess(expr, key) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
-                buf.push('.');
-                buf.push_str(key);
-            }
-            TupleAccessorFunction(key) => {
-                buf.indent(indent);
                 buf.push('.');
                 buf.push_str(key);
             }

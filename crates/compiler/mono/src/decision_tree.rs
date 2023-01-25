@@ -19,6 +19,7 @@ use roc_module::symbol::Symbol;
 
 type Label = u64;
 const RECORD_TAG_NAME: &str = "#Record";
+const TUPLE_TAG_NAME: &str = "#Tuple";
 
 /// Users of this module will mainly interact with this function. It takes
 /// some normal branches and gives out a decision tree that has "labels" at all
@@ -572,6 +573,31 @@ fn test_for_pattern<'a>(pattern: &Pattern<'a>) -> Option<Test<'a>> {
             }
         }
 
+        TupleDestructure(destructs, _) => {
+            // not rendered, so pick the easiest
+            let union = Union {
+                render_as: RenderAs::Tag,
+                alternatives: vec![Ctor {
+                    tag_id: TagId(0),
+                    name: CtorName::Tag(TagName(TUPLE_TAG_NAME.into())),
+                    arity: destructs.len(),
+                }],
+            };
+
+            let mut arguments = std::vec::Vec::new();
+
+            for destruct in destructs {
+                arguments.push((destruct.pat.clone(), destruct.layout));
+            }
+
+            IsCtor {
+                tag_id: 0,
+                ctor_name: CtorName::Tag(TagName(TUPLE_TAG_NAME.into())),
+                union,
+                arguments,
+            }
+        }
+
         NewtypeDestructure {
             tag_name,
             arguments,
@@ -764,6 +790,42 @@ fn to_relevant_branch_help<'a>(
                         DestructType::Guard(guard) => guard.clone(),
                         DestructType::Required(_) => Pattern::Underscore,
                     };
+
+                    let mut new_path = path.to_vec();
+                    let next_instr = if destructs_len == 1 {
+                        PathInstruction::NewType
+                    } else {
+                        PathInstruction::TagIndex {
+                            index: index as u64,
+                            tag_id: *tag_id,
+                        }
+                    };
+                    new_path.push(next_instr);
+
+                    (new_path, pattern)
+                });
+                start.extend(sub_positions);
+                start.extend(end);
+
+                Some(Branch {
+                    goal: branch.goal,
+                    guard: branch.guard.clone(),
+                    patterns: start,
+                })
+            }
+            _ => None,
+        },
+
+        TupleDestructure(destructs, _) => match test {
+            IsCtor {
+                ctor_name: test_name,
+                tag_id,
+                ..
+            } => {
+                debug_assert!(test_name == &CtorName::Tag(TagName(TUPLE_TAG_NAME.into())));
+                let destructs_len = destructs.len();
+                let sub_positions = destructs.into_iter().enumerate().map(|(index, destruct)| {
+                    let pattern = destruct.pat.clone();
 
                     let mut new_path = path.to_vec();
                     let next_instr = if destructs_len == 1 {
@@ -1126,6 +1188,7 @@ fn needs_tests(pattern: &Pattern) -> bool {
 
         NewtypeDestructure { .. }
         | RecordDestructure(..)
+        | TupleDestructure(..)
         | AppliedTag { .. }
         | OpaqueUnwrap { .. }
         | BitLiteral { .. }

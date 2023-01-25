@@ -1498,6 +1498,20 @@ mod solve_expr {
     }
 
     #[test]
+    fn tuple_accessor_generalization() {
+        infer_eq(
+            indoc!(
+                r#"
+                    get0 = .0
+
+                    { a: get0 (1, 2), b: get0 ("a", "b", "c") }
+                "#
+            ),
+            "{ a : Num *, b : Str }",
+        );
+    }
+
+    #[test]
     fn record_arg() {
         infer_eq("\\rec -> rec.x", "{ x : a }* -> a");
     }

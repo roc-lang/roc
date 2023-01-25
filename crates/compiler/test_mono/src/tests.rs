@@ -2192,6 +2192,20 @@ fn list_one_vs_one_spread_issue_4685() {
     )
 }
 
+#[mono_test]
+fn tuple_pattern_match() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = when (1, 2) is
+            (1, _) -> "A"
+            (_, 2) -> "B"
+            (_, _) -> "C"
+        "#
+    )
+}
+
 #[mono_test(mode = "test")]
 fn issue_4705() {
     indoc!(

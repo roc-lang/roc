@@ -1104,6 +1104,7 @@ impl<'a> Procs<'a> {
 
                     let needs_suspended_specialization =
                         self.symbol_needs_suspended_specialization(name.name());
+
                     match (
                         &mut self.pending_specializations,
                         needs_suspended_specialization,
@@ -2813,7 +2814,10 @@ fn pattern_to_when<'a>(
             (env.unique_symbol(), Loc::at_zero(RuntimeError(error)))
         }
 
-        AppliedTag { .. } | RecordDestructure { .. } | UnwrappedOpaque { .. } => {
+        AppliedTag { .. }
+        | RecordDestructure { .. }
+        | TupleDestructure { .. }
+        | UnwrappedOpaque { .. } => {
             let symbol = env.unique_symbol();
 
             let wrapped_body = When {
@@ -4245,7 +4249,111 @@ pub fn with_hole<'a>(
             }
         }
 
-        Tuple { .. } => todo!("implement tuple hole"),
+        Tuple {
+            tuple_var, elems, ..
+        } => {
+            let sorted_elems_result = {
+                let mut layout_env = layout::Env::from_components(
+                    layout_cache,
+                    env.subs,
+                    env.arena,
+                    env.target_info,
+                );
+                layout::sort_tuple_elems(&mut layout_env, tuple_var)
+            };
+            let sorted_elems = match sorted_elems_result {
+                Ok(elems) => elems,
+                Err(_) => return runtime_error(env, "Can't create tuple with improper layout"),
+            };
+
+            let mut elem_symbols = Vec::with_capacity_in(elems.len(), env.arena);
+            let mut can_elems = Vec::with_capacity_in(elems.len(), env.arena);
+
+            #[allow(clippy::enum_variant_names)]
+            enum Field {
+                // TODO: rename this since it can handle unspecialized expressions now too
+                FunctionOrUnspecialized(Symbol, Variable),
+                ValueSymbol,
+                Field(Variable, Loc<roc_can::expr::Expr>),
+            }
+
+            // Hacky way to let us remove the owned elements from the vector, possibly out-of-order.
+            let mut elems = Vec::from_iter_in(elems.into_iter().map(Some), env.arena);
+
+            for (index, variable, _) in sorted_elems.into_iter() {
+                // TODO how should function pointers be handled here?
+                use ReuseSymbol::*;
+                let (var, loc_expr) = elems[index].take().unwrap();
+                match can_reuse_symbol(env, procs, &loc_expr.value, var) {
+                    Imported(symbol) | LocalFunction(symbol) | UnspecializedExpr(symbol) => {
+                        elem_symbols.push(symbol);
+                        can_elems.push(Field::FunctionOrUnspecialized(symbol, variable));
+                    }
+                    Value(symbol) => {
+                        let reusable = procs.get_or_insert_symbol_specialization(
+                            env,
+                            layout_cache,
+                            symbol,
+                            var,
+                        );
+                        elem_symbols.push(reusable);
+                        can_elems.push(Field::ValueSymbol);
+                    }
+                    NotASymbol => {
+                        elem_symbols.push(env.unique_symbol());
+                        can_elems.push(Field::Field(var, *loc_expr));
+                    }
+                }
+            }
+
+            // creating a record from the var will unpack it if it's just a single field.
+            let layout = match layout_cache.from_var(env.arena, tuple_var, env.subs) {
+                Ok(layout) => layout,
+                Err(_) => return runtime_error(env, "Can't create record with improper layout"),
+            };
+
+            let elem_symbols = elem_symbols.into_bump_slice();
+
+            let mut stmt = if let [only_field] = elem_symbols {
+                let mut hole = hole.clone();
+                substitute_in_exprs(env.arena, &mut hole, assigned, *only_field);
+                hole
+            } else {
+                Stmt::Let(assigned, Expr::Struct(elem_symbols), layout, hole)
+            };
+
+            for (opt_field, symbol) in can_elems.into_iter().rev().zip(elem_symbols.iter().rev()) {
+                match opt_field {
+                    Field::ValueSymbol => {
+                        // this symbol is already defined; nothing to do
+                    }
+                    Field::FunctionOrUnspecialized(symbol, variable) => {
+                        stmt = specialize_symbol(
+                            env,
+                            procs,
+                            layout_cache,
+                            Some(variable),
+                            symbol,
+                            env.arena.alloc(stmt),
+                            symbol,
+                        );
+                    }
+                    Field::Field(var, loc_expr) => {
+                        stmt = with_hole(
+                            env,
+                            loc_expr.value,
+                            var,
+                            procs,
+                            layout_cache,
+                            *symbol,
+                            env.arena.alloc(stmt),
+                        );
+                    }
+                }
+            }
+
+            stmt
+        }
 
         Record {
             record_var,
@@ -4779,8 +4887,82 @@ pub fn with_hole<'a>(
             }
         }
 
-        TupleAccess { .. } => todo!(),
-        TupleAccessor(_) => todo!(),
+        TupleAccess {
+            tuple_var,
+            elem_var,
+            index: accessed_index,
+            loc_expr,
+            ..
+        } => {
+            let sorted_elems_result = {
+                let mut layout_env = layout::Env::from_components(
+                    layout_cache,
+                    env.subs,
+                    env.arena,
+                    env.target_info,
+                );
+                layout::sort_tuple_elems(&mut layout_env, tuple_var)
+            };
+            let sorted_elems = match sorted_elems_result {
+                Ok(fields) => fields,
+                Err(_) => return runtime_error(env, "Can't access tuple with improper layout"),
+            };
+
+            let mut final_index = None;
+            let mut elem_layouts = Vec::with_capacity_in(sorted_elems.len(), env.arena);
+
+            for (current, (index, _, elem_layout)) in sorted_elems.into_iter().enumerate() {
+                elem_layouts.push(elem_layout);
+
+                if index == accessed_index {
+                    final_index = Some(current);
+                }
+            }
+
+            let tuple_symbol = possible_reuse_symbol_or_specialize(
+                env,
+                procs,
+                layout_cache,
+                &loc_expr.value,
+                tuple_var,
+            );
+
+            let mut stmt = match elem_layouts.as_slice() {
+                [_] => {
+                    let mut hole = hole.clone();
+                    substitute_in_exprs(env.arena, &mut hole, assigned, tuple_symbol);
+
+                    hole
+                }
+                _ => {
+                    let expr = Expr::StructAtIndex {
+                        index: final_index.expect("field not in its own type") as u64,
+                        field_layouts: elem_layouts.into_bump_slice(),
+                        structure: tuple_symbol,
+                    };
+
+                    let layout = layout_cache
+                        .from_var(env.arena, elem_var, env.subs)
+                        .unwrap_or_else(|err| {
+                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
+                        });
+
+                    Stmt::Let(assigned, expr, layout, hole)
+                }
+            };
+
+            stmt = assign_to_symbol(
+                env,
+                procs,
+                layout_cache,
+                tuple_var,
+                *loc_expr,
+                tuple_symbol,
+                stmt,
+            );
+
+            stmt
+        }
 
         OpaqueWrapFunction(wrap_fn_data) => {
             let opaque_var = wrap_fn_data.opaque_var;
@@ -7467,6 +7649,46 @@ fn store_pattern_help<'a>(
                 return StorePattern::NotProductive(stmt);
             }
         }
+
+        TupleDestructure(destructs, [_single_field]) => {
+            if let Some(destruct) = destructs.first() {
+                return store_pattern_help(
+                    env,
+                    procs,
+                    layout_cache,
+                    &destruct.pat,
+                    outer_symbol,
+                    stmt,
+                );
+            }
+        }
+        TupleDestructure(destructs, sorted_fields) => {
+            let mut is_productive = false;
+            for (index, destruct) in destructs.iter().enumerate().rev() {
+                match store_tuple_destruct(
+                    env,
+                    procs,
+                    layout_cache,
+                    destruct,
+                    index as u64,
+                    outer_symbol,
+                    sorted_fields,
+                    stmt,
+                ) {
+                    StorePattern::Productive(new) => {
+                        is_productive = true;
+                        stmt = new;
+                    }
+                    StorePattern::NotProductive(new) => {
+                        stmt = new;
+                    }
+                }
+            }
+
+            if !is_productive {
+                return StorePattern::NotProductive(stmt);
+            }
+        }
     }
 
     StorePattern::Productive(stmt)
@@ -7797,6 +8019,71 @@ fn store_newtype_pattern<'a>(
     } else {
         StorePattern::NotProductive(stmt)
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn store_tuple_destruct<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    destruct: &TupleDestruct<'a>,
+    index: u64,
+    outer_symbol: Symbol,
+    sorted_fields: &'a [InLayout<'a>],
+    mut stmt: Stmt<'a>,
+) -> StorePattern<'a> {
+    use Pattern::*;
+
+    let load = Expr::StructAtIndex {
+        index,
+        field_layouts: sorted_fields,
+        structure: outer_symbol,
+    };
+
+    match &destruct.pat {
+        Identifier(symbol) => {
+            stmt = Stmt::Let(*symbol, load, destruct.layout, env.arena.alloc(stmt));
+        }
+        Underscore => {
+            // important that this is special-cased to do nothing: mono record patterns will extract all the
+            // fields, but those not bound in the source code are guarded with the underscore
+            // pattern. So given some record `{ x : a, y : b }`, a match
+            //
+            // { x } -> ...
+            //
+            // is actually
+            //
+            // { x, y: _ } -> ...
+            //
+            // internally. But `y` is never used, so we must make sure it't not stored/loaded.
+            //
+            // This also happens with tuples, so when matching a tuple `(a, b, c)`,
+            // a pattern like `(x, y)` will be internally rewritten to `(x, y, _)`.
+            return StorePattern::NotProductive(stmt);
+        }
+        IntLiteral(_, _)
+        | FloatLiteral(_, _)
+        | DecimalLiteral(_)
+        | EnumLiteral { .. }
+        | BitLiteral { .. }
+        | StrLiteral(_) => {
+            return StorePattern::NotProductive(stmt);
+        }
+
+        _ => {
+            let symbol = env.unique_symbol();
+
+            match store_pattern_help(env, procs, layout_cache, &destruct.pat, symbol, stmt) {
+                StorePattern::Productive(new) => {
+                    stmt = new;
+                    stmt = Stmt::Let(symbol, load, destruct.layout, env.arena.alloc(stmt));
+                }
+                StorePattern::NotProductive(stmt) => return StorePattern::NotProductive(stmt),
+            }
+        }
+    }
+
+    StorePattern::Productive(stmt)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -9081,6 +9368,7 @@ pub enum Pattern<'a> {
     StrLiteral(Box<str>),
 
     RecordDestructure(Vec<'a, RecordDestruct<'a>>, &'a [InLayout<'a>]),
+    TupleDestructure(Vec<'a, TupleDestruct<'a>>, &'a [InLayout<'a>]),
     NewtypeDestructure {
         tag_name: TagName,
         arguments: Vec<'a, (Pattern<'a>, InLayout<'a>)>,
@@ -9133,6 +9421,11 @@ impl<'a> Pattern<'a> {
                         }
                     }
                 }
+                Pattern::TupleDestructure(destructs, _) => {
+                    for destruct in destructs {
+                        stack.push(&destruct.pat);
+                    }
+                }
                 Pattern::NewtypeDestructure { arguments, .. } => {
                     stack.extend(arguments.iter().map(|(t, _)| t))
                 }
@@ -9155,6 +9448,14 @@ pub struct RecordDestruct<'a> {
     pub variable: Variable,
     pub layout: InLayout<'a>,
     pub typ: DestructType<'a>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TupleDestruct<'a> {
+    pub index: usize,
+    pub variable: Variable,
+    pub layout: InLayout<'a>,
+    pub pat: Pattern<'a>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -9752,6 +10053,62 @@ fn from_can_pattern_help<'a>(
             })
         }
 
+        TupleDestructure {
+            whole_var,
+            destructs,
+            ..
+        } => {
+            // sorted fields based on the type
+            let sorted_elems = {
+                let mut layout_env = layout::Env::from_components(
+                    layout_cache,
+                    env.subs,
+                    env.arena,
+                    env.target_info,
+                );
+                crate::layout::sort_tuple_elems(&mut layout_env, *whole_var)
+                    .map_err(RuntimeError::from)?
+            };
+
+            // sorted fields based on the destruct
+            let mut mono_destructs = Vec::with_capacity_in(destructs.len(), env.arena);
+            let mut destructs_by_index = Vec::with_capacity_in(destructs.len(), env.arena);
+            destructs_by_index.extend(destructs.iter().map(Some));
+
+            let mut elem_layouts = Vec::with_capacity_in(sorted_elems.len(), env.arena);
+
+            for (index, variable, res_layout) in sorted_elems.into_iter() {
+                if index < destructs.len() {
+                    // this elem is destructured by the pattern
+                    mono_destructs.push(from_can_tuple_destruct(
+                        env,
+                        procs,
+                        layout_cache,
+                        &destructs[index].value,
+                        res_layout,
+                        assignments,
+                    )?);
+                } else {
+                    // this elem is not destructured by the pattern
+                    // put in an underscore
+                    mono_destructs.push(TupleDestruct {
+                        index,
+                        variable,
+                        layout: res_layout,
+                        pat: Pattern::Underscore,
+                    });
+                }
+
+                // the layout of this field is part of the layout of the record
+                elem_layouts.push(res_layout);
+            }
+
+            Ok(Pattern::TupleDestructure(
+                mono_destructs,
+                elem_layouts.into_bump_slice(),
+            ))
+        }
+
         RecordDestructure {
             whole_var,
             destructs,
@@ -9927,6 +10284,22 @@ fn from_can_record_destruct<'a>(
                 from_can_pattern_help(env, procs, layout_cache, &loc_pattern.value, assignments)?,
             ),
         },
+    })
+}
+
+fn from_can_tuple_destruct<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    can_rd: &roc_can::pattern::TupleDestruct,
+    field_layout: InLayout<'a>,
+    assignments: &mut Vec<'a, (Symbol, Variable, roc_can::expr::Expr)>,
+) -> Result<TupleDestruct<'a>, RuntimeError> {
+    Ok(TupleDestruct {
+        index: can_rd.destruct_index,
+        variable: can_rd.var,
+        layout: field_layout,
+        pat: from_can_pattern_help(env, procs, layout_cache, &can_rd.typ.1.value, assignments)?,
     })
 }
 

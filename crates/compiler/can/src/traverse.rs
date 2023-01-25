@@ -9,9 +9,9 @@ use crate::{
     def::{Annotation, Declaration, Def},
     expr::{
         self, AnnotatedMark, ClosureData, Declarations, Expr, Field, OpaqueWrapFunctionData,
-        RecordAccessorData, TupleAccessorData,
+        StructAccessorData,
     },
-    pattern::{DestructType, Pattern, RecordDestruct},
+    pattern::{DestructType, Pattern, RecordDestruct, TupleDestruct},
 };
 
 macro_rules! visit_list {
@@ -242,7 +242,7 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             record_var: _,
             ext_var: _,
         } => visitor.visit_expr(&loc_expr.value, loc_expr.region, *field_var),
-        Expr::RecordAccessor(RecordAccessorData { .. }) => { /* terminal */ }
+        Expr::RecordAccessor(StructAccessorData { .. }) => { /* terminal */ }
         Expr::TupleAccess {
             elem_var,
             loc_expr,
@@ -250,7 +250,6 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
             tuple_var: _,
             ext_var: _,
         } => visitor.visit_expr(&loc_expr.value, loc_expr.region, *elem_var),
-        Expr::TupleAccessor(TupleAccessorData { .. }) => { /* terminal */ }
         Expr::OpaqueWrapFunction(OpaqueWrapFunctionData { .. }) => { /* terminal */ }
         Expr::RecordUpdate {
             record_var: _,
@@ -483,6 +482,16 @@ pub trait Visitor: Sized {
             walk_record_destruct(self, destruct);
         }
     }
+
+    fn visit_tuple_destruct(&mut self, destruct: &TupleDestruct, region: Region) {
+        if self.should_visit(region) {
+            self.visit_pattern(
+                &destruct.typ.1.value,
+                destruct.typ.1.region,
+                Some(destruct.typ.0),
+            )
+        }
+    }
 }
 
 pub fn walk_pattern<V: Visitor>(visitor: &mut V, pattern: &Pattern) {
@@ -503,6 +512,9 @@ pub fn walk_pattern<V: Visitor>(visitor: &mut V, pattern: &Pattern) {
         RecordDestructure { destructs, .. } => destructs
             .iter()
             .for_each(|d| visitor.visit_record_destruct(&d.value, d.region)),
+        TupleDestructure { destructs, .. } => destructs
+            .iter()
+            .for_each(|d| visitor.visit_tuple_destruct(&d.value, d.region)),
         List {
             patterns, elem_var, ..
         } => patterns

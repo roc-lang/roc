@@ -43,10 +43,8 @@ pub enum Ident<'a> {
         module_name: &'a str,
         parts: &'a [Accessor<'a>],
     },
-    /// .foo { foo: 42 }
-    RecordAccessorFunction(&'a str),
-    /// .1 (1, 2, 3)
-    TupleAccessorFunction(&'a str),
+    /// `.foo { foo: 42 }` or `.1 (1, 2, 3)`
+    AccessorFunction(Accessor<'a>),
     /// .Foo or foo. or something like foo.Bar
     Malformed(&'a str, BadIdent),
 }
@@ -71,8 +69,7 @@ impl<'a> Ident<'a> {
 
                 len - 1
             }
-            RecordAccessorFunction(string) => string.len(),
-            TupleAccessorFunction(string) => string.len(),
+            AccessorFunction(string) => string.len(),
             Malformed(string, _) => string.len(),
         }
     }
@@ -339,7 +336,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Accessor<'a> {
     RecordField(&'a str),
     TupleIndex(&'a str),
@@ -436,13 +433,9 @@ fn chomp_identifier_chain<'a>(
     match char::from_utf8_slice_start(&buffer[chomped..]) {
         Ok((ch, width)) => match ch {
             '.' => match chomp_accessor(&buffer[1..], pos) {
-                Ok(Accessor::RecordField(accessor)) => {
+                Ok(accessor) => {
                     let bytes_parsed = 1 + accessor.len();
-                    return Ok((bytes_parsed as u32, Ident::RecordAccessorFunction(accessor)));
-                }
-                Ok(Accessor::TupleIndex(accessor)) => {
-                    let bytes_parsed = 1 + accessor.len();
-                    return Ok((bytes_parsed as u32, Ident::TupleAccessorFunction(accessor)));
+                    return Ok((bytes_parsed as u32, Ident::AccessorFunction(accessor)));
                 }
                 Err(fail) => return Err((1, fail)),
             },

@@ -19,8 +19,8 @@ use roc_solve_problem::{
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
-    AbilitySet, AliasKind, Category, ErrorType, PatternCategory, Polarity, Reason, RecordField,
-    TypeExt,
+    AbilitySet, AliasKind, Category, ErrorType, IndexOrField, PatternCategory, Polarity, Reason,
+    RecordField, TypeExt,
 };
 use std::path::PathBuf;
 use ven_pretty::DocAllocator;
@@ -1705,10 +1705,13 @@ fn format_category<'b>(
             alloc.text(" of type:"),
         ),
 
-        RecordAccessor(field) => (
+        Accessor(field) => (
             alloc.concat([
                 alloc.text(format!("{}his ", t)),
-                alloc.record_field(field.to_owned()),
+                match field {
+                    IndexOrField::Index(index) => alloc.tuple_field(*index),
+                    IndexOrField::Field(field) => alloc.record_field(field.to_owned()),
+                },
                 alloc.text(" value"),
             ]),
             alloc.text(" is a:"),
@@ -1726,14 +1729,6 @@ fn format_category<'b>(
             alloc.text(" of type:"),
         ),
 
-        TupleAccessor(index) => (
-            alloc.concat([
-                alloc.text(format!("{}his ", t)),
-                alloc.tuple_field(*index),
-                alloc.text(" value"),
-            ]),
-            alloc.text(" is a:"),
-        ),
         TupleAccess(index) => (
             alloc.concat([
                 alloc.text(format!("{}he value at ", t)),
@@ -2046,6 +2041,7 @@ fn add_pattern_category<'b>(
 
     let rest = match category {
         Record => alloc.reflow(" record values of type:"),
+        Tuple => alloc.reflow(" tuple values of type:"),
         EmptyRecord => alloc.reflow(" an empty record:"),
         PatternGuard => alloc.reflow(" a pattern guard of type:"),
         PatternDefault => alloc.reflow(" an optional field of type:"),
@@ -4852,6 +4848,18 @@ fn pattern_to_doc_help<'b>(
                         .text("{ ")
                         .append(alloc.intersperse(arg_docs, alloc.reflow(", ")))
                         .append(" }")
+                }
+                RenderAs::Tuple => {
+                    let mut arg_docs = Vec::with_capacity(args.len());
+
+                    for v in args.into_iter() {
+                        arg_docs.push(pattern_to_doc_help(alloc, v, false));
+                    }
+
+                    alloc
+                        .text("( ")
+                        .append(alloc.intersperse(arg_docs, alloc.reflow(", ")))
+                        .append(" )")
                 }
                 RenderAs::Tag | RenderAs::Opaque => {
                     let ctor = &union.alternatives[tag_id.0 as usize];

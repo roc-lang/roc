@@ -1872,9 +1872,8 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
             is_negative: *is_negative,
         }),
         // These would not have parsed as patterns
-        Expr::RecordAccessorFunction(_)
+        Expr::AccessorFunction(_)
         | Expr::RecordAccess(_, _)
-        | Expr::TupleAccessorFunction(_)
         | Expr::TupleAccess(_, _)
         | Expr::List { .. }
         | Expr::Closure(_, _)
@@ -2459,8 +2458,7 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
 
             answer
         }
-        Ident::RecordAccessorFunction(string) => Expr::RecordAccessorFunction(string),
-        Ident::TupleAccessorFunction(string) => Expr::TupleAccessorFunction(string),
+        Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
         Ident::Malformed(string, problem) => Expr::MalformedIdent(string, problem),
     }
 }

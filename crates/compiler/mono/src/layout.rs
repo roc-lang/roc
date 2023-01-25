@@ -13,9 +13,12 @@ use roc_target::{PtrWidth, TargetInfo};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
     self, Content, FlatType, GetSubsSlice, Label, OptVariable, RecordFields, Subs, TagExt,
-    UnsortedUnionLabels, Variable, VariableSubsSlice,
+    TupleElems, UnsortedUnionLabels, Variable, VariableSubsSlice,
 };
-use roc_types::types::{gather_fields_unsorted_iter, RecordField, RecordFieldsError};
+use roc_types::types::{
+    gather_fields_unsorted_iter, gather_tuple_elems_unsorted_iter, RecordField, RecordFieldsError,
+    TupleElemsError,
+};
 use std::cmp::Ordering;
 use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::HashMap;
@@ -658,6 +661,17 @@ impl FieldOrderHash {
 
         let mut hasher = DefaultHasher::new();
         fields.iter().for_each(|field| field.hash(&mut hasher));
+        Self(hasher.finish())
+    }
+
+    pub fn from_ordered_tuple_elems(elems: &[usize]) -> Self {
+        if elems.is_empty() {
+            // HACK: we must make sure this is always equivalent to a `ZERO_FIELD_HASH`.
+            return Self::ZERO_FIELD_HASH;
+        }
+
+        let mut hasher = DefaultHasher::new();
+        elems.iter().for_each(|elem| elem.hash(&mut hasher));
         Self(hasher.finish())
     }
 }
@@ -3155,8 +3169,52 @@ fn layout_from_flat_type<'a>(
 
             Cacheable(result, criteria)
         }
-        Tuple(_elems, _ext_var) => {
-            todo!();
+        Tuple(elems, ext_var) => {
+            let mut criteria = CACHEABLE;
+
+            // extract any values from the ext_var
+            let mut sortables = Vec::with_capacity_in(elems.len(), arena);
+            let it = match elems.unsorted_iterator(subs, ext_var) {
+                Ok(it) => it,
+                Err(TupleElemsError) => return Cacheable(Err(LayoutProblem::Erroneous), criteria),
+            };
+
+            for (index, elem) in it {
+                let elem_layout = cached!(Layout::from_var(env, elem), criteria);
+                sortables.push((index, elem_layout));
+            }
+
+            sortables.sort_by(|(index1, layout1), (index2, layout2)| {
+                cmp_fields(
+                    &env.cache.interner,
+                    index1,
+                    *layout1,
+                    index2,
+                    *layout2,
+                    target_info,
+                )
+            });
+
+            let ordered_field_names =
+                Vec::from_iter_in(sortables.iter().map(|(index, _)| *index), arena);
+            let field_order_hash =
+                FieldOrderHash::from_ordered_tuple_elems(ordered_field_names.as_slice());
+
+            let result = if sortables.len() == 1 {
+                // If the tuple has only one field that isn't zero-sized,
+                // unwrap it.
+                Ok(sortables.pop().unwrap().1)
+            } else {
+                let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
+                let struct_layout = Layout::Struct {
+                    field_order_hash,
+                    field_layouts: layouts.into_bump_slice(),
+                };
+
+                Ok(env.cache.put_in(struct_layout))
+            };
+
+            Cacheable(result, criteria)
         }
         TagUnion(tags, ext_var) => {
             let (tags, ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
@@ -3189,6 +3247,48 @@ fn layout_from_flat_type<'a>(
         EmptyRecord => cacheable(Ok(Layout::UNIT)),
         EmptyTuple => cacheable(Ok(Layout::UNIT)),
     }
+}
+
+pub type SortedTupleElem<'a> = (usize, Variable, InLayout<'a>);
+
+pub fn sort_tuple_elems<'a>(
+    env: &mut Env<'a, '_>,
+    var: Variable,
+) -> Result<Vec<'a, SortedTupleElem<'a>>, LayoutProblem> {
+    let (it, _) = match gather_tuple_elems_unsorted_iter(env.subs, TupleElems::empty(), var) {
+        Ok(it) => it,
+        Err(_) => return Err(LayoutProblem::Erroneous),
+    };
+
+    sort_tuple_elems_help(env, it)
+}
+
+fn sort_tuple_elems_help<'a>(
+    env: &mut Env<'a, '_>,
+    elems_map: impl Iterator<Item = (usize, Variable)>,
+) -> Result<Vec<'a, SortedTupleElem<'a>>, LayoutProblem> {
+    let target_info = env.target_info;
+
+    let mut sorted_elems = Vec::with_capacity_in(elems_map.size_hint().0, env.arena);
+
+    for (index, elem) in elems_map {
+        let Cacheable(layout, _) = Layout::from_var(env, elem);
+        let layout = layout?;
+        sorted_elems.push((index, elem, layout));
+    }
+
+    sorted_elems.sort_by(|(index1, _, res_layout1), (index2, _, res_layout2)| {
+        cmp_fields(
+            &env.cache.interner,
+            index1,
+            *res_layout1,
+            index2,
+            *res_layout2,
+            target_info,
+        )
+    });
+
+    Ok(sorted_elems)
 }
 
 pub type SortedField<'a> = (Lowercase, Variable, Result<InLayout<'a>, InLayout<'a>>);
