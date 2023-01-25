@@ -963,15 +963,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let answer = eq_ptr_to_struct(
-                    env,
-                    layout_interner,
-                    layout_ids,
-                    union_layout,
-                    field_layouts,
-                    tag1,
-                    tag2,
-                );
+                let answer =
+                    eq_ptr_to_struct(env, layout_interner, layout_ids, field_layouts, tag1, tag2);
 
                 env.builder.build_return(Some(&answer));
 
@@ -1033,15 +1026,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let answer = eq_ptr_to_struct(
-                    env,
-                    layout_interner,
-                    layout_ids,
-                    union_layout,
-                    field_layouts,
-                    tag1,
-                    tag2,
-                );
+                let answer =
+                    eq_ptr_to_struct(env, layout_interner, layout_ids, field_layouts, tag1, tag2);
 
                 env.builder.build_return(Some(&answer));
 
@@ -1097,7 +1083,6 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 env,
                 layout_interner,
                 layout_ids,
-                union_layout,
                 other_fields,
                 tag1.into_pointer_value(),
                 tag2.into_pointer_value(),
@@ -1190,15 +1175,8 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let answer = eq_ptr_to_struct(
-                    env,
-                    layout_interner,
-                    layout_ids,
-                    union_layout,
-                    field_layouts,
-                    tag1,
-                    tag2,
-                );
+                let answer =
+                    eq_ptr_to_struct(env, layout_interner, layout_ids, field_layouts, tag1, tag2);
 
                 env.builder.build_return(Some(&answer));
 
@@ -1232,7 +1210,6 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 env,
                 layout_interner,
                 layout_ids,
-                union_layout,
                 field_layouts,
                 tag1.into_pointer_value(),
                 tag2.into_pointer_value(),
@@ -1247,7 +1224,6 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
-    union_layout: &UnionLayout<'a>,
     field_layouts: &'a [InLayout<'a>],
     tag1: PointerValue<'ctx>,
     tag2: PointerValue<'ctx>,
