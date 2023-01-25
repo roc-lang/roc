@@ -1573,7 +1573,7 @@ example <span class="kw">=</span> <span class="kw">\</span>tag <span class="kw">
         _ <span class="kw">-&gt;</span> Bool.<span class="hljs-literal">false</span>
 </samp></pre>
 
-In contrast, a _closed tag union_ (or _closed union_) like `[Foo Str, Bar Bool]` (without the `*`) represents an the set of all possible tags. If I use a `when` on one of these, I can match on `Foo` only and then on `Bar` only, with no need for a catch-all branch. For example:
+In contrast, a _closed tag union_ (or _closed union_) like `[Foo Str, Bar Bool]` (without the `*`) represents the set of all possible tags. If I use a `when` on one of these, I can match on `Foo` only and then on `Bar` only, with no need for a catch-all branch. For example:
 
 <pre><samp>example <span class="kw">:</span> [Foo Str, Bar Bool] <span class="kw">-&gt;</span> Bool
 example <span class="kw">=</span> <span class="kw">\</span>tag <span class="kw">-&gt;</span>
