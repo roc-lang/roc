@@ -193,7 +193,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         r
     }
 
-    fn resolve(&mut self, mut layout: InLayout<'a>) -> InLayout<'a> {
+    fn resolve(&self, mut layout: InLayout<'a>) -> InLayout<'a> {
         // Note that we are more aggressive than the usual `runtime_representation`
         // here because we need strict equality, and so cannot unwrap lambda sets
         // lazily.
@@ -204,6 +204,12 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 _ => return layout,
             }
         }
+    }
+
+    fn not_equiv(&mut self, layout1: InLayout<'a>, layout2: InLayout<'a>) -> bool {
+        !self
+            .interner
+            .equiv(self.resolve(layout1), self.resolve(layout2))
     }
 
     fn insert(&mut self, symbol: Symbol, layout: InLayout<'a>) {
@@ -238,7 +244,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         use_kind: UseKind,
     ) {
         if let Some(&(def_line, layout)) = self.venv.get(&symbol) {
-            if self.resolve(layout) != self.resolve(expected_layout) {
+            if self.not_equiv(layout, expected_layout) {
                 self.problem(ProblemKind::SymbolUseMismatch {
                     symbol,
                     def_layout: layout,
@@ -266,7 +272,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         match body {
             Stmt::Let(x, e, x_layout, rest) => {
                 if let Some(e_layout) = self.check_expr(e) {
-                    if self.resolve(e_layout) != self.resolve(*x_layout) {
+                    if self.not_equiv(e_layout, *x_layout) {
                         self.problem(ProblemKind::SymbolDefMismatch {
                             symbol: *x,
                             def_layout: *x_layout,
@@ -632,13 +638,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     });
                 }
                 for (arg, wanted_layout) in arguments.iter().zip(payloads.iter()) {
-                    let wanted_layout = resolve_recursive_layout(
-                        self.arena,
-                        self.interner,
-                        *wanted_layout,
-                        union_layout,
-                    );
-                    self.check_sym_layout(*arg, wanted_layout, UseKind::TagPayloadArg);
+                    self.check_sym_layout(*arg, *wanted_layout, UseKind::TagPayloadArg);
                 }
             }
         }
