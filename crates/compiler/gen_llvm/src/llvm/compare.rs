@@ -66,6 +66,7 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
     layout_ids: &mut LayoutIds<'a>,
     lhs_val: BasicValueEnum<'ctx>,
     rhs_val: BasicValueEnum<'ctx>,
+    builtin_layout: InLayout<'a>,
     builtin: &Builtin<'a>,
 ) -> BasicValueEnum<'ctx> {
     let int_cmp = |pred, label| {
@@ -125,18 +126,15 @@ fn build_eq_builtin<'a, 'ctx, 'env>(
         Builtin::Decimal => dec_binop_with_unchecked(env, bitcode::DEC_EQ, lhs_val, rhs_val),
 
         Builtin::Str => str_equal(env, lhs_val, rhs_val),
-        Builtin::List(elem) => {
-            let list_layout = layout_interner.insert(Layout::Builtin(*builtin));
-            build_list_eq(
-                env,
-                layout_interner,
-                layout_ids,
-                list_layout,
-                *elem,
-                lhs_val.into_struct_value(),
-                rhs_val.into_struct_value(),
-            )
-        }
+        Builtin::List(elem) => build_list_eq(
+            env,
+            layout_interner,
+            layout_ids,
+            builtin_layout,
+            *elem,
+            lhs_val.into_struct_value(),
+            rhs_val.into_struct_value(),
+        ),
     }
 }
 
@@ -159,14 +157,21 @@ fn build_eq<'a, 'ctx, 'env>(
     }
 
     match layout_interner.get(*lhs_layout) {
-        Layout::Builtin(builtin) => {
-            build_eq_builtin(env, layout_interner, layout_ids, lhs_val, rhs_val, &builtin)
-        }
+        Layout::Builtin(builtin) => build_eq_builtin(
+            env,
+            layout_interner,
+            layout_ids,
+            lhs_val,
+            rhs_val,
+            *lhs_layout,
+            &builtin,
+        ),
 
         Layout::Struct { field_layouts, .. } => build_struct_eq(
             env,
             layout_interner,
             layout_ids,
+            *lhs_layout,
             field_layouts,
             lhs_val.into_struct_value(),
             rhs_val.into_struct_value(),
@@ -347,6 +352,7 @@ fn build_neq<'a, 'ctx, 'env>(
                 env,
                 layout_interner,
                 layout_ids,
+                lhs_layout,
                 field_layouts,
                 lhs_val.into_struct_value(),
                 rhs_val.into_struct_value(),
@@ -619,14 +625,13 @@ fn build_struct_eq<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
+    struct_layout: InLayout<'a>,
     field_layouts: &'a [InLayout<'a>],
     struct1: StructValue<'ctx>,
     struct2: StructValue<'ctx>,
 ) -> BasicValueEnum<'ctx> {
     let block = env.builder.get_insert_block().expect("to be in a function");
     let di_location = env.builder.get_current_debug_location().unwrap();
-
-    let struct_layout = layout_interner.insert(Layout::struct_no_name_order(field_layouts));
 
     let symbol = Symbol::GENERIC_EQ;
     let fn_name = layout_ids
@@ -963,8 +968,18 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let answer =
-                    eq_ptr_to_struct(env, layout_interner, layout_ids, field_layouts, tag1, tag2);
+                let struct_layout =
+                    layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+
+                let answer = eq_ptr_to_struct(
+                    env,
+                    layout_interner,
+                    layout_ids,
+                    struct_layout,
+                    field_layouts,
+                    tag1,
+                    tag2,
+                );
 
                 env.builder.build_return(Some(&answer));
 
@@ -1026,8 +1041,18 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let answer =
-                    eq_ptr_to_struct(env, layout_interner, layout_ids, field_layouts, tag1, tag2);
+                let struct_layout =
+                    layout_interner.insert(Layout::struct_no_name_order(field_layouts));
+
+                let answer = eq_ptr_to_struct(
+                    env,
+                    layout_interner,
+                    layout_ids,
+                    struct_layout,
+                    field_layouts,
+                    tag1,
+                    tag2,
+                );
 
                 env.builder.build_return(Some(&answer));
 
@@ -1079,10 +1104,13 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             env.builder.position_at_end(compare_other);
 
+            let struct_layout = layout_interner.insert(Layout::struct_no_name_order(other_fields));
+
             let answer = eq_ptr_to_struct(
                 env,
                 layout_interner,
                 layout_ids,
+                struct_layout,
                 other_fields,
                 tag1.into_pointer_value(),
                 tag2.into_pointer_value(),
@@ -1175,8 +1203,18 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
                 let block = env.context.append_basic_block(parent, "tag_id_modify");
                 env.builder.position_at_end(block);
 
-                let answer =
-                    eq_ptr_to_struct(env, layout_interner, layout_ids, field_layouts, tag1, tag2);
+                let struct_layout =
+                    layout_interner.insert(Layout::struct_no_name_order(&field_layouts));
+
+                let answer = eq_ptr_to_struct(
+                    env,
+                    layout_interner,
+                    layout_ids,
+                    struct_layout,
+                    field_layouts,
+                    tag1,
+                    tag2,
+                );
 
                 env.builder.build_return(Some(&answer));
 
@@ -1206,10 +1244,14 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
 
             env.builder.position_at_end(compare_fields);
 
+            let struct_layout =
+                layout_interner.insert(Layout::struct_no_name_order(&field_layouts));
+
             let answer = eq_ptr_to_struct(
                 env,
                 layout_interner,
                 layout_ids,
+                struct_layout,
                 field_layouts,
                 tag1.into_pointer_value(),
                 tag2.into_pointer_value(),
@@ -1224,12 +1266,11 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     layout_ids: &mut LayoutIds<'a>,
+    struct_layout: InLayout<'a>,
     field_layouts: &'a [InLayout<'a>],
     tag1: PointerValue<'ctx>,
     tag2: PointerValue<'ctx>,
 ) -> IntValue<'ctx> {
-    let struct_layout = layout_interner.insert(Layout::struct_no_name_order(field_layouts));
-
     let wrapper_type = basic_type_from_layout(env, layout_interner, struct_layout);
     debug_assert!(wrapper_type.is_struct_type());
 
@@ -1260,6 +1301,7 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
         env,
         layout_interner,
         layout_ids,
+        struct_layout,
         field_layouts,
         struct1,
         struct2,
