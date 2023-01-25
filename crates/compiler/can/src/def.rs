@@ -11,11 +11,11 @@ use crate::annotation::OwnedNamedOrAble;
 use crate::derive;
 use crate::env::Env;
 use crate::expr::get_lookup_symbols;
-use crate::expr::AccessorData;
 use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
 use crate::expr::Declarations;
 use crate::expr::Expr::{self, *};
+use crate::expr::RecordAccessorData;
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
@@ -2321,7 +2321,7 @@ fn canonicalize_pending_body<'a>(
                 let (loc_can_expr, can_output) = (
                     Loc::at(
                         loc_expr.region,
-                        Accessor(AccessorData {
+                        RecordAccessor(RecordAccessorData {
                             name: *defined_symbol,
                             function_var: var_store.fresh(),
                             record_var: var_store.fresh(),

@@ -5785,7 +5785,7 @@ fn build_pending_specializations<'a>(
                 }
 
                 match body.value {
-                    roc_can::expr::Expr::Accessor(accessor_data) => {
+                    roc_can::expr::Expr::RecordAccessor(accessor_data) => {
                         let fresh_record_symbol = mono_env.unique_symbol();
                         let closure_data = accessor_data.to_closure_data(fresh_record_symbol);
                         register_toplevel_function_into_procs_base(
