@@ -1248,7 +1248,7 @@ mod insert_recursive_layout {
     }
 
     fn get_rec_ptr_index<'a>(interner: &impl LayoutInterner<'a>, layout: InLayout<'a>) -> usize {
-        match interner.get(layout) {
+        match interner.chase_recursive(layout) {
             Layout::Union(UnionLayout::Recursive(&[&[l1], &[l2]])) => {
                 match (interner.get(l1), interner.get(l2)) {
                     (
@@ -1372,7 +1372,7 @@ mod insert_recursive_layout {
             make_layout(arena, &mut interner)
         };
 
-        let in1 = {
+        let in1: InLayout = {
             let mut interner = global.fork();
             interner.insert_recursive(arena, layout)
         };
