@@ -74,7 +74,7 @@ pub fn refcount_stmt<'a>(
 
         ModifyRc::DecRef(structure) => {
             match layout_interner.get(layout) {
-                // Str has no children, so we might as well do what we normally do and call the helper.
+                // Str has no children, so Dec is the same as DecRef.
                 Layout::Builtin(Builtin::Str) => {
                     ctx.op = HelperOp::Dec;
                     refcount_stmt(
@@ -139,7 +139,6 @@ pub fn refcount_generic<'a>(
             ident_ids,
             ctx,
             layout_interner,
-            layout,
             elem_layout,
             structure,
         ),
@@ -725,7 +724,6 @@ fn refcount_list<'a>(
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
     layout_interner: &mut STLayoutInterner<'a>,
-    layout: InLayout,
     elem_layout: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
@@ -774,7 +772,7 @@ fn refcount_list<'a>(
     //
 
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let alignment = layout_interner.alignment_bytes(layout);
+    let elem_alignment = layout_interner.alignment_bytes(elem_layout);
 
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_list = modify_refcount(
@@ -782,7 +780,7 @@ fn refcount_list<'a>(
         ident_ids,
         ctx,
         rc_ptr,
-        alignment,
+        elem_alignment,
         arena.alloc(ret_stmt),
     );
 
