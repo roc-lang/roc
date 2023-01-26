@@ -1411,7 +1411,7 @@ impl<
             bitcode::LIST_RESERVE.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
-            &ret_layout,
+            ret_layout,
         );
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
@@ -1423,7 +1423,7 @@ impl<
             &mut self.buf,
             base_offset,
             &Symbol::DEV_TMP4,
-            &ret_layout,
+            ret_layout,
         );
 
         self.free_symbol(&Symbol::DEV_TMP4);
@@ -1486,7 +1486,7 @@ impl<
             bitcode::LIST_APPEND_UNSAFE.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
-            &ret_layout,
+            ret_layout,
         );
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
@@ -1497,7 +1497,7 @@ impl<
             &mut self.buf,
             base_offset,
             &Symbol::DEV_TMP3,
-            &ret_layout,
+            ret_layout,
         );
 
         self.free_symbol(&Symbol::DEV_TMP3);

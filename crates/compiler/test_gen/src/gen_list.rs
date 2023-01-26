@@ -3431,12 +3431,12 @@ fn reserve_unchanged() {
         // both lists are empty.
         (0, RocList::empty(), 15, RocList::empty()),
         (RocList<u64>, RocList<u64>),
-        |(value_a, value_b): (RocList<u64>, RocList<u64>)| ((
+        |(value_a, value_b): (RocList<u64>, RocList<u64>)| (
             value_a.capacity(),
             value_a,
             value_b.capacity(),
             value_b
-        ))
+        )
     );
 }
 
