@@ -287,10 +287,10 @@ impl<'a> ParamMap<'a> {
         proc: &Proc<'a>,
         key: (Symbol, ProcLayout<'a>),
     ) {
-        if proc.must_own_arguments {
-            self.visit_proc_always_owned(arena, interner, proc, key);
-            return;
-        }
+        // if proc.must_own_arguments {
+        //     self.visit_proc_always_owned(arena, interner, proc, key);
+        //     return;
+        // }
 
         let index: usize = self.get_param_offset(key.0, key.1).into();
 

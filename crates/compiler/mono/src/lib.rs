@@ -14,6 +14,7 @@ pub mod ir;
 pub mod layout;
 pub mod layout_soa;
 pub mod low_level;
+pub mod perceus;
 pub mod reset_reuse;
 pub mod tail_recursion;
 

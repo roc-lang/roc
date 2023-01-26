@@ -37,6 +37,7 @@ use roc_mono::ir::{
 use roc_mono::layout::{
     GlobalLayoutInterner, LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner,
 };
+use roc_mono::perceus;
 use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{
     self, CommentOrNewline, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation,
@@ -3090,30 +3091,39 @@ fn update<'a>(
 
                     let ident_ids = state.constrained_ident_ids.get_mut(&module_id).unwrap();
 
-                    Proc::insert_reset_reuse_operations(
-                        arena,
-                        &mut layout_interner,
-                        module_id,
-                        ident_ids,
-                        &mut update_mode_ids,
-                        &mut state.procedures,
-                    );
+                    // Proc::insert_reset_reuse_operations(
+                    //     arena,
+                    //     &mut layout_interner,
+                    //     module_id,
+                    //     ident_ids,
+                    //     &mut update_mode_ids,
+                    //     &mut state.procedures,
+                    // );
 
-                    debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
+                    // debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_RESET_REUSE);
 
-                    let host_exposed_procs = bumpalo::collections::Vec::from_iter_in(
-                        state.exposed_to_host.values.keys().copied(),
-                        arena,
-                    );
+                    // let host_exposed_procs = bumpalo::collections::Vec::from_iter_in(
+                    //     state.exposed_to_host.values.keys().copied(),
+                    //     arena,
+                    // );
 
-                    Proc::insert_refcount_operations(
+                    // Proc::insert_refcount_operations(
+                    //     arena,
+                    //     &layout_interner,
+                    //     module_id,
+                    //     ident_ids,
+                    //     &mut update_mode_ids,
+                    //     &mut state.procedures,
+                    //     &host_exposed_procs,
+                    // );
+
+                    perceus::insert_refcount_operations(
                         arena,
                         &layout_interner,
                         module_id,
                         ident_ids,
                         &mut update_mode_ids,
                         &mut state.procedures,
-                        &host_exposed_procs,
                     );
 
                     debug_print_ir!(state, &layout_interner, ROC_PRINT_IR_AFTER_REFCOUNT);
