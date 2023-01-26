@@ -755,7 +755,7 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
         if let Some(full_layout) = new_interned_full_layout {
             self.record(full_layout, interned);
         }
-        self.insert(Layout::RecursivePointer(interned))
+        interned
     }
 
     fn get(&self, key: InLayout<'a>) -> Layout<'a> {
@@ -887,7 +887,7 @@ macro_rules! st_impl {
                 //   - if so, use that one immediately
                 //   - otherwise, allocate a new slot, update the recursive layout, and intern
                 if let Some(in_layout) = self.map.get(&normalized_layout) {
-                    return self.insert(Layout::RecursivePointer(*in_layout));
+                    return *in_layout;
                 }
 
                 // This recursive layout must be new to the interner, reserve a slot and fill it in.
@@ -900,7 +900,7 @@ macro_rules! st_impl {
                 self.map.insert(normalized_layout, slot);
                 self.map.insert(full_layout, slot);
 
-                self.insert(Layout::RecursivePointer(slot))
+                slot
             }
 
             fn get(&self, key: InLayout<'a>) -> Layout<'a> {
