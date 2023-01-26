@@ -2617,7 +2617,7 @@ fn list_contains_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_manual_range() {
     assert_evals_to!(
         indoc!(
@@ -3382,7 +3382,7 @@ fn with_capacity() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn with_capacity_append() {
     // see https://github.com/roc-lang/roc/issues/1732
     assert_evals_to!(
