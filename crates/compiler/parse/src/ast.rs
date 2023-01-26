@@ -1421,3 +1421,360 @@ impl<'a> ExtractSpaces<'a> for HasImpls<'a> {
         }
     }
 }
+
+pub trait Malformed {
+    /// Returns whether this node is malformed, or contains a malformed node (recursively).
+    fn is_malformed(&self) -> bool;
+}
+
+impl<'a> Malformed for Module<'a> {
+    fn is_malformed(&self) -> bool {
+        self.header.is_malformed()
+    }
+}
+
+impl<'a> Malformed for Header<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            Header::Interface(header) => header.is_malformed(),
+            Header::App(header) => header.is_malformed(),
+            Header::Package(header) => header.is_malformed(),
+            Header::Platform(header) => header.is_malformed(),
+            Header::Hosted(header) => header.is_malformed(),
+        }
+    }
+}
+
+impl<'a, T: Malformed> Malformed for Spaces<'a, T> {
+    fn is_malformed(&self) -> bool {
+        self.item.is_malformed()
+    }
+}
+
+impl<'a> Malformed for Expr<'a> {
+    fn is_malformed(&self) -> bool {
+        use Expr::*;
+
+        match self {
+            Float(_) |
+            Num(_) |
+            NonBase10Int { .. } |
+            TupleAccessorFunction(_) |
+            RecordAccessorFunction(_) |
+            Var { .. } |
+            Underscore(_) |
+            Tag(_) |
+            OpaqueRef(_) |
+            SingleQuote(_) | // This is just a &str - not a bunch of segments
+            Crash => false,
+
+            Str(inner) => inner.is_malformed(),
+
+            RecordAccess(inner, _) |
+            TupleAccess(inner, _) => inner.is_malformed(),
+
+            List(items) => items.is_malformed(),
+
+            RecordUpdate { update, fields } => update.is_malformed() || fields.is_malformed(),
+            Record(items) => items.is_malformed(),
+            Tuple(items) => items.is_malformed(),
+
+            Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
+            Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
+            Backpassing(args, call, body) => args.iter().any(|arg| arg.is_malformed()) || call.is_malformed() || body.is_malformed(),
+            Expect(condition, continuation) |
+            Dbg(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
+            Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),
+            UnaryOp(expr, _) => expr.is_malformed(),
+            If(chain, els) => chain.iter().any(|(cond, body)| cond.is_malformed() || body.is_malformed()) || els.is_malformed(),
+            When(cond, branches) => cond.is_malformed() || branches.iter().any(|branch| branch.is_malformed()),
+
+            SpaceBefore(expr, _) |
+            SpaceAfter(expr, _) |
+            ParensAround(expr) => expr.is_malformed(),
+
+            MalformedIdent(_, _) |
+            MalformedClosure |
+            PrecedenceConflict(_) => true,
+        }
+    }
+}
+
+impl<'a> Malformed for WhenBranch<'a> {
+    fn is_malformed(&self) -> bool {
+        self.patterns.iter().any(|pat| pat.is_malformed())
+            || self.value.is_malformed()
+            || self.guard.map(|g| g.is_malformed()).unwrap_or_default()
+    }
+}
+
+impl<'a, T: Malformed> Malformed for Collection<'a, T> {
+    fn is_malformed(&self) -> bool {
+        self.iter().any(|item| item.is_malformed())
+    }
+}
+
+impl<'a> Malformed for StrLiteral<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            StrLiteral::PlainLine(_) => false,
+            StrLiteral::Line(segs) => segs.iter().any(|seg| seg.is_malformed()),
+            StrLiteral::Block(lines) => lines
+                .iter()
+                .any(|segs| segs.iter().any(|seg| seg.is_malformed())),
+        }
+    }
+}
+
+impl<'a> Malformed for StrSegment<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            StrSegment::Plaintext(_) | StrSegment::Unicode(_) | StrSegment::EscapedChar(_) => false,
+            StrSegment::Interpolated(expr) => expr.is_malformed(),
+        }
+    }
+}
+
+impl<'a, T: Malformed> Malformed for &'a T {
+    fn is_malformed(&self) -> bool {
+        (*self).is_malformed()
+    }
+}
+
+impl<T: Malformed> Malformed for Loc<T> {
+    fn is_malformed(&self) -> bool {
+        self.value.is_malformed()
+    }
+}
+
+impl<T: Malformed> Malformed for Option<T> {
+    fn is_malformed(&self) -> bool {
+        self.as_ref()
+            .map(|value| value.is_malformed())
+            .unwrap_or_default()
+    }
+}
+
+impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            AssignedField::RequiredValue(_, _, val) | AssignedField::OptionalValue(_, _, val) => {
+                val.is_malformed()
+            }
+            AssignedField::LabelOnly(_) => false,
+            AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
+                field.is_malformed()
+            }
+            AssignedField::Malformed(_) => true,
+        }
+    }
+}
+
+impl<'a> Malformed for Pattern<'a> {
+    fn is_malformed(&self) -> bool {
+        use Pattern::*;
+
+        match self {
+            Identifier(_) |
+            Tag(_) |
+            OpaqueRef(_) => false,
+            Apply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            RecordDestructure(items) => items.iter().any(|item| item.is_malformed()),
+            RequiredField(_, pat) => pat.is_malformed(),
+            OptionalField(_, expr) => expr.is_malformed(),
+
+            NumLiteral(_) |
+            NonBase10Literal { .. } |
+            Underscore(_) |
+            SingleQuote(_) | // This is just a &str - not a bunch of segments
+            FloatLiteral(_) => false,
+
+            StrLiteral(lit) => lit.is_malformed(),
+            Tuple(items) => items.iter().any(|item| item.is_malformed()),
+            List(items) => items.iter().any(|item| item.is_malformed()),
+            ListRest(_) =>false,
+            As(pat, _) => pat.is_malformed(),
+            SpaceBefore(pat, _) |
+            SpaceAfter(pat, _) => pat.is_malformed(),
+
+            Malformed(_) |
+            MalformedIdent(_, _) |
+            QualifiedIdentifier { .. } => true,
+        }
+    }
+}
+impl<'a> Malformed for Defs<'a> {
+    fn is_malformed(&self) -> bool {
+        self.type_defs.iter().any(|def| def.is_malformed())
+            || self.value_defs.iter().any(|def| def.is_malformed())
+    }
+}
+
+impl<'a> Malformed for TypeDef<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            TypeDef::Alias { header, ann } => header.is_malformed() || ann.is_malformed(),
+            TypeDef::Opaque {
+                header,
+                typ,
+                derived,
+            } => header.is_malformed() || typ.is_malformed() || derived.is_malformed(),
+            TypeDef::Ability {
+                header,
+                loc_has,
+                members,
+            } => {
+                header.is_malformed()
+                    || loc_has.is_malformed()
+                    || members.iter().any(|member| member.is_malformed())
+            }
+        }
+    }
+}
+
+impl<'a> Malformed for AbilityMember<'a> {
+    fn is_malformed(&self) -> bool {
+        self.typ.is_malformed()
+    }
+}
+
+impl<'a> Malformed for Has<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            Has::Has => false,
+            Has::SpaceBefore(has, _) | Has::SpaceAfter(has, _) => has.is_malformed(),
+        }
+    }
+}
+
+impl<'a> Malformed for HasAbility<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            HasAbility::HasAbility { ability, impls } => {
+                ability.is_malformed() || impls.iter().any(|impl_| impl_.is_malformed())
+            }
+            HasAbility::SpaceBefore(has, _) | HasAbility::SpaceAfter(has, _) => has.is_malformed(),
+        }
+    }
+}
+
+impl<'a> Malformed for HasAbilities<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            HasAbilities::Has(abilities) => abilities.iter().any(|ability| ability.is_malformed()),
+            HasAbilities::SpaceBefore(has, _) | HasAbilities::SpaceAfter(has, _) => {
+                has.is_malformed()
+            }
+        }
+    }
+}
+
+impl<'a> Malformed for HasImpls<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            HasImpls::HasImpls(impls) => impls.iter().any(|ability| ability.is_malformed()),
+            HasImpls::SpaceBefore(has, _) | HasImpls::SpaceAfter(has, _) => has.is_malformed(),
+        }
+    }
+}
+
+impl<'a> Malformed for ValueDef<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            ValueDef::Annotation(pat, annotation) => {
+                pat.is_malformed() || annotation.is_malformed()
+            }
+            ValueDef::Body(pat, expr) => pat.is_malformed() || expr.is_malformed(),
+            ValueDef::AnnotatedBody {
+                ann_pattern,
+                ann_type,
+                comment: _,
+                body_pattern,
+                body_expr,
+            } => {
+                ann_pattern.is_malformed()
+                    || ann_type.is_malformed()
+                    || body_pattern.is_malformed()
+                    || body_expr.is_malformed()
+            }
+            ValueDef::Dbg {
+                condition,
+                preceding_comment: _,
+            }
+            | ValueDef::Expect {
+                condition,
+                preceding_comment: _,
+            }
+            | ValueDef::ExpectFx {
+                condition,
+                preceding_comment: _,
+            } => condition.is_malformed(),
+        }
+    }
+}
+
+impl<'a> Malformed for TypeAnnotation<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            TypeAnnotation::Function(args, ret) => {
+                args.iter().any(|arg| arg.is_malformed()) || ret.is_malformed()
+            }
+            TypeAnnotation::Apply(_, _, args) => args.iter().any(|arg| arg.is_malformed()),
+            TypeAnnotation::BoundVariable(_)
+            | TypeAnnotation::Inferred
+            | TypeAnnotation::Wildcard => false,
+            TypeAnnotation::As(ty, _, head) => ty.is_malformed() || head.is_malformed(),
+            TypeAnnotation::Record { fields, ext } => {
+                fields.iter().any(|field| field.is_malformed())
+                    || ext.map(|ext| ext.is_malformed()).unwrap_or_default()
+            }
+            TypeAnnotation::Tuple { fields, ext } => {
+                fields.iter().any(|field| field.is_malformed())
+                    || ext.map(|ext| ext.is_malformed()).unwrap_or_default()
+            }
+            TypeAnnotation::TagUnion { ext, tags } => {
+                tags.iter().any(|field| field.is_malformed())
+                    || ext.map(|ext| ext.is_malformed()).unwrap_or_default()
+            }
+            TypeAnnotation::Where(ann, clauses) => {
+                ann.is_malformed() || clauses.iter().any(|clause| clause.is_malformed())
+            }
+            TypeAnnotation::SpaceBefore(ty, _) | TypeAnnotation::SpaceAfter(ty, _) => {
+                ty.is_malformed()
+            }
+            TypeAnnotation::Malformed(_) => true,
+        }
+    }
+}
+
+impl<'a> Malformed for TypeHeader<'a> {
+    fn is_malformed(&self) -> bool {
+        self.vars.iter().any(|var| var.is_malformed())
+    }
+}
+
+impl<'a> Malformed for Tag<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            Tag::Apply { name: _, args } => args.iter().any(|arg| arg.is_malformed()),
+            Tag::SpaceBefore(tag, _) | Tag::SpaceAfter(tag, _) => tag.is_malformed(),
+            Tag::Malformed(_) => true,
+        }
+    }
+}
+
+impl<'a> Malformed for HasClause<'a> {
+    fn is_malformed(&self) -> bool {
+        self.abilities.iter().any(|ability| ability.is_malformed())
+    }
+}
+
+impl<'a, T: Malformed> Malformed for Spaced<'a, T> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            Spaced::Item(t) => t.is_malformed(),
+            Spaced::SpaceBefore(t, _) | Spaced::SpaceAfter(t, _) => t.is_malformed(),
+        }
+    }
+}
