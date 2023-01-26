@@ -1,7 +1,7 @@
 use bumpalo::Bump;
 use roc_fmt::{annotation::Formattable, module::fmt_module};
 use roc_parse::{
-    ast::{Defs, Expr, Module},
+    ast::{Defs, Expr, Malformed, Module},
     module::module_defs,
     parser::{Parser, SyntaxError},
     state::State,
@@ -100,6 +100,20 @@ impl<'a> Output<'a> {
             Output::ModuleDefs(defs) => format!("{:#?}\n", defs),
             Output::Expr(expr) => format!("{:#?}\n", expr),
             Output::Full { .. } => format!("{:#?}\n", self),
+        }
+    }
+}
+
+impl<'a> Malformed for Output<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            Output::Header(header) => header.is_malformed(),
+            Output::ModuleDefs(defs) => defs.is_malformed(),
+            Output::Expr(expr) => expr.is_malformed(),
+            Output::Full {
+                header,
+                module_defs,
+            } => header.is_malformed() || module_defs.is_malformed(),
         }
     }
 }
