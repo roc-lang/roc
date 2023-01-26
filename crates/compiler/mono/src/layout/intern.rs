@@ -236,7 +236,7 @@ pub trait LayoutInterner<'a>: Sized {
             static SCRATCHPAD: RefCell<Option<Vec<(InLayout<'static>, InLayout<'static>)>>> = RefCell::new(Some(Vec::with_capacity(64)));
         }
 
-        let answer = SCRATCHPAD.with(|f| {
+        SCRATCHPAD.with(|f| {
             // SAFETY: the promotion to lifetime 'a only lasts during equivalence-checking; the
             // scratchpad stack is cleared after every use.
             let mut stack: Vec<(InLayout<'a>, InLayout<'a>)> =
@@ -249,9 +249,7 @@ pub trait LayoutInterner<'a>: Sized {
                 unsafe { std::mem::transmute(stack) };
             f.replace(Some(stack));
             answer
-        });
-
-        answer
+        })
     }
 
     fn to_doc<'b, D, A>(
@@ -550,8 +548,7 @@ impl<'a> GlobalLayoutInterner<'a> {
                 vec: &mut vec,
                 target_info: self.0.target_info,
             };
-            let done = reify::reify_lambda_set_captures(arena, &mut interner, slot, normalized.set);
-            done
+            reify::reify_lambda_set_captures(arena, &mut interner, slot, normalized.set)
         } else {
             normalized.set
         };
