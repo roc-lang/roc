@@ -74,7 +74,7 @@ pub fn refcount_stmt<'a>(
 
         ModifyRc::DecRef(structure) => {
             match layout_interner.get(layout) {
-                // Str has no children, so we might as well do what we normally do and call the helper.
+                // Str has no children, so Dec is the same as DecRef.
                 Layout::Builtin(Builtin::Str) => {
                     ctx.op = HelperOp::Dec;
                     refcount_stmt(
@@ -127,8 +127,6 @@ pub fn refcount_generic<'a>(
     layout: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
-    debug_assert!(is_rc_implemented_yet(layout_interner, layout));
-
     match layout_interner.get(layout) {
         Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
             // Generate a dummy function that immediately returns Unit
@@ -141,7 +139,6 @@ pub fn refcount_generic<'a>(
             ident_ids,
             ctx,
             layout_interner,
-            layout,
             elem_layout,
             structure,
         ),
@@ -414,44 +411,6 @@ pub fn refcount_reset_proc_body<'a>(
     };
 
     rc_ptr_stmt
-}
-
-// Check if refcounting is implemented yet. In the long term, this will be deleted.
-// In the short term, it helps us to skip refcounting and let it leak, so we can make
-// progress incrementally. Kept in sync with generate_procs using assertions.
-pub fn is_rc_implemented_yet<'a, I>(interner: &I, layout: InLayout<'a>) -> bool
-where
-    I: LayoutInterner<'a>,
-{
-    use UnionLayout::*;
-
-    match interner.get(layout) {
-        Layout::Builtin(Builtin::List(elem_layout)) => is_rc_implemented_yet(interner, elem_layout),
-        Layout::Builtin(_) => true,
-        Layout::Struct { field_layouts, .. } => field_layouts
-            .iter()
-            .all(|l| is_rc_implemented_yet(interner, *l)),
-        Layout::Union(union_layout) => match union_layout {
-            NonRecursive(tags) => tags
-                .iter()
-                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, *l))),
-            Recursive(tags) => tags
-                .iter()
-                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, *l))),
-            NonNullableUnwrapped(fields) => {
-                fields.iter().all(|l| is_rc_implemented_yet(interner, *l))
-            }
-            NullableWrapped { other_tags, .. } => other_tags
-                .iter()
-                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, *l))),
-            NullableUnwrapped { other_fields, .. } => other_fields
-                .iter()
-                .all(|l| is_rc_implemented_yet(interner, *l)),
-        },
-        Layout::LambdaSet(lambda_set) => is_rc_implemented_yet(interner, lambda_set.representation),
-        Layout::RecursivePointer(_) => true,
-        Layout::Boxed(_) => true,
-    }
 }
 
 fn rc_return_stmt<'a>(
@@ -765,7 +724,6 @@ fn refcount_list<'a>(
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
     layout_interner: &mut STLayoutInterner<'a>,
-    layout: InLayout,
     elem_layout: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
@@ -814,7 +772,7 @@ fn refcount_list<'a>(
     //
 
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let alignment = layout_interner.alignment_bytes(layout);
+    let elem_alignment = layout_interner.alignment_bytes(elem_layout);
 
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_list = modify_refcount(
@@ -822,7 +780,7 @@ fn refcount_list<'a>(
         ident_ids,
         ctx,
         rc_ptr,
-        alignment,
+        elem_alignment,
         arena.alloc(ret_stmt),
     );
 
