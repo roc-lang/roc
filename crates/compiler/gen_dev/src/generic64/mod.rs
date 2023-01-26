@@ -1371,9 +1371,9 @@ impl<
             &Literal::Int((element_width as i128).to_ne_bytes()),
         );
 
-        // Load UpdateMode.InPlace argument (1u8)
+        // Load UpdateMode.Immutable argument (0u8)
         let u8_layout = Layout::U8;
-        let update_mode = 1u8;
+        let update_mode = 0u8;
         self.load_literal(
             &Symbol::DEV_TMP3,
             &u64_layout,
