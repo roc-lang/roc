@@ -344,11 +344,9 @@ impl<'a> Proc<'a> {
         let args_doc = self.args.iter().map(|(layout, symbol)| {
             let arg_doc = symbol_to_doc(alloc, *symbol, pretty);
             if pretty_print_ir_symbols() {
-                arg_doc.append(alloc.reflow(": ")).append(interner.to_doc(
-                    *layout,
-                    alloc,
-                    Parens::NotNeeded,
-                ))
+                arg_doc
+                    .append(alloc.reflow(": "))
+                    .append(interner.to_doc_top(*layout, alloc))
             } else {
                 arg_doc
             }
@@ -359,7 +357,7 @@ impl<'a> Proc<'a> {
                 .text("procedure : ")
                 .append(symbol_to_doc(alloc, self.name.name(), pretty))
                 .append(" ")
-                .append(interner.to_doc(self.ret_layout, alloc, Parens::NotNeeded))
+                .append(interner.to_doc_top(self.ret_layout, alloc))
                 .append(alloc.hardline())
                 .append(alloc.text("procedure = "))
                 .append(symbol_to_doc(alloc, self.name.name(), pretty))
@@ -2152,7 +2150,7 @@ impl<'a> Stmt<'a> {
                 .text("let ")
                 .append(symbol_to_doc(alloc, *symbol, pretty))
                 .append(" : ")
-                .append(interner.to_doc(*layout, alloc, Parens::NotNeeded))
+                .append(interner.to_doc_top(*layout, alloc))
                 .append(" = ")
                 .append(expr.to_doc(alloc, pretty))
                 .append(";")
@@ -5927,7 +5925,7 @@ fn convert_tag_union<'a>(
                 layout_cache.from_var(env.arena, variant_var, env.subs),
                 "Wrapped"
             );
-            let union_layout = match layout_cache.get_in(variant_layout) {
+            let union_layout = match layout_cache.interner.chase_recursive(variant_layout) {
                 Layout::Union(ul) => ul,
                 other => internal_error!(
                     "unexpected layout {:?} for {:?}",
@@ -9466,10 +9464,11 @@ fn from_can_pattern_help<'a>(
                     // problems down the line because we hash layouts and an unrolled
                     // version is not the same as the minimal version.
                     let whole_var_layout = layout_cache.from_var(env.arena, *whole_var, env.subs);
-                    let layout = match whole_var_layout.map(|l| layout_cache.get_in(l)) {
-                        Ok(Layout::Union(ul)) => ul,
-                        _ => unreachable!(),
-                    };
+                    let layout =
+                        match whole_var_layout.map(|l| layout_cache.interner.chase_recursive(l)) {
+                            Ok(Layout::Union(ul)) => ul,
+                            _ => internal_error!(),
+                        };
 
                     use WrappedVariant::*;
                     match variant {

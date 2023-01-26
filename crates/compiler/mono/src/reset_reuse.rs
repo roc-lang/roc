@@ -615,7 +615,7 @@ fn function_r_branch_body<'a, 'i>(
             scrutinee,
             layout,
             tag_id,
-        } => match env.interner.get(*layout) {
+        } => match env.interner.chase_recursive(*layout) {
             Layout::Union(UnionLayout::NonRecursive(_)) => temp,
             Layout::Union(union_layout) if !union_layout.tag_is_null(*tag_id) => {
                 let ctor_info = CtorInfo {

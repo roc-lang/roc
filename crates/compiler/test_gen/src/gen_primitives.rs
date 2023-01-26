@@ -3170,7 +3170,6 @@ fn alias_defined_out_of_order() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-#[ignore = "TODO https://github.com/roc-lang/roc/issues/4905"]
 fn recursively_build_effect() {
     assert_evals_to!(
         indoc!(

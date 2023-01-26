@@ -592,7 +592,7 @@ fn record_optional_field_function_use_default() {
     "#
 }
 
-#[mono_test(no_check = "https://github.com/roc-lang/roc/issues/4694")]
+#[mono_test]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r#"
@@ -2494,5 +2494,46 @@ fn weakening_avoids_overspecialization() {
             else
                 List.drop input index
         "###
+    )
+}
+
+#[mono_test]
+fn recursively_build_effect() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        greeting =
+            hi = "Hello"
+            name = "World"
+
+            "\(hi), \(name)!"
+
+        main =
+            when nestHelp 4 is
+                _ -> greeting
+
+        nestHelp : I64 -> XEffect {}
+        nestHelp = \m ->
+            when m is
+                0 ->
+                    always {}
+
+                _ ->
+                    always {} |> after \_ -> nestHelp (m - 1)
+
+
+        XEffect a := {} -> a
+
+        always : a -> XEffect a
+        always = \x -> @XEffect (\{} -> x)
+
+        after : XEffect a, (a -> XEffect b) -> XEffect b
+        after = \(@XEffect e), toB ->
+            @XEffect \{} ->
+                when toB (e {}) is
+                    @XEffect e2 ->
+                        e2 {}
+        "#
     )
 }
