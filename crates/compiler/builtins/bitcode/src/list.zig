@@ -128,7 +128,7 @@ pub const RocList = extern struct {
         @memcpy(new_bytes, old_bytes, number_of_bytes);
 
         // NOTE we fuse an increment of all keys/values with a decrement of the input dict
-        const data_bytes = self.len() * element_width;
+        const data_bytes = self.capacity * element_width;
         utils.decref(self.bytes, data_bytes, alignment);
 
         return new_list;
@@ -164,7 +164,7 @@ pub const RocList = extern struct {
                     return RocList{ .bytes = self.bytes, .length = new_length, .capacity = self.capacity };
                 } else {
                     const new_capacity = utils.calculateCapacity(self.capacity, new_length, element_width);
-                    const new_source = utils.unsafeReallocate(source_ptr, alignment, self.len(), new_capacity, element_width);
+                    const new_source = utils.unsafeReallocate(source_ptr, alignment, self.capacity, new_capacity, element_width);
                     return RocList{ .bytes = new_source, .length = new_length, .capacity = new_capacity };
                 }
             }
@@ -787,7 +787,7 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
         @memcpy(source_b, source_a, byte_count_a);
 
         // decrement list a.
-        utils.decref(source_a, list_a.len(), alignment);
+        utils.decref(source_a, list_a.capacity, alignment);
 
         return resized_list_b;
     }
@@ -804,8 +804,8 @@ pub fn listConcat(list_a: RocList, list_b: RocList, alignment: u32, element_widt
     @memcpy(target + list_a.len() * element_width, source_b, list_b.len() * element_width);
 
     // decrement list a and b.
-    utils.decref(source_a, list_a.len(), alignment);
-    utils.decref(source_b, list_b.len(), alignment);
+    utils.decref(source_a, list_a.capacity, alignment);
+    utils.decref(source_b, list_b.capacity, alignment);
 
     return output;
 }

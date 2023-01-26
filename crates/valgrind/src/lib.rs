@@ -294,3 +294,20 @@ fn str_trim_left_capacity() {
         "#
     ));
 }
+
+#[test]
+fn str_concat_later_referencing_empty_list_with_capacity() {
+    valgrind_test(indoc!(
+        r#"
+        (
+            a : List U8
+            a = List.withCapacity 1
+
+            List.concat a [58]
+            |> List.len
+            |> Num.addWrap (List.len a)
+            |> Num.toStr
+        )
+        "#
+    ));
+}
