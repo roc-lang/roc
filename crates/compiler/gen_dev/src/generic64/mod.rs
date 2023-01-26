@@ -1341,6 +1341,168 @@ impl<
         self.free_symbol(&Symbol::DEV_TMP3);
     }
 
+    fn build_list_reserve(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
+    ) {
+        let list = args[0];
+        let list_layout = arg_layouts[0];
+        let spare = args[1];
+        let spare_layout = arg_layouts[1];
+
+        // Load list alignment argument (u32).
+        let u32_layout = Layout::U32;
+        let list_alignment = self.layout_interner.alignment_bytes(list_layout);
+        self.load_literal(
+            &Symbol::DEV_TMP,
+            &u32_layout,
+            &Literal::Int((list_alignment as i128).to_ne_bytes()),
+        );
+
+        // Load element_width argument (usize).
+        let u64_layout = Layout::U64;
+        let element_width = self.layout_interner.stack_size(*ret_layout);
+        self.load_literal(
+            &Symbol::DEV_TMP2,
+            &u64_layout,
+            &Literal::Int((element_width as i128).to_ne_bytes()),
+        );
+
+        // Load UpdateMode.Immutable argument (0u8)
+        let u8_layout = Layout::U8;
+        let update_mode = 0u8;
+        self.load_literal(
+            &Symbol::DEV_TMP3,
+            &u64_layout,
+            &Literal::Int((update_mode as i128).to_ne_bytes()),
+        );
+
+        // Setup the return location.
+        let base_offset = self
+            .storage_manager
+            .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
+
+        let lowlevel_args = bumpalo::vec![
+        in self.env.arena;
+            list,
+            // alignment
+            Symbol::DEV_TMP,
+            spare,
+            // element_width
+            Symbol::DEV_TMP2,
+            // update_mode
+            Symbol::DEV_TMP3,
+
+         ];
+        let lowlevel_arg_layouts = bumpalo::vec![
+        in self.env.arena;
+            list_layout,
+            u32_layout,
+            spare_layout,
+            u64_layout,
+            u8_layout
+        ];
+
+        self.build_fn_call(
+            &Symbol::DEV_TMP4,
+            bitcode::LIST_RESERVE.to_string(),
+            &lowlevel_args,
+            &lowlevel_arg_layouts,
+            ret_layout,
+        );
+        self.free_symbol(&Symbol::DEV_TMP);
+        self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&Symbol::DEV_TMP3);
+
+        // Return list value from fn call
+        self.storage_manager.copy_symbol_to_stack_offset(
+            self.layout_interner,
+            &mut self.buf,
+            base_offset,
+            &Symbol::DEV_TMP4,
+            ret_layout,
+        );
+
+        self.free_symbol(&Symbol::DEV_TMP4);
+    }
+
+    fn build_list_append_unsafe(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
+    ) {
+        let list = args[0];
+        let list_layout = arg_layouts[0];
+        let elem = args[1];
+        let elem_layout = arg_layouts[1];
+
+        // Have to pass the input element by pointer, so put it on the stack and load it's address.
+        self.storage_manager
+            .ensure_symbol_on_stack(&mut self.buf, &elem);
+        let (new_elem_offset, _) = self.storage_manager.stack_offset_and_size(&elem);
+
+        // Load address of output element into register.
+        let reg = self
+            .storage_manager
+            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP);
+        ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
+
+        // Load element_witdh argument (usize).
+        let u64_layout = Layout::U64;
+        let elem_stack_size = self.layout_interner.stack_size(elem_layout);
+        self.load_literal(
+            &Symbol::DEV_TMP2,
+            &u64_layout,
+            &Literal::Int((elem_stack_size as i128).to_ne_bytes()),
+        );
+
+        // Setup the return location.
+        let base_offset = self
+            .storage_manager
+            .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
+
+        let lowlevel_args = bumpalo::vec![
+        in self.env.arena;
+            list,
+            // element
+            Symbol::DEV_TMP,
+            // element_width
+            Symbol::DEV_TMP2
+         ];
+        let lowlevel_arg_layouts = bumpalo::vec![
+        in self.env.arena;
+            list_layout,
+            u64_layout,
+            u64_layout,
+        ];
+
+        self.build_fn_call(
+            &Symbol::DEV_TMP3,
+            bitcode::LIST_APPEND_UNSAFE.to_string(),
+            &lowlevel_args,
+            &lowlevel_arg_layouts,
+            ret_layout,
+        );
+        self.free_symbol(&Symbol::DEV_TMP);
+        self.free_symbol(&Symbol::DEV_TMP2);
+
+        // Return list value from fn call
+        self.storage_manager.copy_symbol_to_stack_offset(
+            self.layout_interner,
+            &mut self.buf,
+            base_offset,
+            &Symbol::DEV_TMP3,
+            ret_layout,
+        );
+
+        self.free_symbol(&Symbol::DEV_TMP3);
+    }
+
     fn build_list_get_unsafe(
         &mut self,
         dst: &Symbol,
