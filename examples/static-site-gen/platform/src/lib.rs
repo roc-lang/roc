@@ -1,6 +1,6 @@
 use core::ffi::c_void;
 use libc;
-use pulldown_cmark::{html, Parser, Options};
+use pulldown_cmark::{html, Options, Parser};
 use roc_std::RocStr;
 use std::env;
 use std::ffi::CStr;
@@ -192,7 +192,15 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     })?;
 
     let mut content_html = String::new();
-    let options = Options::all();
+    let mut options = Options::all();
+
+    // In the tutorial, this messes up string literals in <samp> blocks.
+    // Those could be done as markdown code blocks, but the repl ones need
+    // a special class, and there's no way to add that class using markdown alone.
+    //
+    // We could make this option user-configurable if people actually want it!
+    options.remove(Options::ENABLE_SMART_PUNCTUATION);
+
     let parser = Parser::new_ext(&content_md, options);
     html::push_html(&mut content_html, parser);
 
