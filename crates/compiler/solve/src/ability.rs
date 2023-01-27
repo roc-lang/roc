@@ -8,8 +8,8 @@ use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableDecode, NotDerivableEq, TypeError, UnderivableReason,
-    Unfulfilled,
+    NotDerivableContext, NotDerivableDecode, NotDerivableEncode, NotDerivableEq, TypeError,
+    UnderivableReason, Unfulfilled,
 };
 use roc_types::num::NumericRange;
 use roc_types::subs::{
@@ -451,9 +451,9 @@ impl ObligationCache {
 
 #[inline(always)]
 #[rustfmt::skip]
-fn is_builtin_int_alias(symbol: Symbol) -> bool {
+fn is_builtin_fixed_int_alias(symbol: Symbol) -> bool {
     matches!(symbol,
-          Symbol::NUM_U8   | Symbol::NUM_UNSIGNED8
+        | Symbol::NUM_U8   | Symbol::NUM_UNSIGNED8
         | Symbol::NUM_U16  | Symbol::NUM_UNSIGNED16
         | Symbol::NUM_U32  | Symbol::NUM_UNSIGNED32
         | Symbol::NUM_U64  | Symbol::NUM_UNSIGNED64
@@ -463,6 +463,13 @@ fn is_builtin_int_alias(symbol: Symbol) -> bool {
         | Symbol::NUM_I32  | Symbol::NUM_SIGNED32
         | Symbol::NUM_I64  | Symbol::NUM_SIGNED64
         | Symbol::NUM_I128 | Symbol::NUM_SIGNED128
+    )
+}
+
+#[inline(always)]
+#[rustfmt::skip]
+fn is_builtin_nat_alias(symbol: Symbol) -> bool {
+    matches!(symbol,
         | Symbol::NUM_NAT  | Symbol::NUM_NATURAL
     )
 }
@@ -487,7 +494,7 @@ fn is_builtin_dec_alias(symbol: Symbol) -> bool {
 #[inline(always)]
 #[rustfmt::skip]
 fn is_builtin_number_alias(symbol: Symbol) -> bool {
-    is_builtin_int_alias(symbol) || is_builtin_float_alias(symbol) || is_builtin_dec_alias(symbol)
+    is_builtin_fixed_int_alias(symbol) || is_builtin_nat_alias(symbol) || is_builtin_float_alias(symbol) || is_builtin_dec_alias(symbol)
 }
 
 struct NotDerivable {
@@ -826,7 +833,7 @@ impl DerivableVisitor for DeriveEncoding {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        is_builtin_number_alias(symbol)
+        is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol)
     }
 
     #[inline(always)]
@@ -884,9 +891,16 @@ impl DerivableVisitor for DeriveEncoding {
     }
 
     #[inline(always)]
-    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+    fn visit_alias(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
         if is_builtin_number_alias(symbol) {
-            Ok(Descend(false))
+            if is_builtin_nat_alias(symbol) {
+                Err(NotDerivable {
+                    var,
+                    context: NotDerivableContext::Encode(NotDerivableEncode::Nat),
+                })
+            } else {
+                Ok(Descend(false))
+            }
         } else {
             Ok(Descend(true))
         }
@@ -914,7 +928,7 @@ impl DerivableVisitor for DeriveDecoding {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        is_builtin_number_alias(symbol)
+        is_builtin_number_alias(symbol) && !is_builtin_nat_alias(symbol)
     }
 
     #[inline(always)]
@@ -983,9 +997,16 @@ impl DerivableVisitor for DeriveDecoding {
     }
 
     #[inline(always)]
-    fn visit_alias(_var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
+    fn visit_alias(var: Variable, symbol: Symbol) -> Result<Descend, NotDerivable> {
         if is_builtin_number_alias(symbol) {
-            Ok(Descend(false))
+            if is_builtin_nat_alias(symbol) {
+                Err(NotDerivable {
+                    var,
+                    context: NotDerivableContext::Decode(NotDerivableDecode::Nat),
+                })
+            } else {
+                Ok(Descend(false))
+            }
         } else {
             Ok(Descend(true))
         }
@@ -1112,7 +1133,9 @@ impl DerivableVisitor for DeriveEq {
 
     #[inline(always)]
     fn is_derivable_builtin_opaque(symbol: Symbol) -> bool {
-        is_builtin_int_alias(symbol) || is_builtin_dec_alias(symbol)
+        is_builtin_fixed_int_alias(symbol)
+            || is_builtin_nat_alias(symbol)
+            || is_builtin_dec_alias(symbol)
     }
 
     #[inline(always)]
