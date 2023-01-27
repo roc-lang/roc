@@ -170,6 +170,36 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         src2: GeneralReg,
     );
 
+    fn shl_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    ) where
+        ASM: Assembler<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg, ASM>;
+
+    fn shr_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    ) where
+        ASM: Assembler<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg, ASM>;
+
+    fn sar_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    ) where
+        ASM: Assembler<GeneralReg, FloatReg>,
+        CC: CallConv<GeneralReg, FloatReg, ASM>;
+
     fn call(buf: &mut Vec<'_, u8>, relocs: &mut Vec<'_, Relocation>, fn_name: String);
 
     /// Jumps by an offset of offset bytes unconditionally.
@@ -2029,6 +2059,127 @@ impl<
                 let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
                 let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
                 ASM::xor_reg64_reg64_reg64(buf, dst_reg, src1_reg, src2_reg);
+            }
+        }
+    }
+
+    fn build_int_shift_left(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    ) {
+        let buf = &mut self.buf;
+
+        match int_width {
+            IntWidth::U128 | IntWidth::I128 => todo!(),
+            _ => {
+                let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
+                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
+                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
+
+                ASM::shl_reg64_reg64_reg64(
+                    buf,
+                    &mut self.storage_manager,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                );
+            }
+        }
+    }
+
+    fn build_int_shift_right(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    ) {
+        let buf = &mut self.buf;
+
+        match int_width {
+            IntWidth::U128 | IntWidth::I128 => todo!(),
+            _ => {
+                let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
+                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
+                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
+
+                // to get sign extension "for free", we move our bits to the left
+                // so the integers sign bit is stored in the register's sign bit.
+                // Then we arithmetic shift right, getting the correct sign extension behavior,
+                // then shift logical right to get the bits back into the position they should
+                // be for our particular integer width
+                let sign_extend_shift_amount = 64 - (int_width.stack_size() as i64 * 8);
+
+                if sign_extend_shift_amount > 0 {
+                    self.storage_manager.with_tmp_general_reg(
+                        buf,
+                        |storage_manager, buf, tmp_reg| {
+                            ASM::mov_reg64_imm64(buf, tmp_reg, sign_extend_shift_amount);
+                            ASM::shl_reg64_reg64_reg64(
+                                buf,
+                                storage_manager,
+                                src1_reg,
+                                src1_reg,
+                                tmp_reg,
+                            );
+                        },
+                    )
+                }
+
+                ASM::sar_reg64_reg64_reg64(
+                    buf,
+                    &mut self.storage_manager,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                );
+
+                if sign_extend_shift_amount > 0 {
+                    // shift back if needed
+                    self.storage_manager.with_tmp_general_reg(
+                        &mut self.buf,
+                        |storage_manager, buf, tmp_reg| {
+                            ASM::mov_reg64_imm64(buf, tmp_reg, sign_extend_shift_amount);
+                            ASM::shr_reg64_reg64_reg64(
+                                buf,
+                                storage_manager,
+                                dst_reg,
+                                dst_reg,
+                                tmp_reg,
+                            );
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    fn build_int_shift_right_zero_fill(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    ) {
+        let buf = &mut self.buf;
+
+        match int_width {
+            IntWidth::U128 | IntWidth::I128 => todo!(),
+            _ => {
+                let dst_reg = self.storage_manager.claim_general_reg(buf, dst);
+                let src1_reg = self.storage_manager.load_to_general_reg(buf, src1);
+                let src2_reg = self.storage_manager.load_to_general_reg(buf, src2);
+
+                ASM::shr_reg64_reg64_reg64(
+                    buf,
+                    &mut self.storage_manager,
+                    dst_reg,
+                    src1_reg,
+                    src2_reg,
+                );
             }
         }
     }
