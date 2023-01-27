@@ -2089,8 +2089,12 @@ test "isWhitespace" {
     try expect(!isWhitespace('x'));
 }
 
-pub fn strTrim(string: RocStr) callconv(.C) RocStr {
-    if (string.str_bytes) |bytes_ptr| {
+pub fn strTrim(input_string: RocStr) callconv(.C) RocStr {
+    var string = input_string;
+
+    if (!string.isEmpty()) {
+        const bytes_ptr = string.asU8ptrMut();
+
         const leading_bytes = countLeadingWhitespaceBytes(string);
         const original_len = string.len();
 
@@ -2102,8 +2106,7 @@ pub fn strTrim(string: RocStr) callconv(.C) RocStr {
         const trailing_bytes = countTrailingWhitespaceBytes(string);
         const new_len = original_len - leading_bytes - trailing_bytes;
 
-        const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
-        if (small_or_shared) {
+        if (string.isSmallStr() or !string.isRefcountOne()) {
             // consume the input string; this will not free the
             // bytes because the string is small or shared
             const result = RocStr.init(string.asU8ptr() + leading_bytes, new_len);
@@ -2318,6 +2321,25 @@ test "strTrim: empty" {
     try expect(trimmedEmpty.eq(RocStr.empty()));
 }
 
+test "strTrim: null byte" {
+    const bytes = [_]u8{0};
+    const original = RocStr.init(&bytes, 1);
+
+    try expectEqual(@as(usize, 1), original.len());
+    try expectEqual(@as(usize, SMALL_STR_MAX_LENGTH), original.getCapacity());
+
+    const original_with_capacity = reserve(original, 40);
+    defer original_with_capacity.deinit();
+
+    try expectEqual(@as(usize, 1), original_with_capacity.len());
+    try expectEqual(@as(usize, 64), original_with_capacity.getCapacity());
+
+    const trimmed = strTrim(original.clone());
+    defer trimmed.deinit();
+
+    try expect(original.eq(trimmed));
+}
+
 test "strTrim: blank" {
     const original_bytes = "   ";
     const original = RocStr.init(original_bytes, original_bytes.len);
@@ -2349,6 +2371,7 @@ test "strTrim: large to large" {
 test "strTrim: large to small" {
     const original_bytes = "             hello         ";
     const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
 
     try expect(!original.isSmallStr());
 
@@ -2358,10 +2381,13 @@ test "strTrim: large to small" {
 
     try expect(expected.isSmallStr());
 
+    try expect(original.isUnique());
     const trimmed = strTrim(original);
 
     try expect(trimmed.eq(expected));
-    try expect(trimmed.isSmallStr());
+    try expect(!trimmed.isSmallStr());
+
+    try expect(trimmed.getCapacity() >= original.len());
 }
 
 test "strTrim: small to small" {

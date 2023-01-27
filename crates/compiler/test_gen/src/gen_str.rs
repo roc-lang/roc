@@ -1082,6 +1082,16 @@ fn str_trim_empty_string() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn str_trim_null_byte() {
+    assert_evals_to!(
+        indoc!(r#"Str.trim (Str.reserve "\u(0000)" 40)"#),
+        RocStr::from("\0"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_trim_small_blank_string() {
     assert_evals_to!(indoc!(r#"Str.trim " ""#), RocStr::from(""), RocStr);
 }
