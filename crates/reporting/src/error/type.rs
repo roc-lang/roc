@@ -378,7 +378,7 @@ fn underivable_hint<'b>(
                     alloc.type_str("Nat"),
                     alloc.reflow(" is not supported. Consider using a fixed-sized unsigned integer, like a "),
                     alloc.type_str("U64"),
-                    alloc.reflow("instead."),
+                    alloc.reflow(" instead."),
                 ])))
             }
         },
