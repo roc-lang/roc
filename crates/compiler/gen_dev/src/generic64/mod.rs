@@ -1035,19 +1035,9 @@ impl<
     }
 
     fn build_num_sub(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
-        match self.layout_interner.get(*layout) {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src1);
-                let src2_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src2);
-                ASM::sub_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-            }
-            x => todo!("NumSub: layout, {:?}", x),
-        }
+        // for the time being, `num_sub` is implemented as wrapping subtraction. In roc, the normal
+        // `sub` should panic on overflow, but we just don't do that yet
+        self.build_num_sub_wrap(dst, src1, src2, layout)
     }
 
     fn build_num_sub_wrap(
@@ -1058,7 +1048,7 @@ impl<
         layout: &InLayout<'a>,
     ) {
         match self.layout_interner.get(*layout) {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+            Layout::Builtin(Builtin::Int(quadword_and_smaller!())) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
