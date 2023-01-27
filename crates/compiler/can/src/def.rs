@@ -15,6 +15,7 @@ use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
 use crate::expr::Declarations;
 use crate::expr::Expr::{self, *};
+use crate::expr::RecordAccessorData;
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
 use crate::procedure::References;
@@ -2303,6 +2304,36 @@ fn canonicalize_pending_body<'a>(
                 let loc_can_expr = Loc::at(loc_expr.region, Expr::Closure(closure_data));
 
                 let def_references = DefReferences::Function(can_output.references.clone());
+                output.union(can_output);
+
+                (loc_can_expr, def_references)
+            }
+
+            // Turn f = .foo into f = \rcd -[f]-> rcd.foo
+            (
+                Pattern::Identifier(defined_symbol)
+                | Pattern::AbilityMemberSpecialization {
+                    ident: defined_symbol,
+                    ..
+                },
+                ast::Expr::RecordAccessorFunction(field),
+            ) => {
+                let (loc_can_expr, can_output) = (
+                    Loc::at(
+                        loc_expr.region,
+                        RecordAccessor(RecordAccessorData {
+                            name: *defined_symbol,
+                            function_var: var_store.fresh(),
+                            record_var: var_store.fresh(),
+                            ext_var: var_store.fresh(),
+                            closure_var: var_store.fresh(),
+                            field_var: var_store.fresh(),
+                            field: (*field).into(),
+                        }),
+                    ),
+                    Output::default(),
+                );
+                let def_references = DefReferences::Value(can_output.references.clone());
                 output.union(can_output);
 
                 (loc_can_expr, def_references)

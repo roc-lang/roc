@@ -37,7 +37,6 @@ use roc_collections::all::{ImMap, MutMap, MutSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_PRINT_LLVM_FN_VERIFICATION;
-use roc_error_macros::internal_error;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::ir::{
     BranchInfo, CallType, CrashTag, EntryPoint, JoinPointId, ListLiteralElement, ModifyRc,
@@ -1521,7 +1520,7 @@ fn build_tag_field_value<'a, 'ctx, 'env>(
     value: BasicValueEnum<'ctx>,
     tag_field_layout: InLayout<'a>,
 ) -> BasicValueEnum<'ctx> {
-    if let Layout::RecursivePointer = layout_interner.get(tag_field_layout) {
+    if let Layout::RecursivePointer(_) = layout_interner.get(tag_field_layout) {
         debug_assert!(value.is_pointer_value());
 
         // we store recursive pointers as `i64*`
@@ -2013,7 +2012,7 @@ fn lookup_at_index_ptr<'a, 'ctx, 'env>(
         "load_at_index_ptr_old",
     );
 
-    if let Some(Layout::RecursivePointer) = field_layouts
+    if let Some(Layout::RecursivePointer(_)) = field_layouts
         .get(index as usize)
         .map(|l| layout_interner.get(*l))
     {
@@ -2073,7 +2072,7 @@ fn lookup_at_index_ptr2<'a, 'ctx, 'env>(
         "load_at_index_ptr",
     );
 
-    if let Some(Layout::RecursivePointer) = field_layouts
+    if let Some(Layout::RecursivePointer(_)) = field_layouts
         .get(index as usize)
         .map(|l| layout_interner.get(*l))
     {
@@ -2465,7 +2464,10 @@ pub fn build_exp_stmt<'a, 'ctx, 'env>(
             let mut stack = Vec::with_capacity_in(queue.len(), env.arena);
 
             for (symbol, expr, layout) in queue {
-                debug_assert!(layout_interner.get(*layout) != Layout::RecursivePointer);
+                debug_assert!(!matches!(
+                    layout_interner.get(*layout),
+                    Layout::RecursivePointer(_)
+                ));
 
                 let val = build_exp_expr(
                     env,
@@ -6083,24 +6085,4 @@ pub fn add_func<'ctx>(
     spec.attach_attributes(ctx, fn_val);
 
     fn_val
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum WhenRecursive<'a> {
-    Unreachable,
-    Loop(UnionLayout<'a>),
-}
-
-impl<'a> WhenRecursive<'a> {
-    pub fn unwrap_recursive_pointer(&self, layout: Layout<'a>) -> Layout<'a> {
-        match layout {
-            Layout::RecursivePointer => match self {
-                WhenRecursive::Loop(lay) => Layout::Union(*lay),
-                WhenRecursive::Unreachable => {
-                    internal_error!("cannot compare recursive pointers outside of a structure")
-                }
-            },
-            _ => layout,
-        }
-    }
 }

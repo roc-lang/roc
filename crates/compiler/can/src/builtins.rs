@@ -482,7 +482,7 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
             // if-condition
             no_region(
                 // arg_2.b
-                Access {
+                RecordAccess {
                     record_var,
                     ext_var: var_store.fresh(),
                     field: "b".into(),
@@ -505,7 +505,7 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
                     "Ok",
                     vec![
                         // arg_2.a
-                        Access {
+                        RecordAccess {
                             record_var,
                             ext_var: var_store.fresh(),
                             field: "a".into(),

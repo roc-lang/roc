@@ -182,6 +182,14 @@ fn index_var(
 
                     return Ok(field_types);
                 }
+                FlatType::Tuple(elems, ext) => {
+                    let elem_types = elems
+                        .sorted_iterator(subs, *ext)
+                        .map(|(_, elem)| elem)
+                        .collect();
+
+                    return Ok(elem_types);
+                }
                 FlatType::TagUnion(tags, ext) | FlatType::RecursiveTagUnion(_, tags, ext) => {
                     let tag_ctor = match ctor {
                         IndexCtor::Tag(name) => name,
@@ -212,6 +220,9 @@ fn index_var(
                         ),
                     };
                     return Ok(std::iter::repeat(Variable::NULL).take(num_fields).collect());
+                }
+                FlatType::EmptyTuple => {
+                    return Ok(std::iter::repeat(Variable::NULL).take(0).collect());
                 }
                 FlatType::EmptyTagUnion => {
                     internal_error!("empty tag unions are not indexable")
@@ -613,7 +624,7 @@ fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, 
 
             // DEVIATION: model openness by attaching a #Open constructor, that can never
             // be matched unless there's an `Anything` pattern.
-            let opt_openness_tag = match subs.get_content_without_compacting(ext) {
+            let opt_openness_tag = match subs.get_content_without_compacting(ext.var()) {
                 FlexVar(_) | RigidVar(_) => {
                     let openness_tag = TagName(NONEXHAUSIVE_CTOR.into());
                     num_tags += 1;

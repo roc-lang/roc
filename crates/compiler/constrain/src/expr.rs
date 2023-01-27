@@ -16,8 +16,8 @@ use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{
-    AccessorData, AnnotatedMark, ClosureData, DeclarationTag, Declarations, DestructureDef,
-    ExpectLookup, Field, FunctionDef, OpaqueWrapFunctionData, WhenBranch,
+    AnnotatedMark, ClosureData, DeclarationTag, Declarations, DestructureDef, ExpectLookup, Field,
+    FunctionDef, OpaqueWrapFunctionData, RecordAccessorData, TupleAccessorData, WhenBranch,
 };
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
@@ -252,7 +252,52 @@ pub fn constrain_expr(
                 constraints.exists(field_vars, and_constraint)
             }
         }
-        Update {
+        Expr::Tuple { tuple_var, elems } => {
+            let mut elem_types = VecMap::with_capacity(elems.len());
+            let mut elem_vars = Vec::with_capacity(elems.len());
+
+            // Constraints need capacity for each elem
+            // + 1 for the tuple itself + 1 for tuple var
+            let mut tuple_constraints = Vec::with_capacity(2 + elems.len());
+
+            for (i, (elem_var, loc_expr)) in elems.iter().enumerate() {
+                let elem_type = constraints.push_variable(*elem_var);
+                let elem_expected = constraints.push_expected_type(NoExpectation(elem_type));
+                let elem_con = constrain_expr(
+                    types,
+                    constraints,
+                    env,
+                    loc_expr.region,
+                    &loc_expr.value,
+                    elem_expected,
+                );
+
+                elem_vars.push(*elem_var);
+                elem_types.insert(i, Variable(*elem_var));
+
+                tuple_constraints.push(elem_con);
+            }
+
+            let tuple_type = {
+                let typ = types.from_old_type(&Type::Tuple(elem_types, TypeExtension::Closed));
+                constraints.push_type(types, typ)
+            };
+
+            let tuple_con = constraints.equal_types_with_storage(
+                tuple_type,
+                expected,
+                Category::Tuple,
+                region,
+                *tuple_var,
+            );
+
+            tuple_constraints.push(tuple_con);
+            elem_vars.push(*tuple_var);
+
+            let and_constraint = constraints.and_constraint(tuple_constraints);
+            constraints.exists(elem_vars, and_constraint)
+        }
+        RecordUpdate {
             record_var,
             ext_var,
             symbol,
@@ -279,7 +324,7 @@ pub fn constrain_expr(
             let fields_type = {
                 let typ = types.from_old_type(&Type::Record(
                     fields,
-                    TypeExtension::from_type(Type::Variable(*ext_var)),
+                    TypeExtension::from_non_annotation_type(Type::Variable(*ext_var)),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -1070,7 +1115,7 @@ pub fn constrain_expr(
                 branch_constraints,
             )
         }
-        Access {
+        RecordAccess {
             record_var,
             ext_var,
             field_var,
@@ -1090,13 +1135,13 @@ pub fn constrain_expr(
             let record_type = {
                 let typ = types.from_old_type(&Type::Record(
                     rec_field_types,
-                    TypeExtension::from_type(ext_type),
+                    TypeExtension::from_non_annotation_type(ext_type),
                 ));
                 constraints.push_type(types, typ)
             };
             let record_expected = constraints.push_expected_type(NoExpectation(record_type));
 
-            let category = Category::Access(field.clone());
+            let category = Category::RecordAccess(field.clone());
 
             let record_con =
                 constraints.equal_types_var(*record_var, record_expected, category.clone(), region);
@@ -1117,7 +1162,7 @@ pub fn constrain_expr(
                 [constraint, eq, record_con],
             )
         }
-        Accessor(AccessorData {
+        RecordAccessor(RecordAccessorData {
             name: closure_name,
             function_var,
             field,
@@ -1134,13 +1179,16 @@ pub fn constrain_expr(
             let mut field_types = SendMap::default();
             let label = field.clone();
             field_types.insert(label, RecordField::Demanded(field_type.clone()));
-            let record_type = Type::Record(field_types, TypeExtension::from_type(ext_type));
+            let record_type = Type::Record(
+                field_types,
+                TypeExtension::from_non_annotation_type(ext_type),
+            );
             let record_type_index = {
                 let typ = types.from_old_type(&record_type);
                 constraints.push_type(types, typ)
             };
 
-            let category = Category::Accessor(field.clone());
+            let category = Category::RecordAccessor(field.clone());
 
             let record_expected = constraints.push_expected_type(NoExpectation(record_type_index));
             let record_con =
@@ -1193,6 +1241,132 @@ pub fn constrain_expr(
 
             constraints.exists_many(
                 [*record_var, *function_var, *closure_var, field_var, ext_var],
+                cons,
+            )
+        }
+        TupleAccess {
+            tuple_var,
+            ext_var,
+            elem_var,
+            loc_expr,
+            index,
+        } => {
+            let mut tup_elem_types = VecMap::with_capacity(1);
+
+            let ext_var = *ext_var;
+            let ext_type = Variable(ext_var);
+
+            let elem_var = *elem_var;
+            let elem_type = Type::Variable(elem_var);
+
+            tup_elem_types.insert(*index, elem_type);
+
+            let tuple_type = {
+                let typ = types.from_old_type(&Type::Tuple(
+                    tup_elem_types,
+                    TypeExtension::from_non_annotation_type(ext_type),
+                ));
+                constraints.push_type(types, typ)
+            };
+            let tuple_expected = constraints.push_expected_type(NoExpectation(tuple_type));
+
+            let category = Category::TupleAccess(*index);
+
+            let tuple_con =
+                constraints.equal_types_var(*tuple_var, tuple_expected, category.clone(), region);
+
+            let expected_tuple = constraints.push_expected_type(NoExpectation(tuple_type));
+            let constraint = constrain_expr(
+                types,
+                constraints,
+                env,
+                region,
+                &loc_expr.value,
+                expected_tuple,
+            );
+
+            let eq = constraints.equal_types_var(elem_var, expected, category, region);
+            constraints.exists_many([*tuple_var, elem_var, ext_var], [constraint, eq, tuple_con])
+        }
+        TupleAccessor(TupleAccessorData {
+            name: closure_name,
+            function_var,
+            tuple_var,
+            closure_var,
+            ext_var,
+            elem_var,
+            index,
+        }) => {
+            let ext_var = *ext_var;
+            let ext_type = Variable(ext_var);
+            let elem_var = *elem_var;
+            let elem_type = Variable(elem_var);
+
+            let mut elem_types = VecMap::with_capacity(1);
+            elem_types.insert(*index, elem_type.clone());
+
+            let record_type = Type::Tuple(
+                elem_types,
+                TypeExtension::from_non_annotation_type(ext_type),
+            );
+            let record_type_index = {
+                let typ = types.from_old_type(&record_type);
+                constraints.push_type(types, typ)
+            };
+
+            let category = Category::TupleAccessor(*index);
+
+            let record_expected = constraints.push_expected_type(NoExpectation(record_type_index));
+            let record_con =
+                constraints.equal_types_var(*tuple_var, record_expected, category.clone(), region);
+
+            let expected_lambda_set = {
+                let lambda_set_ty = {
+                    let typ = types.from_old_type(&Type::ClosureTag {
+                        name: *closure_name,
+                        captures: vec![],
+                        ambient_function: *function_var,
+                    });
+                    constraints.push_type(types, typ)
+                };
+                constraints.push_expected_type(NoExpectation(lambda_set_ty))
+            };
+
+            let closure_type = Type::Variable(*closure_var);
+
+            let function_type_index = {
+                let typ = types.from_old_type(&Type::Function(
+                    vec![record_type],
+                    Box::new(closure_type),
+                    Box::new(elem_type),
+                ));
+                constraints.push_type(types, typ)
+            };
+
+            let cons = [
+                constraints.equal_types_var(
+                    *closure_var,
+                    expected_lambda_set,
+                    category.clone(),
+                    region,
+                ),
+                constraints.equal_types(function_type_index, expected, category.clone(), region),
+                {
+                    let store_fn_var_index = constraints.push_variable(*function_var);
+                    let store_fn_var_expected =
+                        constraints.push_expected_type(NoExpectation(store_fn_var_index));
+                    constraints.equal_types(
+                        function_type_index,
+                        store_fn_var_expected,
+                        category,
+                        region,
+                    )
+                },
+                record_con,
+            ];
+
+            constraints.exists_many(
+                [*tuple_var, *function_var, *closure_var, elem_var, ext_var],
                 cons,
             )
         }
@@ -1267,7 +1441,7 @@ pub fn constrain_expr(
             let tag_union_type = {
                 let typ = types.from_old_type(&Type::TagUnion(
                     vec![(name.clone(), payload_types)],
-                    TypeExtension::from_type(Type::Variable(*ext_var)),
+                    TypeExtension::from_non_annotation_type(Type::Variable(*ext_var)),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -1299,7 +1473,7 @@ pub fn constrain_expr(
                 let typ = types.from_old_type(&Type::FunctionOrTagUnion(
                     name.clone(),
                     *closure_name,
-                    TypeExtension::from_type(Type::Variable(*ext_var)),
+                    TypeExtension::from_non_annotation_type(Type::Variable(*ext_var)),
                 ));
                 constraints.push_type(types, typ)
             };
@@ -1373,7 +1547,7 @@ pub fn constrain_expr(
             // TODO: better expectation here
             let link_type_variables_con = {
                 let specialized_type_index = {
-                    let typ = types.from_old_type(&**specialized_def_type);
+                    let typ = types.from_old_type(specialized_def_type);
                     constraints.push_type(types, typ)
                 };
                 let expected_index =
@@ -3606,9 +3780,7 @@ pub fn rec_defs_help_simple(
             }
             _ => true, // this must be a function
         });
-        // TODO(weakening)
-        #[allow(clippy::logic_bug)]
-        Generalizable(generalizable || true)
+        Generalizable(generalizable)
     };
 
     for index in range {
@@ -3825,8 +3997,12 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
         match expr {
             Num(..) | Int(..) | Float(..) => return true,
             Closure(_) => return true,
-            Accessor(_) => {
-                // Accessor functions `.field` are equivalent to closures `\r -> r.field`, no need to weaken them.
+            RecordAccessor(_) => {
+                // RecordAccessor functions `.field` are equivalent to closures `\r -> r.field`, no need to weaken them.
+                return true;
+            }
+            TupleAccessor(_) => {
+                // TupleAccessor functions `.0` are equivalent to closures `\r -> r.0`, no need to weaken them.
                 return true;
             }
             OpaqueWrapFunction(_) => {
@@ -3851,18 +4027,20 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | ForeignCall { .. }
             | EmptyRecord
             | Expr::Record { .. }
+            | Expr::Tuple { .. }
             | Crash { .. }
-            | Access { .. }
-            | Update { .. }
+            | RecordAccess { .. }
+            | TupleAccess { .. }
+            | RecordUpdate { .. }
             | Expect { .. }
             | ExpectFx { .. }
             | Dbg { .. }
             | TypedHole(_)
-            | RuntimeError(..) => return false,
-            // TODO(weakening)
-            Var(_, _) | AbilityMember(_, _, _) | Tag { .. } | ZeroArgumentTag { .. } => {
-                return true
-            }
+            | RuntimeError(..)
+            | ZeroArgumentTag { .. }
+            | Tag { .. }
+            | AbilityMember(..)
+            | Var(..) => return false,
         }
     }
 }
@@ -3898,9 +4076,7 @@ fn rec_defs_help(
         let generalizable = defs
             .iter()
             .all(|d| is_generalizable_expr(&d.loc_expr.value));
-        // TODO(weakening)
-        #[allow(clippy::logic_bug)]
-        Generalizable(generalizable || true)
+        Generalizable(generalizable)
     };
 
     for def in defs {

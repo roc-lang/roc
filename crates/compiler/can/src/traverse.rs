@@ -8,8 +8,8 @@ use crate::{
     abilities::AbilitiesStore,
     def::{Annotation, Declaration, Def},
     expr::{
-        self, AccessorData, AnnotatedMark, ClosureData, Declarations, Expr, Field,
-        OpaqueWrapFunctionData,
+        self, AnnotatedMark, ClosureData, Declarations, Expr, Field, OpaqueWrapFunctionData,
+        RecordAccessorData, TupleAccessorData,
     },
     pattern::{DestructType, Pattern, RecordDestruct},
 };
@@ -228,17 +228,31 @@ pub fn walk_expr<V: Visitor>(visitor: &mut V, expr: &Expr, var: Variable) {
         } => {
             walk_record_fields(visitor, fields.iter());
         }
+        Expr::Tuple {
+            tuple_var: _,
+            elems,
+        } => elems
+            .iter()
+            .for_each(|(var, elem)| visitor.visit_expr(&elem.value, elem.region, *var)),
         Expr::EmptyRecord => { /* terminal */ }
-        Expr::Access {
+        Expr::RecordAccess {
             field_var,
             loc_expr,
             field: _,
             record_var: _,
             ext_var: _,
         } => visitor.visit_expr(&loc_expr.value, loc_expr.region, *field_var),
-        Expr::Accessor(AccessorData { .. }) => { /* terminal */ }
+        Expr::RecordAccessor(RecordAccessorData { .. }) => { /* terminal */ }
+        Expr::TupleAccess {
+            elem_var,
+            loc_expr,
+            index: _,
+            tuple_var: _,
+            ext_var: _,
+        } => visitor.visit_expr(&loc_expr.value, loc_expr.region, *elem_var),
+        Expr::TupleAccessor(TupleAccessorData { .. }) => { /* terminal */ }
         Expr::OpaqueWrapFunction(OpaqueWrapFunctionData { .. }) => { /* terminal */ }
-        Expr::Update {
+        Expr::RecordUpdate {
             record_var: _,
             ext_var: _,
             symbol: _,

@@ -334,7 +334,7 @@ mod cli_run {
     // when you want to run `roc test` to execute `expect`s, perhaps on a library rather than an application.
     fn test_roc_expect(dir_name: &str, roc_filename: &str) {
         let path = file_path_from_root(dir_name, roc_filename);
-        let out = run_roc(&[CMD_TEST, path.to_str().unwrap()], &[], &[]);
+        let out = run_roc([CMD_TEST, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
 
@@ -422,12 +422,7 @@ mod cli_run {
                 return;
             }
             "args" => {
-                eprintln!(
-                    "WARNING: skipping testing example {} because it is known to be bad, pending investigation!",
-                    roc_filename
-                );
-                return;
-                // custom_flags = vec![LINKER_FLAG, "legacy"];
+                custom_flags = vec![LINKER_FLAG, "legacy"];
             }
             _ => {}
         }
@@ -479,10 +474,7 @@ mod cli_run {
     }
 
     #[test]
-    #[serial(cli_platform)]
-    #[ignore]
-    // ignored because downloaded prebuilt platforms cause problems with nix and NixOS
-    // this is explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)
+    #[ignore = "Prebuilt platforms cause problems with nix and NixOS. This is run explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)"]
     fn hello_world() {
         test_roc_app_slim(
             "examples",
@@ -735,7 +727,7 @@ mod cli_run {
     #[serial(cli_platform)]
     fn cli_args_check() {
         let path = file_path_from_root("examples/cli", "args.roc");
-        let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
 
@@ -744,7 +736,7 @@ mod cli_run {
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
     fn check_virtual_dom_server() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-server.roc");
-        let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
 
@@ -753,7 +745,7 @@ mod cli_run {
     #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806
     fn check_virtual_dom_client() {
         let path = file_path_from_root("examples/virtual-dom-wip", "example-client.roc");
-        let out = run_roc(&[CMD_CHECK, path.to_str().unwrap()], &[], &[]);
+        let out = run_roc([CMD_CHECK, path.to_str().unwrap()], &[], &[]);
         assert!(out.status.success());
     }
 
@@ -860,10 +852,22 @@ mod cli_run {
     #[cfg_attr(windows, ignore)]
     fn parse_movies_csv() {
         test_roc_app_slim(
-            "examples/parser",
+            "examples/parser/examples",
             "parse-movies-csv.roc",
-            "parse-movies-csv",
+            "example",
             "Parse success!\n",
+            UseValgrind::No,
+        )
+    }
+
+    #[test]
+    #[ignore = "Prebuilt platforms cause problems with nix and NixOS. This is run explicitly tested on CI (.github/workflows/ubuntu_x86_64.yml)"]
+    fn parse_letter_counts() {
+        test_roc_app_slim(
+            "examples/parser/examples",
+            "letter-counts.roc",
+            "example",
+            "I counted 7 letter A's!\n",
             UseValgrind::No,
         )
     }
@@ -871,7 +875,7 @@ mod cli_run {
     #[test]
     #[cfg_attr(windows, ignore)]
     fn parse_http() {
-        test_roc_expect("examples/parser/Parser", "Http.roc")
+        test_roc_expect("examples/parser/package", "ParserHttp.roc")
     }
 
     // TODO not sure if this cfg should still be here: #[cfg(not(debug_assertions))]

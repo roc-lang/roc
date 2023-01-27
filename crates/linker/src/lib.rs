@@ -96,7 +96,7 @@ pub fn build_and_preprocess_host(
 fn metadata_file_name(target: &Triple) -> String {
     let target_triple_str = get_target_triple_str(target);
 
-    format!("metadata_{}.rm1", target_triple_str.unwrap_or("unknown"))
+    format!("metadata_{}.rm2", target_triple_str.unwrap_or("unknown"))
 }
 
 pub fn link_preprocessed_host(

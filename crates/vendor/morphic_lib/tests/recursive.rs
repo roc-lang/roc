@@ -1,3 +1,6 @@
+// https://github.com/morphic-lang/morphic_lib/issues/19
+#![allow(clippy::result_large_err)]
+
 use morphic_lib::{
     BlockExpr, CalleeSpecVar, EntryPointName, Error, ExprContext, FuncDefBuilder, FuncName,
     ModDefBuilder, ModName, ProgramBuilder, TypeContext, UpdateMode, UpdateModeVar,

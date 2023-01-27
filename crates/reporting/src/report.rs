@@ -443,6 +443,11 @@ impl<'a> RocDocAllocator<'a> {
             .annotate(Annotation::RecordField)
     }
 
+    pub fn tuple_field(&'a self, index: usize) -> DocBuilder<'a, Self, Annotation> {
+        self.text(format!(".{}", index))
+            .annotate(Annotation::TupleElem)
+    }
+
     pub fn module(&'a self, module_id: ModuleId) -> DocBuilder<'a, Self, Annotation> {
         let name = self.interns.module_name(module_id);
         let name = if name.is_empty() {
@@ -820,6 +825,7 @@ pub enum Annotation {
     Ellipsis,
     Tag,
     RecordField,
+    TupleElem,
     TypeVariable,
     Alias,
     Opaque,
@@ -1046,7 +1052,7 @@ where
             ParserSuggestion => {
                 self.write_str(self.palette.parser_suggestion)?;
             }
-            TypeBlock | InlineTypeBlock | Tag | RecordField => { /* nothing yet */ }
+            TypeBlock | InlineTypeBlock | Tag | RecordField | TupleElem => { /* nothing yet */ }
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -1064,7 +1070,8 @@ where
                     self.write_str(self.palette.reset)?;
                 }
 
-                TypeBlock | InlineTypeBlock | Tag | Opaque | RecordField => { /* nothing yet */ }
+                TypeBlock | InlineTypeBlock | Tag | Opaque | RecordField | TupleElem => { /* nothing yet */
+                }
             },
         }
         Ok(())

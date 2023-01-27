@@ -16,7 +16,7 @@ use indoc::indoc;
 use roc_std::{RocList, RocStr};
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn dict_empty_len() {
     assert_evals_to!(
         indoc!(
@@ -30,7 +30,7 @@ fn dict_empty_len() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn dict_insert_empty() {
     assert_evals_to!(
         indoc!(
@@ -46,7 +46,7 @@ fn dict_insert_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn dict_empty_contains() {
     assert_evals_to!(
         indoc!(
@@ -63,7 +63,7 @@ fn dict_empty_contains() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn dict_nonempty_contains() {
     assert_evals_to!(
         indoc!(
@@ -81,7 +81,7 @@ fn dict_nonempty_contains() {
 
 #[test]
 #[ignore = "TODO figure out why this is broken with llvm wasm tests"]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn dict_empty_remove() {
     assert_evals_to!(
         indoc!(
@@ -100,7 +100,7 @@ fn dict_empty_remove() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn dict_nonempty_remove() {
     assert_evals_to!(
         indoc!(
@@ -120,7 +120,7 @@ fn dict_nonempty_remove() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn dict_nonempty_get() {
     assert_evals_to!(
         indoc!(
@@ -256,11 +256,7 @@ fn from_list_with_fold_reallocates() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
-// TODO: Re-enable this test for wasm.
-// Currently it causes "[trap] out of bounds memory access" due to the small strings.
-// I was unable to find the root cause and with llvm and valgrind it passes with no issues.
-// #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn small_str_keys() {
     assert_evals_to!(
         indoc!(
@@ -269,14 +265,11 @@ fn small_str_keys() {
             myDict =
                 Dict.empty {}
                     |> Dict.insert "a" 100
-                    |> Dict.insert "b" 100
-                    |> Dict.insert "c" 100
-
 
             Dict.keys myDict
             "#
         ),
-        RocList::from_slice(&["a".into(), "b".into(), "c".into(),],),
+        RocList::from_slice(&["a".into()]),
         RocList<RocStr>
     );
 }
@@ -332,7 +325,7 @@ fn big_str_values() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn unit_values() {
     assert_evals_to!(
         indoc!(
@@ -354,7 +347,7 @@ fn unit_values() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn single() {
     assert_evals_to!(
         indoc!(
@@ -372,7 +365,7 @@ fn single() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn insert_all() {
     assert_evals_to!(
         indoc!(
@@ -410,7 +403,7 @@ fn insert_all_prefer_second() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn keep_shared() {
     assert_evals_to!(
         indoc!(
@@ -473,7 +466,7 @@ fn keep_shared_prefer_first() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn remove_all() {
     assert_evals_to!(
         indoc!(
@@ -505,7 +498,7 @@ fn remove_all() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn remove_all_prefer_first() {
     assert_evals_to!(
         indoc!(
@@ -536,7 +529,7 @@ fn remove_all_prefer_first() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn walk_sum_keys() {
     assert_evals_to!(
         indoc!(

@@ -13,7 +13,7 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
     Content, ExhaustiveMark, FlatType, GetSubsSlice, LambdaSet, OptVariable, RecordFields,
-    RedundantMark, SubsSlice, UnionLambdas, UnionTags, Variable,
+    RedundantMark, SubsSlice, TagExt, UnionLambdas, UnionTags, Variable,
 };
 use roc_types::types::{AliasKind, RecordField};
 
@@ -210,7 +210,7 @@ fn decoder_record_step_field(
                     ("Skip".into(), Default::default()),
                 ],
             ),
-            Variable::EMPTY_TAG_UNION,
+            TagExt::Any(Variable::EMPTY_TAG_UNION),
         );
 
         synth_var(env.subs, Content::Structure(flat_type))
@@ -257,7 +257,7 @@ fn decoder_record_step_field(
             let rec_dot_result = {
                 let tag_union = FlatType::TagUnion(
                     UnionTags::for_result(env.subs, field_var, decode_err_var),
-                    Variable::EMPTY_TAG_UNION,
+                    TagExt::Any(Variable::EMPTY_TAG_UNION),
                 );
 
                 synth_var(env.subs, Content::Structure(tag_union))
@@ -300,7 +300,7 @@ fn decoder_record_step_field(
             let when_expr_var = {
                 let flat_type = FlatType::TagUnion(
                     UnionTags::for_result(env.subs, state_record_var, decode_err_var),
-                    Variable::EMPTY_TAG_UNION,
+                    TagExt::Any(Variable::EMPTY_TAG_UNION),
                 );
 
                 synth_var(env.subs, Content::Structure(flat_type))
@@ -363,7 +363,7 @@ fn decoder_record_step_field(
                                 },
                             );
 
-                            let updated_record = Expr::Update {
+                            let updated_record = Expr::RecordUpdate {
                                 record_var: state_record_var,
                                 ext_var: env.new_ext_var(ExtensionKind::Record),
                                 symbol: state_arg_symbol,
@@ -429,7 +429,7 @@ fn decoder_record_step_field(
                         //     Ok val -> Ok {state & first: Ok val},
                         //     Err err -> Err err
                         Expr::When {
-                            loc_cond: Box::new(Loc::at_zero(Expr::Access {
+                            loc_cond: Box::new(Loc::at_zero(Expr::RecordAccess {
                                 record_var: rec_var,
                                 ext_var: env.new_ext_var(ExtensionKind::Record),
                                 field_var: rec_dot_result,
@@ -458,7 +458,7 @@ fn decoder_record_step_field(
                         Field {
                             var: Variable::LIST_U8,
                             region: Region::zero(),
-                            loc_expr: Box::new(Loc::at_zero(Expr::Access {
+                            loc_expr: Box::new(Loc::at_zero(Expr::RecordAccess {
                                 record_var: rec_var,
                                 ext_var: env.new_ext_var(ExtensionKind::Record),
                                 field_var: Variable::LIST_U8,
@@ -759,7 +759,7 @@ fn decoder_record_finalizer(
     let decode_err_var = {
         let flat_type = FlatType::TagUnion(
             UnionTags::tag_without_arguments(env.subs, "TooShort".into()),
-            Variable::EMPTY_TAG_UNION,
+            TagExt::Any(Variable::EMPTY_TAG_UNION),
         );
 
         synth_var(env.subs, Content::Structure(flat_type))
@@ -802,7 +802,7 @@ fn decoder_record_finalizer(
         return_type_var = {
             let flat_type = FlatType::TagUnion(
                 UnionTags::for_result(subs, done_record_var, decode_err_var),
-                Variable::EMPTY_TAG_UNION,
+                TagExt::Any(Variable::EMPTY_TAG_UNION),
             );
 
             synth_var(subs, Content::Structure(flat_type))
@@ -829,7 +829,7 @@ fn decoder_record_finalizer(
         .zip(result_field_vars.iter().rev())
     {
         // when rec.first is
-        let cond_expr = Expr::Access {
+        let cond_expr = Expr::RecordAccess {
             record_var: state_record_var,
             ext_var: env.new_ext_var(ExtensionKind::Record),
             field_var: result_field_var,
@@ -946,7 +946,10 @@ fn decoder_record_initial_state(
         let union_tags = UnionTags::tag_without_arguments(subs, no_field_label.into());
         let no_field_var = synth_var(
             subs,
-            Content::Structure(FlatType::TagUnion(union_tags, Variable::EMPTY_TAG_UNION)),
+            Content::Structure(FlatType::TagUnion(
+                union_tags,
+                TagExt::Any(Variable::EMPTY_TAG_UNION),
+            )),
         );
         let no_field = Expr::Tag {
             tag_union_var: no_field_var,
@@ -958,7 +961,10 @@ fn decoder_record_initial_state(
         let union_tags = UnionTags::for_result(subs, field_var, no_field_var);
         let result_var = synth_var(
             subs,
-            Content::Structure(FlatType::TagUnion(union_tags, Variable::EMPTY_TAG_UNION)),
+            Content::Structure(FlatType::TagUnion(
+                union_tags,
+                TagExt::Any(Variable::EMPTY_TAG_UNION),
+            )),
         );
         let field_expr = Expr::Tag {
             tag_union_var: result_var,

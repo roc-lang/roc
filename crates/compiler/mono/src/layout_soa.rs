@@ -821,6 +821,9 @@ impl Layout {
 
                 Ok(Layout::Struct(slice))
             }
+            FlatType::Tuple(_elems, _ext) => {
+                todo!();
+            }
             FlatType::TagUnion(union_tags, ext) => {
                 debug_assert!(ext_var_is_empty_tag_union(subs, *ext));
 
@@ -861,7 +864,7 @@ impl Layout {
 
                 Ok(Layout::UnionRecursive(slices))
             }
-            FlatType::EmptyRecord => Ok(Layout::UNIT),
+            FlatType::EmptyRecord | FlatType::EmptyTuple => Ok(Layout::UNIT),
             FlatType::EmptyTagUnion => Ok(Layout::VOID),
         }
     }

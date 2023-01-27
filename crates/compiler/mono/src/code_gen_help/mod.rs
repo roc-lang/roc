@@ -125,16 +125,6 @@ impl<'a> CodeGenHelp<'a> {
         modify: &ModifyRc,
         following: &'a Stmt<'a>,
     ) -> (&'a Stmt<'a>, Vec<'a, (Symbol, ProcLayout<'a>)>) {
-        if !refcount::is_rc_implemented_yet(layout_interner, layout) {
-            // Just a warning, so we can decouple backend development from refcounting development.
-            // When we are closer to completion, we can change it to a panic.
-            println!(
-                "WARNING! MEMORY LEAK! Refcounting not yet implemented for Layout {:?}",
-                layout
-            );
-            return (following, Vec::new_in(self.arena));
-        }
-
         let op = match modify {
             ModifyRc::Inc(..) => HelperOp::Inc,
             ModifyRc::Dec(_) => HelperOp::Dec,
@@ -255,7 +245,10 @@ impl<'a> CodeGenHelp<'a> {
         // debug_assert!(self.debug_recursion_depth < 100);
         self.debug_recursion_depth += 1;
 
-        let layout = if matches!(layout_interner.get(called_layout), Layout::RecursivePointer) {
+        let layout = if matches!(
+            layout_interner.get(called_layout),
+            Layout::RecursivePointer(_)
+        ) {
             let union_layout = ctx.recursive_union.unwrap();
             layout_interner.insert(Layout::Union(union_layout))
         } else {
@@ -494,7 +487,7 @@ impl<'a> CodeGenHelp<'a> {
             }
 
             // This line is the whole point of the function
-            Layout::RecursivePointer => Layout::Union(ctx.recursive_union.unwrap()),
+            Layout::RecursivePointer(_) => Layout::Union(ctx.recursive_union.unwrap()),
         };
         layout_interner.insert(layout)
     }
@@ -535,7 +528,7 @@ impl<'a> CodeGenHelp<'a> {
         for fields in tags.iter() {
             let found_index = fields
                 .iter()
-                .position(|f| matches!(layout_interner.get(*f), Layout::RecursivePointer));
+                .position(|f| matches!(layout_interner.get(*f), Layout::RecursivePointer(_)));
             tailrec_indices.push(found_index);
             can_use_tailrec |= found_index.is_some();
         }
@@ -586,7 +579,7 @@ fn layout_needs_helper_proc<'a>(
         Layout::Union(UnionLayout::NonRecursive(tags)) => !tags.is_empty(),
         Layout::Union(_) => true,
         Layout::LambdaSet(_) => true,
-        Layout::RecursivePointer => false,
+        Layout::RecursivePointer(_) => false,
         Layout::Boxed(_) => true,
     }
 }

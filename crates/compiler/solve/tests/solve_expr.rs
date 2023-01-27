@@ -943,12 +943,14 @@ mod solve_expr {
         infer_eq_without_problem(
             indoc!(
                 r#"
-                foo = Foo
+                foo0 = Foo
+                foo1 = Foo
+                foo2 = Foo
 
                 {
-                    x: [foo, Foo],
-                    y: [foo, \x -> Foo x],
-                    z: [foo, \x,y  -> Foo x y]
+                    x: [foo0, Foo],
+                    y: [foo1, \x -> Foo x],
+                    z: [foo2, \x,y  -> Foo x y]
                 }
                 "#
             ),
@@ -1465,6 +1467,34 @@ mod solve_expr {
     #[test]
     fn record_literal_accessor() {
         infer_eq("{ x: 5, y : 3.14 }.x", "Num *");
+    }
+
+    #[test]
+    fn record_literal_accessor_function() {
+        infer_eq(".x { x: 5, y : 3.14 }", "Num *");
+    }
+
+    #[test]
+    fn tuple_literal_accessor() {
+        infer_eq("(5, 3.14 ).0", "Num *");
+    }
+
+    #[test]
+    fn tuple_literal_accessor_function() {
+        infer_eq(".0 (5, 3.14 )", "Num *");
+    }
+
+    #[test]
+    fn tuple_literal_ty() {
+        infer_eq("(5, 3.14 )", "( Num *, Float * )*");
+    }
+
+    #[test]
+    fn tuple_literal_accessor_ty() {
+        infer_eq(".0", "( a )* -> a");
+        infer_eq(".4", "( _, _, _, _, a )* -> a");
+        infer_eq(".5", "( ... 5 omitted, a )* -> a");
+        infer_eq(".200", "( ... 200 omitted, a )* -> a");
     }
 
     #[test]
@@ -2555,10 +2585,10 @@ mod solve_expr {
         infer_eq(
             indoc!(
                 r#"
-                    ok : Result I64 *
+                    ok : Result I64 _
                     ok = Ok 5
 
-                    err : Result * Str
+                    err : Result _ Str
                     err = Err "blah"
 
                     if 1 > 0 then
@@ -3101,7 +3131,6 @@ mod solve_expr {
 
     #[test]
     fn rigid_in_letrec_ignored() {
-        // re-enable when we don't capture local things that don't need to be!
         infer_eq_without_problem(
             indoc!(
                 r#"
@@ -3109,7 +3138,7 @@ mod solve_expr {
 
                     toEmpty : ConsList a -> ConsList a
                     toEmpty = \_ ->
-                        result : ConsList a
+                        result : ConsList _   # TODO to enable using `a` we need scoped variables
                         result = Nil
 
                         toEmpty result
@@ -3132,7 +3161,7 @@ mod solve_expr {
 
                 toEmpty : ConsList a -> ConsList a
                 toEmpty = \_ ->
-                    result : ConsList a
+                    result : ConsList _   # TODO to enable using `a` we need scoped variables
                     result = Nil
 
                     toEmpty result
@@ -4353,12 +4382,12 @@ mod solve_expr {
                 RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
                 # Create an empty dictionary.
-                empty : RBTree k v
-                empty =
+                empty : {} -> RBTree k v
+                empty = \{} ->
                     Empty
 
                 foo : RBTree I64 I64
-                foo = empty
+                foo = empty {}
 
                 main : RBTree I64 I64
                 main =
@@ -6598,6 +6627,42 @@ mod solve_expr {
                 #^^{-1}
 
                 main =
+                    alias1 = \x -> id x
+                    #              ^^
+                    alias2 = \x -> alias1 x
+                    #              ^^^^^^
+
+                    a : A
+                    a = alias2 (@A {})
+                    #   ^^^^^^
+
+                    a
+                "#
+            ),
+            @r###"
+        A#id(4) : A -[[id(4)]]-> A
+        Id#id(2) : a -[[] + a:id(2):1]-> a | a has Id
+        alias1 : a -[[alias1(6)]]-> a | a has Id
+        alias2 : A -[[alias2(7)]]-> A
+        "###
+        )
+    }
+
+    #[test]
+    fn resolve_lambda_set_weakened_ability_alias() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test" provides [main] to "./platform"
+
+                Id has id : a -> a | a has Id
+
+                A := {} has [Id {id}]
+                id = \@A {} -> @A {}
+                #^^{-1}
+
+                main =
+                    # Both alias1, alias2 should get weakened
                     alias1 = id
                     #        ^^
                     alias2 = alias1
@@ -6612,8 +6677,8 @@ mod solve_expr {
             ),
             @r###"
         A#id(4) : A -[[id(4)]]-> A
-        Id#id(2) : a -[[] + a:id(2):1]-> a | a has Id
-        alias1 : a -[[] + a:id(2):1]-> a | a has Id
+        Id#id(2) : A -[[id(4)]]-> A
+        alias1 : A -[[id(4)]]-> A
         alias2 : A -[[id(4)]]-> A
         "###
         )
@@ -6743,8 +6808,8 @@ mod solve_expr {
                 #^^{-1}
 
                 main =
-                    alias = id
-                    #       ^^
+                    alias = \x -> id x
+                    #             ^^
 
                     a : A
                     a = (alias (@A {})) {}
@@ -6756,7 +6821,7 @@ mod solve_expr {
             @r#"
             A#id(5) : {} -[[id(5)]]-> ({} -[[8]]-> {})
             Id#id(3) : a -[[] + a:id(3):1]-> ({} -[[] + a:id(3):2]-> a) | a has Id
-            alias : {} -[[id(5)]]-> ({} -[[8]]-> {})
+            alias : {} -[[alias(9)]]-> ({} -[[8]]-> {})
             "#
             print_only_under_alias: true
         )
@@ -6991,7 +7056,7 @@ mod solve_expr {
                 "#
             ),
             @r#"
-            foo : [Named Str (List a)]* as a
+            foo : [Named Str (List a)] as a
             Named name outerList : [Named Str (List a)] as a
             name : Str
             outerList : List ([Named Str (List a)] as a)

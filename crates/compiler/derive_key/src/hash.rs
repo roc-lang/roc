@@ -65,6 +65,9 @@ impl FlatHash {
 
                     Ok(Key(FlatHashKey::Record(field_names)))
                 }
+                FlatType::Tuple(_elems, _ext) => {
+                    todo!();
+                }
                 FlatType::TagUnion(tags, ext) | FlatType::RecursiveTagUnion(_, tags, ext) => {
                     // The recursion var doesn't matter, because the derived implementation will only
                     // look on the surface of the tag union type, and more over the payloads of the
@@ -77,7 +80,7 @@ impl FlatHash {
                     // `t`-prefixed payload types.
                     let (tags_iter, ext) = tags.unsorted_tags_and_ext(subs, ext);
 
-                    check_derivable_ext_var(subs, ext, |ext| {
+                    check_derivable_ext_var(subs, ext.var(), |ext| {
                         matches!(ext, Content::Structure(FlatType::EmptyTagUnion))
                     })?;
 
@@ -101,6 +104,7 @@ impl FlatHash {
                         .collect(),
                 ))),
                 FlatType::EmptyRecord => Ok(Key(FlatHashKey::Record(vec![]))),
+                FlatType::EmptyTuple => todo!(),
                 FlatType::EmptyTagUnion => Ok(Key(FlatHashKey::TagUnion(vec![]))),
                 //
                 FlatType::Func(..) => Err(Underivable),

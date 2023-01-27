@@ -1,12 +1,13 @@
 #[cfg(not(target_family = "wasm"))]
-use crate::https::{self, PackageMetadata, Problem};
-use roc_error_macros::internal_error;
-use std::{
-    fs,
-    path::{Path, PathBuf},
+use {
+    crate::https::{self, PackageMetadata, Problem},
+    roc_error_macros::internal_error,
+    std::fs,
 };
-
+#[cfg(not(target_family = "wasm"))]
 const MAX_DOWNLOAD_BYTES: u64 = 32 * 1_000_000_000; // GB
+
+use std::path::{Path, PathBuf};
 
 #[derive(Copy, Clone, Debug)]
 pub enum RocCacheDir<'a> {

@@ -10,7 +10,7 @@ use roc_region::all::{Loc, Region};
 use roc_solve::module::Solved;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, Mark, OptVariable, Rank, RecordFields,
-    Subs, SubsSlice, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
+    Subs, SubsSlice, TagExt, UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
     gather_fields_unsorted_iter, Alias, AliasKind, Category, ErrorType, PatternCategory, Polarity,
@@ -683,7 +683,7 @@ fn solve<'a>(
             let mut new_desc = subs.get(actual);
             match new_desc.content {
                 Content::Structure(FlatType::TagUnion(tags, _)) => {
-                    let new_ext = subs.fresh_unnamed_flex_var();
+                    let new_ext = TagExt::Any(subs.fresh_unnamed_flex_var());
                     let new_union = Content::Structure(FlatType::TagUnion(tags, new_ext));
                     new_desc.content = new_union;
                     subs.set(actual, new_desc);
@@ -953,7 +953,7 @@ fn type_to_variable<'a>(
 
             let (union_tags, ext) =
                 type_to_union_tags(arena, mempool, subs, rank, pools, cached, tags, ext);
-            let content = Content::Structure(FlatType::TagUnion(union_tags, ext));
+            let content = Content::Structure(FlatType::TagUnion(union_tags, TagExt::Any(ext)));
 
             register(subs, rank, pools, content)
         }
@@ -1097,9 +1097,12 @@ fn type_to_union_tags<'a>(
     let temp_ext_var = type_to_variable(arena, mempool, subs, rank, pools, cached, ext);
 
     let ext = {
-        let (it, ext) =
-            roc_types::types::gather_tags_unsorted_iter(subs, UnionTags::default(), temp_ext_var)
-                .expect("not a tag union");
+        let (it, ext) = roc_types::types::gather_tags_unsorted_iter(
+            subs,
+            UnionTags::default(),
+            TagExt::Any(temp_ext_var),
+        )
+        .expect("not a tag union");
 
         tag_vars.extend(it.map(|(n, v)| (n.clone(), v)));
         tag_vars.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
@@ -1123,7 +1126,10 @@ fn type_to_union_tags<'a>(
         ext
     };
 
-    (UnionTags::insert_slices_into_subs(subs, tag_vars), ext)
+    (
+        UnionTags::insert_slices_into_subs(subs, tag_vars),
+        ext.var(),
+    )
 }
 
 fn check_for_infinite_type(
@@ -1165,7 +1171,7 @@ fn check_for_infinite_type(
                     new_tags.push((subs[name_index].clone(), new_vars));
                 }
 
-                let new_ext_var = subs.explicit_substitute(recursive, rec_var, ext_var);
+                let new_ext_var = ext_var.map(|v| subs.explicit_substitute(recursive, rec_var, v));
 
                 let new_tags = UnionTags::insert_into_subs(subs, new_tags);
 
@@ -1368,13 +1374,16 @@ fn adjust_rank_content(
                     rank
                 }
 
-                EmptyRecord => {
+                EmptyRecord | EmptyTuple => {
                     // from elm-compiler: THEORY: an empty record never needs to get generalized
                     Rank::toplevel()
                 }
 
                 EmptyTagUnion => Rank::toplevel(),
 
+                Tuple(..) => {
+                    todo!()
+                }
                 Record(fields, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
@@ -1387,7 +1396,8 @@ fn adjust_rank_content(
                 }
 
                 TagUnion(tags, ext_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+                    let mut rank =
+                        adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var.var());
 
                     for (_, index) in tags.iter_all() {
                         let slice = subs[index];
@@ -1402,11 +1412,12 @@ fn adjust_rank_content(
                 }
 
                 FunctionOrTagUnion(_, _, ext_var) => {
-                    adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var)
+                    adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var.var())
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
-                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+                    let mut rank =
+                        adjust_rank(subs, young_mark, visit_mark, group_rank, ext_var.var());
 
                     for (_, index) in tags.iter_all() {
                         let slice = subs[index];
@@ -1564,8 +1575,11 @@ fn instantiate_rigids_help(
                     }
                 }
 
-                EmptyRecord | EmptyTagUnion => {}
+                EmptyRecord | EmptyTuple | EmptyTagUnion => {}
 
+                Tuple(..) => {
+                    todo!()
+                }
                 Record(fields, ext_var) => {
                     for index in fields.iter_variables() {
                         let var = subs[index];
@@ -1584,11 +1598,11 @@ fn instantiate_rigids_help(
                         }
                     }
 
-                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
+                    instantiate_rigids_help(subs, max_rank, pools, ext_var.var());
                 }
 
                 FunctionOrTagUnion(_tag_name, _symbol, ext_var) => {
-                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
+                    instantiate_rigids_help(subs, max_rank, pools, ext_var.var());
                 }
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
@@ -1602,7 +1616,7 @@ fn instantiate_rigids_help(
                         }
                     }
 
-                    instantiate_rigids_help(subs, max_rank, pools, ext_var);
+                    instantiate_rigids_help(subs, max_rank, pools, ext_var.var());
                 }
             };
         }
@@ -1744,8 +1758,11 @@ fn deep_copy_var_help(
                     Func(arg_vars, new_closure_var, new_ret_var)
                 }
 
-                same @ EmptyRecord | same @ EmptyTagUnion => same,
+                same @ EmptyRecord | same @ EmptyTuple | same @ EmptyTagUnion => same,
 
+                Tuple(..) => {
+                    todo!()
+                }
                 Record(fields, ext_var) => {
                     let record_fields = {
                         let mut new_vars = Vec::with_capacity(fields.len());
@@ -1815,14 +1832,14 @@ fn deep_copy_var_help(
 
                     let union_tags = UnionTags::from_slices(tags.labels(), new_variables);
 
-                    let new_ext = deep_copy_var_help(subs, max_rank, pools, ext_var);
+                    let new_ext = ext_var.map(|v| deep_copy_var_help(subs, max_rank, pools, v));
                     TagUnion(union_tags, new_ext)
                 }
 
                 FunctionOrTagUnion(tag_name, symbol, ext_var) => FunctionOrTagUnion(
                     tag_name,
                     symbol,
-                    deep_copy_var_help(subs, max_rank, pools, ext_var),
+                    ext_var.map(|v| deep_copy_var_help(subs, max_rank, pools, v)),
                 ),
 
                 RecursiveTagUnion(rec_var, tags, ext_var) => {
@@ -1853,7 +1870,7 @@ fn deep_copy_var_help(
 
                     let union_tags = UnionTags::from_slices(tags.labels(), new_variables);
 
-                    let new_ext = deep_copy_var_help(subs, max_rank, pools, ext_var);
+                    let new_ext = ext_var.map(|v| deep_copy_var_help(subs, max_rank, pools, v));
                     let new_rec_var = deep_copy_var_help(subs, max_rank, pools, rec_var);
                     FlatType::RecursiveTagUnion(new_rec_var, union_tags, new_ext)
                 }

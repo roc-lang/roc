@@ -66,6 +66,9 @@ impl FlatEncodable {
 
                     Ok(Key(FlatEncodableKey::Record(field_names)))
                 }
+                FlatType::Tuple(_elems, _ext) => {
+                    todo!()
+                }
                 FlatType::TagUnion(tags, ext) | FlatType::RecursiveTagUnion(_, tags, ext) => {
                     // The recursion var doesn't matter, because the derived implementation will only
                     // look on the surface of the tag union type, and more over the payloads of the
@@ -78,7 +81,7 @@ impl FlatEncodable {
                     // `t`-prefixed payload types.
                     let (tags_iter, ext) = tags.unsorted_tags_and_ext(subs, ext);
 
-                    check_derivable_ext_var(subs, ext, |ext| {
+                    check_derivable_ext_var(subs, ext.var(), |ext| {
                         matches!(ext, Content::Structure(FlatType::EmptyTagUnion))
                     })?;
 
@@ -104,6 +107,7 @@ impl FlatEncodable {
                     )))
                 }
                 FlatType::EmptyRecord => Ok(Key(FlatEncodableKey::Record(vec![]))),
+                FlatType::EmptyTuple => todo!(),
                 FlatType::EmptyTagUnion => Ok(Key(FlatEncodableKey::TagUnion(vec![]))),
                 //
                 FlatType::Func(..) => Err(Underivable),

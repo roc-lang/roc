@@ -375,7 +375,7 @@ pub fn constrain_expr<'a>(
                 env.pool.add(ext_type),
             );
 
-            let category = Category::Accessor(field.as_str(env.pool).into());
+            let category = Category::RecordAccessor(field.as_str(env.pool).into());
 
             let record_expected = Expected::NoExpectation(record_type.shallow_clone());
             let record_con = Eq(
@@ -440,7 +440,7 @@ pub fn constrain_expr<'a>(
 
             let record_expected = Expected::NoExpectation(record_type);
 
-            let category = Category::Access(field.as_str(env.pool).into());
+            let category = Category::RecordAccess(field.as_str(env.pool).into());
 
             let record_con = Eq(
                 Type2::Variable(*record_var),

@@ -11,6 +11,9 @@
 //! - Scope checking for values
 //! - Typechecking
 
+// https://github.com/morphic-lang/morphic_lib/issues/19
+#![allow(clippy::result_large_err)]
+
 use smallvec::{smallvec, SmallVec};
 
 use crate::api;

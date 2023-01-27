@@ -541,12 +541,6 @@ impl<'a> LowLevelCall<'a> {
                 let elem_layout = backend.layout_interner.get(elem_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner, TARGET_INFO);
-                let (spare_local, spare_offset, _) = ensure_symbol_is_in_memory(
-                    backend,
-                    spare,
-                    Layout::usize(TARGET_INFO),
-                    backend.env.arena,
-                );
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
@@ -568,11 +562,9 @@ impl<'a> LowLevelCall<'a> {
 
                 backend.code_builder.i32_const(elem_align as i32);
 
-                backend.code_builder.get_local(spare_local);
-                if spare_offset > 0 {
-                    backend.code_builder.i32_const(spare_offset as i32);
-                    backend.code_builder.i32_add();
-                }
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[spare]);
 
                 backend.code_builder.i32_const(elem_width as i32);
 
@@ -1716,12 +1708,11 @@ impl<'a> LowLevelCall<'a> {
                         backend.code_builder.i64_extend_u_i32();
                         backend.code_builder.i64_shr_u();
                     }
-                    I128 => todo!("{:?} for I128", self.lowlevel),
+                    I128 => self.load_args_and_call_zig(backend, "__lshrti3"), // from compiler_rt
                     _ => panic_ret_type(),
                 }
             }
             NumIntCast => {
-                self.load_args(backend);
                 let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
                 let arg_type = CodeGenNumType::from(arg_layout);
                 let arg_width = match backend.layout_interner.get(arg_layout) {
@@ -1737,19 +1728,56 @@ impl<'a> LowLevelCall<'a> {
                 };
 
                 match (ret_type, arg_type) {
-                    (I32, I32) => self.wrap_small_int(backend, ret_width),
+                    (I32, I32) => {
+                        self.load_args(backend);
+                        self.wrap_small_int(backend, ret_width);
+                    }
                     (I32, I64) => {
+                        self.load_args(backend);
                         backend.code_builder.i32_wrap_i64();
                         self.wrap_small_int(backend, ret_width);
                     }
+                    (I32, I128) => {
+                        self.load_args(backend);
+                        backend.code_builder.i32_load(Align::Bytes4, 0);
+                    }
                     (I64, I32) => {
+                        self.load_args(backend);
                         if arg_width.is_signed() {
                             backend.code_builder.i64_extend_s_i32()
                         } else {
                             backend.code_builder.i64_extend_u_i32()
                         }
                     }
-                    (I64, I64) => {}
+                    (I64, I64) => {
+                        self.load_args(backend);
+                    }
+                    (I64, I128) => {
+                        let (frame_ptr, offset) = match backend.storage.get(&self.arguments[0]) {
+                            StoredValue::StackMemory { location, .. } => {
+                                location.local_and_offset(backend.storage.stack_frame_pointer)
+                            }
+                            _ => internal_error!("I128 should be in stack memory"),
+                        };
+                        backend.code_builder.get_local(frame_ptr);
+                        backend.code_builder.i64_load(Align::Bytes8, offset);
+                    }
+                    (I128, I64) => {
+                        // Symbols are loaded as if for a call, so the i128 "return address" and i64 value are on the value stack
+                        self.load_args(backend);
+                        backend.code_builder.i64_store(Align::Bytes8, 0);
+
+                        // Zero the most significant 64 bits
+                        let (frame_ptr, offset) = match &self.ret_storage {
+                            StoredValue::StackMemory { location, .. } => {
+                                location.local_and_offset(backend.storage.stack_frame_pointer)
+                            }
+                            _ => internal_error!("I128 should be in stack memory"),
+                        };
+                        backend.code_builder.get_local(frame_ptr);
+                        backend.code_builder.i64_const(0);
+                        backend.code_builder.i64_store(Align::Bytes8, offset + 8);
+                    }
 
                     _ => todo!("{:?}: {:?} -> {:?}", self.lowlevel, arg_type, ret_type),
                 }
@@ -1952,7 +1980,7 @@ impl<'a> LowLevelCall<'a> {
                 }
             }
 
-            Layout::RecursivePointer => {
+            Layout::RecursivePointer(_) => {
                 internal_error!(
                     "Tried to apply `==` to RecursivePointer values {:?}",
                     self.arguments,
