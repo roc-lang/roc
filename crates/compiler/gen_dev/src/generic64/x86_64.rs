@@ -1660,7 +1660,7 @@ fn shl_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
     let rex = add_reg_extension(dst, rex);
 
     let dst_mod = dst as u8 % 8;
-    buf.extend(&[rex, 0xD3, 0xC0 | (4 << 3) | dst_mod]);
+    buf.extend([rex, 0xD3, 0xC0 | (4 << 3) | dst_mod]);
 }
 
 /// `SHR r/m64, CL` -> Unsigned divide r/m64 by 2, CL times.
@@ -1670,7 +1670,7 @@ fn shr_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
     let rex = add_reg_extension(dst, rex);
 
     let dst_mod = dst as u8 % 8;
-    buf.extend(&[rex, 0xD3, 0xC0 | (5 << 3) | dst_mod]);
+    buf.extend([rex, 0xD3, 0xC0 | (5 << 3) | dst_mod]);
 }
 
 /// `SAR r/m64, CL` -> Signed divide r/m64 by 2, CL times.
@@ -1680,7 +1680,7 @@ fn sar_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg) {
     let rex = add_reg_extension(dst, rex);
 
     let dst_mod = dst as u8 % 8;
-    buf.extend(&[rex, 0xD3, 0xC0 | (7 << 3) | dst_mod]);
+    buf.extend([rex, 0xD3, 0xC0 | (7 << 3) | dst_mod]);
 }
 
 /// `ADDSD xmm1,xmm2/m64` -> Add the low double-precision floating-point value from xmm2/mem to xmm1 and store the result in xmm1.
