@@ -66,28 +66,22 @@ initServerApp = \app, initData, hostJavaScript ->
     |> translateStatic
     |> insertRocScript initData app.wasmUrl hostJavaScript
 
-# TODO: using this annotation currently yields a compiler panic
-#   Alias `Str.Utf8ByteProblem` not registered in delayed aliases!
-# toU64BadUtf8Err : [BadUtf8 Str.Utf8ByteProblem Nat] -> [BadUtf8 Str.Utf8ByteProblem U64]
-toU64BadUtf8Err = \BadUtf8 problem idx -> BadUtf8 problem (Num.toU64 idx)
-
 insertRocScript : Html [], initData, Str, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
 insertRocScript = \document, initData, wasmUrl, hostJavaScript ->
+    encode =
+        \value ->
+            value
+            |> Encode.toBytes Json.toUtf8
+            |> Str.fromUtf8
+            |> Result.withDefault ""
+
     # Convert initData to JSON as a Roc Str, then convert the Roc Str to a JS string.
     # JSON won't have invalid UTF-8 in it, since it would be escaped as part of JSON encoding.
     jsInitData =
-        initData
-        |> Encode.toBytes Json.toUtf8
-        |> Str.fromUtf8
-        |> Result.mapErr toU64BadUtf8Err
-        |> Encode.toBytes Json.toUtf8
-        |> Str.fromUtf8
-        |> Result.withDefault ""
+        initData |> encode |> encode
+
     jsWasmUrl =
-        wasmUrl
-        |> Encode.toBytes Json.toUtf8
-        |> Str.fromUtf8
-        |> Result.withDefault ""
+        encode wasmUrl
 
     script : Html []
     script = (element "script") [] [
