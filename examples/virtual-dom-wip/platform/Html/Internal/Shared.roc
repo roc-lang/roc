@@ -43,7 +43,7 @@ Attribute state : [
 
 CyclicStructureAccessor : [
     ObjectField Str CyclicStructureAccessor,
-    ArrayIndex U64 CyclicStructureAccessor,
+    ArrayIndex U32 CyclicStructureAccessor,
     SerializableValue,
 ]
 
