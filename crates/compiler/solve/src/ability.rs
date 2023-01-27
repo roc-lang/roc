@@ -467,11 +467,8 @@ fn is_builtin_fixed_int_alias(symbol: Symbol) -> bool {
 }
 
 #[inline(always)]
-#[rustfmt::skip]
 fn is_builtin_nat_alias(symbol: Symbol) -> bool {
-    matches!(symbol,
-        | Symbol::NUM_NAT  | Symbol::NUM_NATURAL
-    )
+    matches!(symbol, Symbol::NUM_NAT | Symbol::NUM_NATURAL)
 }
 
 #[inline(always)]
@@ -484,17 +481,16 @@ fn is_builtin_float_alias(symbol: Symbol) -> bool {
 }
 
 #[inline(always)]
-#[rustfmt::skip]
 fn is_builtin_dec_alias(symbol: Symbol) -> bool {
-    matches!(symbol,
-        | Symbol::NUM_DEC  | Symbol::NUM_DECIMAL,
-    )
+    matches!(symbol, Symbol::NUM_DEC | Symbol::NUM_DECIMAL,)
 }
 
 #[inline(always)]
-#[rustfmt::skip]
 fn is_builtin_number_alias(symbol: Symbol) -> bool {
-    is_builtin_fixed_int_alias(symbol) || is_builtin_nat_alias(symbol) || is_builtin_float_alias(symbol) || is_builtin_dec_alias(symbol)
+    is_builtin_fixed_int_alias(symbol)
+        || is_builtin_nat_alias(symbol)
+        || is_builtin_float_alias(symbol)
+        || is_builtin_dec_alias(symbol)
 }
 
 struct NotDerivable {
