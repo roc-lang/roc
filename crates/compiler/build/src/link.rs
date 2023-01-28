@@ -261,6 +261,11 @@ pub fn build_zig_host_native(
         zig_cmd.args(["build-obj", "-fPIC"]);
     }
 
+    // zig issue https://github.com/ziglang/zig/issues/14099 means that the stack probing code is
+    // not included. Instead of trying to include it, just ignore it for now. This is only relevant
+    // for the surgical linker
+    zig_cmd.arg("-fno-stack-check");
+
     zig_cmd.args([
         zig_host_src,
         &format!("-femit-bin={}", emit_bin),
@@ -333,6 +338,11 @@ pub fn build_zig_host_native(
     } else {
         zig_cmd.args(&["build-obj"]);
     }
+
+    // zig issue https://github.com/ziglang/zig/issues/14099 means that the stack probing code is
+    // not included. Instead of trying to include it, just ignore it for now. This is only relevant
+    // for the surgical linker
+    zig_cmd.arg("-fno-stack-check");
 
     zig_cmd.args(&[
         zig_host_src,
@@ -429,6 +439,12 @@ pub fn build_zig_host_native(
     } else {
         zig_cmd.args(["build-obj"]);
     }
+
+    // zig issue https://github.com/ziglang/zig/issues/14099 means that the stack probing code is
+    // not included. Instead of trying to include it, just ignore it for now. This is only relevant
+    // for the surgical linker
+    zig_cmd.arg("-fno-stack-check");
+
     zig_cmd.args([
         zig_host_src,
         &format!("-femit-bin={}", emit_bin),
