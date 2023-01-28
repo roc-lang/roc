@@ -3,7 +3,8 @@
 # https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 set -euxo pipefail
 
-git clone https://github.com/roc-lang/basic-cli.git
+git clone https://github.com/dankeyy/basic-cli
+git checkout 3fbe385a17819cd4a33b7d53221fe543c8e45a73
 
 # Get the url of the latest release. We're not using the latest main source code for easier reproducibility.
 RELEASE_URL=$(./ci/get_latest_release_url.sh $1)
