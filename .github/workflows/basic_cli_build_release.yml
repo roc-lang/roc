@@ -1,4 +1,8 @@
-on: [pull_request, workflow_dispatch]
+on:
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [edited]
 
 # this cancels workflows currently in progress if you start a new one
 concurrency:
