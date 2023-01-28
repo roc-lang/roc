@@ -1813,6 +1813,26 @@ fn str_split_last_not_found() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn str_split_overlapping_substring_1() {
+    assert_evals_to!(
+        r#"Str.split "aaa" "aa""#,
+        RocList::from_slice(&[RocStr::from(""), RocStr::from("a")]),
+        RocList<RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_overlapping_substring_2() {
+    assert_evals_to!(
+        r#"Str.split "aaaa" "aa""#,
+        RocList::from_slice(&[RocStr::from(""), RocStr::from(""), RocStr::from("")]),
+        RocList<RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_walk_utf8_with_index() {
     #[cfg(not(feature = "gen-llvm-wasm"))]
     assert_evals_to!(
