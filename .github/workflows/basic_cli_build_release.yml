@@ -132,7 +132,7 @@ jobs:
 
       - run: ./roc_nightly/roc build --bundle=${{ env.ARCHIVE_FORMAT }} ./basic-cli/src/main.roc
 
-      - run: echo "TAR_FILENAME=$(ls -d basic-cli/src/* | grep '${{ env.ARCHIVE_FORMAT }}')" >> $GITHUB_ENV
+      - run: echo 'TAR_FILENAME=$(ls -d basic-cli/src/* | grep ${{ env.ARCHIVE_FORMAT }})' >> $GITHUB_ENV
 
       - name: Upload platform archive
         uses: actions/upload-artifact@v3
