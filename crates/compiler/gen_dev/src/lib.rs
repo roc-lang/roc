@@ -21,6 +21,7 @@ use roc_mono::layout::{
     Builtin, InLayout, Layout, LayoutId, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
     UnionLayout,
 };
+use roc_mono::list_element_layout;
 
 mod generic64;
 mod object_builder;
@@ -685,7 +686,14 @@ trait Backend<'a> {
                     args.len(),
                     "ListWithCapacity: expected to have exactly one argument"
                 );
-                self.build_list_with_capacity(sym, args[0], arg_layouts[0], ret_layout)
+                let element_layout = list_element_layout!(self.interner(), *ret_layout);
+                self.build_list_with_capacity(
+                    sym,
+                    args[0],
+                    arg_layouts[0],
+                    element_layout,
+                    ret_layout,
+                )
             }
             LowLevel::ListReserve => {
                 debug_assert_eq!(
@@ -948,6 +956,7 @@ trait Backend<'a> {
         dst: &Symbol,
         capacity: Symbol,
         capacity_layout: InLayout<'a>,
+        element_layout: InLayout<'a>,
         ret_layout: &InLayout<'a>,
     );
 

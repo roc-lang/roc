@@ -1269,6 +1269,7 @@ impl<
         dst: &Symbol,
         capacity: Symbol,
         capacity_layout: InLayout<'a>,
+        element_layout: InLayout<'a>,
         ret_layout: &InLayout<'a>,
     ) {
         // List alignment argument (u32).
@@ -1282,7 +1283,7 @@ impl<
 
         // Load element_width argument (usize).
         let u64_layout = Layout::U64;
-        let element_width = self.layout_interner.stack_size(*ret_layout);
+        let element_width = self.layout_interner.stack_size(element_layout);
         self.load_literal(
             &Symbol::DEV_TMP2,
             &u64_layout,
