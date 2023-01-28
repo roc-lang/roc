@@ -127,7 +127,7 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]; then
             echo "ARCHIVE_FORMAT='.tar.br'" >> "$GITHUB_ENV"
           else
-            echo "ARCHIVE_FORMAT='.tar.gz\'" >> "$GITHUB_ENV"
+            echo "ARCHIVE_FORMAT='.tar.gz'" >> "$GITHUB_ENV"
           fi
 
       - run: ./roc_nightly/roc build --bundle=${{ env.ARCHIVE_FORMAT }} ./basic-cli/src/main.roc
