@@ -1,8 +1,14 @@
 on:
   pull_request:
+    env:
+      ARCHIVE_FORMAT: "tar.gz"
   workflow_dispatch:
+    env:
+      ARCHIVE_FORMAT: "tar.br"
   release:
     types: [edited]
+    env:
+      ARCHIVE_FORMAT: "tar.gz" # gz for quick test, br takes longer
 
 # this cancels workflows currently in progress if you start a new one
 concurrency:
@@ -106,7 +112,7 @@ jobs:
         run: ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 
       - name: delete tar
-        run: ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
+        run: ls | grep "roc_nightly.*tar\.gz" | xargs rm -rf
 
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
@@ -122,9 +128,9 @@ jobs:
 
       - run: cp macos-x86_64-files/* ./basic-cli/src
 
-      - run: ./roc_nightly/roc build --bundle=.tar.br ./basic-cli/src/main.roc
+      - run: ./roc_nightly/roc build --bundle=${ARCHIVE_FORMAT} ./basic-cli/src/main.roc
 
-      - run: echo "TAR_FILENAME=$(ls -d basic-cli/src/* | grep '.tar.br')" >> $GITHUB_ENV
+      - run: echo "TAR_FILENAME=$(ls -d basic-cli/src/* | grep '${ARCHIVE_FORMAT}')" >> $GITHUB_ENV
 
       - name: Upload platform archive
         uses: actions/upload-artifact@v3
