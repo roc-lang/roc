@@ -1,7 +1,7 @@
 on:
   workflow_dispatch:
-  schedule:
-    - cron:  '0 13 * * *'
+  release:
+    types: [edited]
 
 name: Test latest nightly release for macOS, ubu 20.04, ubu 22.04 x86_64
 
@@ -52,10 +52,10 @@ jobs:
         run: mv roc_nightly* roc_nightly
 
       - name: test roc hello world
-        run: ./roc_nightly/roc examples/helloWorld.roc
+        run: cd roc_nightly && ./roc examples/helloWorld.roc
 
       - name: test platform switching rust
-        run: ./roc_nightly/roc examples/platform-switching/rocLovesRust.roc
+        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesRust.roc
 
       - name: get OS to use for zig download
         if: startsWith(matrix.os, 'ubuntu')
@@ -73,10 +73,10 @@ jobs:
         run: zig version
 
       - name: test platform switching zig
-        run: ./roc_nightly/roc examples/platform-switching/rocLovesZig.roc
+        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesZig.roc
 
       - name: test platform switching c
-        run: ./roc_nightly/roc examples/platform-switching/rocLovesC.roc
+        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesC.roc
 
 
 
