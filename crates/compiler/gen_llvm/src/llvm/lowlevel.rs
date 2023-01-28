@@ -248,7 +248,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
 
                             let roc_return_type =
                                 basic_type_from_layout(env, layout_interner, layout)
-                                    .ptr_type(AddressSpace::Generic);
+                                    .ptr_type(AddressSpace::default());
 
                             let roc_return_alloca = env.builder.build_pointer_cast(
                                 zig_return_alloca,
@@ -489,7 +489,7 @@ pub(crate) fn run_low_level<'a, 'ctx, 'env>(
                     let return_type = basic_type_from_layout(env, layout_interner, layout);
                     let cast_result = env.builder.build_pointer_cast(
                         result,
-                        return_type.ptr_type(AddressSpace::Generic),
+                        return_type.ptr_type(AddressSpace::default()),
                         "cast",
                     );
 
@@ -1655,7 +1655,7 @@ fn dec_alloca<'a, 'ctx, 'env>(
 
     let ptr = env.builder.build_pointer_cast(
         alloca,
-        value.get_type().ptr_type(AddressSpace::Generic),
+        value.get_type().ptr_type(AddressSpace::default()),
         "cast_to_i128_ptr",
     );
 
@@ -2005,7 +2005,7 @@ fn build_int_unary_op<'a, 'ctx, 'env>(
 
                                 let roc_return_type =
                                     basic_type_from_layout(env, layout_interner, return_layout)
-                                        .ptr_type(AddressSpace::Generic);
+                                        .ptr_type(AddressSpace::default());
 
                                 let roc_return_alloca = env.builder.build_pointer_cast(
                                     zig_return_alloca,

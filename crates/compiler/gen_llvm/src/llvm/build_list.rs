@@ -74,7 +74,7 @@ fn pass_element_as_opaque<'a, 'ctx, 'env>(
     env.builder
         .build_pointer_cast(
             element_ptr,
-            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            env.context.i8_type().ptr_type(AddressSpace::default()),
             "pass_element_as_opaque",
         )
         .into()
@@ -97,7 +97,7 @@ pub(crate) fn pass_as_opaque<'a, 'ctx, 'env>(
     env.builder
         .build_pointer_cast(
             ptr,
-            env.context.i8_type().ptr_type(AddressSpace::Generic),
+            env.context.i8_type().ptr_type(AddressSpace::default()),
             "pass_as_opaque",
         )
         .into()
@@ -133,7 +133,7 @@ pub(crate) fn list_get_unsafe<'a, 'ctx, 'env>(
     let builder = env.builder;
 
     let elem_type = basic_type_from_layout(env, layout_interner, element_layout);
-    let ptr_type = elem_type.ptr_type(AddressSpace::Generic);
+    let ptr_type = elem_type.ptr_type(AddressSpace::default());
     // Load the pointer to the array data
     let array_data_ptr = load_list_ptr(builder, wrapper_struct, ptr_type);
 
@@ -804,7 +804,7 @@ pub(crate) fn decref<'a, 'ctx, 'env>(
     let (_, pointer) = load_list(
         env.builder,
         wrapper_struct,
-        env.context.i8_type().ptr_type(AddressSpace::Generic),
+        env.context.i8_type().ptr_type(AddressSpace::default()),
     );
 
     crate::llvm::refcounting::decref_pointer_check_null(env, pointer, alignment);

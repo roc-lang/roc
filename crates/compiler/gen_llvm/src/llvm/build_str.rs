@@ -32,7 +32,7 @@ pub(crate) fn decode_from_utf8_result<'a, 'ctx, 'env>(
         PtrWidth::Bytes4 | PtrWidth::Bytes8 => {
             let result_ptr_cast = env.builder.build_pointer_cast(
                 pointer,
-                record_type.ptr_type(AddressSpace::Generic),
+                record_type.ptr_type(AddressSpace::default()),
                 "to_unnamed",
             );
 

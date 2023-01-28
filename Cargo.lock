@@ -1783,7 +1783,7 @@ checksum = "adab1eaa3408fb7f0c777a73e7465fd5656136fc93b670eb6df3c88c2c1344e3"
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/roc-lang/inkwell?branch=master#9b63d543eaf996aa91fdeb20a2bc8b8558775648"
+source = "git+https://github.com/roc-lang/inkwell?branch=inkwell-llvm-15#95a3a13c99289539f5cdd91193a4def38711117d"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -1795,8 +1795,8 @@ dependencies = [
 
 [[package]]
 name = "inkwell_internals"
-version = "0.5.0"
-source = "git+https://github.com/roc-lang/inkwell?branch=master#9b63d543eaf996aa91fdeb20a2bc8b8558775648"
+version = "0.7.0"
+source = "git+https://github.com/roc-lang/inkwell?branch=inkwell-llvm-15#95a3a13c99289539f5cdd91193a4def38711117d"
 dependencies = [
  "proc-macro2",
  "quote",
