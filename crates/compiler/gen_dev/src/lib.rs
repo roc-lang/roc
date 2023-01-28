@@ -757,6 +757,14 @@ trait Backend<'a> {
                 let element_layout = list_element_layout!(self.interner(), *ret_layout);
                 self.build_list_concat(sym, args, arg_layouts, element_layout, ret_layout)
             }
+            LowLevel::ListPrepend => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "ListPrepend: expected to have exactly two arguments"
+                );
+                self.build_list_prepend(sym, args, arg_layouts, ret_layout)
+            }
             LowLevel::StrConcat => self.build_fn_call(
                 sym,
                 bitcode::STR_CONCAT.to_string(),
@@ -1060,6 +1068,15 @@ trait Backend<'a> {
         args: &'a [Symbol],
         arg_layouts: &[InLayout<'a>],
         element_layout: InLayout<'a>,
+        ret_layout: &InLayout<'a>,
+    );
+
+    /// build_list_prepend returns a new list with a given element prepended.
+    fn build_list_prepend(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     );
 
