@@ -727,6 +727,15 @@ trait Backend<'a> {
                 );
                 self.build_list_replace_unsafe(sym, args, arg_layouts, ret_layout)
             }
+            LowLevel::ListConcat => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "ListConcat: expected to have exactly two arguments"
+                );
+                let element_layout = list_element_layout!(self.interner(), *ret_layout);
+                self.build_list_concat(sym, args, arg_layouts, element_layout, ret_layout)
+            }
             LowLevel::StrConcat => self.build_fn_call(
                 sym,
                 bitcode::STR_CONCAT.to_string(),
@@ -993,6 +1002,16 @@ trait Backend<'a> {
         dst: &Symbol,
         args: &'a [Symbol],
         arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
+    );
+
+    /// build_list_concat returns a new list containing the two argument lists concatenated.
+    fn build_list_concat(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[InLayout<'a>],
+        element_layout: InLayout<'a>,
         ret_layout: &InLayout<'a>,
     );
 
