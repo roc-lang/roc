@@ -9,7 +9,7 @@ use object::{
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
-use std::ffi::CStr;
+use std::ffi::{CStr, c_char};
 use std::mem;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -430,7 +430,7 @@ pub(crate) fn preprocess_macho(
                         // std::ffi::CStr is actually not a char* under
                         // the hood (!) but rather an array, so to strip
                         // the trailing null bytes we have to use from_ptr.
-                        let c_str = unsafe { CStr::from_ptr(str_bytes.as_ptr() as *const i8) };
+                        let c_str = unsafe { CStr::from_ptr(str_bytes.as_ptr() as *const c_char) };
 
                         Path::new(c_str.to_str().unwrap())
                     } else {
