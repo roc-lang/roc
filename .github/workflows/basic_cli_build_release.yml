@@ -128,6 +128,12 @@ jobs:
 
       - run: cp macos-x86_64-files/* ./basic-cli/src
 
+      - run: echo $ARCHIVE_FORMAT
+
+      - run: echo ${ARCHIVE_FORMAT}
+
+      - run: echo ${{ env.ARCHIVE_FORMAT }}
+
       - run: ./roc_nightly/roc build --bundle=${ARCHIVE_FORMAT} ./basic-cli/src/main.roc
 
       - run: echo "TAR_FILENAME=$(ls -d basic-cli/src/* | grep '${ARCHIVE_FORMAT}')" >> $GITHUB_ENV
