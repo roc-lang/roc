@@ -125,14 +125,14 @@ jobs:
       # gz for quick test, br takes longer
       - run: |
           if [ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]; then
-            echo "ARCHIVE_FORMAT=\".tar.br\"" >> "$GITHUB_ENV"
+            echo "ARCHIVE_FORMAT='.tar.br'" >> "$GITHUB_ENV"
           else
-            echo "ARCHIVE_FORMAT=\".tar.gz\"" >> "$GITHUB_ENV"
+            echo "ARCHIVE_FORMAT='.tar.gz\'" >> "$GITHUB_ENV"
           fi
 
       - run: ./roc_nightly/roc build --bundle=${{ env.ARCHIVE_FORMAT }} ./basic-cli/src/main.roc
 
-      - run: echo 'TAR_FILENAME=$(ls -d basic-cli/src/* | grep ${{ env.ARCHIVE_FORMAT }})' >> $GITHUB_ENV
+      - run: echo "TAR_FILENAME=$(ls -d basic-cli/src/* | grep ${{ env.ARCHIVE_FORMAT }})" >> $GITHUB_ENV
 
       - name: Upload platform archive
         uses: actions/upload-artifact@v3
