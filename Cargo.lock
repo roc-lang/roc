@@ -1783,7 +1783,7 @@ checksum = "adab1eaa3408fb7f0c777a73e7465fd5656136fc93b670eb6df3c88c2c1344e3"
 [[package]]
 name = "inkwell"
 version = "0.1.0"
-source = "git+https://github.com/roc-lang/inkwell?branch=master#9b63d543eaf996aa91fdeb20a2bc8b8558775648"
+source = "git+https://github.com/roc-lang/inkwell?branch=inkwell-llvm-15#95a3a13c99289539f5cdd91193a4def38711117d"
 dependencies = [
  "either",
  "inkwell_internals",
@@ -1795,8 +1795,8 @@ dependencies = [
 
 [[package]]
 name = "inkwell_internals"
-version = "0.5.0"
-source = "git+https://github.com/roc-lang/inkwell?branch=master#9b63d543eaf996aa91fdeb20a2bc8b8558775648"
+version = "0.7.0"
+source = "git+https://github.com/roc-lang/inkwell?branch=inkwell-llvm-15#95a3a13c99289539f5cdd91193a4def38711117d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2532,9 +2532,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.15.0"
+version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e82dad04139b71a90c080c8463fe0dc7902db5192d939bd0950f074d014339e1"
+checksum = "6f61fba1741ea2b3d6a1e3178721804bb716a68a6aeba1149b5d52e3d464ea66"
 
 [[package]]
 name = "oorandom"
@@ -3391,7 +3391,6 @@ dependencies = [
  "libc",
  "libloading",
  "mimalloc",
- "once_cell",
  "parking_lot 0.12.1",
  "pretty_assertions",
  "roc_build",
