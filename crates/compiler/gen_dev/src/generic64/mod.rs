@@ -1299,6 +1299,7 @@ impl<
         dst: &Symbol,
         capacity: Symbol,
         capacity_layout: InLayout<'a>,
+        element_layout: InLayout<'a>,
         ret_layout: &InLayout<'a>,
     ) {
         // List alignment argument (u32).
@@ -1312,7 +1313,7 @@ impl<
 
         // Load element_width argument (usize).
         let u64_layout = Layout::U64;
-        let element_width = self.layout_interner.stack_size(*ret_layout);
+        let element_width = self.layout_interner.stack_size(element_layout);
         self.load_literal(
             &Symbol::DEV_TMP2,
             &u64_layout,
@@ -1679,6 +1680,82 @@ impl<
         );
 
         self.free_symbol(&Symbol::DEV_TMP5);
+    }
+
+    fn build_list_concat(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[InLayout<'a>],
+        element_layout: InLayout<'a>,
+        ret_layout: &InLayout<'a>,
+    ) {
+        let list_a = args[0];
+        let list_a_layout = arg_layouts[0];
+        let list_b = args[1];
+        let list_b_layout = arg_layouts[1];
+
+        // Load list alignment argument (u32).
+        let u32_layout = Layout::U32;
+        let list_alignment = self.layout_interner.alignment_bytes(*ret_layout);
+        self.load_literal(
+            &Symbol::DEV_TMP,
+            &u32_layout,
+            &Literal::Int((list_alignment as i128).to_ne_bytes()),
+        );
+
+        // Load element_width argument (usize).
+        let u64_layout = Layout::U64;
+        let element_width = self.layout_interner.stack_size(element_layout);
+        self.load_literal(
+            &Symbol::DEV_TMP2,
+            &u64_layout,
+            &Literal::Int((element_width as i128).to_ne_bytes()),
+        );
+
+        // Setup the return location.
+        let base_offset = self
+            .storage_manager
+            .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
+
+        let lowlevel_args = bumpalo::vec![
+        in self.env.arena;
+            list_a,
+            list_b,
+            // alignment
+            Symbol::DEV_TMP,
+            // element_width
+            Symbol::DEV_TMP2,
+         ];
+        let lowlevel_arg_layouts = bumpalo::vec![
+        in self.env.arena;
+            list_a_layout,
+            list_b_layout,
+            u32_layout,
+            u64_layout
+        ];
+
+        self.build_fn_call(
+            &Symbol::DEV_TMP3,
+            bitcode::LIST_CONCAT.to_string(),
+            &lowlevel_args,
+            &lowlevel_arg_layouts,
+            ret_layout,
+        );
+
+        self.free_symbol(&Symbol::DEV_TMP);
+        self.free_symbol(&Symbol::DEV_TMP2);
+
+        // Return list value from fn call
+        self.storage_manager.copy_symbol_to_stack_offset(
+            self.layout_interner,
+            &mut self.buf,
+            base_offset,
+            &Symbol::DEV_TMP3,
+            ret_layout,
+        );
+
+        self.free_symbol(&Symbol::DEV_TMP3);
     }
 
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {

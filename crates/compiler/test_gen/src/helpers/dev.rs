@@ -273,6 +273,7 @@ macro_rules! assert_evals_to {
 
         let transform = |success| {
             let expected = $expected;
+            #[allow(clippy::redundant_closure_call)]
             let given = $transform(success);
             assert_eq!(&given, &expected);
         };

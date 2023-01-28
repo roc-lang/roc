@@ -2113,6 +2113,16 @@ pub enum Builtin<'a> {
     List(InLayout<'a>),
 }
 
+#[macro_export]
+macro_rules! list_element_layout {
+    ($interner:expr, $list_layout:expr) => {
+        match $interner.get($list_layout) {
+            Layout::Builtin(Builtin::List(list_layout)) => list_layout,
+            _ => internal_error!("invalid list layout"),
+        }
+    };
+}
+
 pub struct Env<'a, 'b> {
     target_info: TargetInfo,
     arena: &'a Bump,
