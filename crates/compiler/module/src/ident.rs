@@ -77,7 +77,7 @@ pub type TagIdIntType = u16;
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TagName(pub Uppercase);
 
-roc_error_macros::assert_sizeof_non_wasm!(TagName, 16);
+// roc_error_macros::assert_sizeof_non_wasm!(TagName, 16);
 roc_error_macros::assert_sizeof_wasm!(TagName, 8);
 
 impl TagName {

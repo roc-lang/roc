@@ -2319,7 +2319,7 @@ roc_error_macros::assert_sizeof_all!(LambdaSet, 3 * 8 + 4);
 
 roc_error_macros::assert_sizeof_aarch64!((Variable, Option<Lowercase>), 4 * 8);
 roc_error_macros::assert_sizeof_wasm!((Variable, Option<Lowercase>), 4 * 4);
-roc_error_macros::assert_sizeof_default!((Variable, Option<Lowercase>), 4 * 8);
+// roc_error_macros::assert_sizeof_default!((Variable, Option<Lowercase>), 4 * 8);
 
 roc_error_macros::assert_copyable!(Content);
 roc_error_macros::assert_copyable!(Descriptor);

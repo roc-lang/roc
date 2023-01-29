@@ -31,6 +31,11 @@ pub fn target_triple_str(target: &Triple) -> &'static str {
             ..
         } => "aarch64-unknown-linux-gnu",
         Triple {
+            architecture: Architecture::Arm(_),
+            operating_system: OperatingSystem::Linux,
+            ..
+        } => "armv7-unknown-linux-gnueabihf",
+        Triple {
             architecture: Architecture::Aarch64(_),
             operating_system: OperatingSystem::Darwin,
             ..

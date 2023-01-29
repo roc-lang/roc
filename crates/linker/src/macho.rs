@@ -9,7 +9,7 @@ use object::{
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
-use std::ffi::{CStr, c_char};
+use std::ffi::{c_char, CStr};
 use std::mem;
 use std::path::Path;
 use std::time::{Duration, Instant};

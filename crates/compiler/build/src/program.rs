@@ -407,7 +407,10 @@ fn gen_from_mono_module_llvm<'a>(
         // Emit the .o file
         use target_lexicon::Architecture;
         match target.architecture {
-            Architecture::X86_64 | Architecture::X86_32(_) | Architecture::Aarch64(_) => {
+            Architecture::X86_64
+            | Architecture::X86_32(_)
+            | Architecture::Aarch64(_)
+            | Architecture::Arm(_) => {
                 let reloc = RelocMode::PIC;
                 let target_machine =
                     target::target_machine(target, convert_opt_level(opt_level), reloc).unwrap();

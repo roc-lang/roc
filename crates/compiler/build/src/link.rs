@@ -935,7 +935,11 @@ fn link_linux(
     input_paths: &[&str],
     link_type: LinkType,
 ) -> io::Result<(Child, PathBuf)> {
-    let architecture = format!("{}-linux-gnu", target.architecture);
+    let architecture = if let Architecture::Arm(_) = target.architecture {
+        "arm-linux-gnueabihf".to_string()
+    } else {
+        format!("{}-linux-gnu", target.architecture)
+    };
 
     //    Command::new("cp")
     //        .args(&[input_paths[0], "/home/folkertdev/roc/wasm/host.o"])
@@ -1044,6 +1048,7 @@ fn link_linux(
             }
         }
         Architecture::Aarch64(_) => library_path(["/lib", "ld-linux-aarch64.so.1"]),
+        Architecture::Arm(_) => library_path(["/lib", "ld-linux-armhf.so.3"]),
         _ => internal_error!(
             "TODO gracefully handle unsupported linux architecture: {:?}",
             target.architecture
