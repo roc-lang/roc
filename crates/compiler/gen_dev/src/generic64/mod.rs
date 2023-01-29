@@ -1303,13 +1303,7 @@ impl<
         ret_layout: &InLayout<'a>,
     ) {
         // List alignment argument (u32).
-        let u32_layout = Layout::U32;
-        let list_alignment = self.layout_interner.alignment_bytes(*ret_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP,
-            &u32_layout,
-            &Literal::Int((list_alignment as i128).to_ne_bytes()),
-        );
+        self.load_layout_alignment(*ret_layout, Symbol::DEV_TMP);
 
         // Load element_width argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
@@ -1327,7 +1321,7 @@ impl<
             // element_width
             Symbol::DEV_TMP2,
          ];
-        let lowlevel_arg_layouts = [capacity_layout, u32_layout, Layout::U64];
+        let lowlevel_arg_layouts = [capacity_layout, Layout::U32, Layout::U64];
 
         self.build_fn_call(
             &Symbol::DEV_TMP3,
@@ -1364,13 +1358,7 @@ impl<
         let spare_layout = arg_layouts[1];
 
         // Load list alignment argument (u32).
-        let u32_layout = Layout::U32;
-        let list_alignment = self.layout_interner.alignment_bytes(list_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP,
-            &u32_layout,
-            &Literal::Int((list_alignment as i128).to_ne_bytes()),
-        );
+        self.load_layout_alignment(list_layout, Symbol::DEV_TMP);
 
         // Load element_width argument (usize).
         self.load_layout_stack_size(*ret_layout, Symbol::DEV_TMP2);
@@ -1403,7 +1391,7 @@ impl<
          ];
         let lowlevel_arg_layouts = [
             list_layout,
-            u32_layout,
+            Layout::U32,
             spare_layout,
             Layout::U64,
             u8_layout,
@@ -1547,13 +1535,8 @@ impl<
         let elem = args[2];
         let elem_layout = arg_layouts[2];
 
-        let u32_layout = Layout::U32;
-        let list_alignment = self.layout_interner.alignment_bytes(list_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP,
-            &u32_layout,
-            &Literal::Int((list_alignment as i128).to_ne_bytes()),
-        );
+        // Load list alignment argument (u32).
+        self.load_layout_alignment(list_layout, Symbol::DEV_TMP);
 
         // Have to pass the input element by pointer, so put it on the stack and load it's address.
         self.storage_manager
@@ -1616,7 +1599,7 @@ impl<
          ];
         let lowlevel_arg_layouts = [
             list_layout,
-            u32_layout,
+            Layout::U32,
             index_layout,
             u64_layout,
             u64_layout,
@@ -1661,13 +1644,7 @@ impl<
         let list_b_layout = arg_layouts[1];
 
         // Load list alignment argument (u32).
-        let u32_layout = Layout::U32;
-        let list_alignment = self.layout_interner.alignment_bytes(*ret_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP,
-            &u32_layout,
-            &Literal::Int((list_alignment as i128).to_ne_bytes()),
-        );
+        self.load_layout_alignment(*ret_layout, Symbol::DEV_TMP);
 
         // Load element_width argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
@@ -1686,7 +1663,7 @@ impl<
             // element_width
             Symbol::DEV_TMP2,
          ];
-        let lowlevel_arg_layouts = [list_a_layout, list_b_layout, u32_layout, Layout::U64];
+        let lowlevel_arg_layouts = [list_a_layout, list_b_layout, Layout::U32, Layout::U64];
 
         self.build_fn_call(
             &Symbol::DEV_TMP3,
@@ -1724,13 +1701,7 @@ impl<
         let elem_layout = arg_layouts[1];
 
         // List alignment argument (u32).
-        let u32_layout = Layout::U32;
-        let list_alignment = self.layout_interner.alignment_bytes(*ret_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP,
-            &u32_layout,
-            &Literal::Int((list_alignment as i128).to_ne_bytes()),
-        );
+        self.load_layout_alignment(*ret_layout, Symbol::DEV_TMP);
 
         // Have to pass the input element by pointer, so put it on the stack and load it's address.
         self.storage_manager
@@ -1761,7 +1732,7 @@ impl<
             // element_width
             Symbol::DEV_TMP3,
          ];
-        let lowlevel_arg_layouts = [list_layout, u32_layout, Layout::U64, Layout::U64];
+        let lowlevel_arg_layouts = [list_layout, Layout::U32, Layout::U64, Layout::U64];
 
         self.build_fn_call(
             &Symbol::DEV_TMP4,
@@ -1827,6 +1798,8 @@ impl<
             &u64_layout,
             &Literal::Int((allocation_size as i128).to_ne_bytes()),
         );
+
+        // Load allocation alignment (u32)
         let u32_layout = Layout::U32;
         self.load_literal(
             &Symbol::DEV_TMP2,
@@ -2317,6 +2290,16 @@ impl<
         }
     }
 
+    /// Loads the alignment bytes of `layout` into the given `symbol`
+    fn load_layout_alignment(&mut self, layout: InLayout<'a>, symbol: Symbol) {
+        let u32_layout = Layout::U32;
+        let alignment = self.layout_interner.alignment_bytes(layout);
+        let alignment_literal = Literal::Int((alignment as i128).to_ne_bytes());
+
+        self.load_literal(&symbol, &u32_layout, &alignment_literal);
+    }
+
+    /// Loads the stack size of `layout` into the given `symbol`
     fn load_layout_stack_size(&mut self, layout: InLayout<'a>, symbol: Symbol) {
         let u64_layout = Layout::U64;
         let width = self.layout_interner.stack_size(layout);
