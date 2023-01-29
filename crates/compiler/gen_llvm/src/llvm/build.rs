@@ -3763,18 +3763,15 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx, 'env>(
         } else {
             match layout_interner.get(*layout) {
                 Layout::Builtin(Builtin::List(_)) => {
-                    let list_type = arg_type
-                        .into_pointer_type()
-                        .get_element_type()
-                        .into_struct_type();
+                    let list_type = basic_type_from_layout(env, layout_interner, *layout);
+
                     let loaded = env.builder.new_build_load(
                         list_type,
                         arg.into_pointer_value(),
                         "load_list_pointer",
                     );
-                    let cast =
-                        complex_bitcast_check_size(env, loaded, fastcc_type, "to_fastcc_type_1");
-                    arguments_for_call.push(cast);
+
+                    arguments_for_call.push(loaded);
                 }
                 _ => {
                     let cast =

@@ -68,20 +68,20 @@ initServerApp = \app, initData, hostJavaScript ->
 
 insertRocScript : Html [], initData, Str, Str -> Result (Html []) [InvalidDocument] | initData has Encoding
 insertRocScript = \document, initData, wasmUrl, hostJavaScript ->
+    encode =
+        \value ->
+            value
+            |> Encode.toBytes Json.toUtf8
+            |> Str.fromUtf8
+            |> Result.withDefault ""
+
     # Convert initData to JSON as a Roc Str, then convert the Roc Str to a JS string.
     # JSON won't have invalid UTF-8 in it, since it would be escaped as part of JSON encoding.
     jsInitData =
-        initData
-        |> Encode.toBytes Json.toUtf8
-        |> Str.fromUtf8
-        |> Encode.toBytes Json.toUtf8
-        |> Str.fromUtf8
-        |> Result.withDefault ""
+        initData |> encode |> encode
+
     jsWasmUrl =
-        wasmUrl
-        |> Encode.toBytes Json.toUtf8
-        |> Str.fromUtf8
-        |> Result.withDefault ""
+        encode wasmUrl
 
     script : Html []
     script = (element "script") [] [

@@ -210,6 +210,10 @@ pub fn helper(
     let builtins_host_tempfile =
         bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
+    if false {
+        std::fs::copy(&app_o_file, "/tmp/app.o").unwrap();
+    }
+
     let (mut child, dylib_path) = link(
         &target,
         app_o_file.clone(),
@@ -269,6 +273,7 @@ macro_rules! assert_evals_to {
 
         let transform = |success| {
             let expected = $expected;
+            #[allow(clippy::redundant_closure_call)]
             let given = $transform(success);
             assert_eq!(&given, &expected);
         };

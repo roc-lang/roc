@@ -1601,7 +1601,7 @@ fn list_reverse_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_two_empty_lists() {
     assert_evals_to!(
         "List.concat [] []",
@@ -1611,7 +1611,7 @@ fn list_concat_two_empty_lists() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_two_empty_lists_of_int() {
     assert_evals_to!(
         indoc!(
@@ -1633,7 +1633,7 @@ fn list_concat_two_empty_lists_of_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_second_list_is_empty() {
     assert_evals_to!(
         "List.concat [12, 13] []",
@@ -1643,7 +1643,7 @@ fn list_concat_second_list_is_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_first_list_is_empty() {
     assert_evals_to!(
         "List.concat [] [23, 24]",
@@ -1653,7 +1653,7 @@ fn list_concat_first_list_is_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_two_non_empty_lists() {
     assert_evals_to!(
         "List.concat [1, 2] [3, 4]",
@@ -1679,7 +1679,7 @@ fn list_concat_two_bigger_non_empty_lists() {
 }
 
 #[allow(dead_code)]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn assert_concat_worked(num_elems1: i64, num_elems2: i64) {
     let vec1: Vec<i64> = (0..num_elems1)
         .map(|i| 12345 % (i + num_elems1 + num_elems2 + 1))
@@ -1701,7 +1701,7 @@ fn assert_concat_worked(num_elems1: i64, num_elems2: i64) {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_empty_list() {
     assert_concat_worked(0, 0);
     assert_concat_worked(1, 0);
@@ -1725,7 +1725,7 @@ fn list_concat_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_nonempty_lists() {
     assert_concat_worked(1, 1);
     assert_concat_worked(1, 2);
@@ -1741,7 +1741,7 @@ fn list_concat_nonempty_lists() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_large() {
     with_larger_debug_stack(|| {
         // these values produce mono ASTs so large that

@@ -1118,6 +1118,58 @@ test "strSplitHelp: three pieces" {
     try expect(array[2].eq(expected_array[2]));
 }
 
+test "strSplitHelp: overlapping delimiter 1" {
+    // Str.split "aaa" "aa" == ["", "a"]
+    const str_arr = "aaa";
+    const str = RocStr.init(str_arr, str_arr.len);
+
+    const delimiter_arr = "aa";
+    const delimiter = RocStr.init(delimiter_arr, delimiter_arr.len);
+
+    var array: [2]RocStr = undefined;
+    const array_ptr: [*]RocStr = &array;
+
+    strSplitHelp(array_ptr, str, delimiter);
+
+    var expected = [2]RocStr{
+        RocStr.empty(),
+        RocStr.init("a", 1),
+    };
+
+    // strings are all small so we ignore freeing the memory
+
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
+    try expect(array[1].eq(expected[1]));
+}
+
+test "strSplitHelp: overlapping delimiter 2" {
+    // Str.split "aaa" "aa" == ["", "a"]
+    const str_arr = "aaaa";
+    const str = RocStr.init(str_arr, str_arr.len);
+
+    const delimiter_arr = "aa";
+    const delimiter = RocStr.init(delimiter_arr, delimiter_arr.len);
+
+    var array: [3]RocStr = undefined;
+    const array_ptr: [*]RocStr = &array;
+
+    strSplitHelp(array_ptr, str, delimiter);
+
+    var expected = [3]RocStr{
+        RocStr.empty(),
+        RocStr.empty(),
+        RocStr.empty(),
+    };
+
+    // strings are all small so we ignore freeing the memory
+
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
+    try expect(array[1].eq(expected[1]));
+    try expect(array[2].eq(expected[2]));
+}
+
 // This is used for `Str.split : Str, Str -> Array Str
 // It is used to count how many segments the input `_str`
 // needs to be broken into, so that we can allocate a array
@@ -1154,9 +1206,10 @@ pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
 
             if (matches_delimiter) {
                 count += 1;
+                str_index += delimiter_len;
+            } else {
+                str_index += 1;
             }
-
-            str_index += 1;
         }
     }
 
@@ -1232,6 +1285,20 @@ test "countSegments: string equals delimiter" {
     const segments_count = countSegments(str_delimiter, str_delimiter);
 
     try expectEqual(segments_count, 2);
+}
+
+test "countSegments: overlapping delimiter 1" {
+    // Str.split "aaa" "aa" == ["", "a"]
+    const segments_count = countSegments(RocStr.init("aaa", 3), RocStr.init("aa", 2));
+
+    try expectEqual(segments_count, 2);
+}
+
+test "countSegments: overlapping delimiter 2" {
+    // Str.split "aaa" "aa" == ["", "a"]
+    const segments_count = countSegments(RocStr.init("aaaa", 4), RocStr.init("aa", 2));
+
+    try expectEqual(segments_count, 3);
 }
 
 // Str.countGraphemeClusters

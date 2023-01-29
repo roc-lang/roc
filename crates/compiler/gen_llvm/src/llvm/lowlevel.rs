@@ -13,6 +13,7 @@ use roc_module::{low_level::LowLevel, symbol::Symbol};
 use roc_mono::{
     ir::HigherOrderLowLevel,
     layout::{Builtin, InLayout, LambdaSet, Layout, LayoutIds, LayoutInterner, STLayoutInterner},
+    list_element_layout,
 };
 use roc_target::PtrWidth;
 
@@ -48,15 +49,6 @@ use super::{
     build::{load_symbol, load_symbol_and_layout, Env, Scope},
     convert::zig_dec_type,
 };
-
-macro_rules! list_element_layout {
-    ($interner:expr, $list_layout:expr) => {
-        match $interner.get($list_layout) {
-            Layout::Builtin(Builtin::List(list_layout)) => list_layout,
-            _ => unreachable!("invalid list layout"),
-        }
-    };
-}
 
 pub(crate) fn run_low_level<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
