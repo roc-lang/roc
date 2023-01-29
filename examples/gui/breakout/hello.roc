@@ -1,4 +1,4 @@
-app "breakout"
+app "hello"
     packages { pf: "platform/main.roc" }
     imports [pf.Game.{ Bounds, Elem, Event }]
     provides [program] { Model } to pf
