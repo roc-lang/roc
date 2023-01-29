@@ -4,7 +4,7 @@
 set -euxo pipefail
 
 git clone https://github.com/dankeyy/basic-cli
-cd basic-cli && git checkout 3fbe385a17819cd4a33b7d53221fe543c8e45a73 && cd ..
+cd basic-cli && git checkout e62e22b97f88ce806f60af5c74a75ffa5b220745 && cd ..
 
 # Get the url of the latest release. We're not using the latest main source code for easier reproducibility.
 RELEASE_URL=$(./ci/get_latest_release_url.sh $1)
