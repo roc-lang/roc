@@ -1312,13 +1312,7 @@ impl<
         );
 
         // Load element_width argument (usize).
-        let u64_layout = Layout::U64;
-        let element_width = self.layout_interner.stack_size(element_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP2,
-            &u64_layout,
-            &Literal::Int((element_width as i128).to_ne_bytes()),
-        );
+        self.load_layout_stack_size(element_layout, Symbol::DEV_TMP2);
 
         // Setup the return location.
         let base_offset = self
@@ -1333,7 +1327,7 @@ impl<
             // element_width
             Symbol::DEV_TMP2,
          ];
-        let lowlevel_arg_layouts = [capacity_layout, u32_layout, u64_layout];
+        let lowlevel_arg_layouts = [capacity_layout, u32_layout, Layout::U64];
 
         self.build_fn_call(
             &Symbol::DEV_TMP3,
@@ -1379,20 +1373,14 @@ impl<
         );
 
         // Load element_width argument (usize).
-        let u64_layout = Layout::U64;
-        let element_width = self.layout_interner.stack_size(*ret_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP2,
-            &u64_layout,
-            &Literal::Int((element_width as i128).to_ne_bytes()),
-        );
+        self.load_layout_stack_size(*ret_layout, Symbol::DEV_TMP2);
 
         // Load UpdateMode.Immutable argument (0u8)
         let u8_layout = Layout::U8;
         let update_mode = 0u8;
         self.load_literal(
             &Symbol::DEV_TMP3,
-            &u64_layout,
+            &u8_layout,
             &Literal::Int((update_mode as i128).to_ne_bytes()),
         );
 
@@ -1413,7 +1401,13 @@ impl<
             Symbol::DEV_TMP3,
 
          ];
-        let lowlevel_arg_layouts = [list_layout, u32_layout, spare_layout, u64_layout, u8_layout];
+        let lowlevel_arg_layouts = [
+            list_layout,
+            u32_layout,
+            spare_layout,
+            Layout::U64,
+            u8_layout,
+        ];
 
         self.build_fn_call(
             &Symbol::DEV_TMP4,
@@ -1462,13 +1456,7 @@ impl<
         ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
 
         // Load element_witdh argument (usize).
-        let u64_layout = Layout::U64;
-        let elem_stack_size = self.layout_interner.stack_size(elem_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP2,
-            &u64_layout,
-            &Literal::Int((elem_stack_size as i128).to_ne_bytes()),
-        );
+        self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
         // Setup the return location.
         let base_offset = self
@@ -1483,7 +1471,7 @@ impl<
             // element_width
             Symbol::DEV_TMP2
          ];
-        let lowlevel_arg_layouts = [list_layout, u64_layout, u64_layout];
+        let lowlevel_arg_layouts = [list_layout, Layout::U64, Layout::U64];
 
         self.build_fn_call(
             &Symbol::DEV_TMP3,
@@ -1579,12 +1567,7 @@ impl<
         ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
 
         // Load the elements size.
-        let elem_stack_size = self.layout_interner.stack_size(elem_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP3,
-            &u64_layout,
-            &Literal::Int((elem_stack_size as i128).to_ne_bytes()),
-        );
+        self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP3);
 
         // Setup the return location.
         let base_offset = self
@@ -1669,7 +1652,7 @@ impl<
         dst: &Symbol,
         args: &'a [Symbol],
         arg_layouts: &[InLayout<'a>],
-        element_layout: InLayout<'a>,
+        elem_layout: InLayout<'a>,
         ret_layout: &InLayout<'a>,
     ) {
         let list_a = args[0];
@@ -1687,13 +1670,7 @@ impl<
         );
 
         // Load element_width argument (usize).
-        let u64_layout = Layout::U64;
-        let element_width = self.layout_interner.stack_size(element_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP2,
-            &u64_layout,
-            &Literal::Int((element_width as i128).to_ne_bytes()),
-        );
+        self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
         // Setup the return location.
         let base_offset = self
@@ -1709,7 +1686,7 @@ impl<
             // element_width
             Symbol::DEV_TMP2,
          ];
-        let lowlevel_arg_layouts = [list_a_layout, list_b_layout, u32_layout, u64_layout];
+        let lowlevel_arg_layouts = [list_a_layout, list_b_layout, u32_layout, Layout::U64];
 
         self.build_fn_call(
             &Symbol::DEV_TMP3,
@@ -1767,13 +1744,7 @@ impl<
         ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
 
         // Load element_witdh argument (usize).
-        let u64_layout = Layout::U64;
-        let elem_stack_size = self.layout_interner.stack_size(elem_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP3,
-            &u64_layout,
-            &Literal::Int((elem_stack_size as i128).to_ne_bytes()),
-        );
+        self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP3);
 
         // Setup the return location.
         let base_offset = self
@@ -1790,7 +1761,7 @@ impl<
             // element_width
             Symbol::DEV_TMP3,
          ];
-        let lowlevel_arg_layouts = [list_layout, u32_layout, u64_layout, u64_layout];
+        let lowlevel_arg_layouts = [list_layout, u32_layout, Layout::U64, Layout::U64];
 
         self.build_fn_call(
             &Symbol::DEV_TMP4,
@@ -2344,6 +2315,14 @@ impl<
         for (i, byte) in tmp.iter().enumerate() {
             self.buf[jmp_location as usize + i] = *byte;
         }
+    }
+
+    fn load_layout_stack_size(&mut self, layout: InLayout<'a>, symbol: Symbol) {
+        let u64_layout = Layout::U64;
+        let width = self.layout_interner.stack_size(layout);
+        let width_literal = Literal::Int((width as i128).to_ne_bytes());
+
+        self.load_literal(&symbol, &u64_layout, &width_literal);
     }
 }
 
