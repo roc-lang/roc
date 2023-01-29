@@ -1299,7 +1299,7 @@ impl<
         dst: &Symbol,
         capacity: Symbol,
         capacity_layout: InLayout<'a>,
-        element_layout: InLayout<'a>,
+        elem_layout: InLayout<'a>,
         ret_layout: &InLayout<'a>,
     ) {
         // List alignment argument (u32).
@@ -1312,7 +1312,7 @@ impl<
         );
 
         // Load element_width argument (usize).
-        self.load_layout_stack_size(element_layout, Symbol::DEV_TMP2);
+        self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
         // Setup the return location.
         let base_offset = self

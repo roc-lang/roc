@@ -707,14 +707,8 @@ trait Backend<'a> {
                     args.len(),
                     "ListWithCapacity: expected to have exactly one argument"
                 );
-                let element_layout = list_element_layout!(self.interner(), *ret_layout);
-                self.build_list_with_capacity(
-                    sym,
-                    args[0],
-                    arg_layouts[0],
-                    element_layout,
-                    ret_layout,
-                )
+                let elem_layout = list_element_layout!(self.interner(), *ret_layout);
+                self.build_list_with_capacity(sym, args[0], arg_layouts[0], elem_layout, ret_layout)
             }
             LowLevel::ListReserve => {
                 debug_assert_eq!(
@@ -754,8 +748,8 @@ trait Backend<'a> {
                     args.len(),
                     "ListConcat: expected to have exactly two arguments"
                 );
-                let element_layout = list_element_layout!(self.interner(), *ret_layout);
-                self.build_list_concat(sym, args, arg_layouts, element_layout, ret_layout)
+                let elem_layout = list_element_layout!(self.interner(), *ret_layout);
+                self.build_list_concat(sym, args, arg_layouts, elem_layout, ret_layout)
             }
             LowLevel::ListPrepend => {
                 debug_assert_eq!(
@@ -1021,7 +1015,7 @@ trait Backend<'a> {
         dst: &Symbol,
         capacity: Symbol,
         capacity_layout: InLayout<'a>,
-        element_layout: InLayout<'a>,
+        elem_layout: InLayout<'a>,
         ret_layout: &InLayout<'a>,
     );
 
@@ -1067,7 +1061,7 @@ trait Backend<'a> {
         dst: &Symbol,
         args: &'a [Symbol],
         arg_layouts: &[InLayout<'a>],
-        element_layout: InLayout<'a>,
+        elem_layout: InLayout<'a>,
         ret_layout: &InLayout<'a>,
     );
 
