@@ -1333,12 +1333,7 @@ impl<
             // element_width
             Symbol::DEV_TMP2,
          ];
-        let lowlevel_arg_layouts = bumpalo::vec![
-        in self.env.arena;
-            capacity_layout,
-            u32_layout,
-            u64_layout,
-        ];
+        let lowlevel_arg_layouts = [capacity_layout, u32_layout, u64_layout];
 
         self.build_fn_call(
             &Symbol::DEV_TMP3,
@@ -1418,14 +1413,7 @@ impl<
             Symbol::DEV_TMP3,
 
          ];
-        let lowlevel_arg_layouts = bumpalo::vec![
-        in self.env.arena;
-            list_layout,
-            u32_layout,
-            spare_layout,
-            u64_layout,
-            u8_layout
-        ];
+        let lowlevel_arg_layouts = [list_layout, u32_layout, spare_layout, u64_layout, u8_layout];
 
         self.build_fn_call(
             &Symbol::DEV_TMP4,
@@ -1495,12 +1483,7 @@ impl<
             // element_width
             Symbol::DEV_TMP2
          ];
-        let lowlevel_arg_layouts = bumpalo::vec![
-        in self.env.arena;
-            list_layout,
-            u64_layout,
-            u64_layout,
-        ];
+        let lowlevel_arg_layouts = [list_layout, u64_layout, u64_layout];
 
         self.build_fn_call(
             &Symbol::DEV_TMP3,
@@ -1648,14 +1631,13 @@ impl<
             Symbol::DEV_TMP3,
             Symbol::DEV_TMP4,
          ];
-        let lowlevel_arg_layouts = bumpalo::vec![
-        in self.env.arena;
-                list_layout,
-                u32_layout,
-                index_layout,
-                u64_layout,
-                u64_layout,
-                u64_layout,
+        let lowlevel_arg_layouts = [
+            list_layout,
+            u32_layout,
+            index_layout,
+            u64_layout,
+            u64_layout,
+            u64_layout,
         ];
 
         self.build_fn_call(
@@ -1727,13 +1709,7 @@ impl<
             // element_width
             Symbol::DEV_TMP2,
          ];
-        let lowlevel_arg_layouts = bumpalo::vec![
-        in self.env.arena;
-            list_a_layout,
-            list_b_layout,
-            u32_layout,
-            u64_layout
-        ];
+        let lowlevel_arg_layouts = [list_a_layout, list_b_layout, u32_layout, u64_layout];
 
         self.build_fn_call(
             &Symbol::DEV_TMP3,
@@ -1814,13 +1790,7 @@ impl<
             // element_width
             Symbol::DEV_TMP3,
          ];
-        let lowlevel_arg_layouts = bumpalo::vec![
-        in self.env.arena;
-            list_layout,
-            u32_layout,
-            u64_layout,
-            u64_layout,
-        ];
+        let lowlevel_arg_layouts = [list_layout, u32_layout, u64_layout, u64_layout];
 
         self.build_fn_call(
             &Symbol::DEV_TMP4,
