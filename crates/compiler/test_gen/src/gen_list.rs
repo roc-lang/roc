@@ -746,7 +746,7 @@ fn list_append_longer_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_prepend() {
     assert_evals_to!("List.prepend [] 1", RocList::from_slice(&[1]), RocList<i64>);
     assert_evals_to!(
@@ -768,7 +768,11 @@ fn list_prepend() {
         RocList::from_slice(&[6, 4]),
         RocList<i64>
     );
+}
 
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_prepend_str() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -795,7 +799,7 @@ fn list_prepend_bools() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_prepend_big_list() {
     assert_evals_to!(
         "List.prepend [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 100, 100, 100, 100] 9",

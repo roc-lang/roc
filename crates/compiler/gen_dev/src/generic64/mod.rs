@@ -1299,26 +1299,14 @@ impl<
         dst: &Symbol,
         capacity: Symbol,
         capacity_layout: InLayout<'a>,
-        element_layout: InLayout<'a>,
+        elem_layout: InLayout<'a>,
         ret_layout: &InLayout<'a>,
     ) {
         // List alignment argument (u32).
-        let u32_layout = Layout::U32;
-        let list_alignment = self.layout_interner.alignment_bytes(*ret_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP,
-            &u32_layout,
-            &Literal::Int((list_alignment as i128).to_ne_bytes()),
-        );
+        self.load_layout_alignment(*ret_layout, Symbol::DEV_TMP);
 
         // Load element_width argument (usize).
-        let u64_layout = Layout::U64;
-        let element_width = self.layout_interner.stack_size(element_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP2,
-            &u64_layout,
-            &Literal::Int((element_width as i128).to_ne_bytes()),
-        );
+        self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
         // Setup the return location.
         let base_offset = self
@@ -1333,12 +1321,7 @@ impl<
             // element_width
             Symbol::DEV_TMP2,
          ];
-        let lowlevel_arg_layouts = bumpalo::vec![
-        in self.env.arena;
-            capacity_layout,
-            u32_layout,
-            u64_layout,
-        ];
+        let lowlevel_arg_layouts = [capacity_layout, Layout::U32, Layout::U64];
 
         self.build_fn_call(
             &Symbol::DEV_TMP3,
@@ -1375,29 +1358,17 @@ impl<
         let spare_layout = arg_layouts[1];
 
         // Load list alignment argument (u32).
-        let u32_layout = Layout::U32;
-        let list_alignment = self.layout_interner.alignment_bytes(list_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP,
-            &u32_layout,
-            &Literal::Int((list_alignment as i128).to_ne_bytes()),
-        );
+        self.load_layout_alignment(list_layout, Symbol::DEV_TMP);
 
         // Load element_width argument (usize).
-        let u64_layout = Layout::U64;
-        let element_width = self.layout_interner.stack_size(*ret_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP2,
-            &u64_layout,
-            &Literal::Int((element_width as i128).to_ne_bytes()),
-        );
+        self.load_layout_stack_size(*ret_layout, Symbol::DEV_TMP2);
 
         // Load UpdateMode.Immutable argument (0u8)
         let u8_layout = Layout::U8;
         let update_mode = 0u8;
         self.load_literal(
             &Symbol::DEV_TMP3,
-            &u64_layout,
+            &u8_layout,
             &Literal::Int((update_mode as i128).to_ne_bytes()),
         );
 
@@ -1418,13 +1389,12 @@ impl<
             Symbol::DEV_TMP3,
 
          ];
-        let lowlevel_arg_layouts = bumpalo::vec![
-        in self.env.arena;
+        let lowlevel_arg_layouts = [
             list_layout,
-            u32_layout,
+            Layout::U32,
             spare_layout,
-            u64_layout,
-            u8_layout
+            Layout::U64,
+            u8_layout,
         ];
 
         self.build_fn_call(
@@ -1474,13 +1444,7 @@ impl<
         ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
 
         // Load element_witdh argument (usize).
-        let u64_layout = Layout::U64;
-        let elem_stack_size = self.layout_interner.stack_size(elem_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP2,
-            &u64_layout,
-            &Literal::Int((elem_stack_size as i128).to_ne_bytes()),
-        );
+        self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
         // Setup the return location.
         let base_offset = self
@@ -1495,12 +1459,7 @@ impl<
             // element_width
             Symbol::DEV_TMP2
          ];
-        let lowlevel_arg_layouts = bumpalo::vec![
-        in self.env.arena;
-            list_layout,
-            u64_layout,
-            u64_layout,
-        ];
+        let lowlevel_arg_layouts = [list_layout, Layout::U64, Layout::U64];
 
         self.build_fn_call(
             &Symbol::DEV_TMP3,
@@ -1576,13 +1535,8 @@ impl<
         let elem = args[2];
         let elem_layout = arg_layouts[2];
 
-        let u32_layout = Layout::U32;
-        let list_alignment = self.layout_interner.alignment_bytes(list_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP,
-            &u32_layout,
-            &Literal::Int((list_alignment as i128).to_ne_bytes()),
-        );
+        // Load list alignment argument (u32).
+        self.load_layout_alignment(list_layout, Symbol::DEV_TMP);
 
         // Have to pass the input element by pointer, so put it on the stack and load it's address.
         self.storage_manager
@@ -1596,12 +1550,7 @@ impl<
         ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
 
         // Load the elements size.
-        let elem_stack_size = self.layout_interner.stack_size(elem_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP3,
-            &u64_layout,
-            &Literal::Int((elem_stack_size as i128).to_ne_bytes()),
-        );
+        self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP3);
 
         // Setup the return location.
         let base_offset = self
@@ -1648,14 +1597,13 @@ impl<
             Symbol::DEV_TMP3,
             Symbol::DEV_TMP4,
          ];
-        let lowlevel_arg_layouts = bumpalo::vec![
-        in self.env.arena;
-                list_layout,
-                u32_layout,
-                index_layout,
-                u64_layout,
-                u64_layout,
-                u64_layout,
+        let lowlevel_arg_layouts = [
+            list_layout,
+            Layout::U32,
+            index_layout,
+            u64_layout,
+            u64_layout,
+            u64_layout,
         ];
 
         self.build_fn_call(
@@ -1687,7 +1635,7 @@ impl<
         dst: &Symbol,
         args: &'a [Symbol],
         arg_layouts: &[InLayout<'a>],
-        element_layout: InLayout<'a>,
+        elem_layout: InLayout<'a>,
         ret_layout: &InLayout<'a>,
     ) {
         let list_a = args[0];
@@ -1696,22 +1644,10 @@ impl<
         let list_b_layout = arg_layouts[1];
 
         // Load list alignment argument (u32).
-        let u32_layout = Layout::U32;
-        let list_alignment = self.layout_interner.alignment_bytes(*ret_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP,
-            &u32_layout,
-            &Literal::Int((list_alignment as i128).to_ne_bytes()),
-        );
+        self.load_layout_alignment(*ret_layout, Symbol::DEV_TMP);
 
         // Load element_width argument (usize).
-        let u64_layout = Layout::U64;
-        let element_width = self.layout_interner.stack_size(element_layout);
-        self.load_literal(
-            &Symbol::DEV_TMP2,
-            &u64_layout,
-            &Literal::Int((element_width as i128).to_ne_bytes()),
-        );
+        self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
         // Setup the return location.
         let base_offset = self
@@ -1727,13 +1663,7 @@ impl<
             // element_width
             Symbol::DEV_TMP2,
          ];
-        let lowlevel_arg_layouts = bumpalo::vec![
-        in self.env.arena;
-            list_a_layout,
-            list_b_layout,
-            u32_layout,
-            u64_layout
-        ];
+        let lowlevel_arg_layouts = [list_a_layout, list_b_layout, Layout::U32, Layout::U64];
 
         self.build_fn_call(
             &Symbol::DEV_TMP3,
@@ -1756,6 +1686,75 @@ impl<
         );
 
         self.free_symbol(&Symbol::DEV_TMP3);
+    }
+
+    fn build_list_prepend(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
+    ) {
+        let list = args[0];
+        let list_layout = arg_layouts[0];
+        let elem = args[1];
+        let elem_layout = arg_layouts[1];
+
+        // List alignment argument (u32).
+        self.load_layout_alignment(*ret_layout, Symbol::DEV_TMP);
+
+        // Have to pass the input element by pointer, so put it on the stack and load it's address.
+        self.storage_manager
+            .ensure_symbol_on_stack(&mut self.buf, &elem);
+        let (new_elem_offset, _) = self.storage_manager.stack_offset_and_size(&elem);
+
+        // Load address of input element into register.
+        let reg = self
+            .storage_manager
+            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP2);
+        ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, new_elem_offset);
+
+        // Load element_witdh argument (usize).
+        self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP3);
+
+        // Setup the return location.
+        let base_offset = self
+            .storage_manager
+            .claim_stack_area(dst, self.layout_interner.stack_size(*ret_layout));
+
+        let lowlevel_args = bumpalo::vec![
+        in self.env.arena;
+            list,
+            // alignment
+            Symbol::DEV_TMP,
+            // element
+            Symbol::DEV_TMP2,
+            // element_width
+            Symbol::DEV_TMP3,
+         ];
+        let lowlevel_arg_layouts = [list_layout, Layout::U32, Layout::U64, Layout::U64];
+
+        self.build_fn_call(
+            &Symbol::DEV_TMP4,
+            bitcode::LIST_PREPEND.to_string(),
+            &lowlevel_args,
+            &lowlevel_arg_layouts,
+            ret_layout,
+        );
+        self.free_symbol(&Symbol::DEV_TMP);
+        self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&Symbol::DEV_TMP3);
+
+        // Return list value from fn call
+        self.storage_manager.copy_symbol_to_stack_offset(
+            self.layout_interner,
+            &mut self.buf,
+            base_offset,
+            &Symbol::DEV_TMP4,
+            ret_layout,
+        );
+
+        self.free_symbol(&Symbol::DEV_TMP4);
     }
 
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {
@@ -1799,6 +1798,8 @@ impl<
             &u64_layout,
             &Literal::Int((allocation_size as i128).to_ne_bytes()),
         );
+
+        // Load allocation alignment (u32)
         let u32_layout = Layout::U32;
         self.load_literal(
             &Symbol::DEV_TMP2,
@@ -2287,6 +2288,24 @@ impl<
         for (i, byte) in tmp.iter().enumerate() {
             self.buf[jmp_location as usize + i] = *byte;
         }
+    }
+
+    /// Loads the alignment bytes of `layout` into the given `symbol`
+    fn load_layout_alignment(&mut self, layout: InLayout<'a>, symbol: Symbol) {
+        let u32_layout = Layout::U32;
+        let alignment = self.layout_interner.alignment_bytes(layout);
+        let alignment_literal = Literal::Int((alignment as i128).to_ne_bytes());
+
+        self.load_literal(&symbol, &u32_layout, &alignment_literal);
+    }
+
+    /// Loads the stack size of `layout` into the given `symbol`
+    fn load_layout_stack_size(&mut self, layout: InLayout<'a>, symbol: Symbol) {
+        let u64_layout = Layout::U64;
+        let width = self.layout_interner.stack_size(layout);
+        let width_literal = Literal::Int((width as i128).to_ne_bytes());
+
+        self.load_literal(&symbol, &u64_layout, &width_literal);
     }
 }
 
