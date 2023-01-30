@@ -1293,7 +1293,7 @@ mod dbg {
     impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgTags<'a, 'r, I> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_list()
-                .entries(self.1.iter().map(|l| DbgFields(self.0, *l)))
+                .entries(self.1.iter().map(|l| DbgFields(self.0, l)))
                 .finish()
         }
     }
@@ -1380,7 +1380,7 @@ mod dbg {
                 .entries(
                     self.1
                         .iter()
-                        .map(|(sym, captures)| (sym, DbgFields(self.0, &captures))),
+                        .map(|(sym, captures)| (sym, DbgFields(self.0, captures))),
                 )
                 .finish()
         }
