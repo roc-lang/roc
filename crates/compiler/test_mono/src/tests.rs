@@ -2537,3 +2537,49 @@ fn recursively_build_effect() {
         "#
     )
 }
+
+#[mono_test]
+fn foo1() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Json]
+            provides [main] to "./platform"
+
+        toEncoderQ = \t -> Encode.custom \bytes, fmt ->
+            encoder = when t is
+                A s -> Encode.tag "A" [Encode.toEncoder s]
+                B n -> Encode.tag "B" [Encode.toEncoder n]
+            Encode.appendWith bytes encoder fmt
+
+        accessor : [A Str, B U32]
+        accessor = A ""
+
+        main =
+            Encode.appendWith [1u8] (toEncoderQ accessor) Json.toUtf8
+        "#
+    )
+}
+
+#[mono_test]
+fn foo2() {
+    indoc!(
+        r#"
+        app "test"
+            imports [Json]
+            provides [main] to "./platform"
+
+        toEncoderQ = \t -> Encode.custom \bytes, fmt ->
+            encoder = when t is
+                A s -> Encode.tag "A" [Encode.string s]
+                B n -> Encode.tag "B" [Encode.u32 n]
+            Encode.appendWith bytes encoder fmt
+
+        accessor : [A Str, B U32]
+        accessor = A ""
+
+        main =
+            Encode.appendWith [1u8] (toEncoderQ accessor) Json.toUtf8
+        "#
+    )
+}

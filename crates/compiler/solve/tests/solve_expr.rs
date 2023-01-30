@@ -8764,4 +8764,120 @@ mod solve_expr {
         @"main : List w_a"
         );
     }
+
+    #[test]
+    fn foo1() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test"
+                    imports [Json]
+                    provides [main] to "./platform"
+
+                toEncoderQ = \t -> Encode.custom \bytes, fmt ->
+                #^^^^^^^^^^{-1}
+                    encoder = when t is
+                #   ^^^^^^^
+                        A s -> Encode.tag "A" [Encode.toEncoder s]
+                        #      ^^^^^^^^^^
+                        B n -> Encode.tag "B" [Encode.toEncoder n]
+                        #      ^^^^^^^^^^
+                    Encode.appendWith bytes encoder fmt
+                #   ^^^^^^^^^^^^^^^^^
+
+                accessor : [A Str, B U32]
+                accessor = A ""
+
+                main =
+                    Encode.appendWith [] (toEncoderQ accessor) Json.toUtf8
+                #   ^^^^^^^^^^^^^^^^^
+                "#
+            ),
+        @r###"
+        toEncoderQ : [A val, B val1] -[[toEncoderQ(1)]]-> (List U8, fmt -[[4 [A val, B val1]]]-> List U8) | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
+        encoder : List U8, fmt -[[] + fmt:Encode.tag(21):3]-> List U8 | fmt has EncoderFormatting
+        EncoderFormatting#Encode.tag(21) : Str, List ((List U8, fmt -[[] + val:Encode.toEncoder(2):2 + fmt:Encode.tag(21):2]-> List U8)) -[[] + fmt:Encode.tag(21):1]-> (List U8, fmt -[[] + fmt:Encode.tag(21):3]-> List U8) | fmt has EncoderFormatting, val has Encoding
+        EncoderFormatting#Encode.tag(21) : Str, List ((List U8, fmt -[[] + val:Encode.toEncoder(2):2 + fmt:Encode.tag(21):2]-> List U8)) -[[] + fmt:Encode.tag(21):1]-> (List U8, fmt -[[] + fmt:Encode.tag(21):3]-> List U8) | fmt has EncoderFormatting, val has Encoding
+        Encode.appendWith : List U8, (List U8, fmt -[[] + fmt:Encode.tag(21):3]-> List U8), fmt -[[Encode.appendWith(23)]]-> List U8 | fmt has EncoderFormatting
+        Encode.appendWith : List U8, (List U8, {} -[[4 [A Str, B U32]]]-> List U8), {} -[[Encode.appendWith(23)]]-> List U8
+        "###
+            print_only_under_alias: true
+        );
+    }
+
+    #[test]
+    fn foo2() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test"
+                    imports [Json]
+                    provides [main] to "./platform"
+
+                toEncoderQ = \t -> Encode.custom \bytes, fmt ->
+                #^^^^^^^^^^{-1}
+                    encoder = when t is
+                #   ^^^^^^^
+                        A s -> Encode.tag "A" [Encode.string s]
+                        #      ^^^^^^^^^^
+                        B n -> Encode.tag "B" [Encode.u32 n]
+                        #      ^^^^^^^^^^
+                    Encode.appendWith bytes encoder fmt
+                #   ^^^^^^^^^^^^^^^^^
+
+                accessor : [A Str, B U32]
+                accessor = A ""
+
+                main =
+                    Encode.appendWith [] (toEncoderQ accessor) Json.toUtf8
+                #   ^^^^^^^^^^^^^^^^^
+                "#
+            ),
+        @r###"
+        toEncoderQ : [A Str, B U32] -[[toEncoderQ(1)]]-> (List U8, fmt -[[4 [A Str, B U32]]]-> List U8) | fmt has EncoderFormatting
+        encoder : List U8, fmt -[[] + fmt:Encode.tag(21):3]-> List U8 | fmt has EncoderFormatting
+        EncoderFormatting#Encode.tag(21) : Str, List ((List U8, fmt -[[] + fmt:Encode.string(18):2 + fmt:Encode.tag(21):2]-> List U8)) -[[] + fmt:Encode.tag(21):1]-> (List U8, fmt -[[] + fmt:Encode.tag(21):3]-> List U8) | fmt has EncoderFormatting
+        EncoderFormatting#Encode.tag(21) : Str, List ((List U8, fmt -[[] + fmt:Encode.u32(6):2 + fmt:Encode.tag(21):2]-> List U8)) -[[] + fmt:Encode.tag(21):1]-> (List U8, fmt -[[] + fmt:Encode.tag(21):3]-> List U8) | fmt has EncoderFormatting
+        Encode.appendWith : List U8, (List U8, fmt -[[] + fmt:Encode.tag(21):3]-> List U8), fmt -[[Encode.appendWith(23)]]-> List U8 | fmt has EncoderFormatting
+        Encode.appendWith : List U8, (List U8, {} -[[4 [A Str, B U32]]]-> List U8), {} -[[Encode.appendWith(23)]]-> List U8
+        "###
+            print_only_under_alias: true
+        );
+    }
+
+    #[test]
+    fn foo3() {
+        infer_queries!(
+            indoc!(
+                r#"
+                app "test"
+                    imports [Json]
+                    provides [main] to "./platform"
+
+                Q a b := [ A a, B b ]
+
+                toEncoderQ = \@Q t -> Encode.custom \bytes, fmt ->
+                #^^^^^^^^^^{-1}
+                    encoder = when t is
+                #   ^^^^^^^
+                        A s -> Encode.tag "A" [Encode.toEncoder s]
+                        B n -> Encode.tag "B" [Encode.toEncoder n]
+                    Encode.appendWith
+                #   ^^^^^^^^^^^^^^^^^
+                        bytes
+                        encoder
+                        fmt
+
+                accessor : Q Str U32
+                accessor = @Q (A "")
+
+                main =
+                    Encode.appendWith [1u8] (toEncoderQ accessor) Json.toUtf8
+                #   ^^^^^^^^^^^^^^^^^
+                "#
+            ),
+        @""
+            print_only_under_alias: true
+        );
+    }
 }

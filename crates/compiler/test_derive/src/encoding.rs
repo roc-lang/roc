@@ -328,7 +328,32 @@ fn tag_one_label_two_args() {
 }
 
 #[test]
-fn tag_two_labels() {
+fn tag_two_labels_one_arg_each() {
+    derive_test(ToEncoder, v!([A v!(U32), B v!(STR)]), |golden| {
+        assert_snapshot!(golden, @r###"
+        # derived for [A U32, B Str]
+        # [A val, B val1] -[[toEncoder_[A 1,B 1](0)]]-> Encoder fmt | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
+        # [A val, B val1] -[[toEncoder_[A 1,B 1](0)]]-> (List U8, fmt -[[custom(4) [A val, B val1]]]-> List U8) | fmt has EncoderFormatting, val has Encoding, val1 has Encoding
+        # Specialization lambda sets:
+        #   @<1>: [[toEncoder_[A 1,B 1](0)]]
+        #   @<2>: [[custom(4) [A val, B val1]]] | val has Encoding, val1 has Encoding
+        #Derived.toEncoder_[A 1,B 1] =
+          \#Derived.tag ->
+            custom
+              \#Derived.bytes, #Derived.fmt ->
+                appendWith
+                  #Derived.bytes
+                  (when #Derived.tag is
+                    A #Derived.2 -> tag "A" [toEncoder #Derived.2]
+                    B #Derived.3 -> tag "B" [toEncoder #Derived.3])
+                  #Derived.fmt
+        "###
+        )
+    })
+}
+
+#[test]
+fn tag_two_labels_multiple_payloads() {
     derive_test(
         ToEncoder,
         v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]),

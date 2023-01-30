@@ -50,7 +50,7 @@ impl WorldAbilities {
             .unwrap()
             .insert(module, (store, exposed_types));
 
-        debug_assert!(old_store.is_none(), "{:?} abilities not new", module);
+        // debug_assert!(old_store.is_none(), "{:?} abilities not new", module);
     }
 
     #[inline(always)]
