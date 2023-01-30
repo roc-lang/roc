@@ -372,6 +372,10 @@ impl<'a> InLayout<'a> {
     pub(crate) const unsafe fn from_index(index: usize) -> Self {
         Self(index, PhantomData)
     }
+
+    pub fn index(&self) -> usize {
+        self.0
+    }
 }
 
 /// A concurrent interner, suitable for usage between threads.
