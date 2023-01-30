@@ -1786,7 +1786,9 @@ static mut TYPE_CLONE_COUNT: std::sync::atomic::AtomicUsize =
 
 pub fn get_type_clone_count() -> usize {
     if cfg!(debug_assertions) {
-        unsafe { TYPE_CLONE_COUNT.load(std::sync::atomic::Ordering::SeqCst) }
+        // A global counter just needs relaxed, and nothing relies upon this atomic for any
+        // happens-before relationships.
+        unsafe { TYPE_CLONE_COUNT.load(std::sync::atomic::Ordering::Relaxed) }
     } else {
         0
     }
@@ -1796,7 +1798,7 @@ impl Clone for Type {
     fn clone(&self) -> Self {
         #[cfg(debug_assertions)]
         unsafe {
-            TYPE_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            TYPE_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         };
 
         match self {
