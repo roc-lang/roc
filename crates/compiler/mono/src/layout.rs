@@ -120,8 +120,10 @@ pub struct LayoutCache<'a> {
 
 impl<'a> LayoutCache<'a> {
     pub fn new(interner: TLLayoutInterner<'a>, target_info: TargetInfo) -> Self {
-        let cache = std::vec::Vec::with_capacity(4);
-        let raw_cache = std::vec::Vec::with_capacity(4);
+        let mut cache = std::vec::Vec::with_capacity(4);
+        cache.push(Default::default());
+        let mut raw_cache = std::vec::Vec::with_capacity(4);
+        raw_cache.push(Default::default());
         Self {
             target_info,
             cache,
