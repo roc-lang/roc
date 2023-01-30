@@ -324,13 +324,38 @@ pub trait LayoutInterner<'a>: Sized {
         )
     }
 
+    /// Pretty-print a representation of the layout.
     fn dbg(&self, layout: InLayout<'a>) -> String {
         let alloc: ven_pretty::Arena<()> = ven_pretty::Arena::new();
         let doc = self.to_doc_top(layout, &alloc);
         doc.1.pretty(80).to_string()
     }
 
-    fn dbg_big<'r>(&'r self, layout: InLayout<'a>) -> dbg::Dbg<'a, 'r, Self> {
+    /// Yields a debug representation of a layout, traversing its entire nested structure and
+    /// debug-printing all intermediate interned layouts.
+    ///
+    /// By default, a [Layout] is composed inductively by [interned layout][InLayout]s.
+    /// This makes debugging a layout more than one level challenging, as you may run into further
+    /// opaque interned layouts that need unwrapping.
+    ///
+    /// [`dbg_deep`][LayoutInterner::dbg_deep] works around this by returning a value whose debug
+    /// representation chases through all nested interned layouts as you would otherwise have to do
+    /// manually.
+    ///
+    /// ## Example
+    ///
+    /// ```ignore(illustrative)
+    /// fn is_rec_ptr<'a>(interner: &impl LayoutInterner<'a>, layout: InLayout<'a>) -> bool {
+    ///     if matches!(interner.get(layout), Layout::RecursivePointer(..)) {
+    ///         return true;
+    ///     }
+    ///
+    ///     let deep_dbg = interner.dbg_deep(layout);
+    ///     roc_tracing::info!("not a recursive pointer, actually a {deep_dbg:?}");
+    ///     return false;
+    /// }
+    /// ```
+    fn dbg_deep<'r>(&'r self, layout: InLayout<'a>) -> dbg::Dbg<'a, 'r, Self> {
         dbg::Dbg(self, layout)
     }
 }
