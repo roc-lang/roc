@@ -121,9 +121,9 @@ pub struct LayoutCache<'a> {
 impl<'a> LayoutCache<'a> {
     pub fn new(interner: TLLayoutInterner<'a>, target_info: TargetInfo) -> Self {
         let mut cache = std::vec::Vec::with_capacity(4);
-        cache.push(CacheLayer::default());
+        cache.push(Default::default());
         let mut raw_cache = std::vec::Vec::with_capacity(4);
-        raw_cache.push(CacheLayer::default());
+        raw_cache.push(Default::default());
         Self {
             target_info,
             cache,
@@ -300,14 +300,20 @@ impl<'a> LayoutCache<'a> {
     /// Invalidates the list of given root variables.
     /// Usually called after unification, when merged variables with changed contents need to be
     /// invalidated.
-    pub fn invalidate(&mut self, vars: impl IntoIterator<Item = Variable>) {
+    pub fn invalidate(&mut self, subs: &Subs, vars: impl IntoIterator<Item = Variable>) {
+        // TODO(layout-cache): optimize me somehow
         for var in vars.into_iter() {
+            let var = subs.get_root_key_without_compacting(var);
             for layer in self.cache.iter_mut().rev() {
-                layer.0.remove(&var);
+                layer
+                    .0
+                    .retain(|k, _| !subs.equivalent_without_compacting(var, *k));
                 roc_tracing::debug!(?var, "invalidating cached layout");
             }
             for layer in self.raw_function_cache.iter_mut().rev() {
-                layer.0.remove(&var);
+                layer
+                    .0
+                    .retain(|k, _| !subs.equivalent_without_compacting(var, *k));
                 roc_tracing::debug!(?var, "invalidating cached layout");
             }
         }

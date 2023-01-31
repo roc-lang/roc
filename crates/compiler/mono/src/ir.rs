@@ -1479,7 +1479,7 @@ impl<'a, 'i> Env<'a, 'i> {
             right,
         )?;
 
-        layout_cache.invalidate(changed_variables.iter().copied());
+        layout_cache.invalidate(self.subs, changed_variables.iter().copied());
         external_specializations
             .into_iter()
             .for_each(|e| e.invalidate_cache(&changed_variables));
