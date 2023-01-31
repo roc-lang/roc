@@ -15,7 +15,7 @@ use roc_load::docs::{ModuleDocumentation, RecordField};
 use roc_load::{ExecutionMode, LoadConfig, LoadedModule, LoadingProblem, Threading};
 use roc_module::symbol::{Interns, Symbol};
 use roc_packaging::cache::{self, RocCacheDir};
-use roc_parse::ident::{parse_ident, Ident};
+use roc_parse::ident::{parse_ident, Accessor, Ident};
 use roc_parse::state::State;
 use roc_region::all::Region;
 use std::fs;
@@ -816,7 +816,7 @@ fn markdown_to_html(
                         let mut iter = parts.iter();
 
                         match iter.next() {
-                            Some(symbol_name) if iter.next().is_none() => {
+                            Some(Accessor::RecordField(symbol_name)) if iter.next().is_none() => {
                                 let DocUrl { url, title } = doc_url(
                                     all_exposed_symbols,
                                     scope,

@@ -5594,25 +5594,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        part_starts_with_number,
-        indoc!(
-            r#"
-            foo.100
-            "#
-        ),
-        @r###"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-    I trying to parse a record field access here:
-
-    4│      foo.100
-                ^
-
-    So I expect to see a lowercase letter next, like .name or .height.
-    "###
-    );
-
-    test_report!(
         closure_underscore_ident,
         indoc!(
             r#"

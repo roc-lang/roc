@@ -2429,7 +2429,13 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
             // The first value in the iterator is the variable name,
             // e.g. `foo` in `foo.bar.baz`
             let mut answer = match iter.next() {
-                Some(ident) => Expr::Var { module_name, ident },
+                Some(Accessor::RecordField(ident)) => Expr::Var { module_name, ident },
+                Some(Accessor::TupleIndex(_)) => {
+                    // TODO: make this state impossible to represent in Ident::Access,
+                    // by splitting out parts[0] into a separate field with a type of `&'a str`,
+                    // rather than a `&'a [Accessor<'a>]`.
+                    panic!("Parsed an Ident::Access with a first part of a tuple index");
+                }
                 None => {
                     panic!("Parsed an Ident::Access with no parts");
                 }
@@ -2441,7 +2447,14 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
                 // Wrap the previous answer in the new one, so we end up
                 // with a nested Expr. That way, `foo.bar.baz` gets represented
                 // in the AST as if it had been written (foo.bar).baz all along.
-                answer = Expr::RecordAccess(arena.alloc(answer), field);
+                match field {
+                    Accessor::RecordField(field) => {
+                        answer = Expr::RecordAccess(arena.alloc(answer), field);
+                    }
+                    Accessor::TupleIndex(index) => {
+                        answer = Expr::TupleAccess(arena.alloc(answer), index);
+                    }
+                }
             }
 
             answer
