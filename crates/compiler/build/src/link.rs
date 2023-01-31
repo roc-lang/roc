@@ -7,10 +7,10 @@ use roc_mono::ir::OptLevel;
 use roc_utils::{cargo, clang, zig};
 use roc_utils::{get_lib_path, rustup};
 use std::collections::HashMap;
-use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{self, Child, Command};
+use std::{env, fs};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
 
@@ -752,14 +752,6 @@ pub fn rebuild_host(
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = platform_main_roc.parent().unwrap();
 
-        let cargo_out_dir = cargo_dir.join("target").join(
-            if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
-                "release"
-            } else {
-                "debug"
-            },
-        );
-
         let mut cargo_cmd = if cfg!(windows) {
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
@@ -792,6 +784,8 @@ pub fn rebuild_host(
         };
 
         run_build_command(cargo_cmd, source_file, 0);
+
+        let cargo_out_dir = find_used_target_sub_folder(opt_level, cargo_dir.join("target"));
 
         if shared_lib_path.is_some() {
             // For surgical linking, just copy the dynamically linked rust app.
@@ -941,6 +935,49 @@ pub fn rebuild_host(
     let _ = builtins_host_tempfile;
 
     host_dest
+}
+
+// there can be multiple release folders, one in target and one in target/x86_64-unknown-linux-musl,
+// we want the one that was most recently used
+fn find_used_target_sub_folder(opt_level: OptLevel, target_folder: PathBuf) -> PathBuf {
+    let out_folder_name = if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
+        "release"
+    } else {
+        "debug"
+    };
+
+    let mut out_folder_opt = None;
+    let mut out_folder_last_change_opt = None;
+
+    if let Ok(entries) = fs::read_dir(target_folder.clone()) {
+        for entry in entries.flatten() {
+            if entry.file_type().unwrap().is_dir() {
+                let dir_name = entry.file_name().into_string().unwrap_or_else(|_| "".to_string());
+
+                if dir_name == out_folder_name {
+                    let metadata = entry.metadata().unwrap();
+                    let last_modified = metadata.modified().unwrap();
+
+                    if let Some(out_folder_last_change) = out_folder_last_change_opt {
+                        if last_modified > out_folder_last_change {
+                            out_folder_last_change_opt = Some(last_modified);
+                            out_folder_opt = Some(entry.path())
+                        }
+                    } else {
+                        out_folder_last_change_opt = Some(last_modified);
+                        out_folder_opt = Some(entry.path())
+                    }
+                }
+            }
+            
+        }
+    }
+
+    if let Some(out_folder) = out_folder_opt {
+        out_folder
+    } else {
+        internal_error!("I could not find a folder named {} in {:?}. This may be because the `cargo build` for the platform went wrong.", out_folder_name, target_folder)
+    }
 }
 
 fn get_target_str(target: &Triple) -> &str {
