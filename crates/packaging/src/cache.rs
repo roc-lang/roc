@@ -22,20 +22,20 @@ pub enum RocCacheDir<'a> {
 
 // Errors in case NixOS users try to use a dynamically linked platform
 #[cfg(target_os="linux")]
-fn nixos_error_if_dynamic<'a>(url: &'a str, dest_dir: &PathBuf) {
+fn nixos_error_if_dynamic(url: &str, dest_dir: &PathBuf) {
     let output = std::process::Command::new("uname")
-                                        .arg("-a")
-                                        .output()
-                                        .expect("uname command failed to start");
+                                       .arg("-a")
+                                       .output()
+                                       .expect("uname command failed to start");
     let running_nixos = String::from_utf8_lossy(&output.stdout).contains("NixOS");
 
     if running_nixos {
         // bash -c is used instead of plain ldd because process::Command escapes its arguments
         let ldd_output = std::process::Command::new("bash")
-                                                .arg("-c")
-                                                .arg(format!("ldd {}/linux-x86_64.rh*", dest_dir.display()))
-                                                .output()
-                                                .expect("readelf command failed to start");
+                                               .arg("-c")
+                                               .arg(format!("ldd {}/linux-x86_64.rh*", dest_dir.display()))
+                                               .output()
+                                               .expect("readelf command failed to start");
         let is_static = String::from_utf8_lossy(&ldd_output.stdout).contains("statically linked");
 
         if !is_static {
