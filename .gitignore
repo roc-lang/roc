@@ -22,8 +22,8 @@ zig-cache
 vgcore.*
 
 # roc cache files
-*.rh1
-*.rm1
+*.rh*
+*.rm*
 preprocessedhost
 metadata
 roc-cheaty-lib.so
