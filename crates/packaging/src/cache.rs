@@ -35,7 +35,7 @@ fn nixos_error_if_dynamic(url: &str, dest_dir: &PathBuf) {
                                                .arg("-c")
                                                .arg(format!("ldd {}/linux-x86_64.rh*", dest_dir.display()))
                                                .output()
-                                               .expect("readelf command failed to start");
+                                               .expect("ldd command failed to start");
         let is_static = String::from_utf8_lossy(&ldd_output.stdout).contains("statically linked");
 
         if !is_static {
