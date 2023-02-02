@@ -14,6 +14,15 @@ Doc comments begin with `##` instead.
 
 Like Python, Roc does not have multiline comment syntax.
 
+## Casing
+
+Like Elm, Roc uses camelCase for identifiers. Modules and types begin with a capital letter (eg.
+Decode), variables (including type variables!) begin with a lower case letter (eg. request).
+Acronyms also use camelCase despite being capitalized in English, eg. `xmlHttpRequest` for a
+variable and `XmlHttpRequest` for a type. Each word starts with a capital letter, so if acronyms are
+only capitals it's harder to see where the words start. eg. `XMLHTTPRequest` is less clear than
+`XmlHttpRequest`, unless you already know the acronyms.
+
 ## String Interpolation
 
 Roc strings work like Elm strings except that they support string interpolation.
