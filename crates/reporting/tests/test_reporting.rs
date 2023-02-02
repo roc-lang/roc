@@ -13073,4 +13073,48 @@ I recommend using camelCase. It's the standard style in Roc code!
     Tip: `Natural` does not implement `Encoding`.
     "###
     );
+
+    test_report!(
+        exhaustiveness_check_function_or_tag_union_issue_4994,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            x : U8
+
+            ifThenCase =
+                when x is
+                    0 -> Red
+                    1 -> Yellow
+                    2 -> Purple
+                    3 -> Zulip
+                    _ -> Green
+
+            main =
+                when ifThenCase is
+                    Red -> "red"
+                    Green -> "green"
+                    Yellow -> "yellow"
+                    Zulip -> "zulip"
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    14│>      when ifThenCase is
+    15│>          Red -> "red"
+    16│>          Green -> "green"
+    17│>          Yellow -> "yellow"
+    18│>          Zulip -> "zulip"
+
+    Other possibilities include:
+
+        Purple
+        _
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
 }

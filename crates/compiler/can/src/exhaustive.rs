@@ -10,9 +10,10 @@ use roc_module::ident::{Lowercase, TagIdIntType, TagName};
 use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{
-    Content, FlatType, GetSubsSlice, RedundantMark, Subs, SubsFmtContent, Variable,
+    Content, FlatType, GetSubsSlice, RedundantMark, SortedTagsIterator, Subs, SubsFmtContent,
+    Variable,
 };
-use roc_types::types::AliasKind;
+use roc_types::types::{gather_tags_unsorted_iter, AliasKind};
 
 pub use roc_exhaustive::Context as ExhaustiveContext;
 
@@ -145,9 +146,7 @@ fn index_var(
                 var = *structure;
             }
             Content::Structure(structure) => match structure {
-                FlatType::Func(_, _, _) | FlatType::FunctionOrTagUnion(_, _, _) => {
-                    return Err(TypeError)
-                }
+                FlatType::Func(_, _, _) => return Err(TypeError),
                 FlatType::Apply(Symbol::LIST_LIST, args) => {
                     match (subs.get_subs_slice(*args), ctor) {
                         ([elem_var], IndexCtor::List) => {
@@ -207,6 +206,19 @@ fn index_var(
                     });
                     let vars = opt_vars.expect("constructor must be known in the indexable type if we are exhautiveness checking");
                     return Ok(vars);
+                }
+                FlatType::FunctionOrTagUnion(tags, _, _) => {
+                    let tag_ctor = match ctor {
+                        IndexCtor::Tag(name) => name,
+                        _ => {
+                            internal_error!("constructor in a tag union must be tag")
+                        }
+                    };
+
+                    let tags = subs.get_subs_slice(*tags);
+                    debug_assert!(tags.contains(tag_ctor), "constructor must be known in the indexable type if we are exhautiveness checking");
+
+                    return Ok(vec![]);
                 }
                 FlatType::EmptyRecord => {
                     debug_assert!(matches!(ctor, IndexCtor::Record(..)));
@@ -616,64 +628,80 @@ fn convert_tag(subs: &Subs, whole_var: Variable, this_tag: &TagName) -> (Union, 
 
     use {Content::*, FlatType::*};
 
-    match dealias_tag(subs, content) {
+    let (sorted_tags, ext) = match dealias_tag(subs, content) {
         Structure(TagUnion(tags, ext) | RecursiveTagUnion(_, tags, ext)) => {
             let (sorted_tags, ext) = tags.sorted_iterator_and_ext(subs, *ext);
-
-            let mut num_tags = sorted_tags.len();
-
-            // DEVIATION: model openness by attaching a #Open constructor, that can never
-            // be matched unless there's an `Anything` pattern.
-            let opt_openness_tag = match subs.get_content_without_compacting(ext.var()) {
-                FlexVar(_) | RigidVar(_) => {
-                    let openness_tag = TagName(NONEXHAUSIVE_CTOR.into());
-                    num_tags += 1;
-                    Some((openness_tag, &[] as _))
-                }
-                Structure(EmptyTagUnion) => None,
-                // Anything else is erroneous and we ignore
-                _ => None,
-            };
-
-            // High tag ID if we're out-of-bounds.
-            let mut my_tag_id = TagId(num_tags as TagIdIntType);
-
-            let mut alternatives = Vec::with_capacity(num_tags);
-            let alternatives_iter = sorted_tags.into_iter().chain(opt_openness_tag.into_iter());
-
-            let mut index = 0;
-            for (tag, args) in alternatives_iter {
-                let is_inhabited = args.iter().all(|v| subs.is_inhabited(*v));
-                if !is_inhabited {
-                    // This constructor is not material; we don't need to match over it!
-                    continue;
-                }
-
-                let tag_id = TagId(index as TagIdIntType);
-                index += 1;
-
-                if this_tag == &tag {
-                    my_tag_id = tag_id;
-                }
-                alternatives.push(Ctor {
-                    name: CtorName::Tag(tag),
-                    tag_id,
-                    arity: args.len(),
+            (sorted_tags, ext)
+        }
+        Structure(FunctionOrTagUnion(tags, _, ext)) => {
+            let (ext_tags, ext) = gather_tags_unsorted_iter(subs, Default::default(), *ext)
+                .unwrap_or_else(|_| {
+                    internal_error!("Content is not a tag union: {:?}", subs.dbg(whole_var))
                 });
+            let mut all_tags: Vec<(TagName, &[Variable])> = Vec::with_capacity(tags.len());
+            for tag in subs.get_subs_slice(*tags) {
+                all_tags.push((tag.clone(), &[]));
             }
-
-            let union = Union {
-                alternatives,
-                render_as: RenderAs::Tag,
-            };
-
-            (union, my_tag_id)
+            for (tag, vars) in ext_tags {
+                debug_assert!(vars.is_empty());
+                all_tags.push((tag.clone(), &[]));
+            }
+            (Box::new(all_tags.into_iter()) as SortedTagsIterator, ext)
         }
         _ => internal_error!(
             "Content is not a tag union: {:?}",
             SubsFmtContent(content, subs)
         ),
+    };
+
+    let mut num_tags = sorted_tags.len();
+
+    // DEVIATION: model openness by attaching a #Open constructor, that can never
+    // be matched unless there's an `Anything` pattern.
+    let opt_openness_tag = match subs.get_content_without_compacting(ext.var()) {
+        FlexVar(_) | RigidVar(_) => {
+            let openness_tag = TagName(NONEXHAUSIVE_CTOR.into());
+            num_tags += 1;
+            Some((openness_tag, &[] as _))
+        }
+        Structure(EmptyTagUnion) => None,
+        // Anything else is erroneous and we ignore
+        _ => None,
+    };
+
+    // High tag ID if we're out-of-bounds.
+    let mut my_tag_id = TagId(num_tags as TagIdIntType);
+
+    let mut alternatives = Vec::with_capacity(num_tags);
+    let alternatives_iter = sorted_tags.into_iter().chain(opt_openness_tag.into_iter());
+
+    let mut index = 0;
+    for (tag, args) in alternatives_iter {
+        let is_inhabited = args.iter().all(|v| subs.is_inhabited(*v));
+        if !is_inhabited {
+            // This constructor is not material; we don't need to match over it!
+            continue;
+        }
+
+        let tag_id = TagId(index as TagIdIntType);
+        index += 1;
+
+        if this_tag == &tag {
+            my_tag_id = tag_id;
+        }
+        alternatives.push(Ctor {
+            name: CtorName::Tag(tag),
+            tag_id,
+            arity: args.len(),
+        });
     }
+
+    let union = Union {
+        alternatives,
+        render_as: RenderAs::Tag,
+    };
+
+    (union, my_tag_id)
 }
 
 pub fn dealias_tag<'a>(subs: &'a Subs, content: &'a Content) -> &'a Content {
