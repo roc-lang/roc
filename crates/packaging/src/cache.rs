@@ -20,6 +20,41 @@ pub enum RocCacheDir<'a> {
     Temp(&'a tempfile::TempDir),
 }
 
+// Errors in case NixOS users try to use a dynamically linked platform
+#[cfg(target_os = "linux")]
+fn nixos_error_if_dynamic(url: &str, dest_dir: &Path) {
+    let output = std::process::Command::new("uname")
+        .arg("-a")
+        .output()
+        .expect("uname command failed to start");
+    let running_nixos = String::from_utf8_lossy(&output.stdout).contains("NixOS");
+
+    if running_nixos {
+        // bash -c is used instead of plain ldd because process::Command escapes its arguments
+        let ldd_output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(format!("ldd {}/linux-x86_64.rh*", dest_dir.display()))
+            .output()
+            .expect("ldd command failed to start");
+        let is_static = String::from_utf8_lossy(&ldd_output.stdout).contains("statically linked");
+
+        if !is_static {
+            eprintln!("The platform downloaded from the URL {url} is dynamically linked.\n\
+                        Dynamically linked platforms can't be used on NixOS.\n\n\
+                        You can:\n\n\t\
+                            - Download the source of the platform and build it locally, like in this example:\n\t  \
+                                https://github.com/roc-lang/roc/blob/main/examples/platform-switching/rocLovesRust.roc.\n\t  \
+                                When building your roc application, you can use the flag `--prebuilt-platform=true` to prevent the platform from being rebuilt every time.\n\t  \
+                                For some graphical platforms you may need to use https://github.com/guibou/nixGL.\n\n\t\
+                            - Contact the author of the platform to ask them to statically link their platform.\n\t  \
+                                musl can be used to prevent a dynamic dependency on the systems' libc.\n\t  \
+                                If the platform is dynamically linked to GPU drivers, it can not be statically linked practically. Use the previous suggestion to build locally in this case.\n"
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Accepts either a path to the Roc cache dir, or else a TempDir. If a TempDir, always download
 /// into that dir. If the cache dir on the filesystem, then look into it to see if we already
 /// have an entry for the given URL. If we do, return its info. If we don't already have it, then:
@@ -51,6 +86,12 @@ pub fn install_package<'a>(
             if dest_dir.exists() {
                 // If the cache dir exists already, we assume it has the correct contents
                 // (it's a cache, after all!) and return without downloading anything.
+                //
+                #[cfg(target_os = "linux")]
+                {
+                    nixos_error_if_dynamic(url, &dest_dir);
+                }
+
                 Ok((dest_dir, root_module_filename))
             } else {
                 // Download into a tempdir; only move it to dest_dir if hash verification passes.
@@ -91,6 +132,11 @@ pub fn install_package<'a>(
                             },
                         )
                         .map_err(Problem::FsExtraErr)?;
+                    }
+
+                    #[cfg(target_os = "linux")]
+                    {
+                        nixos_error_if_dynamic(url, &dest_dir);
                     }
 
                     // The package's files are now in the cache. We're done!
