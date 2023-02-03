@@ -646,19 +646,20 @@ fn gen_elf_le(
         let p_offset = ph.p_offset.get(LE);
         if (p_type == elf::PT_LOAD && p_offset == 0) || p_type == elf::PT_PHDR {
             // Extend length for the first segment and the program header.
-            ph.p_filesz = endian::U64::new(LE, ph.p_filesz.get(LE) + md.ph_shift_bytes);
-            ph.p_memsz = endian::U64::new(LE, ph.p_memsz.get(LE) + md.ph_shift_bytes);
+            ph.p_filesz.set(LE, ph.p_filesz.get(LE) + md.ph_shift_bytes);
+            ph.p_memsz.set(LE, ph.p_memsz.get(LE) + md.ph_shift_bytes);
         } else {
             // Shift if needed.
-            ph.p_offset = endian::U64::new(LE, update_physical_offset(md, p_offset));
+            ph.p_offset.set(LE, update_physical_offset(md, p_offset));
 
             let p_vaddr = ph.p_vaddr.get(LE);
-            ph.p_vaddr = endian::U64::new(LE, update_virtual_offset(md, p_vaddr));
+            ph.p_vaddr.set(LE, update_virtual_offset(md, p_vaddr));
             let p_paddr = ph.p_paddr.get(LE);
-            ph.p_paddr = endian::U64::new(LE, update_physical_offset(md, p_paddr));
+            ph.p_paddr.set(LE, update_virtual_offset(md, p_paddr));
+
             // if virtual_shift_start <= p_vaddr {
-            // ph.p_vaddr = endian::U64::new(LE, p_vaddr + md.added_byte_count);
-            // ph.p_paddr = endian::U64::new(LE, p_vaddr + md.added_byte_count);
+            // ph.p_vaddr.set(LE, p_vaddr + md.added_byte_count);
+            // ph.p_paddr.set(LE, p_vaddr + md.added_byte_count);
             // }
         }
     }
@@ -725,11 +726,11 @@ fn gen_elf_le(
         let sh_offset = sh.sh_offset.get(LE);
         let sh_addr = sh.sh_addr.get(LE);
 
-        sh.sh_offset = endian::U64::new(LE, update_physical_offset(md, sh_offset));
+        sh.sh_offset.set(LE, update_physical_offset(md, sh_offset));
         // if virtual_shift_start <= sh_addr {
-        // sh.sh_addr = endian::U64::new(LE, sh_addr + md.added_byte_count);
+        // sh.sh_addr.set(LE, sh_addr + md.added_byte_count);
         // }
-        sh.sh_addr = endian::U64::new(LE, update_virtual_offset(md, sh_addr));
+        sh.sh_addr.set(LE, update_virtual_offset(md, sh_addr));
 
         // Record every relocation section.
         let sh_type = sh.sh_type.get(LE);
@@ -762,9 +763,9 @@ fn gen_elf_le(
         for rel in relocations.iter_mut() {
             let r_offset = rel.r_offset.get(LE);
             // if virtual_shift_start <= r_offset {
-            // rel.r_offset = endian::U64::new(LE, r_offset + md.added_byte_count);
+            // rel.r_offset.set(LE, r_offset + md.added_byte_count);
             // }
-            rel.r_offset = endian::U64::new(LE, update_virtual_offset(md, r_offset));
+            rel.r_offset.set(LE, update_virtual_offset(md, r_offset));
         }
     }
 
@@ -777,9 +778,9 @@ fn gen_elf_le(
         );
         for (i, rel) in relocations.iter_mut().enumerate() {
             let r_offset = rel.r_offset.get(LE);
-            rel.r_offset = endian::U64::new(LE, update_virtual_offset(md, r_offset));
+            rel.r_offset.set(LE, update_virtual_offset(md, r_offset));
             // if md.ph_virtual_shift_start <= r_offset {
-            // rel.r_offset = endian::U64::new(LE, r_offset + md.added_byte_count);
+            // rel.r_offset.set(LE, r_offset + md.added_byte_count);
             // Deal with potential adjusts to absolute jumps.
             // TODO: Verify other relocation types.
             if rel.r_type(LE, false) == elf::R_X86_64_RELATIVE {
@@ -903,7 +904,7 @@ fn gen_elf_le(
         dyn_offset as usize,
         dynamic_lib_count,
     );
-    for mut d in dyns {
+    for d in dyns {
         match d.d_tag.get(LE) as u32 {
             // TODO: Double check these. I am pretty sure a number of them are physical and not virtual addresses.
             // I believe this is the list of symbols that need to be update if addresses change.
@@ -929,9 +930,9 @@ fn gen_elf_le(
             | elf::DT_VERNEED => {
                 let d_addr = d.d_val.get(LE);
                 // if virtual_shift_start <= d_addr {
-                // d.d_val = endian::U64::new(LE, d_addr + md.added_byte_count);
+                // d.d_val.set(LE, d_addr + md.added_byte_count);
                 // }
-                d.d_val = endian::U64::new(LE, update_virtual_offset(md, d_addr));
+                d.d_val.set(LE, update_virtual_offset(md, d_addr));
             }
             elf::DT_INIT
             | elf::DT_FINI
@@ -943,7 +944,7 @@ fn gen_elf_le(
             | elf::DT_PREINIT_ARRAY
             | elf::DT_RELA => {
                 let d_addr = d.d_val.get(LE);
-                d.d_val = endian::U64::new(LE, update_physical_offset(md, d_addr));
+                d.d_val.set(LE, update_physical_offset(md, d_addr));
             }
             _ => {}
         }
@@ -962,9 +963,9 @@ fn gen_elf_le(
     for sym in symbols {
         let addr = sym.st_value.get(LE);
         // if virtual_shift_start <= addr {
-        //     sym.st_value = endian::U64::new(LE, addr + md.added_byte_count);
+        //     sym.st_value.set(LE, addr + md.added_byte_count);
         // }
-        sym.st_value = endian::U64::new(LE, update_virtual_offset(md, addr));
+        sym.st_value.set(LE, update_virtual_offset(md, addr));
     }
 
     // Update all data in the global offset table.
@@ -993,16 +994,20 @@ fn gen_elf_le(
     }
 
     // Update main elf header for extra data.
-    let mut file_header = load_struct_inplace_mut::<elf::FileHeader64<LE>>(&mut out_mmap, 0);
-    file_header.e_shoff =
-        endian::U64::new(LE, update_physical_offset(md, file_header.e_shoff.get(LE)));
+    let file_header = load_struct_inplace_mut::<elf::FileHeader64<LE>>(&mut out_mmap, 0);
+    file_header
+        .e_shoff
+        .set(LE, update_physical_offset(md, file_header.e_shoff.get(LE)));
     let e_entry = file_header.e_entry.get(LE);
     // if virtual_shift_start <= e_entry {
-    // file_header.e_entry = endian::U64::new(LE, e_entry + md.added_byte_count);
+    // file_header.e_entry.set(LE, e_entry + md.added_byte_count);
     // }
-    file_header.e_entry = endian::U64::new(LE, update_virtual_offset(md, e_entry));
-    file_header.e_phnum = endian::U16::new(LE, ph_num + added_header_count as u16);
-    dbg!(md);
+    file_header
+        .e_entry
+        .set(LE, update_virtual_offset(md, e_entry));
+    file_header
+        .e_phnum
+        .set(LE, ph_num + added_header_count as u16);
 
     out_mmap
 }
@@ -1601,8 +1606,10 @@ fn surgery_elf_help(
 
     // Reload and update file header and size.
     let file_header = load_struct_inplace_mut::<elf::FileHeader64<LE>>(exec_mmap, 0);
-    file_header.e_shoff = endian::U64::new(LE, new_sh_offset as u64);
-    file_header.e_shnum = endian::U16::new(LE, sh_num + new_section_count as u16);
+    file_header.e_shoff.set(LE, new_sh_offset as u64);
+    file_header
+        .e_shnum
+        .set(LE, sh_num + new_section_count as u16);
 
     // Add 2 new segments that match the new sections.
     let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LE>>(
@@ -1712,9 +1719,9 @@ fn surgery_elf_help(
                 exec_mmap,
                 dynsym_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LE>>(),
             );
-            sym.st_shndx = endian::U16::new(LE, new_text_section_index as u16);
-            sym.st_value = endian::U64::new(LE, func_virt_offset as u64);
-            sym.st_size = endian::U64::new(
+            sym.st_shndx.set(LE, new_text_section_index as u16);
+            sym.st_value.set(LE, func_virt_offset as u64);
+            sym.st_size.set(
                 LE,
                 match app_func_size_map.get(func_name) {
                     Some(size) => *size,
@@ -1729,9 +1736,9 @@ fn surgery_elf_help(
                 exec_mmap,
                 symtab_offset as usize + *i as usize * mem::size_of::<elf::Sym64<LE>>(),
             );
-            sym.st_shndx = endian::U16::new(LE, new_text_section_index as u16);
-            sym.st_value = endian::U64::new(LE, func_virt_offset as u64);
-            sym.st_size = endian::U64::new(
+            sym.st_shndx.set(LE, new_text_section_index as u16);
+            sym.st_value.set(LE, func_virt_offset as u64);
+            sym.st_size.set(
                 LE,
                 match app_func_size_map.get(func_name) {
                     Some(size) => *size,
