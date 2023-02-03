@@ -624,9 +624,7 @@ fn gen_elf_le(
             let p_vaddr = ph.p_vaddr.get(LE);
             let virtual_shift = p_vaddr - p_offset;
             md.rela_virtual_shift_start = md.rela_physical_shift_start + virtual_shift;
-            md.rela_virtual_shift_end = md.rela_physical_shift_end + virtual_shift;
             md.original_rela_vaddr = md.original_rela_paddr + virtual_shift;
-            md.new_rela_vaddr = md.new_rela_paddr + virtual_shift;
         }
     }
     if !first_load_found {
@@ -638,37 +636,6 @@ fn gen_elf_le(
             md.ph_physical_shift_start, md.ph_virtual_shift_start
         );
     }
-
-    // Shift all of the program headers.
-    for ph in program_headers.iter_mut() {
-        let p_type = ph.p_type.get(LE);
-        let p_offset = ph.p_offset.get(LE);
-        if (p_type == elf::PT_LOAD && p_offset == 0) || p_type == elf::PT_PHDR {
-            // Extend length for the first segment and the program header.
-            ph.p_filesz.set(LE, ph.p_filesz.get(LE) + md.ph_shift_bytes);
-            ph.p_memsz.set(LE, ph.p_memsz.get(LE) + md.ph_shift_bytes);
-        } else {
-            // Shift if needed.
-            ph.p_offset.set(LE, update_physical_offset(md, p_offset));
-
-            let p_vaddr = ph.p_vaddr.get(LE);
-            ph.p_vaddr.set(LE, update_virtual_offset(md, p_vaddr));
-            let p_paddr = ph.p_paddr.get(LE);
-            ph.p_paddr.set(LE, update_virtual_offset(md, p_paddr));
-        }
-    }
-
-    // TODO: add new load command for the new location of the rela section.
-    program_headers[program_headers.len() - 1] = elf::ProgramHeader64 {
-        p_type: endian::U32::new(LE, elf::PT_LOAD),
-        p_flags: endian::U32::new(LE, elf::PF_R),
-        p_offset: endian::U64::new(LE, md.new_rela_paddr + md.ph_shift_bytes),
-        p_vaddr: endian::U64::new(LE, md.new_rela_vaddr + md.ph_shift_bytes),
-        p_paddr: endian::U64::new(LE, md.new_rela_vaddr + md.ph_shift_bytes),
-        p_filesz: endian::U64::new(LE, original_rela_size),
-        p_memsz: endian::U64::new(LE, original_rela_size),
-        p_align: endian::U64::new(LE, md.load_align_constraint),
-    };
 
     // Get last segment virtual address.
     let last_segment_vaddr = program_headers
@@ -682,6 +649,55 @@ fn gen_elf_le(
         })
         .max()
         .unwrap();
+
+    md.new_rela_vaddr = align_to_offset_by_constraint(
+        // TODO: potentially remove md.load_align_constraint here. I think we should be able to cram things together.
+        last_segment_vaddr as usize + md.load_align_constraint as usize,
+        md.new_rela_paddr as usize,
+        md.load_align_constraint as usize,
+    ) as u64;
+    md.rela_virtual_shift_end = md.new_rela_vaddr + original_rela_size;
+
+    // Shift all of the program headers.
+    for ph in program_headers.iter_mut() {
+        let p_type = ph.p_type.get(LE);
+        let p_offset = ph.p_offset.get(LE);
+        let original_p_filesz = ph.p_filesz.get(LE);
+        if (p_type == elf::PT_LOAD && p_offset == 0) || p_type == elf::PT_PHDR {
+            // Extend length for the first segment and the program header.
+            ph.p_filesz.set(LE, ph.p_filesz.get(LE) + md.ph_shift_bytes);
+            ph.p_memsz.set(LE, ph.p_memsz.get(LE) + md.ph_shift_bytes);
+        } else {
+            // Shift if needed.
+            ph.p_offset.set(LE, update_physical_offset(md, p_offset));
+
+            let p_vaddr = ph.p_vaddr.get(LE);
+            ph.p_vaddr.set(LE, update_virtual_offset(md, p_vaddr));
+            let p_paddr = ph.p_paddr.get(LE);
+            ph.p_paddr.set(LE, update_virtual_offset(md, p_paddr));
+        }
+        if p_offset <= md.original_rela_paddr
+            && md.original_rela_paddr < p_offset + original_p_filesz
+        {
+            ph.p_filesz
+                .set(LE, ph.p_filesz.get(LE) - md.rela_shift_bytes);
+            ph.p_memsz.set(LE, ph.p_memsz.get(LE) - md.rela_shift_bytes);
+        }
+    }
+
+    program_headers[program_headers.len() - 1] = elf::ProgramHeader64 {
+        p_type: endian::U32::new(LE, elf::PT_LOAD),
+        p_flags: endian::U32::new(LE, elf::PF_R),
+        p_offset: endian::U64::new(LE, md.new_rela_paddr + md.ph_shift_bytes),
+        p_vaddr: endian::U64::new(LE, md.new_rela_vaddr + md.ph_shift_bytes),
+        p_paddr: endian::U64::new(LE, md.new_rela_vaddr + md.ph_shift_bytes),
+        p_filesz: endian::U64::new(LE, original_rela_size),
+        p_memsz: endian::U64::new(LE, original_rela_size),
+        p_align: endian::U64::new(LE, md.load_align_constraint),
+    };
+
+    // Give lots of space between the new rela section and the future app sections in virtual memory.
+    md.last_vaddr = md.new_rela_vaddr + original_rela_size + md.load_align_constraint;
 
     // Copy everything until the rela section.
     out_mmap[md.ph_physical_shift_start as usize + md.ph_shift_bytes as usize
@@ -731,18 +747,6 @@ fn gen_elf_le(
             rela_sections.push((i, sh_offset, sh.sh_size.get(LE)));
         }
     }
-
-    // Get last section virtual address.
-    let last_section_vaddr = section_headers
-        .iter()
-        .map(|sh| sh.sh_addr.get(LE) + sh.sh_size.get(LE))
-        .max()
-        .unwrap();
-
-    // Calculate end virtual address for new segment.
-    // TODO: potentially remove md.load_align_constraint here. I think we should be able to cram things together.
-    md.last_vaddr =
-        std::cmp::max(last_section_vaddr, last_segment_vaddr) + md.load_align_constraint;
 
     // Update all relocations for shift for extra program headers.
     for (sec_offset, sec_size) in rel_sections {
@@ -893,7 +897,16 @@ fn gen_elf_le(
             // TODO: Double check these. I am pretty sure a number of them are physical and not virtual addresses.
             // I believe this is the list of symbols that need to be update if addresses change.
             // I am less sure about the symbols from GNU_HASH down.
-            elf::DT_HASH
+            elf::DT_INIT
+            | elf::DT_FINI
+            | elf::DT_PLTGOT
+            | elf::DT_REL
+            | elf::DT_JMPREL
+            | elf::DT_INIT_ARRAY
+            | elf::DT_FINI_ARRAY
+            | elf::DT_PREINIT_ARRAY
+            | elf::DT_RELA
+            | elf::DT_HASH
             | elf::DT_STRTAB
             | elf::DT_SYMTAB
             | elf::DT_DEBUG
@@ -914,18 +927,6 @@ fn gen_elf_le(
             | elf::DT_VERNEED => {
                 let d_addr = d.d_val.get(LE);
                 d.d_val.set(LE, update_virtual_offset(md, d_addr));
-            }
-            elf::DT_INIT
-            | elf::DT_FINI
-            | elf::DT_PLTGOT
-            | elf::DT_REL
-            | elf::DT_JMPREL
-            | elf::DT_INIT_ARRAY
-            | elf::DT_FINI_ARRAY
-            | elf::DT_PREINIT_ARRAY
-            | elf::DT_RELA => {
-                let d_addr = d.d_val.get(LE);
-                d.d_val.set(LE, update_physical_offset(md, d_addr));
             }
             _ => {}
         }
