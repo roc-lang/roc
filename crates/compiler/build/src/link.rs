@@ -7,10 +7,11 @@ use roc_mono::ir::OptLevel;
 use roc_utils::{cargo, clang, zig};
 use roc_utils::{get_lib_path, rustup};
 use std::collections::HashMap;
-use std::env;
+use std::fs::DirEntry;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{self, Child, Command};
+use std::{env, fs};
 use target_lexicon::{Architecture, OperatingSystem, Triple};
 use wasi_libc_sys::{WASI_COMPILER_RT_PATH, WASI_LIBC_PATH};
 
@@ -752,14 +753,6 @@ pub fn rebuild_host(
         // Compile and link Cargo.toml, if it exists
         let cargo_dir = platform_main_roc.parent().unwrap();
 
-        let cargo_out_dir = cargo_dir.join("target").join(
-            if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
-                "release"
-            } else {
-                "debug"
-            },
-        );
-
         let mut cargo_cmd = if cfg!(windows) {
             // on windows, we need the nightly toolchain so we can use `-Z export-executable-symbols`
             // using `+nightly` only works when running cargo through rustup
@@ -792,6 +785,8 @@ pub fn rebuild_host(
         };
 
         run_build_command(cargo_cmd, source_file, 0);
+
+        let cargo_out_dir = find_used_target_sub_folder(opt_level, cargo_dir.join("target"));
 
         if shared_lib_path.is_some() {
             // For surgical linking, just copy the dynamically linked rust app.
@@ -941,6 +936,63 @@ pub fn rebuild_host(
     let _ = builtins_host_tempfile;
 
     host_dest
+}
+
+// there can be multiple release folders, one in target and one in target/x86_64-unknown-linux-musl,
+// we want the one that was most recently used
+fn find_used_target_sub_folder(opt_level: OptLevel, target_folder: PathBuf) -> PathBuf {
+    let out_folder_name = if matches!(opt_level, OptLevel::Optimize | OptLevel::Size) {
+        "release"
+    } else {
+        "debug"
+    };
+
+    let matching_folders = find_in_folder_or_subfolders(&target_folder, out_folder_name);
+    let mut matching_folders_iter = matching_folders.iter();
+
+    let mut out_folder = match matching_folders_iter.next() {
+        Some(dir_entry) => dir_entry,
+        None => panic!("I could not find a folder named {} in {:?}. This may be because the `cargo build` for the platform went wrong.", out_folder_name, target_folder)
+    };
+
+    let mut out_folder_last_change = out_folder.metadata().unwrap().modified().unwrap();
+
+    for dir_entry in matching_folders_iter {
+        let last_modified = dir_entry.metadata().unwrap().modified().unwrap();
+
+        if last_modified > out_folder_last_change {
+            out_folder_last_change = last_modified;
+            out_folder = dir_entry;
+        }
+    }
+
+    out_folder.path().canonicalize().unwrap()
+}
+
+fn find_in_folder_or_subfolders(path: &PathBuf, folder_to_find: &str) -> Vec<DirEntry> {
+    let mut matching_dirs = vec![];
+
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            if entry.file_type().unwrap().is_dir() {
+                let dir_name = entry
+                    .file_name()
+                    .into_string()
+                    .unwrap_or_else(|_| "".to_string());
+
+                if dir_name == folder_to_find {
+                    matching_dirs.push(entry)
+                } else {
+                    let matched_in_sub_dir =
+                        find_in_folder_or_subfolders(&entry.path(), folder_to_find);
+
+                    matching_dirs.extend(matched_in_sub_dir);
+                }
+            }
+        }
+    }
+
+    matching_dirs
 }
 
 fn get_target_str(target: &Triple) -> &str {

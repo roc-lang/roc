@@ -251,6 +251,7 @@ mod test_snapshots {
         malformed/malformed_ident_due_to_underscore.expr,
         malformed/malformed_pattern_field_access.expr, // See https://github.com/roc-lang/roc/issues/399
         malformed/malformed_pattern_module_name.expr, // See https://github.com/roc-lang/roc/issues/399
+        malformed/qualified_tag.expr,
         malformed/underscore_expr_in_def.expr,
         pass/ability_demand_signature_is_multiline.expr,
         pass/ability_multi_line.expr,
@@ -405,7 +406,6 @@ mod test_snapshots {
         pass/positive_int.expr,
         pass/provides_type.header,
         pass/qualified_field.expr,
-        malformed/qualified_tag.expr,
         pass/qualified_var.expr,
         pass/record_access_after_tuple.expr,
         pass/record_destructure_def.expr,
@@ -426,6 +426,7 @@ mod test_snapshots {
         pass/tag_pattern.expr,
         pass/ten_times_eleven.expr,
         pass/three_arg_closure.expr,
+        pass/tuple_access_after_ident.expr,
         pass/tuple_access_after_record.expr,
         pass/tuple_accessor_function.expr,
         pass/tuple_type.expr,

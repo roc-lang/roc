@@ -324,10 +324,39 @@ pub trait LayoutInterner<'a>: Sized {
         )
     }
 
+    /// Pretty-print a representation of the layout.
     fn dbg(&self, layout: InLayout<'a>) -> String {
         let alloc: ven_pretty::Arena<()> = ven_pretty::Arena::new();
         let doc = self.to_doc_top(layout, &alloc);
         doc.1.pretty(80).to_string()
+    }
+
+    /// Yields a debug representation of a layout, traversing its entire nested structure and
+    /// debug-printing all intermediate interned layouts.
+    ///
+    /// By default, a [Layout] is composed inductively by [interned layout][InLayout]s.
+    /// This makes debugging a layout more than one level challenging, as you may run into further
+    /// opaque interned layouts that need unwrapping.
+    ///
+    /// [`dbg_deep`][LayoutInterner::dbg_deep] works around this by returning a value whose debug
+    /// representation chases through all nested interned layouts as you would otherwise have to do
+    /// manually.
+    ///
+    /// ## Example
+    ///
+    /// ```ignore(illustrative)
+    /// fn is_rec_ptr<'a>(interner: &impl LayoutInterner<'a>, layout: InLayout<'a>) -> bool {
+    ///     if matches!(interner.get(layout), Layout::RecursivePointer(..)) {
+    ///         return true;
+    ///     }
+    ///
+    ///     let deep_dbg = interner.dbg_deep(layout);
+    ///     roc_tracing::info!("not a recursive pointer, actually a {deep_dbg:?}");
+    ///     return false;
+    /// }
+    /// ```
+    fn dbg_deep<'r>(&'r self, layout: InLayout<'a>) -> dbg::Dbg<'a, 'r, Self> {
+        dbg::Dbg(self, layout)
     }
 }
 
@@ -367,6 +396,10 @@ impl<'a> InLayout<'a> {
     /// ```
     pub(crate) const unsafe fn from_index(index: usize) -> Self {
         Self(index, PhantomData)
+    }
+
+    pub fn index(&self) -> usize {
+        self.0
     }
 }
 
@@ -1230,6 +1263,152 @@ mod equiv {
         }
 
         true
+    }
+}
+
+mod dbg {
+    use roc_module::symbol::Symbol;
+
+    use crate::layout::{Builtin, LambdaSet, Layout, UnionLayout};
+
+    use super::{InLayout, LayoutInterner};
+
+    pub struct Dbg<'a, 'r, I: LayoutInterner<'a>>(pub &'r I, pub InLayout<'a>);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for Dbg<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.0.get(self.1) {
+                Layout::Builtin(b) => f
+                    .debug_tuple("Builtin")
+                    .field(&DbgBuiltin(self.0, b))
+                    .finish(),
+                Layout::Struct {
+                    field_order_hash,
+                    field_layouts,
+                } => f
+                    .debug_struct("Struct")
+                    .field("hash", &field_order_hash)
+                    .field("fields", &DbgFields(self.0, field_layouts))
+                    .finish(),
+                Layout::Boxed(b) => f.debug_tuple("Boxed").field(&Dbg(self.0, b)).finish(),
+                Layout::Union(un) => f.debug_tuple("Union").field(&DbgUnion(self.0, un)).finish(),
+                Layout::LambdaSet(ls) => f
+                    .debug_tuple("LambdaSet")
+                    .field(&DbgLambdaSet(self.0, ls))
+                    .finish(),
+                Layout::RecursivePointer(rp) => {
+                    f.debug_tuple("RecursivePointer").field(&rp.0).finish()
+                }
+            }
+        }
+    }
+
+    struct DbgFields<'a, 'r, I: LayoutInterner<'a>>(&'r I, &'a [InLayout<'a>]);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgFields<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_list()
+                .entries(self.1.iter().map(|l| Dbg(self.0, *l)))
+                .finish()
+        }
+    }
+
+    struct DbgTags<'a, 'r, I: LayoutInterner<'a>>(&'r I, &'a [&'a [InLayout<'a>]]);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgTags<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_list()
+                .entries(self.1.iter().map(|l| DbgFields(self.0, l)))
+                .finish()
+        }
+    }
+
+    struct DbgBuiltin<'a, 'r, I: LayoutInterner<'a>>(&'r I, Builtin<'a>);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgBuiltin<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.1 {
+                Builtin::Int(w) => f.debug_tuple("Int").field(&w).finish(),
+                Builtin::Float(w) => f.debug_tuple("Float").field(&w).finish(),
+                Builtin::Bool => f.debug_tuple("Bool").finish(),
+                Builtin::Decimal => f.debug_tuple("Decimal").finish(),
+                Builtin::Str => f.debug_tuple("Str").finish(),
+                Builtin::List(e) => f.debug_tuple("List").field(&Dbg(self.0, e)).finish(),
+            }
+        }
+    }
+
+    struct DbgUnion<'a, 'r, I: LayoutInterner<'a>>(&'r I, UnionLayout<'a>);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgUnion<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.1 {
+                UnionLayout::NonRecursive(payloads) => f
+                    .debug_tuple("NonRecursive")
+                    .field(&DbgTags(self.0, payloads))
+                    .finish(),
+                UnionLayout::Recursive(payloads) => f
+                    .debug_tuple("Recursive")
+                    .field(&DbgTags(self.0, payloads))
+                    .finish(),
+                UnionLayout::NonNullableUnwrapped(fields) => f
+                    .debug_tuple("NonNullableUnwrapped")
+                    .field(&DbgFields(self.0, fields))
+                    .finish(),
+                UnionLayout::NullableWrapped {
+                    nullable_id,
+                    other_tags,
+                } => f
+                    .debug_struct("NullableWrapped")
+                    .field("nullable_id", &nullable_id)
+                    .field("other_tags", &DbgTags(self.0, other_tags))
+                    .finish(),
+                UnionLayout::NullableUnwrapped {
+                    nullable_id,
+                    other_fields,
+                } => f
+                    .debug_struct("NullableUnwrapped")
+                    .field("nullable_id", &nullable_id)
+                    .field("other_tags", &DbgFields(self.0, other_fields))
+                    .finish(),
+            }
+        }
+    }
+
+    struct DbgLambdaSet<'a, 'r, I: LayoutInterner<'a>>(&'r I, LambdaSet<'a>);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgLambdaSet<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let LambdaSet {
+                args,
+                ret,
+                set,
+                representation,
+                full_layout,
+            } = self.1;
+
+            f.debug_struct("LambdaSet")
+                .field("args", &DbgFields(self.0, args))
+                .field("ret", &Dbg(self.0, ret))
+                .field("set", &DbgCapturesSet(self.0, set))
+                .field("representation", &Dbg(self.0, representation))
+                .field("full_layout", &full_layout)
+                .finish()
+        }
+    }
+
+    struct DbgCapturesSet<'a, 'r, I: LayoutInterner<'a>>(&'r I, &'a [(Symbol, &'a [InLayout<'a>])]);
+
+    impl<'a, 'r, I: LayoutInterner<'a>> std::fmt::Debug for DbgCapturesSet<'a, 'r, I> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_list()
+                .entries(
+                    self.1
+                        .iter()
+                        .map(|(sym, captures)| (sym, DbgFields(self.0, captures))),
+                )
+                .finish()
+        }
     }
 }
 

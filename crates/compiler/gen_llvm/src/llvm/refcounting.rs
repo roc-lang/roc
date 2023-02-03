@@ -11,9 +11,7 @@ use bumpalo::collections::Vec;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::{AnyTypeEnum, BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
-use inkwell::values::{
-    BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
-};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, IntPredicate};
 use roc_module::symbol::Interns;
 use roc_module::symbol::Symbol;
@@ -40,7 +38,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
 
         let value = env.builder.build_pointer_cast(
             ptr,
-            refcount_type.ptr_type(AddressSpace::Generic),
+            refcount_type.ptr_type(AddressSpace::default()),
             "to_refcount_ptr",
         );
 
@@ -54,7 +52,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let builder = env.builder;
         // pointer to usize
         let refcount_type = env.ptr_int();
-        let refcount_ptr_type = refcount_type.ptr_type(AddressSpace::Generic);
+        let refcount_ptr_type = refcount_type.ptr_type(AddressSpace::default());
 
         let ptr_as_usize_ptr =
             builder.build_pointer_cast(data_ptr, refcount_ptr_type, "as_usize_ptr");
@@ -148,7 +146,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
             None => {
                 // inc and dec return void
                 let fn_type = context.void_type().fn_type(
-                    &[env.ptr_int().ptr_type(AddressSpace::Generic).into()],
+                    &[env.ptr_int().ptr_type(AddressSpace::default()).into()],
                     false,
                 );
 
@@ -172,8 +170,7 @@ impl<'ctx> PointerToRefcount<'ctx> {
         let refcount_ptr = self.value;
 
         env.builder.position_at_end(block);
-        env.builder
-            .set_current_debug_location(env.context, di_location);
+        env.builder.set_current_debug_location(di_location);
 
         let call = env
             .builder
@@ -216,7 +213,7 @@ fn incref_pointer<'a, 'ctx, 'env>(
             env.builder
                 .build_pointer_cast(
                     pointer,
-                    env.ptr_int().ptr_type(AddressSpace::Generic),
+                    env.ptr_int().ptr_type(AddressSpace::default()),
                     "to_isize_ptr",
                 )
                 .into(),
@@ -238,7 +235,7 @@ fn decref_pointer<'a, 'ctx, 'env>(
             env.builder
                 .build_pointer_cast(
                     pointer,
-                    env.ptr_int().ptr_type(AddressSpace::Generic),
+                    env.ptr_int().ptr_type(AddressSpace::default()),
                     "to_isize_ptr",
                 )
                 .into(),
@@ -261,7 +258,7 @@ pub fn decref_pointer_check_null<'a, 'ctx, 'env>(
             env.builder
                 .build_pointer_cast(
                     pointer,
-                    env.context.i8_type().ptr_type(AddressSpace::Generic),
+                    env.context.i8_type().ptr_type(AddressSpace::default()),
                     "to_i8_ptr",
                 )
                 .into(),
@@ -312,8 +309,7 @@ fn modify_refcount_struct<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function
 }
@@ -655,8 +651,7 @@ fn modify_refcount_list<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function
 }
@@ -715,7 +710,7 @@ fn modify_refcount_list_help<'a, 'ctx, 'env>(
 
     if layout_interner.contains_refcounted(element_layout) {
         let ptr_type = basic_type_from_layout(env, layout_interner, element_layout)
-            .ptr_type(AddressSpace::Generic);
+            .ptr_type(AddressSpace::default());
 
         let (len, ptr) = load_list(env.builder, original_wrapper, ptr_type);
 
@@ -786,8 +781,7 @@ fn modify_refcount_str<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function
 }
@@ -896,8 +890,7 @@ fn modify_refcount_boxed<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function
 }
@@ -1062,8 +1055,7 @@ fn build_rec_union<'a, 'ctx, 'env>(
             );
 
             env.builder.position_at_end(block);
-            env.builder
-                .set_current_debug_location(env.context, di_location);
+            env.builder.set_current_debug_location(di_location);
 
             function_value
         }
@@ -1248,7 +1240,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         // cast the opaque pointer to a pointer of the correct shape
         let struct_ptr = env.builder.build_pointer_cast(
             value_ptr,
-            wrapper_type.ptr_type(AddressSpace::Generic),
+            wrapper_type.ptr_type(AddressSpace::default()),
             "opaque_to_correct_recursive_decrement",
         );
 
@@ -1271,7 +1263,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
                     .unwrap();
 
                 let ptr_as_i64_ptr = env.builder.new_build_load(
-                    env.context.i64_type().ptr_type(AddressSpace::Generic),
+                    env.context.i64_type().ptr_type(AddressSpace::default()),
                     elem_pointer,
                     "load_recursive_pointer",
                 );
@@ -1455,8 +1447,7 @@ pub fn build_reset<'a, 'ctx, 'env>(
             );
 
             env.builder.position_at_end(block);
-            env.builder
-                .set_current_debug_location(env.context, di_location);
+            env.builder.set_current_debug_location(di_location);
 
             function_value
         }
@@ -1622,8 +1613,7 @@ fn modify_refcount_nonrecursive<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
 
     function
 }
@@ -1722,7 +1712,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx, 'env>(
 
         let cast_tag_data_pointer = env.builder.build_pointer_cast(
             opaque_tag_data_ptr,
-            data_struct_type.ptr_type(AddressSpace::Generic),
+            data_struct_type.ptr_type(AddressSpace::default()),
             "cast_to_concrete_tag",
         );
 
@@ -1741,7 +1731,7 @@ fn modify_refcount_nonrecursive_help<'a, 'ctx, 'env>(
 
                 // This is the actual pointer to the recursive data.
                 let field_value = env.builder.new_build_load(
-                    env.context.i64_type().ptr_type(AddressSpace::Generic),
+                    env.context.i64_type().ptr_type(AddressSpace::default()),
                     field_ptr,
                     "load_recursive_pointer",
                 );

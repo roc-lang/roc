@@ -5731,6 +5731,8 @@ fn build_pending_specializations<'a>(
         derived_module: &derived_module,
     };
 
+    let layout_cache_snapshot = layout_cache.snapshot();
+
     // Add modules' decls to Procs
     for index in 0..declarations.len() {
         use roc_can::expr::DeclarationTag::*;
@@ -6107,6 +6109,8 @@ fn build_pending_specializations<'a>(
             }
         }
     }
+
+    layout_cache.rollback_to(layout_cache_snapshot);
 
     procs_base.module_thunks = module_thunks.into_bump_slice();
 

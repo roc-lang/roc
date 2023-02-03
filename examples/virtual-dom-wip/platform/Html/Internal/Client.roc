@@ -723,7 +723,7 @@ expect
 
 # diff
 expect
-    State : { answer : Nat }
+    State : { answer : U32 }
 
     diffStateBefore : DiffState State
     diffStateBefore = {
@@ -778,7 +778,7 @@ expect
 
 # initClientAppHelp
 expect
-    State : { answer : Nat }
+    State : { answer : U32 }
 
     init = \result ->
         when result is

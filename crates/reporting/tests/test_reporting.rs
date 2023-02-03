@@ -5594,25 +5594,6 @@ All branches in an `if` must have the same type!
     );
 
     test_report!(
-        part_starts_with_number,
-        indoc!(
-            r#"
-            foo.100
-            "#
-        ),
-        @r###"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-    I trying to parse a record field access here:
-
-    4│      foo.100
-                ^
-
-    So I expect to see a lowercase letter next, like .name or .height.
-    "###
-    );
-
-    test_report!(
         closure_underscore_ident,
         indoc!(
             r#"
@@ -13027,5 +13008,113 @@ I recommend using camelCase. It's the standard style in Roc code!
                         Two -> Two
             "#
         )
+    );
+
+    test_report!(
+        derive_decoding_for_nat,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+
+            main =
+                myDecoder : Decoder Nat fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│      myDecoder = decoder
+                        ^^^^^^^
+
+    I can't generate an implementation of the `Decoding` ability for
+
+        Nat
+
+    Note: Decoding to a Nat is not supported. Consider decoding to a
+    fixed-sized unsigned integer, like U64, then converting to a Nat if
+    needed.
+    "###
+    );
+
+    test_report!(
+        derive_encoding_for_nat,
+        indoc!(
+            r#"
+            app "test" imports [] provides [main] to "./platform"
+
+            x : Nat
+
+            main = Encode.toEncoder x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = Encode.toEncoder x
+                                ^
+
+    I can't generate an implementation of the `Encoding` ability for
+
+        Int Natural
+
+    In particular, an implementation for
+
+        Natural
+
+    cannot be generated.
+
+    Tip: `Natural` does not implement `Encoding`.
+    "###
+    );
+
+    test_report!(
+        exhaustiveness_check_function_or_tag_union_issue_4994,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            x : U8
+
+            ifThenCase =
+                when x is
+                    0 -> Red
+                    1 -> Yellow
+                    2 -> Purple
+                    3 -> Zulip
+                    _ -> Green
+
+            main =
+                when ifThenCase is
+                    Red -> "red"
+                    Green -> "green"
+                    Yellow -> "yellow"
+                    Zulip -> "zulip"
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    14│>      when ifThenCase is
+    15│>          Red -> "red"
+    16│>          Green -> "green"
+    17│>          Yellow -> "yellow"
+    18│>          Zulip -> "zulip"
+
+    Other possibilities include:
+
+        Purple
+        _
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
     );
 }

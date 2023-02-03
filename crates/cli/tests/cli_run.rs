@@ -687,6 +687,17 @@ mod cli_run {
     }
 
     #[test]
+    fn breakout_hello_gui() {
+        test_roc_app_slim(
+            "examples/gui/breakout",
+            "hello-gui.roc",
+            "hello-gui",
+            "",
+            UseValgrind::No,
+        )
+    }
+
+    #[test]
     #[cfg_attr(windows, ignore)]
     fn quicksort() {
         test_roc_app_slim(

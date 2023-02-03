@@ -4,9 +4,7 @@ use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
 use inkwell::types::BasicType;
-use inkwell::values::{
-    BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue,
-};
+use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_builtins::bitcode;
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
@@ -461,8 +459,7 @@ fn build_list_eq<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
         .build_call(function, &[list1.into(), list2.into()], "list_eq");
@@ -500,7 +497,7 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(ctx, loc);
+        builder.set_current_debug_location(loc);
     }
 
     // Add args to scope
@@ -537,7 +534,7 @@ fn build_list_eq_help<'a, 'ctx, 'env>(
 
         let builder = env.builder;
         let element_type = basic_type_from_layout(env, layout_interner, element_layout);
-        let ptr_type = element_type.ptr_type(AddressSpace::Generic);
+        let ptr_type = element_type.ptr_type(AddressSpace::default());
         let ptr1 = load_list_ptr(env.builder, list1, ptr_type);
         let ptr2 = load_list_ptr(env.builder, list2, ptr_type);
 
@@ -672,8 +669,7 @@ fn build_struct_eq<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
         .build_call(function, &[struct1.into(), struct2.into()], "struct_eq");
@@ -711,7 +707,7 @@ fn build_struct_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(ctx, loc);
+        builder.set_current_debug_location(loc);
     }
 
     // Add args to scope
@@ -858,8 +854,7 @@ fn build_tag_eq<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
         .build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
@@ -897,7 +892,7 @@ fn build_tag_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(ctx, loc);
+        builder.set_current_debug_location(loc);
     }
 
     // Add args to scope
@@ -1285,13 +1280,13 @@ fn eq_ptr_to_struct<'a, 'ctx, 'env>(
     // cast the opaque pointer to a pointer of the correct shape
     let struct1_ptr = env.builder.build_pointer_cast(
         tag1,
-        wrapper_type.ptr_type(AddressSpace::Generic),
+        wrapper_type.ptr_type(AddressSpace::default()),
         "opaque_to_correct",
     );
 
     let struct2_ptr = env.builder.build_pointer_cast(
         tag2,
-        wrapper_type.ptr_type(AddressSpace::Generic),
+        wrapper_type.ptr_type(AddressSpace::default()),
         "opaque_to_correct",
     );
 
@@ -1361,8 +1356,7 @@ fn build_box_eq<'a, 'ctx, 'env>(
     };
 
     env.builder.position_at_end(block);
-    env.builder
-        .set_current_debug_location(env.context, di_location);
+    env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
         .build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
@@ -1400,7 +1394,7 @@ fn build_box_eq_help<'a, 'ctx, 'env>(
             /* current_scope */ lexical_block.as_debug_info_scope(),
             /* inlined_at */ None,
         );
-        builder.set_current_debug_location(ctx, loc);
+        builder.set_current_debug_location(loc);
     }
 
     // Add args to scope
