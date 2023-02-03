@@ -656,11 +656,6 @@ fn gen_elf_le(
             ph.p_vaddr.set(LE, update_virtual_offset(md, p_vaddr));
             let p_paddr = ph.p_paddr.get(LE);
             ph.p_paddr.set(LE, update_virtual_offset(md, p_paddr));
-
-            // if virtual_shift_start <= p_vaddr {
-            // ph.p_vaddr.set(LE, p_vaddr + md.added_byte_count);
-            // ph.p_paddr.set(LE, p_vaddr + md.added_byte_count);
-            // }
         }
     }
 
@@ -727,9 +722,6 @@ fn gen_elf_le(
         let sh_addr = sh.sh_addr.get(LE);
 
         sh.sh_offset.set(LE, update_physical_offset(md, sh_offset));
-        // if virtual_shift_start <= sh_addr {
-        // sh.sh_addr.set(LE, sh_addr + md.added_byte_count);
-        // }
         sh.sh_addr.set(LE, update_virtual_offset(md, sh_addr));
 
         // Record every relocation section.
@@ -762,9 +754,6 @@ fn gen_elf_le(
         );
         for rel in relocations.iter_mut() {
             let r_offset = rel.r_offset.get(LE);
-            // if virtual_shift_start <= r_offset {
-            // rel.r_offset.set(LE, r_offset + md.added_byte_count);
-            // }
             rel.r_offset.set(LE, update_virtual_offset(md, r_offset));
         }
     }
@@ -779,18 +768,14 @@ fn gen_elf_le(
         for (i, rel) in relocations.iter_mut().enumerate() {
             let r_offset = rel.r_offset.get(LE);
             rel.r_offset.set(LE, update_virtual_offset(md, r_offset));
-            // if md.ph_virtual_shift_start <= r_offset {
-            // rel.r_offset.set(LE, r_offset + md.added_byte_count);
             // Deal with potential adjusts to absolute jumps.
             // TODO: Verify other relocation types.
             if rel.r_type(LE, false) == elf::R_X86_64_RELATIVE {
                 let r_addend = rel.r_addend.get(LE);
                 assert!(r_addend >= 0);
                 rel.r_addend
-                    .set(LE, update_physical_offset(md, r_addend as u64) as i64);
-                // rel.r_addend.set(LE, r_addend + md.added_byte_count as i64);
+                    .set(LE, update_virtual_offset(md, r_addend as u64) as i64);
             }
-            // }
             // If the relocation goes to a roc function, we need to surgically link it and change it to relative.
             let r_type = rel.r_type(LE, false);
             if r_type == elf::R_X86_64_GLOB_DAT {
@@ -929,9 +914,6 @@ fn gen_elf_le(
             | elf::DT_VERDEF
             | elf::DT_VERNEED => {
                 let d_addr = d.d_val.get(LE);
-                // if virtual_shift_start <= d_addr {
-                // d.d_val.set(LE, d_addr + md.added_byte_count);
-                // }
                 d.d_val.set(LE, update_virtual_offset(md, d_addr));
             }
             elf::DT_INIT
@@ -962,9 +944,6 @@ fn gen_elf_le(
 
     for sym in symbols {
         let addr = sym.st_value.get(LE);
-        // if virtual_shift_start <= addr {
-        //     sym.st_value.set(LE, addr + md.added_byte_count);
-        // }
         sym.st_value.set(LE, update_virtual_offset(md, addr));
     }
 
@@ -999,9 +978,6 @@ fn gen_elf_le(
         .e_shoff
         .set(LE, update_physical_offset(md, file_header.e_shoff.get(LE)));
     let e_entry = file_header.e_entry.get(LE);
-    // if virtual_shift_start <= e_entry {
-    // file_header.e_entry.set(LE, e_entry + md.added_byte_count);
-    // }
     file_header
         .e_entry
         .set(LE, update_virtual_offset(md, e_entry));
