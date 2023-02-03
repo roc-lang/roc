@@ -621,13 +621,12 @@ fn gen_elf_le(
             && p_offset <= md.original_rela_paddr
             && md.original_rela_paddr < p_offset + ph.p_filesz.get(LE)
         {
-            // TODO: Simply adding vaddr is probably not valid.
-            // We probably need to make sure the vaddr is after all possible vaddrs in this executable.
             let p_vaddr = ph.p_vaddr.get(LE);
-            md.rela_virtual_shift_start = md.rela_physical_shift_start + p_vaddr;
-            md.rela_virtual_shift_end = md.rela_physical_shift_end + p_vaddr;
-            md.original_rela_vaddr = md.original_rela_paddr + p_vaddr;
-            md.new_rela_vaddr = md.new_rela_paddr + p_vaddr;
+            let virtual_shift = p_vaddr - p_offset;
+            md.rela_virtual_shift_start = md.rela_physical_shift_start + virtual_shift;
+            md.rela_virtual_shift_end = md.rela_physical_shift_end + virtual_shift;
+            md.original_rela_vaddr = md.original_rela_paddr + virtual_shift;
+            md.new_rela_vaddr = md.new_rela_paddr + virtual_shift;
         }
     }
     if !first_load_found {
