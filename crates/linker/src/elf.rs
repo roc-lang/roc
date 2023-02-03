@@ -586,9 +586,9 @@ fn gen_elf_le(
 
     md.original_rela_paddr = original_rela_offset;
     md.rela_physical_shift_start = original_rela_offset + original_rela_size;
-    md.rela_physical_shift_end = sh_offset;
+    md.new_rela_paddr = sh_offset - original_rela_size;
+    md.rela_physical_shift_end = md.new_rela_paddr + original_rela_size;
     md.rela_shift_bytes = original_rela_size;
-    md.new_rela_paddr = sh_offset - md.rela_shift_bytes;
 
     // Copy header and shift everything to enable more program sections.
     let added_header_count = 3;
