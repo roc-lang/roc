@@ -21,21 +21,21 @@ pub enum RocCacheDir<'a> {
 }
 
 // Errors in case NixOS users try to use a dynamically linked platform
-#[cfg(target_os="linux")]
-fn nixos_error_if_dynamic(url: &str, dest_dir: &PathBuf) {
+#[cfg(target_os = "linux")]
+fn nixos_error_if_dynamic(url: &str, dest_dir: &Path) {
     let output = std::process::Command::new("uname")
-                                       .arg("-a")
-                                       .output()
-                                       .expect("uname command failed to start");
+        .arg("-a")
+        .output()
+        .expect("uname command failed to start");
     let running_nixos = String::from_utf8_lossy(&output.stdout).contains("NixOS");
 
     if running_nixos {
         // bash -c is used instead of plain ldd because process::Command escapes its arguments
         let ldd_output = std::process::Command::new("bash")
-                                               .arg("-c")
-                                               .arg(format!("ldd {}/linux-x86_64.rh*", dest_dir.display()))
-                                               .output()
-                                               .expect("ldd command failed to start");
+            .arg("-c")
+            .arg(format!("ldd {}/linux-x86_64.rh*", dest_dir.display()))
+            .output()
+            .expect("ldd command failed to start");
         let is_static = String::from_utf8_lossy(&ldd_output.stdout).contains("statically linked");
 
         if !is_static {
@@ -87,7 +87,7 @@ pub fn install_package<'a>(
                 // If the cache dir exists already, we assume it has the correct contents
                 // (it's a cache, after all!) and return without downloading anything.
                 //
-                #[cfg(target_os="linux")]
+                #[cfg(target_os = "linux")]
                 {
                     nixos_error_if_dynamic(url, &dest_dir);
                 }
@@ -134,7 +134,7 @@ pub fn install_package<'a>(
                         .map_err(Problem::FsExtraErr)?;
                     }
 
-                    #[cfg(target_os="linux")]
+                    #[cfg(target_os = "linux")]
                     {
                         nixos_error_if_dynamic(url, &dest_dir);
                     }
