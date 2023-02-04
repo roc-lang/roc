@@ -25,6 +25,7 @@ pub struct SurgeryEntry {
 // I think a number of them can be combined to reduce string duplication.
 // Also I think a few of them aren't need.
 // For example, I think preprocessing can deal with all shifting and remove the need for added_byte_count.
+// TOOD: Split metadata by platform. New changes have added a lot of elf specific data into this.
 #[derive(Default, Serialize, Deserialize, PartialEq, Eq, Debug)]
 pub struct Metadata {
     pub app_functions: Vec<String>,
@@ -51,11 +52,6 @@ pub struct Metadata {
     pub ph_physical_shift_start: u64,
     pub ph_virtual_shift_start: u64,
     pub ph_shift_bytes: u64,
-    // pub rela_physical_shift_start: u64,
-    // pub rela_physical_shift_end: u64,
-    // pub rela_virtual_shift_start: u64,
-    // pub rela_virtual_shift_end: u64,
-    // pub rela_shift_bytes: u64,
 }
 
 impl Metadata {

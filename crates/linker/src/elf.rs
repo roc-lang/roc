@@ -517,9 +517,6 @@ fn update_physical_offset(md: &metadata::Metadata, offset: u64) -> u64 {
     if md.new_rela_paddr <= offset {
         out += md.rela_size;
     }
-    // if md.rela_physical_shift_start <= offset && offset < md.rela_physical_shift_end {
-    //     out -= md.rela_shift_bytes;
-    // }
     out
 }
 
@@ -535,9 +532,6 @@ fn update_virtual_offset(md: &metadata::Metadata, offset: u64) -> u64 {
     if md.new_rela_vaddr <= offset {
         out += md.rela_size;
     }
-    // if md.rela_virtual_shift_start <= offset && offset < md.rela_virtual_shift_end {
-    //     out -= md.rela_shift_bytes;
-    // }
     out
 }
 
@@ -572,8 +566,6 @@ fn gen_elf_le(
     }
 
     // Get the rela section. It needs to be put at the end of the file before the section headers.
-    let mut original_rela_offset = 0;
-    let mut original_rela_size = 0;
     for d in load_structs_inplace::<elf::Dyn64<LE>>(
         exec_data,
         md.dynamic_section_offset as usize,
@@ -581,21 +573,15 @@ fn gen_elf_le(
     ) {
         match d.d_tag.get(LE) as u32 {
             elf::DT_RELA => {
-                original_rela_offset = d.d_val.get(LE);
+                md.original_rela_vaddr = d.d_val.get(LE);
             }
             elf::DT_RELASZ => {
-                original_rela_size = d.d_val.get(LE);
+                md.rela_size = d.d_val.get(LE);
             }
             _ => {}
         }
     }
-
-    md.original_rela_paddr = original_rela_offset;
-    // md.rela_physical_shift_start = original_rela_offset + original_rela_size;
-    md.new_rela_paddr = sh_offset - original_rela_size;
-    // md.rela_physical_shift_end = md.new_rela_paddr + original_rela_size;
-    // md.rela_shift_bytes = original_rela_size;
-    md.rela_size = original_rela_size;
+    md.new_rela_paddr = sh_offset;
 
     // Copy header and shift everything to enable more program sections.
     let added_header_count = 3;
@@ -630,8 +616,7 @@ fn gen_elf_le(
         {
             let p_vaddr = ph.p_vaddr.get(LE);
             let virtual_shift = p_vaddr - p_offset;
-            // md.rela_virtual_shift_start = md.rela_physical_shift_start + virtual_shift;
-            md.original_rela_vaddr = md.original_rela_paddr + virtual_shift;
+            md.original_rela_paddr = md.original_rela_vaddr - virtual_shift;
         }
     }
     if !first_load_found {
@@ -658,18 +643,15 @@ fn gen_elf_le(
         .unwrap();
 
     md.new_rela_vaddr = align_to_offset_by_constraint(
-        // TODO: potentially remove md.load_align_constraint here. I think we should be able to cram things together.
-        last_segment_vaddr as usize + md.load_align_constraint as usize,
+        last_segment_vaddr as usize,
         md.new_rela_paddr as usize,
         md.load_align_constraint as usize,
     ) as u64;
-    // md.rela_virtual_shift_end = md.new_rela_vaddr + original_rela_size;
 
     // Shift all of the program headers.
     for ph in program_headers.iter_mut() {
         let p_type = ph.p_type.get(LE);
         let p_offset = ph.p_offset.get(LE);
-        // let original_p_filesz = ph.p_filesz.get(LE);
         if (p_type == elf::PT_LOAD && p_offset == 0) || p_type == elf::PT_PHDR {
             // Extend length for the first segment and the program header.
             ph.p_filesz.set(LE, ph.p_filesz.get(LE) + md.ph_shift_bytes);
@@ -683,39 +665,35 @@ fn gen_elf_le(
             let p_paddr = ph.p_paddr.get(LE);
             ph.p_paddr.set(LE, update_virtual_offset(md, p_paddr));
         }
-        // if p_offset <= md.original_rela_paddr
-        //     && md.original_rela_paddr < p_offset + original_p_filesz
-        // {
-        //     ph.p_filesz.set(LE, ph.p_filesz.get(LE) - md.rela_size);
-        //     ph.p_memsz.set(LE, ph.p_memsz.get(LE) - md.rela_size);
-        // }
     }
 
+    // Add new segement for the duplicate .rela.dyn section.
     program_headers[program_headers.len() - 1] = elf::ProgramHeader64 {
         p_type: endian::U32::new(LE, elf::PT_LOAD),
         p_flags: endian::U32::new(LE, elf::PF_R),
         p_offset: endian::U64::new(LE, md.new_rela_paddr + md.ph_shift_bytes),
         p_vaddr: endian::U64::new(LE, md.new_rela_vaddr + md.ph_shift_bytes),
         p_paddr: endian::U64::new(LE, md.new_rela_vaddr + md.ph_shift_bytes),
-        p_filesz: endian::U64::new(LE, original_rela_size),
-        p_memsz: endian::U64::new(LE, original_rela_size),
+        p_filesz: endian::U64::new(LE, md.rela_size),
+        p_memsz: endian::U64::new(LE, md.rela_size),
         p_align: endian::U64::new(LE, md.load_align_constraint),
     };
 
     // Give lots of space between the new rela section and the future app sections in virtual memory.
-    md.last_vaddr = md.new_rela_vaddr + original_rela_size + md.load_align_constraint;
+    md.last_vaddr = md.new_rela_vaddr + md.rela_size;
+    // TODO: verify removing this works on all apps.
+    // + md.load_align_constraint;
 
     // Copy everything until the section header table.
     out_mmap[md.ph_physical_shift_start as usize + md.ph_shift_bytes as usize
         ..sh_offset as usize + md.ph_shift_bytes as usize]
         .copy_from_slice(&exec_data[md.ph_physical_shift_start as usize..sh_offset as usize]);
 
-    // Copy everything after the rela section and before the section header table.
-    // out_mmap[md.original_rela_paddr as usize + md.ph_shift_bytes as usize
-    //     ..md.new_rela_paddr as usize + md.ph_shift_bytes as usize]
-    //     .copy_from_slice(&exec_data[md.rela_physical_shift_start as usize..sh_offset as usize]);
-
-    // Copy rela.
+    // TODO: This is just duplicating the rela section at the end of the binary.
+    // It would be best practice to remove the original section and shift everything.
+    // This was causing issues with Rust and C hosts that I have not figured out yet,
+    // but would be a good idea in the long run.
+    // This has a cost in binary bloat, but hopefully nothing more than a few KB.
     out_mmap[md.new_rela_paddr as usize + md.ph_shift_bytes as usize
         ..md.new_rela_paddr as usize + md.rela_size as usize + md.ph_shift_bytes as usize]
         .copy_from_slice(
@@ -730,7 +708,7 @@ fn gen_elf_le(
     // Update all sections for shift for extra program headers.
     let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LE>>(
         &mut out_mmap,
-        sh_offset as usize + md.ph_shift_bytes as usize + md.rela_size as usize,
+        update_physical_offset(md, sh_offset) as usize,
         sh_num as usize,
     );
 
@@ -756,7 +734,7 @@ fn gen_elf_le(
     for (sec_offset, sec_size) in rel_sections {
         let relocations = load_structs_inplace_mut::<elf::Rel64<LE>>(
             &mut out_mmap,
-            sec_offset as usize + md.ph_shift_bytes as usize,
+            update_physical_offset(md, sec_offset) as usize,
             sec_size as usize / mem::size_of::<elf::Rel64<LE>>(),
         );
         for rel in relocations.iter_mut() {
