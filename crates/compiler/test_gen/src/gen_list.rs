@@ -52,7 +52,7 @@ fn int_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn bool_list_literal() {
     assert_evals_to!(
         indoc!(
@@ -84,7 +84,45 @@ fn bool_list_literal() {
         RocList::from_slice(&[false; 1]),
         RocList<bool>
     );
+}
 
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn bool_list_concat() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               List.concat [Bool.true, Bool.false] [Bool.false, Bool.true]
+               "#
+        ),
+        RocList::from_slice(&[true, false, false, true]),
+        RocList<bool>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+               List.concat [] [Bool.false, Bool.true]
+               "#
+        ),
+        RocList::from_slice(&[false, true]),
+        RocList<bool>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+               List.concat [Bool.true, Bool.false] []
+               "#
+        ),
+        RocList::from_slice(&[true, false]),
+        RocList<bool>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bool_list_literal_repeat() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -726,7 +764,7 @@ fn list_append_to_empty_list_of_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_append_bools() {
     assert_evals_to!(
         "List.append [Bool.true, Bool.false] Bool.true",
@@ -789,7 +827,7 @@ fn list_prepend_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_prepend_bools() {
     assert_evals_to!(
         "List.prepend [Bool.true, Bool.false] Bool.true",

@@ -1850,7 +1850,7 @@ impl<
             };
             // TODO: Expand to all types.
             match self.layout_interner.get(*elem_layout) {
-                Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+                Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64) | Builtin::Bool) => {
                     let sym_reg = self
                         .storage_manager
                         .load_to_general_reg(&mut self.buf, elem_sym);
