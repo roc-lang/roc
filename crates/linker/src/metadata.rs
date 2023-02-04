@@ -47,14 +47,15 @@ pub struct Metadata {
     pub original_rela_vaddr: u64,
     pub new_rela_paddr: u64,
     pub new_rela_vaddr: u64,
+    pub rela_size: u64,
     pub ph_physical_shift_start: u64,
     pub ph_virtual_shift_start: u64,
     pub ph_shift_bytes: u64,
-    pub rela_physical_shift_start: u64,
-    pub rela_physical_shift_end: u64,
-    pub rela_virtual_shift_start: u64,
-    pub rela_virtual_shift_end: u64,
-    pub rela_shift_bytes: u64,
+    // pub rela_physical_shift_start: u64,
+    // pub rela_physical_shift_end: u64,
+    // pub rela_virtual_shift_start: u64,
+    // pub rela_virtual_shift_end: u64,
+    // pub rela_shift_bytes: u64,
 }
 
 impl Metadata {

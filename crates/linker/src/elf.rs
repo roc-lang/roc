@@ -507,31 +507,37 @@ pub(crate) fn preprocess_elf(
 
 fn update_physical_offset(md: &metadata::Metadata, offset: u64) -> u64 {
     // Special case: the rela section was moved to a new location.
-    if md.original_rela_paddr <= offset && offset < md.rela_physical_shift_start {
+    if md.original_rela_paddr <= offset && offset < md.original_rela_paddr + md.rela_size {
         return md.new_rela_paddr + (offset - md.original_rela_paddr) + md.ph_shift_bytes;
     }
     let mut out = offset;
     if md.ph_physical_shift_start <= offset {
         out += md.ph_shift_bytes;
     }
-    if md.rela_physical_shift_start <= offset && offset < md.rela_physical_shift_end {
-        out -= md.rela_shift_bytes;
+    if md.new_rela_paddr <= offset {
+        out += md.rela_size;
     }
+    // if md.rela_physical_shift_start <= offset && offset < md.rela_physical_shift_end {
+    //     out -= md.rela_shift_bytes;
+    // }
     out
 }
 
 fn update_virtual_offset(md: &metadata::Metadata, offset: u64) -> u64 {
     // Special case: the rela section was moved to a new location.
-    if md.original_rela_vaddr <= offset && offset < md.rela_virtual_shift_start {
+    if md.original_rela_vaddr <= offset && offset < md.original_rela_vaddr + md.rela_size {
         return md.new_rela_vaddr + (offset - md.original_rela_vaddr) + md.ph_shift_bytes;
     }
     let mut out = offset;
     if md.ph_virtual_shift_start <= offset {
         out += md.ph_shift_bytes;
     }
-    if md.rela_virtual_shift_start <= offset && offset < md.rela_virtual_shift_end {
-        out -= md.rela_shift_bytes;
+    if md.new_rela_vaddr <= offset {
+        out += md.rela_size;
     }
+    // if md.rela_virtual_shift_start <= offset && offset < md.rela_virtual_shift_end {
+    //     out -= md.rela_shift_bytes;
+    // }
     out
 }
 
@@ -585,10 +591,11 @@ fn gen_elf_le(
     }
 
     md.original_rela_paddr = original_rela_offset;
-    md.rela_physical_shift_start = original_rela_offset + original_rela_size;
+    // md.rela_physical_shift_start = original_rela_offset + original_rela_size;
     md.new_rela_paddr = sh_offset - original_rela_size;
-    md.rela_physical_shift_end = md.new_rela_paddr + original_rela_size;
-    md.rela_shift_bytes = original_rela_size;
+    // md.rela_physical_shift_end = md.new_rela_paddr + original_rela_size;
+    // md.rela_shift_bytes = original_rela_size;
+    md.rela_size = original_rela_size;
 
     // Copy header and shift everything to enable more program sections.
     let added_header_count = 3;
@@ -598,7 +605,7 @@ fn gen_elf_le(
     let ph_end = ph_offset as usize + ph_num as usize * ph_ent_size as usize;
     md.ph_physical_shift_start = ph_end as u64;
 
-    md.exec_len = exec_data.len() as u64 + md.ph_shift_bytes;
+    md.exec_len = exec_data.len() as u64 + md.ph_shift_bytes + md.rela_size;
     let mut out_mmap = open_mmap_mut(preprocessed_path, md.exec_len as usize);
 
     out_mmap[..ph_end].copy_from_slice(&exec_data[..ph_end]);
@@ -623,7 +630,7 @@ fn gen_elf_le(
         {
             let p_vaddr = ph.p_vaddr.get(LE);
             let virtual_shift = p_vaddr - p_offset;
-            md.rela_virtual_shift_start = md.rela_physical_shift_start + virtual_shift;
+            // md.rela_virtual_shift_start = md.rela_physical_shift_start + virtual_shift;
             md.original_rela_vaddr = md.original_rela_paddr + virtual_shift;
         }
     }
@@ -656,13 +663,13 @@ fn gen_elf_le(
         md.new_rela_paddr as usize,
         md.load_align_constraint as usize,
     ) as u64;
-    md.rela_virtual_shift_end = md.new_rela_vaddr + original_rela_size;
+    // md.rela_virtual_shift_end = md.new_rela_vaddr + original_rela_size;
 
     // Shift all of the program headers.
     for ph in program_headers.iter_mut() {
         let p_type = ph.p_type.get(LE);
         let p_offset = ph.p_offset.get(LE);
-        let original_p_filesz = ph.p_filesz.get(LE);
+        // let original_p_filesz = ph.p_filesz.get(LE);
         if (p_type == elf::PT_LOAD && p_offset == 0) || p_type == elf::PT_PHDR {
             // Extend length for the first segment and the program header.
             ph.p_filesz.set(LE, ph.p_filesz.get(LE) + md.ph_shift_bytes);
@@ -676,13 +683,12 @@ fn gen_elf_le(
             let p_paddr = ph.p_paddr.get(LE);
             ph.p_paddr.set(LE, update_virtual_offset(md, p_paddr));
         }
-        if p_offset <= md.original_rela_paddr
-            && md.original_rela_paddr < p_offset + original_p_filesz
-        {
-            ph.p_filesz
-                .set(LE, ph.p_filesz.get(LE) - md.rela_shift_bytes);
-            ph.p_memsz.set(LE, ph.p_memsz.get(LE) - md.rela_shift_bytes);
-        }
+        // if p_offset <= md.original_rela_paddr
+        //     && md.original_rela_paddr < p_offset + original_p_filesz
+        // {
+        //     ph.p_filesz.set(LE, ph.p_filesz.get(LE) - md.rela_size);
+        //     ph.p_memsz.set(LE, ph.p_memsz.get(LE) - md.rela_size);
+        // }
     }
 
     program_headers[program_headers.len() - 1] = elf::ProgramHeader64 {
@@ -699,34 +705,32 @@ fn gen_elf_le(
     // Give lots of space between the new rela section and the future app sections in virtual memory.
     md.last_vaddr = md.new_rela_vaddr + original_rela_size + md.load_align_constraint;
 
-    // Copy everything until the rela section.
+    // Copy everything until the section header table.
     out_mmap[md.ph_physical_shift_start as usize + md.ph_shift_bytes as usize
-        ..md.original_rela_paddr as usize + md.ph_shift_bytes as usize]
-        .copy_from_slice(
-            &exec_data[md.ph_physical_shift_start as usize..md.original_rela_paddr as usize],
-        );
+        ..sh_offset as usize + md.ph_shift_bytes as usize]
+        .copy_from_slice(&exec_data[md.ph_physical_shift_start as usize..sh_offset as usize]);
 
     // Copy everything after the rela section and before the section header table.
-    out_mmap[md.original_rela_paddr as usize + md.ph_shift_bytes as usize
-        ..md.new_rela_paddr as usize + md.ph_shift_bytes as usize]
-        .copy_from_slice(&exec_data[md.rela_physical_shift_start as usize..sh_offset as usize]);
+    // out_mmap[md.original_rela_paddr as usize + md.ph_shift_bytes as usize
+    //     ..md.new_rela_paddr as usize + md.ph_shift_bytes as usize]
+    //     .copy_from_slice(&exec_data[md.rela_physical_shift_start as usize..sh_offset as usize]);
 
     // Copy rela.
     out_mmap[md.new_rela_paddr as usize + md.ph_shift_bytes as usize
-        ..md.new_rela_paddr as usize + original_rela_size as usize + md.ph_shift_bytes as usize]
+        ..md.new_rela_paddr as usize + md.rela_size as usize + md.ph_shift_bytes as usize]
         .copy_from_slice(
             &exec_data[md.original_rela_paddr as usize
-                ..md.original_rela_paddr as usize + original_rela_size as usize],
+                ..md.original_rela_paddr as usize + md.rela_size as usize],
         );
 
     // Copy the section header table.
-    out_mmap[sh_offset as usize + md.ph_shift_bytes as usize..]
+    out_mmap[sh_offset as usize + md.ph_shift_bytes as usize + md.rela_size as usize..]
         .copy_from_slice(&exec_data[sh_offset as usize..]);
 
     // Update all sections for shift for extra program headers.
     let section_headers = load_structs_inplace_mut::<elf::SectionHeader64<LE>>(
         &mut out_mmap,
-        sh_offset as usize + md.ph_shift_bytes as usize,
+        sh_offset as usize + md.ph_shift_bytes as usize + md.rela_size as usize,
         sh_num as usize,
     );
 
