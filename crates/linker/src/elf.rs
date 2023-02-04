@@ -670,7 +670,7 @@ fn gen_elf_le(
     // Add new segement for the duplicate .rela.dyn section.
     program_headers[program_headers.len() - 1] = elf::ProgramHeader64 {
         p_type: endian::U32::new(LE, elf::PT_LOAD),
-        p_flags: endian::U32::new(LE, elf::PF_R),
+        p_flags: endian::U32::new(LE, elf::PF_R | elf::PF_W),
         p_offset: endian::U64::new(LE, md.new_rela_paddr + md.ph_shift_bytes),
         p_vaddr: endian::U64::new(LE, md.new_rela_vaddr + md.ph_shift_bytes),
         p_paddr: endian::U64::new(LE, md.new_rela_vaddr + md.ph_shift_bytes),
@@ -841,6 +841,9 @@ fn gen_elf_le(
                 tag == elf::DT_RELA
             })
             .any(|d| d.d_val.get(LE) == sec_offset);
+        if is_rela_dyn {
+            md.rela_section_index = sec_index as u64;
+        }
         let is_rela_plt = dyns
             .iter()
             .filter(|d| {
@@ -953,6 +956,7 @@ fn gen_elf_le(
             16 * (dynamic_lib_count - shared_lib_index),
         );
     }
+    md.dynamic_section_count = dynamic_lib_count as u64 - 1;
 
     // Update main elf header for extra data.
     let file_header = load_struct_inplace_mut::<elf::FileHeader64<LE>>(&mut out_mmap, 0);
@@ -1171,18 +1175,21 @@ pub(crate) fn surgery_elf(
         }
     };
 
-    if app_obj
+    let absolute_relocation_count = app_obj
         .sections()
         .filter(|sec| {
             let name = sec.name().unwrap_or_default();
             !name.starts_with(".debug") && !name.starts_with(".eh")
         })
         .flat_map(|sec| sec.relocations())
-        .any(|(_, reloc)| reloc.kind() == RelocationKind::Absolute)
-    {
-        eprintln!("The surgical linker currently has issue #3609 and would fail linking your app.");
-        eprintln!("Please use `--linker=legacy` to avoid the issue for now.");
-        std::process::exit(1);
+        .filter(|(_, reloc)| reloc.kind() == RelocationKind::Absolute)
+        .count();
+
+    if verbose {
+        println!(
+            "Have {} absolute relocations to handle",
+            absolute_relocation_count
+        );
     }
 
     let total_start = Instant::now();
@@ -1192,14 +1199,26 @@ pub(crate) fn surgery_elf(
     let loading_metadata_duration = loading_metadata_start.elapsed();
 
     let load_and_mmap_start = Instant::now();
-    let max_out_len = md.exec_len + roc_app_bytes.len() as u64 + md.load_align_constraint;
+    let max_out_len = md.exec_len
+        + roc_app_bytes.len() as u64
+        + (absolute_relocation_count
+            * (mem::size_of::<elf::Rela64<LE>>() - mem::size_of::<elf::Rel64<LE>>()))
+            as u64
+        + md.load_align_constraint;
     let mut exec_mmap = open_mmap_mut(executable_path, max_out_len as usize);
     let load_and_mmap_duration = load_and_mmap_start.elapsed();
 
     let out_gen_start = Instant::now();
     let mut offset = 0;
 
-    surgery_elf_help(verbose, &md, &mut exec_mmap, &mut offset, app_obj);
+    surgery_elf_help(
+        verbose,
+        &md,
+        &mut exec_mmap,
+        &mut offset,
+        app_obj,
+        absolute_relocation_count,
+    );
 
     let out_gen_duration = out_gen_start.elapsed();
     let flushing_data_start = Instant::now();
@@ -1251,6 +1270,7 @@ fn surgery_elf_help(
     exec_mmap: &mut MmapMut,
     offset_ref: &mut usize, // TODO return this instead of taking a mutable reference to it
     app_obj: object::File,
+    absolute_relocation_count: usize,
 ) {
     let elf64 = exec_mmap[4] == 2;
     let litte_endian = exec_mmap[5] == 1;
@@ -1283,6 +1303,9 @@ fn surgery_elf_help(
     let sh_tab = exec_mmap[sh_offset as usize..][..sh_size].to_vec();
 
     let mut offset = sh_offset as usize;
+
+    offset += absolute_relocation_count * mem::size_of::<elf::Rela64<LE>>();
+
     offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
 
     let new_rodata_section_offset = offset;
@@ -1308,7 +1331,10 @@ fn surgery_elf_help(
     // in development builds for caching the results of top-level constants
     let rodata_sections: Vec<Section> = app_obj
         .sections()
-        .filter(|sec| sec.name().unwrap_or_default().starts_with(".rodata"))
+        .filter(|sec| {
+            let name = sec.name().unwrap_or_default();
+            name.starts_with(".rodata") || name.ends_with(".rel.ro")
+        })
         .collect();
 
     // bss section is like rodata section, but it has zero file size and non-zero virtual size.
@@ -1391,6 +1417,7 @@ fn surgery_elf_help(
         (*new_text_section_offset, *new_text_section_vaddr);
 
     // Move data and deal with relocations.
+    let mut current_rela_index = 0;
     for sec in rodata_sections
         .iter()
         .chain(bss_sections.iter())
@@ -1410,7 +1437,7 @@ fn surgery_elf_help(
         if verbose {
             println!();
             println!(
-                "Processing Relocations for Section: 0x{:+x?} @ {:+x} (virt: {:+x})",
+                "Processing Relocations for Section: {:+x?} @ {:+x} (virt: {:+x})",
                 sec, section_offset, section_virtual_offset
             );
         }
@@ -1454,6 +1481,25 @@ fn surgery_elf_help(
                         let target: i64 = match rel.1.kind() {
                             RelocationKind::Relative | RelocationKind::PltRelative => {
                                 target_offset - virt_base as i64 + rel.1.addend()
+                            }
+                            RelocationKind::Absolute => {
+                                // Absolute relocations are special. We do not know the final address they will be loaded into due to PIC and aslr.
+                                // As such, we need to convert them to dynamic relocations that can be run at load time.
+                                let current_rela = load_struct_inplace_mut::<elf::Rela64<LE>>(
+                                    exec_mmap,
+                                    md.new_rela_paddr as usize
+                                        + md.rela_size as usize
+                                        + md.ph_shift_bytes as usize
+                                        + (current_rela_index * mem::size_of::<elf::Rela64<LE>>()),
+                                );
+                                current_rela.set_r_info(LE, false, 0, elf::R_X86_64_RELATIVE);
+                                current_rela.r_offset.set(LE, virt_base as u64);
+                                current_rela
+                                    .r_addend
+                                    .set(LE, target_offset as i64 + rel.1.addend());
+
+                                current_rela_index += 1;
+                                continue;
                             }
                             x => {
                                 internal_error!("Relocation Kind not yet support: {:?}", x);
@@ -1504,6 +1550,42 @@ fn surgery_elf_help(
         }
     }
 
+    // Update RELASZ and RELACOUNT to reflect the added dynamic relocations.
+    let added_rela_size = current_rela_index * mem::size_of::<elf::Rela64<LE>>();
+    for d in load_structs_inplace_mut::<elf::Dyn64<LE>>(
+        exec_mmap,
+        update_physical_offset(md, md.dynamic_section_offset) as usize,
+        md.dynamic_section_count as usize,
+    ) {
+        match d.d_tag.get(LE) as u32 {
+            elf::DT_RELASZ => d.d_val.set(LE, d.d_val.get(LE) + added_rela_size as u64),
+            elf::DT_RELACOUNT => d.d_val.set(LE, d.d_val.get(LE) + current_rela_index as u64),
+            _ => {}
+        }
+    }
+
+    // TODO: do this more properly. Instead of shifting everything at the end.
+    // First shift the old relocations in one large chunk.
+    // Then add the new relocations before the old relocations.
+    let all_relas = load_structs_inplace_mut::<elf::Rela64<LE>>(
+        exec_mmap,
+        md.new_rela_paddr as usize + md.ph_shift_bytes as usize,
+        (md.rela_size as usize + added_rela_size) / mem::size_of::<elf::Rela64<LE>>(),
+    );
+    let mut rela_index = 0;
+    let mut end = all_relas.len() - 1;
+    while rela_index < end {
+        rela_index += 1;
+        if all_relas[rela_index].r_type(LE, false) != elf::R_X86_64_RELATIVE {
+            // Some reason all of the X64_64_RELATIVE relocations have to be next to each other.
+            // When we find a different type of relocation, swap it to the end.
+            let tmp = all_relas[end];
+            all_relas[end] = all_relas[rela_index];
+            all_relas[rela_index] = tmp;
+            end -= 1;
+        }
+    }
+
     offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
     let new_sh_offset = offset;
     exec_mmap[offset..][..sh_size].copy_from_slice(&sh_tab);
@@ -1533,6 +1615,12 @@ fn surgery_elf_help(
         new_text_section_vaddr as u64 - new_rodata_section_vaddr as u64;
     let new_text_section_vaddr = new_rodata_section_vaddr as u64 + new_rodata_section_size as u64;
     let new_text_section_size = new_sh_offset as u64 - new_text_section_offset as u64;
+
+    // update the .rela.dyn section size.
+    let rela_sec = &mut section_headers[md.rela_section_index as usize];
+    rela_sec
+        .sh_size
+        .set(LE, rela_sec.sh_size.get(LE) + added_rela_size as u64);
 
     // set the new rodata section header
     section_headers[section_headers.len() - 2] = elf::SectionHeader64 {
@@ -1576,10 +1664,19 @@ fn surgery_elf_help(
         ph_num as usize,
     );
 
+    // Update the .rela.dyn segment size
+    let rela_seg = &mut program_headers[program_headers.len() - 3];
+    rela_seg
+        .p_filesz
+        .set(LE, rela_seg.p_filesz.get(LE) + added_rela_size as u64);
+    rela_seg
+        .p_memsz
+        .set(LE, rela_seg.p_memsz.get(LE) + added_rela_size as u64);
+
     // set the new rodata section program header
     program_headers[program_headers.len() - 2] = elf::ProgramHeader64 {
         p_type: endian::U32::new(LE, elf::PT_LOAD),
-        p_flags: endian::U32::new(LE, elf::PF_R),
+        p_flags: endian::U32::new(LE, elf::PF_R | elf::PF_W),
         p_offset: endian::U64::new(LE, new_rodata_section_offset as u64),
         p_vaddr: endian::U64::new(LE, new_rodata_section_vaddr as u64),
         p_paddr: endian::U64::new(LE, new_rodata_section_vaddr as u64),
@@ -1592,7 +1689,7 @@ fn surgery_elf_help(
     let new_text_section_index = program_headers.len() - 1;
     program_headers[new_text_section_index] = elf::ProgramHeader64 {
         p_type: endian::U32::new(LE, elf::PT_LOAD),
-        p_flags: endian::U32::new(LE, elf::PF_R | elf::PF_X),
+        p_flags: endian::U32::new(LE, elf::PF_R | elf::PF_X | elf::PF_W),
         p_offset: endian::U64::new(LE, new_text_section_offset as u64),
         p_vaddr: endian::U64::new(LE, new_text_section_vaddr),
         p_paddr: endian::U64::new(LE, new_text_section_vaddr),
