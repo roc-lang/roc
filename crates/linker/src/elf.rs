@@ -1880,14 +1880,14 @@ mod tests {
 
             pub fn main() !void {
                 const stdout = std.io.getStdOut().writer();
-                try stdout.print("Hello {s}\n", .{roc_magic1(0)[0..3]});
+                try stdout.print("Hello {s}\n", .{roc_magic1(1)[0..3]});
             }
             "#
         );
 
         let app_zig = indoc!(
             r#"
-            const X = [_][]const u8 { "foo" };
+            const X = [_][]const u8 { "foo", "bar" };
 
             export fn roc_magic1(index: usize) [*]const u8 {
                 return X[index].ptr;
@@ -2014,6 +2014,6 @@ mod tests {
 
         let output = String::from_utf8_lossy(&output.stdout);
 
-        assert_eq!("Hello foo\n", output);
+        assert_eq!("Hello bar\n", output);
     }
 }
