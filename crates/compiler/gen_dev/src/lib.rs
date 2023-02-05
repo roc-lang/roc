@@ -284,28 +284,31 @@ trait Backend<'a> {
                         if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
                             LowLevelWrapperType::from_symbol(func_sym.name())
                         {
-                            self.build_run_low_level(
+                            return self.build_run_low_level(
                                 sym,
                                 &lowlevel,
                                 arguments,
                                 arg_layouts,
                                 ret_layout,
-                            )
-                        } else if self.defined_in_app_module(func_sym.name()) {
-                            let layout_id = LayoutIds::default().get(func_sym.name(), layout);
-                            let fn_name = self.symbol_to_string(func_sym.name(), layout_id);
-                            // Now that the arguments are needed, load them if they are literals.
-                            self.load_literal_symbols(arguments);
-                            self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
-                        } else {
-                            self.build_builtin(
+                            );
+                        } else if sym.is_builtin() {
+                            // These builtins can be built through `build_fn_call` as well, but the
+                            // implementation in `build_builtin` inlines some of the symbols.
+                            return self.build_builtin(
                                 sym,
                                 func_sym.name(),
                                 arguments,
                                 arg_layouts,
                                 ret_layout,
-                            )
+                            );
                         }
+
+                        let layout_id = LayoutIds::default().get(func_sym.name(), layout);
+                        let fn_name = self.symbol_to_string(func_sym.name(), layout_id);
+
+                        // Now that the arguments are needed, load them if they are literals.
+                        self.load_literal_symbols(arguments);
+                        self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                     }
 
                     CallType::LowLevel { op: lowlevel, .. } => {
@@ -802,7 +805,6 @@ trait Backend<'a> {
         arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     ) {
-        self.load_literal_symbols(args);
         match func_sym {
             Symbol::NUM_IS_ZERO => {
                 debug_assert_eq!(
@@ -816,6 +818,7 @@ trait Backend<'a> {
                     "NumIsZero: expected to have return layout of type Bool"
                 );
 
+                self.load_literal_symbols(args);
                 self.load_literal(
                     &Symbol::DEV_TMP,
                     &arg_layouts[0],
@@ -843,11 +846,13 @@ trait Backend<'a> {
                 let bool_layout = Layout::BOOL;
                 self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(true));
                 self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
+                self.free_symbol(&Symbol::DEV_TMP)
             }
             Symbol::BOOL_FALSE => {
                 let bool_layout = Layout::BOOL;
                 self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(false));
                 self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
+                self.free_symbol(&Symbol::DEV_TMP)
             }
             _ => todo!("the function, {:?}", func_sym),
         }
