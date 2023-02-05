@@ -753,7 +753,7 @@ fn gen_elf_le(
     // Add new segement for the duplicate .rela.dyn section.
     program_headers[program_headers.len() - 1] = elf::ProgramHeader64 {
         p_type: endian::U32::new(LE, elf::PT_LOAD),
-        p_flags: endian::U32::new(LE, elf::PF_R | elf::PF_W),
+        p_flags: endian::U32::new(LE, elf::PF_R),
         p_offset: endian::U64::new(LE, md.new_rela_paddr + md.ph_shift_bytes),
         p_vaddr: endian::U64::new(LE, md.new_rela_vaddr + md.ph_shift_bytes),
         p_paddr: endian::U64::new(LE, md.new_rela_vaddr + md.ph_shift_bytes),
@@ -1750,6 +1750,14 @@ fn surgery_elf_help(
     rela_seg
         .p_memsz
         .set(LE, rela_seg.p_memsz.get(LE) + added_rela_size as u64);
+
+    // TODO: Neither of these below segments should have the write bit set.
+    // Sadly, dynamic loading only supports 1 relro segment.
+    // This means we need to somehow merge the new and old relro segment by shifting data in the binary around more.
+    // This is left for a later PR because it is brittle work.
+    // For now, the roc app text and read only data sections are writable.
+    // Given roc won't generate code to abuse this, this should only really be an issue if the platform chooses to do something.
+    // It is also a minor security concern if someone is trying to hack into a running roc app.
 
     // set the new rodata section program header
     program_headers[program_headers.len() - 2] = elf::ProgramHeader64 {
