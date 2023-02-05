@@ -264,6 +264,7 @@ pub enum BadIdent {
     WeirdDotQualified(Position),
     StrayDot(Position),
     BadOpaqueRef(Position),
+    QualifiedTupleAccessor(Position),
 }
 
 fn is_alnum(ch: char) -> bool {
@@ -500,6 +501,13 @@ fn chomp_identifier_chain<'a>(
 
         match chomp_access_chain(&buffer[chomped..], &mut parts) {
             Ok(width) => {
+                if matches!(parts[0], Accessor::TupleIndex(_)) && first_is_uppercase {
+                    return Err((
+                        chomped as u32,
+                        BadIdent::QualifiedTupleAccessor(pos.bump_column(chomped as u32)),
+                    ));
+                }
+
                 chomped += width as usize;
 
                 let ident = Ident::Access {

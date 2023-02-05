@@ -1,0 +1,38 @@
+Defs(
+    Defs {
+        tags: [
+            Index(0),
+        ],
+        regions: [
+            @2-6,
+        ],
+        space_before: [
+            Slice(start = 0, length = 0),
+        ],
+        space_after: [
+            Slice(start = 0, length = 0),
+        ],
+        spaces: [],
+        type_defs: [
+            Alias {
+                header: TypeHeader {
+                    name: @2-3 "A",
+                    vars: [],
+                },
+                ann: @5-6 BoundVariable(
+                    "b",
+                ),
+            },
+        ],
+        value_defs: [],
+    },
+    @7-8 SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "a",
+        },
+        [
+            Newline,
+        ],
+    ),
+)

@@ -745,6 +745,7 @@ fn remove_spaces_bad_ident(ident: BadIdent) -> BadIdent {
         BadIdent::WeirdDotQualified(_) => BadIdent::WeirdDotQualified(Position::zero()),
         BadIdent::StrayDot(_) => BadIdent::StrayDot(Position::zero()),
         BadIdent::BadOpaqueRef(_) => BadIdent::BadOpaqueRef(Position::zero()),
+        BadIdent::QualifiedTupleAccessor(_) => BadIdent::QualifiedTupleAccessor(Position::zero()),
     }
 }
 
