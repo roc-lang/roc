@@ -1,3 +1,4 @@
+use bincode::{deserialize_from, serialize_into};
 use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::MmapMut;
 use object::{elf, endian};
@@ -8,14 +9,16 @@ use object::{
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::{internal_error, user_error};
+use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use std::ffi::CStr;
 use std::mem;
 use std::os::raw::c_char;
-use std::path::Path;
-use std::time::{Duration, Instant};
-
-use crate::metadata::{self, Metadata, VirtualOffset};
+use std::{
+    io::{BufReader, BufWriter},
+    path::Path,
+    time::{Duration, Instant},
+};
 
 use crate::{
     align_by_constraint, align_to_offset_by_constraint, load_struct_inplace,
@@ -34,6 +37,86 @@ struct ElfDynamicDeps {
     app_sym_indices: Vec<usize>,
     dynamic_lib_count: usize,
     shared_lib_index: usize,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+enum VirtualOffset {
+    Absolute,
+    Relative(u64),
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, Debug)]
+struct SurgeryEntry {
+    file_offset: u64,
+    virtual_offset: VirtualOffset,
+    size: u8,
+}
+
+// TODO: Reanalyze each piece of data in this struct.
+// I think a number of them can be combined to reduce string duplication.
+// Also I think a few of them aren't need.
+// For example, I think preprocessing can deal with all shifting and remove the need for added_byte_count.
+#[derive(Default, Serialize, Deserialize, PartialEq, Eq, Debug)]
+struct Metadata {
+    app_functions: Vec<String>,
+    // offset followed by address.
+    plt_addresses: MutMap<String, (u64, u64)>,
+    surgeries: MutMap<String, Vec<SurgeryEntry>>,
+    dynamic_symbol_indices: MutMap<String, u64>,
+    static_symbol_indices: MutMap<String, u64>,
+    roc_symbol_vaddresses: MutMap<String, u64>,
+    exec_len: u64,
+    load_align_constraint: u64,
+    last_vaddr: u64,
+    dynamic_section_offset: u64,
+    dynamic_section_count: u64,
+    dynamic_symbol_table_section_offset: u64,
+    symbol_table_section_offset: u64,
+    symbol_table_size: u64,
+    original_rela_paddr: u64,
+    original_rela_vaddr: u64,
+    new_rela_paddr: u64,
+    new_rela_vaddr: u64,
+    rela_size: u64,
+    rela_section_index: u64,
+    ph_physical_shift_start: u64,
+    ph_virtual_shift_start: u64,
+    ph_shift_bytes: u64,
+}
+
+impl Metadata {
+    fn write_to_file(&self, metadata_filename: &Path) {
+        let metadata_file =
+            std::fs::File::create(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
+
+        serialize_into(BufWriter::new(metadata_file), self)
+            .unwrap_or_else(|err| internal_error!("Failed to serialize metadata: {err}"));
+    }
+
+    fn read_from_file(metadata_filename: &Path) -> Self {
+        let input =
+            std::fs::File::open(metadata_filename)
+            .unwrap_or_else(
+                |e| internal_error!(r#"
+
+                Error:
+                    {}
+
+                > This may occur when using a release of roc that relies on a specific metadata format like 'rm2' and the imported platform only has an older metadata format available, like rm1.
+                  The platform you are using can be found in the header of your main.roc: `packages {{ pf: <PLATFORM>}}`.
+                  You should check if a more recent version of the platform is available.
+                  If not, you should notify the author of the platform about this issue.
+
+"#, e)
+            );
+
+        match deserialize_from(BufReader::new(input)) {
+            Ok(data) => data,
+            Err(err) => {
+                internal_error!("Failed to deserialize metadata: {}", err);
+            }
+        }
+    }
 }
 
 fn report_timing(label: &str, duration: Duration) {
@@ -96,7 +179,7 @@ fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<St
 }
 
 struct Surgeries<'a> {
-    surgeries: MutMap<String, Vec<metadata::SurgeryEntry>>,
+    surgeries: MutMap<String, Vec<SurgeryEntry>>,
     app_func_addresses: MutMap<u64, &'a str>,
     indirect_warning_given: bool,
 }
@@ -230,7 +313,7 @@ impl<'a> Surgeries<'a> {
                         self.surgeries
                             .get_mut(*func_name)
                             .unwrap()
-                            .push(metadata::SurgeryEntry {
+                            .push(SurgeryEntry {
                                 file_offset: offset,
                                 virtual_offset: VirtualOffset::Relative(inst.next_ip()),
                                 size: op_size,
@@ -266,7 +349,7 @@ impl<'a> Surgeries<'a> {
     }
 }
 
-/// Constructs a `metadata::Metadata` from a host executable binary, and writes it to disk
+/// Constructs a `Metadata` from a host executable binary, and writes it to disk
 pub(crate) fn preprocess_elf(
     endianness: target_lexicon::Endianness,
     host_exe_path: &Path,
@@ -286,7 +369,7 @@ pub(crate) fn preprocess_elf(
         }
     };
 
-    let mut md = metadata::Metadata {
+    let mut md = Metadata {
         roc_symbol_vaddresses: collect_roc_definitions(&exec_obj),
         ..Default::default()
     };
@@ -505,7 +588,7 @@ pub(crate) fn preprocess_elf(
     }
 }
 
-fn update_physical_offset(md: &metadata::Metadata, offset: u64) -> u64 {
+fn update_physical_offset(md: &Metadata, offset: u64) -> u64 {
     // Special case: the rela section was moved to a new location.
     if md.original_rela_paddr <= offset && offset < md.original_rela_paddr + md.rela_size {
         return md.new_rela_paddr + (offset - md.original_rela_paddr) + md.ph_shift_bytes;
@@ -520,7 +603,7 @@ fn update_physical_offset(md: &metadata::Metadata, offset: u64) -> u64 {
     out
 }
 
-fn update_virtual_offset(md: &metadata::Metadata, offset: u64) -> u64 {
+fn update_virtual_offset(md: &Metadata, offset: u64) -> u64 {
     // Special case: the rela section was moved to a new location.
     if md.original_rela_vaddr <= offset && offset < md.original_rela_vaddr + md.rela_size {
         return md.new_rela_vaddr + (offset - md.original_rela_vaddr) + md.ph_shift_bytes;
@@ -538,7 +621,7 @@ fn update_virtual_offset(md: &metadata::Metadata, offset: u64) -> u64 {
 #[allow(clippy::too_many_arguments)]
 fn gen_elf_le(
     exec_data: &[u8],
-    md: &mut metadata::Metadata,
+    md: &mut Metadata,
     preprocessed_path: &Path,
     got_app_syms: &[(String, usize)],
     got_sections: &[(usize, usize)],
@@ -599,7 +682,7 @@ fn gen_elf_le(
     let program_headers = load_structs_inplace_mut::<elf::ProgramHeader64<LE>>(
         &mut out_mmap,
         ph_offset as usize,
-        ph_num as usize + 1 as usize,
+        ph_num as usize + 1,
     );
     let mut first_load_found = false;
     for ph in program_headers.iter() {
@@ -772,14 +855,11 @@ fn gen_elf_le(
                             + i * mem::size_of::<elf::Rela64<LE>>()
                             // This 16 skips the first 2 fields and gets to the addend field.
                             + 16;
-                        md.surgeries
-                            .get_mut(name)
-                            .unwrap()
-                            .push(metadata::SurgeryEntry {
-                                file_offset: addend_addr as u64,
-                                virtual_offset: VirtualOffset::Absolute,
-                                size: 8,
-                            });
+                        md.surgeries.get_mut(name).unwrap().push(SurgeryEntry {
+                            file_offset: addend_addr as u64,
+                            virtual_offset: VirtualOffset::Absolute,
+                            size: 8,
+                        });
                     }
                 }
             }
@@ -976,7 +1056,7 @@ fn gen_elf_le(
 
 fn scan_elf_dynamic_deps(
     exec_obj: &object::File,
-    md: &mut metadata::Metadata,
+    md: &mut Metadata,
     app_syms: &[Symbol],
     shared_lib: &Path,
     exec_data: &[u8],
@@ -1266,7 +1346,7 @@ pub(crate) fn surgery_elf(
 
 fn surgery_elf_help(
     verbose: bool,
-    md: &metadata::Metadata,
+    md: &Metadata,
     exec_mmap: &mut MmapMut,
     offset_ref: &mut usize, // TODO return this instead of taking a mutable reference to it
     app_obj: object::File,
@@ -1579,9 +1659,7 @@ fn surgery_elf_help(
         if all_relas[rela_index].r_type(LE, false) != elf::R_X86_64_RELATIVE {
             // Some reason all of the X64_64_RELATIVE relocations have to be next to each other.
             // When we find a different type of relocation, swap it to the end.
-            let tmp = all_relas[end];
-            all_relas[end] = all_relas[rela_index];
-            all_relas[rela_index] = tmp;
+            all_relas.swap(rela_index, end);
             end -= 1;
         }
     }

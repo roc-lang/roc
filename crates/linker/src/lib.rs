@@ -21,7 +21,6 @@ mod macho;
 mod pe;
 
 mod generate_dylib;
-mod metadata;
 
 pub fn supported(link_type: LinkType, target: &Triple) -> bool {
     if let LinkType::Executable = link_type {
