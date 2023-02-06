@@ -9,7 +9,7 @@ echo $(echo "$AUTH_HEADER" | wc -c)
 
 curl --request GET \
           --url https://api.github.com/repos/roc-lang/roc/releases \
-          --header $AUTH_HEADER \
+          --header '$AUTH_HEADER' \
           --header 'content-type: application/json' \
           --output roc_releases.json
 
