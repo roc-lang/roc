@@ -7,7 +7,7 @@
 
 curl --request GET \
           --url https://api.github.com/repos/roc-lang/roc/releases \
-          --header 'authorization: Bearer $TOKEN' \
+          --header 'authorization: Bearer $1' \
           --header 'content-type: application/json' \
           --output roc_releases.json
 
