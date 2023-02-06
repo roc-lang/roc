@@ -1,7 +1,6 @@
 on:
+  pull_request:
   workflow_dispatch:
-  release:
-    types: [edited]
 
 # this cancels workflows currently in progress if you start a new one
 concurrency:
@@ -17,15 +16,15 @@ jobs:
 
       # note: moving this step to a bash script will not work, the GITHUB_TOKEN is not passed properly
       - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting.
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          curl --request GET \
-          --url https://api.github.com/repos/roc-lang/roc/releases \
-          --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
-          --header 'content-type: application/json' \
-          --output roc_releases.json
+          ./ci/get_releases.sh
 
-      # does a build with the surgical linker and also with the legacy linker
-      - run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
+      - name: build basic-cli with surgical linker and also with legacy linker
+        env:
+          CARGO_BUILD_TARGET: x86_64-unknown-linux-musl
+        run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
 
       - name: Save .rh1, .rm2 and .o file 
         uses: actions/upload-artifact@v3

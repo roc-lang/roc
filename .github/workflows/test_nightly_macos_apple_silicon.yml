@@ -1,7 +1,5 @@
 on:
   workflow_dispatch:
-  release:
-    types: [edited]
 
 name: Test latest nightly release for macOS Apple Silicon
 
