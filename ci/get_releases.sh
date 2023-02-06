@@ -5,7 +5,7 @@
 # https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 # set -euxo pipefail
 
-echo $(wc -c $GITHUB_TOKEN)
+echo $(echo "$GITHUB_TOKEN" | wc -c)
 
 curl --request GET \
           --url https://api.github.com/repos/roc-lang/roc/releases \

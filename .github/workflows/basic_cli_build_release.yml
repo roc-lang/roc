@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v3
 
       # dbg
-      - run: echo $(wc -c ${{ secrets.GITHUB_TOKEN }})
+      - run: echo $(echo "${{ secrets.GITHUB_TOKEN }}" | wc -c)
 
       # note: moving this step to a bash script will not work, the GITHUB_TOKEN is not passed properly
       - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting.
