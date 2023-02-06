@@ -17,9 +17,9 @@ jobs:
       # note: moving this step to a bash script will not work, the GITHUB_TOKEN is not passed properly
       - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting.
         env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}'
         run: |
-          ./ci/get_releases.sh $TOKEN
+          ./ci/get_releases.sh
 
       - name: build basic-cli with surgical linker and also with legacy linker
         env:
