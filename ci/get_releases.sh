@@ -5,11 +5,11 @@
 # https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 # set -euxo pipefail
 
-echo $(echo "$GITHUB_TOKEN" | wc -c)
+echo $(echo "$AUTH_HEADER" | wc -c)
 
 curl --request GET \
           --url https://api.github.com/repos/roc-lang/roc/releases \
-          --header 'authorization: Bearer $GITHUB_TOKEN' \
+          --header $AUTH_HEADER \
           --header 'content-type: application/json' \
           --output roc_releases.json
 
