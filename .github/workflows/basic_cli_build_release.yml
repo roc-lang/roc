@@ -11,6 +11,8 @@ jobs:
   fetch-releases:
     runs-on: [ubuntu-20.04]
     steps:
+      - uses: actions/checkout@v3
+      
       - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting.
         env:
           AUTH_HEADER: 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
