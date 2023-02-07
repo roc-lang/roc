@@ -12,7 +12,7 @@ jobs:
     runs-on: [ubuntu-20.04]
     steps:
       - uses: actions/checkout@v3
-      
+
       - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting.
         env:
           AUTH_HEADER: 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
@@ -33,7 +33,9 @@ jobs:
       - name: Download the previously uploaded roc_releases.json
         uses: actions/download-artifact@v3
 
-      - run: ls
+      - run: ls artifact
+
+      - run: mv artifact/roc_releases.json .
 
       - name: build basic-cli with surgical linker and also with legacy linker
         env:
