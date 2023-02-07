@@ -1006,6 +1006,34 @@ We just saw how tag unions get combined when different branches of a conditional
 
 Here, Roc's compiler will infer that `color`'s type is `[Red, Yellow, Green]`, because those are the three possibilities this `when` handles.
 
+### [Opaque Types](#opaque-types) {#opaque-types}
+
+Roc enables information hiding through an *opaque type* language feature. To define an opaque type you can use the `:=` operator. This type can then be exported for use elsewhere, however, its internal implementation is only visible within the same scope where the type is defined. This is similar to Elm's [opaque types](http://sporto.github.io/elm-patterns/advanced/opaque-types.html).
+
+Lets see how to create an opaque type; suppose we define the following inside the `Username` module:
+
+```elm
+Username := Str
+
+fromStr : Str -> Username
+fromStr = \str ->
+    @Username str
+
+toStr : Username -> Str
+toStr = \@Username str ->
+    str
+```
+
+Here, `Username` is an opaque type. The `fromStr` function turns a string into a `Username` by *calling* `@Username` on that string. The `toStr` function turns a `Username` back into a string by pattern matching `@Username str ->` to unwrap the string from the `Username`.
+
+Now that we've defined the `Username` opaque type, we can expose it so that other modules can use it in type annotations. However, other modules can't use the `@Username` syntax to wrap or unwrap `Username` values. That operation is only available in the same scope where `Username` itself was defined; trying to use it outside that scope will give an error.
+
+> Note that if we define `Username := Str` inside another module (e.g. `Main`) and also use `@Username`,
+> this will compile, however the new `Username` type in main would not be equal to the one defined in
+> the `Username` module. Although both opaque types have the name `Username`, they were defined in
+> different modules and so the are type-incompatible with each other,
+> and even attempting to use `==` to compare them would be a type mismatch.
+
 ## [Numeric types](#numeric-types) {#numeric-types}
 
 Roc has different numeric types that each have different tradeoffs. They can all be broken down into two categories: [fractions](https://en.wikipedia.org/wiki/Fraction), and [integers](https://en.wikipedia.org/wiki/Integer). In Roc we call these `Frac` and `Int` for short.
