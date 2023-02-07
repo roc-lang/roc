@@ -20,8 +20,6 @@ jobs:
         run: |
           ./ci/get_releases.sh
 
-      - run: rustup target add x86_64-unknown-linux-musl
-
       - name: build basic-cli with surgical linker and also with legacy linker
         env:
           CARGO_BUILD_TARGET: x86_64-unknown-linux-musl

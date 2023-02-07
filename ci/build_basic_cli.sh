@@ -5,6 +5,10 @@ set -euxo pipefail
 
 git clone https://github.com/roc-lang/basic-cli.git
 
+cd basic-cli/src # we cd to install the target for the right rust version
+rustup target add x86_64-unknown-linux-musl 
+cd ../..
+
 # Get the url of the latest release. We're not using the latest main source code for easier reproducibility.
 RELEASE_URL=$(./ci/get_latest_release_url.sh $1)
 
