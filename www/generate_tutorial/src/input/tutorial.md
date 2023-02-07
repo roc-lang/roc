@@ -1006,6 +1006,32 @@ We just saw how tag unions get combined when different branches of a conditional
 
 Here, Roc's compiler will infer that `color`'s type is `[Red, Yellow, Green]`, because those are the three possibilities this `when` handles.
 
+### [Opaque Types](#opaque-types) {#opaque-types}
+
+A type can be defined to be opaque to hide its internal structure. This is a lot more amazing than it may seem. It can make your code more modular, robust, and easier to read:
+- If a type is opaque you can modify its internal structure and be certain that no dependencies need to be updated.
+- You can prevent that data needs to be checked multiple times. For example, you can create an opaque `NonEmptyList` from a `List` after you've checked it. Now all functions that you pass this `NonEmptyList` to do not need to handle the empty list case. 
+- Having the type `Username` in a type signature gives you more context compared to `Str`. Even if the `Username` is an opaque type for `Str`.
+
+You can create an opaque type with the `:=` operator. Let's make one called `Username`:	
+
+<pre><samp>Username <span class="colon">:=</span> Str
+
+fromStr <span class="colon">:</span> Str <span class="kw">-></span> Username
+fromStr <span class="kw">=</span> <span class="kw">\</span>str <span class="kw">-></span>
+    @Username str
+
+toStr <span class="colon">:</span> Username <span class="kw">-></span> Str
+toStr <span class="kw">=</span> <span class="kw">\</span>@Username str <span class="kw">-></span>
+    str
+</pre></samp>
+
+The `fromStr` function turns a string into a `Username` by calling `@Username` on that string. The `toStr` function turns a `Username` back into a string by pattern matching `@Username str` to unwrap the string from the `Username` opaque type.
+
+Now we can expose the `Username` opaque type so that other modules can use it in type annotations. However, other modules can't use the `@Username` syntax to wrap or unwrap `Username` values. That operation is only available in the same scope where `Username` itself was defined; trying to use it outside that scope will give an error.
+
+Note that if we define `Username := Str` inside another module (e.g. `Main`) and also use `@Username`, this will compile, however the new `Username` type in main would not be equal to the one defined in the `Username` module. Although both opaque types have the name `Username`, they were defined in different modules and so they are type-incompatible with each other, and even attempting to use `==` to compare them would be a type mismatch.
+
 ## [Numeric types](#numeric-types) {#numeric-types}
 
 Roc has different numeric types that each have different tradeoffs. They can all be broken down into two categories: [fractions](https://en.wikipedia.org/wiki/Fraction), and [integers](https://en.wikipedia.org/wiki/Integer). In Roc we call these `Frac` and `Int` for short.
