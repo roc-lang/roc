@@ -140,27 +140,27 @@ jobs:
           path: |
             ${{ env.TAR_FILENAME }}
 
-test-release-ubuntu:
-  needs: [create-brotli-archive]
-  runs-on: [ubuntu-20.04]
-  steps:
+  test-release-ubuntu:
+    needs: [create-brotli-archive]
+    runs-on: [ubuntu-20.04]
+      steps:
 
-    - name: Download the previously uploaded files
-      uses: actions/download-artifact@v3
+      - name: Download the previously uploaded files
+        uses: actions/download-artifact@v3
 
-    - name: mv roc nightly and simplify name
-      run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux") ./roc_nightly.tar.gz
+      - name: mv roc nightly and simplify name
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux") ./roc_nightly.tar.gz
 
-    - name: decompress the tar
-      run: tar -xzvf roc_nightly.tar.gz
+      - name: decompress the tar
+        run: tar -xzvf roc_nightly.tar.gz
 
-    - name: delete tar
-      run: rm roc_nightly.tar.gz
+      - name: delete tar
+        run: rm roc_nightly.tar.gz
 
-    - name: rename nightly folder
-      run: mv roc_nightly* roc_nightly
+      - name: rename nightly folder
+        run: mv roc_nightly* roc_nightly
 
-    - run: ls
+      - run: ls
 
-      # TODO do test run with prebuilt platform
+        # TODO do test run with prebuilt platform
 
