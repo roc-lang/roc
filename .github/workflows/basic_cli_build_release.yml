@@ -32,7 +32,7 @@ jobs:
 
       - name: Download the previously uploaded roc_releases.json
         uses: actions/download-artifact@v3
-        run: mv artifact/roc_releases.json .
+      -  run: mv artifact/roc_releases.json .
 
       - name: build basic-cli with surgical linker and also with legacy linker
         env:
@@ -56,7 +56,7 @@ jobs:
 
       - name: Download the previously uploaded roc_releases.json
         uses: actions/download-artifact@v3
-        run: mv artifact/roc_releases.json .
+      - run: mv artifact/roc_releases.json .
 
       - run: ./ci/build_basic_cli.sh macos_x86_64
 
@@ -76,9 +76,7 @@ jobs:
 
       - name: Download the previously uploaded roc_releases.json
         uses: actions/download-artifact@v3
-        run: mv artifact/roc_releases.json .
-
-      - run: ls
+      -  run: mv artifact/roc_releases.json .
 
       - run: ./ci/build_basic_cli.sh silicon
 
@@ -101,7 +99,7 @@ jobs:
 
       - name: Download the previously uploaded roc_releases.json
         uses: actions/download-artifact@v3
-        run: mv artifact/roc_releases.json .
+      - run: mv artifact/roc_releases.json .
 
       - run: echo "ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh linux_x86_64)" >> $GITHUB_ENV
 
