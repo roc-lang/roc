@@ -8,17 +8,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-
-  build-linux-x86_64-files:
+  fetch-releases:
     runs-on: [ubuntu-20.04]
     steps:
-      - uses: actions/checkout@v3
-
       - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting.
         env:
           AUTH_HEADER: 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
         run: |
           ./ci/get_releases.sh
+
+      - name: Save roc_releases.json
+        uses: actions/upload-artifact@v3
+        with:
+          path: roc_releases.json
+
+  build-linux-x86_64-files:
+    runs-on: [ubuntu-20.04]
+    needs: [fetch-releases]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download the previously uploaded roc_releases.json
+        uses: actions/download-artifact@v3
+
+      - run: ls
 
       - name: build basic-cli with surgical linker and also with legacy linker
         env:
@@ -36,14 +49,14 @@ jobs:
 
   build-macos-x86_64-files:
     runs-on: [macos-11] # I expect the generated files to work on macOS 12
+    needs: [fetch-releases]
     steps:
       - uses: actions/checkout@v3
 
-      - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting.
-        env:
-          AUTH_HEADER: 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
-        run: |
-          ./ci/get_releases.sh
+      - name: Download the previously uploaded roc_releases.json
+        uses: actions/download-artifact@v3
+
+      - run: ls
 
       - run: ./ci/build_basic_cli.sh macos_x86_64
 
@@ -57,11 +70,14 @@ jobs:
   build-macos-apple-silicon-files:
     name: build apple silicon .o file
     runs-on: [self-hosted, macOS, ARM64]
+    needs: [fetch-releases]
     steps:
       - uses: actions/checkout@v3
 
-      - name: fetch releases data and save to file
-        run: curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
+      - name: Download the previously uploaded roc_releases.json
+        uses: actions/download-artifact@v3
+
+      - run: ls
 
       - run: ./ci/build_basic_cli.sh silicon
 
