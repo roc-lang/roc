@@ -160,9 +160,9 @@ jobs:
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
 
-      - run: ls
-
       - run: sudo apt-get install tree
+
+      - run: cd basic-cli-platform && ls | grep "tar" | xargs tar -xzf
 
       - run: tree basic-cli-platform
 
