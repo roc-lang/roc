@@ -162,5 +162,9 @@ jobs:
 
       - run: ls
 
+      - run: sudo apt-get install tree
+
+      - run: tree basic-cli-platform
+
         # TODO do test run with prebuilt platform
 
