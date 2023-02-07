@@ -36,8 +36,6 @@ jobs:
 
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
-      - run: ls
-      - run: blabla
 
       - name: build basic-cli with surgical linker and also with legacy linker
         env:
@@ -59,9 +57,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Download the previously uploaded roc_releases.json
+      - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
-      - run: mv artifact/roc_releases.json .
 
       - run: ./ci/build_basic_cli.sh macos_x86_64
 
@@ -79,9 +76,8 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Download the previously uploaded roc_releases.json
+      - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
-      -  run: mv artifact/roc_releases.json .
 
       - run: ./ci/build_basic_cli.sh silicon
 
@@ -104,18 +100,15 @@ jobs:
 
       - name: Download the previously uploaded roc_releases.json
         uses: actions/download-artifact@v3
-      - run: mv artifact/roc_releases.json .
 
-      - run: echo "ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh linux_x86_64)" >> $GITHUB_ENV
-
-      - name: Get the archive from the url.
-        run: curl -OL ${{ env.ROC_RELEASE_URL }}
+      - name: mv roc nightly and simplify name
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "$1") ./roc_nightly.tar.gz
 
       - name: decompress the tar
-        run: ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
+        run: tar -xzvf roc_nightly.tar.gz
 
       - name: delete tar
-        run: ls | grep "roc_nightly.*tar\.gz" | xargs rm -rf
+        run: rm roc_nightly.tar.gz
 
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly

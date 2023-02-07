@@ -12,17 +12,13 @@ if [ "$(uname -m)" == "x86_64" ] && [ "$(uname -s)" == "Linux" ]; then
     cd ../..
 fi
 
-# Get the url of the latest release. We're not using the latest main source code for easier reproducibility.
-RELEASE_URL=$(./ci/get_latest_release_url.sh $1)
-
-# get the archive from the url
-curl -OL $RELEASE_URL
+mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "$1") ./roc_nightly.tar.gz
 
 # decompress the tar
-ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
+tar -xzvf roc_nightly.tar.gz
 
 # delete tar
-ls | grep "roc_nightly.*tar\.gz" | xargs rm -rf
+rm roc_nightly.tar.gz
 
 # simplify dir name
 mv roc_nightly* roc_nightly
