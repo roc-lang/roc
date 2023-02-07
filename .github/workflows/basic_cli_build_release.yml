@@ -23,14 +23,10 @@ jobs:
       - run: curl -OL $(./ci/get_latest_release_url.sh macos_x86_64)
       - run: curl -OL $(./ci/get_latest_release_url.sh silicon)
 
-      - run: ls
-
-      - run: blabla
-
-      - name: Save roc_releases.json
+      - name: Save roc_nightly archives
         uses: actions/upload-artifact@v3
         with:
-          path: roc_releases.json
+          path:  roc_nightly-*
 
   build-linux-x86_64-files:
     runs-on: [ubuntu-20.04]
@@ -38,9 +34,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: Download the previously uploaded roc_releases.json
+      - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v3
-      -  run: mv artifact/roc_releases.json .
+      - run: ls
+      - run: blabla
 
       - name: build basic-cli with surgical linker and also with legacy linker
         env:
