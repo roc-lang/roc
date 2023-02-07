@@ -165,7 +165,7 @@ jobs:
       - run: cd basic-cli-platform && ls | grep "tar" | xargs tar -xzf
 
       - name: prep testing http-get.roc
-      - run: |
+        run: |
           cd basic-cli-platform
           curl -OL https://github.com/roc-lang/basic-cli/blob/main/examples/http-get.roc
           curl -OL https://github.com/roc-lang/basic-cli/blob/main/ci/expect_scripts/http-get.exp
