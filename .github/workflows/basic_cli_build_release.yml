@@ -17,7 +17,15 @@ jobs:
         env:
           AUTH_HEADER: 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
         run: |
-          ./ci/get_releases.sh
+          ./ci/get_releases_json.sh
+
+      - run: curl -OL $(./ci/get_latest_release_url.sh linux_x86_64)
+      - run: curl -OL $(./ci/get_latest_release_url.sh macos_x86_64)
+      - run: curl -OL $(./ci/get_latest_release_url.sh silicon)
+
+      - run: ls
+
+      - run: blabla
 
       - name: Save roc_releases.json
         uses: actions/upload-artifact@v3
@@ -144,4 +152,10 @@ jobs:
           name: basic-cli-platform
           path: |
             ${{ env.TAR_FILENAME }}
+
+#  test-release-ubuntu:
+#    needs: [create-brotli-archive]
+#    runs-on: [ubuntu-20.04]
+#    steps:
+#      - uses: actions/checkout@v3
 
