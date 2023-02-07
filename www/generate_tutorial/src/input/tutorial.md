@@ -1012,17 +1012,17 @@ Roc enables information hiding through an *opaque type* language feature. To def
 
 Lets see how to create an opaque type; suppose we define the following inside the `Username` module:
 
-```elm
-Username := Str
+<pre><samp>
+Username <span class="colon">:=</span> Str
 
-fromStr : Str -> Username
-fromStr = \str ->
+fromStr <span class="colon">:</span> Str <span class="kw">-></span> Username
+fromStr <span class="kw">=</span> <span class="kw">\</span>str <span class="kw">-></span>
     @Username str
 
-toStr : Username -> Str
-toStr = \@Username str ->
+toStr <span class="colon">:</span> Username <span class="kw">-></span> Str
+toStr <span class="kw">=</span> <span class="kw">\</span>@Username str <span class="kw">-></span>
     str
-```
+</pre></samp>
 
 Here, `Username` is an opaque type. The `fromStr` function turns a string into a `Username` by *calling* `@Username` on that string. The `toStr` function turns a `Username` back into a string by pattern matching `@Username str ->` to unwrap the string from the `Username`.
 
