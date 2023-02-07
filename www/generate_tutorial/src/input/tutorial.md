@@ -1012,8 +1012,7 @@ Roc enables information hiding through an *opaque type* language feature. To def
 
 Lets see how to create an opaque type; suppose we define the following inside the `Username` module:
 
-<pre><samp>
-Username <span class="colon">:=</span> Str
+<pre><samp>Username <span class="colon">:=</span> Str
 
 fromStr <span class="colon">:</span> Str <span class="kw">-></span> Username
 fromStr <span class="kw">=</span> <span class="kw">\</span>str <span class="kw">-></span>
@@ -1024,15 +1023,11 @@ toStr <span class="kw">=</span> <span class="kw">\</span>@Username str <span cla
     str
 </pre></samp>
 
-Here, `Username` is an opaque type. The `fromStr` function turns a string into a `Username` by *calling* `@Username` on that string. The `toStr` function turns a `Username` back into a string by pattern matching `@Username str ->` to unwrap the string from the `Username`.
+Here, `Username` is an opaque type. The `fromStr` function turns a string into a `Username` by calling `@Username` on that string. The `toStr` function turns a `Username` back into a string by pattern matching `@Username str` to unwrap the string from the `Username` opaque type.
 
-Now that we've defined the `Username` opaque type, we can expose it so that other modules can use it in type annotations. However, other modules can't use the `@Username` syntax to wrap or unwrap `Username` values. That operation is only available in the same scope where `Username` itself was defined; trying to use it outside that scope will give an error.
+Now we can expose the `Username` opaque type we defined so that other modules can use it in type annotations. However, other modules can't use the `@Username` syntax to wrap or unwrap `Username` values. That operation is only available in the same scope where `Username` itself was defined; trying to use it outside that scope will give an error.
 
-> Note that if we define `Username := Str` inside another module (e.g. `Main`) and also use `@Username`,
-> this will compile, however the new `Username` type in main would not be equal to the one defined in
-> the `Username` module. Although both opaque types have the name `Username`, they were defined in
-> different modules and so the are type-incompatible with each other,
-> and even attempting to use `==` to compare them would be a type mismatch.
+Note that if we define `Username := Str` inside another module (e.g. `Main`) and also use `@Username`, this will compile, however the new `Username` type in main would not be equal to the one defined in the `Username` module. Although both opaque types have the name `Username`, they were defined in different modules and so they are type-incompatible with each other, and even attempting to use `==` to compare them would be a type mismatch.
 
 ## [Numeric types](#numeric-types) {#numeric-types}
 
