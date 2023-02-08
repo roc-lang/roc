@@ -20,7 +20,7 @@ Try typing this in the REPL and pressing Enter:
 
 The REPL should cheerfully display the following:
 
-<pre><samp><span class="str">"Hello, World!"</span> <span class="colon">:</span> Str <span class="autovar">               # val1</span></samp></pre>
+<pre><samp><span class="str">"Hello, World!" </span><span class="colon">:</span> Str <span class="autovar">               # val1</span></samp></pre>
 
 Congratulations! You've just written your first Roc code.
 
@@ -51,7 +51,7 @@ You can combine named strings together using _string interpolation_, like so:
 
 If you put this into the REPL, you should see this output:
 
-<pre><samp><span class="str">"Hi there, World!"</span> <span class="colon">:</span> Str <span class="autovar">               # val2</span></samp></pre>
+<pre><samp><span class="str">"Hi there, World!" </span><span class="colon">:</span> Str <span class="autovar">               # val2</span></samp></pre>
 
 Notice that the REPL printed `# val2` here. This works just like `# val1` did before, but it chose the name `val2` for this expression because `val1` was already taken. As we continue entering more expressions into the REPL, you'll see more and more of these generated names—but they won't be mentioned again in this tutorial, since they're just a convenience.
 
@@ -259,7 +259,7 @@ This differently-indented version is equivalent to writing `else if sum < 0 then
 
 This is a comment in Roc:
 
-<samp><span class="comment"># The `name` field is unused by addAndStringify</span></samp>
+<samp><span class="comment"># The 'name' field is unused by addAndStringify</span></samp>
 
 Whenever you write `#` it means that the rest of the line is a comment, and will not affect the
 running program. Roc does not have multiline comment syntax.
@@ -309,7 +309,7 @@ An easy way to print multiple values at a time is to wrap them in a tag, for exa
 
 Currently our `addAndStringify` function takes two arguments. We can instead make it take one argument like so:
 
-<pre><samp>total <span class="kw">=</span> addAndStringify <span class="brace">{</span> birds: 5<span class="comma">,</span> iguanas: 7 <span class="brace">}</span>
+<pre><samp>total <span class="kw">=</span> addAndStringify <span class="brace">{</span> birds<span class="colon">,</span> 5<span class="comma">,</span> iguanas<span class="colon">,</span> 7 <span class="brace">}</span>
 
 addAndStringify <span class="kw">=</span> <span class="kw">\</span>counts <span class="kw">-></span>
     Num.toStr <span class="paren">(</span>counts.birds <span class="op">+</span> counts.iguanas<span class="paren">)</span>
@@ -329,7 +329,7 @@ When we use [`==`](/builtins/Bool#isEq) on records, it compares all the fields i
 
 The `addAndStringify` function will accept any record with at least the fields `birds` and `iguanas`, but it will also accept records with more fields. For example:
 
-<pre><samp><span>total <span class="kw">=</span> addAndStringify <span class="brace">{</span> birds: 5<span class="comma">,</span> iguanas: 7 <span class="brace">}</span>
+<pre><samp><span>total <span class="kw">=</span> addAndStringify <span class="brace">{</span> birds<span class="colon">:</span> 5<span class="comma">,</span> iguanas<span class="colon">:</span> 7 <span class="brace">}</span>
 </span>
 <span class="comment"># The `name` field is unused by addAndStringify</span>
 totalWithNote <span class="kw">=</span> addAndStringify <span class="brace">{</span> birds: 4<span class="comma">,</span> iguanas: 3<span class="comma">,</span> name: <span class="str">"Whee!"</span> <span class="brace">}</span>
@@ -349,7 +349,7 @@ Instead of writing `\record -> record.x` we can write `.x` and it will evaluate 
 <span class="comment"># and returns the `foo` field of that record.</span>
 returnFoo <span class="kw">=</span> .foo
 
-returnFoo <span class="brace">{</span> foo <span class="colon">:</span> <span class="str">"hi!"</span><span class="comma">,</span> bar <span class="colon">:</span> <span class="str">"blah"</span> <span class="brace">}</span></span>
+returnFoo <span class="brace">{</span> foo<span class="colon">:</span> <span class="str">"hi!"</span><span class="comma">,</span> bar<span class="colon">:</span> <span class="str">"blah"</span> <span class="brace">}</span></span>
 <span class="comment"># returns "hi!"</span>
 </samp></pre>
 
@@ -371,7 +371,7 @@ We can use _destructuring_ to avoid naming a record in a function argument, inst
 
 Here, we've _destructured_ the record to create a `birds` def that's assigned to its `birds` field, and an `iguanas` def that's assigned to its `iguanas` field. We can customize this if we like:
 
-<pre><samp>addAndStringify <span class="kw">=</span> <span class="kw">\</span><span class="brace">{</span> birds<span class="comma">,</span> iguanas: lizards <span class="brace">}</span><span class="kw"> -></span>
+<pre><samp>addAndStringify <span class="kw">=</span> <span class="kw">\</span><span class="brace">{</span> birds<span class="comma">,</span> iguanas<span class="colon">:</span> lizards <span class="brace">}</span><span class="kw"> -></span>
     Num.toStr <span class="paren">(</span>birds <span class="op">+</span> lizards<span class="paren">)</span>
 </samp></pre>
 
@@ -379,15 +379,15 @@ In this version, we created a `lizards` def that's assigned to the record's `igu
 
 Finally, destructuring can be used in defs too:
 
-<pre><samp><span class="brace">{</span> x<span class="comma">,</span> y <span class="brace">}</span> <span class="kw">=</span> <span class="brace">{</span> x <span class="colon">:</span> 5<span class="comma">,</span> y <span class="colon">:</span> 10 <span class="brace">}</span></samp></pre>
+<pre><samp><span class="brace">{</span> x<span class="comma">,</span> y <span class="brace">}</span> <span class="kw">=</span> <span class="brace">{</span> x<span class="colon">:</span> 5<span class="comma">,</span> y<span class="colon">:</span> 10 <span class="brace">}</span></samp></pre>
 
 ### [Making records from other records](#making-records-from-other-records) {#making-records-from-other-records}
 
 So far we've only constructed records from scratch, by specifying all of their fields. We can also construct new records by using another record to use as a starting point, and then specifying only the fields we want to be different. For example, here are two ways to get the same record:
 
-<pre><samp>original <span class="kw">=</span> <span class="brace">{</span> birds: 5<span class="comma">,</span> zebras <span class="colon">:</span> 2<span class="comma">,</span> iguanas <span class="colon">:</span> 7<span class="comma">,</span> goats <span class="colon">:</span> 1 <span class="brace">}</span>
-fromScratch <span class="kw">=</span> <span class="brace">{</span> birds <span class="colon">:</span> 4<span class="comma">,</span> zebras <span class="colon">:</span> 2<span class="comma">,</span> iguanas <span class="colon">:</span> 3<span class="comma">,</span> goats <span class="colon">:</span> 1 <span class="brace">}</span>
-fromOriginal <span class="kw">=</span> <span class="brace">{</span> original <span class="kw">&amp;</span> birds <span class="colon">:</span> 4<span class="comma">,</span> iguanas <span class="colon">:</span> 3<span class="comma"> <span class="brace">}</span>
+<pre><samp>original <span class="kw">=</span> <span class="brace">{</span> birds<span class="colon">:</span> 5<span class="comma">,</span> zebras<span class="colon">:</span> 2<span class="comma">,</span> iguanas<span class="colon">:</span> 7<span class="comma">,</span> goats<span class="colon">:</span> 1 <span class="brace">}</span>
+fromScratch <span class="kw">=</span> <span class="brace">{</span> birds<span class="colon">:</span> 4<span class="comma">,</span> zebras<span class="colon">:</span> 2<span class="comma">,</span> iguanas<span class="colon">:</span> 3<span class="comma">,</span> goats<span class="colon">:</span> 1 <span class="brace">}</span>
+fromOriginal <span class="kw">=</span> <span class="brace">{</span> original <span class="kw">&amp;</span> birds<span class="colon">:</span> 4<span class="comma">,</span> iguanas<span class="colon">:</span> 3<span class="comma"> <span class="brace">}</span>
 </samp></pre>
 
 The `fromScratch` and `fromOriginal` records are equal, although they're defined in different ways.
@@ -404,7 +404,7 @@ Roc supports optional record fields using the `?` operator. This can be a useful
 
 In Roc you can write a function like;
 
-<pre><samp>table <span class="kw">=</span> <span class="kw">\</span><span class="paren">{</span> height, width, title <span class="colon">?</span> "", description <span class="colon">?</span> "" <span class="paren">}</span> <span class="kw">-></span>
+<pre><samp>table <span class="kw">=</span> <span class="kw">\</span><span class="paren">{</span> height, width, title<span class="colon">?</span> "", description<span class="colon">?</span> "" <span class="paren">}</span> <span class="kw">-></span>
 </pre></samp>
 
 This is using *optional field destructuring* to destructure a record while
@@ -414,13 +414,13 @@ Here's the type of `table`;
 
 <pre><samp>table <span class="colon">:</span>
     <span class="paren">{</span>
-        height <span class="colon">:</span> Pixels,
-        width <span class="colon">:</span> Pixels,
-        title <span class="colon">?</span> Str,
-        description <span class="colon">?</span> Str,
+        height<span class="colon">:</span> Pixels,
+        width<span class="colon">:</span> Pixels,
+        title<span class="colon">?</span> Str,
+        description<span class="colon">?</span> Str,
     <span class="paren">}</span>
     <span class="kw">-></span> Table
-table <span class="kw">= \</span><span class="paren">{</span> height, width, title <span class="colon">?</span> "", description <span class="colon">?</span> "" } <span class="kw">-></span>
+table <span class="kw">= \</span><span class="paren">{</span> height, width, title<span class="colon">?</span> "", description<span class="colon">?</span> "" } <span class="kw">-></span>
 </pre></samp>
 
 This says that `table` takes a record with two *required* fields, `height` and
@@ -779,11 +779,11 @@ because it's more concise, runs faster, and doesn't give you any `Result`s to de
 
 Here's an example:
 
-<pre><samp>List.walk [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] { evens <span class="colon">:</span> [], odds <span class="colon">:</span> [] } <span class="kw">\</span>state, elem <span class="kw">-&gt;</span>
+<pre><samp>List.walk [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] { evens<span class="colon">:</span> [], odds<span class="colon">:</span> [] } <span class="kw">\</span>state, elem <span class="kw">-&gt;</span>
     <span class="kw">if</span> Num.isEven elem <span class="kw">then</span>
-        { state &amp; evens <span class="colon">:</span> List.append state.evens elem }
+        { state &amp; evens<span class="colon">:</span> List.append state.evens elem }
     <span class="kw">else</span>
-        { state &amp; odds <span class="colon">:</span> List.append state.odds elem }
+        { state &amp; odds<span class="colon">:</span> List.append state.odds elem }
 
 <span class="comment"># returns { evens : [2, 4], odds : [1, 3, 5] }</span>
 </samp></pre>
@@ -793,7 +793,7 @@ In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to
 `List.walk` takes a few ingredients:
 
 1. A list. (`[1, 2, 3, 4, 5]`)
-2. An initial `state` value. (`{ evens : [], odds : [] }`)
+2. An initial `state` value. (`{ evens: [], odds: [] }`)
 3. A function which takes the current `state` and element, and returns a new `state`. (`\state, elem -> …`)
 
 It then proceeds to walk over each element in the list and call that function. Each time, the state that function returns becomes the argument to the next function call. Here are the arguments the function will receive, and what it will return, as `List.walk` walks over the list `[1, 2, 3, 4, 5]`:
@@ -841,7 +841,7 @@ Note that the initial `state` argument is `{ evens: [], odds: [] }` because that
 we passed `List.walk` for its initial state. From then on, each `state` argument is whatever the
 previous function call returned.
 
-Once the list has run out of elements, `List.walk` retunrs whatever the final function call returned—in this case, `{ evens : [2, 4], odds : [1, 3, 5] }`. (If the list was empty, the function never gets called and `List.walk` returns the initial state.)
+Once the list has run out of elements, `List.walk` retunrs whatever the final function call returned—in this case, `{ evens: [2, 4], odds: [1, 3, 5] }`. (If the list was empty, the function never gets called and `List.walk` returns the initial state.)
 
 Note that the state doesn't have to be a record; it can be anything you want. For example, if you made it a `Bool`, you could implement `List.any` using `List.walk`. You could also make the state be a list, and implement `List.map`, `List.keepIf`, or `List.dropIf`. There are a lot of things you can do with `List.walk`!
 
@@ -927,18 +927,18 @@ These annotations say that both `firstName` and `lastName` have the type `Str`.
 
 We can annotate records similarly. For example, we could move `firstName` and `lastName` into a record like so:
 
-<pre><samp>amy <span class="colon">:</span> { firstName <span class="colon">:</span> Str, lastName <span class="colon">:</span> Str }
-amy <span class="kw">=</span> { firstName <span class="colon">:</span> <span class="str">"Amy"</span>, lastName <span class="colon">:</span> <span class="str">"Lee"</span> }
+<pre><samp>amy <span class="colon">:</span> { firstName<span class="colon">:</span> Str, lastName<span class="colon">:</span> Str }
+amy <span class="kw">=</span> { firstName<span class="colon">:</span> <span class="str">"Amy"</span>, lastName<span class="colon">:</span> <span class="str">"Lee"</span> }
 
-jen <span class="colon">:</span> { firstName <span class="colon">:</span> Str, lastName <span class="colon">:</span> Str }
-jen <span class="kw">=</span> { firstName <span class="colon">:</span> <span class="str">"Jen"</span>, lastName <span class="colon">:</span> <span class="str">"Majura"</span> }
+jen <span class="colon">:</span> { firstName<span class="colon">:</span> Str, lastName<span class="colon">:</span> Str }
+jen <span class="kw">=</span> { firstName<span class="colon">:</span> <span class="str">"Jen"</span>, lastName<span class="colon">:</span> <span class="str">"Majura"</span> }
 </samp></pre>
 
 ### [Type Aliases](#type-aliases) {#type-aliases}
 
 When we have a recurring type annotation like this, it can be nice to give it its own name. We do this like so:
 
-<pre><samp>Musician <span class="colon">:</span> { firstName <span class="colon">:</span> Str, lastName <span class="colon">:</span> Str }
+<pre><samp>Musician <span class="colon">:</span> { firstName<span class="colon">:</span> Str, lastName<span class="colon">:</span> Str }
 
 amy <span class="colon">:</span> Musician
 amy <span class="kw">=</span> { firstName<span class="colon">:</span> <span class="str">"Amy"</span>, lastName<span class="colon">:</span> <span class="str">"Lee"</span> }
@@ -1341,7 +1341,7 @@ Besides being built into the compiler, the builtin modules are different from ot
 Let's take a closer look at the part of `main.roc` above the `main` def:
 
 <pre><samp><span class="kw">app</span> "<span class="hljs-selector-tag">hello</span>"
-    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf<span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> <span class="hljs-selector-attr">[pf.Stdout]</span>
     <span class="kw">provides</span> <span class="hljs-selector-tag">main</span> <span class="kw">to</span> <span class="hljs-selector-tag">pf</span>
 </samp></pre>
@@ -1352,7 +1352,7 @@ The line `app "hello"` states that this module defines a Roc application, and th
 
 The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
 
-<pre><samp><span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
+<pre><samp><span class="kw">packages</span> <span class="brace">{</span> pf<span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
     <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 </samp></pre>
@@ -1415,7 +1415,7 @@ We'll use these four operations to learn about tasks.
 Let's start with a basic "Hello World" program.
 
 <pre><samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf<span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> [pf.Stdout]
     <span class="kw">provides</span> [main] <span class="kw">to</span> pf
 
@@ -1442,7 +1442,7 @@ In contrast, `Stdin.line` produces a `Str` when it finishes reading from [standa
 Let's change `main` to read a line from `stdin`, and then print it back out again:
 
 <pre><samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf<span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> [pf.Stdout, pf.Stdin, pf.Task]
     <span class="kw">provides</span> [main] <span class="kw">to</span> pf
 
@@ -1604,29 +1604,29 @@ In contrast, a _closed record_ is one that requires an exact set of fields (and 
 If we add a type annotation to this `fullName` function, we can choose to have it accept either an open record or a closed record:
 
 <pre><samp><span class="comment"># Closed record</span>
-fullName <span class="colon">:</span> { <span class="hljs-type">firstName</span> <span class="colon">:</span> <span class="hljs-type">Str</span>, lastName <span class="colon">:</span> <span class="hljs-type">Str</span> } <span class="kw">-&gt;</span> Str
+fullName <span class="colon">:</span> { <span class="hljs-type">firstName</span><span class="colon">:</span> <span class="hljs-type">Str</span>, lastName<span class="colon">:</span> <span class="hljs-type">Str</span> } <span class="kw">-&gt;</span> Str
 fullName <span class="kw">=</span> <span class="kw">\</span>user <span class="kw">-&gt;</span>
     <span class="str-interp">"\(user.firstName) \(user.lastName)"</span>
 </samp>
 <samp><span class="comment"># Open record (because of the `*`)</span>
-fullName <span class="colon">:</span> { firstName <span class="colon">:</span> Str, lastName <span class="colon">:</span> Str }* <span class="kw">-&gt;</span> Str
+fullName <span class="colon">:</span> { firstName<span class="colon">:</span> Str, lastName<span class="colon">:</span> Str }* <span class="kw">-&gt;</span> Str
 fullName <span class="kw">=</span> <span class="kw">\</span>user <span class="kw">-&gt;</span>
     <span class="str-interp">"\(user.firstName) \(user.lastName)"</span>
 </samp></pre>
 
-The `*` in the type `{ firstName : Str, lastName : Str }*` is what makes it an open record type. This `*` is the _wildcard type_ we saw earlier with empty lists. (An empty list has the type `List *`, in contrast to something like `List Str` which is a list of strings.)
+The `*` in the type `{ firstName: Str, lastName: Str }*` is what makes it an open record type. This `*` is the _wildcard type_ we saw earlier with empty lists. (An empty list has the type `List *`, in contrast to something like `List Str` which is a list of strings.)
 
-This is because record types can optionally end in a type variable. Just like how we can have `List *` or `List a -> List a`, we can also have `{ first : Str, last : Str }*` or `{ first : Str, last : Str }a -> { first: Str, last : Str }a`. The differences are that in `List a`, the type variable is required and appears with a space after `List`; in a record, the type variable is optional, and appears (with no space) immediately after `}`.
+This is because record types can optionally end in a type variable. Just like how we can have `List *` or `List a -> List a`, we can also have `{ first: Str, last: Str }*` or `{ first: Str, last: Str }a -> { first: Str, last: Str }a`. The differences are that in `List a`, the type variable is required and appears with a space after `List`; in a record, the type variable is optional, and appears (with no space) immediately after `}`.
 
-If the type variable in a record type is a `*` (such as in `{ first : Str, last : Str }*`), then it's an open record. If the type variable is missing, then it's a closed record. You can also specify a closed record by putting a `{}` as the type variable (so for example, `{ email : Str }{}` is another way to write `{ email : Str }`). In practice, closed records are basically always written without the `{}` on the end, but later on we'll see a situation where putting types other than `*` in that spot can be useful.
+If the type variable in a record type is a `*` (such as in `{ first: Str, last: Str }*`), then it's an open record. If the type variable is missing, then it's a closed record. You can also specify a closed record by putting a `{}` as the type variable (so for example, `{ email: Str }{}` is another way to write `{ email: Str }`). In practice, closed records are basically always written without the `{}` on the end, but later on we'll see a situation where putting types other than `*` in that spot can be useful.
 
 ### [Constrained Records](#constrained-records) {#constrained-records}
 
 The type variable can also be a named type variable, like so:
 
-<pre><samp>addHttps <span class="colon">:</span> { <span class="hljs-type">url</span>  <span class="colon">:</span> <span class="hljs-type">Str</span> }a <span class="kw">-&gt;</span> { url  <span class="colon">:</span> <span class="hljs-type">Str</span> }a
+<pre><samp>addHttps <span class="colon">:</span> { <span class="hljs-type">url</span><span class="colon">:</span> <span class="hljs-type">Str</span> }a <span class="kw">-&gt;</span> { url<span class="colon">:</span> <span class="hljs-type">Str</span> }a
 addHttps <span class="kw">=</span> <span class="kw">\</span>record <span class="kw">-&gt;</span>
-    { record <span class="kw">&amp;</span> url <span class="colon">:</span> <span class="str">"https://</span><span class="str-interp">\(record.url)"</span> }
+    { record <span class="kw">&amp;</span> url<span class="colon">:</span> <span class="str">"https://</span><span class="str-interp">\(record.url)"</span> }
 </samp></pre>
 
 This function uses _constrained records_ in its type. The annotation is saying:
@@ -1635,7 +1635,7 @@ This function uses _constrained records_ in its type. The annotation is saying:
 - That `url` field has the type `Str`
 - It returns a record of exactly the same type as the one it was given
 
-So if we give this function a record with five fields, it will return a record with those same five fields. The only requirement is that one of those fields must be `url : Str`.
+So if we give this function a record with five fields, it will return a record with those same five fields. The only requirement is that one of those fields must be `url: Str`.
 
 In practice, constrained records appear in type annotations much less often than open or closed records do.
 
@@ -1645,9 +1645,9 @@ Here's when you can typically expect to encounter these three flavors of type va
 - _Closed records_ are what the compiler infers when you create a new record (for example, `{ x: 5, y: 6 }`)
 - _Constrained records_ are what the compiler infers when you do a record update (for example, `{ user & email: newEmail }`)
 
-Of note, you can pass a closed record to a function that accepts a smaller open record, but not the reverse. So a function `{ a : Str, b : Bool }* -> Str` can accept an `{ a : Str, b : Bool, c : Bool }` record, but a function `{ a : Str, b : Bool, c : Bool } -> Str` would not accept an `{ a : Str, b : Bool }*` record.
+Of note, you can pass a closed record to a function that accepts a smaller open record, but not the reverse. So a function `{ a: Str, b: Bool }* -> Str` can accept an `{ a: Str, b: Bool, c: Bool }` record, but a function `{ a: Str, b: Bool, c: Bool } -> Str` would not accept an `{ a: Str, b: Bool }*` record.
 
-This is because if a function accepts `{ a : Str, b : Bool, c : Bool }`, that means it might access the `c` field of that record. So if you passed it a record that was not guaranteed to have all three of those fields present (such as an `{ a : Str, b : Bool }*` record, which only guarantees that the fields `a` and `b` are present), the function might try to access a `c` field at runtime that did not exist!
+This is because if a function accepts `{ a: Str, b: Bool, c: Bool }`, that means it might access the `c` field of that record. So if you passed it a record that was not guaranteed to have all three of those fields present (such as an `{ a: Str, b: Bool }*` record, which only guarantees that the fields `a` and `b` are present), the function might try to access a `c` field at runtime that did not exist!
 
 ### [Type Variables in Record Annotations](#type-variables-in-record-annotations) {#type-variables-in-record-annotations}
 
@@ -1656,9 +1656,9 @@ You can add type annotations to make record types less flexible than what the co
 If you like, you can always annotate your functions as accepting open records. However, in practice this may not always be the nicest choice. For example, let's say you have a `User` type alias, like so:
 
 <pre><samp>User <span class="colon">:</span> {
-    email <span class="colon">:</span> <span class="hljs-type">Str</span>,
-    firstName <span class="colon">:</span> <span class="hljs-type">Str</span>,
-    lastName <span class="colon">:</span> <span class="hljs-type">Str</span>,
+    email<span class="colon">:</span> <span class="hljs-type">Str</span>,
+    firstName<span class="colon">:</span> <span class="hljs-type">Str</span>,
+    lastName<span class="colon">:</span> <span class="hljs-type">Str</span>,
 }
 </samp></pre>
 
@@ -1680,12 +1680,12 @@ A function which takes a user and returns a user might look like this:
 
 This is a perfectly reasonable way to write all of these functions. However, I might decide that I really want the `isValid` function to take an open record; a record with _at least_ the fields of this `User` record, but possibly others as well.
 
-Since open records have a type variable (like `*` in `{ email : Str }*` or `a` in `{ email : Str }a -> { email : Str }a`), in order to do this I'd need to add a type variable to the `User` type alias:
+Since open records have a type variable (like `*` in `{ email: Str }*` or `a` in `{ email: Str }a -> { email: Str }a`), in order to do this I'd need to add a type variable to the `User` type alias:
 
 <pre><samp>User a <span class="kw">:</span> {
-    email <span class="kw">:</span> Str
-    firstName <span class="kw">:</span> Str
-    lastName <span class="kw">:</span> Str
+    email<span class="kw">:</span> Str
+    firstName<span class="kw">:</span> Str
+    lastName<span class="kw">:</span> Str
 }a
 </samp></pre>
 
@@ -1696,14 +1696,14 @@ Using `User a` type alias, I can still write the same three functions, but now t
 <pre><samp>isValid <span class="colon">:</span> User * <span class="kw">-&gt;</span> Bool
 </samp></pre>
 
-Here, the `User *` type alias substitutes `*` for the type variable `a` in the type alias, which takes it from `{ email : Str, … }a` to `{ email : Str, … }*`. Now I can pass it any record that has at least the fields in `User`, and possibly others as well, which was my goal.
+Here, the `User *` type alias substitutes `*` for the type variable `a` in the type alias, which takes it from `{ email: Str, … }a` to `{ email: Str, … }*`. Now I can pass it any record that has at least the fields in `User`, and possibly others as well, which was my goal.
 
 <pre><samp>userFromEmail <span class="colon">:</span> Str <span class="kw">-&gt;</span> User {}
 </samp></pre>
 
-Here, the `User {}` type alias substitutes `{}` for the type variable `a` in the type alias, which takes it from `{ email : Str, … }a` to `{ email : Str, … }{}`. As noted earlier, this is another way to specify a closed record: putting a `{}` after it, in the same place that you'd find a `*` in an open record.
+Here, the `User {}` type alias substitutes `{}` for the type variable `a` in the type alias, which takes it from `{ email: Str, … }a` to `{ email: Str, … }{}`. As noted earlier, this is another way to specify a closed record: putting a `{}` after it, in the same place that you'd find a `*` in an open record.
 
-> **Aside:** This works because you can form new record types by replacing the type variable with other record types. For example, `{ a : Str, b : Str }` can also be written `{ a : Str }{ b : Str }`. You can chain these more than once, e.g. `{ a : Str }{ b : Str }{ c : Str, d : Str }`. This is more useful when used with type annotations; for example, `{ a : Str, b : Str }User` describes a closed record consisting of all the fields in the closed record `User`, plus `a : Str` and `b : Str`.
+> **Aside:** This works because you can form new record types by replacing the type variable with other record types. For example, `{ a: Str, b: Str }` can also be written `{ a: Str }{ b: Str }`. You can chain these more than once, e.g. `{ a: Str }{ b: Str }{ c: Str, d: Str }`. This is more useful when used with type annotations; for example, `{ a: Str, b: Str }User` describes a closed record consisting of all the fields in the closed record `User`, plus `a: Str` and `b: Str`.
 
 This function still returns the same record as it always did, it just needs to be annotated as `User {}` now instead of just `User`, because the `User` type alias has a variable in it that must be specified.
 
@@ -1762,7 +1762,7 @@ Putting these together, whether a tag union is inferred to be open or closed dep
 
 ### [Combining Open Unions](#combining-open-unions) {#combining-open-unions}
 
-When we make a new record, it's inferred to be a closed record. For example, in `foo { a: "hi" }`, the type of `{ a: "hi" }` is inferred to be `{ a : Str }`. In contrast, when we make a new tag, it's inferred to be an open union. So in `foo (Bar "hi")`, the type of `Bar "hi"` is inferred to be `[Bar Str]*`.
+When we make a new record, it's inferred to be a closed record. For example, in `foo { a: "hi" }`, the type of `{ a: "hi" }` is inferred to be `{ a: Str }`. In contrast, when we make a new tag, it's inferred to be an open union. So in `foo (Bar "hi")`, the type of `Bar "hi"` is inferred to be `[Bar Str]*`.
 
 This is because open unions can accumulate additional tags based on how they're used in the program, whereas closed unions cannot. For example, let's look at this conditional:
 
