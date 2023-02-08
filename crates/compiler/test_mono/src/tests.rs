@@ -592,7 +592,7 @@ fn record_optional_field_function_use_default() {
     "#
 }
 
-#[mono_test(no_check = "https://github.com/roc-lang/roc/issues/4694")]
+#[mono_test]
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r#"
@@ -1838,16 +1838,16 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
         main =
             Value : [Nil, Array (List Value)]
 
-            foo : [Nil]_
-            foo = Nil
+            foo : {} -> [Nil]_
+            foo = \{} -> Nil
 
             v1 : Value
-            v1 = foo
+            v1 = foo {}
 
             Value2 : [Nil, B U16, Array (List Value)]
 
             v2 : Value2
-            v2 = foo
+            v2 = foo {}
 
             {v1, v2}
         "#
@@ -2192,6 +2192,20 @@ fn list_one_vs_one_spread_issue_4685() {
     )
 }
 
+#[mono_test]
+fn tuple_pattern_match() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        main = when (1, 2) is
+            (1, _) -> "A"
+            (_, 2) -> "B"
+            (_, _) -> "C"
+        "#
+    )
+}
+
 #[mono_test(mode = "test")]
 fn issue_4705() {
     indoc!(
@@ -2446,5 +2460,94 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
 
         main = between1 \{} -> between2 \{} -> 10u8
         "###
+    )
+}
+
+#[mono_test(mode = "test")]
+fn issue_4772_weakened_monomorphic_destructure() {
+    indoc!(
+        r###"
+        interface Test exposes [] imports [Json]
+
+        getNumber =
+            { result, rest } = Decode.fromBytesPartial (Str.toUtf8 "-1234") Json.fromUtf8
+                    
+            when result is 
+                Ok val -> 
+                    when Str.toI64 val is 
+                        Ok number ->
+                            Ok {val : number, input : rest}
+                        Err InvalidNumStr ->
+                            Err (ParsingFailure "not a number")
+
+                Err _ -> 
+                    Err (ParsingFailure "not a number")
+
+        expect 
+            result = getNumber
+            result == Ok {val : -1234i64, input : []}
+        "###
+    )
+}
+
+#[mono_test]
+fn weakening_avoids_overspecialization() {
+    // Without weakening of let-bindings, this program would force two specializations of
+    // `index` - to `Nat` and the default integer type, `I64`. The test is to ensure only one
+    // specialization, that of `Nat`, exists.
+    indoc!(
+        r###"
+        app "test" provides [main] to "./platform"
+
+        main : (List U8) -> (List U8)
+        main = \input ->
+            index = List.walkUntil input 0 \i, _ -> Break i
+
+            if index == 0 then
+                input
+            else
+                List.drop input index
+        "###
+    )
+}
+
+#[mono_test]
+fn recursively_build_effect() {
+    indoc!(
+        r#"
+        app "test" provides [main] to "./platform"
+
+        greeting =
+            hi = "Hello"
+            name = "World"
+
+            "\(hi), \(name)!"
+
+        main =
+            when nestHelp 4 is
+                _ -> greeting
+
+        nestHelp : I64 -> XEffect {}
+        nestHelp = \m ->
+            when m is
+                0 ->
+                    always {}
+
+                _ ->
+                    always {} |> after \_ -> nestHelp (m - 1)
+
+
+        XEffect a := {} -> a
+
+        always : a -> XEffect a
+        always = \x -> @XEffect (\{} -> x)
+
+        after : XEffect a, (a -> XEffect b) -> XEffect b
+        after = \(@XEffect e), toB ->
+            @XEffect \{} ->
+                when toB (e {}) is
+                    @XEffect e2 ->
+                        e2 {}
+        "#
     )
 }

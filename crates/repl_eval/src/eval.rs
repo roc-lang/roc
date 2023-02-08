@@ -499,7 +499,7 @@ fn jit_to_ast_help<'a, A: ReplApp<'a>>(
                 },
             )
         }
-        Layout::RecursivePointer => {
+        Layout::RecursivePointer(_) => {
             unreachable!("RecursivePointers can only be inside structures")
         }
         Layout::LambdaSet(_) => OPAQUE_FUNCTION,
@@ -632,7 +632,7 @@ fn addr_to_ast<'a, M: ReplAppMemory>(
                 );
             }
         },
-        (_, Layout::RecursivePointer) => match (raw_content, when_recursive) {
+        (_, Layout::RecursivePointer(_)) => match (raw_content, when_recursive) {
             (
                 Content::RecursionVar {
                     structure,

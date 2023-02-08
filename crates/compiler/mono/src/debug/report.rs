@@ -5,7 +5,7 @@ use ven_pretty::{Arena, DocAllocator, DocBuilder};
 
 use crate::{
     ir::{Parens, ProcLayout},
-    layout::{Layout, LayoutInterner},
+    layout::LayoutInterner,
 };
 
 use super::{
@@ -157,7 +157,7 @@ where
                 f.concat([
                     format_symbol(f, interns, symbol),
                     f.reflow(" defined here with layout "),
-                    interner.to_doc(def_layout, f, Parens::NotNeeded),
+                    interner.to_doc_top(def_layout, f),
                 ]),
             )];
             f.concat([
@@ -165,7 +165,7 @@ where
                 f.reflow(" used as a "),
                 f.reflow(format_use_kind(use_kind)),
                 f.reflow(" here with layout "),
-                interner.to_doc(use_layout, f, Parens::NotNeeded),
+                interner.to_doc_top(use_layout, f),
             ])
         }
         ProblemKind::SymbolDefMismatch {
@@ -178,9 +178,9 @@ where
             f.concat([
                 format_symbol(f, interns, symbol),
                 f.reflow(" is defined as "),
-                interner.to_doc(def_layout, f, Parens::NotNeeded),
+                interner.to_doc_top(def_layout, f),
                 f.reflow(" but its initializer is "),
-                interner.to_doc(expr_layout, f, Parens::NotNeeded),
+                interner.to_doc_top(expr_layout, f),
             ])
         }
         ProblemKind::BadSwitchConditionLayout { found_layout } => {
@@ -188,7 +188,7 @@ where
             docs_before = vec![];
             f.concat([
                 f.reflow("This switch condition is a "),
-                interner.to_doc(found_layout, f, Parens::NotNeeded),
+                interner.to_doc_top(found_layout, f),
             ])
         }
         ProblemKind::DuplicateSwitchBranch {} => {
@@ -324,7 +324,7 @@ where
                     f.reflow("The union "),
                     format_symbol(f, interns, structure),
                     f.reflow(" defined here has layout "),
-                    Layout::Union(union_layout).to_doc(f, interner, Parens::NotNeeded),
+                    interner.to_doc_top(union_layout, f),
                 ]),
             )];
             f.concat([f.reflow("which has no tag of id "), f.as_string(tag_id)])
@@ -367,7 +367,7 @@ where
                     f.reflow("The union "),
                     format_symbol(f, interns, structure),
                     f.reflow(" defined here has layout "),
-                    Layout::Union(union_layout).to_doc(f, interner, Parens::NotNeeded),
+                    interner.to_doc_top(union_layout, f),
                 ]),
             )];
             f.concat([
@@ -394,7 +394,7 @@ where
                 f.reflow("The variant "),
                 f.as_string(tag_id),
                 f.reflow(" is outside the target union layout "),
-                Layout::Union(union_layout).to_doc(f, interner, Parens::NotNeeded),
+                interner.to_doc_top(union_layout, f),
             ])
         }
         ProblemKind::CreateTagPayloadMismatch {
@@ -469,16 +469,16 @@ where
     let args = f.intersperse(
         arguments
             .iter()
-            .map(|a| interner.to_doc(*a, f, Parens::InFunction)),
+            .map(|a| interner.to_doc(*a, f, &mut Default::default(), Parens::InFunction)),
         f.reflow(", "),
     );
     let fun = f.concat([
         f.concat([f.reflow("("), args, f.reflow(")")]),
         f.reflow(" -> "),
-        interner.to_doc(result, f, Parens::NotNeeded),
+        interner.to_doc_top(result, f),
     ]);
     let niche = (f.text("("))
-        .append(captures_niche.to_doc(f, interner))
+        .append(captures_niche.to_doc(f, interner, &mut Default::default()))
         .append(f.text(")"));
     f.concat([fun, f.space(), niche])
 }

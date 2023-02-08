@@ -32,6 +32,7 @@ pub struct Metadata {
     pub plt_addresses: MutMap<String, (u64, u64)>,
     pub surgeries: MutMap<String, Vec<SurgeryEntry>>,
     pub dynamic_symbol_indices: MutMap<String, u64>,
+    pub static_symbol_indices: MutMap<String, u64>,
     pub roc_symbol_vaddresses: MutMap<String, u64>,
     pub exec_len: u64,
     pub load_align_constraint: u64,
@@ -55,7 +56,20 @@ impl Metadata {
 
     pub fn read_from_file(metadata_filename: &Path) -> Self {
         let input =
-            std::fs::File::open(metadata_filename).unwrap_or_else(|e| internal_error!("{}", e));
+            std::fs::File::open(metadata_filename)
+            .unwrap_or_else(
+                |e| internal_error!(r#"
+
+                Error:
+                    {}
+
+                > This may occur when using a release of roc that relies on a specific metadata format like 'rm2' and the imported platform only has an older metadata format available, like rm1.
+                  The platform you are using can be found in the header of your main.roc: `packages {{ pf: <PLATFORM>}}`.
+                  You should check if a more recent version of the platform is available.
+                  If not, you should notify the author of the platform about this issue.
+
+"#, e)
+            );
 
         match deserialize_from(BufReader::new(input)) {
             Ok(data) => data,

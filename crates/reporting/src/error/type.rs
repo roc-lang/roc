@@ -13,14 +13,14 @@ use roc_module::symbol::Symbol;
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableDecode, NotDerivableEq, TypeError, UnderivableReason,
-    Unfulfilled,
+    NotDerivableContext, NotDerivableDecode, NotDerivableEncode, NotDerivableEq, TypeError,
+    UnderivableReason, Unfulfilled,
 };
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
-    AbilitySet, AliasKind, Category, ErrorType, PatternCategory, Polarity, Reason, RecordField,
-    TypeExt,
+    AbilitySet, AliasKind, Category, ErrorType, IndexOrField, PatternCategory, Polarity, Reason,
+    RecordField, TypeExt,
 };
 use std::path::PathBuf;
 use ven_pretty::DocAllocator;
@@ -371,7 +371,29 @@ fn underivable_hint<'b>(
                 ])),
             ])))
         }
+        NotDerivableContext::Encode(reason) => match reason {
+            NotDerivableEncode::Nat => {
+                Some(alloc.note("").append(alloc.concat([
+                    alloc.reflow("Encoding a "),
+                    alloc.type_str("Nat"),
+                    alloc.reflow(" is not supported. Consider using a fixed-sized unsigned integer, like a "),
+                    alloc.type_str("U64"),
+                    alloc.reflow(" instead."),
+                ])))
+            }
+        },
         NotDerivableContext::Decode(reason) => match reason {
+            NotDerivableDecode::Nat => {
+                Some(alloc.note("").append(alloc.concat([
+                    alloc.reflow("Decoding to a "),
+                    alloc.type_str("Nat"),
+                    alloc.reflow(" is not supported. Consider decoding to a fixed-sized unsigned integer, like "),
+                    alloc.type_str("U64"),
+                    alloc.reflow(", then converting to a "),
+                    alloc.type_str("Nat"),
+                    alloc.reflow(" if needed."),
+                ])))
+            }
             NotDerivableDecode::OptionalRecordField(field) => {
                 Some(alloc.note("").append(alloc.concat([
                     alloc.reflow("I can't derive decoding for a record with an optional field, which in this case is "),
@@ -1686,18 +1708,35 @@ fn format_category<'b>(
         Accessor(field) => (
             alloc.concat([
                 alloc.text(format!("{}his ", t)),
-                alloc.record_field(field.to_owned()),
+                match field {
+                    IndexOrField::Index(index) => alloc.tuple_field(*index),
+                    IndexOrField::Field(field) => alloc.record_field(field.to_owned()),
+                },
                 alloc.text(" value"),
             ]),
             alloc.text(" is a:"),
         ),
-        Access(field) => (
+        RecordAccess(field) => (
             alloc.concat([
                 alloc.text(format!("{}he value at ", t)),
                 alloc.record_field(field.to_owned()),
             ]),
             alloc.text(" is a:"),
         ),
+
+        Tuple => (
+            alloc.concat([this_is, alloc.text(" a tuple")]),
+            alloc.text(" of type:"),
+        ),
+
+        TupleAccess(index) => (
+            alloc.concat([
+                alloc.text(format!("{}he value at ", t)),
+                alloc.tuple_field(*index),
+            ]),
+            alloc.text(" is a:"),
+        ),
+
         CallResult(
             Some(_),
             CalledVia::BinOp(
@@ -2002,6 +2041,7 @@ fn add_pattern_category<'b>(
 
     let rest = match category {
         Record => alloc.reflow(" record values of type:"),
+        Tuple => alloc.reflow(" tuple values of type:"),
         EmptyRecord => alloc.reflow(" an empty record:"),
         PatternGuard => alloc.reflow(" a pattern guard of type:"),
         PatternDefault => alloc.reflow(" an optional field of type:"),
@@ -2416,6 +2456,20 @@ fn to_doc_help<'b>(
             )
         }
 
+        Tuple(elems, ext) => {
+            report_text::tuple(
+                alloc,
+                elems
+                    .into_iter()
+                    .map(|(_, value)| {
+                        to_doc_help(ctx, gen_usages, alloc, Parens::Unnecessary, value)
+                    })
+                    .collect(),
+                record_ext_to_doc(alloc, ext),
+                0, // zero elems omitted, since this isn't a diff
+            )
+        }
+
         TagUnion(tags_map, ext, pol) => {
             let mut tags = tags_map
                 .into_iter()
@@ -2508,6 +2562,10 @@ fn count_generated_name_usages<'a>(
             }
             Record(fields, ext) => {
                 stack.extend(fields.values().map(|f| (f.as_inner(), only_unseen)));
+                ext_stack.push((ext, only_unseen));
+            }
+            Tuple(elems, ext) => {
+                stack.extend(elems.iter().map(|(_, f)| (f, only_unseen)));
                 ext_stack.push((ext, only_unseen));
             }
             TagUnion(tags, ext, _) => {
@@ -3185,7 +3243,7 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
             v1 != v2
         }
         (Record(fields1, ext1), Record(fields2, ext2)) => {
-            if fields1.len() != fields1.len() || ext1 != ext2 {
+            if fields1.len() != fields2.len() || ext1 != ext2 {
                 return true;
             }
 
@@ -3193,6 +3251,16 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
                 .iter()
                 .zip(fields2.iter())
                 .any(|((name1, f1), (name2, f2))| name1 != name2 || should_show_field_diff(f1, f2))
+        }
+        (Tuple(elems1, ext1), Tuple(elems2, ext2)) => {
+            if elems1.len() != elems2.len() || ext1 != ext2 {
+                return true;
+            }
+
+            elems1
+                .iter()
+                .zip(elems2.iter())
+                .any(|((i1, e1), (i2, e2))| i1 != i2 || should_show_diff(e1, e2))
         }
         (TagUnion(tags1, ext1, polarity1), TagUnion(tags2, ext2, polarity2)) => {
             debug_assert_eq!(
@@ -3303,6 +3371,8 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
         | (_, RigidAbleVar(_, _))
         | (Record(_, _), _)
         | (_, Record(_, _))
+        | (Tuple(_, _), _)
+        | (_, Tuple(_, _))
         | (TagUnion(_, _, _), _)
         | (_, TagUnion(_, _, _))
         | (RecursiveTagUnion(_, _, _, _), _)
@@ -3741,6 +3811,66 @@ mod report_text {
         }
     }
 
+    pub fn tuple<'b>(
+        alloc: &'b RocDocAllocator<'b>,
+        entries: Vec<RocDocBuilder<'b>>,
+        opt_ext: Option<RocDocBuilder<'b>>,
+        fields_omitted: usize,
+    ) -> RocDocBuilder<'b> {
+        let ext_doc = if let Some(t) = opt_ext {
+            t
+        } else {
+            alloc.nil()
+        };
+
+        if entries.is_empty() {
+            if fields_omitted == 0 {
+                alloc.text("()")
+            } else {
+                alloc
+                    .text("( ")
+                    .append(alloc.ellipsis().append(alloc.text(" }")))
+            }
+            .append(ext_doc)
+        } else if entries.len() == 1 {
+            // Single-field records get printed on one line; multi-field records get multiple lines
+            alloc
+                .text("( ")
+                .append(entries.into_iter().next().unwrap())
+                .append(if fields_omitted == 0 {
+                    alloc.text("")
+                } else {
+                    alloc.text(", ").append(alloc.ellipsis())
+                })
+                .append(alloc.text(" )"))
+                .append(ext_doc)
+        } else {
+            let ending = if fields_omitted == 0 {
+                alloc.reflow(")")
+            } else {
+                alloc.vcat([
+                    alloc.ellipsis().indent(super::RECORD_FIELD_INDENT),
+                    alloc.reflow(")"),
+                ])
+            }
+            .append(ext_doc);
+
+            // Multi-elem tuple get printed on multiple lines
+            alloc.vcat(
+                std::iter::once(alloc.reflow("(")).chain(
+                    entries
+                        .into_iter()
+                        .map(|entry| {
+                            entry
+                                .indent(super::RECORD_FIELD_INDENT)
+                                .append(alloc.reflow(","))
+                        })
+                        .chain(std::iter::once(ending)),
+                ),
+            )
+        }
+    }
+
     pub fn to_suggestion_record<'b>(
         alloc: &'b RocDocAllocator<'b>,
         f: (Lowercase, RecordField<ErrorType>),
@@ -4147,6 +4277,7 @@ fn type_problem_to_pretty<'b>(
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
                 Function(_, _, _) => rigid_able_vs_concrete(x, alloc.reflow("a function value")),
                 Record(_, _) => rigid_able_vs_concrete(x, alloc.reflow("a record value")),
+                Tuple(_, _) => rigid_able_vs_concrete(x, alloc.reflow("a tuple value")),
                 TagUnion(_, _, _) | RecursiveTagUnion(_, _, _, _) => {
                     rigid_able_vs_concrete(x, alloc.reflow("a tag value"))
                 }
@@ -4235,6 +4366,7 @@ fn type_problem_to_pretty<'b>(
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
                 Function(_, _, _) => bad_rigid_var(x, alloc.reflow("a function value")),
                 Record(_, _) => bad_rigid_var(x, alloc.reflow("a record value")),
+                Tuple(_, _) => bad_rigid_var(x, alloc.reflow("a tuple value")),
                 TagUnion(_, _, _) | RecursiveTagUnion(_, _, _, _) => {
                     bad_rigid_var(x, alloc.reflow("a tag value"))
                 }
@@ -4716,6 +4848,18 @@ fn pattern_to_doc_help<'b>(
                         .text("{ ")
                         .append(alloc.intersperse(arg_docs, alloc.reflow(", ")))
                         .append(" }")
+                }
+                RenderAs::Tuple => {
+                    let mut arg_docs = Vec::with_capacity(args.len());
+
+                    for v in args.into_iter() {
+                        arg_docs.push(pattern_to_doc_help(alloc, v, false));
+                    }
+
+                    alloc
+                        .text("( ")
+                        .append(alloc.intersperse(arg_docs, alloc.reflow(", ")))
+                        .append(" )")
                 }
                 RenderAs::Tag | RenderAs::Opaque => {
                     let ctor = &union.alternatives[tag_id.0 as usize];

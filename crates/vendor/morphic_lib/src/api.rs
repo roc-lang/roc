@@ -1,3 +1,6 @@
+// https://github.com/morphic-lang/morphic_lib/issues/19
+#![allow(clippy::result_large_err)]
+
 use sha2::{digest::Digest, Sha256};
 use smallvec::SmallVec;
 use std::collections::{btree_map::Entry, BTreeMap};

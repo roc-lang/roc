@@ -12,10 +12,10 @@ use roc_module::{
     symbol::{Interns, Symbol},
 };
 use roc_mono::{
-    ir::LambdaSetPathHash,
+    ir::LambdaSetId,
     layout::{
         cmp_fields, ext_var_is_empty_tag_union, round_up_to_alignment, Builtin, Discriminant,
-        InLayout, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, UnionLayout,
+        InLayout, LambdaSet, Layout, LayoutCache, LayoutInterner, TLLayoutInterner, UnionLayout,
     },
 };
 use roc_target::TargetInfo;
@@ -91,6 +91,7 @@ impl Types {
         );
 
         for var in variables {
+            env.lambda_set_ids = dbg!(env.find_lambda_sets(var));
             env.add_type(var, &mut types);
         }
 
@@ -827,6 +828,7 @@ struct Env<'a> {
     layout_cache: LayoutCache<'a>,
     glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
     extern_names: MutMap<Variable, String>,
+    lambda_set_ids: MutMap<Variable, LambdaSetId>,
     interns: &'a Interns,
     struct_names: Structs,
     enum_names: Enums,
@@ -855,6 +857,7 @@ impl<'a> Env<'a> {
             known_recursive_types: Default::default(),
             glue_procs_by_layout,
             extern_names,
+            lambda_set_ids: Default::default(),
             layout_cache: LayoutCache::new(layout_interner, target),
             target,
         }
@@ -902,6 +905,60 @@ impl<'a> Env<'a> {
         }
     }
 
+    fn find_lambda_sets(&self, root: Variable) -> MutMap<Variable, LambdaSetId> {
+        let mut lambda_set_id = LambdaSetId::default();
+
+        let mut result = MutMap::default();
+        let mut stack = vec![root];
+
+        while let Some(var) = stack.pop() {
+            match self.subs.get_content_without_compacting(var) {
+                Content::RangedNumber(_)
+                | Content::Error
+                | Content::FlexVar(_)
+                | Content::RigidVar(_)
+                | Content::FlexAbleVar(_, _)
+                | Content::RigidAbleVar(_, _)
+                | Content::RecursionVar { .. } => {}
+                Content::Structure(flat_type) => match flat_type {
+                    FlatType::Apply(_, arguments) => {
+                        stack.extend(self.subs.get_subs_slice(*arguments).iter().rev());
+                    }
+                    FlatType::Func(_, lambda_set_var, _) => {
+                        result.insert(*lambda_set_var, lambda_set_id);
+                        lambda_set_id = lambda_set_id.next();
+                    }
+                    FlatType::Record(_, _) => todo!(),
+                    FlatType::Tuple(_, _) => todo!(),
+                    FlatType::TagUnion(_, _) => todo!(),
+                    FlatType::FunctionOrTagUnion(_, _, _) => todo!(),
+                    FlatType::RecursiveTagUnion(_, union_tags, ext) => {
+                        //
+                        for tag in union_tags.variables() {
+                            stack.extend(
+                                self.subs
+                                    .get_subs_slice(self.subs.variable_slices[tag.index as usize])
+                                    .iter()
+                                    .rev(),
+                            );
+                        }
+                    }
+                    FlatType::EmptyRecord => {}
+                    FlatType::EmptyTuple => {}
+                    FlatType::EmptyTagUnion => {}
+                },
+                Content::Alias(_, _, actual, _) => {
+                    stack.push(*actual);
+                }
+                Content::LambdaSet(_) => {
+                    unreachable!("should be caught FlatType::Func above");
+                }
+            }
+        }
+
+        result
+    }
+
     fn add_type(&mut self, var: Variable, types: &mut Types) -> TypeId {
         roc_tracing::debug!(content=?roc_types::subs::SubsFmtContent(self.subs.get_content_without_compacting(var), self.subs), "adding type");
 
@@ -929,6 +986,9 @@ fn add_type_help<'a>(
         | Content::FlexAbleVar(_, _)
         | Content::RigidAbleVar(_, _) => {
             todo!("TODO give a nice error message for a non-concrete type being passed to the host")
+        }
+        Content::Structure(FlatType::Tuple(..)) => {
+            todo!();
         }
         Content::Structure(FlatType::Record(fields, ext)) => {
             let it = fields
@@ -1000,14 +1060,13 @@ fn add_type_help<'a>(
                 .from_var(env.arena, *closure_var, env.subs)
                 .expect("Something weird ended up in the content");
 
-            let lambda_set = match env.layout_cache.interner.get(lambda_set_layout) {
+            let _lambda_set = match env.layout_cache.interner.get(lambda_set_layout) {
                 Layout::LambdaSet(lambda_set) => lambda_set,
                 _ => unreachable!(),
             };
 
-            let extern_name = env.extern_names.get(closure_var).cloned().unwrap();
-            // let extern_name = String::from("roc__mainForHost_1__Fx1_caller");
-            let extern_name = format!("roc__mainForHost_1__Fx{}_caller", extern_name);
+            let id = env.lambda_set_ids.get(closure_var).unwrap();
+            let extern_name = format!("roc__mainForHost_1__Fx{}_caller", id.0);
 
             for arg_var in args {
                 let arg_layout = env
@@ -1052,6 +1111,9 @@ fn add_type_help<'a>(
             todo!()
         }
         Content::Structure(FlatType::EmptyRecord) => {
+            types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
+        }
+        Content::Structure(FlatType::EmptyTuple) => {
             types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
         }
         Content::Structure(FlatType::EmptyTagUnion) => {
@@ -1220,6 +1282,8 @@ fn add_builtin_type<'a>(
     use FlatType::*;
 
     let builtin_type = env.subs.get_content_without_compacting(var);
+
+    let lambda_set_id = LambdaSetId::invalid();
 
     match (builtin, builtin_type) {
         (Builtin::Int(width), _) => match width {
@@ -1730,7 +1794,7 @@ fn tag_union_type_from_layout<'a>(
             lambda_set.runtime_representation(),
             rec_root,
         ),
-        Layout::RecursivePointer => {
+        Layout::RecursivePointer(_) => {
             // A single-tag union which only wraps itself is erroneous and should have
             // been turned into an error earlier in the process.
             unreachable!();

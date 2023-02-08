@@ -65,12 +65,12 @@ resolver = "2"
 # commit of TheDan64/inkwell, push a new tag which points to the latest commit,
 # change the tag value in this Cargo.toml to point to that tag, and `cargo update`.
 # This way, GitHub Actions works and nobody's builds get broken.
-inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "master", features = [ "llvm13-0" ] }
+inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "inkwell-llvm-15", features = [ "llvm13-0" ] }
 
 arrayvec = "0.7.2"
 bincode = "1.3.3"
 bitvec = "1.0.1"
-bumpalo = { version = "3.11.0", features = ["collections"] }
+bumpalo = { version = "3.11.1", features = ["collections"] }
 capstone = "0.11.0"
 clap = { version = "3.2.20", default-features = false, features = ["std", "color", "suggestions"] }
 const_format = { version = "0.2.23", features = ["const_generics"] }

@@ -1106,7 +1106,10 @@ fn finish_parsing_alias_or_opaque<'a>(
     let mut defs = Defs::default();
 
     let state = match &expr.value.extract_spaces().item {
-        Expr::Tag(name) => {
+        Expr::ParensAround(Expr::SpaceBefore(Expr::Tag(name), _))
+        | Expr::ParensAround(Expr::SpaceAfter(Expr::Tag(name), _))
+        | Expr::ParensAround(Expr::Tag(name))
+        | Expr::Tag(name) => {
             let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
 
             for argument in arguments {
@@ -1796,20 +1799,47 @@ pub fn loc_expr<'a>(accept_multi_backpassing: bool) -> impl Parser<'a, Loc<Expr<
     })
 }
 
+pub fn merge_spaces<'a>(
+    arena: &'a Bump,
+    a: &'a [CommentOrNewline<'a>],
+    b: &'a [CommentOrNewline<'a>],
+) -> &'a [CommentOrNewline<'a>] {
+    if a.is_empty() {
+        b
+    } else if b.is_empty() {
+        a
+    } else {
+        let mut merged = Vec::with_capacity_in(a.len() + b.len(), arena);
+        merged.extend_from_slice(a);
+        merged.extend_from_slice(b);
+        merged.into_bump_slice()
+    }
+}
+
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
 /// Example: (foo) could be either an Expr::Var("foo") or Pattern::Identifier("foo")
 fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, ()> {
-    match expr {
+    let mut expr = expr.extract_spaces();
+
+    if let Expr::ParensAround(loc_expr) = &expr.item {
+        let expr_inner = loc_expr.extract_spaces();
+
+        expr.before = merge_spaces(arena, expr.before, expr_inner.before);
+        expr.after = merge_spaces(arena, expr_inner.after, expr.after);
+        expr.item = expr_inner.item;
+    }
+
+    let mut pat = match expr.item {
         Expr::Var { module_name, ident } => {
             if module_name.is_empty() {
-                Ok(Pattern::Identifier(ident))
+                Pattern::Identifier(ident)
             } else {
-                Ok(Pattern::QualifiedIdentifier { module_name, ident })
+                Pattern::QualifiedIdentifier { module_name, ident }
             }
         }
-        Expr::Underscore(opt_name) => Ok(Pattern::Underscore(opt_name)),
-        Expr::Tag(value) => Ok(Pattern::Tag(value)),
-        Expr::OpaqueRef(value) => Ok(Pattern::OpaqueRef(value)),
+        Expr::Underscore(opt_name) => Pattern::Underscore(opt_name),
+        Expr::Tag(value) => Pattern::Tag(value),
+        Expr::OpaqueRef(value) => Pattern::OpaqueRef(value),
         Expr::Apply(loc_val, loc_args, _) => {
             let region = loc_val.region;
             let value = expr_to_pattern_help(arena, &loc_val.value)?;
@@ -1826,19 +1856,10 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
 
             let pattern = Pattern::Apply(val_pattern, arg_patterns.into_bump_slice());
 
-            Ok(pattern)
+            pattern
         }
 
-        Expr::SpaceBefore(sub_expr, spaces) => Ok(Pattern::SpaceBefore(
-            arena.alloc(expr_to_pattern_help(arena, sub_expr)?),
-            spaces,
-        )),
-        Expr::SpaceAfter(sub_expr, spaces) => Ok(Pattern::SpaceAfter(
-            arena.alloc(expr_to_pattern_help(arena, sub_expr)?),
-            spaces,
-        )),
-
-        Expr::ParensAround(sub_expr) => expr_to_pattern_help(arena, sub_expr),
+        Expr::SpaceBefore(..) | Expr::SpaceAfter(..) | Expr::ParensAround(..) => unreachable!(),
 
         Expr::Record(fields) => {
             let patterns = fields.map_items_result(arena, |loc_assigned_field| {
@@ -1847,34 +1868,30 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
                 Ok(Loc { region, value })
             })?;
 
-            Ok(Pattern::RecordDestructure(patterns))
+            Pattern::RecordDestructure(patterns)
         }
 
-        Expr::Tuple(fields) => Ok(Pattern::Tuple(fields.map_items_result(
-            arena,
-            |loc_expr| {
-                Ok(Loc {
-                    region: loc_expr.region,
-                    value: expr_to_pattern_help(arena, &loc_expr.value)?,
-                })
-            },
-        )?)),
+        Expr::Tuple(fields) => Pattern::Tuple(fields.map_items_result(arena, |loc_expr| {
+            Ok(Loc {
+                region: loc_expr.region,
+                value: expr_to_pattern_help(arena, &loc_expr.value)?,
+            })
+        })?),
 
-        &Expr::Float(string) => Ok(Pattern::FloatLiteral(string)),
-        &Expr::Num(string) => Ok(Pattern::NumLiteral(string)),
+        Expr::Float(string) => Pattern::FloatLiteral(string),
+        Expr::Num(string) => Pattern::NumLiteral(string),
         Expr::NonBase10Int {
             string,
             base,
             is_negative,
-        } => Ok(Pattern::NonBase10Literal {
+        } => Pattern::NonBase10Literal {
             string,
-            base: *base,
-            is_negative: *is_negative,
-        }),
+            base,
+            is_negative,
+        },
         // These would not have parsed as patterns
-        Expr::RecordAccessorFunction(_)
+        Expr::AccessorFunction(_)
         | Expr::RecordAccess(_, _)
-        | Expr::TupleAccessorFunction(_)
         | Expr::TupleAccess(_, _)
         | Expr::List { .. }
         | Expr::Closure(_, _)
@@ -1889,12 +1906,23 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::PrecedenceConflict { .. }
         | Expr::RecordUpdate { .. }
         | Expr::UnaryOp(_, _)
-        | Expr::Crash => Err(()),
+        | Expr::Crash => return Err(()),
 
-        Expr::Str(string) => Ok(Pattern::StrLiteral(*string)),
-        Expr::SingleQuote(string) => Ok(Pattern::SingleQuote(string)),
-        Expr::MalformedIdent(string, problem) => Ok(Pattern::MalformedIdent(string, *problem)),
+        Expr::Str(string) => Pattern::StrLiteral(string),
+        Expr::SingleQuote(string) => Pattern::SingleQuote(string),
+        Expr::MalformedIdent(string, problem) => Pattern::MalformedIdent(string, problem),
+    };
+
+    // Now we re-add the spaces
+
+    if !expr.before.is_empty() {
+        pat = Pattern::SpaceBefore(arena.alloc(pat), expr.before);
     }
+    if !expr.after.is_empty() {
+        pat = Pattern::SpaceAfter(arena.alloc(pat), expr.after);
+    }
+
+    Ok(pat)
 }
 
 fn assigned_expr_field_to_pattern_help<'a>(
@@ -2429,7 +2457,13 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
             // The first value in the iterator is the variable name,
             // e.g. `foo` in `foo.bar.baz`
             let mut answer = match iter.next() {
-                Some(ident) => Expr::Var { module_name, ident },
+                Some(Accessor::RecordField(ident)) => Expr::Var { module_name, ident },
+                Some(Accessor::TupleIndex(_)) => {
+                    // TODO: make this state impossible to represent in Ident::Access,
+                    // by splitting out parts[0] into a separate field with a type of `&'a str`,
+                    // rather than a `&'a [Accessor<'a>]`.
+                    panic!("Parsed an Ident::Access with a first part of a tuple index");
+                }
                 None => {
                     panic!("Parsed an Ident::Access with no parts");
                 }
@@ -2441,13 +2475,19 @@ fn ident_to_expr<'a>(arena: &'a Bump, src: Ident<'a>) -> Expr<'a> {
                 // Wrap the previous answer in the new one, so we end up
                 // with a nested Expr. That way, `foo.bar.baz` gets represented
                 // in the AST as if it had been written (foo.bar).baz all along.
-                answer = Expr::RecordAccess(arena.alloc(answer), field);
+                match field {
+                    Accessor::RecordField(field) => {
+                        answer = Expr::RecordAccess(arena.alloc(answer), field);
+                    }
+                    Accessor::TupleIndex(index) => {
+                        answer = Expr::TupleAccess(arena.alloc(answer), index);
+                    }
+                }
             }
 
             answer
         }
-        Ident::RecordAccessorFunction(string) => Expr::RecordAccessorFunction(string),
-        Ident::TupleAccessorFunction(string) => Expr::TupleAccessorFunction(string),
+        Ident::AccessorFunction(string) => Expr::AccessorFunction(string),
         Ident::Malformed(string, problem) => Expr::MalformedIdent(string, problem),
     }
 }

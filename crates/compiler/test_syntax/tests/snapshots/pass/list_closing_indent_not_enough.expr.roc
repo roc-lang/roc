@@ -1,4 +1,4 @@
-my_list = [
+myList = [
     0,
     [
         a,

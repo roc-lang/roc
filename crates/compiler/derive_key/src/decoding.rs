@@ -61,6 +61,9 @@ impl FlatDecodable {
 
                     Ok(Key(FlatDecodableKey::Record(field_names)))
                 }
+                FlatType::Tuple(_elems, _ext) => {
+                    todo!()
+                }
                 FlatType::TagUnion(_tags, _ext) | FlatType::RecursiveTagUnion(_, _tags, _ext) => {
                     Err(Underivable) // yet
                 }
@@ -68,6 +71,7 @@ impl FlatDecodable {
                     Err(Underivable) // yet
                 }
                 FlatType::EmptyRecord => Ok(Key(FlatDecodableKey::Record(vec![]))),
+                FlatType::EmptyTuple => todo!(),
                 FlatType::EmptyTagUnion => {
                     Err(Underivable) // yet
                 }

@@ -1218,6 +1218,21 @@ fn to_bad_ident_expr_report<'b>(
                 ]),
             ])
         }
+        QualifiedTupleAccessor(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            alloc.stack([
+                alloc.reflow("I am trying to parse a qualified name here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region),
+                alloc.concat([
+                    alloc.reflow("This looks like a tuple accessor on a module or tag name,"),
+                    alloc.reflow(r"but neither modules nor tags can have tuple elements! "),
+                    alloc.reflow(r"Maybe you wanted a qualified name, something like "),
+                    alloc.parser_suggestion("Json.Decode.string"),
+                    alloc.text("."),
+                ]),
+            ])
+        }
         QualifiedTag(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
@@ -1358,7 +1373,7 @@ fn to_bad_ident_pattern_report<'b>(
             ]),
         ]),
 
-        WeirdDotQualified(pos) => {
+        QualifiedTupleAccessor(pos) | WeirdDotQualified(pos) => {
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             alloc.stack([

@@ -16,8 +16,8 @@ use roc_can::expected::Expected::{self, *};
 use roc_can::expected::PExpected;
 use roc_can::expr::Expr::{self, *};
 use roc_can::expr::{
-    AccessorData, AnnotatedMark, ClosureData, DeclarationTag, Declarations, DestructureDef,
-    ExpectLookup, Field, FunctionDef, OpaqueWrapFunctionData, WhenBranch,
+    AnnotatedMark, ClosureData, DeclarationTag, Declarations, DestructureDef, ExpectLookup, Field,
+    FunctionDef, OpaqueWrapFunctionData, StructAccessorData, WhenBranch,
 };
 use roc_can::pattern::Pattern;
 use roc_can::traverse::symbols_introduced_from_pattern;
@@ -30,7 +30,7 @@ use roc_region::all::{Loc, Region};
 use roc_types::subs::{IllegalCycleMark, Variable};
 use roc_types::types::Type::{self, *};
 use roc_types::types::{
-    AliasKind, AnnotationSource, Category, OptAbleType, PReason, Reason, RecordField,
+    AliasKind, AnnotationSource, Category, IndexOrField, OptAbleType, PReason, Reason, RecordField,
     TypeExtension, TypeTag, Types,
 };
 
@@ -252,7 +252,52 @@ pub fn constrain_expr(
                 constraints.exists(field_vars, and_constraint)
             }
         }
-        Update {
+        Expr::Tuple { tuple_var, elems } => {
+            let mut elem_types = VecMap::with_capacity(elems.len());
+            let mut elem_vars = Vec::with_capacity(elems.len());
+
+            // Constraints need capacity for each elem
+            // + 1 for the tuple itself + 1 for tuple var
+            let mut tuple_constraints = Vec::with_capacity(2 + elems.len());
+
+            for (i, (elem_var, loc_expr)) in elems.iter().enumerate() {
+                let elem_type = constraints.push_variable(*elem_var);
+                let elem_expected = constraints.push_expected_type(NoExpectation(elem_type));
+                let elem_con = constrain_expr(
+                    types,
+                    constraints,
+                    env,
+                    loc_expr.region,
+                    &loc_expr.value,
+                    elem_expected,
+                );
+
+                elem_vars.push(*elem_var);
+                elem_types.insert(i, Variable(*elem_var));
+
+                tuple_constraints.push(elem_con);
+            }
+
+            let tuple_type = {
+                let typ = types.from_old_type(&Type::Tuple(elem_types, TypeExtension::Closed));
+                constraints.push_type(types, typ)
+            };
+
+            let tuple_con = constraints.equal_types_with_storage(
+                tuple_type,
+                expected,
+                Category::Tuple,
+                region,
+                *tuple_var,
+            );
+
+            tuple_constraints.push(tuple_con);
+            elem_vars.push(*tuple_var);
+
+            let and_constraint = constraints.and_constraint(tuple_constraints);
+            constraints.exists(elem_vars, and_constraint)
+        }
+        RecordUpdate {
             record_var,
             ext_var,
             symbol,
@@ -1070,7 +1115,7 @@ pub fn constrain_expr(
                 branch_constraints,
             )
         }
-        Access {
+        RecordAccess {
             record_var,
             ext_var,
             field_var,
@@ -1096,7 +1141,7 @@ pub fn constrain_expr(
             };
             let record_expected = constraints.push_expected_type(NoExpectation(record_type));
 
-            let category = Category::Access(field.clone());
+            let category = Category::RecordAccess(field.clone());
 
             let record_con =
                 constraints.equal_types_var(*record_var, record_expected, category.clone(), region);
@@ -1117,7 +1162,7 @@ pub fn constrain_expr(
                 [constraint, eq, record_con],
             )
         }
-        Accessor(AccessorData {
+        RecordAccessor(StructAccessorData {
             name: closure_name,
             function_var,
             field,
@@ -1131,13 +1176,26 @@ pub fn constrain_expr(
             let field_var = *field_var;
             let field_type = Variable(field_var);
 
-            let mut field_types = SendMap::default();
-            let label = field.clone();
-            field_types.insert(label, RecordField::Demanded(field_type.clone()));
-            let record_type = Type::Record(
-                field_types,
-                TypeExtension::from_non_annotation_type(ext_type),
-            );
+            let record_type = match field {
+                IndexOrField::Field(field) => {
+                    let mut field_types = SendMap::default();
+                    let label = field.clone();
+                    field_types.insert(label, RecordField::Demanded(field_type.clone()));
+                    Type::Record(
+                        field_types,
+                        TypeExtension::from_non_annotation_type(ext_type),
+                    )
+                }
+                IndexOrField::Index(index) => {
+                    let mut field_types = VecMap::with_capacity(1);
+                    field_types.insert(*index, field_type.clone());
+                    Type::Tuple(
+                        field_types,
+                        TypeExtension::from_non_annotation_type(ext_type),
+                    )
+                }
+            };
+
             let record_type_index = {
                 let typ = types.from_old_type(&record_type);
                 constraints.push_type(types, typ)
@@ -1198,6 +1256,50 @@ pub fn constrain_expr(
                 [*record_var, *function_var, *closure_var, field_var, ext_var],
                 cons,
             )
+        }
+        TupleAccess {
+            tuple_var,
+            ext_var,
+            elem_var,
+            loc_expr,
+            index,
+        } => {
+            let mut tup_elem_types = VecMap::with_capacity(1);
+
+            let ext_var = *ext_var;
+            let ext_type = Variable(ext_var);
+
+            let elem_var = *elem_var;
+            let elem_type = Type::Variable(elem_var);
+
+            tup_elem_types.insert(*index, elem_type);
+
+            let tuple_type = {
+                let typ = types.from_old_type(&Type::Tuple(
+                    tup_elem_types,
+                    TypeExtension::from_non_annotation_type(ext_type),
+                ));
+                constraints.push_type(types, typ)
+            };
+            let tuple_expected = constraints.push_expected_type(NoExpectation(tuple_type));
+
+            let category = Category::TupleAccess(*index);
+
+            let tuple_con =
+                constraints.equal_types_var(*tuple_var, tuple_expected, category.clone(), region);
+
+            let expected_tuple = constraints.push_expected_type(NoExpectation(tuple_type));
+            let constraint = constrain_expr(
+                types,
+                constraints,
+                env,
+                region,
+                &loc_expr.value,
+                expected_tuple,
+            );
+
+            let eq = constraints.equal_types_var(elem_var, expected, category, region);
+            constraints.exists_many([*tuple_var, elem_var, ext_var], [constraint, eq, tuple_con])
         }
         LetRec(defs, loc_ret, cycle_mark) => {
             let body_con = constrain_expr(
@@ -1376,7 +1478,7 @@ pub fn constrain_expr(
             // TODO: better expectation here
             let link_type_variables_con = {
                 let specialized_type_index = {
-                    let typ = types.from_old_type(&**specialized_def_type);
+                    let typ = types.from_old_type(specialized_def_type);
                     constraints.push_type(types, typ)
                 };
                 let expected_index =
@@ -3826,8 +3928,8 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
         match expr {
             Num(..) | Int(..) | Float(..) => return true,
             Closure(_) => return true,
-            Accessor(_) => {
-                // Accessor functions `.field` are equivalent to closures `\r -> r.field`, no need to weaken them.
+            RecordAccessor(_) => {
+                // RecordAccessor functions `.field` are equivalent to closures `\r -> r.field`, no need to weaken them.
                 return true;
             }
             OpaqueWrapFunction(_) => {
@@ -3852,9 +3954,11 @@ fn is_generalizable_expr(mut expr: &Expr) -> bool {
             | ForeignCall { .. }
             | EmptyRecord
             | Expr::Record { .. }
+            | Expr::Tuple { .. }
             | Crash { .. }
-            | Access { .. }
-            | Update { .. }
+            | RecordAccess { .. }
+            | TupleAccess { .. }
+            | RecordUpdate { .. }
             | Expect { .. }
             | ExpectFx { .. }
             | Dbg { .. }

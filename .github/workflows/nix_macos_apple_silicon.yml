@@ -43,3 +43,6 @@ jobs:
       # we run the llvm wasm tests only on this machine because it is fast and wasm should be cross-target
       - name: execute llvm wasm tests with --release
         run: nix develop -c cargo test-gen-llvm-wasm --locked --release
+
+      - name: test website build script
+        run: REPL_DEBUG=1 bash www/build.sh

@@ -29,12 +29,13 @@ use roc_region::all::Loc;
 use roc_solve_problem::TypeError;
 use roc_types::subs::{
     self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, LambdaSet, Mark,
-    OptVariable, Rank, RecordFields, Subs, SubsSlice, TagExt, UlsOfVar, UnionLabels, UnionLambdas,
-    UnionTags, Variable, VariableSubsSlice,
+    OptVariable, Rank, RecordFields, Subs, SubsSlice, TagExt, TupleElems, UlsOfVar, UnionLabels,
+    UnionLambdas, UnionTags, Variable, VariableSubsSlice,
 };
 use roc_types::types::{
-    gather_fields_unsorted_iter, AliasKind, AliasShared, Category, ExtImplicitOpenness, OptAbleVar,
-    Polarity, Reason, RecordField, Type, TypeExtension, TypeTag, Types, Uls,
+    gather_fields_unsorted_iter, gather_tuple_elems_unsorted_iter, AliasKind, AliasShared,
+    Category, ExtImplicitOpenness, OptAbleVar, Polarity, Reason, RecordField, Type, TypeExtension,
+    TypeTag, Types, Uls,
 };
 use roc_unify::unify::{
     unify, unify_introduced_ability_specialization, Env as UEnv, Mode, Obligated,
@@ -2658,6 +2659,39 @@ fn type_to_variable<'a>(
                 register_with_known_var(subs, destination, rank, pools, content)
             }
 
+            Tuple(elems) => {
+                let ext_slice = types.get_type_arguments(typ_index);
+
+                // Elems should never be empty; we don't support empty tuples
+                debug_assert!(!elems.is_empty() || !ext_slice.is_empty());
+
+                let mut elem_vars = Vec::with_capacity_in(elems.len(), arena);
+
+                let (indices, elem_tys) = types.tuple_elems_slices(elems);
+
+                for (index, elem_type) in indices.into_iter().zip(elem_tys.into_iter()) {
+                    let elem_var = helper!(elem_type);
+                    elem_vars.push((types[index], elem_var));
+                }
+
+                debug_assert!(ext_slice.len() <= 1);
+                let temp_ext_var = match ext_slice.into_iter().next() {
+                    None => roc_types::subs::Variable::EMPTY_TUPLE,
+                    Some(ext) => helper!(ext),
+                };
+
+                let (it, new_ext_var) =
+                    gather_tuple_elems_unsorted_iter(subs, TupleElems::empty(), temp_ext_var)
+                        .expect("Something ended up weird in this tuple type");
+
+                elem_vars.extend(it);
+                let tuple_elems = TupleElems::insert_into_subs(subs, elem_vars);
+
+                let content = Content::Structure(FlatType::Tuple(tuple_elems, new_ext_var));
+
+                register_with_known_var(subs, destination, rank, pools, content)
+            }
+
             TagUnion(tags, ext_openness) => {
                 let ext_slice = types.get_type_arguments(typ_index);
 
@@ -3728,7 +3762,7 @@ fn adjust_rank_content(
                     rank
                 }
 
-                EmptyRecord => {
+                EmptyRecord | EmptyTuple => {
                     // from elm-compiler: THEORY: an empty record never needs to get generalized
                     //
                     // But for us, that theory does not hold, because there might be type variables hidden
@@ -3762,6 +3796,17 @@ fn adjust_rank_content(
                             }
                             _ => {}
                         }
+                    }
+
+                    rank
+                }
+
+                Tuple(elems, ext_var) => {
+                    let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
+
+                    for (_, var_index) in elems.iter_all() {
+                        let var = subs[var_index];
+                        rank = rank.max(adjust_rank(subs, young_mark, visit_mark, group_rank, var));
                     }
 
                     rank
@@ -4125,7 +4170,7 @@ fn deep_copy_var_help(
                         Func(new_arguments, new_closure_var, new_ret_var)
                     }
 
-                    same @ EmptyRecord | same @ EmptyTagUnion => same,
+                    same @ EmptyRecord | same @ EmptyTuple | same @ EmptyTagUnion => same,
 
                     Record(fields, ext_var) => {
                         let record_fields = {
@@ -4166,6 +4211,20 @@ fn deep_copy_var_help(
                         };
 
                         Record(record_fields, work!(ext_var))
+                    }
+
+                    Tuple(elems, ext_var) => {
+                        let tuple_elems = {
+                            let new_variables = copy_sequence!(elems.len(), elems.iter_variables());
+
+                            TupleElems {
+                                length: elems.length,
+                                variables_start: new_variables.start,
+                                elem_index_start: elems.elem_index_start,
+                            }
+                        };
+
+                        Tuple(tuple_elems, work!(ext_var))
                     }
 
                     TagUnion(tags, ext_var) => {

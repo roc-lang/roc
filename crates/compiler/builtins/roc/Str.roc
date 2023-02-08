@@ -37,17 +37,17 @@
 ## The `"\n"` in the middle will insert a line break into this string. There are
 ## other ways of getting a line break in there, but `"\n"` is the most common.
 ##
-## Another way you could insert a newlines is by writing `\u{0x0A}` instead of `\n`.
+## Another way you could insert a newlines is by writing `\u(0A)` instead of `\n`.
 ## That would result in the same string, because the `\u` escape sequence inserts
 ## [Unicode code points](https://unicode.org/glossary/#code_point) directly into
 ## the string. The Unicode code point 10 is a newline, and 10 is `0A` in hexadecimal.
-## `0x0A` is a Roc hexadecimal literal, and `\u` escape sequences are always
-## followed by a hexadecimal literal inside `{` and `}` like this.
+## `\u` escape sequences are always followed by a hexadecimal number inside `(` and `)`
+## like this.
 ##
-## As another example, `"R\u{0x6F}c"` is the same string as `"Roc"`, because
-## `"\u{0x6F}"` corresponds to the Unicode code point for lowercase `o`. If you
+## As another example, `"R\u(6F)c"` is the same string as `"Roc"`, because
+## `"\u(6F)"` corresponds to the Unicode code point for lowercase `o`. If you
 ## want to [spice things up a bit](https://en.wikipedia.org/wiki/Metal_umlaut),
-## you can write `"R\u{0xF6}c"` as an alternative way to get the string `"Röc"\.
+## you can write `"R\u(F6)c"` as an alternative way to get the string `"Röc"\.
 ##
 ## Roc strings also support these escape sequences:
 ##

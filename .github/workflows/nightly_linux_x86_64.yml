@@ -1,4 +1,5 @@
 on:
+  workflow_dispatch:
   schedule:
     - cron:  '0 9 * * *'
 
@@ -24,6 +25,16 @@ jobs:
         
       - name: get date
         run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
+
+      - name: build wasm repl
+        run: ./ci/www-repl.sh
+
+      - name: Upload wasm repl tar. Actually uploading to github releases has to be done manually.
+        uses: actions/upload-artifact@v3
+        with:
+           name: roc_repl_wasm.tar.gz
+           path: roc_repl_wasm.tar.gz
+           retention-days: 4
         
       - name: build file name
         env:
@@ -37,16 +48,6 @@ jobs:
       - name: Upload roc nightly tar. Actually uploading to github releases has to be done manually.
         uses: actions/upload-artifact@v3
         with:
-           name: ${{ env.RELEASE_FOLDER_NAME }}
-           path: ${{ env.RELEASE_FOLDER_NAME }}
-           retention-days: 4
-
-      - name: build wasm repl
-        run: ./ci/www-repl.sh
-
-      - name: Upload wasm repl tar. Actually uploading to github releases has to be done manually.
-        uses: actions/upload-artifact@v3
-        with:
-           name: roc_repl_wasm.tar.gz
-           path: roc_repl_wasm.tar.gz
+           name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+           path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
            retention-days: 4

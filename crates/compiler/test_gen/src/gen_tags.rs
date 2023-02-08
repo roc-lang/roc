@@ -1695,7 +1695,7 @@ fn instantiate_annotated_as_recursive_alias_toplevel() {
 
             Value : [Nil, Array (List Value)]
 
-            foo : [Nil]
+            foo : [Nil]_
             foo = Nil
 
             it : Value
@@ -1723,7 +1723,7 @@ fn instantiate_annotated_as_recursive_alias_polymorphic_expr() {
             main =
                 Value : [Nil, Array (List Value)]
 
-                foo : [Nil]
+                foo : [Nil]_
                 foo = Nil
 
                 it : Value
@@ -1750,16 +1750,16 @@ fn instantiate_annotated_as_recursive_alias_multiple_polymorphic_expr() {
             main =
                 Value : [Nil, Array (List Value)]
 
-                foo : [Nil]
-                foo = Nil
+                foo : {} -> [Nil]
+                foo = \{} -> Nil
 
                 v1 : Value
-                v1 = foo
+                v1 = foo {}
 
                 Value2 : [Nil, B U16, Array (List Value)]
 
                 v2 : Value2
-                v2 = foo
+                v2 = foo {}
 
                 when {v1, v2} is
                     {v1: Nil, v2: Nil} -> 123i64

@@ -52,7 +52,7 @@ fn int_list_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn bool_list_literal() {
     assert_evals_to!(
         indoc!(
@@ -84,7 +84,45 @@ fn bool_list_literal() {
         RocList::from_slice(&[false; 1]),
         RocList<bool>
     );
+}
 
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn bool_list_concat() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+               List.concat [Bool.true, Bool.false] [Bool.false, Bool.true]
+               "#
+        ),
+        RocList::from_slice(&[true, false, false, true]),
+        RocList<bool>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+               List.concat [] [Bool.false, Bool.true]
+               "#
+        ),
+        RocList::from_slice(&[false, true]),
+        RocList<bool>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+               List.concat [Bool.true, Bool.false] []
+               "#
+        ),
+        RocList::from_slice(&[true, false]),
+        RocList<bool>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn bool_list_literal_repeat() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -145,7 +183,7 @@ fn variously_sized_list_literals() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_append_basic() {
     assert_evals_to!(
         "List.append [1] 2",
@@ -702,13 +740,13 @@ fn list_swap() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_append_to_empty_list() {
     assert_evals_to!("List.append [] 3", RocList::from_slice(&[3]), RocList<i64>);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_append_to_empty_list_of_int() {
     assert_evals_to!(
         indoc!(
@@ -726,7 +764,7 @@ fn list_append_to_empty_list_of_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_append_bools() {
     assert_evals_to!(
         "List.append [Bool.true, Bool.false] Bool.true",
@@ -736,7 +774,7 @@ fn list_append_bools() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_append_longer_list() {
     assert_evals_to!(
         "List.append [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22] 23",
@@ -746,7 +784,7 @@ fn list_append_longer_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_prepend() {
     assert_evals_to!("List.prepend [] 1", RocList::from_slice(&[1]), RocList<i64>);
     assert_evals_to!(
@@ -768,7 +806,11 @@ fn list_prepend() {
         RocList::from_slice(&[6, 4]),
         RocList<i64>
     );
+}
 
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+fn list_prepend_str() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -785,7 +827,7 @@ fn list_prepend() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_prepend_bools() {
     assert_evals_to!(
         "List.prepend [Bool.true, Bool.false] Bool.true",
@@ -795,7 +837,7 @@ fn list_prepend_bools() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_prepend_big_list() {
     assert_evals_to!(
         "List.prepend [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 100, 100, 100, 100] 9",
@@ -1601,7 +1643,7 @@ fn list_reverse_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_two_empty_lists() {
     assert_evals_to!(
         "List.concat [] []",
@@ -1611,7 +1653,7 @@ fn list_concat_two_empty_lists() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_two_empty_lists_of_int() {
     assert_evals_to!(
         indoc!(
@@ -1633,7 +1675,7 @@ fn list_concat_two_empty_lists_of_int() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_second_list_is_empty() {
     assert_evals_to!(
         "List.concat [12, 13] []",
@@ -1643,7 +1685,7 @@ fn list_concat_second_list_is_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_first_list_is_empty() {
     assert_evals_to!(
         "List.concat [] [23, 24]",
@@ -1653,7 +1695,7 @@ fn list_concat_first_list_is_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_two_non_empty_lists() {
     assert_evals_to!(
         "List.concat [1, 2] [3, 4]",
@@ -1679,7 +1721,7 @@ fn list_concat_two_bigger_non_empty_lists() {
 }
 
 #[allow(dead_code)]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn assert_concat_worked(num_elems1: i64, num_elems2: i64) {
     let vec1: Vec<i64> = (0..num_elems1)
         .map(|i| 12345 % (i + num_elems1 + num_elems2 + 1))
@@ -1701,7 +1743,7 @@ fn assert_concat_worked(num_elems1: i64, num_elems2: i64) {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_empty_list() {
     assert_concat_worked(0, 0);
     assert_concat_worked(1, 0);
@@ -1725,7 +1767,7 @@ fn list_concat_empty_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_nonempty_lists() {
     assert_concat_worked(1, 1);
     assert_concat_worked(1, 2);
@@ -1741,7 +1783,7 @@ fn list_concat_nonempty_lists() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_concat_large() {
     with_larger_debug_stack(|| {
         // these values produce mono ASTs so large that
@@ -1754,19 +1796,19 @@ fn list_concat_large() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn empty_list_len() {
     assert_evals_to!("List.len []", 0, usize);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn basic_int_list_len() {
     assert_evals_to!("List.len [12, 9, 6, 3]", 4, usize);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn loaded_int_list_len() {
     assert_evals_to!(
         indoc!(
@@ -1782,7 +1824,7 @@ fn loaded_int_list_len() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn fn_int_list_len() {
     assert_evals_to!(
         indoc!(
@@ -2188,7 +2230,7 @@ fn get_unique_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_wrap_len() {
     assert_evals_to!(
         indoc!(
@@ -2501,7 +2543,7 @@ fn quicksort_singleton() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn empty_list_increment_decrement() {
     assert_evals_to!(
         indoc!(
@@ -2518,7 +2560,7 @@ fn empty_list_increment_decrement() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_literal_increment_decrement() {
     assert_evals_to!(
         indoc!(
@@ -2617,7 +2659,7 @@ fn list_contains_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_manual_range() {
     assert_evals_to!(
         indoc!(
@@ -3363,8 +3405,27 @@ fn monomorphized_lists() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn with_capacity() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            l : List U64
+            l = List.withCapacity 10
+            
+            l
+            "#
+        ),
+        // Equality check for RocList does not account for capacity
+        (10, RocList::with_capacity(10)),
+        RocList<u64>,
+        |value: RocList<u64>| (value.capacity(), value)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn with_capacity_append() {
     // see https://github.com/roc-lang/roc/issues/1732
     assert_evals_to!(
         indoc!(
@@ -3376,8 +3437,48 @@ fn with_capacity() {
                 |> List.append 3u64
             "#
         ),
-        RocList::from_slice(&[0, 1, 2, 3]),
-        RocList<u64>
+        (10, RocList::from_slice(&[0, 1, 2, 3])),
+        RocList<u64>,
+        |value: RocList<u64>| (value.capacity(), value)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn reserve() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.reserve [] 15
+            "#
+        ),
+        (15, RocList::empty()),
+        RocList<u64>,
+        |value: RocList<u64>| (value.capacity(), value)
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn reserve_unchanged() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            a = []
+            b = List.reserve a 15
+            {a, b}
+            "#
+        ),
+        // a's capacity is unchanged when we reserve 15 more capcity
+        // both lists are empty.
+        (0, RocList::empty(), 15, RocList::empty()),
+        (RocList<u64>, RocList<u64>),
+        |(value_a, value_b): (RocList<u64>, RocList<u64>)| (
+            value_a.capacity(),
+            value_a,
+            value_b.capacity(),
+            value_b
+        )
     );
 }
 

@@ -536,8 +536,7 @@ pub enum EPattern<'a> {
     IndentEnd(Position),
     AsIndentStart(Position),
 
-    RecordAccessorFunction(Position),
-    TupleAccessorFunction(Position),
+    AccessorFunction(Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

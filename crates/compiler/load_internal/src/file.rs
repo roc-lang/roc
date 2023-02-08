@@ -31,16 +31,14 @@ use roc_module::symbol::{
     PackageQualified, Symbol,
 };
 use roc_mono::ir::{
-    CapturedSymbols, ExternalSpecializations, GlueLayouts, PartialProc, Proc, ProcLayout, Procs,
-    ProcsBase, UpdateModeIds,
+    CapturedSymbols, ExternalSpecializations, GlueLayouts, HostExposedLayouts, PartialProc, Proc,
+    ProcLayout, Procs, ProcsBase, UpdateModeIds,
 };
 use roc_mono::layout::LayoutInterner;
 use roc_mono::layout::{
     GlobalLayoutInterner, LambdaName, Layout, LayoutCache, LayoutProblem, Niche, STLayoutInterner,
 };
-use roc_packaging::cache::{self, RocCacheDir};
-#[cfg(not(target_family = "wasm"))]
-use roc_packaging::https::PackageMetadata;
+use roc_packaging::cache::RocCacheDir;
 use roc_parse::ast::{
     self, CommentOrNewline, Defs, ExtractSpaces, Spaced, StrLiteral, TypeAnnotation,
 };
@@ -68,6 +66,11 @@ use std::path::{Path, PathBuf};
 use std::str::from_utf8_unchecked;
 use std::sync::Arc;
 use std::{env, fs};
+#[cfg(not(target_family = "wasm"))]
+use {
+    roc_packaging::cache::{self},
+    roc_packaging::https::PackageMetadata,
+};
 
 pub use crate::work::Phase;
 use crate::work::{DepCycle, Dependencies};
@@ -1543,7 +1546,7 @@ pub enum Threading {
 ///     determine all the specializations this module *wants*. We compute the hashes
 ///     and report them to the coordinator thread, along with the mono::expr::Expr values of
 ///     the current function's body. At this point, we have not yet begun to assemble Procs;
-///     all we've done is send a list of requetsted specializations to the coordinator.
+///     all we've done is send a list of requested specializations to the coordinator.
 /// 11. The coordinator works through the specialization requests in parallel, adding them
 ///     to a global map once they're finished. Performing one specialization may result
 ///     in requests for others; these are added to the queue and worked through as normal.
@@ -2986,6 +2989,64 @@ fn update<'a>(
                 },
             );
 
+            if module_id == state.root_id {
+                let entry_point = find_entry_point(arena, &state, &interns)?;
+
+                if let EntryPoint::Executable {
+                    exposed_to_host, ..
+                } = &entry_point
+                {
+                    // Expose glue for the platform, not for the app module!
+                    let module_id = platform_data.as_ref().unwrap().module_id;
+
+                    for key @ (_name, proc_layout) in exposed_to_host.iter() {
+                        dbg!(_name);
+                        let ret = &proc_layout.result;
+                        for in_layout in proc_layout.arguments.iter().chain([ret]) {
+                            let layout = state.layout_interner.get(*in_layout);
+                            let all_glue_procs = roc_mono::ir::generate_glue_procs(
+                                module_id,
+                                &mut interns,
+                                arena,
+                                &mut layout_interner,
+                                arena.alloc(layout),
+                            );
+
+                            glue_getters.extend(all_glue_procs.getters.iter().flat_map(
+                                |(_, glue_procs)| {
+                                    glue_procs
+                                        .iter()
+                                        .map(|glue_proc| (glue_proc.name, glue_proc.proc_layout))
+                                },
+                            ));
+
+                            procedures.extend(all_glue_procs.getters.into_iter().flat_map(
+                                |(_, glue_procs)| {
+                                    glue_procs.into_iter().map(|glue_proc| {
+                                        (((glue_proc.name), glue_proc.proc_layout), glue_proc.proc)
+                                    })
+                                },
+                            ));
+
+                            let aliases = BumpMap::default();
+
+                            for (id, raw_function_layout) in all_glue_procs.extern_names {
+                                aliases.insert(
+                                    Symbol::ATTR_ARG1,
+                                    (Symbol::ATTR_ARG1, raw_function_layout),
+                                );
+                            }
+
+                            procedures.get_mut(key).unwrap().host_exposed_layouts =
+                                HostExposedLayouts::HostExposed {
+                                    rigids: BumpMap::default(),
+                                    aliases,
+                                };
+                        }
+                    }
+                }
+            }
+
             let work = state
                 .dependencies
                 .notify(module_id, Phase::MakeSpecializations);
@@ -3267,6 +3328,73 @@ fn log_layout_stats(module_id: ModuleId, layout_cache: &LayoutCache) {
     );
 }
 
+fn find_entry_point<'a>(
+    arena: &'a Bump,
+    state: &State<'a>,
+    interns: &Interns,
+) -> Result<EntryPoint<'a>, LoadingProblem<'a>> {
+    match state.exec_mode {
+        ExecutionMode::Test => Ok(EntryPoint::Test),
+        ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
+            use PlatformPath::*;
+
+            let platform_path = match state.platform_path {
+                Valid(To::ExistingPackage(shorthand)) => {
+                    match state.arc_shorthands.lock().get(shorthand) {
+                        Some(shorthand_path) => shorthand_path.root_module().to_path_buf(),
+                        None => unreachable!(),
+                    }
+                }
+                Valid(To::NewPackage(p_or_p)) => PathBuf::from(p_or_p.as_str()),
+                other => {
+                    let buf = to_missing_platform_report(state.root_id, other);
+                    return Err(LoadingProblem::FormattedReport(buf));
+                }
+            };
+
+            let exposed_symbols_and_layouts = match state.platform_data {
+                None => {
+                    let src = &state.exposed_to_host.values;
+                    let mut buf = bumpalo::collections::Vec::with_capacity_in(src.len(), arena);
+
+                    for &symbol in src.keys() {
+                        let proc_layout = proc_layout_for(state.procedures.keys().copied(), symbol);
+
+                        buf.push((symbol, proc_layout));
+                    }
+
+                    buf.into_bump_slice()
+                }
+                Some(PlatformData {
+                    module_id,
+                    provides,
+                    ..
+                }) => {
+                    let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
+                    let mut buf =
+                        bumpalo::collections::Vec::with_capacity_in(provides.len(), arena);
+
+                    for (loc_name, _loc_typed_ident) in provides {
+                        let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
+                        let symbol = Symbol::new(module_id, ident_id);
+                        let proc_layout = proc_layout_for(state.procedures.keys().copied(), symbol);
+
+                        buf.push((symbol, proc_layout));
+                    }
+
+                    buf.into_bump_slice()
+                }
+            };
+
+            Ok(EntryPoint::Executable {
+                exposed_to_host: exposed_symbols_and_layouts,
+                platform_path,
+            })
+        }
+        ExecutionMode::Check => unreachable!(),
+    }
+}
+
 fn finish_specialization<'a>(
     arena: &'a Bump,
     state: State<'a>,
@@ -3302,6 +3430,8 @@ fn finish_specialization<'a>(
         all_ident_ids,
     };
 
+    let entry_point = find_entry_point(arena, &state, &interns)?;
+
     let State {
         toplevel_expects,
         mut procedures,
@@ -3325,69 +3455,6 @@ fn finish_specialization<'a>(
         .map(|(id, (path, src))| (id, (path, src.into())))
         .collect();
 
-    let entry_point = {
-        match exec_mode {
-            ExecutionMode::Test => EntryPoint::Test,
-            ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
-                use PlatformPath::*;
-
-                let platform_path = match platform_path {
-                    Valid(To::ExistingPackage(shorthand)) => {
-                        match (*state.arc_shorthands).lock().get(shorthand) {
-                            Some(shorthand_path) => shorthand_path.root_module().to_path_buf(),
-                            None => unreachable!(),
-                        }
-                    }
-                    Valid(To::NewPackage(p_or_p)) => PathBuf::from(p_or_p.as_str()),
-                    other => {
-                        let buf = to_missing_platform_report(state.root_id, other);
-                        return Err(LoadingProblem::FormattedReport(buf));
-                    }
-                };
-
-                let exposed_symbols_and_layouts = match platform_data {
-                    None => {
-                        let src = &exposed_to_host.values;
-                        let mut buf = bumpalo::collections::Vec::with_capacity_in(src.len(), arena);
-
-                        for &symbol in src.keys() {
-                            let proc_layout = proc_layout_for(procedures.keys().copied(), symbol);
-
-                            buf.push((symbol, proc_layout));
-                        }
-
-                        buf.into_bump_slice()
-                    }
-                    Some(PlatformData {
-                        module_id,
-                        provides,
-                        ..
-                    }) => {
-                        let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
-                        let mut buf =
-                            bumpalo::collections::Vec::with_capacity_in(provides.len(), arena);
-
-                        for (loc_name, _loc_typed_ident) in provides {
-                            let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
-                            let symbol = Symbol::new(module_id, ident_id);
-                            let proc_layout = proc_layout_for(procedures.keys().copied(), symbol);
-
-                            buf.push((symbol, proc_layout));
-                        }
-
-                        buf.into_bump_slice()
-                    }
-                };
-
-                EntryPoint::Executable {
-                    exposed_to_host: exposed_symbols_and_layouts,
-                    platform_path,
-                }
-            }
-            ExecutionMode::Check => unreachable!(),
-        }
-    };
-
     let module_id = state.root_id;
     let mut glue_getters = Vec::new();
 
@@ -3398,7 +3465,7 @@ fn finish_specialization<'a>(
         // Expose glue for the platform, not for the app module!
         let module_id = platform_data.as_ref().unwrap().module_id;
 
-        for (_name, proc_layout) in exposed_to_host.iter() {
+        for key @ (_name, proc_layout) in exposed_to_host.iter() {
             dbg!(_name);
             let ret = &proc_layout.result;
             for in_layout in proc_layout.arguments.iter().chain([ret]) {
@@ -3416,6 +3483,7 @@ fn finish_specialization<'a>(
                         .iter()
                         .map(|glue_proc| (glue_proc.name, glue_proc.proc_layout))
                 }));
+
                 procedures.extend(all_glue_procs.getters.into_iter().flat_map(
                     |(_, glue_procs)| {
                         glue_procs.into_iter().map(|glue_proc| {
@@ -3423,6 +3491,18 @@ fn finish_specialization<'a>(
                         })
                     },
                 ));
+
+                let aliases = BumpMap::default();
+
+                for (id, raw_function_layout) in all_glue_procs.extern_names {
+                    aliases.insert(Symbol::ATTR_ARG1, (Symbol::ATTR_ARG1, raw_function_layout));
+                }
+
+                procedures.get_mut(key).unwrap().host_exposed_layouts =
+                    HostExposedLayouts::HostExposed {
+                        rigids: BumpMap::default(),
+                        aliases,
+                    };
             }
         }
     }
@@ -5773,6 +5853,8 @@ fn build_pending_specializations<'a>(
         derived_module: &derived_module,
     };
 
+    let layout_cache_snapshot = layout_cache.snapshot();
+
     // Add modules' decls to Procs
     for index in 0..declarations.len() {
         use roc_can::expr::DeclarationTag::*;
@@ -5789,9 +5871,6 @@ fn build_pending_specializations<'a>(
         let tag = declarations.declarations[index];
         match tag {
             Value => {
-                // mark this symbols as a top-level thunk before any other work on the procs
-                module_thunks.push(symbol);
-
                 // If this is an exposed symbol, we need to
                 // register it as such. Otherwise, since it
                 // never gets called by Roc code, it will never
@@ -5829,19 +5908,40 @@ fn build_pending_specializations<'a>(
                     );
                 }
 
-                let proc = PartialProc {
-                    annotation: expr_var,
-                    // This is a 0-arity thunk, so it has no arguments.
-                    pattern_symbols: &[],
-                    // This is a top-level definition, so it cannot capture anything
-                    captured_symbols: CapturedSymbols::None,
-                    body: body.value,
-                    body_var: expr_var,
-                    // This is a 0-arity thunk, so it cannot be recursive
-                    is_self_recursive: false,
-                };
+                match body.value {
+                    roc_can::expr::Expr::RecordAccessor(accessor_data) => {
+                        let fresh_record_symbol = mono_env.unique_symbol();
+                        let closure_data = accessor_data.to_closure_data(fresh_record_symbol);
+                        register_toplevel_function_into_procs_base(
+                            &mut mono_env,
+                            &mut procs_base,
+                            closure_data.name,
+                            expr_var,
+                            closure_data.arguments,
+                            closure_data.return_type,
+                            *closure_data.loc_body,
+                            false,
+                        );
+                    }
+                    _ => {
+                        // mark this symbols as a top-level thunk before any other work on the procs
+                        module_thunks.push(symbol);
 
-                procs_base.partial_procs.insert(symbol, proc);
+                        let proc = PartialProc {
+                            annotation: expr_var,
+                            // This is a 0-arity thunk, so it has no arguments.
+                            pattern_symbols: &[],
+                            // This is a top-level definition, so it cannot capture anything
+                            captured_symbols: CapturedSymbols::None,
+                            body: body.value,
+                            body_var: expr_var,
+                            // This is a 0-arity thunk, so it cannot be recursive
+                            is_self_recursive: false,
+                        };
+
+                        procs_base.partial_procs.insert(symbol, proc);
+                    }
+                }
             }
             Function(f_index) | Recursive(f_index) | TailRecursive(f_index) => {
                 let function_def = &declarations.function_bodies[f_index.index()].value;
@@ -5891,17 +5991,16 @@ fn build_pending_specializations<'a>(
 
                 let is_recursive = matches!(tag, Recursive(_) | TailRecursive(_));
 
-                let partial_proc = PartialProc::from_named_function(
+                register_toplevel_function_into_procs_base(
                     &mut mono_env,
+                    &mut procs_base,
+                    symbol,
                     expr_var,
                     function_def.arguments.clone(),
-                    body,
-                    CapturedSymbols::None,
-                    is_recursive,
                     function_def.return_type,
+                    body,
+                    is_recursive,
                 );
-
-                procs_base.partial_procs.insert(symbol, partial_proc);
             }
             Destructure(d_index) => {
                 let loc_pattern = &declarations.destructs[d_index.index()].loc_pattern;
@@ -6133,6 +6232,8 @@ fn build_pending_specializations<'a>(
         }
     }
 
+    layout_cache.rollback_to(layout_cache_snapshot);
+
     procs_base.module_thunks = module_thunks.into_bump_slice();
 
     let find_specializations_end = Instant::now();
@@ -6150,6 +6251,33 @@ fn build_pending_specializations<'a>(
         toplevel_expects,
         expectations,
     }
+}
+
+fn register_toplevel_function_into_procs_base<'a>(
+    mono_env: &mut roc_mono::ir::Env<'a, '_>,
+    procs_base: &mut ProcsBase<'a>,
+    symbol: Symbol,
+    expr_var: Variable,
+    arguments: Vec<(
+        Variable,
+        roc_can::expr::AnnotatedMark,
+        Loc<roc_can::pattern::Pattern>,
+    )>,
+    return_type: Variable,
+    body: Loc<roc_can::expr::Expr>,
+    is_recursive: bool,
+) {
+    let partial_proc = PartialProc::from_named_function(
+        mono_env,
+        expr_var,
+        arguments,
+        body,
+        CapturedSymbols::None,
+        is_recursive,
+        return_type,
+    );
+
+    procs_base.partial_procs.insert(symbol, partial_proc);
 }
 
 /// Loads derived ability members up for specialization into the Derived module, prior to making

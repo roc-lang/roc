@@ -20,10 +20,6 @@ const LAYOUT_BOOL: InLayout = Layout::BOOL;
 const LAYOUT_UNIT: InLayout = Layout::UNIT;
 const LAYOUT_U32: InLayout = Layout::U32;
 
-// TODO: Replace usages with root.union_refcount
-// TODO(recursive-layouts): update once we have disjoint recursive pointers
-const LAYOUT_PTR: InLayout = Layout::RECURSIVE_PTR;
-
 pub fn refcount_stmt<'a>(
     root: &mut CodeGenHelp<'a>,
     ident_ids: &mut IdentIds,
@@ -78,7 +74,7 @@ pub fn refcount_stmt<'a>(
 
         ModifyRc::DecRef(structure) => {
             match layout_interner.get(layout) {
-                // Str has no children, so we might as well do what we normally do and call the helper.
+                // Str has no children, so Dec is the same as DecRef.
                 Layout::Builtin(Builtin::Str) => {
                     ctx.op = HelperOp::Dec;
                     refcount_stmt(
@@ -131,8 +127,6 @@ pub fn refcount_generic<'a>(
     layout: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
-    debug_assert!(is_rc_implemented_yet(layout_interner, layout));
-
     match layout_interner.get(layout) {
         Layout::Builtin(Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal) => {
             // Generate a dummy function that immediately returns Unit
@@ -145,7 +139,6 @@ pub fn refcount_generic<'a>(
             ident_ids,
             ctx,
             layout_interner,
-            layout,
             elem_layout,
             structure,
         ),
@@ -162,6 +155,7 @@ pub fn refcount_generic<'a>(
             ident_ids,
             ctx,
             layout_interner,
+            layout,
             union_layout,
             structure,
         ),
@@ -176,7 +170,7 @@ pub fn refcount_generic<'a>(
                 structure,
             )
         }
-        Layout::RecursivePointer => unreachable!(
+        Layout::RecursivePointer(_) => unreachable!(
             "We should never call a refcounting helper on a RecursivePointer layout directly"
         ),
         Layout::Boxed(inner_layout) => refcount_boxed(
@@ -213,6 +207,7 @@ pub fn refcount_reset_proc_body<'a>(
     // Whenever we recurse into a child layout we will want to Decrement
     ctx.op = HelperOp::Dec;
     ctx.recursive_union = Some(union_layout);
+    let recursion_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
 
     // Reset structure is unique. Decrement its children and return a pointer to the allocation.
     let then_stmt = {
@@ -411,48 +406,11 @@ pub fn refcount_reset_proc_body<'a>(
             union_layout.stores_tag_id_in_pointer(root.target_info),
             root.arena.alloc(rc_stmt),
             addr,
+            recursion_ptr,
         )
     };
 
     rc_ptr_stmt
-}
-
-// Check if refcounting is implemented yet. In the long term, this will be deleted.
-// In the short term, it helps us to skip refcounting and let it leak, so we can make
-// progress incrementally. Kept in sync with generate_procs using assertions.
-pub fn is_rc_implemented_yet<'a, I>(interner: &I, layout: InLayout<'a>) -> bool
-where
-    I: LayoutInterner<'a>,
-{
-    use UnionLayout::*;
-
-    match interner.get(layout) {
-        Layout::Builtin(Builtin::List(elem_layout)) => is_rc_implemented_yet(interner, elem_layout),
-        Layout::Builtin(_) => true,
-        Layout::Struct { field_layouts, .. } => field_layouts
-            .iter()
-            .all(|l| is_rc_implemented_yet(interner, *l)),
-        Layout::Union(union_layout) => match union_layout {
-            NonRecursive(tags) => tags
-                .iter()
-                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, *l))),
-            Recursive(tags) => tags
-                .iter()
-                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, *l))),
-            NonNullableUnwrapped(fields) => {
-                fields.iter().all(|l| is_rc_implemented_yet(interner, *l))
-            }
-            NullableWrapped { other_tags, .. } => other_tags
-                .iter()
-                .all(|fields| fields.iter().all(|l| is_rc_implemented_yet(interner, *l))),
-            NullableUnwrapped { other_fields, .. } => other_fields
-                .iter()
-                .all(|l| is_rc_implemented_yet(interner, *l)),
-        },
-        Layout::LambdaSet(lambda_set) => is_rc_implemented_yet(interner, lambda_set.representation),
-        Layout::RecursivePointer => true,
-        Layout::Boxed(_) => true,
-    }
 }
 
 fn rc_return_stmt<'a>(
@@ -489,6 +447,7 @@ pub fn rc_ptr_from_data_ptr<'a>(
     rc_ptr_sym: Symbol,
     mask_lower_bits: bool,
     following: &'a Stmt<'a>,
+    recursive_layout: InLayout<'a>,
 ) -> Stmt<'a> {
     let addr_sym = root.create_symbol(ident_ids, "addr");
     rc_ptr_from_data_ptr_help(
@@ -499,6 +458,7 @@ pub fn rc_ptr_from_data_ptr<'a>(
         mask_lower_bits,
         following,
         addr_sym,
+        recursive_layout,
     )
 }
 
@@ -510,6 +470,7 @@ pub fn rc_ptr_from_data_ptr_help<'a>(
     mask_lower_bits: bool,
     following: &'a Stmt<'a>,
     addr_sym: Symbol,
+    recursion_ptr: InLayout<'a>,
 ) -> Stmt<'a> {
     use std::ops::Neg;
 
@@ -571,7 +532,7 @@ pub fn rc_ptr_from_data_ptr_help<'a>(
         },
         arguments: root.arena.alloc([rc_addr_sym]),
     });
-    let cast_stmt = |next| Stmt::Let(rc_ptr_sym, cast_expr, LAYOUT_PTR, next);
+    let cast_stmt = |next| Stmt::Let(rc_ptr_sym, cast_expr, recursion_ptr, next);
 
     if mask_lower_bits {
         as_int_stmt(root.arena.alloc(
@@ -664,7 +625,9 @@ fn refcount_str<'a>(
 ) -> Stmt<'a> {
     let string = Symbol::ARG_1;
     let layout_isize = root.layout_isize;
-    let field_layouts = root.arena.alloc([LAYOUT_PTR, layout_isize, layout_isize]);
+    let field_layouts = root
+        .arena
+        .alloc([Layout::OPAQUE_PTR, layout_isize, layout_isize]);
 
     // Get the last word as a signed int
     let last_word = root.create_symbol(ident_ids, "last_word");
@@ -728,6 +691,7 @@ fn refcount_str<'a>(
                 //
                 mod_rc_stmt,
             ),
+            Layout::OPAQUE_PTR,
         ),
     ));
 
@@ -760,7 +724,6 @@ fn refcount_list<'a>(
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
     layout_interner: &mut STLayoutInterner<'a>,
-    layout: InLayout,
     elem_layout: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
@@ -809,7 +772,7 @@ fn refcount_list<'a>(
     //
 
     let rc_ptr = root.create_symbol(ident_ids, "rc_ptr");
-    let alignment = layout_interner.alignment_bytes(layout);
+    let elem_alignment = layout_interner.alignment_bytes(elem_layout);
 
     let ret_stmt = rc_return_stmt(root, ident_ids, ctx);
     let modify_list = modify_refcount(
@@ -817,7 +780,7 @@ fn refcount_list<'a>(
         ident_ids,
         ctx,
         rc_ptr,
-        alignment,
+        elem_alignment,
         arena.alloc(ret_stmt),
     );
 
@@ -828,6 +791,7 @@ fn refcount_list<'a>(
         rc_ptr,
         false,
         arena.alloc(modify_list),
+        Layout::OPAQUE_PTR,
     );
 
     let modify_elems_and_list =
@@ -1093,6 +1057,7 @@ fn refcount_union<'a>(
     ident_ids: &mut IdentIds,
     ctx: &mut Context<'a>,
     layout_interner: &mut STLayoutInterner<'a>,
+    layout: InLayout<'a>,
     union: UnionLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
@@ -1129,6 +1094,7 @@ fn refcount_union<'a>(
                     structure,
                 )
             } else {
+                let recursive_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
                 refcount_union_rec(
                     root,
                     ident_ids,
@@ -1137,6 +1103,7 @@ fn refcount_union<'a>(
                     union,
                     tags,
                     None,
+                    recursive_ptr,
                     structure,
                 )
             }
@@ -1148,6 +1115,7 @@ fn refcount_union<'a>(
             // a direct RecursionPointer is only possible if there's at least one non-recursive variant.
             // This nesting makes it harder to do tail recursion, so we just don't.
             let tags = root.arena.alloc([field_layouts]);
+            let recursive_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
             refcount_union_rec(
                 root,
                 ident_ids,
@@ -1156,6 +1124,7 @@ fn refcount_union<'a>(
                 union,
                 tags,
                 None,
+                recursive_ptr,
                 structure,
             )
         }
@@ -1179,6 +1148,7 @@ fn refcount_union<'a>(
                     structure,
                 )
             } else {
+                let recursive_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
                 refcount_union_rec(
                     root,
                     ident_ids,
@@ -1187,6 +1157,7 @@ fn refcount_union<'a>(
                     union,
                     tags,
                     null_id,
+                    recursive_ptr,
                     structure,
                 )
             }
@@ -1212,6 +1183,7 @@ fn refcount_union<'a>(
                     structure,
                 )
             } else {
+                let recursive_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
                 refcount_union_rec(
                     root,
                     ident_ids,
@@ -1220,6 +1192,7 @@ fn refcount_union<'a>(
                     union,
                     tags,
                     null_id,
+                    recursive_ptr,
                     structure,
                 )
             }
@@ -1354,6 +1327,7 @@ fn refcount_union_rec<'a>(
     union_layout: UnionLayout<'a>,
     tag_layouts: &'a [&'a [InLayout<'a>]],
     null_id: Option<TagIdIntType>,
+    recursion_ptr: InLayout<'a>,
     structure: Symbol,
 ) -> Stmt<'a> {
     let tag_id_layout = union_layout.tag_id_layout();
@@ -1393,6 +1367,7 @@ fn refcount_union_rec<'a>(
             rc_ptr,
             union_layout.stores_tag_id_in_pointer(root.target_info),
             root.arena.alloc(modify_structure_stmt),
+            recursion_ptr,
         )
     };
 
@@ -1440,6 +1415,7 @@ fn refcount_union_tailrec<'a>(
     let current = root.create_symbol(ident_ids, "current");
     let next_ptr = root.create_symbol(ident_ids, "next_ptr");
     let layout = layout_interner.insert(Layout::Union(union_layout));
+    let recursion_ptr = layout_interner.insert(Layout::RecursivePointer(layout));
 
     let tag_id_layout = union_layout.tag_id_layout();
 
@@ -1501,6 +1477,7 @@ fn refcount_union_tailrec<'a>(
             rc_ptr,
             union_layout.stores_tag_id_in_pointer(root.target_info),
             root.arena.alloc(modify_structure_stmt),
+            recursion_ptr,
         )
     };
 
@@ -1710,6 +1687,7 @@ fn refcount_boxed<'a>(
         rc_ptr,
         false,
         arena.alloc(modify_outer),
+        Layout::OPAQUE_PTR,
     );
 
     if layout_interner.is_refcounted(inner_layout) && !ctx.op.is_decref() {

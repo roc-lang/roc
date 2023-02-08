@@ -1374,13 +1374,16 @@ fn adjust_rank_content(
                     rank
                 }
 
-                EmptyRecord => {
+                EmptyRecord | EmptyTuple => {
                     // from elm-compiler: THEORY: an empty record never needs to get generalized
                     Rank::toplevel()
                 }
 
                 EmptyTagUnion => Rank::toplevel(),
 
+                Tuple(..) => {
+                    todo!()
+                }
                 Record(fields, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
 
@@ -1572,8 +1575,11 @@ fn instantiate_rigids_help(
                     }
                 }
 
-                EmptyRecord | EmptyTagUnion => {}
+                EmptyRecord | EmptyTuple | EmptyTagUnion => {}
 
+                Tuple(..) => {
+                    todo!()
+                }
                 Record(fields, ext_var) => {
                     for index in fields.iter_variables() {
                         let var = subs[index];
@@ -1752,8 +1758,11 @@ fn deep_copy_var_help(
                     Func(arg_vars, new_closure_var, new_ret_var)
                 }
 
-                same @ EmptyRecord | same @ EmptyTagUnion => same,
+                same @ EmptyRecord | same @ EmptyTuple | same @ EmptyTagUnion => same,
 
+                Tuple(..) => {
+                    todo!()
+                }
                 Record(fields, ext_var) => {
                     let record_fields = {
                         let mut new_vars = Vec::with_capacity(fields.len());

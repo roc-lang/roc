@@ -1,4 +1,7 @@
-on: [workflow_dispatch]
+on:
+  workflow_dispatch:
+  release:
+    types: [edited]
 
 # this cancels workflows currently in progress if you start a new one
 concurrency:
@@ -24,13 +27,13 @@ jobs:
       # does a build with the surgical linker and also with the legacy linker
       - run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
 
-      - name: Save .rh1, .rm1 and .o file 
+      - name: Save .rh1, .rm2 and .o file 
         uses: actions/upload-artifact@v3
         with:
           name: linux-x86_64-files
           path: |
+            basic-cli/src/metadata_linux-x86_64.rm2
             basic-cli/src/linux-x86_64.rh1
-            basic-cli/src/metadata_linux-x86_64.rm1
             basic-cli/src/linux-x86_64.o
 
   build-macos-x86_64-files:
@@ -102,7 +105,7 @@ jobs:
         run: ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
 
       - name: delete tar
-        run: ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
+        run: ls | grep "roc_nightly.*tar\.gz" | xargs rm -rf
 
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
@@ -118,9 +121,17 @@ jobs:
 
       - run: cp macos-x86_64-files/* ./basic-cli/src
 
-      - run: ./roc_nightly/roc build --bundle=.tar.br ./basic-cli/src/main.roc
+      # gz for quick test, br takes longer
+      - run: |
+          if [ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]; then
+            echo "ARCHIVE_FORMAT='.tar.br'" >> "$GITHUB_ENV"
+          else
+            echo "ARCHIVE_FORMAT='.tar.gz'" >> "$GITHUB_ENV"
+          fi
 
-      - run: echo "TAR_FILENAME=$(ls -d basic-cli/src/* | grep '.tar.br')" >> $GITHUB_ENV
+      - run: ./roc_nightly/roc build --bundle=${{ env.ARCHIVE_FORMAT }} ./basic-cli/src/main.roc
+
+      - run: echo "TAR_FILENAME=$(ls -d basic-cli/src/* | grep ${{ env.ARCHIVE_FORMAT }})" >> $GITHUB_ENV
 
       - name: Upload platform archive
         uses: actions/upload-artifact@v3

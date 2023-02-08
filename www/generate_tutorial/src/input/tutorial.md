@@ -127,7 +127,7 @@ Let's move out of the REPL and create our first Roc application!
 Make a file named `main.roc` and put this in it:
 
 <pre><samp><span class="kw">app</span> <span class="str">"hello"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
     <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 
@@ -177,10 +177,11 @@ Once we have a def, we can use its name in other expressions. For example, the `
 
 You can name a def using any combination of letters and numbers, but they have to start with a letter.
 
-> **Note:** Definitions are constant and must be unique within a scope. Once we've assigned a name to an expression, we can't reassign it! We'd get an error if we wrote these two defs in the same scope:
-
-<pre><samp>birds <span class="kw">=</span> 3
-birds <span class="kw">=</span> 2</samp></pre>
+<aside>
+    <p><b>Note:</b> Defs are constant; they can't be reassigned. We'd get an error if we wrote these two defs in the same scope:</p>
+    <pre><samp>birds <span class="kw">=</span> 3
+    birds <span class="kw">=</span> 2</samp></pre>
+</aside>
 
 ## [Defining Functions](#defining-functions) {#defining-functions}
 
@@ -201,7 +202,7 @@ addAndStringify <span class="kw">= \</span>num1<span class="kw">,</span> num2 <s
 
 This new `addAndStringify` function we've defined accepts two numbers, adds them, calls `Num.toStr` on the result, and returns that.
 
-The `\num1, num2 ->` syntax defines a function's arguments, and the expression after the `->` is the body of the function, `Num.toStr (num1 + num2)` in this case. When a function runs, its body expression gets evaluated and returned.
+The `\num1, num2 ->` syntax defines a function's arguments, and the expression after the `->` is the body of the function. Whenever a function gets called, its body expression gets evaluated and returned.
 
 ## [if-then-else](#if-then-else) {#if-then-else}
 
@@ -218,10 +219,10 @@ Let's modify this function to return an empty string if the numbers add to zero.
 
 We did two things here:
 
-- We introduced a _local def_ named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it will not be accessible outside that function.
+- We introduced a _local def_ named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it's _local_ to that scope and can't be accessed outside that function.
 - We added an `if`\-`then`\-`else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
 
-Every `if` must be accompanied by both `then` and also `else`. Having an `if` without an `else` is an error, because `if` is an an expression, and all expressions must evaluate to a value. If there were ever an `if` without an `else`, that would be an expression that might not evaluate to a value!
+Every `if` must be accompanied by both `then` and also `else`. Having an `if` without an `else` is an error, because `if` is an expression, and all expressions must evaluate to a value. If there were ever an `if` without an `else`, that would be an expression that might not evaluate to a value!
 
 ### [else if](#else-if) {#else-if}
 
@@ -254,6 +255,27 @@ Note that `else if` is not a separate language keyword! It's just an `if`/`else`
 
 This differently-indented version is equivalent to writing `else if sum < 0 then` on the same line, although the convention is to use the original version's style.
 
+### [Comments](#comments) {#comments}
+
+This is a comment in Roc:
+
+<samp><span class="comment"># The `name` field is unused by addAndStringify</span></samp>
+
+Whenever you write `#` it means that the rest of the line is a comment, and will not affect the
+running program. Roc does not have multiline comment syntax.
+
+### [Doc Comments](#doc-comments) {#doc-comments}
+
+Comments that begin with `##` are "doc comments" which will be included in generated documentation (`roc docs`). They can include code blocks by adding five spaces after `##`.
+
+<pre><samp><span class="comment">## This is a comment for documentation, and includes a code block.
+##
+##     x = 2
+##     expect x == 2</span>
+</samp></pre>
+
+Like other comments, doc comments do not affect the running program.
+
 ## [Debugging](#debugging) {#debugging}
 
 [Print debugging](https://en.wikipedia.org/wiki/Debugging#Techniques) is the most common debugging technique in the history of programming, and Roc has a `dbg` keyword to facilitate it. Here's an example of how to use `dbg`:
@@ -270,6 +292,8 @@ This differently-indented version is equivalent to writing `else if sum < 0 then
 Whenever this `dbg` line of code is reached, the value of `count` will be printed to [stderr](<https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)>), along with the source code file and line number where the `dbg` itself was written:
 
 <samp><span class="kw">[pluralize.roc 6:8]</span> 5</samp>
+
+Here, `[pluralize.roc 6:8]` tells us that this `dbg` was written in the file `pluralize.roc` on line 6, column 8.
 
 You can give `dbg` any expression you like, for example:
 
@@ -291,9 +315,9 @@ addAndStringify <span class="kw">=</span> <span class="kw">\</span>counts <span 
     Num.toStr <span class="paren">(</span>counts.birds <span class="op">+</span> counts.iguanas<span class="paren">)</span>
 </samp></pre>
 
-The function now takes a _record_, which is a group of named values. Records are not objects; they don't have methods or inheritance, they just store values.
+The function now takes a _record_, which is a group of named values. Records are not [objects](https://en.wikipedia.org/wiki/Object_(computer_science)); they don't have methods or inheritance, they just store information.
 
-We create the record when we write `{ birds: 5, iguanas: 7 }`. This defines a record with two _fields_ (the `birds` field and the `iguanas` field) and then assigns the number `5` to the `birds` field and the number `7` to the `iguanas` field. Order doesn't matter with record fields; we could have also specified `iguanas` first and `birds` second, and Roc would consider it the exact same record.
+The expression `{ birds: 5, iguanas: 7 }` defines a record with two _fields_ (the `birds` field and the `iguanas` field) and then assigns the number `5` to the `birds` field and the number `7` to the `iguanas` field. Order doesn't matter with record fields; we could have also specified `iguanas` first and `birds` second, and Roc would consider it the exact same record.
 
 When we write `counts.birds`, it accesses the `birds` field of the `counts` record, and when we write `counts.iguanas` it accesses the `iguanas` field.
 
@@ -315,26 +339,6 @@ totalWithNote <span class="kw">=</span> addAndStringify <span class="brace">{</s
 
 This works because `addAndStringify` only uses `counts.birds` and `counts.iguanas`. If we were to use `counts.note` inside `addAndStringify`, then we would get an error because `total` is calling `addAndStringify` passing a record that doesn't have a `note` field.
 
-### [Comments](#comments) {#comments}
-
-By the way, this is a comment in Roc:
-
-<samp><span class="comment"># The `name` field is unused by addAndStringify</span></samp>
-
-Whenever you write `#` it means that the rest of the line is a comment, and will not affect the program.
-
-### [Doc Comments](#doc-comments) {#doc-comments}
-
-Comments that begin with `##` will be included in generated documentation (`roc docs`). They can include code blocks by adding five spaces after `##`.
-
-<pre><samp><span class="comment">## This is a comment for documentation, and includes a code block.
-##
-##     x = 2
-##     expect x == 2</span>
-</samp></pre>
-
-Roc does not have multiline comment syntax.
-
 ### [Record shorthands](#record-shorthands) {#record-shorthands}
 
 Roc has a couple of shorthands you can use to express some record-related operations more concisely.
@@ -349,7 +353,13 @@ returnFoo <span class="brace">{</span> foo <span class="colon">:</span> <span cl
 <span class="comment"># returns "hi!"</span>
 </samp></pre>
 
-Whenever we're setting a field to be equal to a def that has the same name as the field—for example, `{ x: x }`—we can shorten it to just writing the name of the def alone—for example, `{ x }`. We can do this with as many fields as we like, e.g. `{ x: x, y: y }` can alternately be written `{ x, y }`, `{ x: x, y }`, or `{ x, y: y }`.
+Sometimes we assign a def to a field that happens to have the same name—for example, `{ x: x }`.
+In these cases, we shorten it to writing the name of the def alone—for example, `{ x }`. We can do this with as many fields as we like; here are several different ways to define the same record:
+
+- `{ x: x, y: y }`
+- `{ x, y }`
+- `{ x: x, y }`
+- `{ x, y: y }`
 
 ### [Record destructuring](#record-destructuring) {#record-destructuring}
 
@@ -385,7 +395,8 @@ The `fromScratch` and `fromOriginal` records are equal, although they're defined
 - `fromScratch` was built using the same record syntax we've been using up to this point.
 - `fromOriginal` created a new record using the contents of `original` as defaults for fields that it didn't specify after the `&`.
 
-Note that when we do this, the fields you're overriding must all be present on the original record, and their values must have the same type as the corresponding values in the original record.
+Note that `&` can't introduce new fields to a record, or change the types of existing fields.
+(Trying to do either of these will result in an error at build time!)
 
 ## [Tags](#tags) {#tags}
 
@@ -431,7 +442,7 @@ Besides being more concise, there are other advantages to using `when` here.
 1.  We don't have to specify an `else` branch, so the code can be more self-documenting about exactly what all the options are.
 2.  We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplightColor` could be `Green`. It knows this because `Green` is one of the possibilities in our `stoplightColor = if …` definition.
 
-We can still have the equivalent of an `else` branch in our `when` if we like. Instead of writing "else", we write "\_ \->" like so:
+We can still have the equivalent of an `else` branch in our `when` if we like. Instead of writing `else`, we write `\_ ->` like so:
 
 <pre><samp>stoplightStr <span class="kw">=</span>
 <span class="kw">    when</span> stoplightColor <span class="kw">is</span>
@@ -479,7 +490,7 @@ Either style can be a reasonable choice depending on the circumstances.
 
 ### [Tags with payloads](#tags-with-payloads) {#tags-with-payloads}
 
-Tags can have _payloads_ - that is, values inside them. For example:
+Tags can have _payloads_—that is, values inside them. For example:
 
 <pre><samp>stoplightColor <span class="kw">=</span>
     <span class="kw">if</span> something <span class="op">&gt;</span> <span class="number">100</span> <span class="kw">then</span>
@@ -500,8 +511,8 @@ stoplightStr <span class="kw">=</span>
 
 This makes two changes to our earlier `stoplightColor` / `stoplightStr` example.
 
-1.  We sometimes set `stoplightColor` to be `Custom "some other color"`. When we did this, we gave the `Custom` tag a _payload_ of the string `"some other color"`.
-2.  We added a `Custom` tag in our `when`, with a payload which we named `description`. Because we did this, we were able to refer to `description` in the body of the branch (that is, the part after the `->`) just like any other def.
+1.  We sometimes chose to set `stoplightColor` to be `Custom "some other color"`. When we did this, we gave the `Custom` tag a _payload_ of the string `"some other color"`.
+2.  We added a `Custom` tag in our `when`, with a payload which we named `description`. Because we did this, we were able to refer to `description` in the body of the branch (that is, the part after the `->`) just like a def or a function argument.
 
 Any tag can be given a payload like this. A payload doesn't have to be a string; we could also have said (for example) `Custom { r: 40, g: 60, b: 80 }` to specify an RGB color instead of a string. Then in our `when` we could have written `Custom record ->` and then after the `->` used `record.r`, `record.g`, and `record.b` to access the `40`, `60`, `80` values. We could also have written `Custom { r, g, b } ->` to _destructure_ the record, and then accessed these `r`, `g`, and `b` defs after the `->` instead.
 
@@ -527,11 +538,11 @@ You can also pattern match on lists, like so:
 
 This can be both more concise and more efficient (at runtime) than calling [`List.get`](https://www.roc-lang.org/builtins/List#get) multiple times, since each call to `get` requires a separate conditional to handle the different `Result`s they return.
 
-> **Note:** Each list pattern can only have one `..`, which is known as the "rest pattern" because it's where the _rest_ of the list goes. 
+> **Note:** Each list pattern can only have one `..`, which is known as the "rest pattern" because it's where the _rest_ of the list goes.
 
 ## [Booleans](#booleans) {#booleans}
 
-In many programming languages, `true` and `false` are special language keywords that refer to the two boolean values. In Roc, booleans do not get special keywords; instead, they are exposed as the ordinary values `Bool.true` and `Bool.false`.
+In many programming languages, `true` and `false` are special language keywords that refer to the two [boolean](https://en.wikipedia.org/wiki/Boolean_data_type) values. In Roc, booleans do not get special keywords; instead, they are exposed as the ordinary values `Bool.true` and `Bool.false`.
 
 This design is partly to keep the number of special keywords in the language smaller, but mainly to suggest how booleans are intended be used in Roc: for [_boolean logic_](https://en.wikipedia.org/wiki/Boolean_algebra) (`&&`, `||`, and so on) as opposed to for data modeling. Tags are the preferred choice for data modeling, and having tag values be more concise than boolean values helps make this preference clear.
 
@@ -553,10 +564,12 @@ This returns a **new** list with `"Jess"` after `"Ari"`, and doesn't modify the 
 
 A common way to transform one list into another is to use `List.map`. Here's an example of how to use it:
 
-<pre><samp>List.map <span class="brace">[</span><span class="number">1</span><span class="comma">,</span> <span class="number">2</span><span class="comma">,</span> <span class="number">3</span><span class="brace">]</span> <span class="kw">\</span>num <span class="kw">-&gt;</span> num <span class="op">*<span> <span class="number">2</span>
-</samp></pre>
+<samp>List.map <span class="brace">[</span><span class="number">1</span><span class="comma">,</span> <span class="number">2</span><span class="comma">,</span> <span class="number">3</span><span class="brace">]</span> <span class="kw">&bsol;</span>num <span class="kw">-&gt;</span> num <span class="op">*<span> <span class="number">2</span>
+</samp>
 
-This returns `[2, 4, 6]`. `List.map` takes two arguments:
+This returns `[2, 4, 6]`.
+
+`List.map` takes two arguments:
 
 1.  An input list
 2.  A function that will be called on each element of that list
@@ -565,7 +578,9 @@ It then returns a list which it creates by calling the given function on each el
 
 We can also give `List.map` a named function, instead of an anonymous one:
 
-For example, the `Num.isOdd` function returns `true` if it's given an odd number, and `false` otherwise. So `Num.isOdd 5` returns `true` and `Num.isOdd 2` returns `false`.
+<samp>List.map <span class="brace">[</span><span class="number">1</span><span class="comma">,</span> <span class="number">2</span><span class="comma">,</span> <span class="number">3</span><span class="brace">]</span> Num.isOdd</samp>
+
+This `Num.isOdd` function returns `Bool.true` if it's given an odd number, and `Bool.false` otherwise. So `Num.isOdd 5` returns true and `Num.isOdd 2` returns false.
 
 As such, calling `List.map [1, 2, 3] Num.isOdd` returns a new list of `[Bool.true, Bool.false, Bool.true]`.
 
@@ -664,36 +679,11 @@ Another way is to use `List.keepIf`, which passes each of the list's elements to
 <span class="comment"># returns [2, 4]</span>
 </samp></pre>
 
-There's also `List.dropIf`, which does the reverse:
+There's also `List.dropIf`, which does the opposite:
 
 <pre><samp>List.dropIf [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] Num.isEven
 <span class="comment"># returns [1, 3, 5]</span>
 </samp></pre>
-
-### [Custom operations that walk over a list](#custom-operations-that-walk-over-a-list) {#custom-operations-that-walk-over-a-list}
-
-You can make your own custom operations that walk over all the elements in a list, using `List.walk`. Let's look at an example and then walk (ha!) through it.
-
-<pre><samp>List.walk [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] { evens <span class="colon">:</span> [], odds <span class="colon">:</span> [] } <span class="kw">\</span>state, elem <span class="kw">-&gt;</span>
-    <span class="kw">if</span> Num.isEven elem <span class="kw">then</span>
-        { state &amp; evens <span class="colon">:</span> List.append state.evens elem }
-    <span class="kw">else</span>
-        { state &amp; odds <span class="colon">:</span> List.append state.odds elem }
-
-<span class="comment"># returns { evens : [2, 4], odds : [1, 3, 5] }</span>
-</samp></pre>
-
-`List.walk` walks through each element of the list, building up a state as it goes. At the end, it returns the final state, whatever that ended up being after processing the last element. The `\state, elem -> ...` function it takes as its last argument takes the current state and the current list element. It then returns the new state based on whatever it decides to do with that element.
-
-In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to either the `evens` or `odds` field of a `state` record: `{ evens, odds }`. By the end, that record has a list of all the even numbers in the list and a list of all the odd numbers.
-
-The state doesn't have to be a record; it can be anything you want. For example, if you made it a boolean, you could implement `List.any` using `List.walk`. You could also make the state be a list, and implement `List.map`, `List.keepIf`, or `List.dropIf`. There are a lot of things you can do with `List.walk`, it's very flexible!
-
-It can be tricky to remember the argument order for `List.walk` at first. A helpful trick is that the arguments follow the same pattern as what we've seen with `List.map`, `List.any`, `List.keepIf`, and `List.dropIf`: the first argument is a list, and the last argument is a function. The difference here is that `List.walk` has one more argument than those other functions; the only place it could go while preserving that pattern is the middle!
-
-That third argument specifies the initial `state`; what it's set to before the `\state, elem -> ...` function has been called on it even once. (If the list is empty, the `\state, elem -> ...` function will never get called and the initial state gets returned immediately.)
-
-> **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`.
 
 ### [Getting an individual element from a list](#getting-an-individual-element-from-a-list) {#getting-an-individual-element-from-a-list}
 
@@ -727,6 +717,93 @@ These functions demonstrate a common pattern in Roc: operations that can fail re
 
 <span class="comment"># Note: There's a Result.isErr function that works similarly.</span>
 </samp></pre>
+
+### [Walking the elements in a list](#walking-the-elements-in-a-list) {#walking-the-elements-in-a-list}
+
+We've now seen a few different ways you can transform lists. Sometimes, though, there's nothing
+that quite does what you want, and you might find yourself calling `List.get` repeatedly to
+retrieve every element in the list and use it to build up the new value you want. That approach
+can work, but it has a few downsides:
+
+* Each `List.get` call returns a `Result` that must be dealt with, even though you plan to use every element in the list anyway
+* There's a runtime performance overhead associated with each of these `Result`s, which you won't find in other "look at every element in the list" operations like `List.keepIf`.
+* It's more verbose than the alternative we're about to discuss
+
+The `List.walk` function gives you a way to walk over the elements in a list and build up whatever
+return value you like. It's a great alternative to calling `List.get` on every element in the list
+because it's more concise, runs faster, and doesn't give you any `Result`s to deal with.
+
+Here's an example:
+
+<pre><samp>List.walk [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] { evens <span class="colon">:</span> [], odds <span class="colon">:</span> [] } <span class="kw">\</span>state, elem <span class="kw">-&gt;</span>
+    <span class="kw">if</span> Num.isEven elem <span class="kw">then</span>
+        { state &amp; evens <span class="colon">:</span> List.append state.evens elem }
+    <span class="kw">else</span>
+        { state &amp; odds <span class="colon">:</span> List.append state.odds elem }
+
+<span class="comment"># returns { evens : [2, 4], odds : [1, 3, 5] }</span>
+</samp></pre>
+
+In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to either the `evens` or `odds` field of a `state` record: `{ evens, odds }`. By the end, that record has a list of all the even numbers in the list and a list of all the odd numbers.
+
+`List.walk` takes a few ingredients:
+
+1. A list. (`[1, 2, 3, 4, 5]`)
+2. An initial `state` value. (`{ evens : [], odds : [] }`)
+3. A function which takes the current `state` and element, and returns a new `state`. (`\state, elem -> …`)
+
+It then proceeds to walk over each element in the list and call that function. Each time, the state that function returns becomes the argument to the next function call. Here are the arguments the function will receive, and what it will return, as `List.walk` walks over the list `[1, 2, 3, 4, 5]`:
+
+<pre>
+<table>
+<thead>
+<tr>
+    <th>state</th>
+    <th>element</th>
+    <th>return value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+    <td><code>{ evens : [], odds : [] }</code></td>
+    <td><code>1</code></td>
+    <td><code>{ evens : [], odds : [1] }</code></td>
+</tr>
+<tr>
+    <td><code>{ evens : [], odds : [1] }</code></td>
+    <td><code>2</code></td>
+    <td><code>{ evens : [2], odds : [1] }</code></td>
+</tr>
+<tr>
+    <td><code>{ evens : [2], odds : [1] }</code></td>
+    <td><code>3</code></td>
+    <td><code>{ evens : [2], odds : [1, 3] }</code></td>
+</tr>
+<tr>
+    <td><code>{ evens : [2], odds : [1, 3] }</code></td>
+    <td><code>4</code></td>
+    <td><code>{ evens : [2, 4], odds : [1, 3] }</code></td>
+</tr>
+<tr>
+    <td><code>{ evens : [2, 4], odds : [1, 3] }</code></td>
+    <td><code>4</code></td>
+    <td><code>{ evens : [2, 4], odds : [1, 3, 5] }</code></td>
+</tr>
+</tbody>
+</table>
+</pre>
+
+Note that the initial `state` argument is `{ evens: [], odds: [] }` because that's the argument
+we passed `List.walk` for its initial state. From then on, each `state` argument is whatever the
+previous function call returned.
+
+Once the list has run out of elements, `List.walk` retunrs whatever the final function call returned—in this case, `{ evens : [2, 4], odds : [1, 3, 5] }`. (If the list was empty, the function never gets called and `List.walk` returns the initial state.)
+
+Note that the state doesn't have to be a record; it can be anything you want. For example, if you made it a `Bool`, you could implement `List.any` using `List.walk`. You could also make the state be a list, and implement `List.map`, `List.keepIf`, or `List.dropIf`. There are a lot of things you can do with `List.walk`!
+
+A helpful way to remember the argument order for `List.walk` is that that its arguments follow the same pattern as what we've seen with `List.map`, `List.any`, `List.keepIf`, and `List.dropIf`: the first argument is a list, and the last argument is a function. The difference here is that `List.walk` has one more argument than those other functions; the only place it could go while preserving that pattern is in the middle!
+
+> **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`. Some languages also have operations like `forEach` or `for…in` syntax, which walk across every element and perform potentially side-effecting operations on them; `List.walk` can be used to replace these too, if you include a `Task` in the state. We'll talk about tasks, and how to use them with `List.walk`, later on.
 
 ### [The pipe operator](#the-pipe-operator) {#the-pipe-operator}
 
@@ -928,6 +1005,32 @@ We just saw how tag unions get combined when different branches of a conditional
 </samp></pre>
 
 Here, Roc's compiler will infer that `color`'s type is `[Red, Yellow, Green]`, because those are the three possibilities this `when` handles.
+
+### [Opaque Types](#opaque-types) {#opaque-types}
+
+A type can be defined to be opaque to hide its internal structure. This is a lot more amazing than it may seem. It can make your code more modular, robust, and easier to read:
+- If a type is opaque you can modify its internal structure and be certain that no dependencies need to be updated.
+- You can prevent that data needs to be checked multiple times. For example, you can create an opaque `NonEmptyList` from a `List` after you've checked it. Now all functions that you pass this `NonEmptyList` to do not need to handle the empty list case. 
+- Having the type `Username` in a type signature gives you more context compared to `Str`. Even if the `Username` is an opaque type for `Str`.
+
+You can create an opaque type with the `:=` operator. Let's make one called `Username`:	
+
+<pre><samp>Username <span class="colon">:=</span> Str
+
+fromStr <span class="colon">:</span> Str <span class="kw">-></span> Username
+fromStr <span class="kw">=</span> <span class="kw">\</span>str <span class="kw">-></span>
+    @Username str
+
+toStr <span class="colon">:</span> Username <span class="kw">-></span> Str
+toStr <span class="kw">=</span> <span class="kw">\</span>@Username str <span class="kw">-></span>
+    str
+</pre></samp>
+
+The `fromStr` function turns a string into a `Username` by calling `@Username` on that string. The `toStr` function turns a `Username` back into a string by pattern matching `@Username str` to unwrap the string from the `Username` opaque type.
+
+Now we can expose the `Username` opaque type so that other modules can use it in type annotations. However, other modules can't use the `@Username` syntax to wrap or unwrap `Username` values. That operation is only available in the same scope where `Username` itself was defined; trying to use it outside that scope will give an error.
+
+Note that if we define `Username := Str` inside another module (e.g. `Main`) and also use `@Username`, this will compile, however the new `Username` type in main would not be equal to the one defined in the `Username` module. Although both opaque types have the name `Username`, they were defined in different modules and so they are type-incompatible with each other, and even attempting to use `==` to compare them would be a type mismatch.
 
 ## [Numeric types](#numeric-types) {#numeric-types}
 
@@ -1143,7 +1246,7 @@ Expects do not have to be at the top level:
 
 <pre><samp>pluralize <span class="kw">=</span> <span class="kw">\</span>singular, plural, count <span class="kw">-&gt;</span>
     countStr <span class="kw">=</span> <span class="hljs-type">Num</span>.toStr count
-    
+
     <span class="kw">if</span> count <span class="op">==</span> <span class="number">1</span> <span class="kw">then</span>
         <span class="str">"<span class="hljs-subst">\(countStr)</span> <span class="hljs-subst">\(singular)</span>"</span>
     <span class="kw">else</span>
@@ -1191,7 +1294,7 @@ Besides being built into the compiler, the builtin modules are different from ot
 Let's take a closer look at the part of `main.roc` above the `main` def:
 
 <pre><samp><span class="kw">app</span> "<span class="hljs-selector-tag">hello</span>"
-    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> <span class="hljs-selector-attr">[pf.Stdout]</span>
     <span class="kw">provides</span> <span class="hljs-selector-tag">main</span> <span class="kw">to</span> <span class="hljs-selector-tag">pf</span>
 </samp></pre>
@@ -1202,7 +1305,7 @@ The line `app "hello"` states that this module defines a Roc application, and th
 
 The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
 
-<pre><samp><span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
+<pre><samp><span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
 <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
 <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 </samp></pre>
@@ -1247,7 +1350,7 @@ We'll use these four operations to learn about tasks.
 Let's start with a basic "Hello World" program.
 
 <pre><samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> [pf.Stdout]
     <span class="kw">provides</span> [main] <span class="kw">to</span> pf
 
@@ -1274,7 +1377,7 @@ In contrast, `Stdin.line` produces a `Str` when it finishes reading from [standa
 Let's change `main` to read a line from `stdin`, and then print it back out again:
 
 <pre><samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> [pf.Stdout, pf.Stdin, pf.Task]
     <span class="kw">provides</span> [main] <span class="kw">to</span> pf
 
@@ -1311,7 +1414,7 @@ For example, we can print a prompt before we pause to read from `stdin`, so it n
 This works, but we can make it a little nicer to read. Let's change it to the following:
 
 <pre><samp><span class="kw">app</span> <span class="str">"cli-tutorial"</span>
-    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.1.3/5SXwdW7rH8QAOnD71IkHcFxCmBEPtFSLAIkclPEgjHQ.tar.br"</span> <span class="brace">}</span>
+    <span class="kw">packages</span> <span class="brace">{</span> pf: <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
     <span class="kw">imports</span> [pf.Stdout, pf.Stdin, pf.Task.{ await }]
     <span class="kw">provides</span> [main] <span class="kw">to</span> pf
 
@@ -1573,7 +1676,7 @@ example <span class="kw">=</span> <span class="kw">\</span>tag <span class="kw">
         _ <span class="kw">-&gt;</span> Bool.<span class="hljs-literal">false</span>
 </samp></pre>
 
-In contrast, a _closed tag union_ (or _closed union_) like `[Foo Str, Bar Bool]` (without the `*`) represents an the set of all possible tags. If I use a `when` on one of these, I can match on `Foo` only and then on `Bar` only, with no need for a catch-all branch. For example:
+In contrast, a _closed tag union_ (or _closed union_) like `[Foo Str, Bar Bool]` (without the `*`) represents the set of all possible tags. If I use a `when` on one of these, I can match on `Foo` only and then on `Bar` only, with no need for a catch-all branch. For example:
 
 <pre><samp>example <span class="kw">:</span> [Foo Str, Bar Bool] <span class="kw">-&gt;</span> Bool
 example <span class="kw">=</span> <span class="kw">\</span>tag <span class="kw">-&gt;</span>

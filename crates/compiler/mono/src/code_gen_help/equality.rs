@@ -45,7 +45,7 @@ pub fn eq_generic<'a>(
             eq_boxed(root, ident_ids, ctx, layout_interner, inner_layout)
         }
         Layout::LambdaSet(_) => unreachable!("`==` is not defined on functions"),
-        Layout::RecursivePointer => {
+        Layout::RecursivePointer(_) => {
             unreachable!(
                 "Can't perform `==` on RecursivePointer. Should have been replaced by a tag union."
             )
@@ -451,7 +451,7 @@ fn eq_tag_fields<'a>(
     // (If there are more than one, the others will use non-tail recursion)
     let rec_ptr_index = field_layouts
         .iter()
-        .position(|field| matches!(layout_interner.get(*field), Layout::RecursivePointer));
+        .position(|field| matches!(layout_interner.get(*field), Layout::RecursivePointer(_)));
 
     let (tailrec_index, innermost_stmt) = match rec_ptr_index {
         None => {

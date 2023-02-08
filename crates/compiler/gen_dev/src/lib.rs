@@ -21,6 +21,7 @@ use roc_mono::layout::{
     Builtin, InLayout, Layout, LayoutId, LayoutIds, LayoutInterner, STLayoutInterner, TagIdIntType,
     UnionLayout,
 };
+use roc_mono::list_element_layout;
 
 mod generic64;
 mod object_builder;
@@ -283,28 +284,31 @@ trait Backend<'a> {
                         if let LowLevelWrapperType::CanBeReplacedBy(lowlevel) =
                             LowLevelWrapperType::from_symbol(func_sym.name())
                         {
-                            self.build_run_low_level(
+                            return self.build_run_low_level(
                                 sym,
                                 &lowlevel,
                                 arguments,
                                 arg_layouts,
                                 ret_layout,
-                            )
-                        } else if self.defined_in_app_module(func_sym.name()) {
-                            let layout_id = LayoutIds::default().get(func_sym.name(), layout);
-                            let fn_name = self.symbol_to_string(func_sym.name(), layout_id);
-                            // Now that the arguments are needed, load them if they are literals.
-                            self.load_literal_symbols(arguments);
-                            self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
-                        } else {
-                            self.build_builtin(
+                            );
+                        } else if sym.is_builtin() {
+                            // These builtins can be built through `build_fn_call` as well, but the
+                            // implementation in `build_builtin` inlines some of the symbols.
+                            return self.build_builtin(
                                 sym,
                                 func_sym.name(),
                                 arguments,
                                 arg_layouts,
                                 ret_layout,
-                            )
+                            );
                         }
+
+                        let layout_id = LayoutIds::default().get(func_sym.name(), layout);
+                        let fn_name = self.symbol_to_string(func_sym.name(), layout_id);
+
+                        // Now that the arguments are needed, load them if they are literals.
+                        self.load_literal_symbols(arguments);
+                        self.build_fn_call(sym, fn_name, arguments, arg_layouts, ret_layout)
                     }
 
                     CallType::LowLevel { op: lowlevel, .. } => {
@@ -516,6 +520,22 @@ trait Backend<'a> {
                 );
                 self.build_num_sub(sym, &args[0], &args[1], ret_layout)
             }
+            LowLevel::NumSubWrap => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumSubWrap: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumSubWrap: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], *ret_layout,
+                    "NumSubWrap: expected to have the same argument and return layout"
+                );
+                self.build_num_sub_wrap(sym, &args[0], &args[1], ret_layout)
+            }
             LowLevel::NumBitwiseAnd => {
                 if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
                     self.build_int_bitwise_and(sym, &args[0], &args[1], int_width)
@@ -535,6 +555,27 @@ trait Backend<'a> {
                     self.build_int_bitwise_xor(sym, &args[0], &args[1], int_width)
                 } else {
                     internal_error!("bitwise xor on a non-integer")
+                }
+            }
+            LowLevel::NumShiftLeftBy => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                    self.build_int_shift_left(sym, &args[0], &args[1], int_width)
+                } else {
+                    internal_error!("shift left on a non-integer")
+                }
+            }
+            LowLevel::NumShiftRightBy => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                    self.build_int_shift_right(sym, &args[0], &args[1], int_width)
+                } else {
+                    internal_error!("shift right on a non-integer")
+                }
+            }
+            LowLevel::NumShiftRightZfBy => {
+                if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
+                    self.build_int_shift_right_zero_fill(sym, &args[0], &args[1], int_width)
+                } else {
+                    internal_error!("shift right zero-fill on a non-integer")
                 }
             }
             LowLevel::Eq => {
@@ -583,6 +624,23 @@ trait Backend<'a> {
                     "NumLt: expected to have return layout of type Bool"
                 );
                 self.build_num_lt(sym, &args[0], &args[1], &arg_layouts[0])
+            }
+            LowLevel::NumGt => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "NumGt: expected to have exactly two argument"
+                );
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "NumGt: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    Layout::BOOL,
+                    *ret_layout,
+                    "NumGt: expected to have return layout of type Bool"
+                );
+                self.build_num_gt(sym, &args[0], &args[1], &arg_layouts[0])
             }
             LowLevel::NumToFrac => {
                 debug_assert_eq!(
@@ -646,6 +704,31 @@ trait Backend<'a> {
                 );
                 self.build_list_len(sym, &args[0])
             }
+            LowLevel::ListWithCapacity => {
+                debug_assert_eq!(
+                    1,
+                    args.len(),
+                    "ListWithCapacity: expected to have exactly one argument"
+                );
+                let elem_layout = list_element_layout!(self.interner(), *ret_layout);
+                self.build_list_with_capacity(sym, args[0], arg_layouts[0], elem_layout, ret_layout)
+            }
+            LowLevel::ListReserve => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "ListReserve: expected to have exactly two arguments"
+                );
+                self.build_list_reserve(sym, args, arg_layouts, ret_layout)
+            }
+            LowLevel::ListAppendUnsafe => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "ListAppendUnsafe: expected to have exactly two arguments"
+                );
+                self.build_list_append_unsafe(sym, args, arg_layouts, ret_layout)
+            }
             LowLevel::ListGetUnsafe => {
                 debug_assert_eq!(
                     2,
@@ -661,6 +744,23 @@ trait Backend<'a> {
                     "ListReplaceUnsafe: expected to have exactly three arguments"
                 );
                 self.build_list_replace_unsafe(sym, args, arg_layouts, ret_layout)
+            }
+            LowLevel::ListConcat => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "ListConcat: expected to have exactly two arguments"
+                );
+                let elem_layout = list_element_layout!(self.interner(), *ret_layout);
+                self.build_list_concat(sym, args, arg_layouts, elem_layout, ret_layout)
+            }
+            LowLevel::ListPrepend => {
+                debug_assert_eq!(
+                    2,
+                    args.len(),
+                    "ListPrepend: expected to have exactly two arguments"
+                );
+                self.build_list_prepend(sym, args, arg_layouts, ret_layout)
             }
             LowLevel::StrConcat => self.build_fn_call(
                 sym,
@@ -705,7 +805,6 @@ trait Backend<'a> {
         arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     ) {
-        self.load_literal_symbols(args);
         match func_sym {
             Symbol::NUM_IS_ZERO => {
                 debug_assert_eq!(
@@ -719,6 +818,7 @@ trait Backend<'a> {
                     "NumIsZero: expected to have return layout of type Bool"
                 );
 
+                self.load_literal_symbols(args);
                 self.load_literal(
                     &Symbol::DEV_TMP,
                     &arg_layouts[0],
@@ -727,7 +827,7 @@ trait Backend<'a> {
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
-            Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE => {
+            Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE | Symbol::LIST_APPEND => {
                 // TODO: This is probably simple enough to be worth inlining.
                 let layout_id = LayoutIds::default().get(func_sym, ret_layout);
                 let fn_name = self.symbol_to_string(func_sym, layout_id);
@@ -746,11 +846,13 @@ trait Backend<'a> {
                 let bool_layout = Layout::BOOL;
                 self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(true));
                 self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
+                self.free_symbol(&Symbol::DEV_TMP)
             }
             Symbol::BOOL_FALSE => {
                 let bool_layout = Layout::BOOL;
                 self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(false));
                 self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
+                self.free_symbol(&Symbol::DEV_TMP)
             }
             _ => todo!("the function, {:?}", func_sym),
         }
@@ -795,6 +897,15 @@ trait Backend<'a> {
     /// build_num_sub stores the `src1 - src2` difference into dst.
     fn build_num_sub(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>);
 
+    /// build_num_sub_wrap stores the `src1 - src2` difference into dst.
+    fn build_num_sub_wrap(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
+    );
+
     /// stores the `src1 & src2` into dst.
     fn build_int_bitwise_and(
         &mut self,
@@ -822,6 +933,33 @@ trait Backend<'a> {
         int_width: IntWidth,
     );
 
+    /// stores the `Num.shiftLeftBy src1 src2` into dst.
+    fn build_int_shift_left(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
+
+    /// stores the `Num.shiftRightBy src1 src2` into dst.
+    fn build_int_shift_right(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
+
+    /// stores the `Num.shiftRightZfBy src1 src2` into dst.
+    fn build_int_shift_right_zero_fill(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        int_width: IntWidth,
+    );
+
     /// build_eq stores the result of `src1 == src2` into dst.
     fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>);
 
@@ -830,6 +968,15 @@ trait Backend<'a> {
 
     /// build_num_lt stores the result of `src1 < src2` into dst.
     fn build_num_lt(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        arg_layout: &InLayout<'a>,
+    );
+
+    /// build_num_gt stores the result of `src1 > src2` into dst.
+    fn build_num_gt(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,
@@ -867,6 +1014,34 @@ trait Backend<'a> {
     /// build_list_len returns the length of a list.
     fn build_list_len(&mut self, dst: &Symbol, list: &Symbol);
 
+    /// build_list_with_capacity creates and returns a list with the given capacity.
+    fn build_list_with_capacity(
+        &mut self,
+        dst: &Symbol,
+        capacity: Symbol,
+        capacity_layout: InLayout<'a>,
+        elem_layout: InLayout<'a>,
+        ret_layout: &InLayout<'a>,
+    );
+
+    /// build_list_reserve enlarges a list to at least accommodate the given capacity.
+    fn build_list_reserve(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
+    );
+
+    /// build_list_append_unsafe returns a new list with a given element appended.
+    fn build_list_append_unsafe(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
+    );
+
     /// build_list_get_unsafe loads the element from the list at the index.
     fn build_list_get_unsafe(
         &mut self,
@@ -878,6 +1053,25 @@ trait Backend<'a> {
 
     /// build_list_replace_unsafe returns the old element and new list with the list having the new element inserted.
     fn build_list_replace_unsafe(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[InLayout<'a>],
+        ret_layout: &InLayout<'a>,
+    );
+
+    /// build_list_concat returns a new list containing the two argument lists concatenated.
+    fn build_list_concat(
+        &mut self,
+        dst: &Symbol,
+        args: &'a [Symbol],
+        arg_layouts: &[InLayout<'a>],
+        elem_layout: InLayout<'a>,
+        ret_layout: &InLayout<'a>,
+    );
+
+    /// build_list_prepend returns a new list with a given element prepended.
+    fn build_list_prepend(
         &mut self,
         dst: &Symbol,
         args: &'a [Symbol],

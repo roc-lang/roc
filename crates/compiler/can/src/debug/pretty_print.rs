@@ -5,7 +5,7 @@ use crate::expr::Expr::{self, *};
 use crate::expr::{
     ClosureData, DeclarationTag, Declarations, FunctionDef, OpaqueWrapFunctionData, WhenBranch,
 };
-use crate::pattern::{Pattern, RecordDestruct};
+use crate::pattern::{Pattern, RecordDestruct, TupleDestruct};
 
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
@@ -306,17 +306,36 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
             .append(f.line())
             .append(f.text("}"))
             .group(),
+        Tuple { elems, .. } => f
+            .reflow("(")
+            .append(
+                f.intersperse(
+                    elems.iter().map(|(_var, elem)| {
+                        f.line()
+                            .append(expr(c, Free, f, &elem.value))
+                            .nest(2)
+                            .group()
+                    }),
+                    f.reflow(","),
+                )
+                .nest(2)
+                .group(),
+            )
+            .append(f.line())
+            .append(f.text(")"))
+            .group(),
         EmptyRecord => f.text("{}"),
-        Access {
+        RecordAccess {
             loc_expr, field, ..
         } => expr(c, AppArg, f, &loc_expr.value)
             .append(f.text(format!(".{}", field.as_str())))
             .group(),
+        TupleAccess { .. } => todo!(),
         OpaqueWrapFunction(OpaqueWrapFunctionData { opaque_name, .. }) => {
             f.text(format!("@{}", opaque_name.as_str(c.interns)))
         }
-        Accessor(_) => todo!(),
-        Update {
+        RecordAccessor(_) => todo!(),
+        RecordUpdate {
             symbol, updates, ..
         } => f
             .reflow("{")
@@ -484,6 +503,19 @@ fn pattern<'a>(
                 ),
             )
             .append(f.text("}"))
+            .group(),
+        TupleDestructure { destructs, .. } => f
+            .text("(")
+            .append(
+                f.intersperse(
+                    destructs
+                        .iter()
+                        .map(|l| &l.value)
+                        .map(|TupleDestruct { typ: (_, p), .. }| pattern(c, Free, f, &p.value)),
+                    f.text(", "),
+                ),
+            )
+            .append(f.text(")"))
             .group(),
         List { .. } => todo!(),
         NumLiteral(_, n, _, _) | IntLiteral(_, _, n, _, _) | FloatLiteral(_, _, n, _, _) => {

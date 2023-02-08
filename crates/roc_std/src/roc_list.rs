@@ -241,6 +241,7 @@ where
                 }
 
                 // Allocate new memory.
+                self.capacity = slice.len();
                 let new_elements = Self::elems_with_capacity(slice.len());
 
                 // Copy the old elements to the new allocation.
@@ -251,6 +252,7 @@ where
                 new_elements
             }
         } else {
+            self.capacity = slice.len();
             Self::elems_with_capacity(slice.len())
         };
 
@@ -274,8 +276,6 @@ where
             // a incrementing the reference count panics.
             self.length += 1;
         }
-
-        self.capacity = self.length
     }
 }
 

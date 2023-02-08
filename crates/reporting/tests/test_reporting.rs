@@ -958,6 +958,59 @@ mod test_reporting {
     );
 
     test_report!(
+        tuple_exhaustiveness_bad,
+        indoc!(
+            r#"
+            Color : [Red, Blue]
+
+            value : (Color, Color)
+            value = (Red, Red)
+
+            when value is
+                (Blue, Blue) -> "foo"
+                (Red, Blue) -> "foo"
+                (Blue, Red) -> "foo"
+                #(Red, Red) -> "foo"
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+     9│>      when value is
+    10│>          (Blue, Blue) -> "foo"
+    11│>          (Red, Blue) -> "foo"
+    12│>          (Blue, Red) -> "foo"
+
+    Other possibilities include:
+
+        ( Red, Red )
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        tuple_exhaustiveness_good,
+        indoc!(
+            r#"
+            Color : [Red, Blue]
+
+            value : (Color, Color)
+            value = (Red, Red)
+
+            when value is
+                (Blue, Blue) -> "foo"
+                (Red, Blue) -> "foo"
+                (Blue, Red) -> "foo"
+                (Red, Red) -> "foo"
+            "#
+        ),
+        @"" // No error
+    );
+
+    test_report!(
         elem_in_list,
         indoc!(
             r#"
@@ -5590,25 +5643,6 @@ All branches in an `if` must have the same type!
     It looks like a field access on an accessor. I parse.client.name as
     (.client).name. Maybe use an anonymous function like
     (\r -> r.client.name) instead?
-    "###
-    );
-
-    test_report!(
-        part_starts_with_number,
-        indoc!(
-            r#"
-            foo.100
-            "#
-        ),
-        @r###"
-    ── SYNTAX PROBLEM ──────────────────────────────────────── /code/proj/Main.roc ─
-
-    I trying to parse a record field access here:
-
-    4│      foo.100
-                ^
-
-    So I expect to see a lowercase letter next, like .name or .height.
     "###
     );
 
@@ -13027,5 +13061,113 @@ I recommend using camelCase. It's the standard style in Roc code!
                         Two -> Two
             "#
         )
+    );
+
+    test_report!(
+        derive_decoding_for_nat,
+        indoc!(
+            r#"
+            app "test" imports [Decode.{decoder}] provides [main] to "./platform"
+
+            main =
+                myDecoder : Decoder Nat fmt | fmt has DecoderFormatting
+                myDecoder = decoder
+
+                myDecoder
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│      myDecoder = decoder
+                        ^^^^^^^
+
+    I can't generate an implementation of the `Decoding` ability for
+
+        Nat
+
+    Note: Decoding to a Nat is not supported. Consider decoding to a
+    fixed-sized unsigned integer, like U64, then converting to a Nat if
+    needed.
+    "###
+    );
+
+    test_report!(
+        derive_encoding_for_nat,
+        indoc!(
+            r#"
+            app "test" imports [] provides [main] to "./platform"
+
+            x : Nat
+
+            main = Encode.toEncoder x
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH ───────────────────────────────────────── /code/proj/Main.roc ─
+
+    This expression has a type that does not implement the abilities it's expected to:
+
+    5│  main = Encode.toEncoder x
+                                ^
+
+    I can't generate an implementation of the `Encoding` ability for
+
+        Int Natural
+
+    In particular, an implementation for
+
+        Natural
+
+    cannot be generated.
+
+    Tip: `Natural` does not implement `Encoding`.
+    "###
+    );
+
+    test_report!(
+        exhaustiveness_check_function_or_tag_union_issue_4994,
+        indoc!(
+            r#"
+            app "test" provides [main] to "./platform"
+
+            x : U8
+
+            ifThenCase =
+                when x is
+                    0 -> Red
+                    1 -> Yellow
+                    2 -> Purple
+                    3 -> Zulip
+                    _ -> Green
+
+            main =
+                when ifThenCase is
+                    Red -> "red"
+                    Green -> "green"
+                    Yellow -> "yellow"
+                    Zulip -> "zulip"
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+    14│>      when ifThenCase is
+    15│>          Red -> "red"
+    16│>          Green -> "green"
+    17│>          Yellow -> "yellow"
+    18│>          Zulip -> "zulip"
+
+    Other possibilities include:
+
+        Purple
+        _
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
     );
 }

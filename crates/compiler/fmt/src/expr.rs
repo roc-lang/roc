@@ -12,6 +12,7 @@ use roc_parse::ast::{
     AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
+use roc_parse::ident::Accessor;
 use roc_region::all::Loc;
 
 impl<'a> Formattable for Expr<'a> {
@@ -35,9 +36,8 @@ impl<'a> Formattable for Expr<'a> {
             | NonBase10Int { .. }
             | SingleQuote(_)
             | RecordAccess(_, _)
-            | RecordAccessorFunction(_)
+            | AccessorFunction(_)
             | TupleAccess(_, _)
-            | TupleAccessorFunction(_)
             | Var { .. }
             | Underscore { .. }
             | MalformedIdent(_, _)
@@ -51,25 +51,7 @@ impl<'a> Formattable for Expr<'a> {
 
             List(items) => items.iter().any(|loc_expr| loc_expr.is_multiline()),
 
-            Str(literal) => {
-                use roc_parse::ast::StrLiteral::*;
-
-                match literal {
-                    PlainLine(string) => {
-                        // When a PlainLine contains '\n' or '"', format as a block string
-                        string.contains('"') || string.contains('\n')
-                    }
-                    Line(_) => {
-                        // If this had any newlines, it'd have parsed as Block.
-                        false
-                    }
-                    Block(_) => {
-                        // Block strings are always formatted on multiple lines,
-                        // even if the string is only a single line.
-                        true
-                    }
-                }
-            }
+            Str(literal) => is_str_multiline(literal),
             Apply(loc_expr, args, _) => {
                 loc_expr.is_multiline() || args.iter().any(|loc_arg| loc_arg.is_multiline())
             }
@@ -271,7 +253,20 @@ impl<'a> Formattable for Expr<'a> {
                     indent
                 };
 
+                let expr_needs_parens =
+                    matches!(loc_expr.value.extract_spaces().item, Expr::Closure(..))
+                        && !loc_args.is_empty();
+
+                if expr_needs_parens {
+                    buf.push('(');
+                }
+
                 loc_expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
+
+                if expr_needs_parens {
+                    buf.indent(indent);
+                    buf.push(')');
+                }
 
                 for loc_arg in loc_args.iter() {
                     if should_reflow_outdentable {
@@ -432,20 +427,42 @@ impl<'a> Formattable for Expr<'a> {
                     }
                 }
 
-                sub_expr.format_with_options(buf, Parens::InApply, newlines, indent);
+                let needs_newline = match &sub_expr.value {
+                    SpaceBefore(..) => true,
+                    Str(text) => is_str_multiline(text),
+                    _ => false,
+                };
+                let needs_parens =
+                    needs_newline && matches!(unary_op.value, called_via::UnaryOp::Negate);
+
+                if needs_parens {
+                    // Unary negation can't be followed by whitespace (which is what a newline is) - so
+                    // we need to wrap the negated value in parens.
+                    buf.push('(');
+                }
+
+                let inner_indent = if needs_parens {
+                    indent + INDENT
+                } else {
+                    indent
+                };
+
+                sub_expr.format_with_options(buf, Parens::InApply, newlines, inner_indent);
+
+                if needs_parens {
+                    buf.push(')');
+                }
             }
-            RecordAccessorFunction(key) => {
+            AccessorFunction(key) => {
                 buf.indent(indent);
                 buf.push('.');
-                buf.push_str(key);
+                match key {
+                    Accessor::RecordField(key) => buf.push_str(key),
+                    Accessor::TupleIndex(key) => buf.push_str(key),
+                }
             }
             RecordAccess(expr, key) => {
                 expr.format_with_options(buf, Parens::InApply, Newlines::Yes, indent);
-                buf.push('.');
-                buf.push_str(key);
-            }
-            TupleAccessorFunction(key) => {
-                buf.indent(indent);
                 buf.push('.');
                 buf.push_str(key);
             }
@@ -460,6 +477,26 @@ impl<'a> Formattable for Expr<'a> {
             }
             MalformedClosure => {}
             PrecedenceConflict { .. } => {}
+        }
+    }
+}
+
+fn is_str_multiline(literal: &StrLiteral) -> bool {
+    use roc_parse::ast::StrLiteral::*;
+
+    match literal {
+        PlainLine(string) => {
+            // When a PlainLine contains '\n' or '"', format as a block string
+            string.contains('"') || string.contains('\n')
+        }
+        Line(_) => {
+            // If this had any newlines, it'd have parsed as Block.
+            false
+        }
+        Block(_) => {
+            // Block strings are always formatted on multiple lines,
+            // even if the string is only a single line.
+            true
         }
     }
 }
@@ -585,11 +622,11 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
                 buf.ensure_ends_with_newline();
                 buf.indent(indent);
                 buf.push_str("\"\"\"");
-                buf.newline();
+                buf.push_newline_literal();
                 for line in string.split('\n') {
                     buf.indent(indent);
                     buf.push_str_allow_spaces(line);
-                    buf.newline();
+                    buf.push_newline_literal();
                 }
                 buf.indent(indent);
                 buf.push_str("\"\"\"");
@@ -613,7 +650,7 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
             buf.ensure_ends_with_newline();
             buf.indent(indent);
             buf.push_str("\"\"\"");
-            buf.newline();
+            buf.push_newline_literal();
 
             for segments in lines.iter() {
                 for seg in segments.iter() {
@@ -622,11 +659,11 @@ pub fn fmt_str_literal<'buf>(buf: &mut Buf<'buf>, literal: StrLiteral, indent: u
                         buf.indent(indent);
                         format_str_segment(seg, buf, indent);
                     } else {
-                        buf.newline();
+                        buf.push_newline_literal();
                     }
                 }
 
-                buf.newline();
+                buf.push_newline_literal();
             }
             buf.indent(indent);
             buf.push_str("\"\"\"");

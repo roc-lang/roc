@@ -1082,6 +1082,16 @@ fn str_trim_empty_string() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm"))]
+fn str_trim_null_byte() {
+    assert_evals_to!(
+        indoc!(r#"Str.trim (Str.reserve "\u(0000)" 40)"#),
+        RocStr::from("\0"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
 fn str_trim_small_blank_string() {
     assert_evals_to!(indoc!(r#"Str.trim " ""#), RocStr::from(""), RocStr);
 }
@@ -1798,6 +1808,26 @@ fn str_split_last_not_found() {
         ),
         RocResult::err(()),
         RocResult<(RocStr, RocStr), ()>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_overlapping_substring_1() {
+    assert_evals_to!(
+        r#"Str.split "aaa" "aa""#,
+        RocList::from_slice(&[RocStr::from(""), RocStr::from("a")]),
+        RocList<RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm"))]
+fn str_split_overlapping_substring_2() {
+    assert_evals_to!(
+        r#"Str.split "aaaa" "aa""#,
+        RocList::from_slice(&[RocStr::from(""), RocStr::from(""), RocStr::from("")]),
+        RocList<RocStr>
     );
 }
 

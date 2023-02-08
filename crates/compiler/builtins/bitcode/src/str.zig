@@ -324,6 +324,10 @@ pub const RocStr = extern struct {
     }
 
     fn refcountMachine(self: RocStr) usize {
+        if (self.getCapacity() == 0 or self.isSmallStr()) {
+            return utils.REFCOUNT_ONE;
+        }
+
         const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
         return (ptr - 1)[0];
     }
@@ -1114,6 +1118,58 @@ test "strSplitHelp: three pieces" {
     try expect(array[2].eq(expected_array[2]));
 }
 
+test "strSplitHelp: overlapping delimiter 1" {
+    // Str.split "aaa" "aa" == ["", "a"]
+    const str_arr = "aaa";
+    const str = RocStr.init(str_arr, str_arr.len);
+
+    const delimiter_arr = "aa";
+    const delimiter = RocStr.init(delimiter_arr, delimiter_arr.len);
+
+    var array: [2]RocStr = undefined;
+    const array_ptr: [*]RocStr = &array;
+
+    strSplitHelp(array_ptr, str, delimiter);
+
+    var expected = [2]RocStr{
+        RocStr.empty(),
+        RocStr.init("a", 1),
+    };
+
+    // strings are all small so we ignore freeing the memory
+
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
+    try expect(array[1].eq(expected[1]));
+}
+
+test "strSplitHelp: overlapping delimiter 2" {
+    // Str.split "aaa" "aa" == ["", "a"]
+    const str_arr = "aaaa";
+    const str = RocStr.init(str_arr, str_arr.len);
+
+    const delimiter_arr = "aa";
+    const delimiter = RocStr.init(delimiter_arr, delimiter_arr.len);
+
+    var array: [3]RocStr = undefined;
+    const array_ptr: [*]RocStr = &array;
+
+    strSplitHelp(array_ptr, str, delimiter);
+
+    var expected = [3]RocStr{
+        RocStr.empty(),
+        RocStr.empty(),
+        RocStr.empty(),
+    };
+
+    // strings are all small so we ignore freeing the memory
+
+    try expectEqual(array.len, expected.len);
+    try expect(array[0].eq(expected[0]));
+    try expect(array[1].eq(expected[1]));
+    try expect(array[2].eq(expected[2]));
+}
+
 // This is used for `Str.split : Str, Str -> Array Str
 // It is used to count how many segments the input `_str`
 // needs to be broken into, so that we can allocate a array
@@ -1150,9 +1206,10 @@ pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
 
             if (matches_delimiter) {
                 count += 1;
+                str_index += delimiter_len;
+            } else {
+                str_index += 1;
             }
-
-            str_index += 1;
         }
     }
 
@@ -1228,6 +1285,20 @@ test "countSegments: string equals delimiter" {
     const segments_count = countSegments(str_delimiter, str_delimiter);
 
     try expectEqual(segments_count, 2);
+}
+
+test "countSegments: overlapping delimiter 1" {
+    // Str.split "aaa" "aa" == ["", "a"]
+    const segments_count = countSegments(RocStr.init("aaa", 3), RocStr.init("aa", 2));
+
+    try expectEqual(segments_count, 2);
+}
+
+test "countSegments: overlapping delimiter 2" {
+    // Str.split "aaa" "aa" == ["", "a"]
+    const segments_count = countSegments(RocStr.init("aaaa", 4), RocStr.init("aa", 2));
+
+    try expectEqual(segments_count, 3);
 }
 
 // Str.countGraphemeClusters
@@ -2085,8 +2156,12 @@ test "isWhitespace" {
     try expect(!isWhitespace('x'));
 }
 
-pub fn strTrim(string: RocStr) callconv(.C) RocStr {
-    if (string.str_bytes) |bytes_ptr| {
+pub fn strTrim(input_string: RocStr) callconv(.C) RocStr {
+    var string = input_string;
+
+    if (!string.isEmpty()) {
+        const bytes_ptr = string.asU8ptrMut();
+
         const leading_bytes = countLeadingWhitespaceBytes(string);
         const original_len = string.len();
 
@@ -2098,8 +2173,7 @@ pub fn strTrim(string: RocStr) callconv(.C) RocStr {
         const trailing_bytes = countTrailingWhitespaceBytes(string);
         const new_len = original_len - leading_bytes - trailing_bytes;
 
-        const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
-        if (small_or_shared) {
+        if (string.isSmallStr() or !string.isRefcountOne()) {
             // consume the input string; this will not free the
             // bytes because the string is small or shared
             const result = RocStr.init(string.asU8ptr() + leading_bytes, new_len);
@@ -2144,9 +2218,14 @@ pub fn strTrimLeft(string: RocStr) callconv(.C) RocStr {
 
         const new_len = original_len - leading_bytes;
 
-        const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
-        if (small_or_shared) {
-            return RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+        if (string.isSmallStr() or !string.isRefcountOne()) {
+            // if the trimmed string fits in a small string,
+            // make the result a small string and decref the original string
+            const result = RocStr.init(string.asU8ptr() + leading_bytes, new_len);
+
+            string.decref();
+
+            return result;
         } else {
             // nonempty, large, and unique: shift everything over in-place if necessary.
             // Note: must use memmove over memcpy, because the bytes definitely overlap!
@@ -2184,9 +2263,12 @@ pub fn strTrimRight(string: RocStr) callconv(.C) RocStr {
 
         const new_len = original_len - trailing_bytes;
 
-        const small_or_shared = new_len <= SMALL_STR_MAX_LENGTH or !string.isRefcountOne();
-        if (small_or_shared) {
-            return RocStr.init(string.asU8ptr(), new_len);
+        if (string.isSmallStr() or !string.isRefcountOne()) {
+            const result = RocStr.init(string.asU8ptr(), new_len);
+
+            string.decref();
+
+            return result;
         }
 
         // nonempty, large, and unique:
@@ -2306,6 +2388,25 @@ test "strTrim: empty" {
     try expect(trimmedEmpty.eq(RocStr.empty()));
 }
 
+test "strTrim: null byte" {
+    const bytes = [_]u8{0};
+    const original = RocStr.init(&bytes, 1);
+
+    try expectEqual(@as(usize, 1), original.len());
+    try expectEqual(@as(usize, SMALL_STR_MAX_LENGTH), original.getCapacity());
+
+    const original_with_capacity = reserve(original, 40);
+    defer original_with_capacity.deinit();
+
+    try expectEqual(@as(usize, 1), original_with_capacity.len());
+    try expectEqual(@as(usize, 64), original_with_capacity.getCapacity());
+
+    const trimmed = strTrim(original.clone());
+    defer trimmed.deinit();
+
+    try expect(original.eq(trimmed));
+}
+
 test "strTrim: blank" {
     const original_bytes = "   ";
     const original = RocStr.init(original_bytes, original_bytes.len);
@@ -2337,6 +2438,7 @@ test "strTrim: large to large" {
 test "strTrim: large to small" {
     const original_bytes = "             hello         ";
     const original = RocStr.init(original_bytes, original_bytes.len);
+    defer original.deinit();
 
     try expect(!original.isSmallStr());
 
@@ -2346,10 +2448,13 @@ test "strTrim: large to small" {
 
     try expect(expected.isSmallStr());
 
+    try expect(original.isUnique());
     const trimmed = strTrim(original);
 
     try expect(trimmed.eq(expected));
-    try expect(trimmed.isSmallStr());
+    try expect(!trimmed.isSmallStr());
+
+    try expect(trimmed.getCapacity() >= original.len());
 }
 
 test "strTrim: small to small" {
@@ -2405,9 +2510,9 @@ test "strTrimLeft: large to large" {
 }
 
 test "strTrimLeft: large to small" {
+    // `original` will be consumed by the concat; do not free explicitly
     const original_bytes = "                    hello ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
 
     try expect(!original.isSmallStr());
 
@@ -2418,9 +2523,10 @@ test "strTrimLeft: large to small" {
     try expect(expected.isSmallStr());
 
     const trimmed = strTrimLeft(original);
+    defer trimmed.deinit();
 
     try expect(trimmed.eq(expected));
-    try expect(trimmed.isSmallStr());
+    try expect(!trimmed.isSmallStr());
 }
 
 test "strTrimLeft: small to small" {
@@ -2476,9 +2582,9 @@ test "strTrimRight: large to large" {
 }
 
 test "strTrimRight: large to small" {
+    // `original` will be consumed by the concat; do not free explicitly
     const original_bytes = " hello                    ";
     const original = RocStr.init(original_bytes, original_bytes.len);
-    defer original.deinit();
 
     try expect(!original.isSmallStr());
 
@@ -2489,9 +2595,10 @@ test "strTrimRight: large to small" {
     try expect(expected.isSmallStr());
 
     const trimmed = strTrimRight(original);
+    defer trimmed.deinit();
 
     try expect(trimmed.eq(expected));
-    try expect(trimmed.isSmallStr());
+    try expect(!trimmed.isSmallStr());
 }
 
 test "strTrimRight: small to small" {

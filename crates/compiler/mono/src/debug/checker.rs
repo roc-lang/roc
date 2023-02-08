@@ -10,8 +10,7 @@ use crate::{
         ModifyRc, Param, Proc, ProcLayout, Stmt,
     },
     layout::{
-        Builtin, InLayout, LambdaSet, Layout, LayoutInterner, STLayoutInterner, TagIdIntType,
-        UnionLayout,
+        Builtin, InLayout, Layout, LayoutInterner, STLayoutInterner, TagIdIntType, UnionLayout,
     },
 };
 
@@ -87,7 +86,7 @@ pub enum ProblemKind<'a> {
         structure: Symbol,
         def_line: usize,
         tag_id: u16,
-        union_layout: UnionLayout<'a>,
+        union_layout: InLayout<'a>,
     },
     TagUnionStructIndexOOB {
         structure: Symbol,
@@ -100,7 +99,7 @@ pub enum ProblemKind<'a> {
         structure: Symbol,
         def_line: usize,
         tag_id: u16,
-        union_layout: UnionLayout<'a>,
+        union_layout: InLayout<'a>,
     },
     UnboxNotABox {
         symbol: Symbol,
@@ -108,7 +107,7 @@ pub enum ProblemKind<'a> {
     },
     CreatingTagIdNotInUnion {
         tag_id: u16,
-        union_layout: UnionLayout<'a>,
+        union_layout: InLayout<'a>,
     },
     CreateTagPayloadMismatch {
         num_needed: usize,
@@ -193,16 +192,23 @@ impl<'a, 'r> Ctx<'a, 'r> {
         r
     }
 
-    fn resolve(&mut self, mut layout: InLayout<'a>) -> InLayout<'a> {
+    fn resolve(&self, mut layout: InLayout<'a>) -> InLayout<'a> {
         // Note that we are more aggressive than the usual `runtime_representation`
         // here because we need strict equality, and so cannot unwrap lambda sets
         // lazily.
         loop {
+            layout = self.interner.chase_recursive_in(layout);
             match self.interner.get(layout) {
                 Layout::LambdaSet(ls) => layout = ls.representation,
                 _ => return layout,
             }
         }
+    }
+
+    fn not_equiv(&mut self, layout1: InLayout<'a>, layout2: InLayout<'a>) -> bool {
+        !self
+            .interner
+            .equiv(self.resolve(layout1), self.resolve(layout2))
     }
 
     fn insert(&mut self, symbol: Symbol, layout: InLayout<'a>) {
@@ -237,7 +243,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         use_kind: UseKind,
     ) {
         if let Some(&(def_line, layout)) = self.venv.get(&symbol) {
-            if self.resolve(layout) != self.resolve(expected_layout) {
+            if self.not_equiv(layout, expected_layout) {
                 self.problem(ProblemKind::SymbolUseMismatch {
                     symbol,
                     def_layout: layout,
@@ -265,7 +271,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
         match body {
             Stmt::Let(x, e, x_layout, rest) => {
                 if let Some(e_layout) = self.check_expr(e) {
-                    if self.resolve(e_layout) != self.resolve(*x_layout) {
+                    if self.not_equiv(e_layout, *x_layout) {
                         self.problem(ProblemKind::SymbolDefMismatch {
                             symbol: *x,
                             def_layout: *x_layout,
@@ -390,8 +396,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 tag_id,
                 arguments,
             } => {
-                self.check_tag_expr(tag_layout, tag_id, arguments);
-                Some(self.interner.insert(Layout::Union(tag_layout)))
+                let interned_layout = self.interner.insert(Layout::Union(tag_layout));
+                self.check_tag_expr(interned_layout, tag_layout, tag_id, arguments);
+                Some(interned_layout)
             }
             Expr::Struct(syms) => {
                 for sym in syms.iter() {
@@ -415,7 +422,9 @@ impl<'a, 'r> Ctx<'a, 'r> {
                 tag_id,
                 union_layout,
                 index,
-            } => self.check_union_at_index(structure, union_layout, tag_id, index),
+            } => self.with_sym_layout(structure, |ctx, _def_line, layout| {
+                ctx.check_union_at_index(structure, layout, union_layout, tag_id, index)
+            }),
             Expr::Array { elem_layout, elems } => {
                 for elem in elems.iter() {
                     match elem {
@@ -503,6 +512,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
     fn check_union_at_index(
         &mut self,
         structure: Symbol,
+        interned_union_layout: InLayout<'a>,
         union_layout: UnionLayout<'a>,
         tag_id: u16,
         index: u64,
@@ -517,7 +527,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                         structure,
                         def_line,
                         tag_id,
-                        union_layout,
+                        union_layout: interned_union_layout,
                     });
                     None
                 }
@@ -532,12 +542,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                         });
                         return None;
                     }
-                    let layout = resolve_recursive_layout(
-                        ctx.arena,
-                        ctx.interner,
-                        payloads[index as usize],
-                        union_layout,
-                    );
+                    let layout = payloads[index as usize];
                     Some(layout)
                 }
             }
@@ -605,12 +610,18 @@ impl<'a, 'r> Ctx<'a, 'r> {
         }
     }
 
-    fn check_tag_expr(&mut self, union_layout: UnionLayout<'a>, tag_id: u16, arguments: &[Symbol]) {
+    fn check_tag_expr(
+        &mut self,
+        interned_union_layout: InLayout<'a>,
+        union_layout: UnionLayout<'a>,
+        tag_id: u16,
+        arguments: &[Symbol],
+    ) {
         match get_tag_id_payloads(union_layout, tag_id) {
             TagPayloads::IdNotInUnion => {
                 self.problem(ProblemKind::CreatingTagIdNotInUnion {
                     tag_id,
-                    union_layout,
+                    union_layout: interned_union_layout,
                 });
             }
             TagPayloads::Payloads(payloads) => {
@@ -621,13 +632,7 @@ impl<'a, 'r> Ctx<'a, 'r> {
                     });
                 }
                 for (arg, wanted_layout) in arguments.iter().zip(payloads.iter()) {
-                    let wanted_layout = resolve_recursive_layout(
-                        self.arena,
-                        self.interner,
-                        *wanted_layout,
-                        union_layout,
-                    );
-                    self.check_sym_layout(*arg, wanted_layout, UseKind::TagPayloadArg);
+                    self.check_sym_layout(*arg, *wanted_layout, UseKind::TagPayloadArg);
                 }
             }
         }
@@ -641,94 +646,6 @@ impl<'a, 'r> Ctx<'a, 'r> {
             }
         }
     }
-}
-
-fn resolve_recursive_layout<'a>(
-    arena: &'a Bump,
-    interner: &mut STLayoutInterner<'a>,
-    layout: InLayout<'a>,
-    when_recursive: UnionLayout<'a>,
-) -> InLayout<'a> {
-    macro_rules! go {
-        ($lay:expr) => {
-            resolve_recursive_layout(arena, interner, $lay, when_recursive)
-        };
-    }
-
-    // TODO check if recursive pointer not in recursive union
-    let layout = match interner.get(layout) {
-        Layout::RecursivePointer => Layout::Union(when_recursive),
-        Layout::Union(union_layout) => match union_layout {
-            UnionLayout::NonRecursive(payloads) => {
-                let payloads = payloads.iter().map(|args| {
-                    let args = args.iter().map(|lay| go!(*lay));
-                    &*arena.alloc_slice_fill_iter(args)
-                });
-                let payloads = arena.alloc_slice_fill_iter(payloads);
-                Layout::Union(UnionLayout::NonRecursive(payloads))
-            }
-            UnionLayout::Recursive(_)
-            | UnionLayout::NonNullableUnwrapped(_)
-            | UnionLayout::NullableWrapped { .. }
-            | UnionLayout::NullableUnwrapped { .. } => {
-                // This is the recursive layout.
-                // TODO will need fixing to be modified once we support multiple
-                // recursive pointers in one structure.
-                return layout;
-            }
-        },
-        Layout::Boxed(inner) => {
-            let inner = go!(inner);
-            Layout::Boxed(inner)
-        }
-        Layout::Struct {
-            field_order_hash,
-            field_layouts,
-        } => {
-            let field_layouts = field_layouts
-                .iter()
-                .map(|lay| resolve_recursive_layout(arena, interner, *lay, when_recursive));
-            let field_layouts = arena.alloc_slice_fill_iter(field_layouts);
-            Layout::Struct {
-                field_order_hash,
-                field_layouts,
-            }
-        }
-        Layout::Builtin(builtin) => match builtin {
-            Builtin::List(inner) => {
-                let inner = resolve_recursive_layout(arena, interner, inner, when_recursive);
-                Layout::Builtin(Builtin::List(inner))
-            }
-            Builtin::Int(_)
-            | Builtin::Float(_)
-            | Builtin::Bool
-            | Builtin::Decimal
-            | Builtin::Str => return layout,
-        },
-        Layout::LambdaSet(LambdaSet {
-            args,
-            ret,
-            set,
-            representation,
-            full_layout,
-        }) => {
-            let set = set.iter().map(|(symbol, captures)| {
-                let captures = captures.iter().map(|lay_in| go!(*lay_in));
-                let captures = &*arena.alloc_slice_fill_iter(captures);
-                (*symbol, captures)
-            });
-            let set = arena.alloc_slice_fill_iter(set);
-            Layout::LambdaSet(LambdaSet {
-                args,
-                ret,
-                set: arena.alloc(&*set),
-                representation,
-                full_layout,
-            })
-        }
-    };
-
-    interner.insert(layout)
 }
 
 enum TagPayloads<'a> {

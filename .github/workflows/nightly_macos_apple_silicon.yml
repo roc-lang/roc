@@ -1,4 +1,5 @@
 on:
+  workflow_dispatch:
   schedule:
     - cron:  '0 9 * * *'
 
@@ -40,6 +41,15 @@ jobs:
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
 
+      - name: delete everything except the tar
+        run: ls | grep -v "roc_nightly.*tar\.gz" | xargs rm -rf
+
+      - name: extract tar for a quick test
+        run: ls | grep tar | xargs tar -xf
+
+      - name: test with rust platform
+        run: cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc examples/platform-switching/rocLovesRust.roc
+
       - name: print short commit SHA
         run: git rev-parse --short "$GITHUB_SHA"
       - name: print date
@@ -47,6 +57,6 @@ jobs:
       - name: Upload artifact Actually uploading to github releases has to be done manually
         uses: actions/upload-artifact@v3
         with:
-           name: ${{ env.RELEASE_FOLDER_NAME }}
-           path: ${{ env.RELEASE_FOLDER_NAME }}
+           name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+           path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
            retention-days: 4

@@ -66,6 +66,9 @@ impl FlatEncodable {
 
                     Ok(Key(FlatEncodableKey::Record(field_names)))
                 }
+                FlatType::Tuple(_elems, _ext) => {
+                    todo!()
+                }
                 FlatType::TagUnion(tags, ext) | FlatType::RecursiveTagUnion(_, tags, ext) => {
                     // The recursion var doesn't matter, because the derived implementation will only
                     // look on the surface of the tag union type, and more over the payloads of the
@@ -104,6 +107,7 @@ impl FlatEncodable {
                     )))
                 }
                 FlatType::EmptyRecord => Ok(Key(FlatEncodableKey::Record(vec![]))),
+                FlatType::EmptyTuple => todo!(),
                 FlatType::EmptyTagUnion => Ok(Key(FlatEncodableKey::TagUnion(vec![]))),
                 //
                 FlatType::Func(..) => Err(Underivable),
@@ -122,6 +126,7 @@ impl FlatEncodable {
                 Symbol::NUM_DEC | Symbol::NUM_DECIMAL => Ok(Immediate(Symbol::ENCODE_DEC)),
                 Symbol::NUM_F32 | Symbol::NUM_BINARY32 => Ok(Immediate(Symbol::ENCODE_F32)),
                 Symbol::NUM_F64 | Symbol::NUM_BINARY64 => Ok(Immediate(Symbol::ENCODE_F64)),
+                Symbol::NUM_NAT | Symbol::NUM_NATURAL => Err(Underivable),
                 // TODO: I believe it is okay to unwrap opaques here because derivers are only used
                 // by the backend, and the backend treats opaques like structural aliases.
                 _ => Self::from_var(subs, real_var),

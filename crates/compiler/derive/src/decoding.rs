@@ -363,7 +363,7 @@ fn decoder_record_step_field(
                                 },
                             );
 
-                            let updated_record = Expr::Update {
+                            let updated_record = Expr::RecordUpdate {
                                 record_var: state_record_var,
                                 ext_var: env.new_ext_var(ExtensionKind::Record),
                                 symbol: state_arg_symbol,
@@ -429,7 +429,7 @@ fn decoder_record_step_field(
                         //     Ok val -> Ok {state & first: Ok val},
                         //     Err err -> Err err
                         Expr::When {
-                            loc_cond: Box::new(Loc::at_zero(Expr::Access {
+                            loc_cond: Box::new(Loc::at_zero(Expr::RecordAccess {
                                 record_var: rec_var,
                                 ext_var: env.new_ext_var(ExtensionKind::Record),
                                 field_var: rec_dot_result,
@@ -458,7 +458,7 @@ fn decoder_record_step_field(
                         Field {
                             var: Variable::LIST_U8,
                             region: Region::zero(),
-                            loc_expr: Box::new(Loc::at_zero(Expr::Access {
+                            loc_expr: Box::new(Loc::at_zero(Expr::RecordAccess {
                                 record_var: rec_var,
                                 ext_var: env.new_ext_var(ExtensionKind::Record),
                                 field_var: Variable::LIST_U8,
@@ -829,7 +829,7 @@ fn decoder_record_finalizer(
         .zip(result_field_vars.iter().rev())
     {
         // when rec.first is
-        let cond_expr = Expr::Access {
+        let cond_expr = Expr::RecordAccess {
             record_var: state_record_var,
             ext_var: env.new_ext_var(ExtensionKind::Record),
             field_var: result_field_var,

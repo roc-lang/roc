@@ -121,6 +121,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
 
                 EmptyRecord => (),
                 EmptyTagUnion => (),
+                EmptyTuple => (),
 
                 Record(fields, ext) => {
                     let fields = *fields;
@@ -129,6 +130,7 @@ fn number_lambda_sets(subs: &Subs, initial: Variable) -> Vec<Variable> {
                     stack.push(ext);
                     stack.extend(var_slice!(fields.variables()));
                 }
+                Tuple(_, _) => todo!(),
                 TagUnion(tags, ext) => {
                     let tags = *tags;
                     let ext = *ext;

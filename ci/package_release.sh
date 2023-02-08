@@ -9,4 +9,15 @@ cp target/release/roc ./roc # to be able to delete "target" later
 git clean -fdx --exclude roc
 
 mkdir $1
-tar -czvf "$1.tar.gz" roc LICENSE LEGAL_DETAILS examples/helloWorld.roc examples/platform-switching examples/cli crates/roc_std crates/compiler/builtins/bitcode/src
+
+
+mv roc LICENSE LEGAL_DETAILS $1
+
+mkdir $1/examples
+mv examples/helloWorld.roc examples/platform-switching examples/cli $1/examples
+
+mkdir -p $1/crates/compiler/builtins/bitcode
+mv crates/roc_std $1/crates
+mv crates/compiler/builtins/bitcode/src $1/crates/compiler/builtins/bitcode
+ 
+tar -czvf "$1.tar.gz" $1

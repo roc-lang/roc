@@ -769,13 +769,43 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
-    fn lt_reg64_reg64_reg64(
+    fn ilt_reg64_reg64_reg64(
         _buf: &mut Vec<'_, u8>,
         _dst: AArch64GeneralReg,
         _src1: AArch64GeneralReg,
         _src2: AArch64GeneralReg,
     ) {
-        todo!("registers less than for AArch64");
+        todo!("registers signed less than for AArch64");
+    }
+
+    #[inline(always)]
+    fn ult_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("registers unsigned less than for AArch64");
+    }
+
+    #[inline(always)]
+    fn igt_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("registers signed greater than for AArch64");
+    }
+
+    #[inline(always)]
+    fn ugt_reg64_reg64_reg64(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("registers unsigned greater than for AArch64");
     }
 
     #[inline(always)]
@@ -868,6 +898,45 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         _src2: AArch64GeneralReg,
     ) {
         todo!("bitwise xor for AArch64")
+    }
+
+    fn shl_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
+        todo!("shl for AArch64")
+    }
+
+    fn shr_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
+        todo!("shr for AArch64")
+    }
+
+    fn sar_reg64_reg64_reg64<'a, 'r, ASM, CC>(
+        _buf: &mut Vec<'a, u8>,
+        _storage_manager: &mut StorageManager<'a, 'r, AArch64GeneralReg, AArch64FloatReg, ASM, CC>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) where
+        ASM: Assembler<AArch64GeneralReg, AArch64FloatReg>,
+        CC: CallConv<AArch64GeneralReg, AArch64FloatReg, ASM>,
+    {
+        todo!("sar for AArch64")
     }
 }
 

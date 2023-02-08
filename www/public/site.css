@@ -46,11 +46,6 @@ section p:last-child {
     margin-bottom: 0;
 }
 
-p, aside, li, footer {
-    font-size: 1.2rem;
-    line-height: 1.85rem;
-}
-
 aside {
     margin-left: 4rem;
 }
@@ -312,10 +307,19 @@ td:last-child {
     padding: 12px 24px;
 }
 
+p, aside, li, footer {
+    font-size: 1.2rem;
+    line-height: 1.85rem;
+}
+
 /* Mobile-friendly screen width */
 @media only screen and (max-device-width: 480px) and (orientation: portrait) {
-    p, code, samp, .code-snippet {
+    p, aside, li, footer, code, samp, .code-snippet {
         font-size: 16px;
+    }
+
+    h1 code, h2 code, h3 code, h4 code, h5 code {
+        font-size: inherit;
     }
 
     #tutorial-toc-toggle-label,

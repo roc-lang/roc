@@ -32,6 +32,9 @@
         },
         {
             "pattern": "https://www.10xeditor.com/"
+        },
+        {
+            "pattern": "https://www.roc-lang.org/packages/basic-cli/Stdout#line"
         }
     ]
 }

@@ -1,7 +1,8 @@
 use crate::num::NumericRange;
 use crate::pretty_print::Parens;
 use crate::subs::{
-    GetSubsSlice, RecordFields, Subs, TagExt, UnionTags, VarStore, Variable, VariableSubsSlice,
+    GetSubsSlice, RecordFields, Subs, TagExt, TupleElems, UnionTags, VarStore, Variable,
+    VariableSubsSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
 use roc_collections::soa::{Index, Slice};
@@ -436,6 +437,7 @@ pub enum TypeTag {
     TagUnion(UnionTags, ExtImplicitOpenness),
     RecursiveTagUnion(Variable, UnionTags, ExtImplicitOpenness),
     Record(RecordFields),
+    Tuple(TupleElems),
 }
 
 /// Look-aside slice of types used in [Types], when the slice does not correspond to the direct
@@ -485,6 +487,9 @@ pub struct Types {
     field_types: Vec<RecordField<()>>,
     field_names: Vec<Lowercase>,
 
+    // tuples
+    tuple_elem_indices: Vec<usize>,
+
     // aliases
     type_arg_abilities: Vec<AbilitySet>, // TODO: structural sharing for `AbilitySet`s themselves
     aliases: Vec<AliasShared>,
@@ -533,6 +538,7 @@ impl Types {
             tag_names: Default::default(),
             field_types: Default::default(),
             field_names: Default::default(),
+            tuple_elem_indices: Default::default(),
             type_arg_abilities: Default::default(),
             aliases: Default::default(),
             single_tag_union_tag_names: Default::default(),
@@ -571,6 +577,19 @@ impl Types {
         let tys = Slice::new(variables_start, length);
 
         (names, fields, tys)
+    }
+
+    pub fn tuple_elems_slices(&self, elems: TupleElems) -> (Slice<usize>, Slice<TypeTag>) {
+        let TupleElems {
+            length,
+            variables_start,
+            elem_index_start,
+        } = elems;
+
+        let index = Slice::new(elem_index_start, length);
+        let tys = Slice::new(variables_start, length);
+
+        (index, tys)
     }
 
     pub fn union_tag_slices(&self, union: UnionTags) -> (Slice<TagName>, Slice<AsideTypeSlice>) {
@@ -851,6 +870,35 @@ impl Types {
                 };
 
                 let tag = TypeTag::Record(record_fields);
+                self.set_type_tag(index, tag, type_slice)
+            }
+            Type::Tuple(elems, extension) => {
+                let type_slice = match extension {
+                    TypeExtension::Open(ext, _) => self.from_old_type(ext).as_slice(),
+                    TypeExtension::Closed => Slice::default(),
+                };
+
+                // should we sort at this point?
+                let elem_type_slice = {
+                    let slice = self.reserve_type_tags(elems.len());
+
+                    for (index, (_elem_index, argument)) in slice.into_iter().zip(elems.iter()) {
+                        self.from_old_type_at(index, argument);
+                    }
+
+                    slice
+                };
+
+                let elem_index_slice =
+                    Slice::extend_new(&mut self.tuple_elem_indices, elems.iter().map(|(i, _)| *i));
+
+                let tuple_elems = TupleElems {
+                    length: elems.len() as u16,
+                    variables_start: elem_type_slice.start() as u32,
+                    elem_index_start: elem_index_slice.start() as u32,
+                };
+
+                let tag = TypeTag::Tuple(tuple_elems);
                 self.set_type_tag(index, tag, type_slice)
             }
             Type::ClosureTag {
@@ -1262,6 +1310,21 @@ impl Types {
 
                     (Record(new_record_fields), new_ext_slice)
                 }
+                Tuple(elems) => {
+                    let ext_slice = self.get_type_arguments(typ);
+                    let (indices, tys) = self.tuple_elems_slices(elems);
+
+                    let new_tys = defer_slice!(tys);
+                    let new_ext_slice = defer_slice!(ext_slice);
+
+                    let new_tuple_elems = TupleElems {
+                        length: new_tys.len() as _,
+                        variables_start: new_tys.start() as _,
+                        elem_index_start: indices.start() as _,
+                    };
+
+                    (Tuple(new_tuple_elems), new_ext_slice)
+                }
                 RangedNumber(range) => (RangedNumber(range), Default::default()),
                 Error => (Error, Default::default()),
             };
@@ -1448,6 +1511,20 @@ mod debug_types {
                         .align(),
                 )
             }
+            TypeTag::Tuple(elems) => {
+                let (_indices, tys) = types.tuple_elems_slices(elems);
+                let fmt_fields = tys.into_iter().map(|ty| typ(types, f, Free, ty));
+
+                f.text("(").append(
+                    f.intersperse(fmt_fields, f.reflow(", "))
+                        .append(
+                            f.text(")")
+                                .append(ext(types, f, types.get_type_arguments(tag))),
+                        )
+                        .group()
+                        .align(),
+                )
+            }
         };
         group.group()
     }
@@ -1616,6 +1693,7 @@ impl_types_index! {
     tag_names, TagName
     field_types, RecordField<()>
     field_names, Lowercase
+    tuple_elem_indices, usize
 }
 
 impl_types_index_slice! {
@@ -1645,6 +1723,7 @@ pub enum Type {
     /// A function. The types of its arguments, size of its closure, then the type of its return value.
     Function(Vec<Type>, Box<Type>, Box<Type>),
     Record(SendMap<Lowercase, RecordField<Type>>, TypeExtension),
+    Tuple(VecMap<usize, Type>, TypeExtension),
     TagUnion(Vec<(TagName, Vec<Type>)>, TypeExtension),
     FunctionOrTagUnion(TagName, Symbol, TypeExtension),
     /// A function name that is used in our defunctionalization algorithm. For example in
@@ -1707,7 +1786,9 @@ static mut TYPE_CLONE_COUNT: std::sync::atomic::AtomicUsize =
 
 pub fn get_type_clone_count() -> usize {
     if cfg!(debug_assertions) {
-        unsafe { TYPE_CLONE_COUNT.load(std::sync::atomic::Ordering::SeqCst) }
+        // A global counter just needs relaxed, and nothing relies upon this atomic for any
+        // happens-before relationships.
+        unsafe { TYPE_CLONE_COUNT.load(std::sync::atomic::Ordering::Relaxed) }
     } else {
         0
     }
@@ -1717,7 +1798,7 @@ impl Clone for Type {
     fn clone(&self) -> Self {
         #[cfg(debug_assertions)]
         unsafe {
-            TYPE_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            TYPE_CLONE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         };
 
         match self {
@@ -1727,6 +1808,7 @@ impl Clone for Type {
                 Self::Function(arg0.clone(), arg1.clone(), arg2.clone())
             }
             Self::Record(arg0, arg1) => Self::Record(arg0.clone(), arg1.clone()),
+            Self::Tuple(arg0, arg1) => Self::Tuple(arg0.clone(), arg1.clone()),
             Self::TagUnion(arg0, arg1) => Self::TagUnion(arg0.clone(), arg1.clone()),
             Self::FunctionOrTagUnion(arg0, arg1, arg2) => {
                 Self::FunctionOrTagUnion(arg0.clone(), *arg1, arg2.clone())
@@ -2042,6 +2124,46 @@ impl fmt::Debug for Type {
                     }
                 }
             }
+            Type::Tuple(elems, ext) => {
+                write!(f, "(")?;
+
+                if !elems.is_empty() {
+                    write!(f, " ")?;
+                }
+
+                let mut any_written_yet = false;
+
+                for (_, field_type) in elems.iter() {
+                    write!(f, "{:?}", field_type)?;
+
+                    if any_written_yet {
+                        write!(f, ", ")?;
+                    } else {
+                        any_written_yet = true;
+                    }
+                }
+
+                if !elems.is_empty() {
+                    write!(f, " ")?;
+                }
+
+                write!(f, ")")?;
+
+                match ext {
+                    TypeExtension::Closed => {
+                        // This is a closed record. We're done!
+                        Ok(())
+                    }
+                    TypeExtension::Open(other, _) => {
+                        // This is an open record, so print the variable
+                        // right after the '}'
+                        //
+                        // e.g. the "*" at the end of `{ x: Int }*`
+                        // or the "r" at the end of `{ x: Int }r`
+                        other.fmt(f)
+                    }
+                }
+            }
             Type::TagUnion(tags, ext) => {
                 write_tags(f, tags.iter())?;
 
@@ -2212,6 +2334,15 @@ impl Type {
                         stack.push(ext);
                     }
                 }
+                Tuple(elems, ext) => {
+                    for (_, x) in elems.iter_mut() {
+                        stack.push(x);
+                    }
+
+                    if let TypeExtension::Open(ext, _) = ext {
+                        stack.push(ext);
+                    }
+                }
                 Type::DelayedAlias(AliasCommon {
                     type_arguments,
                     lambda_set_variables,
@@ -2344,6 +2475,14 @@ impl Type {
                         stack.push(ext);
                     }
                 }
+                Tuple(elems, ext) => {
+                    for (_, x) in elems.iter_mut() {
+                        stack.push(x);
+                    }
+                    if let TypeExtension::Open(ext, _) = ext {
+                        stack.push(ext);
+                    }
+                }
                 Type::DelayedAlias(AliasCommon {
                     type_arguments,
                     lambda_set_variables,
@@ -2463,6 +2602,18 @@ impl Type {
                     TypeExtension::Closed => Ok(()),
                 }
             }
+            Tuple(elems, ext) => {
+                for (_, x) in elems.iter_mut() {
+                    x.substitute_alias(rep_symbol, rep_args, actual)?;
+                }
+
+                match ext {
+                    TypeExtension::Open(ext, _) => {
+                        ext.substitute_alias(rep_symbol, rep_args, actual)
+                    }
+                    TypeExtension::Closed => Ok(()),
+                }
+            }
             DelayedAlias(AliasCommon {
                 type_arguments,
                 lambda_set_variables: _no_aliases_in_lambda_sets,
@@ -2550,6 +2701,10 @@ impl Type {
                 Self::contains_symbol_ext(ext, rep_symbol)
                     || fields.values().any(|arg| arg.contains_symbol(rep_symbol))
             }
+            Tuple(elems, ext) => {
+                Self::contains_symbol_ext(ext, rep_symbol)
+                    || elems.iter().any(|(_, arg)| arg.contains_symbol(rep_symbol))
+            }
             DelayedAlias(AliasCommon {
                 symbol,
                 type_arguments,
@@ -2622,6 +2777,12 @@ impl Type {
                     || fields
                         .values()
                         .any(|arg| arg.contains_variable(rep_variable))
+            }
+            Tuple(elems, ext) => {
+                Self::contains_variable_ext(ext, rep_variable)
+                    || elems
+                        .iter()
+                        .any(|(_i, arg)| arg.contains_variable(rep_variable))
             }
             DelayedAlias(AliasCommon { .. }) => {
                 todo!()
@@ -2739,6 +2900,27 @@ impl Type {
             }
             Record(fields, ext) => {
                 for (_, x) in fields.iter_mut() {
+                    x.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                        new_infer_ext_vars,
+                    );
+                }
+
+                if let TypeExtension::Open(ext, _) = ext {
+                    ext.instantiate_aliases(
+                        region,
+                        aliases,
+                        var_store,
+                        new_lambda_set_variables,
+                        new_infer_ext_vars,
+                    );
+                }
+            }
+            Tuple(elems, ext) => {
+                for (_, x) in elems.iter_mut() {
                     x.instantiate_aliases(
                         region,
                         aliases,
@@ -3111,6 +3293,10 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
                 stack.extend(ext);
                 stack.extend(fields.values().map(|field| field.as_inner()));
             }
+            Tuple(elems, ext) => {
+                stack.extend(ext);
+                stack.extend(elems.iter().map(|(_, t)| t));
+            }
             DelayedAlias(AliasCommon {
                 symbol,
                 type_arguments,
@@ -3175,6 +3361,15 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
         Record(fields, ext) => {
             for (_, field) in fields {
                 variables_help(field.as_inner(), accum);
+            }
+
+            if let TypeExtension::Open(ext, _) = ext {
+                variables_help(ext, accum);
+            }
+        }
+        Tuple(elems, ext) => {
+            for (_, elem) in elems.iter() {
+                variables_help(elem, accum);
             }
 
             if let TypeExtension::Open(ext, _) = ext {
@@ -3316,6 +3511,15 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 variables_help_detailed(ext, accum);
             }
         }
+        Tuple(elems, ext) => {
+            for (_, elem) in elems.iter() {
+                variables_help_detailed(elem, accum);
+            }
+
+            if let TypeExtension::Open(ext, _) = ext {
+                variables_help_detailed(ext, accum);
+            }
+        }
         ClosureTag {
             name: _,
             captures,
@@ -3413,10 +3617,24 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     }
 }
 
+/// Either a field name for a record or an index into a tuple
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IndexOrField {
+    Field(Lowercase),
+    Index(usize),
+}
+
 #[derive(Debug)]
 pub struct RecordStructure {
     /// Invariant: these should be sorted!
     pub fields: Vec<(Lowercase, RecordField<Variable>)>,
+    pub ext: Variable,
+}
+
+#[derive(Debug)]
+pub struct TupleStructure {
+    /// Invariant: these should be sorted!
+    pub elems: Vec<(usize, Variable)>,
     pub ext: Variable,
 }
 
@@ -3566,8 +3784,10 @@ pub enum Category {
 
     // records
     Record,
-    Accessor(Lowercase),
-    Access(Lowercase),
+    Accessor(IndexOrField),
+    RecordAccess(Lowercase),
+    Tuple,
+    TupleAccess(usize),
     DefaultValue(Lowercase), // for setting optional fields
 
     AbilityMemberSpecialization(Symbol),
@@ -3582,6 +3802,7 @@ pub enum Category {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatternCategory {
     Record,
+    Tuple,
     List,
     EmptyRecord,
     PatternGuard,
@@ -3706,6 +3927,7 @@ pub enum ErrorType {
     FlexAbleVar(Lowercase, AbilitySet),
     RigidAbleVar(Lowercase, AbilitySet),
     Record(SendMap<Lowercase, RecordField<ErrorType>>, TypeExt),
+    Tuple(Vec<(usize, ErrorType)>, TypeExt),
     TagUnion(SendMap<TagName, Vec<ErrorType>>, TypeExt, Polarity),
     RecursiveTagUnion(
         Box<ErrorType>,
@@ -3747,6 +3969,10 @@ impl ErrorType {
                 fields
                     .iter()
                     .for_each(|(_, t)| t.as_inner().add_names(taken));
+                ext.add_names(taken);
+            }
+            Tuple(elems, ext) => {
+                elems.iter().for_each(|(_, t)| t.add_names(taken));
                 ext.add_names(taken);
             }
             TagUnion(tags, ext, _) => {
@@ -4045,6 +4271,16 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
             buf.push('}');
             write_type_ext(ext, buf);
         }
+        Tuple(elems, ext) => {
+            buf.push('(');
+
+            for (_index, elem) in elems {
+                write_debug_error_type_help(elem, buf, Parens::Unnecessary);
+            }
+
+            buf.push(')');
+            write_type_ext(ext, buf);
+        }
         TagUnion(tags, ext, _pol) => {
             buf.push('[');
 
@@ -4256,6 +4492,61 @@ pub fn gather_fields_unsorted_iter(
     Ok((it, var))
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct TupleElemsError;
+
+pub fn gather_tuple_elems_unsorted_iter(
+    subs: &Subs,
+    other_elems: TupleElems,
+    mut var: Variable,
+) -> Result<(impl Iterator<Item = (usize, Variable)> + '_, Variable), TupleElemsError> {
+    use crate::subs::Content::*;
+    use crate::subs::FlatType::*;
+
+    let mut stack = vec![other_elems];
+
+    loop {
+        match subs.get_content_without_compacting(var) {
+            Structure(Tuple(sub_elems, sub_ext)) => {
+                stack.push(*sub_elems);
+
+                if var == Variable::EMPTY_TUPLE {
+                    break;
+                } else {
+                    var = *sub_ext;
+                }
+            }
+
+            Alias(_, _, actual_var, _) => {
+                // TODO according to elm/compiler: "TODO may be dropping useful alias info here"
+                var = *actual_var;
+            }
+
+            FlexVar(_) | FlexAbleVar(..) => break,
+
+            // TODO investigate apparently this one pops up in the reporting tests!
+            RigidVar(_) | RigidAbleVar(..) => break,
+
+            // Stop on errors in the record
+            Error => break,
+
+            _ => return Err(TupleElemsError),
+        }
+    }
+
+    let it = stack
+        .into_iter()
+        .flat_map(|elems| elems.iter_all())
+        .map(move |(i1, i2)| {
+            let elem_index: &usize = &subs[i1];
+            let variable = subs[i2];
+
+            (*elem_index, variable)
+        });
+
+    Ok((it, var))
+}
+
 pub fn gather_fields(
     subs: &Subs,
     other_fields: RecordFields,
@@ -4273,6 +4564,20 @@ pub fn gather_fields(
         fields: result,
         ext,
     })
+}
+
+pub fn gather_tuple_elems(
+    subs: &Subs,
+    other_elems: TupleElems,
+    var: Variable,
+) -> Result<TupleStructure, TupleElemsError> {
+    let (it, ext) = gather_tuple_elems_unsorted_iter(subs, other_elems, var)?;
+
+    let mut result: Vec<_> = it.collect();
+
+    result.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    Ok(TupleStructure { elems: result, ext })
 }
 
 #[derive(Debug)]
@@ -4444,6 +4749,12 @@ fn instantiate_lambda_sets_as_unspecialized(
                 stack.extend(ext.iter_mut());
                 for (_, x) in fields.iter_mut() {
                     stack.push(x.as_inner_mut());
+                }
+            }
+            Type::Tuple(elems, ext) => {
+                stack.extend(ext.iter_mut());
+                for (_, x) in elems.iter_mut() {
+                    stack.push(x);
                 }
             }
             Type::TagUnion(tags, ext) | Type::RecursiveTagUnion(_, tags, ext) => {

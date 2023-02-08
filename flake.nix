@@ -106,6 +106,7 @@
           rust
           cargo-criterion # for benchmarks
           simple-http-server # to view roc website when trying out edits
+          wasm-pack # for repl_wasm
         ]);
       in {
 
