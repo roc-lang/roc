@@ -4728,49 +4728,18 @@ pub fn with_hole<'a>(
                 }
             }
 
-            let record_symbol = possible_reuse_symbol_or_specialize(
+            compile_struct_like_access(
                 env,
                 procs,
                 layout_cache,
-                &loc_expr.value,
-                record_var,
-            );
-
-            let mut stmt = match field_layouts.as_slice() {
-                [_] => {
-                    let mut hole = hole.clone();
-                    substitute_in_exprs(env.arena, &mut hole, assigned, record_symbol);
-
-                    hole
-                }
-                _ => {
-                    let expr = Expr::StructAtIndex {
-                        index: index.expect("field not in its own type") as u64,
-                        field_layouts: field_layouts.into_bump_slice(),
-                        structure: record_symbol,
-                    };
-
-                    let layout = layout_cache
-                        .from_var(env.arena, field_var, env.subs)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                        });
-
-                    Stmt::Let(assigned, expr, layout, hole)
-                }
-            };
-
-            stmt = assign_to_symbol(
-                env,
-                procs,
-                layout_cache,
-                record_var,
+                field_layouts,
+                index.expect("field not in its own type") as _,
                 *loc_expr,
-                record_symbol,
-                stmt,
-            );
-
-            stmt
+                record_var,
+                hole,
+                assigned,
+                field_var,
+            )
         }
 
         RecordAccessor(accessor_data) => {
@@ -4848,61 +4817,30 @@ pub fn with_hole<'a>(
                 Ok(fields) => fields,
                 Err(_) => return runtime_error(env, "Can't access tuple with improper layout"),
             };
+            let mut field_layouts = Vec::with_capacity_in(sorted_elems.len(), env.arena);
 
             let mut final_index = None;
-            let mut elem_layouts = Vec::with_capacity_in(sorted_elems.len(), env.arena);
 
             for (current, (index, _, elem_layout)) in sorted_elems.into_iter().enumerate() {
-                elem_layouts.push(elem_layout);
+                field_layouts.push(elem_layout);
 
                 if index == accessed_index {
                     final_index = Some(current);
                 }
             }
 
-            let tuple_symbol = possible_reuse_symbol_or_specialize(
+            compile_struct_like_access(
                 env,
                 procs,
                 layout_cache,
-                &loc_expr.value,
-                tuple_var,
-            );
-
-            let mut stmt = match elem_layouts.as_slice() {
-                [_] => {
-                    let mut hole = hole.clone();
-                    substitute_in_exprs(env.arena, &mut hole, assigned, tuple_symbol);
-
-                    hole
-                }
-                _ => {
-                    let expr = Expr::StructAtIndex {
-                        index: final_index.expect("field not in its own type") as u64,
-                        field_layouts: elem_layouts.into_bump_slice(),
-                        structure: tuple_symbol,
-                    };
-
-                    let layout = layout_cache
-                        .from_var(env.arena, elem_var, env.subs)
-                        .unwrap_or_else(|err| {
-                            panic!("TODO turn fn_var into a RuntimeError {:?}", err)
-                        });
-
-                    Stmt::Let(assigned, expr, layout, hole)
-                }
-            };
-
-            stmt = assign_to_symbol(
-                env,
-                procs,
-                layout_cache,
-                tuple_var,
+                field_layouts,
+                final_index.expect("elem not in its own type") as u64,
                 *loc_expr,
-                tuple_symbol,
-                stmt,
-            );
-
-            stmt
+                tuple_var,
+                hole,
+                assigned,
+                elem_var,
+            )
         }
 
         OpaqueWrapFunction(wrap_fn_data) => {
@@ -5658,6 +5596,62 @@ pub fn with_hole<'a>(
             assign_to_symbol(env, procs, layout_cache, Variable::STR, *msg, msg_sym, stmt)
         }
     }
+}
+
+/// Compiles an access into a tuple or record.
+fn compile_struct_like_access<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    field_layouts: Vec<'a, InLayout<'a>>,
+    index: u64,
+    loc_expr: Loc<roc_can::expr::Expr>,
+    struct_like_var: Variable,
+    hole: &'a Stmt<'a>,
+    assigned: Symbol,
+    elem_var: Variable,
+) -> Stmt<'a> {
+    let struct_symbol = possible_reuse_symbol_or_specialize(
+        env,
+        procs,
+        layout_cache,
+        &loc_expr.value,
+        struct_like_var,
+    );
+
+    let mut stmt = match field_layouts.as_slice() {
+        [_] => {
+            let mut hole = hole.clone();
+            substitute_in_exprs(env.arena, &mut hole, assigned, struct_symbol);
+
+            hole
+        }
+        _ => {
+            let expr = Expr::StructAtIndex {
+                index,
+                field_layouts: field_layouts.into_bump_slice(),
+                structure: struct_symbol,
+            };
+
+            let layout = layout_cache
+                .from_var(env.arena, elem_var, env.subs)
+                .unwrap_or_else(|err| panic!("TODO turn fn_var into a RuntimeError {:?}", err));
+
+            Stmt::Let(assigned, expr, layout, hole)
+        }
+    };
+
+    stmt = assign_to_symbol(
+        env,
+        procs,
+        layout_cache,
+        struct_like_var,
+        loc_expr,
+        struct_symbol,
+        stmt,
+    );
+
+    stmt
 }
 
 /// Compiles a record or a tuple.
