@@ -417,13 +417,9 @@ fn loc_ident_pattern_help<'a>(
                     state,
                 ))
             }
-            Ident::RecordAccessorFunction(_string) => Err((
+            Ident::AccessorFunction(_string) => Err((
                 MadeProgress,
-                EPattern::RecordAccessorFunction(loc_ident.region.start()),
-            )),
-            Ident::TupleAccessorFunction(_string) => Err((
-                MadeProgress,
-                EPattern::TupleAccessorFunction(loc_ident.region.start()),
+                EPattern::AccessorFunction(loc_ident.region.start()),
             )),
             Ident::Malformed(malformed, problem) => {
                 debug_assert!(!malformed.is_empty());

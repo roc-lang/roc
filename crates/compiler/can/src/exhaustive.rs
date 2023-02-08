@@ -81,6 +81,8 @@ enum IndexCtor<'a> {
     Opaque,
     /// Index a record type. The arguments are the types of the record fields.
     Record(&'a [Lowercase]),
+    /// Index a tuple type.
+    Tuple,
     /// Index a guard constructor. The arguments are a faux guard pattern, and then the real
     /// pattern being guarded. E.g. `A B if g` becomes Guard { [True, (A B)] }.
     Guard,
@@ -113,6 +115,7 @@ impl<'a> IndexCtor<'a> {
             }
             RenderAs::Opaque => Self::Opaque,
             RenderAs::Record(fields) => Self::Record(fields),
+            RenderAs::Tuple => Self::Tuple,
             RenderAs::Guard => Self::Guard,
         }
     }
@@ -356,6 +359,30 @@ fn sketch_pattern(pattern: &crate::pattern::Pattern) -> SketchedPattern {
 
             let union = Union {
                 render_as: RenderAs::Record(field_names),
+                alternatives: vec![Ctor {
+                    name: CtorName::Tag(TagName("#Record".into())),
+                    tag_id,
+                    arity: destructs.len(),
+                }],
+            };
+
+            SP::KnownCtor(union, tag_id, patterns)
+        }
+
+        TupleDestructure { destructs, .. } => {
+            let tag_id = TagId(0);
+            let mut patterns = std::vec::Vec::with_capacity(destructs.len());
+
+            for Loc {
+                value: destruct,
+                region: _,
+            } in destructs
+            {
+                patterns.push(sketch_pattern(&destruct.typ.1.value));
+            }
+
+            let union = Union {
+                render_as: RenderAs::Tuple,
                 alternatives: vec![Ctor {
                     name: CtorName::Tag(TagName("#Record".into())),
                     tag_id,

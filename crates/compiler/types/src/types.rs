@@ -3617,6 +3617,13 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
     }
 }
 
+/// Either a field name for a record or an index into a tuple
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IndexOrField {
+    Field(Lowercase),
+    Index(usize),
+}
+
 #[derive(Debug)]
 pub struct RecordStructure {
     /// Invariant: these should be sorted!
@@ -3777,10 +3784,9 @@ pub enum Category {
 
     // records
     Record,
-    RecordAccessor(Lowercase),
+    Accessor(IndexOrField),
     RecordAccess(Lowercase),
     Tuple,
-    TupleAccessor(usize),
     TupleAccess(usize),
     DefaultValue(Lowercase), // for setting optional fields
 
@@ -3796,6 +3802,7 @@ pub enum Category {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatternCategory {
     Record,
+    Tuple,
     List,
     EmptyRecord,
     PatternGuard,

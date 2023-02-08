@@ -58,6 +58,11 @@ pub enum Pattern {
         ext_var: Variable,
         destructs: Vec<Loc<RecordDestruct>>,
     },
+    TupleDestructure {
+        whole_var: Variable,
+        ext_var: Variable,
+        destructs: Vec<Loc<TupleDestruct>>,
+    },
     List {
         list_var: Variable,
         elem_var: Variable,
@@ -100,6 +105,7 @@ impl Pattern {
             AppliedTag { whole_var, .. } => Some(*whole_var),
             UnwrappedOpaque { whole_var, .. } => Some(*whole_var),
             RecordDestructure { whole_var, .. } => Some(*whole_var),
+            TupleDestructure { whole_var, .. } => Some(*whole_var),
             List {
                 list_var: whole_var,
                 ..
@@ -130,7 +136,21 @@ impl Pattern {
             | UnsupportedPattern(..)
             | MalformedPattern(..)
             | AbilityMemberSpecialization { .. } => true,
-            RecordDestructure { destructs, .. } => destructs.is_empty(),
+
+            RecordDestructure { destructs, .. } => {
+                // If all destructs are surely exhaustive, then this is surely exhaustive.
+                destructs.iter().all(|d| match &d.value.typ {
+                    DestructType::Required | DestructType::Optional(_, _) => false,
+                    DestructType::Guard(_, pat) => pat.value.surely_exhaustive(),
+                })
+            }
+            TupleDestructure { destructs, .. } => {
+                // If all destructs are surely exhaustive, then this is surely exhaustive.
+                destructs
+                    .iter()
+                    .all(|d| d.value.typ.1.value.surely_exhaustive())
+            }
+
             As(pattern, _identifier) => pattern.value.surely_exhaustive(),
             List { patterns, .. } => patterns.surely_exhaustive(),
             AppliedTag { .. }
@@ -160,6 +180,7 @@ impl Pattern {
             UnwrappedOpaque { opaque, .. } => C::Opaque(*opaque),
             RecordDestructure { destructs, .. } if destructs.is_empty() => C::EmptyRecord,
             RecordDestructure { .. } => C::Record,
+            TupleDestructure { .. } => C::Tuple,
             List { .. } => C::List,
             NumLiteral(..) => C::Num,
             IntLiteral(..) => C::Int,
@@ -213,6 +234,13 @@ pub struct RecordDestruct {
     pub label: Lowercase,
     pub symbol: Symbol,
     pub typ: DestructType,
+}
+
+#[derive(Clone, Debug)]
+pub struct TupleDestruct {
+    pub var: Variable,
+    pub destruct_index: usize,
+    pub typ: (Variable, Loc<Pattern>),
 }
 
 #[derive(Clone, Debug)]
@@ -554,8 +582,38 @@ pub fn canonicalize_pattern<'a>(
             )
         }
 
-        Tuple(_patterns) => {
-            todo!("canonicalize_pattern: Tuple")
+        Tuple(patterns) => {
+            let ext_var = var_store.fresh();
+            let whole_var = var_store.fresh();
+            let mut destructs = Vec::with_capacity(patterns.len());
+
+            for (i, loc_pattern) in patterns.iter().enumerate() {
+                let can_guard = canonicalize_pattern(
+                    env,
+                    var_store,
+                    scope,
+                    output,
+                    pattern_type,
+                    &loc_pattern.value,
+                    loc_pattern.region,
+                    permit_shadows,
+                );
+
+                destructs.push(Loc {
+                    region: loc_pattern.region,
+                    value: TupleDestruct {
+                        destruct_index: i,
+                        var: var_store.fresh(),
+                        typ: (var_store.fresh(), can_guard),
+                    },
+                });
+            }
+
+            Pattern::TupleDestructure {
+                whole_var,
+                ext_var,
+                destructs,
+            }
         }
 
         RecordDestructure(patterns) => {
@@ -861,7 +919,8 @@ pub enum BindingsFromPattern<'a> {
 
 pub enum BindingsFromPatternWork<'a> {
     Pattern(&'a Loc<Pattern>),
-    Destruct(&'a Loc<RecordDestruct>),
+    RecordDestruct(&'a Loc<RecordDestruct>),
+    TupleDestruct(&'a Loc<TupleDestruct>),
 }
 
 impl<'a> BindingsFromPattern<'a> {
@@ -911,8 +970,12 @@ impl<'a> BindingsFromPattern<'a> {
                             let (_, loc_arg) = &**argument;
                             stack.push(Pattern(loc_arg));
                         }
+                        TupleDestructure { destructs, .. } => {
+                            let it = destructs.iter().rev().map(TupleDestruct);
+                            stack.extend(it);
+                        }
                         RecordDestructure { destructs, .. } => {
-                            let it = destructs.iter().rev().map(Destruct);
+                            let it = destructs.iter().rev().map(RecordDestruct);
                             stack.extend(it);
                         }
                         NumLiteral(..)
@@ -930,7 +993,7 @@ impl<'a> BindingsFromPattern<'a> {
                         }
                     }
                 }
-                BindingsFromPatternWork::Destruct(loc_destruct) => {
+                BindingsFromPatternWork::RecordDestruct(loc_destruct) => {
                     match &loc_destruct.value.typ {
                         DestructType::Required | DestructType::Optional(_, _) => {
                             return Some((loc_destruct.value.symbol, loc_destruct.region));
@@ -940,6 +1003,10 @@ impl<'a> BindingsFromPattern<'a> {
                             stack.push(BindingsFromPatternWork::Pattern(inner))
                         }
                     }
+                }
+                BindingsFromPatternWork::TupleDestruct(loc_destruct) => {
+                    let inner = &loc_destruct.value.typ.1;
+                    stack.push(BindingsFromPatternWork::Pattern(inner))
                 }
             }
         }

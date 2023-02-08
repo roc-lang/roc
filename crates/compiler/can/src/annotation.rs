@@ -448,7 +448,7 @@ pub fn find_type_def_symbols(
             As(actual, _, _) => {
                 stack.push(&actual.value);
             }
-            Tuple { fields: _, ext: _ } => {
+            Tuple { elems: _, ext: _ } => {
                 todo!("find_type_def_symbols: Tuple");
             }
             Record { fields, ext } => {
@@ -872,8 +872,41 @@ fn can_annotation_help(
             }
         }
 
-        Tuple { fields: _, ext: _ } => {
-            todo!("tuple");
+        Tuple { elems, ext } => {
+            let (ext_type, is_implicit_openness) = can_extension_type(
+                env,
+                pol,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+                ext,
+                roc_problem::can::ExtensionTypeKind::Record,
+            );
+
+            debug_assert!(
+                matches!(is_implicit_openness, ExtImplicitOpenness::No),
+                "tuples should never be implicitly inferred open"
+            );
+
+            debug_assert!(!elems.is_empty()); // We don't allow empty tuples
+
+            let elem_types = can_assigned_tuple_elems(
+                env,
+                pol,
+                &elems.items,
+                scope,
+                var_store,
+                introduced_variables,
+                local_aliases,
+                references,
+            );
+
+            Type::Tuple(
+                elem_types,
+                TypeExtension::from_type(ext_type, is_implicit_openness),
+            )
         }
         Record { fields, ext } => {
             let (ext_type, is_implicit_openness) = can_extension_type(
@@ -1438,6 +1471,39 @@ fn can_assigned_fields<'a>(
     }
 
     field_types
+}
+
+// TODO trim down these arguments!
+#[allow(clippy::too_many_arguments)]
+fn can_assigned_tuple_elems<'a>(
+    env: &mut Env,
+    pol: CanPolarity,
+    elems: &&[Loc<TypeAnnotation<'a>>],
+    scope: &mut Scope,
+    var_store: &mut VarStore,
+    introduced_variables: &mut IntroducedVariables,
+    local_aliases: &mut VecMap<Symbol, Alias>,
+    references: &mut VecSet<Symbol>,
+) -> VecMap<usize, Type> {
+    let mut elem_types = VecMap::with_capacity(elems.len());
+
+    for (index, loc_elem) in elems.iter().enumerate() {
+        let elem_type = can_annotation_help(
+            env,
+            pol,
+            &loc_elem.value,
+            loc_elem.region,
+            scope,
+            var_store,
+            introduced_variables,
+            local_aliases,
+            references,
+        );
+
+        elem_types.insert(index, elem_type);
+    }
+
+    elem_types
 }
 
 // TODO trim down these arguments!

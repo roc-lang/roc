@@ -5,7 +5,7 @@ use crate::expr::Expr::{self, *};
 use crate::expr::{
     ClosureData, DeclarationTag, Declarations, FunctionDef, OpaqueWrapFunctionData, WhenBranch,
 };
-use crate::pattern::{Pattern, RecordDestruct};
+use crate::pattern::{Pattern, RecordDestruct, TupleDestruct};
 
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 
@@ -335,7 +335,6 @@ fn expr<'a>(c: &Ctx, p: EPrec, f: &'a Arena<'a>, e: &'a Expr) -> DocBuilder<'a, 
             f.text(format!("@{}", opaque_name.as_str(c.interns)))
         }
         RecordAccessor(_) => todo!(),
-        TupleAccessor(_) => todo!(),
         RecordUpdate {
             symbol, updates, ..
         } => f
@@ -504,6 +503,19 @@ fn pattern<'a>(
                 ),
             )
             .append(f.text("}"))
+            .group(),
+        TupleDestructure { destructs, .. } => f
+            .text("(")
+            .append(
+                f.intersperse(
+                    destructs
+                        .iter()
+                        .map(|l| &l.value)
+                        .map(|TupleDestruct { typ: (_, p), .. }| pattern(c, Free, f, &p.value)),
+                    f.text(", "),
+                ),
+            )
+            .append(f.text(")"))
             .group(),
         List { .. } => todo!(),
         NumLiteral(_, n, _, _) | IntLiteral(_, _, n, _, _) | FloatLiteral(_, _, n, _, _) => {

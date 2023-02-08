@@ -958,6 +958,59 @@ mod test_reporting {
     );
 
     test_report!(
+        tuple_exhaustiveness_bad,
+        indoc!(
+            r#"
+            Color : [Red, Blue]
+
+            value : (Color, Color)
+            value = (Red, Red)
+
+            when value is
+                (Blue, Blue) -> "foo"
+                (Red, Blue) -> "foo"
+                (Blue, Red) -> "foo"
+                #(Red, Red) -> "foo"
+            "#
+        ),
+        @r###"
+    ── UNSAFE PATTERN ──────────────────────────────────────── /code/proj/Main.roc ─
+
+    This `when` does not cover all the possibilities:
+
+     9│>      when value is
+    10│>          (Blue, Blue) -> "foo"
+    11│>          (Red, Blue) -> "foo"
+    12│>          (Blue, Red) -> "foo"
+
+    Other possibilities include:
+
+        ( Red, Red )
+
+    I would have to crash if I saw one of those! Add branches for them!
+    "###
+    );
+
+    test_report!(
+        tuple_exhaustiveness_good,
+        indoc!(
+            r#"
+            Color : [Red, Blue]
+
+            value : (Color, Color)
+            value = (Red, Red)
+
+            when value is
+                (Blue, Blue) -> "foo"
+                (Red, Blue) -> "foo"
+                (Blue, Red) -> "foo"
+                (Red, Red) -> "foo"
+            "#
+        ),
+        @"" // No error
+    );
+
+    test_report!(
         elem_in_list,
         indoc!(
             r#"

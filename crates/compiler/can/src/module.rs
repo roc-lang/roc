@@ -918,6 +918,15 @@ fn fix_values_captured_in_closure_pattern(
                 }
             }
         }
+        TupleDestructure { destructs, .. } => {
+            for loc_destruct in destructs.iter_mut() {
+                fix_values_captured_in_closure_pattern(
+                    &mut loc_destruct.value.typ.1.value,
+                    no_capture_symbols,
+                    closure_captures,
+                )
+            }
+        }
         List { patterns, .. } => {
             for loc_pat in patterns.patterns.iter_mut() {
                 fix_values_captured_in_closure_pattern(
@@ -1087,8 +1096,7 @@ fn fix_values_captured_in_closure_expr(
         | TypedHole { .. }
         | RuntimeError(_)
         | ZeroArgumentTag { .. }
-        | RecordAccessor { .. }
-        | TupleAccessor { .. } => {}
+        | RecordAccessor { .. } => {}
 
         List { loc_elems, .. } => {
             for elem in loc_elems.iter_mut() {
