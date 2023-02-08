@@ -2165,6 +2165,43 @@ mod test_fmt {
     }
 
     #[test]
+    fn type_definition_add_space_around_optional_record() {
+        expr_formats_to(
+            indoc!(
+                r#"
+                f : { a ?Str }
+
+                f"#
+            ),
+            indoc!(
+                r#"
+                f : { a ? Str }
+
+                f"#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                f : {
+                    a ?Str,
+                }
+
+                f"#
+            ),
+            indoc!(
+                r#"
+                f : {
+                    a ? Str,
+                }
+
+                f"#
+            ),
+        );
+    }
+
+    #[test]
     #[ignore]
     fn final_comment_in_empty_record_type_definition() {
         expr_formats_to(
