@@ -100,7 +100,7 @@ fn str_split_str_concat_repeated() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_small_str_bigger_delimiter() {
     assert_evals_to!(
         indoc!(r#"Str.split "JJJ" "0123456789abcdefghi""#),
@@ -140,7 +140,7 @@ fn str_split_big_str_small_delimiter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_small_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
@@ -170,7 +170,7 @@ fn str_split_bigger_delimiter_big_strs() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_empty_strs() {
     assert_evals_to!(
         indoc!(
@@ -184,7 +184,7 @@ fn str_split_empty_strs() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_minimal_example() {
     assert_evals_to!(
         indoc!(
