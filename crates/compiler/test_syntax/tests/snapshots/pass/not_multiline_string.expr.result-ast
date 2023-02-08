@@ -4,5 +4,5 @@ UnaryOp(
             [],
         ),
     ),
-    @0-1 Negate,
+    @0-1 Not,
 )

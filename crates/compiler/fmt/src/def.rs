@@ -76,8 +76,19 @@ impl<'a> Formattable for TypeDef<'a> {
 
                 for var in *vars {
                     buf.spaces(1);
+
+                    let need_parens = matches!(var.value, Pattern::Apply(..));
+
+                    if need_parens {
+                        buf.push_str("(");
+                    }
+
                     fmt_pattern(buf, &var.value, indent, Parens::NotNeeded);
                     buf.indent(indent);
+
+                    if need_parens {
+                        buf.push_str(")");
+                    }
                 }
 
                 buf.push_str(" :");
