@@ -928,7 +928,7 @@ impl<
             ) => (*base_offset, *size),
             storage => {
                 internal_error!(
-                    "Data not on the stack for sym ({}) with storage ({:?})",
+                    "Data not on the stack for sym {:?} with storage {:?}",
                     sym,
                     storage
                 )

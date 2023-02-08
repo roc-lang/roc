@@ -384,6 +384,21 @@ trait Backend<'a> {
                 self.load_literal_symbols(arguments);
                 self.tag(sym, arguments, tag_layout, *tag_id);
             }
+            Expr::ExprBox { symbol: value } => {
+                let element_layout = match self.interner().get(*layout) {
+                    Layout::Boxed(boxed) => boxed,
+                    _ => unreachable!("{:?}", self.interner().dbg(*layout)),
+                };
+
+                self.load_literal_symbols([*value].as_slice());
+                self.expr_box(*sym, *value, element_layout)
+            }
+            Expr::ExprUnbox { symbol: ptr } => {
+                let element_layout = *layout;
+
+                self.load_literal_symbols([*ptr].as_slice());
+                self.expr_unbox(*sym, *ptr, element_layout)
+            }
             x => todo!("the expression, {:?}", x),
         }
     }
@@ -1146,6 +1161,12 @@ trait Backend<'a> {
         tag_layout: &UnionLayout<'a>,
         tag_id: TagIdIntType,
     );
+
+    /// load a value from a pointer
+    fn expr_unbox(&mut self, sym: Symbol, ptr: Symbol, element_layout: InLayout<'a>);
+
+    /// store a refcounted value on the heap
+    fn expr_box(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>);
 
     /// return_symbol moves a symbol to the correct return location for the backend and adds a jump to the end of the function.
     fn return_symbol(&mut self, sym: &Symbol, layout: &InLayout<'a>);
