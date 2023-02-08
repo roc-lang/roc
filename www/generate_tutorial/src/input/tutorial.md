@@ -400,7 +400,47 @@ Note that `&` can't introduce new fields to a record, or change the types of exi
 
 ## [Optional Record Fields](#optional-record-fields) {#optional-record-fields}
 
-\[This part of the tutorial has not been written yet. Coming soon!\]
+Roc supports optional record fields using the `?` operator. This can be a useful pattern where you pass a function a record of configuration values, some of which you don't really care about and want to leave as defaults.
+
+In Roc you can write a function like;
+
+<pre><samp>table <span class="kw">=</span> <span class="kw">\</span><span class="paren">{</span> height, width, title <span class="colon">?</span> "", description <span class="colon">?</span> "" <span class="paren">}</span> <span class="kw">-></span>
+</pre></samp>
+
+This is using *optional field destructuring* to destructure a record while
+also providing default values for any fields that might be missing.
+
+Here's the type of `table`;
+
+<pre><samp>table <span class="colon">:</span>
+    <span class="paren">{</span>
+        height <span class="colon">:</span> Pixels,
+        width <span class="colon">:</span> Pixels,
+        title <span class="colon">?</span> Str,
+        description <span class="colon">?</span> Str,
+    <span class="paren">}</span>
+    <span class="kw">-></span> Table
+table <span class="kw">= \</span><span class="paren">{</span> height, width, title <span class="colon">?</span> "", description <span class="colon">?</span> "" } <span class="kw">-></span>
+</pre></samp>
+
+This says that `table` takes a record with two *required* fields, `height` and
+`width`, and two *optional* fields, `title` and `description`. It also says that
+the `height` and `width` fields have the type `Pixels`, a type alias for some
+numeric type, and the `title` and `description` fields have the type `Str`.
+This means you can choose to omit the `title`, `description`, or both fields, when calling the function... but if you provide them, they must have the type `Str`.
+
+This is also the type that would have been inferred for `table` if no annotation
+had been written. Roc's compiler can tell from the destructuring syntax
+`title ? ""` that `title` is an optional field, and that it has the type `Str`.
+These default values can reference other expressions in the record destructure; if you wanted, you could write `{ height, width, title ? "", description ? Str.concat "A table called " title }`.
+
+Destructuring is the only way to implement a record with optional fields. For example, if you write the expression `config.title` and `title` is an
+optional field, you'll get a compile error.
+
+This means it's never possible to end up with an *optional value* that exists
+outside a record field. Optionality is a concept that exists only in record
+fields, and it's intended for the use case of config records like this. The
+ergonomics of destructuring mean this wouldn't be a good fit for data modeling.
 
 ## [Tags](#tags) {#tags}
 
