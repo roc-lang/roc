@@ -16,7 +16,7 @@ We are very grateful to our sponsors [NoRedInk](https://www.noredink.com/), [rwx
 
 [<img src="https://www.noredink.com/assets/logo-red-black-f6989d7567cf90b349409137595e99c52d036d755b4403d25528e0fd83a3b084.svg" height="60" alt="NoRedInk logo"/>](https://www.noredink.com/)
 &nbsp;&nbsp;&nbsp;&nbsp;
-[<img src="https://avatars.githubusercontent.com/u/97913715" height="60" alt="rwx logo"/>](https://www.rwx.com)
+[<img src="https://www.rwx.com/rwx_banner.svg" height="60" alt="rwx logo"/>](https://www.rwx.com)
 &nbsp;&nbsp;&nbsp;&nbsp;
 [<img src="https://user-images.githubusercontent.com/1094080/183123052-856815b1-8cc9-410a-83b0-589f03613188.svg" height="60" alt="tweede golf logo"/>](https://tweedegolf.nl/en)
 
