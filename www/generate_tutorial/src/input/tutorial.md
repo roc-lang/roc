@@ -183,7 +183,7 @@ You can name a def using any combination of letters and numbers, but they have t
     birds <span class="kw">=</span> 2</samp></pre>
 </aside>
 
-## [Defining Functions](#defining-functions) {#defining-functions}
+### [Defining Functions](#defining-functions) {#defining-functions}
 
 So far we've called functions like `Num.toStr`, `Str.concat`, and `Stdout.line`. Next let's try defining a function of our own.
 
@@ -204,7 +204,7 @@ This new `addAndStringify` function we've defined accepts two numbers, adds them
 
 The `\num1, num2 ->` syntax defines a function's arguments, and the expression after the `->` is the body of the function. Whenever a function gets called, its body expression gets evaluated and returned.
 
-## [if-then-else](#if-then-else) {#if-then-else}
+### [if-then-else](#if-then-else) {#if-then-else}
 
 Let's modify this function to return an empty string if the numbers add to zero.
 
@@ -397,6 +397,10 @@ The `fromScratch` and `fromOriginal` records are equal, although they're defined
 
 Note that `&` can't introduce new fields to a record, or change the types of existing fields.
 (Trying to do either of these will result in an error at build time!)
+
+## [Optional Record Fields](#optional-record-fields) {#optional-record-fields}
+
+\[This part of the tutorial has not been written yet. Coming soon!\]
 
 ## [Tags](#tags) {#tags}
 
@@ -1262,13 +1266,16 @@ So you'll want to use `roc dev` or `roc test` to get the output for `expect`.
 
 ## [Modules](#modules) {#modules}
 
-\[This part of the tutorial has not been written yet. Coming soon!\]
+Each `.roc` file is a separate module and contains Roc code for different purposes. There are all of the different types of modules that Roc suppports;
 
-## [Interface modules](#interface-modules) {#interface-modules}
+- **Builtins** provide functions which are automatically imported into every module. 
+- **Applications** are combined with a platform and compiled into an executable.
+- **Interfaces** provide functions which can be imported into other modules.
+- **Packages** organise modules to share functionality across applications and platforms.
+- **Platforms** provide effects such as IO to interface with the outside world.
+- **Hosted** *note this module type is likely to be deprecated soon*.
 
-\[This part of the tutorial has not been written yet. Coming soon!\]
-
-## [Builtin modules](#builtin-modules) {#builtin-modules}
+### [Builtin Modules](#builtin-modules) {#builtin-modules}
 
 There are several modules that are built into the Roc compiler, which are imported automatically into every Roc module. They are:
 
@@ -1289,7 +1296,7 @@ Besides being built into the compiler, the builtin modules are different from ot
 - They are always imported. You never need to add them to `imports`.
 - All their types are imported unqualified automatically. So you never need to write `Num.Nat`, because it's as if the `Num` module was imported using `imports [Num.{ Nat }]` (the same is true for all the other types in the `Num` module.
 
-## [The app module header](#the-app-module-header) {#the-app-module-header}
+### [App Module Header](#app-module-header) {#app-module-header}
 
 Let's take a closer look at the part of `main.roc` above the `main` def:
 
@@ -1306,8 +1313,8 @@ The line `app "hello"` states that this module defines a Roc application, and th
 The remaining lines all involve the [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) this application is built on:
 
 <pre><samp><span class="kw">packages</span> <span class="brace">{</span> pf <span class="colon">:</span> <span class="str">"https://github.com/roc-lang/basic-cli/releases/download/0.2.0/8tCohJeXMBUnjo_zdMq0jSaqdYoCWJkWazBd4wa8cQU.tar.br"</span> <span class="brace">}</span>
-<span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
-<span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
+    <span class="kw">imports</span> <span class="brace">[</span>pf.Stdout<span class="brace">]</span>
+    <span class="kw">provides</span> <span class="brace">[</span>main<span class="brace">]</span> <span class="kw">to</span> pf
 </samp></pre>
 
 The `packages { pf: "https://…tar.br" }` part says three things:
@@ -1333,6 +1340,24 @@ If we would like to include other modules in our application, say `AdditionalMod
 </samp></pre>
 
 You can find documentation for the `Stdout.line` function in the [Stdout](https://www.roc-lang.org/packages/basic-cli/Stdout#line) module documentation.
+
+### [Package Modules](#interface-modules) {#interface-modules}
+
+\[This part of the tutorial has not been written yet. Coming soon!\]
+
+See [Parser Package](https://github.com/roc-lang/roc/tree/main/examples/parser/package) for an example.
+
+### [Interface Modules](#interface-modules) {#interface-modules}
+
+\[This part of the tutorial has not been written yet. Coming soon!\]
+
+See [Html Interface](https://github.com/roc-lang/roc/blob/main/examples/virtual-dom-wip/platform/Html.roc) for an example.
+
+### [Platform Modules](#interface-modules) {#interface-modules}
+
+\[This part of the tutorial has not been written yet. Coming soon!\]
+
+See [Platform Switching Rust](https://github.com/roc-lang/roc/blob/main/examples/platform-switching/rust-platform/main.roc) for an example.
 
 ## [Tasks](#tasks) {#tasks}
 

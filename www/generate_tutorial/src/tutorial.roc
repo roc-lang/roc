@@ -73,6 +73,7 @@ tocLinks =
         { tag: "#booleans", value: "Booleans" },
         { tag: "#lists", value: "Lists" },
         { tag: "#types", value: "Types" },
+        { tag: "#numeric-types", value: "Numeric Types" },
         { tag: "#crashing", value: "Crashing" },
         { tag: "#tests-and-expectations", value: "Tests and Expectations" },
         { tag: "#modules", value: "Modules" },
