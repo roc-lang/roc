@@ -4266,93 +4266,20 @@ pub fn with_hole<'a>(
                 Err(_) => return runtime_error(env, "Can't create tuple with improper layout"),
             };
 
-            let mut elem_symbols = Vec::with_capacity_in(elems.len(), env.arena);
-            let mut can_elems = Vec::with_capacity_in(elems.len(), env.arena);
-
-            #[allow(clippy::enum_variant_names)]
-            enum Field {
-                // TODO: rename this since it can handle unspecialized expressions now too
-                FunctionOrUnspecialized(Symbol, Variable),
-                ValueSymbol,
-                Field(Variable, Loc<roc_can::expr::Expr>),
-            }
-
             // Hacky way to let us remove the owned elements from the vector, possibly out-of-order.
             let mut elems = Vec::from_iter_in(elems.into_iter().map(Some), env.arena);
+            let take_elem_expr = move |index: usize| elems[index].take();
 
-            for (index, variable, _) in sorted_elems.into_iter() {
-                // TODO how should function pointers be handled here?
-                use ReuseSymbol::*;
-                let (var, loc_expr) = elems[index].take().unwrap();
-                match can_reuse_symbol(env, procs, &loc_expr.value, var) {
-                    Imported(symbol) | LocalFunction(symbol) | UnspecializedExpr(symbol) => {
-                        elem_symbols.push(symbol);
-                        can_elems.push(Field::FunctionOrUnspecialized(symbol, variable));
-                    }
-                    Value(symbol) => {
-                        let reusable = procs.get_or_insert_symbol_specialization(
-                            env,
-                            layout_cache,
-                            symbol,
-                            var,
-                        );
-                        elem_symbols.push(reusable);
-                        can_elems.push(Field::ValueSymbol);
-                    }
-                    NotASymbol => {
-                        elem_symbols.push(env.unique_symbol());
-                        can_elems.push(Field::Field(var, *loc_expr));
-                    }
-                }
-            }
-
-            // creating a record from the var will unpack it if it's just a single field.
-            let layout = match layout_cache.from_var(env.arena, tuple_var, env.subs) {
-                Ok(layout) => layout,
-                Err(_) => return runtime_error(env, "Can't create record with improper layout"),
-            };
-
-            let elem_symbols = elem_symbols.into_bump_slice();
-
-            let mut stmt = if let [only_field] = elem_symbols {
-                let mut hole = hole.clone();
-                substitute_in_exprs(env.arena, &mut hole, assigned, *only_field);
-                hole
-            } else {
-                Stmt::Let(assigned, Expr::Struct(elem_symbols), layout, hole)
-            };
-
-            for (opt_field, symbol) in can_elems.into_iter().rev().zip(elem_symbols.iter().rev()) {
-                match opt_field {
-                    Field::ValueSymbol => {
-                        // this symbol is already defined; nothing to do
-                    }
-                    Field::FunctionOrUnspecialized(symbol, variable) => {
-                        stmt = specialize_symbol(
-                            env,
-                            procs,
-                            layout_cache,
-                            Some(variable),
-                            symbol,
-                            env.arena.alloc(stmt),
-                            symbol,
-                        );
-                    }
-                    Field::Field(var, loc_expr) => {
-                        stmt = with_hole(
-                            env,
-                            loc_expr.value,
-                            var,
-                            procs,
-                            layout_cache,
-                            *symbol,
-                            env.arena.alloc(stmt),
-                        );
-                    }
-                }
-            }
-
-            stmt
+            compile_struct_like(
+                env,
+                procs,
+                layout_cache,
+                sorted_elems,
+                take_elem_expr,
+                tuple_var,
+                hole,
+                assigned,
+            )
         }
 
         Record {
@@ -4374,100 +4301,114 @@ pub fn with_hole<'a>(
                 Err(_) => return runtime_error(env, "Can't create record with improper layout"),
             };
 
-            let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
-            let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
+            let take_field_expr =
+                move |field: Lowercase| fields.remove(&field).map(|f| (f.var, f.loc_expr));
 
-            #[allow(clippy::enum_variant_names)]
-            enum Field {
-                // TODO: rename this since it can handle unspecialized expressions now too
-                FunctionOrUnspecialized(Symbol, Variable),
-                ValueSymbol,
-                Field(roc_can::expr::Field),
-            }
+            compile_struct_like(
+                env,
+                procs,
+                layout_cache,
+                sorted_fields,
+                take_field_expr,
+                record_var,
+                hole,
+                assigned,
+            )
 
-            for (label, variable, _) in sorted_fields.into_iter() {
-                // TODO how should function pointers be handled here?
-                use ReuseSymbol::*;
-                match fields.remove(&label) {
-                    Some(field) => {
-                        match can_reuse_symbol(env, procs, &field.loc_expr.value, field.var) {
-                            Imported(symbol)
-                            | LocalFunction(symbol)
-                            | UnspecializedExpr(symbol) => {
-                                field_symbols.push(symbol);
-                                can_fields.push(Field::FunctionOrUnspecialized(symbol, variable));
-                            }
-                            Value(symbol) => {
-                                let reusable = procs.get_or_insert_symbol_specialization(
-                                    env,
-                                    layout_cache,
-                                    symbol,
-                                    field.var,
-                                );
-                                field_symbols.push(reusable);
-                                can_fields.push(Field::ValueSymbol);
-                            }
-                            NotASymbol => {
-                                field_symbols.push(env.unique_symbol());
-                                can_fields.push(Field::Field(field));
-                            }
-                        }
-                    }
-                    None => {
-                        // this field was optional, but not given
-                        continue;
-                    }
-                }
-            }
+            // let mut field_symbols = Vec::with_capacity_in(fields.len(), env.arena);
+            // let mut can_fields = Vec::with_capacity_in(fields.len(), env.arena);
 
-            // creating a record from the var will unpack it if it's just a single field.
-            let layout = match layout_cache.from_var(env.arena, record_var, env.subs) {
-                Ok(layout) => layout,
-                Err(_) => return runtime_error(env, "Can't create record with improper layout"),
-            };
+            // #[allow(clippy::enum_variant_names)]
+            // enum Field {
+            //     // TODO: rename this since it can handle unspecialized expressions now too
+            //     FunctionOrUnspecialized(Symbol, Variable),
+            //     ValueSymbol,
+            //     Field(roc_can::expr::Field),
+            // }
 
-            let field_symbols = field_symbols.into_bump_slice();
+            // for (label, variable, _) in sorted_fields.into_iter() {
+            //     // TODO how should function pointers be handled here?
+            //     use ReuseSymbol::*;
+            //     match fields.remove(&label) {
+            //         Some(field) => {
+            //             match can_reuse_symbol(env, procs, &field.loc_expr.value, field.var) {
+            //                 Imported(symbol)
+            //                 | LocalFunction(symbol)
+            //                 | UnspecializedExpr(symbol) => {
+            //                     field_symbols.push(symbol);
+            //                     can_fields.push(Field::FunctionOrUnspecialized(symbol, variable));
+            //                 }
+            //                 Value(symbol) => {
+            //                     let reusable = procs.get_or_insert_symbol_specialization(
+            //                         env,
+            //                         layout_cache,
+            //                         symbol,
+            //                         field.var,
+            //                     );
+            //                     field_symbols.push(reusable);
+            //                     can_fields.push(Field::ValueSymbol);
+            //                 }
+            //                 NotASymbol => {
+            //                     field_symbols.push(env.unique_symbol());
+            //                     can_fields.push(Field::Field(field));
+            //                 }
+            //             }
+            //         }
+            //         None => {
+            //             // this field was optional, but not given
+            //             continue;
+            //         }
+            //     }
+            // }
 
-            let mut stmt = if let [only_field] = field_symbols {
-                let mut hole = hole.clone();
-                substitute_in_exprs(env.arena, &mut hole, assigned, *only_field);
-                hole
-            } else {
-                Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole)
-            };
+            // // creating a record from the var will unpack it if it's just a single field.
+            // let layout = match layout_cache.from_var(env.arena, record_var, env.subs) {
+            //     Ok(layout) => layout,
+            //     Err(_) => return runtime_error(env, "Can't create record with improper layout"),
+            // };
 
-            for (opt_field, symbol) in can_fields.into_iter().rev().zip(field_symbols.iter().rev())
-            {
-                match opt_field {
-                    Field::ValueSymbol => {
-                        // this symbol is already defined; nothing to do
-                    }
-                    Field::FunctionOrUnspecialized(symbol, variable) => {
-                        stmt = specialize_symbol(
-                            env,
-                            procs,
-                            layout_cache,
-                            Some(variable),
-                            symbol,
-                            env.arena.alloc(stmt),
-                            symbol,
-                        );
-                    }
-                    Field::Field(field) => {
-                        stmt = with_hole(
-                            env,
-                            field.loc_expr.value,
-                            field.var,
-                            procs,
-                            layout_cache,
-                            *symbol,
-                            env.arena.alloc(stmt),
-                        );
-                    }
-                }
-            }
+            // let field_symbols = field_symbols.into_bump_slice();
 
-            stmt
+            // let mut stmt = if let [only_field] = field_symbols {
+            //     let mut hole = hole.clone();
+            //     substitute_in_exprs(env.arena, &mut hole, assigned, *only_field);
+            //     hole
+            // } else {
+            //     Stmt::Let(assigned, Expr::Struct(field_symbols), layout, hole)
+            // };
+
+            // for (opt_field, symbol) in can_fields.into_iter().rev().zip(field_symbols.iter().rev())
+            // {
+            //     match opt_field {
+            //         Field::ValueSymbol => {
+            //             // this symbol is already defined; nothing to do
+            //         }
+            //         Field::FunctionOrUnspecialized(symbol, variable) => {
+            //             stmt = specialize_symbol(
+            //                 env,
+            //                 procs,
+            //                 layout_cache,
+            //                 Some(variable),
+            //                 symbol,
+            //                 env.arena.alloc(stmt),
+            //                 symbol,
+            //             );
+            //         }
+            //         Field::Field(field) => {
+            //             stmt = with_hole(
+            //                 env,
+            //                 field.loc_expr.value,
+            //                 field.var,
+            //                 procs,
+            //                 layout_cache,
+            //                 *symbol,
+            //                 env.arena.alloc(stmt),
+            //             );
+            //         }
+            //     }
+            // }
+
+            // stmt
         }
 
         EmptyRecord => let_empty_struct(assigned, hole),
@@ -5717,6 +5658,106 @@ pub fn with_hole<'a>(
             assign_to_symbol(env, procs, layout_cache, Variable::STR, *msg, msg_sym, stmt)
         }
     }
+}
+
+/// Compiles a record or a tuple.
+// TODO: UnusedLayout is because `sort_record_fields` currently returns a three-tuple, but is, in
+// fact, unneeded for the compilation.
+fn compile_struct_like<'a, L, UnusedLayout>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    sorted_elems: Vec<(L, Variable, UnusedLayout)>,
+    mut take_elem_expr: impl FnMut(L) -> Option<(Variable, Box<Loc<roc_can::expr::Expr>>)>,
+    struct_like_var: Variable,
+    hole: &'a Stmt<'a>,
+    assigned: Symbol,
+) -> Stmt<'a> {
+    let mut elem_symbols = Vec::with_capacity_in(sorted_elems.len(), env.arena);
+    let mut can_elems = Vec::with_capacity_in(sorted_elems.len(), env.arena);
+
+    #[allow(clippy::enum_variant_names)]
+    enum Field {
+        // TODO: rename this since it can handle unspecialized expressions now too
+        FunctionOrUnspecialized(Symbol, Variable),
+        ValueSymbol,
+        Field(Variable, Loc<roc_can::expr::Expr>),
+    }
+
+    for (index, variable, _) in sorted_elems.into_iter() {
+        // TODO how should function pointers be handled here?
+        use ReuseSymbol::*;
+        match take_elem_expr(index) {
+            Some((var, loc_expr)) => match can_reuse_symbol(env, procs, &loc_expr.value, var) {
+                Imported(symbol) | LocalFunction(symbol) | UnspecializedExpr(symbol) => {
+                    elem_symbols.push(symbol);
+                    can_elems.push(Field::FunctionOrUnspecialized(symbol, variable));
+                }
+                Value(symbol) => {
+                    let reusable =
+                        procs.get_or_insert_symbol_specialization(env, layout_cache, symbol, var);
+                    elem_symbols.push(reusable);
+                    can_elems.push(Field::ValueSymbol);
+                }
+                NotASymbol => {
+                    elem_symbols.push(env.unique_symbol());
+                    can_elems.push(Field::Field(var, *loc_expr));
+                }
+            },
+            None => {
+                // this field was optional, but not given
+                continue;
+            }
+        }
+    }
+
+    // creating a record from the var will unpack it if it's just a single field.
+    let layout = match layout_cache.from_var(env.arena, struct_like_var, env.subs) {
+        Ok(layout) => layout,
+        Err(_) => return runtime_error(env, "Can't create record with improper layout"),
+    };
+
+    let elem_symbols = elem_symbols.into_bump_slice();
+
+    let mut stmt = if let [only_field] = elem_symbols {
+        let mut hole = hole.clone();
+        substitute_in_exprs(env.arena, &mut hole, assigned, *only_field);
+        hole
+    } else {
+        Stmt::Let(assigned, Expr::Struct(elem_symbols), layout, hole)
+    };
+
+    for (opt_field, symbol) in can_elems.into_iter().rev().zip(elem_symbols.iter().rev()) {
+        match opt_field {
+            Field::ValueSymbol => {
+                // this symbol is already defined; nothing to do
+            }
+            Field::FunctionOrUnspecialized(symbol, variable) => {
+                stmt = specialize_symbol(
+                    env,
+                    procs,
+                    layout_cache,
+                    Some(variable),
+                    symbol,
+                    env.arena.alloc(stmt),
+                    symbol,
+                );
+            }
+            Field::Field(var, loc_expr) => {
+                stmt = with_hole(
+                    env,
+                    loc_expr.value,
+                    var,
+                    procs,
+                    layout_cache,
+                    *symbol,
+                    env.arena.alloc(stmt),
+                );
+            }
+        }
+    }
+
+    stmt
 }
 
 #[inline(always)]
