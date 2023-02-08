@@ -25,7 +25,6 @@ pub(crate) mod x86_64;
 
 use storage::{RegStorage, StorageManager};
 
-const REFCOUNT_ONE: u64 = i64::MIN as u64;
 // TODO: on all number functions double check and deal with over/underflow.
 
 pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<GeneralReg, FloatReg>>:
@@ -1779,63 +1778,41 @@ impl<
     fn create_array(
         &mut self,
         sym: &Symbol,
-        elem_layout: &InLayout<'a>,
-        elems: &'a [ListLiteralElement<'a>],
+        element_layout: &InLayout<'a>,
+        elements: &'a [ListLiteralElement<'a>],
     ) {
-        // Allocate
-        // This requires at least 8 for the refcount alignment.
-        let allocation_alignment = std::cmp::max(
-            8,
-            self.layout_interner
-                .allocation_alignment_bytes(*elem_layout) as u64,
-        );
+        let element_width = self.layout_interner.stack_size(*element_layout) as u64;
 
-        let elem_size = self.layout_interner.stack_size(*elem_layout) as u64;
-        let allocation_size = elem_size * elems.len() as u64 + allocation_alignment /* add space for refcount */;
-        let u64_layout = Layout::U64;
+        // load the total size of the data we want to store (excludes refcount)
+        let data_bytes_symbol = Symbol::DEV_TMP;
+        let data_bytes = element_width * elements.len() as u64;
         self.load_literal(
-            &Symbol::DEV_TMP,
-            &u64_layout,
-            &Literal::Int((allocation_size as i128).to_ne_bytes()),
+            &data_bytes_symbol,
+            &Layout::U64,
+            &Literal::Int((data_bytes as i128).to_ne_bytes()),
         );
 
         // Load allocation alignment (u32)
-        let u32_layout = Layout::U32;
-        self.load_literal(
-            &Symbol::DEV_TMP2,
-            &u32_layout,
-            &Literal::Int((allocation_alignment as i128).to_ne_bytes()),
+        let element_alignment_symbol = Symbol::DEV_TMP2;
+        self.load_layout_alignment(Layout::U32, element_alignment_symbol);
+
+        self.allocate_with_refcount(
+            Symbol::DEV_TMP3,
+            data_bytes_symbol,
+            element_alignment_symbol,
         );
 
-        self.build_fn_call(
-            &Symbol::DEV_TMP3,
-            "roc_alloc".to_string(),
-            &[Symbol::DEV_TMP, Symbol::DEV_TMP2],
-            &[u64_layout, u32_layout],
-            &u64_layout,
-        );
-        self.free_symbol(&Symbol::DEV_TMP);
-        self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&data_bytes_symbol);
+        self.free_symbol(&element_alignment_symbol);
 
-        // Fill pointer with elems
+        // The pointer already points to the first element
         let ptr_reg = self
             .storage_manager
             .load_to_general_reg(&mut self.buf, &Symbol::DEV_TMP3);
-        // Point to first element of array.
-        ASM::add_reg64_reg64_imm32(&mut self.buf, ptr_reg, ptr_reg, allocation_alignment as i32);
-
-        // fill refcount at -8.
-        self.storage_manager.with_tmp_general_reg(
-            &mut self.buf,
-            |_storage_manager, buf, tmp_reg| {
-                ASM::mov_reg64_imm64(buf, tmp_reg, REFCOUNT_ONE as i64);
-                ASM::mov_mem64_offset32_reg64(buf, ptr_reg, -8, tmp_reg);
-            },
-        );
 
         // Copy everything into output array.
         let mut elem_offset = 0;
-        for elem in elems {
+        for elem in elements {
             // TODO: this could be a lot faster when loading large lists
             // if we move matching on the element layout to outside this loop.
             // It also greatly bloats the code here.
@@ -1844,24 +1821,24 @@ impl<
             let elem_sym = match elem {
                 ListLiteralElement::Symbol(sym) => sym,
                 ListLiteralElement::Literal(lit) => {
-                    self.load_literal(&Symbol::DEV_TMP, elem_layout, lit);
+                    self.load_literal(&Symbol::DEV_TMP, element_layout, lit);
                     &Symbol::DEV_TMP
                 }
             };
             // TODO: Expand to all types.
-            match self.layout_interner.get(*elem_layout) {
+            match self.layout_interner.get(*element_layout) {
                 Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64) | Builtin::Bool) => {
                     let sym_reg = self
                         .storage_manager
                         .load_to_general_reg(&mut self.buf, elem_sym);
                     ASM::mov_mem64_offset32_reg64(&mut self.buf, ptr_reg, elem_offset, sym_reg);
                 }
-                _ if elem_size == 0 => {}
-                _ if elem_size > 8 => {
+                _ if element_width == 0 => {}
+                _ if element_width > 8 => {
                     let (from_offset, size) = self.storage_manager.stack_offset_and_size(elem_sym);
                     debug_assert!(from_offset % 8 == 0);
                     debug_assert!(size % 8 == 0);
-                    debug_assert_eq!(size as u64, elem_size);
+                    debug_assert_eq!(size as u64, element_width);
                     self.storage_manager.with_tmp_general_reg(
                         &mut self.buf,
                         |_storage_manager, buf, tmp_reg| {
@@ -1874,7 +1851,7 @@ impl<
                 }
                 x => todo!("copying data to list with layout, {:?}", x),
             }
-            elem_offset += elem_size as i32;
+            elem_offset += element_width as i32;
             if elem_sym == &Symbol::DEV_TMP {
                 self.free_symbol(elem_sym);
             }
@@ -1887,7 +1864,7 @@ impl<
                 let base_offset = storage_manager.claim_stack_area(sym, 24);
                 ASM::mov_base32_reg64(buf, base_offset, ptr_reg);
 
-                ASM::mov_reg64_imm64(buf, tmp_reg, elems.len() as i64);
+                ASM::mov_reg64_imm64(buf, tmp_reg, elements.len() as i64);
                 ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
                 ASM::mov_base32_reg64(buf, base_offset + 16, tmp_reg);
             },
@@ -2274,6 +2251,21 @@ impl<
         CC: CallConv<GeneralReg, FloatReg, ASM>,
     > Backend64Bit<'a, 'r, GeneralReg, FloatReg, ASM, CC>
 {
+    fn allocate_with_refcount(
+        &mut self,
+        dst: Symbol,
+        data_bytes: Symbol,
+        element_alignment: Symbol,
+    ) {
+        self.build_fn_call(
+            &dst,
+            bitcode::UTILS_ALLOCATE_WITH_REFCOUNT.to_string(),
+            &[data_bytes, element_alignment],
+            &[Layout::U64, Layout::U32],
+            &Layout::U64,
+        );
+    }
+
     /// Updates a jump instruction to a new offset and returns the number of bytes written.
     fn update_jmp_imm32_offset(
         &mut self,

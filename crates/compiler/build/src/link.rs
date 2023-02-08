@@ -792,7 +792,14 @@ pub fn rebuild_host(
             // For surgical linking, just copy the dynamically linked rust app.
             let mut exe_path = cargo_out_dir.join("host");
             exe_path.set_extension(executable_extension);
-            std::fs::copy(&exe_path, &host_dest).unwrap();
+            if let Err(e) = std::fs::copy(&exe_path, &host_dest) {
+                panic!(
+                    "unable to copy {} => {}: {:?}\n\nIs the file used by another invocation of roc?",
+                    exe_path.display(),
+                    host_dest.display(),
+                    e,
+                );
+            }
         } else {
             // Cargo hosts depend on a c wrapper for the api. Compile host.c as well.
 
