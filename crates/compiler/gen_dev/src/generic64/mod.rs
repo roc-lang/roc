@@ -1518,7 +1518,42 @@ impl<
                             let dst_reg = storage_manager.claim_general_reg(buf, dst);
                             ASM::mov_reg64_mem64_offset32(buf, dst_reg, tmp, 0);
                         }
-                        x => internal_error!("Loading list element with layout: {:?}", x),
+                        single_register_floats!() => {
+                            let dst_reg = storage_manager.claim_float_reg(buf, dst);
+                            ASM::mov_freg64_freg64(buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
+                        }
+                        Layout::STR => {
+                            let dst_reg = storage_manager.claim_general_reg(buf, dst);
+
+                            let base_offset = storage_manager.claim_stack_area(dst, 24);
+
+                            // move 1 into a register
+                            ASM::mov_mem64_offset32_reg64(buf, dst_reg, 0, tmp);
+                            ASM::mov_base32_reg64(buf, base_offset + 0, dst_reg);
+
+                            // word 2
+                            ASM::mov_mem64_offset32_reg64(buf, dst_reg, 8, tmp);
+                            ASM::mov_base32_reg64(buf, base_offset + 8, dst_reg);
+
+                            // word 3
+                            ASM::mov_mem64_offset32_reg64(buf, dst_reg, 16, tmp);
+                            ASM::mov_base32_reg64(buf, base_offset + 16, dst_reg);
+                        }
+                        other => {
+                            //
+                            match self.layout_interner.get(other) {
+                                Layout::Boxed(_) => {
+                                    let dst_reg = storage_manager.claim_general_reg(buf, dst);
+                                    ASM::mov_reg64_reg64(buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
+                                }
+                                _ => {
+                                    todo!(
+                                        "cannot load {} from the heap yet",
+                                        self.layout_interner.dbg(other)
+                                    );
+                                }
+                            }
+                        }
                     }
                 });
             },
@@ -1925,7 +1960,13 @@ impl<
                     tag_layouts[tag_id as usize],
                 );
             }
-            x => todo!("loading from union type: {:?}", x),
+            _ => {
+                let union_in_layout = self.layout_interner.insert(Layout::Union(*union_layout));
+                todo!(
+                    "loading from union type: {:?}",
+                    self.layout_interner.dbg(union_in_layout)
+                )
+            }
         }
     }
 
@@ -2004,7 +2045,9 @@ impl<
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, &dst);
                 ASM::mov_reg64_mem64_offset32(&mut self.buf, dst_reg, ptr_reg, 0);
             }
-            x => internal_error!("Loading list element with layout: {:?}", x),
+            _ => {
+                todo!("unboxing of {:?}", self.layout_interner.dbg(element_layout))
+            }
         }
     }
 

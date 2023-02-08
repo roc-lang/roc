@@ -76,7 +76,7 @@ fn str_split_bigger_delimiter_small_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_str_concat_repeated() {
     assert_evals_to!(
         indoc!(
