@@ -400,9 +400,9 @@ Note that `&` can't introduce new fields to a record, or change the types of exi
 
 ## [Optional Record Fields](#optional-record-fields) {#optional-record-fields}
 
-Roc supports optional record fields using the `?` operator. This can be a useful pattern where you pass a function a record of configuration values, some of which you don't really care about and want to leave as defaults.
+Roc supports optional record fields using the `?` operator. This can be a useful pattern where you pass a function a record of configuration values, some of which you'd like to provide defaults for.
 
-In Roc you can write a function like;
+In Roc you can write a function like:
 
 <pre><samp>table <span class="kw">=</span> <span class="kw">\</span><span class="paren">{</span> height, width, title<span class="colon">?</span> "", description<span class="colon">?</span> "" <span class="paren">}</span> <span class="kw">-></span>
 </pre></samp>
@@ -410,7 +410,7 @@ In Roc you can write a function like;
 This is using *optional field destructuring* to destructure a record while
 also providing default values for any fields that might be missing.
 
-Here's the type of `table`;
+Here's the type of `table`:
 
 <pre><samp>table <span class="colon">:</span>
     <span class="paren">{</span>
