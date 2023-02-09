@@ -731,8 +731,7 @@ fn refcount_list<'a>(
     let arena = root.arena;
 
     // A "Box" layout (heap pointer to a single list element)
-    let box_union_layout = UnionLayout::NonNullableUnwrapped(arena.alloc([elem_layout]));
-    let box_layout = layout_interner.insert(Layout::Union(box_union_layout));
+    let box_layout = layout_interner.insert(Layout::Boxed(elem_layout));
 
     //
     // Check if the list is empty
@@ -803,7 +802,7 @@ fn refcount_list<'a>(
                 layout_interner,
                 elem_layout,
                 LAYOUT_UNIT,
-                box_union_layout,
+                box_layout,
                 len,
                 elements,
                 get_rc_and_modify_list,
@@ -853,7 +852,7 @@ fn refcount_list_elems<'a>(
     layout_interner: &mut STLayoutInterner<'a>,
     elem_layout: InLayout<'a>,
     ret_layout: InLayout<'a>,
-    box_union_layout: UnionLayout<'a>,
+    box_layout: InLayout<'a>,
     length: Symbol,
     elements: Symbol,
     following: Stmt<'a>,
@@ -913,17 +912,11 @@ fn refcount_list_elems<'a>(
 
     // Cast integer to box pointer
     let box_ptr = root.create_symbol(ident_ids, "box");
-    let box_layout = layout_interner.insert(Layout::Union(box_union_layout));
     let box_stmt = |next| let_lowlevel(arena, box_layout, box_ptr, PtrCast, &[addr], next);
 
     // Dereference the box pointer to get the current element
     let elem = root.create_symbol(ident_ids, "elem");
-    let elem_expr = Expr::UnionAtIndex {
-        structure: box_ptr,
-        union_layout: box_union_layout,
-        tag_id: 0,
-        index: 0,
-    };
+    let elem_expr = Expr::ExprUnbox { symbol: box_ptr };
     let elem_stmt = |next| Stmt::Let(elem, elem_expr, elem_layout, next);
 
     //
