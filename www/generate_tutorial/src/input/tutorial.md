@@ -445,7 +445,7 @@ optional field, you'll get a compile error.
 This means it's never possible to end up with an *optional value* that exists
 outside a record field. Optionality is a concept that exists only in record
 fields, and it's intended for the use case of config records like this. The
-ergonomics of destructuring mean this wouldn't be a good fit for data modeling.
+ergonomics of destructuring mean this wouldn't be a good fit for data modeling, consider using a `Result` type instead. 
 
 ## [Tags](#tags) {#tags}
 
