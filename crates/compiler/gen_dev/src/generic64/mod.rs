@@ -1888,7 +1888,12 @@ impl<
                         |_storage_manager, buf, tmp_reg| {
                             for i in (0..size as i32).step_by(8) {
                                 ASM::mov_reg64_base32(buf, tmp_reg, from_offset + i);
-                                ASM::mov_mem64_offset32_reg64(buf, ptr_reg, elem_offset, tmp_reg);
+                                ASM::mov_mem64_offset32_reg64(
+                                    buf,
+                                    ptr_reg,
+                                    elem_offset + i,
+                                    tmp_reg,
+                                );
                             }
                         },
                     );
@@ -2012,9 +2017,15 @@ impl<
                 self.storage_manager.with_tmp_general_reg(
                     &mut self.buf,
                     |_storage_manager, buf, tmp_reg| {
+                        // a crude memcpy
                         for i in (0..size as i32).step_by(8) {
                             ASM::mov_reg64_base32(buf, tmp_reg, from_offset + i);
-                            ASM::mov_mem64_offset32_reg64(buf, ptr_reg, element_offset, tmp_reg);
+                            ASM::mov_mem64_offset32_reg64(
+                                buf,
+                                ptr_reg,
+                                element_offset + i,
+                                tmp_reg,
+                            );
                         }
                     },
                 );
