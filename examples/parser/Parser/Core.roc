@@ -190,6 +190,7 @@ andThen = \@Parser firstParser, buildNextParser ->
         when firstParser input is
             Ok step ->
                 (@Parser nextParser) = buildNextParser step.val
+
                 nextParser step.input
 
             Err e ->

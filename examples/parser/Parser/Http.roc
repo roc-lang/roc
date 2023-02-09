@@ -83,6 +83,7 @@ httpVersion =
 expect
     actual = parseStr httpVersion "HTTP/1.1"
     expected = Ok { major: 1, minor: 1 }
+
     actual == expected
 
 Header : [Header Str Str]
@@ -110,6 +111,7 @@ header =
 expect
     actual = parseStr header "Accept-Encoding: gzip, deflate\r\n"
     expected = Ok (Header "Accept-Encoding" "gzip, deflate")
+
     actual == expected
 
 request : Parser RawStr Request
@@ -148,6 +150,7 @@ expect
         ],
         body: "Hello, world!" |> Str.toUtf8,
     }
+
     actual == expected
 
 expect
@@ -182,6 +185,7 @@ expect
         ],
         body: [],
     }
+
     actual == expected
 
 response : Parser RawStr Response
@@ -257,5 +261,6 @@ expect
             ],
             body: Str.toUtf8 body,
         }
+
     actual == expected
 

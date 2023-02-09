@@ -3,5 +3,7 @@ main =
         file <-
             foo
         bar
+
     task
+
 42

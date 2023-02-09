@@ -276,8 +276,10 @@ diff = \{ rendered, patches }, newNode ->
                     List.map2 oldChildren newChildren (\oldChildId, newChild -> { oldChildId, newChild })
                     |> List.walk stateAttrs \childWalkState, { oldChildId, newChild } ->
                         { rendered: childWalkRendered, patches: childWalkPatches } = childWalkState
+
                         diff { rendered: { childWalkRendered & root: oldChildId }, patches: childWalkPatches } newChild
                 { rendered: renderedLeftOverChildren, patches: patchesLeftOverChildren } =
+
                     if List.len oldChildren > List.len newChildren then
                         List.walkFrom oldChildren (List.len newChildren) stateChildPairs deleteNode
                     else if List.len oldChildren < List.len newChildren then
@@ -475,6 +477,7 @@ diffAttr = \{ nodeId, attrs, patches, handlers, deletedHandlerCache }, attr ->
                             Tuple
                                 { attrs & htmlAttrs: Dict.insert attrs.htmlAttrs k v }
                                 (patches |> List.append (SetAttribute nodeId k v))
+
                     {
                         nodeId,
                         attrs: newAttrs,
@@ -496,6 +499,7 @@ diffAttr = \{ nodeId, attrs, patches, handlers, deletedHandlerCache }, attr ->
                             Tuple
                                 { attrs & domProps: Dict.insert attrs.domProps k v }
                                 (patches |> List.append (SetProperty nodeId k v))
+
                     {
                         nodeId,
                         attrs: newAttrs,
@@ -517,6 +521,7 @@ diffAttr = \{ nodeId, attrs, patches, handlers, deletedHandlerCache }, attr ->
                             Tuple
                                 { attrs & styles: Dict.insert attrs.styles k v }
                                 (patches |> List.append (SetStyle nodeId k v))
+
                     {
                         nodeId,
                         attrs: newAttrs,

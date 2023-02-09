@@ -992,7 +992,9 @@ mod test_fmt {
                 f = \x, y ->
                     y = 4
                     z = 8
+
                     x
+
                 "string"
             "#
             ),
@@ -1001,7 +1003,9 @@ mod test_fmt {
                 f = \x, y ->
                     y = 4
                     z = 8
+
                     x
+
                 "string"
             "#
             ),
@@ -1298,6 +1302,7 @@ mod test_fmt {
                 x =
                     y = 4
                     z = 8
+
                     w
 
                 x
@@ -1339,6 +1344,68 @@ mod test_fmt {
             42
             "#
         ));
+    }
+
+    #[test]
+    fn defs_newline_before_return() {
+        expr_formats_same(indoc!(
+            r#"
+                x =
+                    y = 4
+                    z = 8
+
+                    z
+
+                x
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                x =
+                    y = 4
+                    z = 8
+
+                    z
+
+                # comment
+                x
+                "#
+        ));
+
+        expr_formats_same(indoc!(
+            r#"
+                x =
+                    y = 4 # comment
+                    z = 8 # comment
+
+                    z
+
+                # comment
+                x
+                "#
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r#"
+                x =
+                    y = 4
+                    y
+                x
+                "#
+            ),
+            indoc!(
+                r#"
+                x =
+                    y = 4
+
+                    y
+
+                x
+                "#
+            ),
+        );
     }
 
     #[test]
@@ -5825,6 +5892,7 @@ mod test_fmt {
                 _ = crash
                 _ = crash    ""
                 _ = crash   ""   ""
+
                 try
                     foo
                     (\_ ->   crash "")
@@ -5835,6 +5903,7 @@ mod test_fmt {
                 _ = crash
                 _ = crash ""
                 _ = crash "" ""
+
                 try
                     foo
                     (\_ -> crash "")

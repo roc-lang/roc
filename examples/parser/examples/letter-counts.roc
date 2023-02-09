@@ -14,6 +14,7 @@ app "example"
 main =
     lettersInput = "AAAiBByAABBwBtCCCiAyArBBx"
     ifLetterA = \l -> l == A
+
     when parseStr (many letterParser) lettersInput is
         Ok letters ->
             letters
@@ -46,10 +47,12 @@ expect
     input = "B"
     parser = letterParser
     result = parseStr parser input
+
     result == Ok B
 
 expect
     input = "BCXA"
     parser = many letterParser
     result = parseStr parser input
+
     result == Ok [B, C, Other, A]

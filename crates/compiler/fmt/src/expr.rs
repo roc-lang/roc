@@ -378,6 +378,10 @@ impl<'a> Formattable for Expr<'a> {
                             buf.spaces(1);
                             fmt_spaces(buf, spaces.iter(), indent);
 
+                            if let Some(CommentOrNewline::Newline) = spaces.last() {
+                                buf.newline()
+                            }
+
                             buf.indent(indent);
 
                             sub_expr.format_with_options(
