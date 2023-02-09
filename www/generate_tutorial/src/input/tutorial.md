@@ -404,7 +404,13 @@ Roc supports optional record fields using the `?` operator. This can be a useful
 
 In Roc you can write a function like:
 
-<pre><samp>table <span class="kw">=</span> <span class="kw">\</span><span class="paren">{</span> height, width, title<span class="colon">?</span> "", description<span class="colon">?</span> "" <span class="paren">}</span> <span class="kw">-></span>
+<pre><samp>table <span class="kw">=</span> <span class="kw">\</span><span class="paren">{</span> 
+        height, 
+        width, 
+        title<span class="colon">?</span> "oak", 
+        description<span class="colon">?</span> "a wooden table" <span class="paren">
+    }</span>
+    <span class="kw">-></span>
 </pre></samp>
 
 This is using *optional field destructuring* to destructure a record while
@@ -420,7 +426,6 @@ Here's the type of `table`:
         description<span class="colon">?</span> Str,
     <span class="paren">}</span>
     <span class="kw">-></span> Table
-table <span class="kw">= \</span><span class="paren">{</span> height, width, title<span class="colon">?</span> "", description<span class="colon">?</span> "" } <span class="kw">-></span>
 </pre></samp>
 
 This says that `table` takes a record with two *required* fields, `height` and
