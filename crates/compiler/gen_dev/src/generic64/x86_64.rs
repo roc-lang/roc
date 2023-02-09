@@ -268,9 +268,9 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
             storage_manager.ret_pointer_arg(Self::GENERAL_PARAM_REGS[0]);
             general_i += 1;
         }
-        for (layout, sym) in args.iter() {
-            let stack_size = layout_interner.stack_size(*layout);
-            match *layout {
+        for (in_layout, sym) in args.iter() {
+            let stack_size = layout_interner.stack_size(*in_layout);
+            match *in_layout {
                 single_register_integers!() => {
                     if general_i < Self::GENERAL_PARAM_REGS.len() {
                         storage_manager.general_reg_arg(sym, Self::GENERAL_PARAM_REGS[general_i]);
@@ -297,9 +297,22 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                     storage_manager.complex_stack_arg(sym, arg_offset, stack_size);
                     arg_offset += stack_size as i32;
                 }
-                x => {
-                    todo!("Loading args with layout {:?}", x);
-                }
+                other => match layout_interner.get(other) {
+                    Layout::Boxed(_) => {
+                        // boxed layouts are pointers, which we treat as 64-bit integers
+                        if general_i < Self::GENERAL_PARAM_REGS.len() {
+                            storage_manager
+                                .general_reg_arg(sym, Self::GENERAL_PARAM_REGS[general_i]);
+                            general_i += 1;
+                        } else {
+                            storage_manager.primitive_stack_arg(sym, arg_offset);
+                            arg_offset += 8;
+                        }
+                    }
+                    _ => {
+                        todo!("Loading args with layout {:?}", layout_interner.dbg(other));
+                    }
+                },
             }
         }
     }
@@ -338,6 +351,7 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                 base_offset,
             );
         }
+
         for (sym, layout) in args.iter().zip(arg_layouts.iter()) {
             match *layout {
                 single_register_integers!() => {
@@ -407,8 +421,37 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                     }
                     tmp_stack_offset += size as i32;
                 }
-                x => {
-                    todo!("calling with arg type, {:?}", x);
+                other => {
+                    // look at the layout in more detail
+                    match layout_interner.get(other) {
+                        Layout::Boxed(_) => {
+                            // treat boxed like a 64-bit integer
+                            if general_i < Self::GENERAL_PARAM_REGS.len() {
+                                storage_manager.load_to_specified_general_reg(
+                                    buf,
+                                    sym,
+                                    Self::GENERAL_PARAM_REGS[general_i],
+                                );
+                                general_i += 1;
+                            } else {
+                                // Copy to stack using return reg as buffer.
+                                storage_manager.load_to_specified_general_reg(
+                                    buf,
+                                    sym,
+                                    Self::GENERAL_RETURN_REGS[0],
+                                );
+                                X86_64Assembler::mov_stack32_reg64(
+                                    buf,
+                                    tmp_stack_offset,
+                                    Self::GENERAL_RETURN_REGS[0],
+                                );
+                                tmp_stack_offset += 8;
+                            }
+                        }
+                        _ => {
+                            todo!("calling with arg type, {:?}", layout_interner.dbg(other));
+                        }
+                    }
                 }
             }
         }

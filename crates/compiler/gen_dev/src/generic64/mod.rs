@@ -715,14 +715,23 @@ impl<
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
             }
-            _ => {
-                CC::load_returned_complex_symbol(
-                    &mut self.buf,
-                    &mut self.storage_manager,
-                    self.layout_interner,
-                    dst,
-                    ret_layout,
-                );
+            other => {
+                //
+                match self.layout_interner.get(other) {
+                    Layout::Boxed(_) => {
+                        let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                        ASM::mov_reg64_reg64(&mut self.buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
+                    }
+                    _ => {
+                        CC::load_returned_complex_symbol(
+                            &mut self.buf,
+                            &mut self.storage_manager,
+                            self.layout_interner,
+                            dst,
+                            ret_layout,
+                        );
+                    }
+                }
             }
         }
     }
@@ -1920,6 +1929,85 @@ impl<
         }
     }
 
+    fn expr_box(&mut self, sym: Symbol, value: Symbol, element_layout: InLayout<'a>) {
+        let element_width_symbol = Symbol::DEV_TMP;
+        self.load_layout_stack_size(element_layout, element_width_symbol);
+
+        // Load allocation alignment (u32)
+        let element_alignment_symbol = Symbol::DEV_TMP2;
+        self.load_layout_alignment(Layout::U32, element_alignment_symbol);
+
+        self.allocate_with_refcount(
+            Symbol::DEV_TMP3,
+            element_width_symbol,
+            element_alignment_symbol,
+        );
+
+        self.free_symbol(&element_width_symbol);
+        self.free_symbol(&element_alignment_symbol);
+
+        // Fill pointer with the value
+        let ptr_reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, &Symbol::DEV_TMP3);
+
+        let element_width = self.layout_interner.stack_size(element_layout) as u64;
+        let element_offset = 0;
+
+        // TODO: Expand to all types.
+        match self.layout_interner.get(element_layout) {
+            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+                let sym_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, &value);
+                ASM::mov_mem64_offset32_reg64(&mut self.buf, ptr_reg, element_offset, sym_reg);
+            }
+            _ if element_width == 0 => {}
+            _ if element_width > 8 => {
+                let (from_offset, size) = self.storage_manager.stack_offset_and_size(&value);
+                debug_assert!(from_offset % 8 == 0);
+                debug_assert!(size % 8 == 0);
+                debug_assert_eq!(size as u64, element_width);
+                self.storage_manager.with_tmp_general_reg(
+                    &mut self.buf,
+                    |_storage_manager, buf, tmp_reg| {
+                        for i in (0..size as i32).step_by(8) {
+                            ASM::mov_reg64_base32(buf, tmp_reg, from_offset + i);
+                            ASM::mov_mem64_offset32_reg64(buf, ptr_reg, element_offset, tmp_reg);
+                        }
+                    },
+                );
+            }
+            x => todo!("copying data to list with layout, {:?}", x),
+        }
+
+        if value == Symbol::DEV_TMP {
+            self.free_symbol(&value);
+        }
+
+        // box is just a pointer on the stack
+        let base_offset = self.storage_manager.claim_stack_area(&sym, 8);
+        ASM::mov_base32_reg64(&mut self.buf, base_offset, ptr_reg);
+
+        self.free_symbol(&Symbol::DEV_TMP3);
+    }
+
+    fn expr_unbox(&mut self, dst: Symbol, ptr: Symbol, element_layout: InLayout<'a>) {
+        let ptr_reg = self
+            .storage_manager
+            .load_to_general_reg(&mut self.buf, &ptr);
+
+        let ret_stack_size = self.layout_interner.stack_size(element_layout);
+
+        match element_layout {
+            single_register_integers!() if ret_stack_size == 8 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, &dst);
+                ASM::mov_reg64_mem64_offset32(&mut self.buf, dst_reg, ptr_reg, 0);
+            }
+            x => internal_error!("Loading list element with layout: {:?}", x),
+        }
+    }
+
     fn get_tag_id(&mut self, sym: &Symbol, structure: &Symbol, union_layout: &UnionLayout<'a>) {
         self.storage_manager.load_union_tag_id(
             self.layout_interner,
@@ -2036,9 +2124,19 @@ impl<
                         CC::FLOAT_RETURN_REGS[0],
                     );
                 }
-                _ => {
-                    internal_error!("All primitive valuse should fit in a single register");
-                }
+                other => match self.layout_interner.get(other) {
+                    Layout::Boxed(_) => {
+                        // treat like a 64-bit integer
+                        self.storage_manager.load_to_specified_general_reg(
+                            &mut self.buf,
+                            sym,
+                            CC::GENERAL_RETURN_REGS[0],
+                        );
+                    }
+                    _ => {
+                        internal_error!("All primitive values should fit in a single register");
+                    }
+                },
             }
         } else {
             CC::return_complex_symbol(

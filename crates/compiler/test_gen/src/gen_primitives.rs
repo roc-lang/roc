@@ -9,9 +9,7 @@ use crate::helpers::wasm::assert_evals_to;
 
 use indoc::indoc;
 #[allow(unused_imports)]
-use roc_std::RocList;
-#[allow(unused_imports)]
-use roc_std::RocStr;
+use roc_std::{RocBox, RocList, RocStr};
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
@@ -3275,17 +3273,15 @@ fn box_and_unbox_string() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_num() {
+    assert_evals_to!("Box.box 123u64", RocBox::new(123), RocBox<u64>)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn box_and_unbox_num() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            Box.unbox (Box.box (123u8))
-            "#
-        ),
-        123,
-        u8
-    )
+    assert_evals_to!("Box.unbox (Box.box (123u64))", 123, u64)
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use roc_error_macros::internal_error;
 use roc_gen_wasm::wasm32_sized::Wasm32Sized;
 use roc_mono::layout::Builtin;
-use roc_std::{RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
+use roc_std::{RocBox, RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
 use roc_wasm_module::round_up_to_alignment;
 use std::convert::TryInto;
 
@@ -101,6 +101,17 @@ impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocList<T> {
         let mut list = RocList::with_capacity(capacity as usize);
         list.extend_from_slice(&items);
         list
+    }
+}
+
+impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocBox<T> {
+    fn decode(memory: &[u8], offset: u32) -> Self {
+        let ptr = <u32 as FromWasm32Memory>::decode(memory, offset + 4 * Builtin::WRAPPER_PTR);
+        debug_assert_ne!(ptr, 0);
+
+        let value = <T as FromWasm32Memory>::decode(memory, ptr);
+
+        RocBox::new(value)
     }
 }
 
