@@ -3255,8 +3255,24 @@ fn issue_2322() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_small_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "short"
+                |> Box.box
+                |> Box.unbox
+            "#
+        ),
+        RocStr::from("short"),
+        RocStr
+    )
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn box_and_unbox_string() {
+fn box_and_unbox_big_string() {
     assert_evals_to!(
         indoc!(
             r#"
