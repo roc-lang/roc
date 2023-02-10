@@ -3,8 +3,6 @@
 
 This engineering blog is designed to facilitate collaboration and communication within the community. It provides a platform to share design documentation and to develop ideas through comments and feedback. The documentation not only gives the design intent, but also serves as a reference for contributors to implement and for newcomers to understand the features.
 
-Turn the following into a paragraph to explain to engineers the process for status updates.
-
 ## [Crash Reporting](/crash-reporting.html)
 
     Status: Proposal seeking feedback
