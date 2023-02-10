@@ -129,22 +129,23 @@ fn insert_refcount_stmt<'a>(
     mut usage: VariableUsage,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
-    usage.iter_mut().for_each(|(symbol, mut usage_count)| {
-        match consume_variable(environment, *symbol) {
-            // If the variable is borrowed, we need to increment the reference count for each usage.
-            Ownership::Borrowed => {}
-            // If the variable is owned, we need to increment the reference count for each usage except one.
-            Ownership::Owned => *usage_count -= 1,
-        }
-    });
-
     usage
         .iter()
         .fold(continuation, |continuation, (symbol, usage_count)| {
-            arena.alloc(Stmt::Refcounting(
-                ModifyRc::Inc(*symbol, *usage_count),
-                continuation,
-            ))
+            let new_count = match consume_variable(environment, *symbol) {
+                // If the variable is borrowed, we need to increment the reference count for each usage.
+                Ownership::Borrowed => *usage_count,
+                // If the variable is owned, we need to increment the reference count for each usage except one.
+                Ownership::Owned => *usage_count - 1,
+            };
+
+            match new_count {
+                0 => continuation,
+                _ => arena.alloc(Stmt::Refcounting(
+                    ModifyRc::Inc(*symbol, *usage_count),
+                    continuation,
+                )),
+            }
         })
 }
 
