@@ -311,6 +311,7 @@ mod test_snapshots {
         pass/expect_fx.moduledefs,
         pass/extra_newline_in_parens.expr,
         pass/float_with_underscores.expr,
+        pass/fn_with_record_arg.expr,
         pass/full_app_header.header,
         pass/full_app_header_trailing_commas.header,
         pass/function_effect_types.header,
