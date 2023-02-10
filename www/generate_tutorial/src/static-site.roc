@@ -14,13 +14,18 @@ relPathToName : Str -> Str
 relPathToName = \relPath -> 
     when relPath is 
         "tutorial.html" -> "Roc Tutorial"
-        "other.html" -> "Idea: Crash Reporting"
+        "crash-reporting.html" -> "Design: Crash Reporting"
+        "dbg-feature.html" -> "Design: Debugging"
+        "design.html" -> "Design Blog"
         _ -> "Roc"
 
 relPathToDescription : Str -> Str 
 relPathToDescription = \relPath -> 
     when relPath is 
         "tutorial.html" -> "Learn how to use the Roc programming language."
+        "crash-reporting.html" -> "A design article on crash reporting"
+        "dbg-feature.html" -> "A design article on debugging"
+        "design.html" -> "Contribute to the design of the Roc programming langugage"
         _ -> "A Roc blog post"
 
 view : Str, Str -> Html.Node
