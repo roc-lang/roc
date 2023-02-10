@@ -202,7 +202,45 @@ fn process_file(input_dir: &Path, output_dir: &Path, input_file: &Path) -> Resul
     options.remove(Options::ENABLE_SMART_PUNCTUATION);
 
     let parser = Parser::new_ext(&content_md, options);
-    html::push_html(&mut content_html, parser);
+
+    // We'll build a new vector of events since we can only consume the parser once
+    let mut parser_with_highlighting = Vec::new();
+    // As we go along, we'll want to highlight code in bundles, not lines
+    let mut to_highlight = String::new();
+    // And track a little bit of state
+    let mut in_code_block = false;
+
+    for event in parser {
+        match event {
+            pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(_)) => {
+                // TODO keep track of what language this code is so we only handle
+                in_code_block = true;
+            }
+            pulldown_cmark::Event::End(pulldown_cmark::Tag::CodeBlock(_)) => {
+                if in_code_block {
+                    // Format the whole multi-line code block as HTML all at once
+                    let highlighted_html = highlight_roc_code_with_regex(&to_highlight);
+                    // And put it into the vector
+                    parser_with_highlighting.push(pulldown_cmark::Event::Html(pulldown_cmark::CowStr::from(highlighted_html)));
+                    to_highlight = String::new();
+                    in_code_block = false;
+                }
+            }
+            pulldown_cmark::Event::Text(t) => {
+                if in_code_block {
+                    // If we're in a code block, build up the string of text
+                    to_highlight.push_str(&t);
+                } else {
+                    parser_with_highlighting.push(pulldown_cmark::Event::Text(t))
+                }
+            }
+            e => {
+                parser_with_highlighting.push(e);
+            }
+        }
+    }
+
+    html::push_html(&mut content_html, parser_with_highlighting.into_iter());
 
     let roc_relpath = RocStr::from(output_relpath.to_str().unwrap());
     let roc_content_html = RocStr::from(content_html.as_str());
@@ -240,3 +278,49 @@ pub fn strip_windows_prefix(path_buf: PathBuf) -> std::path::PathBuf {
 
     std::path::Path::new(path_str.trim_start_matches(r"\\?\")).to_path_buf()
 }
+
+fn highlight_roc_code_with_regex(code : &str) -> String {
+
+    let code = wrap_keyword_imports(code);
+    
+    format!("<pre><samp>{}</pre></samp>", code)
+
+}
+
+fn wrap_keyword_imports(s: &str) -> String {
+    // Find all instances of the "if" keyword
+    let s = s.replace(
+        " imports",
+        &format!("<span class=\"kw;\"> imports</span>"));
+    let s = s.replace(
+        "imports ",
+        &format!("<span class=\"kw;\">imports </span>"));
+    let s = s.replace(
+        "^imports ",
+        &format!("<span class=\"kw;\">imports </span>"));
+    s.replace(
+        " imports$",
+        &format!("<span class=\"kw;\"> imports</span>"),
+    )
+}
+
+// TODO other keywords
+// pub const IF: &str = "if";
+// pub const THEN: &str = "then";
+// pub const ELSE: &str = "else";
+// pub const WHEN: &str = "when";
+// pub const AS: &str = "as";
+// pub const IS: &str = "is";
+// pub const DBG: &str = "dbg";
+// pub const EXPECT: &str = "expect";
+// pub const EXPECT_FX: &str = "expect-fx";
+// pub const CRASH: &str = "crash";
+// ExposesKeyword => "exposes",
+// ImportsKeyword => "imports",
+// WithKeyword => "with",
+// GeneratesKeyword => "generates",
+// PackageKeyword => "package",
+// PackagesKeyword => "packages",
+// RequiresKeyword => "requires",
+// ProvidesKeyword => "provides",
+// ToKeyword => "to",
