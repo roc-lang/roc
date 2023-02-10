@@ -94,7 +94,7 @@ mv roc_nightly* roc_nightly
 echo 'Building tutorial.html from tutorial.md...'
 mkdir www/build/tutorial
 ./roc_nightly/roc version
-./roc_nightly/roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
+./roc_nightly/roc run www/generate_tutorial/src/static-site.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
 mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
 
 # cleanup

@@ -1,4 +1,34 @@
-<!-- The welcome and installation section are located in tutorial.roc -->
+
+# Tutorial
+
+Welcome to Roc!
+
+This tutorial will teach you how to build Roc applications. Along the way, you'll learn how to write tests, use the REPL, and much more!
+
+## [Table of Contents](#toc) {#toc}
+
+1.  [Installation](#installation)
+2.  [Strings and Numbers](#strings-and-numbers)
+3.  [Building an Application](#building-an-application)
+4.  [Defining Functions](#defining-functions)
+5.  [if-then-else](#if-then-else)
+6.  [Records](#records)
+7.  [Debugging](#debugging)
+8.  [Tags & Pattern Matching](#tags)
+9.  [Booleans](#booleans)
+10.  [Lists](#lists)
+11.  [Types](#types)
+12.  [Crashing](#crashing)
+13.  [Tests and Expectations](#tests-and-expectations)
+14.  [Modules](#modules)
+15.  [Tasks](#tasks)
+16.  [Abilities](#abilities)
+17.  [Advanced Concepts](#appendix-advanced-concepts)
+18.  [Operator Desugaring Table](#operator-desugaring-table)
+
+## [Installation](#installation) {#installation}
+
+Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS [here](https://github.com/roc-lang/roc/tree/main/getting_started#installation) . If you get stuck, friendly people will be happy to help if you open a topic in [#beginners](https://roc.zulipchat.com/#narrow/stream/231634-beginners) on [Roc Zulip Chat](https://roc.zulipchat.com/) and ask for assistance!
 
 ## [Strings and Numbers](#strings-and-numbers) {#strings-and-numbers}
 
