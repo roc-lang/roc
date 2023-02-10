@@ -557,7 +557,6 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
                 // This should have been recieved via an arg pointer.
                 // That means the value is already loaded onto the stack area we allocated before the call.
                 // Nothing to do.
-                dbg!(sym);
             }
         }
     }

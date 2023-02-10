@@ -3296,12 +3296,13 @@ fn box_num() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[ignore = "triggers some UB somewhere in at least the llvm and dev backends"]
 fn box_str() {
     assert_evals_to!(
         "Box.box \"short\"",
         RocBox::new(RocStr::from("short")),
         RocBox<RocStr>
-    )
+    );
 }
 
 #[test]

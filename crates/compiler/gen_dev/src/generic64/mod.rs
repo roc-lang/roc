@@ -2436,7 +2436,7 @@ impl<
         let base_offset = storage_manager.claim_stack_area(&dst, 24);
 
         ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, 0);
-        ASM::mov_base32_reg64(buf, base_offset + 0, tmp_reg);
+        ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
 
         ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, 8);
         ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
