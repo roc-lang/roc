@@ -819,6 +819,13 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::StrFromUtf8Range => self.build_fn_call(
+                sym,
+                bitcode::STR_FROM_UTF8_RANGE.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             LowLevel::PtrCast => {
                 debug_assert_eq!(
                     1,

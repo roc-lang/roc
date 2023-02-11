@@ -577,7 +577,7 @@ fn str_starts_with_false_small_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_pass_single_ascii() {
     assert_evals_to!(
         indoc!(

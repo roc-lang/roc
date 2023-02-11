@@ -1271,17 +1271,44 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64FloatReg, offset: i32) {
         movsd_freg64_base64_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
     }
+
     #[inline(always)]
     fn mov_reg64_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
         mov_reg64_base64_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
     }
     #[inline(always)]
+    fn mov_reg32_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
+        mov_reg32_base32_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
+    }
+    #[inline(always)]
+    fn mov_reg16_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
+        mov_reg16_base16_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
+    }
+    #[inline(always)]
+    fn mov_reg8_base32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, offset: i32) {
+        mov_reg8_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset)
+    }
+
+    #[inline(always)]
     fn mov_base32_freg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64FloatReg) {
         movsd_base64_offset32_freg64(buf, X86_64GeneralReg::RBP, offset, src)
     }
+
     #[inline(always)]
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
         mov_base64_offset32_reg64(buf, X86_64GeneralReg::RBP, offset, src)
+    }
+    #[inline(always)]
+    fn mov_base32_reg32(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
+        mov_base32_offset32_reg32(buf, X86_64GeneralReg::RBP, offset, src)
+    }
+    #[inline(always)]
+    fn mov_base32_reg16(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
+        mov_base16_offset32_reg16(buf, X86_64GeneralReg::RBP, offset, src)
+    }
+    #[inline(always)]
+    fn mov_base32_reg8(buf: &mut Vec<'_, u8>, offset: i32, src: X86_64GeneralReg) {
+        mov_base8_offset32_reg8(buf, X86_64GeneralReg::RBP, offset, src)
     }
 
     #[inline(always)]

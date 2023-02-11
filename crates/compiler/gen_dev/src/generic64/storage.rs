@@ -739,16 +739,55 @@ impl<
         layout: &InLayout<'a>,
     ) {
         match layout_interner.get(*layout) {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
-                debug_assert_eq!(to_offset % 8, 0);
-                let reg = self.load_to_general_reg(buf, sym);
-                ASM::mov_base32_reg64(buf, to_offset, reg);
-            }
-            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                debug_assert_eq!(to_offset % 8, 0);
-                let reg = self.load_to_float_reg(buf, sym);
-                ASM::mov_base32_freg64(buf, to_offset, reg);
-            }
+            Layout::Builtin(builtin) => match builtin {
+                Builtin::Int(int_width) => match int_width {
+                    IntWidth::I128 | IntWidth::U128 => {
+                        // can we treat this as 2 u64's?
+                        todo!()
+                    }
+                    IntWidth::I64 | IntWidth::U64 => {
+                        debug_assert_eq!(to_offset % 8, 0);
+                        let reg = self.load_to_general_reg(buf, sym);
+                        ASM::mov_base32_reg64(buf, to_offset, reg);
+                    }
+                    IntWidth::I32 | IntWidth::U32 => {
+                        debug_assert_eq!(to_offset % 4, 0);
+                        let reg = self.load_to_general_reg(buf, sym);
+                        ASM::mov_base32_reg32(buf, to_offset, reg);
+                    }
+                    IntWidth::I16 | IntWidth::U16 => {
+                        debug_assert_eq!(to_offset % 2, 0);
+                        let reg = self.load_to_general_reg(buf, sym);
+                        ASM::mov_base32_reg16(buf, to_offset, reg);
+                    }
+                    IntWidth::I8 | IntWidth::U8 => {
+                        let reg = self.load_to_general_reg(buf, sym);
+                        ASM::mov_base32_reg8(buf, to_offset, reg);
+                    }
+                },
+
+                Builtin::Float(float_width) => match float_width {
+                    FloatWidth::F64 => {
+                        debug_assert_eq!(to_offset % 8, 0);
+                        let reg = self.load_to_float_reg(buf, sym);
+                        ASM::mov_base32_freg64(buf, to_offset, reg);
+                    }
+                    FloatWidth::F32 => todo!(),
+                },
+                Builtin::Bool => {
+                    // same as 8-bit integer
+                    let reg = self.load_to_general_reg(buf, sym);
+                    ASM::mov_base32_reg8(buf, to_offset, reg);
+                }
+                Builtin::Decimal => todo!(),
+                Builtin::Str | Builtin::List(_) => {
+                    let (from_offset, size) = self.stack_offset_and_size(sym);
+                    debug_assert!(from_offset % 8 == 0);
+                    debug_assert!(size % 8 == 0);
+                    debug_assert_eq!(size, layout_interner.stack_size(*layout));
+                    self.copy_symbol_to_stack_offset_help(buf, size, from_offset, to_offset)
+                }
+            },
             _ if layout_interner.stack_size(*layout) == 0 => {}
             // TODO: Verify this is always true.
             // The dev backend does not deal with refcounting and does not care about if data is safe to memcpy.
@@ -759,15 +798,51 @@ impl<
                 debug_assert!(from_offset % 8 == 0);
                 debug_assert!(size % 8 == 0);
                 debug_assert_eq!(size, layout_interner.stack_size(*layout));
-                self.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
-                    for i in (0..size as i32).step_by(8) {
-                        ASM::mov_reg64_base32(buf, reg, from_offset + i);
-                        ASM::mov_base32_reg64(buf, to_offset + i, reg);
-                    }
-                });
+                self.copy_symbol_to_stack_offset_help(buf, size, from_offset, to_offset)
             }
             x => todo!("copying data to the stack with layout, {:?}", x),
         }
+    }
+
+    pub fn copy_symbol_to_stack_offset_help(
+        &mut self,
+        buf: &mut Vec<'a, u8>,
+        size: u32,
+        from_offset: i32,
+        to_offset: i32,
+    ) {
+        let mut copied = 0;
+        let size = size as i32;
+
+        self.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
+            for _ in (0..(size - copied)).step_by(8) {
+                ASM::mov_reg64_base32(buf, reg, from_offset + copied);
+                ASM::mov_base32_reg64(buf, to_offset + copied, reg);
+
+                copied += 8;
+            }
+
+            for _ in (0..(size - copied)).step_by(4) {
+                ASM::mov_reg32_base32(buf, reg, from_offset + copied);
+                ASM::mov_base32_reg32(buf, to_offset + copied, reg);
+
+                copied += 4;
+            }
+
+            for _ in (0..(size - copied)).step_by(2) {
+                ASM::mov_reg16_base32(buf, reg, from_offset + copied);
+                ASM::mov_base32_reg16(buf, to_offset + copied, reg);
+
+                copied += 2;
+            }
+
+            for _ in (0..(size - copied)).step_by(1) {
+                ASM::mov_reg8_base32(buf, reg, from_offset + copied);
+                ASM::mov_base32_reg8(buf, to_offset + copied, reg);
+
+                copied += 1;
+            }
+        });
     }
 
     #[allow(dead_code)]
