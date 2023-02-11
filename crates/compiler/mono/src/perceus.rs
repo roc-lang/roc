@@ -1,5 +1,6 @@
 use std::{collections::HashMap, hash::BuildHasherDefault, iter};
 
+use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_collections::{all::WyHash, MutMap, MutSet};
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
@@ -18,30 +19,42 @@ pub fn insert_refcount_operations<'a>(
     update_mode_ids: &mut UpdateModeIds,
     procedures: &mut HashMap<(Symbol, ProcLayout), Proc<'a>, BuildHasherDefault<WyHash>>,
 ) -> () {
+    // Create a VariableRcTypesEnv for the procedures as they get referenced but should be marked as non reference counted.
+    let proc_rc_type = procedures.keys().map(|(symbol, _layout)| *symbol);
+    let variable_rc_types_env =
+        VariableRcTypesEnv::from_proc_symbols(layout_interner, proc_rc_type);
+
     for (_, proc) in procedures.iter_mut() {
+        // Clone the variable_rc_types_env and insert the variables in the current procedure.
+        // As the variables should be limited in scope for the current proc.
+        let variable_rc_types_env = &mut variable_rc_types_env.clone();
+        variable_rc_types_env.insert_variables_rc_type_proc(&proc);
+
         let mut initial_environment = Environment {
-            variables_rc_type: VariableRcTypesEnv::get_variables_rc_type_proc(
-                layout_interner,
-                &proc,
-            ),
-            // All parameters are owned.
-            variables_ownership: proc
-                .args
-                .iter()
-                .map(|(_layout, symbol)| (*symbol, Ownership::Owned))
-                .collect(),
+            variables_rc_types: &variable_rc_types_env.variables_rc_type,
+            variables_ownership: MutMap::default(),
         };
-        let new_body = insert_refcount_operations_stmt(arena, &mut initial_environment, &proc.body);
+
+        // Add all arguments to the environment (if they are reference counted)
+        for (_layout, symbol) in proc.args.iter() {
+            initial_environment.add_variable(symbol);
+        }
+
+        let (new_body, _) =
+            insert_refcount_operations_stmt(arena, &mut initial_environment, &proc.body);
         proc.body = new_body.clone();
     }
 }
 
+#[derive(Clone)]
 enum VarRcType {
     ReferenceCounted,
     NotReferenceCounted,
 }
 
 type VariableRcTypes = MutMap<Symbol, VarRcType>;
+
+type FreeRcVariables = MutSet<Symbol>;
 
 struct VariableRcTypesEnv<'a> {
     // A map keeping track of which variables are reference counted and which are not.
@@ -50,24 +63,27 @@ struct VariableRcTypesEnv<'a> {
     layout_interner: &'a STLayoutInterner<'a>,
 }
 
+// TODO what would be a good way to structure a similar pattern? creating env, evaluating multiple different objects and returning an element from the env.
 impl<'a> VariableRcTypesEnv<'a> {
-    // Get the reference count types of all variables in a procedure.
-    fn get_variables_rc_type_proc(
-        layout_interner: &STLayoutInterner,
-        proc: &Proc<'a>,
-    ) -> VariableRcTypes {
-        let mut variable_rc_types = VariableRcTypesEnv {
-            variables_rc_type: MutMap::default(),
+    fn from_proc_symbols(
+        layout_interner: &'a STLayoutInterner,
+        proc_symbols: impl Iterator<Item = Symbol>,
+    ) -> VariableRcTypesEnv<'a> {
+        VariableRcTypesEnv {
+            variables_rc_type: proc_symbols
+                .map(|symbol| (symbol, VarRcType::NotReferenceCounted))
+                .collect(),
             layout_interner,
-        };
+        }
+    }
 
+    // Get the reference count types of all variables in a procedure.
+    fn insert_variables_rc_type_proc(self: &mut VariableRcTypesEnv<'a>, proc: &Proc<'a>) {
         for (layout, symbol) in proc.args.iter() {
-            variable_rc_types.insert_symbol_layout_rc_type(symbol, layout);
+            self.insert_symbol_layout_rc_type(symbol, layout);
         }
 
-        variable_rc_types.insert_variables_rc_type_stmt(&proc.body);
-
-        variable_rc_types.variables_rc_type
+        self.insert_variables_rc_type_stmt(&proc.body);
     }
 
     fn insert_variables_rc_type_stmt(self: &mut VariableRcTypesEnv<'a>, stmt: &Stmt<'a>) {
@@ -158,47 +174,197 @@ impl<'a> VariableRcTypesEnv<'a> {
     }
 }
 
-type Variables = MutSet<Symbol>;
+impl Clone for VariableRcTypesEnv<'_> {
+    fn clone(&self) -> Self {
+        VariableRcTypesEnv {
+            variables_rc_type: self.variables_rc_type.clone(),
+            layout_interner: self.layout_interner,
+        }
+    }
+}
 
 type VariablesOwnership = MutMap<Symbol, Ownership>;
 
 // A map keeping track of how many times a variable is used.
 type VariableUsage = MutMap<Symbol, u64>;
 
-fn insert_variable_usage(
-    variable_rc_types: &VariableRcTypes,
-    usage: &mut VariableUsage,
-    symbol: Symbol,
+// Combine variable usage by summing the usage of each variable.
+fn combine_variable_usage(
+    variable_usage: &mut VariableUsage,
+    other_variable_usage: &VariableUsage,
 ) {
-    match variable_rc_types
-        .get(&symbol)
-        .expect("Expected variable to be in the map")
-    {
-        // If the variable is reference counted, we need to increment the usage count.
-        VarRcType::ReferenceCounted => {
-            match usage.get(&symbol) {
-                Some(count) => usage.insert(symbol, count + 1),
-                None => usage.insert(symbol, 1),
-            };
-        }
-        // If the variable is not reference counted, we don't need to do anything.
-        VarRcType::NotReferenceCounted => return,
+    for (symbol, other_usage) in other_variable_usage.iter() {
+        match variable_usage.get(symbol) {
+            Some(old_usage) => variable_usage.insert(*symbol, old_usage + other_usage),
+            None => variable_usage.insert(*symbol, *other_usage),
+        };
     }
 }
 
-fn insert_variable_usages(
-    variable_rc_types: &VariableRcTypes,
-    usage: &mut VariableUsage,
-    symbols: impl Iterator<Item = Symbol>,
-) {
-    symbols.for_each(|symbol| insert_variable_usage(variable_rc_types, usage, symbol));
+struct VariableUsageEnv<'a> {
+    variable_usage: VariableUsage,
+
+    variable_rc_types: &'a VariableRcTypes,
 }
 
-struct Environment {
+impl<'a> VariableUsageEnv<'a> {
+    fn get_reference_counted_variable_usage_expr(
+        variable_rc_types: &VariableRcTypes,
+        expr: &Expr<'a>,
+    ) -> HashMap<Symbol, u64, BuildHasherDefault<WyHash>> {
+        let mut usage_env = VariableUsageEnv {
+            variable_usage: VariableUsage::default(),
+            variable_rc_types,
+        };
+
+        match expr {
+            Expr::Literal(_) => {
+                // Literals are not reference counted.
+            }
+            Expr::Call(call) => {
+                usage_env.insert_variable_usages(call.arguments.iter().copied());
+            }
+            Expr::Tag { arguments, .. } | Expr::Struct(arguments) => {
+                usage_env.insert_variable_usages(arguments.iter().copied());
+            }
+            Expr::StructAtIndex {
+                index,
+                field_layouts,
+                structure,
+            } => {
+                usage_env.insert_variable_usage(*structure);
+            }
+            Expr::GetTagId {
+                structure,
+                union_layout,
+            } => {
+                // The arguments to get tag id are not reference counted.
+            }
+            Expr::UnionAtIndex {
+                structure,
+                tag_id,
+                union_layout,
+                index,
+            } => todo!(),
+            Expr::Array { elem_layout, elems } => todo!(),
+            Expr::EmptyArray => todo!(),
+            Expr::ExprBox { symbol } => todo!(),
+            Expr::ExprUnbox { symbol } => todo!(),
+            Expr::Reuse {
+                symbol,
+                update_tag_id,
+                update_mode,
+                tag_layout,
+                tag_id,
+                arguments,
+            } => todo!(),
+            Expr::Reset {
+                symbol,
+                update_mode,
+            } => todo!(),
+            Expr::RuntimeErrorFunction(_) => todo!(),
+        }
+
+        usage_env.variable_usage
+    }
+
+    fn insert_variable_usage(self: &mut VariableUsageEnv<'a>, symbol: Symbol) {
+        match {
+            let this = self.variable_rc_types.get(&symbol);
+            match this {
+                Some(val) => val,
+                None => panic!("Expected variable to be in the map"),
+            }
+        } {
+            // If the variable is reference counted, we need to increment the usage count.
+            VarRcType::ReferenceCounted => {
+                match self.variable_usage.get(&symbol) {
+                    Some(count) => self.variable_usage.insert(symbol, count + 1),
+                    None => self.variable_usage.insert(symbol, 1),
+                };
+            }
+            // If the variable is not reference counted, we don't need to do anything.
+            VarRcType::NotReferenceCounted => return,
+        }
+    }
+
+    fn insert_variable_usages(
+        self: &mut VariableUsageEnv<'a>,
+        symbols: impl Iterator<Item = Symbol>,
+    ) {
+        symbols.for_each(|symbol| self.insert_variable_usage(symbol));
+    }
+}
+
+struct Environment<'a> {
     // Keep track which variables are reference counted and which are not.
-    variables_rc_type: VariableRcTypes,
+    variables_rc_types: &'a VariableRcTypes,
     // The Koka implementation assumes everything that is not owned to be borrowed.
     variables_ownership: VariablesOwnership,
+}
+
+impl<'a> Clone for Environment<'a> {
+    fn clone(&self) -> Self {
+        Environment {
+            variables_rc_types: self.variables_rc_types,
+            variables_ownership: self.variables_ownership.clone(),
+        }
+    }
+}
+
+impl<'a> Environment<'a> {
+    fn get_variable_rc_type(self: &mut Environment<'a>, variable: &Symbol) -> &VarRcType {
+        self.variables_rc_types
+            .get(variable)
+            .expect("variable should have rc type")
+    }
+
+    // Retrieve whether the variable is owned or borrowed.
+    // If it was owned, set it to borrowed.
+    fn consume_variable(self: &mut Environment<'a>, variable: &Symbol) -> Ownership {
+        // This function should only be called on reference counted variables.
+        debug_assert!(matches!(
+            self.get_variable_rc_type(variable),
+            VarRcType::ReferenceCounted
+        ));
+        // Consume the variable by setting it to borrowed (if it was owned before), and return the previous ownership.
+        let this = self
+            .variables_ownership
+            .insert(*variable, Ownership::Borrowed);
+        match this {
+            Some(val) => val,
+            None => panic!("Expected variable to be in environment"),
+        }
+    }
+
+    // Add a variable to the environment.
+    fn add_variable(self: &mut Environment<'a>, variable: &Symbol) {
+        match self.get_variable_rc_type(variable) {
+            VarRcType::ReferenceCounted => {
+                self.variables_ownership.insert(*variable, Ownership::Owned);
+            }
+            VarRcType::NotReferenceCounted => {
+                // If this variable is not reference counted, we don't need to do anything.
+            }
+        }
+    }
+
+    // Add a variable to the environment during a function call.
+    // Remove the variable afterwards to prevent it from being used outside the function call.
+    fn with_variable<F, R>(self: &mut Environment<'a>, variable: &Symbol, callback: F) -> R
+    where
+        F: Fn(&mut Environment) -> R,
+    {
+        match self.get_variable_rc_type(variable) {
+            VarRcType::ReferenceCounted => {
+                self.variables_ownership.insert(*variable, Ownership::Owned);
+                let result = callback(self);
+                self.variables_ownership.remove(&variable);
+                result
+            }
+            VarRcType::NotReferenceCounted => callback(self),
+        }
+    }
 }
 
 // TODO take into account what values should and should not be reference counted.
@@ -207,7 +373,7 @@ fn insert_refcount_operations_stmt<'a>(
     arena: &'a Bump,
     environment: &mut Environment,
     stmt: &Stmt<'a>,
-) -> &'a Stmt<'a> {
+) -> (&'a Stmt<'a>, FreeRcVariables) {
     // TODO: Deal with potentially stack overflowing let chains with an explicit loop.
     // Koka has a list for let bindings.
 
@@ -222,23 +388,31 @@ fn insert_refcount_operations_stmt<'a>(
             // And in the rest of the code, the dead variables are treated as borrowed (because not alive).
 
             // First evalute the continuation and let it consume it's free variables.
-            let new_stmt = insert_refcount_operations_stmt(arena, environment, stmt);
+            let (new_stmt, mut free_rc_vars_stmt) = environment.with_variable(binding, |env| {
+                insert_refcount_operations_stmt(arena, env, stmt)
+            });
 
             // Then evaluate the bound expression. where the free variables from the continuation are borrowed.
-            let mut usage = VariableUsage::default();
-            get_reference_counted_variable_usage_expr(
-                arena,
-                &environment.variables_rc_type,
-                &mut usage,
+            let variable_usage = VariableUsageEnv::get_reference_counted_variable_usage_expr(
+                &environment.variables_rc_types,
                 expr,
             );
 
-            // Can this clone be avoided?
             let new_let = arena.alloc(Stmt::Let(*binding, expr.clone(), *layout, new_stmt));
 
             // Insert the reference count operations for the variables used in the expression.
-            let new_let_with_refcount = insert_refcount_stmt(arena, environment, usage, new_let);
-            new_let_with_refcount
+            let new_let_with_refcount =
+                insert_inc_stmts(arena, environment, &variable_usage, new_let);
+
+            let free_rc_vars = {
+                // Remove the bound variable, as it is no longer free.
+                free_rc_vars_stmt.remove(binding);
+                // Add the free variables from the expression.
+                free_rc_vars_stmt.extend(variable_usage.keys());
+                free_rc_vars_stmt
+            };
+
+            (new_let_with_refcount, free_rc_vars)
         }
         Stmt::Switch {
             cond_symbol,
@@ -247,256 +421,162 @@ fn insert_refcount_operations_stmt<'a>(
             default_branch,
             ret_layout,
         } => {
-            return arena.alloc(Stmt::Switch {
+            let new_branches: std::vec::Vec<_> = branches
+                .iter()
+                .map(|(label, info, branch)| {
+                    let (new_branch, free_variables_branch) =
+                        insert_refcount_operations_stmt(arena, &mut environment.clone(), branch);
+
+                    (*label, info.clone(), new_branch, free_variables_branch)
+                })
+                .collect();
+
+            let new_default_branch = {
+                let (info, branch) = default_branch;
+                let (new_branch, free_variables_branch) =
+                    insert_refcount_operations_stmt(arena, &mut environment.clone(), branch);
+
+                (info.clone(), new_branch, free_variables_branch)
+            };
+
+            let free_rc_vars = {
+                let mut free_rc_vars = FreeRcVariables::default();
+
+                new_branches.iter().for_each(|(_, _, _, free_variables)| {
+                    free_rc_vars.extend(free_variables);
+                });
+
+                free_rc_vars.extend(&new_default_branch.2);
+
+                // The scrutinee is not reference counted as it is a number.
+                // Thus, we don't need to insert it in free vars.
+                // free_rc_vars.insert(*cond_symbol);
+
+                free_rc_vars
+            };
+
+            let newer_branches = Vec::from_iter_in(
+                new_branches
+                    .into_iter()
+                    .map(|(label, info, branch, free_variables)| {
+                        let drop_vars = free_rc_vars.difference(&free_variables).collect();
+                        let newer_branch = insert_dec_stmts(arena, environment, &drop_vars, branch);
+                        (label, info, newer_branch.clone())
+                    }),
+                arena,
+            )
+            .into_bump_slice();
+
+            let newer_default_branch = {
+                let (info, branch, free_variables) = new_default_branch;
+                let drop_vars = free_rc_vars.difference(&free_variables).collect();
+                let newer_branch = insert_dec_stmts(arena, environment, &drop_vars, branch);
+
+                (info, newer_branch)
+            };
+
+            let new_switch = arena.alloc(Stmt::Switch {
                 cond_symbol: *cond_symbol,
                 cond_layout: *cond_layout,
-                branches: branches.clone(),
-                default_branch: default_branch.clone(),
+                branches: newer_branches,
+                default_branch: newer_default_branch,
                 ret_layout: *ret_layout,
             });
-            todo!()
+
+            (new_switch, free_rc_vars)
         }
         Stmt::Ret(s) => {
-            return arena.alloc(Stmt::Ret(*s));
+            return (arena.alloc(Stmt::Ret(*s)), FreeRcVariables::default());
             todo!()
         }
-        Stmt::Refcounting(_, _) => todo!(),
-        _ => todo!(),
+        Stmt::Refcounting(_, _) => unreachable!("refcounting should not be in the AST already"),
+        Stmt::Expect {
+            condition,
+            region,
+            lookups,
+            variables,
+            remainder,
+        } => todo!(),
+        Stmt::ExpectFx {
+            condition,
+            region,
+            lookups,
+            variables,
+            remainder,
+        } => todo!(),
+        Stmt::Dbg {
+            symbol,
+            variable,
+            remainder,
+        } => todo!(),
+        Stmt::Join {
+            id,
+            parameters,
+            body,
+            remainder,
+        } => todo!(),
+        Stmt::Jump(_, _) => todo!(),
+        Stmt::Crash(_, _) => todo!(),
     }
 }
 
-fn insert_refcount_stmt<'a>(
+fn insert_inc_stmts<'a>(
     arena: &'a Bump,
     environment: &mut Environment,
-    mut usage: VariableUsage,
+    usage: &VariableUsage,
     continuation: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
     usage
         .iter()
         .fold(continuation, |continuation, (symbol, usage_count)| {
-            let new_count = match consume_variable(environment, *symbol) {
-                // If the variable is borrowed, we need to increment the reference count for each usage.
-                Ownership::Borrowed => *usage_count,
-                // If the variable is owned, we need to increment the reference count for each usage except one.
-                Ownership::Owned => *usage_count - 1,
-            };
-
-            match new_count {
-                0 => continuation,
-                _ => arena.alloc(Stmt::Refcounting(
-                    ModifyRc::Inc(*symbol, *usage_count),
-                    continuation,
-                )),
-            }
+            insert_inc_stmt(arena, environment, symbol, *usage_count, continuation)
         })
 }
 
-fn get_reference_counted_variable_usage_expr<'a>(
-    arena: &Bump,
-    variable_rc_types: &VariableRcTypes,
-    usage: &mut VariableUsage,
-    expr: &Expr<'a>,
-) {
-    match expr {
-        Expr::Literal(_) => {
-            // Literals are not reference counted.
-        }
-        Expr::Call(call) => {
-            insert_variable_usages(variable_rc_types, usage, call.arguments.iter().copied());
-        }
-        Expr::Tag {
-            tag_layout,
-            tag_id,
-            arguments,
-        } => todo!(),
-        Expr::Struct(arguments) => {
-            insert_variable_usages(variable_rc_types, usage, arguments.iter().copied());
-        }
-        Expr::StructAtIndex {
-            index,
-            field_layouts,
-            structure,
-        } => todo!(),
-        Expr::GetTagId {
-            structure,
-            union_layout,
-        } => {
-            // The arguments to get tag id are not reference counted.
-        }
-        Expr::UnionAtIndex {
-            structure,
-            tag_id,
-            union_layout,
-            index,
-        } => todo!(),
-        Expr::Array { elem_layout, elems } => todo!(),
-        Expr::EmptyArray => todo!(),
-        Expr::ExprBox { symbol } => todo!(),
-        Expr::ExprUnbox { symbol } => todo!(),
-        Expr::Reuse {
-            symbol,
-            update_tag_id,
-            update_mode,
-            tag_layout,
-            tag_id,
-            arguments,
-        } => todo!(),
-        Expr::Reset {
-            symbol,
-            update_mode,
-        } => todo!(),
-        Expr::RuntimeErrorFunction(_) => todo!(),
-    }
-}
-
-fn insert_refcount_operations_expr<'a>(
-    arena: &Bump,
+fn insert_inc_stmt<'a>(
+    arena: &'a Bump,
     environment: &mut Environment,
-    expr: &Expr<'a>,
-) -> Expr<'a> {
-    match &expr {
-        Expr::Literal(lit) => {
-            return Expr::Literal(lit.clone());
-            todo!()
-        }
-        Expr::Call(call) => Expr::Call(insert_refcount_operations_expr_call(
-            arena,
-            environment,
-            call,
+    symbol: &Symbol,
+    usage_count: u64,
+    continuation: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    let new_count = match environment.consume_variable(symbol) {
+        // If the variable is borrowed, we need to increment the reference count for each usage.
+        Ownership::Borrowed => usage_count,
+        // If the variable is owned, we need to increment the reference count for each usage except one.
+        Ownership::Owned => usage_count - 1,
+    };
+
+    match new_count {
+        0 => continuation,
+        positive_count => arena.alloc(Stmt::Refcounting(
+            ModifyRc::Inc(*symbol, positive_count),
+            continuation,
         )),
-        Expr::Tag {
-            tag_layout,
-            tag_id,
-            arguments,
-        } => {
-            return Expr::Tag {
-                tag_layout: *tag_layout,
-                tag_id: *tag_id,
-                arguments: arguments.clone(),
-            };
-            todo!()
-        }
-        Expr::Struct(s) => {
-            return Expr::Struct(s);
-            todo!()
-        }
-        Expr::StructAtIndex {
-            index,
-            field_layouts,
-            structure,
-        } => {
-            return Expr::StructAtIndex {
-                index: *index,
-                field_layouts,
-                structure: *structure,
-            };
-            todo!()
-        }
-        Expr::GetTagId {
-            structure,
-            union_layout,
-        } => {
-            return Expr::GetTagId {
-                structure: *structure,
-                union_layout: *union_layout,
-            };
-
-            todo!()
-        }
-        Expr::UnionAtIndex {
-            structure,
-            tag_id,
-            union_layout,
-            index,
-        } => todo!(),
-        Expr::Array { elem_layout, elems } => todo!(),
-        Expr::EmptyArray => todo!(),
-        Expr::ExprBox { symbol } => todo!(),
-        Expr::ExprUnbox { symbol } => todo!(),
-        Expr::Reuse {
-            symbol,
-            update_tag_id,
-            update_mode,
-            tag_layout,
-            tag_id,
-            arguments,
-        } => todo!(),
-        Expr::Reset {
-            symbol,
-            update_mode,
-        } => todo!(),
-        Expr::RuntimeErrorFunction(_) => todo!(),
     }
 }
 
-// When performing a function call, we pass the parameters as owned.
-// This means that if we have these parameters in the borrowed environment, we need to increment the reference count.
-fn insert_refcount_operations_expr_call<'a>(
-    arena: &Bump,
+fn insert_dec_stmts<'a>(
+    arena: &'a Bump,
     environment: &mut Environment,
-    call: &Call<'a>,
-) -> Call<'a> {
-    // INFO Koka makes a distinction between top level and non top level definitions.
-    match &call.call_type {
-        CallType::ByName {
-            name,
-            ret_layout,
-            arg_layouts,
-            specialization_id,
-        } => {
-            return call.clone();
-            todo!()
-        }
-        CallType::Foreign {
-            foreign_symbol,
-            ret_layout,
-        } => {
-            return call.clone();
-            todo!()
-        }
-        // E.g. lowlevel eq
-        CallType::LowLevel { op, update_mode } => {
-            return call.clone();
-            todo!()
-        }
-        CallType::HigherOrder(_) => {
-            return call.clone();
-            todo!()
-        }
-    }
+    symbols: &MutSet<&Symbol>,
+    continuation: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    symbols.iter().fold(continuation, |continuation, symbol| {
+        insert_dec_stmt(arena, environment, symbol, continuation)
+    })
 }
 
-// Retrieve whether the variable is owned or borrowed.
-// If it was owned, set it to borrowed.
-fn consume_variable<'a>(environment: &mut Environment, variable: Symbol) -> Ownership {
-    // Consume the variable by setting it to borrowed (if it was owned before), and return the previous ownership.
-    {
-        let this = environment
-            .variables_ownership
-            .insert(variable, Ownership::Borrowed);
-        match this {
-            Some(val) => val,
-            None => panic!("Expected variable to be in environment"),
-        }
+fn insert_dec_stmt<'a>(
+    arena: &'a Bump,
+    environment: &mut Environment,
+    symbol: &Symbol,
+    continuation: &'a Stmt<'a>,
+) -> &'a Stmt<'a> {
+    match environment.consume_variable(symbol) {
+        // If the variable is borrowed, don't have to decrement the reference count.
+        Ownership::Borrowed => continuation,
+        // If the variable is owned, we do need to decrement the reference count.
+        Ownership::Owned => arena.alloc(Stmt::Refcounting(ModifyRc::Dec(*symbol), continuation)),
     }
 }
-
-// trait FreeVariables {
-//     fn free_variables(&self) -> Variables;
-// }
-
-// impl<'a> FreeVariables for Stmt<'a> {
-//     // Return the set of variables that are free in the statement.
-//     fn free_variables(&self) -> Variables {
-//         return MutSet::default();
-//         todo!()
-//     }
-// }
-
-// impl<'a> FreeVariables for Expr<'a> {
-//     // Return the set of variables that are free in the expression.
-//     fn free_variables(&self) -> Variables {
-//         return MutSet::default();
-//         todo!()
-//     }
-// }
