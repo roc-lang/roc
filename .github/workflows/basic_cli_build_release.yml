@@ -166,13 +166,19 @@ jobs:
 
       - name: prep testing http-get.roc
         run: |
+          mv roc_nightly basic-cli-platform/.
           cd basic-cli-platform
+          mkdir examples
+          cd examples
           curl -OL https://github.com/roc-lang/basic-cli/blob/main/examples/http-get.roc
+          cd ..
           curl -OL https://github.com/roc-lang/basic-cli/blob/main/ci/expect_scripts/http-get.exp
           sed -i 's/pf:\ \"[^"]*/pf:\ \"main.roc/g' http-get.roc
 
       - run: sudo apt install -y expect
 
       - name: execute test
-        run: expect http-get.exp
+        run: |
+          cd basic-cli-platform
+          expect http-get.exp
 
