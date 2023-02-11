@@ -1294,6 +1294,16 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         mov_reg64_base64_offset32(buf, dst, src, offset)
     }
     #[inline(always)]
+    fn mov_reg32_mem32_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        mov_reg32_base32_offset32(buf, dst, src, offset)
+    }
+
+    #[inline(always)]
     fn mov_mem64_offset32_reg64(
         buf: &mut Vec<'_, u8>,
         dst: X86_64GeneralReg,
@@ -1301,6 +1311,16 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src: X86_64GeneralReg,
     ) {
         mov_base64_offset32_reg64(buf, dst, offset, src)
+    }
+
+    #[inline(always)]
+    fn mov_mem32_offset32_reg32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        offset: i32,
+        src: X86_64GeneralReg,
+    ) {
+        mov_base32_offset32_reg32(buf, dst, offset, src)
     }
 
     #[inline(always)]
@@ -2038,6 +2058,27 @@ fn mov_base64_offset32_reg64(
     src: X86_64GeneralReg,
 ) {
     let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(src, rex);
+    let src_mod = (src as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(8);
+    buf.extend([rex, 0x89, 0x80 | src_mod | base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
+/// `MOV r/m32,r32` -> Move r32 to r/m32, where m32 references a base + offset.
+#[inline(always)]
+fn mov_base32_offset32_reg32(
+    buf: &mut Vec<'_, u8>,
+    base: X86_64GeneralReg,
+    offset: i32,
+    src: X86_64GeneralReg,
+) {
+    let rex = add_rm_extension(base, REX);
     let rex = add_reg_extension(src, rex);
     let src_mod = (src as u8 % 8) << 3;
     let base_mod = base as u8 % 8;

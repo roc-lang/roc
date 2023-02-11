@@ -3307,8 +3307,14 @@ fn box_str() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn box_and_unbox_num() {
+fn box_and_unbox_64bit_num() {
     assert_evals_to!("Box.unbox (Box.box (123u64))", 123, u64)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_32bit_num() {
+    assert_evals_to!("Box.unbox (Box.box (123u32))", 123, u32)
 }
 
 #[test]
