@@ -1567,18 +1567,6 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         seto_reg64(buf, dst);
     }
 
-    fn and_reg8_reg8_reg8(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
-        binop_move_src_to_dst_reg64(buf, and_reg8_reg8, dst, src1, src2)
-    }
-
-    fn or_reg8_reg8_reg8(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
-        binop_move_src_to_dst_reg64(buf, or_reg8_reg8, dst, src1, src2)
-    }
-
-    fn xor_reg8_reg8_reg8(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
-        binop_move_src_to_dst_reg64(buf, xor_reg8_reg8, dst, src1, src2)
-    }
-
     fn and_reg64_reg64_reg64(buf: &mut Vec<'_, u8>, dst: Reg64, src1: Reg64, src2: Reg64) {
         binop_move_src_to_dst_reg64(buf, and_reg64_reg64, dst, src1, src2)
     }
@@ -1724,20 +1712,6 @@ fn add_reg_extension<T: RegTrait>(reg: T, byte: u8) -> u8 {
 }
 
 #[inline(always)]
-fn binop_reg8_reg8(
-    op_code: u8,
-    buf: &mut Vec<'_, u8>,
-    dst: X86_64GeneralReg,
-    src: X86_64GeneralReg,
-) {
-    let rex = add_rm_extension(dst, REX);
-    let rex = add_reg_extension(src, rex);
-    let dst_mod = dst as u8 % 8;
-    let src_mod = (src as u8 % 8) << 3;
-    buf.extend([rex, op_code, 0xC0 | dst_mod | src_mod]);
-}
-
-#[inline(always)]
 fn binop_reg64_reg64(
     op_code: u8,
     buf: &mut Vec<'_, u8>,
@@ -1786,27 +1760,6 @@ fn add_reg64_imm32(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, imm: i32) {
 #[inline(always)]
 fn add_reg64_reg64(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
     binop_reg64_reg64(0x01, buf, dst, src);
-}
-
-/// `AND r/m8,r8` -> Bitwise logical and r8 to r/m8.
-#[inline(always)]
-fn and_reg8_reg8(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    // NOTE: src and dst are flipped by design
-    binop_reg8_reg8(0x22, buf, src, dst);
-}
-
-/// `OR r/m8,r8` -> Bitwise logical inclusive or r8 to r/m8.
-#[inline(always)]
-fn or_reg8_reg8(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    // NOTE: src and dst are flipped by design
-    binop_reg8_reg8(0x0A, buf, src, dst);
-}
-
-/// `XOR r/m8,r8` -> Bitwise logical exclusive or r8 to r/m8.
-#[inline(always)]
-fn xor_reg8_reg8(buf: &mut Vec<'_, u8>, dst: X86_64GeneralReg, src: X86_64GeneralReg) {
-    // NOTE: src and dst are flipped by design
-    binop_reg8_reg8(0x32, buf, src, dst);
 }
 
 /// `AND r/m64,r64` -> Bitwise logical and r64 to r/m64.
@@ -2884,48 +2837,6 @@ mod tests {
         disassembler_test!(
             and_reg64_reg64,
             |reg1, reg2| format!("and {reg1}, {reg2}"),
-            ALL_GENERAL_REGS,
-            ALL_GENERAL_REGS
-        );
-    }
-
-    #[test]
-    fn test_and_reg8_reg8() {
-        disassembler_test!(
-            and_reg8_reg8,
-            |reg1, reg2| format!(
-                "and {}, {}",
-                X86_64GeneralReg::low_8bits_string(&reg1),
-                X86_64GeneralReg::low_8bits_string(&reg2),
-            ),
-            ALL_GENERAL_REGS,
-            ALL_GENERAL_REGS
-        );
-    }
-
-    #[test]
-    fn test_or_reg8_reg8() {
-        disassembler_test!(
-            or_reg8_reg8,
-            |reg1, reg2| format!(
-                "or {}, {}",
-                X86_64GeneralReg::low_8bits_string(&reg1),
-                X86_64GeneralReg::low_8bits_string(&reg2),
-            ),
-            ALL_GENERAL_REGS,
-            ALL_GENERAL_REGS
-        );
-    }
-
-    #[test]
-    fn test_xor_reg8_reg8() {
-        disassembler_test!(
-            xor_reg8_reg8,
-            |reg1, reg2| format!(
-                "xor {}, {}",
-                X86_64GeneralReg::low_8bits_string(&reg1),
-                X86_64GeneralReg::low_8bits_string(&reg2),
-            ),
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS
         );
