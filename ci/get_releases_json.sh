@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# retrieves roc_releases.json, expects TOKEN to be set to ${{ secrets.GITHUB_TOKEN }}
+# retrieves roc_releases.json, expects AUTH_HEADER to be set
 
 # https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 set -euxo pipefail

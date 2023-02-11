@@ -1,5 +1,4 @@
 on:
-  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -159,8 +158,6 @@ jobs:
 
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
-
-      - run: sudo apt-get install tree
 
       - run: cd basic-cli-platform && ls | grep "tar" | xargs tar -xzf
 
