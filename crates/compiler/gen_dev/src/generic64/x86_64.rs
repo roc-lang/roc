@@ -2199,6 +2199,54 @@ fn mov_base8_offset32_reg8(
     buf.extend(offset.to_le_bytes());
 }
 
+enum RegisterWidth {
+    W8,
+    W16,
+    W32,
+    W64,
+}
+
+#[inline(always)]
+fn mov_reg_base_offset32(
+    buf: &mut Vec<'_, u8>,
+    register_width: RegisterWidth,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    use RegisterWidth::*;
+
+    let rex = match register_width {
+        W64 => REX_W,
+        _ => REX,
+    };
+
+    let rex = add_rm_extension(base, rex);
+    let rex = add_reg_extension(dst, rex);
+
+    let dst_mod = (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    let operands = 0x80 | dst_mod | base_mod;
+
+    buf.reserve(8);
+
+    let instruction = match register_width {
+        W8 => 0x8A,
+        W16 | W32 | W64 => 0x8B,
+    };
+
+    match register_width {
+        W16 => buf.extend([GRP_4, rex, instruction, operands]),
+        _ => buf.extend([rex, instruction, operands]),
+    };
+
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
 /// `MOV r64,r/m64` -> Move r/m64 to r64, where m64 references a base + offset.
 #[inline(always)]
 fn mov_reg64_base64_offset32(
@@ -2207,17 +2255,7 @@ fn mov_reg64_base64_offset32(
     base: X86_64GeneralReg,
     offset: i32,
 ) {
-    let rex = add_rm_extension(base, REX_W);
-    let rex = add_reg_extension(dst, rex);
-    let dst_mod = (dst as u8 % 8) << 3;
-    let base_mod = base as u8 % 8;
-    buf.reserve(8);
-    buf.extend([rex, 0x8B, 0x80 | dst_mod | base_mod]);
-    // Using RSP or R12 requires a secondary index byte.
-    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
-        buf.push(0x24);
-    }
-    buf.extend(offset.to_le_bytes());
+    mov_reg_base_offset32(buf, RegisterWidth::W64, dst, base, offset)
 }
 
 /// `MOV r/m32,r32` -> Move r32 to r/m32.
@@ -2228,19 +2266,7 @@ fn mov_reg32_base32_offset32(
     base: X86_64GeneralReg,
     offset: i32,
 ) {
-    let rex = add_rm_extension(base, REX);
-    let rex = add_reg_extension(dst, rex);
-    let dst_mod = (dst as u8 % 8) << 3; // (dst as u8 % 8) << 3;
-    let base_mod = base as u8 % 8;
-    buf.reserve(8);
-
-    buf.extend([rex, 0x8B, 0x80 | dst_mod | base_mod]);
-    // Using RSP or R12 requires a secondary index byte.
-    // if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
-    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
-        buf.push(0x24);
-    }
-    buf.extend(offset.to_le_bytes());
+    mov_reg_base_offset32(buf, RegisterWidth::W32, dst, base, offset)
 }
 
 /// `MOV r/m16,r16` -> Move r16 to r/m16.
@@ -2251,19 +2277,7 @@ fn mov_reg16_base16_offset32(
     base: X86_64GeneralReg,
     offset: i32,
 ) {
-    let rex = add_rm_extension(base, REX);
-    let rex = add_reg_extension(dst, rex);
-    let dst_mod = (dst as u8 % 8) << 3; // (dst as u8 % 8) << 3;
-    let base_mod = base as u8 % 8;
-    buf.reserve(8);
-
-    buf.extend([0x66, rex, 0x8B, 0x80 | dst_mod | base_mod]);
-    // Using RSP or R12 requires a secondary index byte.
-    // if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
-    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
-        buf.push(0x24);
-    }
-    buf.extend(offset.to_le_bytes());
+    mov_reg_base_offset32(buf, RegisterWidth::W16, dst, base, offset)
 }
 
 /// `MOV r/m16,r16` -> Move r16 to r/m16.
@@ -2274,19 +2288,7 @@ fn mov_reg8_base8_offset32(
     base: X86_64GeneralReg,
     offset: i32,
 ) {
-    let rex = add_rm_extension(base, REX);
-    let rex = add_reg_extension(dst, rex);
-    let dst_mod = (dst as u8 % 8) << 3; // (dst as u8 % 8) << 3;
-    let base_mod = base as u8 % 8;
-    buf.reserve(8);
-
-    buf.extend([rex, 0x8A, 0x80 | dst_mod | base_mod]);
-    // Using RSP or R12 requires a secondary index byte.
-    // if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
-    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
-        buf.push(0x24);
-    }
-    buf.extend(offset.to_le_bytes());
+    mov_reg_base_offset32(buf, RegisterWidth::W8, dst, base, offset)
 }
 
 /// `MOVZX r64,r/m8` -> Move r/m8 with zero extention to r64, where m8 references a base + offset.
