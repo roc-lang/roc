@@ -963,6 +963,33 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         ret_reg64(buf, AArch64GeneralReg::LR)
     }
 
+    fn and_reg8_reg8_reg8(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("bitwise and for AArch64")
+    }
+
+    fn or_reg8_reg8_reg8(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("bitwise and for AArch64")
+    }
+
+    fn xor_reg8_reg8_reg8(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src1: AArch64GeneralReg,
+        _src2: AArch64GeneralReg,
+    ) {
+        todo!("bitwise and for AArch64")
+    }
+
     fn and_reg64_reg64_reg64(
         _buf: &mut Vec<'_, u8>,
         _dst: AArch64GeneralReg,

@@ -1857,7 +1857,7 @@ fn str_walk_utf8_with_index() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_append_scalar() {
     assert_evals_to!(
         indoc!(
