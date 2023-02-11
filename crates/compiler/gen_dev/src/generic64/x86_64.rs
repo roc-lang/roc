@@ -1591,6 +1591,7 @@ const REX: u8 = 0x40;
 /// If set, 64-bit operand size is used
 const REX_PREFIX_W: u8 = 0b1000;
 /// Extension to the MODRM.reg
+/// Permits access to additional registers
 const REX_PREFIX_R: u8 = 0b0100;
 #[allow(unused)]
 /// Extension to the SIB.index field
@@ -1598,7 +1599,7 @@ const REX_PREFIX_X: u8 = 0b0010;
 /// Extension to the MODRM.rm
 const REX_PREFIX_B: u8 = 0b0001;
 
-/// Wide REX
+/// Wide REX (64-bit)
 const REX_W: u8 = REX | REX_PREFIX_W;
 
 #[inline(always)]
@@ -2431,6 +2432,50 @@ mod tests {
     use capstone::prelude::*;
 
     impl X86_64GeneralReg {
+        #[allow(dead_code)]
+        fn low_32bits_string(&self) -> &str {
+            match self {
+                X86_64GeneralReg::RAX => "eax",
+                X86_64GeneralReg::RBX => "ebx",
+                X86_64GeneralReg::RCX => "ecx",
+                X86_64GeneralReg::RDX => "edx",
+                X86_64GeneralReg::RBP => "ebp",
+                X86_64GeneralReg::RSP => "esp",
+                X86_64GeneralReg::RDI => "edi",
+                X86_64GeneralReg::RSI => "esi",
+                X86_64GeneralReg::R8 => "r8d",
+                X86_64GeneralReg::R9 => "r9d",
+                X86_64GeneralReg::R10 => "r10d",
+                X86_64GeneralReg::R11 => "r11d",
+                X86_64GeneralReg::R12 => "r12d",
+                X86_64GeneralReg::R13 => "r13d",
+                X86_64GeneralReg::R14 => "r14d",
+                X86_64GeneralReg::R15 => "r15d",
+            }
+        }
+
+        #[allow(dead_code)]
+        fn low_16bits_string(&self) -> &str {
+            match self {
+                X86_64GeneralReg::RAX => "ax",
+                X86_64GeneralReg::RBX => "bx",
+                X86_64GeneralReg::RCX => "cx",
+                X86_64GeneralReg::RDX => "dx",
+                X86_64GeneralReg::RBP => "bp",
+                X86_64GeneralReg::RSP => "sp",
+                X86_64GeneralReg::RDI => "di",
+                X86_64GeneralReg::RSI => "si",
+                X86_64GeneralReg::R8 => "r8w",
+                X86_64GeneralReg::R9 => "r9w",
+                X86_64GeneralReg::R10 => "r10w",
+                X86_64GeneralReg::R11 => "r11w",
+                X86_64GeneralReg::R12 => "r12w",
+                X86_64GeneralReg::R13 => "r13w",
+                X86_64GeneralReg::R14 => "r14w",
+                X86_64GeneralReg::R15 => "r15w",
+            }
+        }
+
         #[allow(dead_code)]
         fn low_8bits_string(&self) -> &str {
             match self {
