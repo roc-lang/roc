@@ -2071,6 +2071,29 @@ fn mov_reg64_base64_offset32(
     buf.extend(offset.to_le_bytes());
 }
 
+/// `MOV r/m32,r32` -> Move r32 to r/m32.
+#[inline(always)]
+fn mov_reg32_base32_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    let rex = add_rm_extension(base, REX);
+    let rex = add_reg_extension(dst, rex);
+    let dst_mod = (dst as u8 % 8) << 3; // (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(8);
+
+    buf.extend([rex, 0x8B, 0x80 | dst_mod | base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    // if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
 /// `MOVZX r64,r/m8` -> Move r/m8 with zero extention to r64, where m8 references a base + offset.
 #[inline(always)]
 fn movzx_reg64_base8_offset32(
@@ -2849,6 +2872,22 @@ mod tests {
         disassembler_test!(
             mov_reg64_base64_offset32,
             |reg1, reg2, imm| format!("mov {}, qword ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
+    fn test_mov_reg32_base32_offset32() {
+        disassembler_test!(
+            mov_reg32_base32_offset32,
+            |reg1, reg2, imm| format!(
+                "mov {}, dword ptr [{} + 0x{:x}]",
+                X86_64GeneralReg::low_32bits_string(&reg1),
+                reg2,
+                imm
+            ),
             ALL_GENERAL_REGS,
             ALL_GENERAL_REGS,
             [TEST_I32]
