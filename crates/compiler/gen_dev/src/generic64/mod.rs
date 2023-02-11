@@ -1547,43 +1547,14 @@ impl<
                     ASM::add_reg64_reg64_reg64(buf, tmp, tmp, list_ptr);
                     let element_ptr = tmp;
 
-                    match *ret_layout {
-                        single_register_integers!() if ret_stack_size == 8 => {
-                            let dst_reg = storage_manager.claim_general_reg(buf, dst);
-                            ASM::mov_reg64_mem64_offset32(buf, dst_reg, element_ptr, 0);
-                        }
-                        single_register_floats!() => {
-                            let dst_reg = storage_manager.claim_float_reg(buf, dst);
-                            ASM::mov_freg64_freg64(buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
-                        }
-                        Layout::STR => {
-                            // the `list_ptr` register is now unused, and we can use it as scratch space
-                            let tmp_reg = list_ptr;
-
-                            Self::unbox_str_or_list(
-                                buf,
-                                storage_manager,
-                                *dst,
-                                element_ptr,
-                                tmp_reg,
-                            );
-                        }
-                        other => {
-                            //
-                            match self.layout_interner.get(other) {
-                                Layout::Boxed(_) => {
-                                    let dst_reg = storage_manager.claim_general_reg(buf, dst);
-                                    ASM::mov_reg64_reg64(buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
-                                }
-                                _ => {
-                                    todo!(
-                                        "cannot load {} from the heap yet",
-                                        self.layout_interner.dbg(other)
-                                    );
-                                }
-                            }
-                        }
-                    }
+                    Self::ptr_read(
+                        buf,
+                        storage_manager,
+                        self.layout_interner,
+                        element_ptr,
+                        *ret_layout,
+                        *dst,
+                    );
                 });
             },
         );
@@ -2036,37 +2007,14 @@ impl<
             .storage_manager
             .load_to_general_reg(&mut self.buf, &ptr);
 
-        let ret_stack_size = self.layout_interner.stack_size(element_layout);
-
-        match element_layout {
-            Layout::U64 | Layout::I64 => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, &dst);
-                ASM::mov_reg64_mem64_offset32(&mut self.buf, dst_reg, ptr_reg, 0);
-            }
-            Layout::U32 | Layout::I32 => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, &dst);
-                ASM::mov_reg32_mem32_offset32(&mut self.buf, dst_reg, ptr_reg, 0);
-            }
-            Layout::U16 | Layout::I16 => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, &dst);
-                ASM::mov_reg16_mem16_offset32(&mut self.buf, dst_reg, ptr_reg, 0);
-            }
-            Layout::U8 | Layout::I8 | Layout::BOOL => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, &dst);
-                ASM::mov_reg8_mem8_offset32(&mut self.buf, dst_reg, ptr_reg, 0);
-            }
-            Layout::STR => {
-                self.storage_manager.with_tmp_general_reg(
-                    &mut self.buf,
-                    |storage_manager, buf, tmp_reg| {
-                        Self::unbox_str_or_list(buf, storage_manager, dst, ptr_reg, tmp_reg);
-                    },
-                );
-            }
-            _ => {
-                todo!("unboxing of {:?}", self.layout_interner.dbg(element_layout))
-            }
-        }
+        Self::ptr_read(
+            &mut self.buf,
+            &mut self.storage_manager,
+            self.layout_interner,
+            ptr_reg,
+            element_layout,
+            dst,
+        );
     }
 
     fn get_tag_id(&mut self, sym: &Symbol, structure: &Symbol, union_layout: &UnionLayout<'a>) {
@@ -2442,6 +2390,67 @@ impl<
 
         ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, 16);
         ASM::mov_base32_reg64(buf, base_offset + 16, tmp_reg);
+    }
+
+    fn ptr_read(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+        layout_interner: &STLayoutInterner<'a>,
+        ptr_reg: GeneralReg,
+        element_in_layout: InLayout<'a>,
+        dst: Symbol,
+    ) {
+        match layout_interner.get(element_in_layout) {
+            Layout::Builtin(builtin) => match builtin {
+                Builtin::Int(int_width) => match int_width {
+                    IntWidth::I128 | IntWidth::U128 => {
+                        // can we treat this as 2 u64's?
+                        todo!()
+                    }
+                    IntWidth::I64 | IntWidth::U64 => {
+                        let dst_reg = storage_manager.claim_general_reg(buf, &dst);
+                        ASM::mov_reg64_mem64_offset32(buf, dst_reg, ptr_reg, 0);
+                    }
+                    IntWidth::I32 | IntWidth::U32 => {
+                        let dst_reg = storage_manager.claim_general_reg(buf, &dst);
+                        ASM::mov_reg32_mem32_offset32(buf, dst_reg, ptr_reg, 0);
+                    }
+                    IntWidth::I16 | IntWidth::U16 => {
+                        let dst_reg = storage_manager.claim_general_reg(buf, &dst);
+                        ASM::mov_reg16_mem16_offset32(buf, dst_reg, ptr_reg, 0);
+                    }
+                    IntWidth::I8 | IntWidth::U8 => {
+                        let dst_reg = storage_manager.claim_general_reg(buf, &dst);
+                        ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, 0);
+                    }
+                },
+                Builtin::Float(_) => {
+                    let dst_reg = storage_manager.claim_float_reg(buf, &dst);
+                    ASM::mov_freg64_freg64(buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
+                }
+                Builtin::Bool => {
+                    // the same as an 8-bit integer
+                    let dst_reg = storage_manager.claim_general_reg(buf, &dst);
+                    ASM::mov_reg8_mem8_offset32(buf, dst_reg, ptr_reg, 0);
+                }
+                Builtin::Decimal => {
+                    // same as 128-bit integer
+                }
+                Builtin::Str | Builtin::List(_) => {
+                    storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
+                        Self::unbox_str_or_list(buf, storage_manager, dst, ptr_reg, tmp_reg);
+                    });
+                }
+            },
+
+            Layout::Boxed(_) => {
+                // the same as 64-bit integer (for 64-bit targets)
+                let dst_reg = storage_manager.claim_general_reg(buf, &dst);
+                ASM::mov_reg64_mem64_offset32(buf, dst_reg, ptr_reg, 0);
+            }
+
+            _ => todo!("unboxing of {:?}", layout_interner.dbg(element_in_layout)),
+        }
     }
 
     fn ptr_write(
