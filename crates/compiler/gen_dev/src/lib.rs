@@ -833,6 +833,94 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            //            LowLevel::StrToUtf8 => self.build_fn_call(
+            //                sym,
+            //                bitcode::STR_TO_UTF8.to_string(),
+            //                args,
+            //                arg_layouts,
+            //                ret_layout,
+            //            ),
+            LowLevel::StrRepeat => self.build_fn_call(
+                sym,
+                bitcode::STR_REPEAT.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrTrim => self.build_fn_call(
+                sym,
+                bitcode::STR_TRIM.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrTrimLeft => self.build_fn_call(
+                sym,
+                bitcode::STR_TRIM_LEFT.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrTrimRight => self.build_fn_call(
+                sym,
+                bitcode::STR_TRIM_RIGHT.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrReserve => self.build_fn_call(
+                sym,
+                bitcode::STR_RESERVE.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrWithCapacity => self.build_fn_call(
+                sym,
+                bitcode::STR_WITH_CAPACITY.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrToScalars => self.build_fn_call(
+                sym,
+                bitcode::STR_TO_SCALARS.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrGetUnsafe => self.build_fn_call(
+                sym,
+                bitcode::STR_GET_UNSAFE.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrGetScalarUnsafe => self.build_fn_call(
+                sym,
+                bitcode::STR_GET_SCALAR_UNSAFE.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            //            LowLevel::StrToNum => {
+            //                let number_layout = match self.interner().get(*ret_layout) {
+            //                    Layout::Struct { field_layouts, .. } => field_layouts[0], // TODO: why is it sometimes a struct?
+            //                    _ => unreachable!(),
+            //                };
+            //
+            //                // match on the return layout to figure out which zig builtin we need
+            //                let intrinsic = match self.interner().get(number_layout) {
+            //                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+            //                    Layout::Builtin(Builtin::Float(float_width)) => {
+            //                        &bitcode::STR_TO_FLOAT[float_width]
+            //                    }
+            //                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+            //                    _ => unreachable!(),
+            //                };
+            //
+            //                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            //            }
             LowLevel::PtrCast => {
                 debug_assert_eq!(
                     1,

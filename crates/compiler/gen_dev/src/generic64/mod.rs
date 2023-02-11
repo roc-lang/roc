@@ -2,7 +2,7 @@ use crate::{
     single_register_floats, single_register_int_builtins, single_register_integers, Backend, Env,
     Relocation,
 };
-use bumpalo::collections::Vec;
+use bumpalo::collections::{CollectIn, Vec};
 use roc_builtins::bitcode::{self, FloatWidth, IntWidth};
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
@@ -1832,7 +1832,7 @@ impl<
         &mut self,
         sym: &Symbol,
         element_in_layout: &InLayout<'a>,
-        elements: &'a [ListLiteralElement<'a>],
+        elements: &[ListLiteralElement<'a>],
     ) {
         let element_layout = self.layout_interner.get(*element_in_layout);
         let element_width = self.layout_interner.stack_size(*element_in_layout) as u64;
@@ -2092,33 +2092,45 @@ impl<
                 let val = *x as f32;
                 ASM::mov_freg32_imm32(&mut self.buf, &mut self.relocs, reg, val);
             }
-            (Literal::Str(x), Layout::Builtin(Builtin::Str)) if x.len() < 24 => {
-                // Load small string.
-                self.storage_manager.with_tmp_general_reg(
-                    &mut self.buf,
-                    |storage_manager, buf, reg| {
-                        let base_offset = storage_manager.claim_stack_area(sym, 24);
-                        let mut bytes = [0; 24];
-                        bytes[..x.len()].copy_from_slice(x.as_bytes());
-                        bytes[23] = (x.len() as u8) | 0b1000_0000;
+            (Literal::Str(x), Layout::Builtin(Builtin::Str)) => {
+                if x.len() < 24 {
+                    // Load small string.
+                    self.storage_manager.with_tmp_general_reg(
+                        &mut self.buf,
+                        |storage_manager, buf, reg| {
+                            let base_offset = storage_manager.claim_stack_area(sym, 24);
+                            let mut bytes = [0; 24];
+                            bytes[..x.len()].copy_from_slice(x.as_bytes());
+                            bytes[23] = (x.len() as u8) | 0b1000_0000;
 
-                        let mut num_bytes = [0; 8];
-                        num_bytes.copy_from_slice(&bytes[..8]);
-                        let num = i64::from_ne_bytes(num_bytes);
-                        ASM::mov_reg64_imm64(buf, reg, num);
-                        ASM::mov_base32_reg64(buf, base_offset, reg);
+                            let mut num_bytes = [0; 8];
+                            num_bytes.copy_from_slice(&bytes[..8]);
+                            let num = i64::from_ne_bytes(num_bytes);
+                            ASM::mov_reg64_imm64(buf, reg, num);
+                            ASM::mov_base32_reg64(buf, base_offset, reg);
 
-                        num_bytes.copy_from_slice(&bytes[8..16]);
-                        let num = i64::from_ne_bytes(num_bytes);
-                        ASM::mov_reg64_imm64(buf, reg, num);
-                        ASM::mov_base32_reg64(buf, base_offset + 8, reg);
+                            num_bytes.copy_from_slice(&bytes[8..16]);
+                            let num = i64::from_ne_bytes(num_bytes);
+                            ASM::mov_reg64_imm64(buf, reg, num);
+                            ASM::mov_base32_reg64(buf, base_offset + 8, reg);
 
-                        num_bytes.copy_from_slice(&bytes[16..]);
-                        let num = i64::from_ne_bytes(num_bytes);
-                        ASM::mov_reg64_imm64(buf, reg, num);
-                        ASM::mov_base32_reg64(buf, base_offset + 16, reg);
-                    },
-                );
+                            num_bytes.copy_from_slice(&bytes[16..]);
+                            let num = i64::from_ne_bytes(num_bytes);
+                            ASM::mov_reg64_imm64(buf, reg, num);
+                            ASM::mov_base32_reg64(buf, base_offset + 16, reg);
+                        },
+                    );
+                } else {
+                    // load large string (pretend it's a `List U8`). We should move this data into
+                    // the binary eventually because our RC algorithm won't free this value
+                    let elements: Vec<_> = x
+                        .as_bytes()
+                        .iter()
+                        .map(|b| ListLiteralElement::Literal(Literal::Byte(*b)))
+                        .collect_in(self.storage_manager.env.arena);
+
+                    self.create_array(sym, &Layout::U8, elements.into_bump_slice())
+                }
             }
             x => todo!("loading literal, {:?}", x),
         }

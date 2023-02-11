@@ -16,7 +16,7 @@ use indoc::indoc;
 use roc_std::{RocList, RocResult, RocStr};
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_empty_delimiter() {
     assert_evals_to!(
         indoc!(
@@ -46,7 +46,7 @@ fn str_split_empty_delimiter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_bigger_delimiter_small_str() {
     assert_evals_to!(
         indoc!(
@@ -110,7 +110,7 @@ fn str_split_small_str_bigger_delimiter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_big_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
@@ -154,7 +154,7 @@ fn str_split_small_str_small_delimiter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_bigger_delimiter_big_strs() {
     assert_evals_to!(
         indoc!(
@@ -198,7 +198,7 @@ fn str_split_minimal_example() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_small_str_big_delimiter() {
     assert_evals_to!(
         indoc!(
@@ -227,7 +227,7 @@ fn str_split_small_str_big_delimiter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_small_str_20_char_delimiter() {
     assert_evals_to!(
         indoc!(
@@ -243,7 +243,7 @@ fn str_split_small_str_20_char_delimiter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_concat_big_to_big() {
     assert_evals_to!(
             indoc!(
@@ -402,7 +402,7 @@ fn small_str_concat_empty_second_arg() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn small_str_concat_small_to_big() {
     assert_evals_to!(
         r#"Str.concat "abc" " this is longer than 15 chars""#,
@@ -530,7 +530,7 @@ fn str_count_graphemes_three_js() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_count_graphemes_big_str() {
     assert_evals_to!(
         r#"Str.countGraphemes "6🤔å🤔e¥🤔çppkd🙃1jdal🦯asdfa∆ltråø˚waia8918.,🏅jjc""#,
@@ -540,7 +540,7 @@ fn str_count_graphemes_big_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_starts_with_same_big_str() {
     assert_evals_to!(
         r#"Str.startsWith "123456789123456789" "123456789123456789""#,
@@ -550,7 +550,7 @@ fn str_starts_with_same_big_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_starts_with_different_big_str() {
     assert_evals_to!(
         r#"Str.startsWith "12345678912345678910" "123456789123456789""#,
@@ -560,18 +560,18 @@ fn str_starts_with_different_big_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_starts_with_same_small_str() {
     assert_evals_to!(r#"Str.startsWith "1234" "1234""#, true, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_starts_with_different_small_str() {
     assert_evals_to!(r#"Str.startsWith "1234" "12""#, true, bool);
 }
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_starts_with_false_small_str() {
     assert_evals_to!(r#"Str.startsWith "1234" "23""#, false, bool);
 }
@@ -875,7 +875,7 @@ fn str_join_comma_small() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_join_comma_big() {
     assert_evals_to!(
         r#"Str.joinWith ["10000000", "2000000", "30000000"] ", " "#,
@@ -1031,7 +1031,7 @@ fn str_from_utf8_range_count_too_high_for_start() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_repeat_small_stays_small() {
     assert_evals_to!(
         indoc!(r#"Str.repeat "Roc" 3"#),
@@ -1041,7 +1041,7 @@ fn str_repeat_small_stays_small() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_repeat_small_becomes_big() {
     assert_evals_to!(
         indoc!(r#"Str.repeat "less than 23 characters" 2"#),
@@ -1051,7 +1051,7 @@ fn str_repeat_small_becomes_big() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_repeat_big() {
     assert_evals_to!(
         indoc!(r#"Str.repeat "more than 23 characters now" 2"#),
@@ -1061,27 +1061,26 @@ fn str_repeat_big() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_repeat_empty_string() {
     let a = indoc!(r#"Str.repeat "" 3"#);
-    let b = RocStr::from("");
-    assert_evals_to!(a, b, RocStr);
+    assert_evals_to!(a, RocStr::from(""), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_repeat_zero_times() {
     assert_evals_to!(indoc!(r#"Str.repeat "Roc" 0"#), RocStr::from(""), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_empty_string() {
     assert_evals_to!(indoc!(r#"Str.trim """#), RocStr::from(""), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_null_byte() {
     assert_evals_to!(
         indoc!(r#"Str.trim (Str.reserve "\u(0000)" 40)"#),
@@ -1091,13 +1090,13 @@ fn str_trim_null_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_small_blank_string() {
     assert_evals_to!(indoc!(r#"Str.trim " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_small_to_small() {
     assert_evals_to!(
         indoc!(r#"Str.trim "  hello world  ""#),
@@ -1107,7 +1106,7 @@ fn str_trim_small_to_small() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_large_to_large_unique() {
     assert_evals_to!(
         indoc!(r#"Str.trim (Str.concat "  " "hello world from a large string ")"#),
@@ -1117,7 +1116,7 @@ fn str_trim_large_to_large_unique() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_large_to_small_unique() {
     assert_evals_to!(
         indoc!(r#"Str.trim (Str.concat "  " "hello world        ")"#),
@@ -1184,13 +1183,13 @@ fn str_trim_small_to_small_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_left_small_blank_string() {
     assert_evals_to!(indoc!(r#"Str.trimLeft " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_left_small_to_small() {
     assert_evals_to!(
         indoc!(r#"Str.trimLeft "  hello world  ""#),
@@ -1200,7 +1199,7 @@ fn str_trim_left_small_to_small() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_left_large_to_large_unique() {
     assert_evals_to!(
         indoc!(r#"Str.trimLeft (Str.concat "    " "hello world from a large string ")"#),
@@ -1210,7 +1209,7 @@ fn str_trim_left_large_to_large_unique() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_left_large_to_small_unique() {
     assert_evals_to!(
         indoc!(r#"Str.trimLeft (Str.concat "  " "hello world        ")"#),
@@ -1277,13 +1276,13 @@ fn str_trim_left_small_to_small_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_right_small_blank_string() {
     assert_evals_to!(indoc!(r#"Str.trimRight " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_right_small_to_small() {
     assert_evals_to!(
         indoc!(r#"Str.trimRight "  hello world  ""#),
@@ -1293,7 +1292,7 @@ fn str_trim_right_small_to_small() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_right_large_to_large_unique() {
     assert_evals_to!(
         indoc!(r#"Str.trimRight (Str.concat " hello world from a large string" "    ")"#),
@@ -1303,7 +1302,7 @@ fn str_trim_right_large_to_large_unique() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_trim_right_large_to_small_unique() {
     assert_evals_to!(
         indoc!(r#"Str.trimRight (Str.concat "        hello world" "  ")"#),
@@ -1585,7 +1584,7 @@ fn str_to_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn issue_2811() {
     assert_evals_to!(
         indoc!(
@@ -1601,7 +1600,7 @@ fn issue_2811() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn to_scalar_1_byte() {
     assert_evals_to!(
         indoc!(
@@ -1625,7 +1624,7 @@ fn to_scalar_1_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn to_scalar_2_byte() {
     assert_evals_to!(
         indoc!(
@@ -1649,7 +1648,7 @@ fn to_scalar_2_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn to_scalar_3_byte() {
     assert_evals_to!(
         indoc!(
@@ -1673,7 +1672,7 @@ fn to_scalar_3_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn to_scalar_4_byte() {
     // from https://design215.com/toolbox/utf8-4byte-characters.php
     assert_evals_to!(
@@ -1812,7 +1811,7 @@ fn str_split_last_not_found() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_overlapping_substring_1() {
     assert_evals_to!(
         r#"Str.split "aaa" "aa""#,
@@ -1822,7 +1821,7 @@ fn str_split_overlapping_substring_1() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_overlapping_substring_2() {
     assert_evals_to!(
         r#"Str.split "aaaa" "aa""#,
@@ -1951,7 +1950,7 @@ fn when_on_strings() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn with_capacity() {
     assert_evals_to!(
         indoc!(
@@ -1965,7 +1964,7 @@ fn with_capacity() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn with_capacity_concat() {
     assert_evals_to!(
         indoc!(
@@ -1979,7 +1978,7 @@ fn with_capacity_concat() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_with_prefix() {
     assert_evals_to!(
         indoc!(
@@ -2003,7 +2002,7 @@ fn str_with_prefix() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn destructure_pattern_assigned_from_thunk_opaque() {
     assert_evals_to!(
         indoc!(
@@ -2025,7 +2024,7 @@ fn destructure_pattern_assigned_from_thunk_opaque() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn destructure_pattern_assigned_from_thunk_tag() {
     assert_evals_to!(
         indoc!(
