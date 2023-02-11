@@ -593,7 +593,7 @@ fn str_from_utf8_pass_single_ascii() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_pass_many_ascii() {
     assert_evals_to!(
         indoc!(
@@ -609,7 +609,7 @@ fn str_from_utf8_pass_many_ascii() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_pass_single_unicode() {
     assert_evals_to!(
         indoc!(
@@ -625,7 +625,7 @@ fn str_from_utf8_pass_single_unicode() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_pass_many_unicode() {
     assert_evals_to!(
         indoc!(
@@ -641,7 +641,7 @@ fn str_from_utf8_pass_many_unicode() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_pass_single_grapheme() {
     assert_evals_to!(
         indoc!(
@@ -657,7 +657,7 @@ fn str_from_utf8_pass_single_grapheme() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_pass_many_grapheme() {
     assert_evals_to!(
         indoc!(
@@ -673,7 +673,7 @@ fn str_from_utf8_pass_many_grapheme() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_pass_all() {
     assert_evals_to!(
         indoc!(
@@ -689,7 +689,7 @@ fn str_from_utf8_pass_all() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_fail_invalid_start_byte() {
     assert_evals_to!(
         indoc!(
@@ -709,7 +709,7 @@ fn str_from_utf8_fail_invalid_start_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_fail_unexpected_end_of_sequence() {
     assert_evals_to!(
         indoc!(
@@ -729,7 +729,7 @@ fn str_from_utf8_fail_unexpected_end_of_sequence() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_fail_expected_continuation() {
     assert_evals_to!(
         indoc!(
@@ -749,7 +749,7 @@ fn str_from_utf8_fail_expected_continuation() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_fail_overlong_encoding() {
     assert_evals_to!(
         indoc!(
@@ -769,7 +769,7 @@ fn str_from_utf8_fail_overlong_encoding() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_fail_codepoint_too_large() {
     assert_evals_to!(
         indoc!(
@@ -789,7 +789,7 @@ fn str_from_utf8_fail_codepoint_too_large() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_fail_surrogate_half() {
     assert_evals_to!(
         indoc!(
@@ -865,7 +865,7 @@ fn nested_recursive_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_join_comma_small() {
     assert_evals_to!(
         r#"Str.joinWith ["1", "2"] ", " "#,
@@ -885,7 +885,7 @@ fn str_join_comma_big() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_join_comma_single() {
     assert_evals_to!(r#"Str.joinWith ["1"] ", " "#, RocStr::from("1"), RocStr);
 }

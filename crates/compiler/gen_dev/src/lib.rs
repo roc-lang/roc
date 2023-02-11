@@ -784,6 +784,13 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::StrJoinWith => self.build_fn_call(
+                sym,
+                bitcode::STR_JOIN_WITH.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             LowLevel::StrSplit => self.build_fn_call(
                 sym,
                 bitcode::STR_SPLIT.to_string(),
