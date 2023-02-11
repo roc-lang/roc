@@ -253,6 +253,13 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         src: GeneralReg,
         offset: i32,
     );
+    fn mov_reg16_mem16_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src: GeneralReg,
+        offset: i32,
+    );
+    fn mov_reg8_mem8_offset32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg, offset: i32);
 
     // move from register to memory
     fn mov_mem64_offset32_reg64(
@@ -267,6 +274,13 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         offset: i32,
         src: GeneralReg,
     );
+    fn mov_mem16_offset32_reg16(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        offset: i32,
+        src: GeneralReg,
+    );
+    fn mov_mem8_offset32_reg8(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, src: GeneralReg);
 
     /// Sign extends the data at `offset` with `size` as it copies it to `dst`
     /// size must be less than or equal to 8.
@@ -2026,6 +2040,14 @@ impl<
                 let sym_reg = storage_manager.load_to_general_reg(&mut self.buf, &value);
                 ASM::mov_mem32_offset32_reg32(&mut self.buf, ptr_reg, element_offset, sym_reg);
             }
+            Layout::Builtin(Builtin::Int(IntWidth::I16 | IntWidth::U16)) => {
+                let sym_reg = storage_manager.load_to_general_reg(&mut self.buf, &value);
+                ASM::mov_mem16_offset32_reg16(&mut self.buf, ptr_reg, element_offset, sym_reg);
+            }
+            Layout::Builtin(Builtin::Int(IntWidth::I8 | IntWidth::U8) | Builtin::Bool) => {
+                let sym_reg = storage_manager.load_to_general_reg(&mut self.buf, &value);
+                ASM::mov_mem8_offset32_reg8(&mut self.buf, ptr_reg, element_offset, sym_reg);
+            }
             _ if element_width == 0 => {}
             _ if element_width > 8 => {
                 let (from_offset, size) = self.storage_manager.stack_offset_and_size(&value);
@@ -2077,6 +2099,14 @@ impl<
             Layout::U32 | Layout::I32 => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, &dst);
                 ASM::mov_reg32_mem32_offset32(&mut self.buf, dst_reg, ptr_reg, 0);
+            }
+            Layout::U16 | Layout::I16 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, &dst);
+                ASM::mov_reg16_mem16_offset32(&mut self.buf, dst_reg, ptr_reg, 0);
+            }
+            Layout::U8 | Layout::I8 | Layout::BOOL => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, &dst);
+                ASM::mov_reg8_mem8_offset32(&mut self.buf, dst_reg, ptr_reg, 0);
             }
             Layout::STR => {
                 self.storage_manager.with_tmp_general_reg(

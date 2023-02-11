@@ -657,6 +657,25 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         }
     }
     #[inline(always)]
+    fn mov_reg16_mem16_offset32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src: AArch64GeneralReg,
+        _offset: i32,
+    ) {
+        todo!()
+    }
+    #[inline(always)]
+    fn mov_reg8_mem8_offset32(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _src: AArch64GeneralReg,
+        _offset: i32,
+    ) {
+        todo!()
+    }
+
+    #[inline(always)]
     fn mov_mem64_offset32_reg64(
         buf: &mut Vec<'_, u8>,
         dst: AArch64GeneralReg,
@@ -675,19 +694,32 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
 
     #[inline(always)]
     fn mov_mem32_offset32_reg32(
-        buf: &mut Vec<'_, u8>,
-        dst: AArch64GeneralReg,
-        offset: i32,
-        src: AArch64GeneralReg,
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _offset: i32,
+        _src: AArch64GeneralReg,
     ) {
-        if offset < 0 {
-            todo!("negative mem offsets for AArch64");
-        } else if offset < (0xFFF << 8) {
-            debug_assert!(offset % 8 == 0);
-            str_reg64_reg64_imm12(buf, src, dst, (offset as u16) >> 3);
-        } else {
-            todo!("mem offsets over 32k for AArch64");
-        }
+        todo!()
+    }
+
+    #[inline(always)]
+    fn mov_mem16_offset32_reg16(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _offset: i32,
+        _src: AArch64GeneralReg,
+    ) {
+        todo!()
+    }
+
+    #[inline(always)]
+    fn mov_mem8_offset32_reg8(
+        _buf: &mut Vec<'_, u8>,
+        _dst: AArch64GeneralReg,
+        _offset: i32,
+        _src: AArch64GeneralReg,
+    ) {
+        todo!()
     }
 
     #[inline(always)]

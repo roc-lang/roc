@@ -1302,6 +1302,22 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
     ) {
         mov_reg32_base32_offset32(buf, dst, src, offset)
     }
+    fn mov_reg16_mem16_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        mov_reg16_base16_offset32(buf, dst, src, offset)
+    }
+    fn mov_reg8_mem8_offset32(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        src: X86_64GeneralReg,
+        offset: i32,
+    ) {
+        mov_reg8_base8_offset32(buf, dst, src, offset)
+    }
 
     #[inline(always)]
     fn mov_mem64_offset32_reg64(
@@ -1321,6 +1337,26 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         src: X86_64GeneralReg,
     ) {
         mov_base32_offset32_reg32(buf, dst, offset, src)
+    }
+
+    #[inline(always)]
+    fn mov_mem16_offset32_reg16(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        offset: i32,
+        src: X86_64GeneralReg,
+    ) {
+        mov_base16_offset32_reg16(buf, dst, offset, src)
+    }
+
+    #[inline(always)]
+    fn mov_mem8_offset32_reg8(
+        buf: &mut Vec<'_, u8>,
+        dst: X86_64GeneralReg,
+        offset: i32,
+        src: X86_64GeneralReg,
+    ) {
+        mov_base8_offset32_reg8(buf, dst, offset, src)
     }
 
     #[inline(always)]
@@ -1605,6 +1641,9 @@ impl X86_64Assembler {
         push_reg64(buf, reg);
     }
 }
+
+const GRP_4: u8 = 0x66;
+
 const REX: u8 = 0x40;
 
 // see https://wiki.osdev.org/X86-64_Instruction_Encoding#Encoding
@@ -2091,6 +2130,48 @@ fn mov_base32_offset32_reg32(
     buf.extend(offset.to_le_bytes());
 }
 
+/// `MOV r/m16,r16` -> Move r16 to r/m16, where m16 references a base + offset.
+#[inline(always)]
+fn mov_base16_offset32_reg16(
+    buf: &mut Vec<'_, u8>,
+    base: X86_64GeneralReg,
+    offset: i32,
+    src: X86_64GeneralReg,
+) {
+    let rex = add_rm_extension(base, REX);
+    let rex = add_reg_extension(src, rex);
+    let src_mod = (src as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(8);
+    buf.extend([GRP_4, rex, 0x89, 0x80 | src_mod | base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
+/// `MOV r/m8,r8` -> Move r8 to r/m8, where m8 references a base + offset.
+#[inline(always)]
+fn mov_base8_offset32_reg8(
+    buf: &mut Vec<'_, u8>,
+    base: X86_64GeneralReg,
+    offset: i32,
+    src: X86_64GeneralReg,
+) {
+    let rex = add_rm_extension(base, REX);
+    let rex = add_reg_extension(src, rex);
+    let src_mod = (src as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(8);
+    buf.extend([rex, 0x88, 0x80 | src_mod | base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
 /// `MOV r64,r/m64` -> Move r/m64 to r64, where m64 references a base + offset.
 #[inline(always)]
 fn mov_reg64_base64_offset32(
@@ -2127,6 +2208,52 @@ fn mov_reg32_base32_offset32(
     buf.reserve(8);
 
     buf.extend([rex, 0x8B, 0x80 | dst_mod | base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    // if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
+/// `MOV r/m16,r16` -> Move r16 to r/m16.
+#[inline(always)]
+fn mov_reg16_base16_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    let rex = add_rm_extension(base, REX);
+    let rex = add_reg_extension(dst, rex);
+    let dst_mod = (dst as u8 % 8) << 3; // (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(8);
+
+    buf.extend([0x66, rex, 0x8B, 0x80 | dst_mod | base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    // if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
+/// `MOV r/m16,r16` -> Move r16 to r/m16.
+#[inline(always)]
+fn mov_reg8_base8_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    let rex = add_rm_extension(base, REX);
+    let rex = add_reg_extension(dst, rex);
+    let dst_mod = (dst as u8 % 8) << 3; // (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(8);
+
+    buf.extend([rex, 0x8A, 0x80 | dst_mod | base_mod]);
     // Using RSP or R12 requires a secondary index byte.
     // if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
     if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
@@ -2936,10 +3063,90 @@ mod tests {
     }
 
     #[test]
+    fn test_mov_reg16_base16_offset32() {
+        disassembler_test!(
+            mov_reg16_base16_offset32,
+            |reg1, reg2, imm| format!(
+                "mov {}, word ptr [{} + 0x{:x}]",
+                X86_64GeneralReg::low_16bits_string(&reg1),
+                reg2,
+                imm
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
+    fn test_mov_reg8_base8_offset32() {
+        disassembler_test!(
+            mov_reg8_base8_offset32,
+            |reg1, reg2, imm| format!(
+                "mov {}, byte ptr [{} + 0x{:x}]",
+                X86_64GeneralReg::low_8bits_string(&reg1),
+                reg2,
+                imm
+            ),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
     fn test_mov_base64_offset32_reg64() {
         disassembler_test!(
             mov_base64_offset32_reg64,
             |reg1, imm, reg2| format!("mov qword ptr [{} + 0x{:x}], {}", reg1, imm, reg2),
+            ALL_GENERAL_REGS,
+            [TEST_I32],
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_mov_base32_offset32_reg32() {
+        disassembler_test!(
+            mov_base32_offset32_reg32,
+            |reg1, imm, reg2| format!(
+                "mov dword ptr [{} + 0x{:x}], {}",
+                reg1,
+                imm,
+                X86_64GeneralReg::low_32bits_string(&reg2),
+            ),
+            ALL_GENERAL_REGS,
+            [TEST_I32],
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_mov_base16_offset32_reg16() {
+        disassembler_test!(
+            mov_base16_offset32_reg16,
+            |reg1, imm, reg2| format!(
+                "mov word ptr [{} + 0x{:x}], {}",
+                reg1,
+                imm,
+                X86_64GeneralReg::low_16bits_string(&reg2),
+            ),
+            ALL_GENERAL_REGS,
+            [TEST_I32],
+            ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_mov_base8_offset32_reg8() {
+        disassembler_test!(
+            mov_base8_offset32_reg8,
+            |reg1, imm, reg2| format!(
+                "mov byte ptr [{} + 0x{:x}], {}",
+                reg1,
+                imm,
+                X86_64GeneralReg::low_8bits_string(&reg2),
+            ),
             ALL_GENERAL_REGS,
             [TEST_I32],
             ALL_GENERAL_REGS
