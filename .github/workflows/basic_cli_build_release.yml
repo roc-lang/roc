@@ -170,10 +170,10 @@ jobs:
           cd basic-cli-platform
           mkdir examples
           cd examples
-          curl -OL https://github.com/roc-lang/basic-cli/blob/main/examples/http-get.roc
+          curl -OL https://raw.githubusercontent.com/roc-lang/basic-cli/main/examples/http-get.roc
           sed -i 's/pf:\ \"[^"]*/pf:\ \"\.\.\/main.roc/g' http-get.roc
           cd ..
-          curl -OL https://github.com/roc-lang/basic-cli/blob/main/ci/expect_scripts/http-get.exp
+          curl -OL https://raw.githubusercontent.com/roc-lang/basic-cli/main/ci/expect_scripts/http-get.exp
 
       - run: sudo apt install -y expect
 
