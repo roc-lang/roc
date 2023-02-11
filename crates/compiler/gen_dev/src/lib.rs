@@ -572,6 +572,20 @@ trait Backend<'a> {
                     internal_error!("bitwise xor on a non-integer")
                 }
             }
+            LowLevel::And => {
+                if let Layout::Builtin(Builtin::Bool) = self.interner().get(*ret_layout) {
+                    self.build_int_bitwise_and(sym, &args[0], &args[1], IntWidth::U8)
+                } else {
+                    internal_error!("bitwise and on a non-integer")
+                }
+            }
+            LowLevel::Or => {
+                if let Layout::Builtin(Builtin::Bool) = self.interner().get(*ret_layout) {
+                    self.build_int_bitwise_or(sym, &args[0], &args[1], IntWidth::U8)
+                } else {
+                    internal_error!("bitwise or on a non-integer")
+                }
+            }
             LowLevel::NumShiftLeftBy => {
                 if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
                     self.build_int_shift_left(sym, &args[0], &args[1], int_width)
@@ -812,6 +826,13 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::StrAppendScalar => self.build_fn_call(
+                sym,
+                bitcode::STR_APPEND_SCALAR.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             LowLevel::StrEndsWith => self.build_fn_call(
                 sym,
                 bitcode::STR_ENDS_WITH.to_string(),
@@ -1005,6 +1026,13 @@ trait Backend<'a> {
                 self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(false));
                 self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
                 self.free_symbol(&Symbol::DEV_TMP)
+            }
+            Symbol::STR_IS_VALID_SCALAR => {
+                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
+                let fn_name = self.symbol_to_string(func_sym, layout_id);
+                // Now that the arguments are needed, load them if they are literals.
+                self.load_literal_symbols(args);
+                self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
             _ => todo!("the function, {:?}", func_sym),
         }
