@@ -171,9 +171,9 @@ jobs:
           mkdir examples
           cd examples
           curl -OL https://github.com/roc-lang/basic-cli/blob/main/examples/http-get.roc
+          sed -i 's/pf:\ \"[^"]*/pf:\ \"\.\.\/main.roc/g' http-get.roc
           cd ..
           curl -OL https://github.com/roc-lang/basic-cli/blob/main/ci/expect_scripts/http-get.exp
-          sed -i 's/pf:\ \"[^"]*/pf:\ \"main.roc/g' http-get.roc
 
       - run: sudo apt install -y expect
 
