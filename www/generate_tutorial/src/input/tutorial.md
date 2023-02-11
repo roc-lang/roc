@@ -846,7 +846,7 @@ Note that the initial `state` argument is `{ evens: [], odds: [] }` because that
 we passed `List.walk` for its initial state. From then on, each `state` argument is whatever the
 previous function call returned.
 
-Once the list has run out of elements, `List.walk` retunrs whatever the final function call returned—in this case, `{ evens: [2, 4], odds: [1, 3, 5] }`. (If the list was empty, the function never gets called and `List.walk` returns the initial state.)
+Once the list has run out of elements, `List.walk` returns whatever the final function call returned—in this case, `{ evens: [2, 4], odds: [1, 3, 5] }`. (If the list was empty, the function never gets called and `List.walk` returns the initial state.)
 
 Note that the state doesn't have to be a record; it can be anything you want. For example, if you made it a `Bool`, you could implement `List.any` using `List.walk`. You could also make the state be a list, and implement `List.map`, `List.keepIf`, or `List.dropIf`. There are a lot of things you can do with `List.walk`!
 
@@ -1311,9 +1311,9 @@ So you'll want to use `roc dev` or `roc test` to get the output for `expect`.
 
 ## [Modules](#modules) {#modules}
 
-Each `.roc` file is a separate module and contains Roc code for different purposes. There are all of the different types of modules that Roc suppports;
+Each `.roc` file is a separate module and contains Roc code for different purposes. Here are all of the different types of modules that Roc suppports;
 
-- **Builtins** provide functions which are automatically imported into every module. 
+- **Builtins** provide functions that are automatically imported into every module. 
 - **Applications** are combined with a platform and compiled into an executable.
 - **Interfaces** provide functions which can be imported into other modules.
 - **Packages** organise modules to share functionality across applications and platforms.
