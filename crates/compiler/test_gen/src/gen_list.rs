@@ -1870,6 +1870,20 @@ fn first_int_list() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn first_str_list() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.first ["short", "bar"]
+            "#
+        ),
+        RocResult::ok(RocStr::from("short")),
+        RocResult<RocStr, ()>
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn first_wildcard_empty_list() {
     assert_evals_to!(
@@ -1978,6 +1992,20 @@ fn get_wildcard_empty_list() {
         ),
         -1,
         i64
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn get_str_list_ok() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            List.get ["foo", "bar"] 1
+            "#
+        ),
+        RocResult::ok(RocStr::from("bar")),
+        RocResult<RocStr, ()>
     );
 }
 

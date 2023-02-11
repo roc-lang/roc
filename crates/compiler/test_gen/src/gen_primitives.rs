@@ -3255,8 +3255,24 @@ fn issue_2322() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn box_and_unbox_small_string() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "short"
+                |> Box.box
+                |> Box.unbox
+            "#
+        ),
+        RocStr::from("short"),
+        RocStr
+    )
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
-fn box_and_unbox_string() {
+fn box_and_unbox_big_string() {
     assert_evals_to!(
         indoc!(
             r#"
@@ -3276,6 +3292,17 @@ fn box_and_unbox_string() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn box_num() {
     assert_evals_to!("Box.box 123u64", RocBox::new(123), RocBox<u64>)
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[ignore = "triggers some UB somewhere in at least the llvm and dev backends"]
+fn box_str() {
+    assert_evals_to!(
+        "Box.box \"short\"",
+        RocBox::new(RocStr::from("short")),
+        RocBox<RocStr>
+    );
 }
 
 #[test]

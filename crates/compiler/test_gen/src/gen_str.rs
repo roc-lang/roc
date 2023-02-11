@@ -76,7 +76,7 @@ fn str_split_bigger_delimiter_small_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_str_concat_repeated() {
     assert_evals_to!(
         indoc!(
@@ -100,7 +100,7 @@ fn str_split_str_concat_repeated() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_small_str_bigger_delimiter() {
     assert_evals_to!(
         indoc!(r#"Str.split "JJJ" "0123456789abcdefghi""#),
@@ -140,7 +140,7 @@ fn str_split_big_str_small_delimiter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_small_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
@@ -170,7 +170,7 @@ fn str_split_bigger_delimiter_big_strs() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_empty_strs() {
     assert_evals_to!(
         indoc!(
@@ -184,7 +184,7 @@ fn str_split_empty_strs() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_minimal_example() {
     assert_evals_to!(
         indoc!(
@@ -485,7 +485,7 @@ fn empty_str_is_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_starts_with() {
     assert_evals_to!(r#"Str.startsWith "hello world" "hell""#, true, bool);
     assert_evals_to!(r#"Str.startsWith "hello world" """#, true, bool);
@@ -495,7 +495,7 @@ fn str_starts_with() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_starts_with_scalar() {
     assert_evals_to!(
         &format!(r#"Str.startsWithScalar "foobar" {}"#, 'f' as u32),
@@ -510,7 +510,7 @@ fn str_starts_with_scalar() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_ends_with() {
     assert_evals_to!(r#"Str.endsWith "hello world" "world""#, true, bool);
     assert_evals_to!(r#"Str.endsWith "nope" "hello world""#, false, bool);
@@ -518,13 +518,13 @@ fn str_ends_with() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_count_graphemes_small_str() {
     assert_evals_to!(r#"Str.countGraphemes "å🤔""#, 2, usize);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_count_graphemes_three_js() {
     assert_evals_to!(r#"Str.countGraphemes "JJJ""#, 3, usize);
 }

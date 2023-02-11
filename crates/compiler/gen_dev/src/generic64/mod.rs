@@ -1510,15 +1510,50 @@ impl<
             |storage_manager, buf, list_ptr| {
                 ASM::mov_reg64_base32(buf, list_ptr, base_offset as i32);
                 storage_manager.with_tmp_general_reg(buf, |storage_manager, buf, tmp| {
+                    // calculate `element_width * index`
                     ASM::mov_reg64_imm64(buf, tmp, ret_stack_size as i64);
                     ASM::imul_reg64_reg64_reg64(buf, tmp, tmp, index_reg);
+
+                    // add the offset to the list pointer, store in `tmp`
                     ASM::add_reg64_reg64_reg64(buf, tmp, tmp, list_ptr);
+                    let element_ptr = tmp;
+
                     match *ret_layout {
                         single_register_integers!() if ret_stack_size == 8 => {
                             let dst_reg = storage_manager.claim_general_reg(buf, dst);
-                            ASM::mov_reg64_mem64_offset32(buf, dst_reg, tmp, 0);
+                            ASM::mov_reg64_mem64_offset32(buf, dst_reg, element_ptr, 0);
                         }
-                        x => internal_error!("Loading list element with layout: {:?}", x),
+                        single_register_floats!() => {
+                            let dst_reg = storage_manager.claim_float_reg(buf, dst);
+                            ASM::mov_freg64_freg64(buf, dst_reg, CC::FLOAT_RETURN_REGS[0]);
+                        }
+                        Layout::STR => {
+                            // the `list_ptr` register is now unused, and we can use it as scratch space
+                            let tmp_reg = list_ptr;
+
+                            Self::unbox_str_or_list(
+                                buf,
+                                storage_manager,
+                                *dst,
+                                element_ptr,
+                                tmp_reg,
+                            );
+                        }
+                        other => {
+                            //
+                            match self.layout_interner.get(other) {
+                                Layout::Boxed(_) => {
+                                    let dst_reg = storage_manager.claim_general_reg(buf, dst);
+                                    ASM::mov_reg64_reg64(buf, dst_reg, CC::GENERAL_RETURN_REGS[0]);
+                                }
+                                _ => {
+                                    todo!(
+                                        "cannot load {} from the heap yet",
+                                        self.layout_interner.dbg(other)
+                                    );
+                                }
+                            }
+                        }
                     }
                 });
             },
@@ -1853,7 +1888,12 @@ impl<
                         |_storage_manager, buf, tmp_reg| {
                             for i in (0..size as i32).step_by(8) {
                                 ASM::mov_reg64_base32(buf, tmp_reg, from_offset + i);
-                                ASM::mov_mem64_offset32_reg64(buf, ptr_reg, elem_offset, tmp_reg);
+                                ASM::mov_mem64_offset32_reg64(
+                                    buf,
+                                    ptr_reg,
+                                    elem_offset + i,
+                                    tmp_reg,
+                                );
                             }
                         },
                     );
@@ -1925,7 +1965,13 @@ impl<
                     tag_layouts[tag_id as usize],
                 );
             }
-            x => todo!("loading from union type: {:?}", x),
+            _ => {
+                let union_in_layout = self.layout_interner.insert(Layout::Union(*union_layout));
+                todo!(
+                    "loading from union type: {:?}",
+                    self.layout_interner.dbg(union_in_layout)
+                )
+            }
         }
     }
 
@@ -1971,9 +2017,15 @@ impl<
                 self.storage_manager.with_tmp_general_reg(
                     &mut self.buf,
                     |_storage_manager, buf, tmp_reg| {
+                        // a crude memcpy
                         for i in (0..size as i32).step_by(8) {
                             ASM::mov_reg64_base32(buf, tmp_reg, from_offset + i);
-                            ASM::mov_mem64_offset32_reg64(buf, ptr_reg, element_offset, tmp_reg);
+                            ASM::mov_mem64_offset32_reg64(
+                                buf,
+                                ptr_reg,
+                                element_offset + i,
+                                tmp_reg,
+                            );
                         }
                     },
                 );
@@ -2004,7 +2056,17 @@ impl<
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, &dst);
                 ASM::mov_reg64_mem64_offset32(&mut self.buf, dst_reg, ptr_reg, 0);
             }
-            x => internal_error!("Loading list element with layout: {:?}", x),
+            Layout::STR => {
+                self.storage_manager.with_tmp_general_reg(
+                    &mut self.buf,
+                    |storage_manager, buf, tmp_reg| {
+                        Self::unbox_str_or_list(buf, storage_manager, dst, ptr_reg, tmp_reg);
+                    },
+                );
+            }
+            _ => {
+                todo!("unboxing of {:?}", self.layout_interner.dbg(element_layout))
+            }
         }
     }
 
@@ -2362,6 +2424,25 @@ impl<
             &[Layout::U64, Layout::U32],
             &Layout::U64,
         );
+    }
+
+    fn unbox_str_or_list(
+        buf: &mut Vec<'a, u8>,
+        storage_manager: &mut StorageManager<'a, 'r, GeneralReg, FloatReg, ASM, CC>,
+        dst: Symbol,
+        ptr_reg: GeneralReg,
+        tmp_reg: GeneralReg,
+    ) {
+        let base_offset = storage_manager.claim_stack_area(&dst, 24);
+
+        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, 0);
+        ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
+
+        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, 8);
+        ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
+
+        ASM::mov_reg64_mem64_offset32(buf, tmp_reg, ptr_reg, 16);
+        ASM::mov_base32_reg64(buf, base_offset + 16, tmp_reg);
     }
 
     /// Updates a jump instruction to a new offset and returns the number of bytes written.

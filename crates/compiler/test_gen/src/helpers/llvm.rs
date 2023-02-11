@@ -572,47 +572,59 @@ pub fn try_run_lib_function<T>(
     }
 }
 
+// only used in tests
+#[allow(unused)]
+pub(crate) fn llvm_evals_to<T, U, F>(src: &str, expected: U, transform: F, ignore_problems: bool)
+where
+    U: PartialEq + std::fmt::Debug,
+    F: FnOnce(T) -> U,
+{
+    use bumpalo::Bump;
+    use inkwell::context::Context;
+
+    let arena = Bump::new();
+    let context = Context::create();
+
+    let config = crate::helpers::llvm::HelperConfig {
+        mode: LlvmBackendMode::GenTest,
+        add_debug_info: false,
+        ignore_problems,
+        opt_level: crate::helpers::llvm::OPT_LEVEL,
+    };
+
+    let (main_fn_name, errors, lib) = crate::helpers::llvm::helper(&arena, config, src, &context);
+
+    let result = crate::helpers::llvm::try_run_lib_function::<T>(main_fn_name, &lib);
+
+    match result {
+        Ok(raw) => {
+            // only if there are no exceptions thrown, check for errors
+            assert!(errors.is_empty(), "Encountered errors:\n{}", errors);
+
+            #[allow(clippy::redundant_closure_call)]
+            let given = transform(raw);
+            assert_eq!(&given, &expected, "LLVM test failed");
+
+            // on Windows, there are issues with the drop instances of some roc_std
+            #[cfg(windows)]
+            std::mem::forget(given);
+        }
+        Err((msg, tag)) => match tag {
+            CrashTag::Roc => panic!(r#"Roc failed with message: "{}""#, msg),
+            CrashTag::User => panic!(r#"User crash with message: "{}""#, msg),
+        },
+    }
+}
+
 #[allow(unused_macros)]
 macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
-        use bumpalo::Bump;
-        use inkwell::context::Context;
-        use roc_gen_llvm::llvm::build::LlvmBackendMode;
-        use roc_mono::ir::CrashTag;
-
-        let arena = Bump::new();
-        let context = Context::create();
-
-        let config = $crate::helpers::llvm::HelperConfig {
-            mode: LlvmBackendMode::GenTest,
-            add_debug_info: false,
-            ignore_problems: $ignore_problems,
-            opt_level: $crate::helpers::llvm::OPT_LEVEL,
-        };
-
-        let (main_fn_name, errors, lib) =
-            $crate::helpers::llvm::helper(&arena, config, $src, &context);
-
-        let result = $crate::helpers::llvm::try_run_lib_function::<$ty>(main_fn_name, &lib);
-
-        match result {
-            Ok(raw) => {
-                // only if there are no exceptions thrown, check for errors
-                assert!(errors.is_empty(), "Encountered errors:\n{}", errors);
-
-                #[allow(clippy::redundant_closure_call)]
-                let given = $transform(raw);
-                assert_eq!(&given, &$expected, "LLVM test failed");
-
-                // on Windows, there are issues with the drop instances of some roc_std
-                #[cfg(windows)]
-                std::mem::forget(given);
-            }
-            Err((msg, tag)) => match tag {
-                CrashTag::Roc => panic!(r#"Roc failed with message: "{}""#, msg),
-                CrashTag::User => panic!(r#"User crash with message: "{}""#, msg),
-            },
-        }
+        crate::helpers::llvm::llvm_evals_to::<$ty, _, _>(
+            $src,
+            $expected,
+            $transform,
+            $ignore_problems,
+        );
     };
 
     ($src:expr, $expected:expr, $ty:ty) => {

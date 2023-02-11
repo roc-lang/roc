@@ -784,6 +784,41 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::StrSplit => self.build_fn_call(
+                sym,
+                bitcode::STR_SPLIT.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrStartsWith => self.build_fn_call(
+                sym,
+                bitcode::STR_STARTS_WITH.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrStartsWithScalar => self.build_fn_call(
+                sym,
+                bitcode::STR_STARTS_WITH_SCALAR.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrEndsWith => self.build_fn_call(
+                sym,
+                bitcode::STR_ENDS_WITH.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrCountGraphemes => self.build_fn_call(
+                sym,
+                bitcode::STR_COUNT_GRAPEHEME_CLUSTERS.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             LowLevel::PtrCast => {
                 debug_assert_eq!(
                     1,
