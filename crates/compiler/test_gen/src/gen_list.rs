@@ -1887,11 +1887,11 @@ fn first_wildcard_empty_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.last [] |> Result.map (\_ -> 0i64)
+            List.first [] |> Result.map (\_ -> {})
             "#
         ),
         RocResult::err(()),
-        RocResult<i64, ()>
+        RocResult<(), ()>
     );
 }
 
@@ -1932,11 +1932,11 @@ fn last_wildcard_empty_list() {
     assert_evals_to!(
         indoc!(
             r#"
-            List.last [] |> Result.map (\_ -> 0i64)
+            List.last [] |> Result.map (\_ -> {})
             "#
         ),
         RocResult::err(()),
-        RocResult<i64, ()>
+        RocResult<(), ()>
     );
 }
 
