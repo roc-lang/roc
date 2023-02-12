@@ -2512,7 +2512,7 @@ impl<
                 let sym_reg = storage_manager.load_to_general_reg(buf, &value);
                 ASM::mov_mem8_offset32_reg8(buf, ptr_reg, element_offset, sym_reg);
             }
-            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+            Layout::Builtin(Builtin::Float(FloatWidth::F64 | FloatWidth::F32)) => {
                 let sym_reg = storage_manager.load_to_float_reg(buf, &value);
                 ASM::movesd_mem64_offset32_freg64(buf, ptr_reg, element_offset, sym_reg);
             }

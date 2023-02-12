@@ -2700,24 +2700,22 @@ fn list_min() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when List.min [] is
-                        Ok val -> val
-                        Err _ -> -1
-                "#
+            List.min []
+            |> Result.map (\_ -> {})
+            "#
         ),
-        -1,
-        i64
+        RocResult::err(()),
+        RocResult<(), ()>
     );
+
     assert_evals_to!(
         indoc!(
             r#"
-                    when List.min [3, 1, 2] is
-                        Ok val -> val
-                        Err _ -> -1
-                "#
+            List.min [3, 1, 2]
+            "#
         ),
-        1,
-        i64
+        RocResult::ok(1),
+        RocResult<i64, ()>
     );
 }
 
@@ -2727,24 +2725,22 @@ fn list_max() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when List.max [] is
-                        Ok val -> val
-                        Err _ -> -1
-                "#
+            List.max []
+            |> Result.map (\_ -> {})
+            "#
         ),
-        -1,
-        i64
+        RocResult::err(()),
+        RocResult<(), ()>
     );
+
     assert_evals_to!(
         indoc!(
             r#"
-                    when List.max [3, 1, 2] is
-                        Ok val -> val
-                        Err _ -> -1
-                "#
+            List.max [3, 1, 2]
+            "#
         ),
-        3,
-        i64
+        RocResult::ok(3),
+        RocResult<i64, ()>
     );
 }
 
