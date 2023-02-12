@@ -934,13 +934,6 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            //            LowLevel::StrToUtf8 => self.build_fn_call(
-            //                sym,
-            //                bitcode::STR_TO_UTF8.to_string(),
-            //                args,
-            //                arg_layouts,
-            //                ret_layout,
-            //            ),
             LowLevel::StrRepeat => self.build_fn_call(
                 sym,
                 bitcode::STR_REPEAT.to_string(),
@@ -1080,14 +1073,6 @@ trait Backend<'a> {
                 self.build_eq(sym, &args[0], &Symbol::DEV_TMP, &arg_layouts[0]);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
-            Symbol::LIST_GET | Symbol::LIST_SET | Symbol::LIST_REPLACE | Symbol::LIST_APPEND => {
-                // TODO: This is probably simple enough to be worth inlining.
-                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
-                let fn_name = self.symbol_to_string(func_sym, layout_id);
-                // Now that the arguments are needed, load them if they are literals.
-                self.load_literal_symbols(args);
-                self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
-            }
             Symbol::BOOL_TRUE => {
                 let bool_layout = Layout::BOOL;
                 self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(true));
@@ -1100,17 +1085,7 @@ trait Backend<'a> {
                 self.return_symbol(&Symbol::DEV_TMP, &bool_layout);
                 self.free_symbol(&Symbol::DEV_TMP)
             }
-            Symbol::STR_IS_VALID_SCALAR => {
-                // just call the function
-                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
-                let fn_name = self.symbol_to_string(func_sym, layout_id);
-                // Now that the arguments are needed, load them if they are literals.
-                self.load_literal_symbols(args);
-                self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
-            }
-            other => {
-                eprintln!("maybe {other:?} should have a custom implementation?");
-
+            _ => {
                 // just call the function
                 let layout_id = LayoutIds::default().get(func_sym, ret_layout);
                 let fn_name = self.symbol_to_string(func_sym, layout_id);
