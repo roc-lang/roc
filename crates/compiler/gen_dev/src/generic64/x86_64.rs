@@ -490,6 +490,24 @@ impl X64_64SystemVStoreArgs {
                         sym,
                         lambda_set.runtime_representation(),
                     ),
+                    Layout::Struct { .. } => {
+                        // for now, just also store this on the stack
+                        let (base_offset, size) = storage_manager.stack_offset_and_size(&sym);
+                        debug_assert_eq!(base_offset % 8, 0);
+                        for i in (0..size as i32).step_by(8) {
+                            X86_64Assembler::mov_reg64_base32(
+                                buf,
+                                Self::GENERAL_RETURN_REGS[0],
+                                base_offset + i,
+                            );
+                            X86_64Assembler::mov_stack32_reg64(
+                                buf,
+                                self.tmp_stack_offset + i,
+                                Self::GENERAL_RETURN_REGS[0],
+                            );
+                        }
+                        self.tmp_stack_offset += size as i32;
+                    }
                     _ => {
                         todo!("calling with arg type, {:?}", layout_interner.dbg(other));
                     }
@@ -589,6 +607,11 @@ impl X64_64SystemVLoadArgs {
                     sym,
                     lambda_set.runtime_representation(),
                 ),
+                Layout::Struct { .. } => {
+                    // for now, just also store this on the stack
+                    storage_manager.complex_stack_arg(&sym, self.argument_offset, stack_size);
+                    self.argument_offset += stack_size as i32;
+                }
                 _ => {
                     dbg!(other, layout_interner.get(other));
                     todo!("Loading args with layout {:?}", layout_interner.dbg(other));

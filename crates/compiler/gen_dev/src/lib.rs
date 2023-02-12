@@ -868,6 +868,13 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::StrToUtf8 => self.build_fn_call(
+                sym,
+                bitcode::STR_TO_UTF8.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             LowLevel::StrCountUtf8Bytes => self.build_fn_call(
                 sym,
                 bitcode::STR_COUNT_UTF8_BYTES.to_string(),

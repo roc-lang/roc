@@ -891,7 +891,7 @@ fn str_join_comma_single() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_to_utf8() {
     assert_evals_to!(
         r#"Str.toUtf8 "hello""#,
@@ -909,7 +909,7 @@ fn str_to_utf8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_range() {
     assert_evals_to!(
         indoc!(
@@ -926,7 +926,7 @@ fn str_from_utf8_range() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_range_slice() {
     assert_evals_to!(
         indoc!(
@@ -943,7 +943,7 @@ fn str_from_utf8_range_slice() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_range_slice_not_end() {
     assert_evals_to!(
         indoc!(
@@ -960,7 +960,7 @@ fn str_from_utf8_range_slice_not_end() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_range_order_does_not_matter() {
     assert_evals_to!(
         indoc!(
@@ -977,7 +977,7 @@ fn str_from_utf8_range_order_does_not_matter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_range_out_of_bounds_start_value() {
     assert_evals_to!(
         indoc!(
@@ -995,7 +995,7 @@ fn str_from_utf8_range_out_of_bounds_start_value() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_range_count_too_high() {
     assert_evals_to!(
         indoc!(
@@ -1013,7 +1013,7 @@ fn str_from_utf8_range_count_too_high() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_from_utf8_range_count_too_high_for_start() {
     assert_evals_to!(
         indoc!(
