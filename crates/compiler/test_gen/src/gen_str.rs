@@ -1871,7 +1871,7 @@ fn str_append_scalar() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_walk_scalars() {
     assert_evals_to!(
         indoc!(

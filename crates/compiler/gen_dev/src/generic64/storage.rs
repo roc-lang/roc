@@ -459,13 +459,17 @@ impl<
                 ASM::mov_reg64_base32(buf, reg, *base_offset);
             }
             Stack(ReferencedPrimitive {
-                base_offset, size, ..
-            }) if base_offset % 8 == 0 && *size == 8 => {
-                // The primitive is aligned and the data is exactly 8 bytes, treat it like regular stack.
-                ASM::mov_reg64_base32(buf, reg, *base_offset);
-            }
-            Stack(ReferencedPrimitive { .. }) => {
-                todo!("loading referenced primitives")
+                base_offset,
+                size,
+                sign_extend,
+            }) => {
+                debug_assert!(*size <= 8);
+
+                if *sign_extend {
+                    ASM::movsx_reg64_base32(buf, reg, *base_offset, *size as u8)
+                } else {
+                    ASM::movzx_reg64_base32(buf, reg, *base_offset, *size as u8)
+                }
             }
             Stack(Complex { size, .. }) => {
                 internal_error!(

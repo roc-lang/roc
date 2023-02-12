@@ -262,10 +262,10 @@ impl CallConv<X86_64GeneralReg, X86_64FloatReg, X86_64Assembler> for X86_64Syste
         ret_layout: &InLayout<'a>,
     ) {
         let returns_via_pointer =
-            X86_64SystemV::returns_via_arg_pointer(layout_interner, &ret_layout);
+            X86_64SystemV::returns_via_arg_pointer(layout_interner, ret_layout);
 
         let mut state = X64_64SystemVLoadArgs {
-            general_i: if returns_via_pointer { 1 } else { 0 },
+            general_i: usize::from(returns_via_pointer),
             float_i: 0,
             // 16 is the size of the pushed return address and base pointer.
             argument_offset: X86_64SystemV::SHADOW_SPACE_SIZE as i32 + 16,
@@ -613,7 +613,6 @@ impl X64_64SystemVLoadArgs {
                     self.argument_offset += stack_size as i32;
                 }
                 _ => {
-                    dbg!(other, layout_interner.get(other));
                     todo!("Loading args with layout {:?}", layout_interner.dbg(other));
                 }
             },
@@ -1483,7 +1482,9 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         debug_assert!(size <= 8);
         match size {
             8 => Self::mov_reg64_base32(buf, dst, offset),
-            4 | 2 | 1 => todo!("sign extending {size} byte values"),
+            4 => movsx_reg64_base32_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+            2 => movsx_reg64_base16_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
+            1 => movsx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
             _ => internal_error!("Invalid size for sign extension: {size}"),
         }
     }
@@ -1492,7 +1493,12 @@ impl Assembler<X86_64GeneralReg, X86_64FloatReg> for X86_64Assembler {
         debug_assert!(size <= 8);
         match size {
             8 => Self::mov_reg64_base32(buf, dst, offset),
-            4 | 2 => todo!("zero extending {size} byte values"),
+            4 => {
+                // The Intel documentation (3.4.1.1 General-Purpose Registers in 64-Bit Mode in manual Basic Architecture))
+                // 32-bit operands generate a 32-bit result, zero-extended to a 64-bit result in the destination general-purpose register.
+                Self::mov_reg64_base32(buf, dst, offset)
+            }
+            2 => movzx_reg64_base16_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
             1 => movzx_reg64_base8_offset32(buf, dst, X86_64GeneralReg::RBP, offset),
             _ => internal_error!("Invalid size for zero extension: {size}"),
         }
@@ -2372,7 +2378,7 @@ fn mov_reg16_base16_offset32(
     mov_reg_base_offset32(buf, RegisterWidth::W16, dst, base, offset)
 }
 
-/// `MOV r/m16,r16` -> Move r16 to r/m16.
+/// `MOV r/m8,r8` -> Move r8 to r/m8.
 #[inline(always)]
 fn mov_reg8_base8_offset32(
     buf: &mut Vec<'_, u8>,
@@ -2383,6 +2389,86 @@ fn mov_reg8_base8_offset32(
     mov_reg_base_offset32(buf, RegisterWidth::W8, dst, base, offset)
 }
 
+#[inline(always)]
+fn movsx_reg64_base_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+    opcode: &[u8],
+) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(dst, rex);
+    let dst_mod = (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(9);
+
+    // our output is a 64-bit value, so rex is always needed
+    buf.push(rex);
+    buf.extend(opcode);
+    buf.push(0x80 | dst_mod | base_mod);
+
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
+/// `MOVSX r64,r/m32` -> Move r/m32 with sign extention to r64, where m32 references a base + offset.
+#[inline(always)]
+fn movsx_reg64_base32_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    movsx_reg64_base_offset32(buf, dst, base, offset, &[0x63])
+}
+
+/// `MOVSX r64,r/m16` -> Move r/m16 with sign extention to r64, where m16 references a base + offset.
+#[inline(always)]
+fn movsx_reg64_base16_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    movsx_reg64_base_offset32(buf, dst, base, offset, &[0x0F, 0xBF])
+}
+
+/// `MOVSX r64,r/m8` -> Move r/m8 with sign extention to r64, where m8 references a base + offset.
+#[inline(always)]
+fn movsx_reg64_base8_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    movsx_reg64_base_offset32(buf, dst, base, offset, &[0x0F, 0xBE])
+}
+
+#[inline(always)]
+fn movzx_reg64_base_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+    opcode: u8,
+) {
+    let rex = add_rm_extension(base, REX_W);
+    let rex = add_reg_extension(dst, rex);
+    let dst_mod = (dst as u8 % 8) << 3;
+    let base_mod = base as u8 % 8;
+    buf.reserve(9);
+    buf.extend([rex, 0x0F, opcode, 0x80 | dst_mod | base_mod]);
+    // Using RSP or R12 requires a secondary index byte.
+    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
+        buf.push(0x24);
+    }
+    buf.extend(offset.to_le_bytes());
+}
+
 /// `MOVZX r64,r/m8` -> Move r/m8 with zero extention to r64, where m8 references a base + offset.
 #[inline(always)]
 fn movzx_reg64_base8_offset32(
@@ -2391,17 +2477,18 @@ fn movzx_reg64_base8_offset32(
     base: X86_64GeneralReg,
     offset: i32,
 ) {
-    let rex = add_rm_extension(base, REX_W);
-    let rex = add_reg_extension(dst, rex);
-    let dst_mod = (dst as u8 % 8) << 3;
-    let base_mod = base as u8 % 8;
-    buf.reserve(9);
-    buf.extend([rex, 0x0F, 0xB6, 0x80 | dst_mod | base_mod]);
-    // Using RSP or R12 requires a secondary index byte.
-    if base == X86_64GeneralReg::RSP || base == X86_64GeneralReg::R12 {
-        buf.push(0x24);
-    }
-    buf.extend(offset.to_le_bytes());
+    movzx_reg64_base_offset32(buf, dst, base, offset, 0xB6)
+}
+
+/// `MOVZX r64,r/m16` -> Move r/m16 with zero extention to r64, where m16 references a base + offset.
+#[inline(always)]
+fn movzx_reg64_base16_offset32(
+    buf: &mut Vec<'_, u8>,
+    dst: X86_64GeneralReg,
+    base: X86_64GeneralReg,
+    offset: i32,
+) {
+    movzx_reg64_base_offset32(buf, dst, base, offset, 0xB7)
 }
 
 /// `MOVSD xmm1,xmm2` -> Move scalar double-precision floating-point value from xmm2 to xmm1 register.
@@ -3271,6 +3358,50 @@ mod tests {
             ALL_GENERAL_REGS,
             [TEST_I32],
             ALL_GENERAL_REGS
+        );
+    }
+
+    #[test]
+    fn test_movsx_reg64_base32_offset32() {
+        disassembler_test!(
+            movsx_reg64_base32_offset32,
+            |reg1, reg2, imm| format!("movsxd {}, dword ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
+    fn test_movsx_reg64_base16_offset32() {
+        disassembler_test!(
+            movsx_reg64_base16_offset32,
+            |reg1, reg2, imm| format!("movsx {}, word ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
+    fn test_movsx_reg64_base8_offset32() {
+        disassembler_test!(
+            movsx_reg64_base8_offset32,
+            |reg1, reg2, imm| format!("movsx {}, byte ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
+        );
+    }
+
+    #[test]
+    fn test_movzx_reg64_base16_offset32() {
+        disassembler_test!(
+            movzx_reg64_base16_offset32,
+            |reg1, reg2, imm| format!("movzx {}, word ptr [{} + 0x{:x}]", reg1, reg2, imm),
+            ALL_GENERAL_REGS,
+            ALL_GENERAL_REGS,
+            [TEST_I32]
         );
     }
 
