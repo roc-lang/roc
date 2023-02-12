@@ -625,6 +625,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         todo!("saving floating point reg to base offset for AArch64");
     }
     #[inline(always)]
+    fn movesd_mem64_offset32_freg64(
+        _buf: &mut Vec<'_, u8>,
+        _ptr: AArch64GeneralReg,
+        _offset: i32,
+        _src: AArch64FloatReg,
+    ) {
+        todo!()
+    }
+
+    #[inline(always)]
     fn mov_base32_reg64(buf: &mut Vec<'_, u8>, offset: i32, src: AArch64GeneralReg) {
         if offset < 0 {
             todo!("negative base offsets for AArch64");

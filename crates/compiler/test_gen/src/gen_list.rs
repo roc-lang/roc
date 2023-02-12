@@ -1859,13 +1859,11 @@ fn first_int_list() {
     assert_evals_to!(
         indoc!(
             r#"
-                when List.first [12, 9, 6, 3] is
-                    Ok val -> val
-                    Err _ -> -1
+            List.first [12, 9, 6, 3]
             "#
         ),
-        12,
-        i64
+        RocResult::ok(12),
+        RocResult<i64, ()>
     );
 }
 
@@ -1889,45 +1887,42 @@ fn first_wildcard_empty_list() {
     assert_evals_to!(
         indoc!(
             r#"
-                when List.first [] is
-                    Ok _ -> 5
-                    Err _ -> -1
+            List.first []
             "#
         ),
-        -1,
-        i64
+        RocResult::err(()),
+        RocResult<i64, ()>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn first_empty_list() {
     assert_evals_to!(
         indoc!(
             r#"
-                when List.first [] is
-                    Ok val -> val
-                    Err _ -> -1
+            list : List I64
+            list = []
+
+            List.first list
             "#
         ),
-        -1,
-        i64
+        RocResult::err(()),
+        RocResult<i64, ()>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn last_int_list() {
     assert_evals_to!(
         indoc!(
             r#"
-                when List.last [12, 9, 6, 3] is
-                    Ok val -> val
-                    Err _ -> -1
+            List.last [12, 9, 6, 3]
             "#
         ),
-        3,
-        i64
+        RocResult::ok(3),
+        RocResult<i64, ()>
     );
 }
 
@@ -1937,13 +1932,11 @@ fn last_wildcard_empty_list() {
     assert_evals_to!(
         indoc!(
             r#"
-                when List.last [] is
-                    Ok _ -> 5
-                    Err _ -> -1
+            List.last []
             "#
         ),
-        -1,
-        i64
+        RocResult::err(()),
+        RocResult<i64, ()>
     );
 }
 
@@ -1953,13 +1946,14 @@ fn last_empty_list() {
     assert_evals_to!(
         indoc!(
             r#"
-                when List.last [] is
-                    Ok val -> val
-                    Err _ -> -1
+            list : List I64
+            list = []
+
+            List.last list
             "#
         ),
-        -1,
-        i64
+        RocResult::err(()),
+        RocResult<i64, ()>
     );
 }
 
@@ -1969,29 +1963,32 @@ fn get_empty_list() {
     assert_evals_to!(
         indoc!(
             r#"
-               when List.get [] 0 is
-                    Ok val -> val
-                    Err _ -> -1
+            list : List I64
+            list = []
+
+            List.get list 0
             "#
         ),
-        -1,
-        i64
+        RocResult::err(()),
+        RocResult<i64, ()>
     );
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn get_wildcard_empty_list() {
+    // NOTE: by default, the return type is `Result [] [NotFound]`, which is actually represented
+    // as just `[NotFound]`. Casting that to `RocResult<(), ()>` is invalid! But accepting any `()`
+    // would make the test pointless. Therefore, we must explicitly change the type on the roc side
     assert_evals_to!(
         indoc!(
             r#"
-               when List.get [] 0 is
-                    Ok _ -> 5
-                    Err _ -> -1
+            List.get [] 0
+            |> Result.map (\_ -> {})
             "#
         ),
-        -1,
-        i64
+        RocResult::err(()),
+        RocResult<(), ()>
     );
 }
 
@@ -2010,39 +2007,35 @@ fn get_str_list_ok() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn get_int_list_ok() {
     assert_evals_to!(
         indoc!(
             r#"
-                when List.get [12, 9, 6] 1 is
-                    Ok val -> val
-                    Err _ -> -1
+            List.get [12, 9, 6] 1
             "#
         ),
-        9,
-        i64
+        RocResult::ok(9),
+        RocResult<i64, ()>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn get_int_list_oob() {
     assert_evals_to!(
         indoc!(
             r#"
-                when List.get [12, 9, 6] 1000 is
-                    Ok val -> val
-                    Err _ -> -1
+            List.get [12, 9, 6] 1000
             "#
         ),
-        -1,
-        i64
+        RocResult::err(()),
+        RocResult<i64, ()>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn replace_unique_int_list() {
     assert_evals_to!(
         indoc!(
@@ -2057,7 +2050,7 @@ fn replace_unique_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn replace_unique_int_list_out_of_bounds() {
     assert_evals_to!(
         indoc!(
@@ -2072,7 +2065,7 @@ fn replace_unique_int_list_out_of_bounds() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn replace_unique_int_list_get_old_value() {
     assert_evals_to!(
         indoc!(
@@ -2087,7 +2080,7 @@ fn replace_unique_int_list_get_old_value() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn replace_unique_get_large_value() {
     assert_evals_to!(
         indoc!(
@@ -2138,29 +2131,25 @@ fn get_set_unique_int_list_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-                when List.get (List.set [12, 9, 7, 3] 1 42) 1 is
-                    Ok val -> val
-                    Err _ -> -1
+            List.get (List.set [12, 9, 7, 3] 1 42) 1
             "#
         ),
-        42,
-        i64
+        RocResult::ok(42),
+        RocResult<i64, ()>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn get_set_unique_int_list_i8() {
     assert_evals_to!(
         indoc!(
             r#"
-                when List.get (List.set [12, 9, 7, 3] 1 42i8) 1 is
-                    Ok val -> val
-                    Err _ -> -1i8
+            List.get (List.set [12, 9, 7, 3] 1 42i8) 1
             "#
         ),
-        42,
-        i8
+        RocResult::ok(42),
+        RocResult<i8, ()>
     );
 }
 
@@ -2175,7 +2164,7 @@ fn set_unique_int_list() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn set_unique_list_oob() {
     assert_evals_to!(
         "List.set [3, 17, 4.1] 1337 9.25",
@@ -2240,20 +2229,18 @@ fn set_shared_list_oob() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn get_unique_int_list() {
     assert_evals_to!(
         indoc!(
             r#"
                 unique = [2, 4]
 
-                when List.get unique 1 is
-                    Ok num -> num
-                    Err _ -> -1
+                List.get unique 1
             "#
         ),
-        4,
-        i64
+        RocResult::ok(4),
+        RocResult<i64, ()>
     );
 }
 
@@ -2275,7 +2262,7 @@ fn gen_wrap_len() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_wrap_first() {
     assert_evals_to!(
         indoc!(
@@ -2292,7 +2279,7 @@ fn gen_wrap_first() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn gen_duplicate() {
     assert_evals_to!(
         indoc!(
@@ -3440,7 +3427,7 @@ fn with_capacity() {
             r#"
             l : List U64
             l = List.withCapacity 10
-            
+
             l
             "#
         ),

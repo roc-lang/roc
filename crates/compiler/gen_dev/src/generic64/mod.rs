@@ -291,6 +291,13 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     );
     fn mov_mem8_offset32_reg8(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, src: GeneralReg);
 
+    fn movesd_mem64_offset32_freg64(
+        buf: &mut Vec<'_, u8>,
+        ptr: GeneralReg,
+        offset: i32,
+        src: FloatReg,
+    );
+
     /// Sign extends the data at `offset` with `size` as it copies it to `dst`
     /// size must be less than or equal to 8.
     fn movsx_reg64_base32(buf: &mut Vec<'_, u8>, dst: GeneralReg, offset: i32, size: u8);
@@ -2504,6 +2511,10 @@ impl<
             Layout::Builtin(Builtin::Int(IntWidth::I8 | IntWidth::U8) | Builtin::Bool) => {
                 let sym_reg = storage_manager.load_to_general_reg(buf, &value);
                 ASM::mov_mem8_offset32_reg8(buf, ptr_reg, element_offset, sym_reg);
+            }
+            Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let sym_reg = storage_manager.load_to_float_reg(buf, &value);
+                ASM::movesd_mem64_offset32_freg64(buf, ptr_reg, element_offset, sym_reg);
             }
             _ if element_width == 0 => {}
             _ if element_width > 8 => {

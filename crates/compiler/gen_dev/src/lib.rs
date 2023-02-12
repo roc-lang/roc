@@ -551,6 +551,27 @@ trait Backend<'a> {
                 );
                 self.build_num_sub_wrap(sym, &args[0], &args[1], ret_layout)
             }
+            LowLevel::NumSubSaturated => match self.interner().get(*ret_layout) {
+                Layout::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
+                    sym,
+                    bitcode::NUM_SUB_SATURATED_INT[int_width].to_string(),
+                    args,
+                    arg_layouts,
+                    ret_layout,
+                ),
+                Layout::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                    self.build_num_sub(sym, &args[0], &args[1], ret_layout)
+                }
+                Layout::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                    // saturated sub is just normal sub
+                    self.build_num_sub(sym, &args[0], &args[1], ret_layout)
+                }
+                Layout::Builtin(Builtin::Decimal) => {
+                    // self.load_args_and_call_zig(backend, bitcode::DEC_SUB_SATURATED)
+                    todo!()
+                }
+                _ => internal_error!("invalid return type"),
+            },
             LowLevel::NumBitwiseAnd => {
                 if let Layout::Builtin(Builtin::Int(int_width)) = self.interner().get(*ret_layout) {
                     self.build_int_bitwise_and(sym, &args[0], &args[1], int_width)
