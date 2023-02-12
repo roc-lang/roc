@@ -314,7 +314,7 @@ impl<
                 reg: Some(Float(_)),
                 ..
             }) => {
-                internal_error!("Cannot load floating point symbol into GeneralReg: {}", sym)
+                internal_error!("Cannot load floating point symbol into GeneralReg: {sym:?}")
             }
             Stack(Primitive {
                 reg: None,
@@ -349,8 +349,10 @@ impl<
                 self.free_reference(sym);
                 reg
             }
-            Stack(Complex { .. }) => {
-                internal_error!("Cannot load large values into general registers: {}", sym)
+            Stack(Complex { size, .. }) => {
+                internal_error!(
+                    "Cannot load large values (size {size}) into general registers: {sym:?}",
+                )
             }
             NoData => {
                 internal_error!("Cannot load no data into general registers: {}", sym)
@@ -447,7 +449,7 @@ impl<
                 reg: Some(Float(_)),
                 ..
             }) => {
-                internal_error!("Cannot load floating point symbol into GeneralReg: {}", sym)
+                internal_error!("Cannot load floating point symbol into GeneralReg: {sym:?}",)
             }
             Stack(Primitive {
                 reg: None,
@@ -465,11 +467,13 @@ impl<
             Stack(ReferencedPrimitive { .. }) => {
                 todo!("loading referenced primitives")
             }
-            Stack(Complex { .. }) => {
-                internal_error!("Cannot load large values into general registers: {}", sym)
+            Stack(Complex { size, .. }) => {
+                internal_error!(
+                    "Cannot load large values (size {size}) into general registers: {sym:?}",
+                )
             }
             NoData => {
-                internal_error!("Cannot load no data into general registers: {}", sym)
+                internal_error!("Cannot load no data into general registers: {:?}", sym)
             }
         }
     }

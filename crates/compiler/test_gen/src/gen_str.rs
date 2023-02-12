@@ -809,7 +809,7 @@ fn str_from_utf8_fail_surrogate_half() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_equality() {
     assert_evals_to!(r#""a" == "a""#, true, bool);
     assert_evals_to!(

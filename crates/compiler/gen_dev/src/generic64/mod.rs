@@ -1157,6 +1157,16 @@ impl<
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::eq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
+            Layout::STR => {
+                // use a zig call
+                self.build_fn_call(
+                    dst,
+                    bitcode::STR_EQUAL.to_string(),
+                    &[*src1, *src2],
+                    &[Layout::STR, Layout::STR],
+                    &Layout::BOOL,
+                )
+            }
             x => todo!("NumEq: layout, {:?}", x),
         }
     }
@@ -1172,6 +1182,23 @@ impl<
                     .storage_manager
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::neq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            Layout::Builtin(Builtin::Str) => {
+                self.build_fn_call(
+                    dst,
+                    bitcode::STR_EQUAL.to_string(),
+                    &[*src1, *src2],
+                    &[Layout::STR, Layout::STR],
+                    &Layout::BOOL,
+                );
+
+                // negate the result
+                let tmp = &Symbol::DEV_TMP;
+                let tmp_reg = self.storage_manager.claim_general_reg(&mut self.buf, tmp);
+                ASM::mov_reg64_imm64(&mut self.buf, tmp_reg, 164);
+
+                let dst_reg = self.storage_manager.load_to_general_reg(&mut self.buf, dst);
+                ASM::neq_reg64_reg64_reg64(&mut self.buf, dst_reg, dst_reg, tmp_reg);
             }
             x => todo!("NumNeq: layout, {:?}", x),
         }
