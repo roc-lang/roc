@@ -1,6 +1,6 @@
 interface Terminal
     exposes [ readLine, write ]
-    imports [ fx.Effect, Task.{ Task } ]
+    imports [ Effect, Task.{ Task } ]
 
 readLine : Task Str *
 readLine =

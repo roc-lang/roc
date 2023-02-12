@@ -1,6 +1,6 @@
 interface Task
     exposes [ Task, succeed, fail, await, map, onFail, attempt, fromResult, useArenaAlloc ]
-    imports [ fx.Effect ]
+    imports [ Effect ]
 
 
 Task ok err : Effect.Effect (Result ok err)
@@ -55,16 +55,8 @@ map = \effect, transform ->
 useArenaAlloc : (U8 -> Task a err) -> Task a err
 useArenaAlloc = \task ->
     # `n` is used to prevent `task` from running before `arenaStart`
-    n <- Task.await arenaStart
-    result <- Task.attempt (task n)
-    {} <- Task.await arenaEnd
+    n <- Effect.after Effect.arenaStart
+    result <- Effect.after (task n)
+    {} <- Effect.after Effect.arenaEnd
 
     Task.fromResult result
-
-arenaStart : Task U8 *
-arenaStart =
-    Effect.after Effect.arenaStart Task.succeed
-
-arenaEnd : Task {} *
-arenaEnd =
-    Effect.after Effect.arenaEnd Task.succeed
