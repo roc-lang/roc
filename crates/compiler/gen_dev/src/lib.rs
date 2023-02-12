@@ -969,24 +969,24 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
-            //            LowLevel::StrToNum => {
-            //                let number_layout = match self.interner().get(*ret_layout) {
-            //                    Layout::Struct { field_layouts, .. } => field_layouts[0], // TODO: why is it sometimes a struct?
-            //                    _ => unreachable!(),
-            //                };
-            //
-            //                // match on the return layout to figure out which zig builtin we need
-            //                let intrinsic = match self.interner().get(number_layout) {
-            //                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
-            //                    Layout::Builtin(Builtin::Float(float_width)) => {
-            //                        &bitcode::STR_TO_FLOAT[float_width]
-            //                    }
-            //                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
-            //                    _ => unreachable!(),
-            //                };
-            //
-            //                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
-            //            }
+            LowLevel::StrToNum => {
+                let number_layout = match self.interner().get(*ret_layout) {
+                    Layout::Struct { field_layouts, .. } => field_layouts[0], // TODO: why is it sometimes a struct?
+                    _ => unreachable!(),
+                };
+
+                // match on the return layout to figure out which zig builtin we need
+                let intrinsic = match self.interner().get(number_layout) {
+                    Layout::Builtin(Builtin::Int(int_width)) => &bitcode::STR_TO_INT[int_width],
+                    Layout::Builtin(Builtin::Float(float_width)) => {
+                        &bitcode::STR_TO_FLOAT[float_width]
+                    }
+                    Layout::Builtin(Builtin::Decimal) => bitcode::DEC_FROM_STR,
+                    _ => unreachable!(),
+                };
+
+                self.build_fn_call(sym, intrinsic.to_string(), args, arg_layouts, ret_layout)
+            }
             LowLevel::PtrCast => {
                 debug_assert_eq!(
                     1,

@@ -1369,9 +1369,17 @@ fn str_trim_right_small_to_small_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_to_nat() {
-    assert_evals_to!(r#"Str.toNat "1" |> Result.withDefault 0"#, 1, usize);
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.toNat "1"
+            "#
+        ),
+        RocResult::ok(1),
+        RocResult<usize, ()>
+    );
 }
 
 #[test]
@@ -1380,14 +1388,11 @@ fn str_to_i128() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Str.toI128 "1" is
-                Ok n -> n
-                Err _ -> 0
-
-               "#
+            Str.toI128 "1"
+            "#
         ),
-        1,
-        i128
+        RocResult::ok(1),
+        RocResult<i128, ()>
     );
 }
 
@@ -1397,41 +1402,39 @@ fn str_to_u128() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Str.toU128 "1" is
-                Ok n -> n
-                Err _ -> 0
-
-               "#
+            Str.toU128 "1"
+            "#
         ),
-        1,
-        u128
+        RocResult::ok(1),
+        RocResult<u128, ()>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_to_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Str.toI64 "1" is
-                Ok n -> n
-                Err _ -> 0
-
-               "#
+            Str.toI64 "1"
+            "#
         ),
-        1,
-        i64
+        RocResult::ok(1),
+        RocResult<i64, ()>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_to_u64() {
     assert_evals_to!(
-        r#"Str.toU64 "1""#,
-        RocResult::ok(1u64),
-        RocResult<u64, u8>
+        indoc!(
+            r#"
+            Str.toU64 "1"
+            "#
+        ),
+        RocResult::ok(1),
+        RocResult<u64, ()>
     );
 }
 
@@ -1441,14 +1444,11 @@ fn str_to_i32() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Str.toI32 "1" is
-                Ok n -> n
-                Err _ -> 0
-
-               "#
+            Str.toI32 "1"
+            "#
         ),
-        1,
-        i32
+        RocResult::ok(1),
+        RocResult<i32, ()>
     );
 }
 
@@ -1456,9 +1456,13 @@ fn str_to_i32() {
 #[cfg(any(feature = "gen-llvm"))]
 fn str_to_u32() {
     assert_evals_to!(
-        r#"Str.toU32 "1""#,
-        RocResult::ok(1u32),
-        RocResult<u32, u8>
+        indoc!(
+            r#"
+            Str.toU32 "1"
+            "#
+        ),
+        RocResult::ok(1),
+        RocResult<u32, ()>
     );
 }
 
@@ -1468,14 +1472,11 @@ fn str_to_i16() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Str.toI16 "1" is
-                Ok n -> n
-                Err _ -> 0
-
-               "#
+            Str.toI16 "1"
+            "#
         ),
-        1,
-        i16
+        RocResult::ok(1),
+        RocResult<i16, ()>
     );
 }
 
@@ -1485,14 +1486,11 @@ fn str_to_u16() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Str.toU16 "1" is
-                Ok n -> n
-                Err _ -> 0
-
-               "#
+            Str.toU16 "1"
+            "#
         ),
-        1,
-        u16
+        RocResult::ok(1),
+        RocResult<u16, ()>
     );
 }
 
@@ -1502,14 +1500,11 @@ fn str_to_i8() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Str.toI8 "1" is
-                Ok n -> n
-                Err _ -> 0
-
-               "#
+            Str.toI8 "1"
+            "#
         ),
-        1,
-        i8
+        RocResult::ok(1),
+        RocResult<i8, ()>
     );
 }
 
@@ -1519,14 +1514,11 @@ fn str_to_u8() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Str.toU8 "1" is
-                Ok n -> n
-                Err _ -> 0
-
-               "#
+            Str.toU8 "1"
+            "#
         ),
-        1,
-        u8
+        RocResult::ok(1),
+        RocResult<u8, ()>
     );
 }
 
