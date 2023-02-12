@@ -552,7 +552,7 @@ impl<
                 self.allocation_map.insert(*sym, owned_data);
                 self.symbol_storage_map.insert(
                     *sym,
-                    Stack(if is_primitive(layout) {
+                    Stack(if is_primitive(layout_interner, layout) {
                         ReferencedPrimitive {
                             base_offset: data_offset,
                             size,
@@ -1400,6 +1400,15 @@ impl<
     }
 }
 
-fn is_primitive(layout: InLayout<'_>) -> bool {
-    matches!(layout, single_register_layouts!())
+fn is_primitive(layout_interner: &mut STLayoutInterner<'_>, layout: InLayout<'_>) -> bool {
+    match layout {
+        single_register_layouts!() => true,
+        _ => match layout_interner.get(layout) {
+            Layout::Boxed(_) => true,
+            Layout::LambdaSet(lambda_set) => {
+                is_primitive(layout_interner, lambda_set.runtime_representation())
+            }
+            _ => false,
+        },
+    }
 }
