@@ -1402,6 +1402,7 @@ define_builtins! {
         77 LIST_COUNT_IF: "countIf"
         78 LIST_WALK_FROM: "walkFrom"
         79 LIST_WALK_FROM_UNTIL: "walkFromUntil"
+        80 LIST_ITER_HELP: "iterHelp"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias

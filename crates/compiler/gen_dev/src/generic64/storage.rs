@@ -787,6 +787,22 @@ impl<
                     self.copy_symbol_to_stack_offset_help(buf, size, from_offset, to_offset)
                 }
             },
+            Layout::Boxed(_) => {
+                // like a 64-bit integer
+                debug_assert_eq!(to_offset % 8, 0);
+                let reg = self.load_to_general_reg(buf, sym);
+                ASM::mov_base32_reg64(buf, to_offset, reg);
+            }
+            Layout::LambdaSet(lambda_set) => {
+                // like its runtime representation
+                self.copy_symbol_to_stack_offset(
+                    layout_interner,
+                    buf,
+                    to_offset,
+                    sym,
+                    &lambda_set.runtime_representation(),
+                )
+            }
             _ if layout_interner.stack_size(*layout) == 0 => {}
             // TODO: Verify this is always true.
             // The dev backend does not deal with refcounting and does not care about if data is safe to memcpy.

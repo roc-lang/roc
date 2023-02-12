@@ -2140,7 +2140,7 @@ fn get_set_unique_int_list_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn get_set_unique_int_list_i8() {
     assert_evals_to!(
         indoc!(
@@ -2592,7 +2592,7 @@ fn list_literal_increment_decrement() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_pass_to_function() {
     assert_evals_to!(
         indoc!(
@@ -2612,7 +2612,7 @@ fn list_pass_to_function() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn list_pass_to_set() {
     assert_evals_to!(
         indoc!(

@@ -1056,13 +1056,23 @@ trait Backend<'a> {
                 self.free_symbol(&Symbol::DEV_TMP)
             }
             Symbol::STR_IS_VALID_SCALAR => {
+                // just call the function
                 let layout_id = LayoutIds::default().get(func_sym, ret_layout);
                 let fn_name = self.symbol_to_string(func_sym, layout_id);
                 // Now that the arguments are needed, load them if they are literals.
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
-            _ => todo!("the function, {:?}", func_sym),
+            other => {
+                eprintln!("maybe {other:?} should have a custom implementation?");
+
+                // just call the function
+                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
+                let fn_name = self.symbol_to_string(func_sym, layout_id);
+                // Now that the arguments are needed, load them if they are literals.
+                self.load_literal_symbols(args);
+                self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
+            }
         }
     }
 
