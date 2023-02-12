@@ -1003,6 +1003,30 @@ impl<
         }
     }
 
+    fn build_num_sub_checked(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        num_layout: &InLayout<'a>,
+        return_layout: &InLayout<'a>,
+    ) {
+        let function_name = match self.interner().get(*num_layout) {
+            Layout::Builtin(Builtin::Int(width)) => &bitcode::NUM_SUB_CHECKED_INT[width],
+            Layout::Builtin(Builtin::Float(width)) => &bitcode::NUM_SUB_CHECKED_FLOAT[width],
+            Layout::Builtin(Builtin::Decimal) => bitcode::DEC_SUB_WITH_OVERFLOW,
+            x => internal_error!("NumSubChecked is not defined for {:?}", x),
+        };
+
+        self.build_fn_call(
+            dst,
+            function_name.to_string(),
+            &[*src1, *src2],
+            &[*num_layout, *num_layout],
+            return_layout,
+        )
+    }
+
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
         use Builtin::Int;
 

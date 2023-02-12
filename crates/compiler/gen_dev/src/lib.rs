@@ -447,6 +447,9 @@ trait Backend<'a> {
             LowLevel::NumAddChecked => {
                 self.build_num_add_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
             }
+            LowLevel::NumSubChecked => {
+                self.build_num_sub_checked(sym, &args[0], &args[1], &arg_layouts[0], ret_layout)
+            }
             LowLevel::NumAcos => self.build_fn_call(
                 sym,
                 bitcode::NUM_ACOS[FloatWidth::F64].to_string(),
@@ -868,6 +871,13 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::StrSubstringUnsafe => self.build_fn_call(
+                sym,
+                bitcode::STR_SUBSTRING_UNSAFE.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             LowLevel::StrToUtf8 => self.build_fn_call(
                 sym,
                 bitcode::STR_TO_UTF8.to_string(),
@@ -1043,13 +1053,6 @@ trait Backend<'a> {
                 self.load_literal_symbols(args);
                 self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
             }
-            Symbol::NUM_ADD_CHECKED => {
-                let layout_id = LayoutIds::default().get(func_sym, ret_layout);
-                let fn_name = self.symbol_to_string(func_sym, layout_id);
-                // Now that the arguments are needed, load them if they are literals.
-                self.load_literal_symbols(args);
-                self.build_fn_call(sym, fn_name, args, arg_layouts, ret_layout)
-            }
             Symbol::BOOL_TRUE => {
                 let bool_layout = Layout::BOOL;
                 self.load_literal(&Symbol::DEV_TMP, &bool_layout, &Literal::Bool(true));
@@ -1102,6 +1105,16 @@ trait Backend<'a> {
 
     /// build_num_add_checked stores the sum of src1 and src2 into dst.
     fn build_num_add_checked(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        num_layout: &InLayout<'a>,
+        return_layout: &InLayout<'a>,
+    );
+
+    /// build_num_sub_checked stores the sum of src1 and src2 into dst.
+    fn build_num_sub_checked(
         &mut self,
         dst: &Symbol,
         src1: &Symbol,

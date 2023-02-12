@@ -1697,7 +1697,7 @@ fn to_scalar_4_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_first_one_char() {
     assert_evals_to!(
         indoc!(
@@ -1713,7 +1713,7 @@ fn str_split_first_one_char() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_first_multiple_chars() {
     assert_evals_to!(
         indoc!(
@@ -1727,7 +1727,7 @@ fn str_split_first_multiple_chars() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_first_entire_input() {
     assert_evals_to!(
         indoc!(
@@ -1741,7 +1741,7 @@ fn str_split_first_entire_input() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_first_not_found() {
     assert_evals_to!(
         indoc!(
@@ -1755,7 +1755,7 @@ fn str_split_first_not_found() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_last_one_char() {
     assert_evals_to!(
         indoc!(
@@ -1769,7 +1769,7 @@ fn str_split_last_one_char() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_last_multiple_chars() {
     assert_evals_to!(
         indoc!(
@@ -1783,7 +1783,7 @@ fn str_split_last_multiple_chars() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_last_entire_input() {
     assert_evals_to!(
         indoc!(
@@ -1797,12 +1797,12 @@ fn str_split_last_entire_input() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_split_last_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.splitFirst "foo" "bar"
+            Str.splitLast "foo" "bar"
             "#
         ),
         RocResult::err(()),
@@ -1831,7 +1831,7 @@ fn str_split_overlapping_substring_2() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn str_walk_utf8_with_index() {
     #[cfg(not(feature = "gen-llvm-wasm"))]
     assert_evals_to!(
