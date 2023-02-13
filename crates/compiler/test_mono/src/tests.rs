@@ -2551,3 +2551,23 @@ fn recursively_build_effect() {
         "#
     )
 }
+
+#[mono_test]
+fn recursive_lambda_set_has_nested_non_recursive_lambda_sets_issue_5026() {
+    indoc!(
+        r#"
+        app "test" provides [looper] to "./platform"
+
+        Effect : {} -> Str
+
+        after = \buildNext ->
+            afterInner = \{} -> (buildNext "foobar") {}
+            afterInner
+
+        await : (Str -> Effect) -> Effect
+        await = \cont -> after (\result -> cont result)
+
+        looper = await \_ -> if Bool.true then looper else \{} -> "done"
+        "#
+    )
+}

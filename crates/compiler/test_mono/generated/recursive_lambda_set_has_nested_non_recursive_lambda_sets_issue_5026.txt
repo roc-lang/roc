@@ -1,0 +1,55 @@
+procedure Bool.2 ():
+    let Bool.23 : Int1 = true;
+    ret Bool.23;
+
+procedure Test.10 (Test.28):
+    let Test.32 : Int1 = CallByName Bool.2;
+    if Test.32 then
+        let Test.33 : [<rnu><null>, C {}] = CallByName Test.0;
+        ret Test.33;
+    else
+        let Test.29 : [<rnu><null>, C {}] = TagId(1) ;
+        ret Test.29;
+
+procedure Test.11 (Test.30):
+    let Test.31 : Str = "done";
+    ret Test.31;
+
+procedure Test.2 (Test.5):
+    let Test.17 : [<rnu><null>, C {}] = TagId(0) Test.5;
+    ret Test.17;
+
+procedure Test.3 (Test.7):
+    let Test.14 : [<rnu><null>, C {}] = CallByName Test.2 Test.7;
+    ret Test.14;
+
+procedure Test.6 (Test.16, #Attr.12):
+    let Test.5 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
+    dec #Attr.12;
+    let Test.19 : {} = Struct {};
+    let Test.25 : Str = "foobar";
+    let Test.20 : [<rnu><null>, C {}] = CallByName Test.8 Test.25 Test.5;
+    dec Test.25;
+    let Test.21 : U8 = GetTagId Test.20;
+    joinpoint Test.22 Test.18:
+        ret Test.18;
+    in
+    switch Test.21:
+        case 0:
+            let Test.23 : Str = CallByName Test.6 Test.19 Test.20;
+            jump Test.22 Test.23;
+    
+        default:
+            dec Test.20;
+            let Test.24 : Str = CallByName Test.11 Test.19;
+            jump Test.22 Test.24;
+    
+
+procedure Test.8 (Test.9, Test.7):
+    let Test.27 : [<rnu><null>, C {}] = CallByName Test.10 Test.9;
+    ret Test.27;
+
+procedure Test.0 ():
+    let Test.13 : {} = Struct {};
+    let Test.12 : [<rnu><null>, C {}] = CallByName Test.3 Test.13;
+    ret Test.12;
