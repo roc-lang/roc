@@ -491,7 +491,9 @@ impl<'a> RawFunctionLayout<'a> {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
             }
-            LambdaSet(lset) => Self::layout_from_lambda_set(env, lset),
+            LambdaSet(_) => {
+                internal_error!("lambda set should only appear under a function, where it's handled independently.");
+            }
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
             RangedNumber(..) => Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk),
 
@@ -562,15 +564,6 @@ impl<'a> RawFunctionLayout<'a> {
             Alias(_, _, var, _) => Self::from_var(env, var),
             Error => cacheable(Err(LayoutProblem::Erroneous)),
         }
-    }
-
-    fn layout_from_lambda_set(
-        _env: &mut Env<'a, '_>,
-        _lset: subs::LambdaSet,
-    ) -> Cacheable<RawFunctionLayoutResult<'a>> {
-        unreachable!()
-        // Lambda set is just a tag union from the layout's perspective.
-        // Self::layout_from_flat_type(env, lset.as_tag_union())
     }
 
     fn layout_from_flat_type(
@@ -2368,7 +2361,9 @@ impl<'a> Layout<'a> {
                 let structure_content = env.subs.get_content_without_compacting(structure);
                 Self::new_help(env, structure, *structure_content)
             }
-            LambdaSet(lset) => layout_from_lambda_set(env, lset),
+            LambdaSet(_) => {
+                internal_error!("lambda set should only appear under a function, where it's handled independently.");
+            }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
             Alias(symbol, _args, actual_var, _) => {
@@ -2950,37 +2945,6 @@ impl<'a> Builtin<'a> {
         };
 
         allocation.max(ptr_width)
-    }
-}
-
-fn layout_from_lambda_set<'a>(
-    env: &mut Env<'a, '_>,
-    lset: subs::LambdaSet,
-) -> Cacheable<LayoutResult<'a>> {
-    // Lambda set is just a tag union from the layout's perspective.
-    let subs::LambdaSet {
-        solved,
-        recursion_var,
-        unspecialized,
-        ambient_function: _,
-    } = lset;
-
-    if !unspecialized.is_empty() {
-        internal_error!(
-            "unspecialized lambda sets remain during layout generation for {:?}",
-            roc_types::subs::SubsFmtContent(&Content::LambdaSet(lset), env.subs)
-        );
-    }
-
-    match recursion_var.into_variable() {
-        None => {
-            let labels = solved.unsorted_lambdas(env.subs);
-            layout_from_non_recursive_union(env, &labels).map(Ok)
-        }
-        Some(rec_var) => {
-            let labels = solved.unsorted_lambdas(env.subs);
-            layout_from_recursive_union(env, rec_var, &labels)
-        }
     }
 }
 
