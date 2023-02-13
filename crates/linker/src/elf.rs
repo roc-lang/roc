@@ -1644,25 +1644,27 @@ fn surgery_elf_help(
         }
     }
 
-    // TODO: do this more properly. Instead of shifting everything at the end.
-    // First shift the old relocations in one large chunk.
-    // Then add the new relocations before the old relocations.
-    let all_relas = load_structs_inplace_mut::<elf::Rela64<LE>>(
-        exec_mmap,
-        md.new_rela_paddr as usize + md.ph_shift_bytes as usize,
-        (md.rela_size as usize + added_rela_size) / mem::size_of::<elf::Rela64<LE>>(),
-    );
-    let mut rela_index = 0;
-    let mut end = all_relas.len() - 1;
-    while rela_index < end {
-        rela_index += 1;
-        if all_relas[rela_index].r_type(LE, false) != elf::R_X86_64_RELATIVE {
-            // Some reason all of the X64_64_RELATIVE relocations have to be next to each other.
-            // When we find a different type of relocation, swap it to the end.
-            all_relas.swap(rela_index, end);
-            end -= 1;
-        }
-    }
+    // TODO: Figure this out and we should be able to get everything working, hopefully.
+    // It seems that for some platforms this fixes things and for other platforms this breaks things.
+    // Oh the fun of linking. I think this is the last blocker.
+
+    // let all_relas = load_structs_inplace_mut::<elf::Rela64<LE>>(
+    //     exec_mmap,
+    //     md.new_rela_paddr as usize + md.ph_shift_bytes as usize,
+    //     (md.rela_size as usize + added_rela_size) / mem::size_of::<elf::Rela64<LE>>(),
+    // );
+    // let mut rela_index = 0;
+    // let mut end = all_relas.len() - 1;
+    // while rela_index < end {
+    //     if all_relas[rela_index].r_type(LE, false) != elf::R_X86_64_RELATIVE {
+    //         // Some reason all of the X64_64_RELATIVE relocations have to be next to each other.
+    //         // When we find a different type of relocation, swap it to the end.
+    //         all_relas.swap(rela_index, end);
+    //         end -= 1;
+    //     } else {
+    //         rela_index += 1;
+    //     }
+    // }
 
     offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
     let new_sh_offset = offset;
