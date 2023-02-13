@@ -430,6 +430,11 @@ fn name_all_type_vars(variable: Variable, subs: &mut Subs, debug_print: DebugPri
         // set_root_name(root, (format!("<{:?}>", root).into()), subs);
         match appearances.get(&root) {
             Some(Appearances::Multiple) => {
+                if let Content::RecursionVar { structure, .. } =
+                    subs.get_content_without_compacting(root)
+                {
+                    recursion_structs_to_expand.push(*structure);
+                }
                 letters_used = name_root(letters_used, root, subs, &mut taken, debug_print);
             }
             Some(Appearances::Single) => {
@@ -692,6 +697,8 @@ fn write_content<'a>(
                         parens,
                         pol,
                     );
+
+                    ctx.recursion_structs_to_expand.push(*structure);
                 } else {
                     let name = &subs.field_names[name_index.index as usize];
                     buf.push_str(name.as_str())
