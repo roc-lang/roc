@@ -841,32 +841,40 @@ impl<
         let size = size as i32;
 
         self.with_tmp_general_reg(buf, |_storage_manager, buf, reg| {
-            for _ in (0..(size - copied)).step_by(8) {
-                ASM::mov_reg64_base32(buf, reg, from_offset + copied);
-                ASM::mov_base32_reg64(buf, to_offset + copied, reg);
+            if size - copied >= 8 {
+                for _ in (0..(size - copied)).step_by(8) {
+                    ASM::mov_reg64_base32(buf, reg, from_offset + copied);
+                    ASM::mov_base32_reg64(buf, to_offset + copied, reg);
 
-                copied += 8;
+                    copied += 8;
+                }
             }
 
-            for _ in (0..(size - copied)).step_by(4) {
-                ASM::mov_reg32_base32(buf, reg, from_offset + copied);
-                ASM::mov_base32_reg32(buf, to_offset + copied, reg);
+            if size - copied >= 4 {
+                for _ in (0..(size - copied)).step_by(4) {
+                    ASM::mov_reg32_base32(buf, reg, from_offset + copied);
+                    ASM::mov_base32_reg32(buf, to_offset + copied, reg);
 
-                copied += 4;
+                    copied += 4;
+                }
             }
 
-            for _ in (0..(size - copied)).step_by(2) {
-                ASM::mov_reg16_base32(buf, reg, from_offset + copied);
-                ASM::mov_base32_reg16(buf, to_offset + copied, reg);
+            if size - copied >= 2 {
+                for _ in (0..(size - copied)).step_by(2) {
+                    ASM::mov_reg16_base32(buf, reg, from_offset + copied);
+                    ASM::mov_base32_reg16(buf, to_offset + copied, reg);
 
-                copied += 2;
+                    copied += 2;
+                }
             }
 
-            for _ in (0..(size - copied)).step_by(1) {
-                ASM::mov_reg8_base32(buf, reg, from_offset + copied);
-                ASM::mov_base32_reg8(buf, to_offset + copied, reg);
+            if size - copied >= 1 {
+                for _ in (0..(size - copied)).step_by(1) {
+                    ASM::mov_reg8_base32(buf, reg, from_offset + copied);
+                    ASM::mov_base32_reg8(buf, to_offset + copied, reg);
 
-                copied += 1;
+                    copied += 1;
+                }
             }
         });
     }
