@@ -7805,8 +7805,8 @@ mod solve_expr {
             ),
             @r###"
         const : Str -[[const(2)]]-> (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str)
-        compose : (Str -a-> Str), (Str -[[]]-> Str) -[[compose(1)]]-> (Str -a-> Str)
-        \c1, c2 -> compose c1 c2 : (Str -a-> Str), (Str -[[]]-> Str) -[[11]]-> (Str -a-> Str)
+        compose : (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str), (Str -[[]]-> Str) -[[compose(1)]]-> (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str)
+        \c1, c2 -> compose c1 c2 : (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str), (Str -[[]]-> Str) -[[11]]-> (Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str)
         res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
         res : Str -[[closCompose(7) (Str -a-> Str) (Str -[[]]-> Str), closConst(10) Str] as a]-> Str
         "###
@@ -8330,7 +8330,7 @@ mod solve_expr {
                  "#
             ),
         @r###"
-        job : { lst : List [Bar, FromG a] } -[[job(0)]]-> [G { lst : List [Bar, FromG a] }] as a
+        job : { lst : List [Bar, FromG ([G { lst : List [Bar, FromG a] }] as a)] } -[[job(0)]]-> [G { lst : List [Bar, FromG a] }] as a
         config : { lst : List [Bar, FromG ([G { lst : List [Bar, FromG a] }] as a)] }
         G config : [G { lst : List [Bar, FromG a] }] as a
         "###

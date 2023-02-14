@@ -1,4 +1,5 @@
 use crate::ir::Parens;
+use crate::layout::intern::NeedsRecursionPointerFixup;
 use bitvec::vec::BitVec;
 use bumpalo::collections::Vec;
 use bumpalo::Bump;
@@ -1883,12 +1884,16 @@ impl<'a> LambdaSet<'a> {
                 );
                 cache_criteria.and(criteria);
 
+                let needs_recursive_fixup = NeedsRecursionPointerFixup(
+                    opt_recursion_var.is_some() && set_captures_have_naked_rec_ptr,
+                );
+
                 let lambda_set = env.cache.interner.insert_lambda_set(
                     env.arena,
                     fn_args,
                     ret,
                     env.arena.alloc(set.into_bump_slice()),
-                    set_captures_have_naked_rec_ptr,
+                    needs_recursive_fixup,
                     representation,
                 );
 
@@ -1902,7 +1907,7 @@ impl<'a> LambdaSet<'a> {
                     fn_args,
                     ret,
                     &(&[] as &[(Symbol, &[InLayout])]),
-                    false,
+                    NeedsRecursionPointerFixup(false),
                     Layout::UNIT,
                 );
                 Cacheable(Ok(lambda_set), cache_criteria)
