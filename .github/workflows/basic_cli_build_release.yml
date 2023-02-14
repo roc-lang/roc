@@ -1,7 +1,5 @@
 on:
   workflow_dispatch:
-  release:
-    types: [edited]
 
 # this cancels workflows currently in progress if you start a new one
 concurrency:
@@ -9,23 +7,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-
-  build-linux-x86_64-files:
+  fetch-releases:
     runs-on: [ubuntu-20.04]
     steps:
       - uses: actions/checkout@v3
 
-      # note: moving this step to a bash script will not work, the GITHUB_TOKEN is not passed properly
       - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting.
+        env:
+          AUTH_HEADER: 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}'
         run: |
-          curl --request GET \
-          --url https://api.github.com/repos/roc-lang/roc/releases \
-          --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
-          --header 'content-type: application/json' \
-          --output roc_releases.json
+          ./ci/get_releases_json.sh
 
-      # does a build with the surgical linker and also with the legacy linker
-      - run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
+      - run: curl -OL $(./ci/get_latest_release_url.sh linux_x86_64)
+      - run: curl -OL $(./ci/get_latest_release_url.sh macos_x86_64)
+      - run: curl -OL $(./ci/get_latest_release_url.sh silicon)
+
+      - name: Save roc_nightly archives
+        uses: actions/upload-artifact@v3
+        with:
+          path:  roc_nightly-*
+
+  build-linux-x86_64-files:
+    runs-on: [ubuntu-20.04]
+    needs: [fetch-releases]
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Download the previously uploaded roc_nightly archives
+        uses: actions/download-artifact@v3
+
+      - name: build basic-cli with surgical linker and also with legacy linker
+        env:
+          CARGO_BUILD_TARGET: x86_64-unknown-linux-musl
+        run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
 
       - name: Save .rh1, .rm2 and .o file 
         uses: actions/upload-artifact@v3
@@ -38,17 +52,12 @@ jobs:
 
   build-macos-x86_64-files:
     runs-on: [macos-11] # I expect the generated files to work on macOS 12
+    needs: [fetch-releases]
     steps:
       - uses: actions/checkout@v3
 
-      # note: moving this step to a bash script will not work, the GITHUB_TOKEN is not passed properly
-      - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting due to shared IP of github's macos ci servers.
-        run: |
-          curl --request GET \
-          --url https://api.github.com/repos/roc-lang/roc/releases \
-          --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
-          --header 'content-type: application/json' \
-          --output roc_releases.json
+      - name: Download the previously uploaded roc_nightly archives
+        uses: actions/download-artifact@v3
 
       - run: ./ci/build_basic_cli.sh macos_x86_64
 
@@ -62,11 +71,12 @@ jobs:
   build-macos-apple-silicon-files:
     name: build apple silicon .o file
     runs-on: [self-hosted, macOS, ARM64]
+    needs: [fetch-releases]
     steps:
       - uses: actions/checkout@v3
 
-      - name: fetch releases data and save to file
-        run: curl https://api.github.com/repos/roc-lang/roc/releases > roc_releases.json
+      - name: Download the previously uploaded roc_nightly archives
+        uses: actions/download-artifact@v3
 
       - run: ./ci/build_basic_cli.sh silicon
 
@@ -87,33 +97,22 @@ jobs:
       - name: remove all folders except the ci folder
         run: ls | grep -v  ci | xargs rm -rf
 
-      # note: moving this step to a bash script will not work, the GITHUB_TOKEN is not passed properly
-      - name: Fetch releases data and save to file. Authorization is used to prevent rate limiting.
-        run: |
-          curl --request GET \
-          --url https://api.github.com/repos/roc-lang/roc/releases \
-          --header 'authorization: Bearer ${{ secrets.GITHUB_TOKEN }}' \
-          --header 'content-type: application/json' \
-          --output roc_releases.json
+      - name: Download the previously uploaded files
+        uses: actions/download-artifact@v3
 
-      - run: echo "ROC_RELEASE_URL=$(./ci/get_latest_release_url.sh linux_x86_64)" >> $GITHUB_ENV
-
-      - name: Get the archive from the url.
-        run: curl -OL ${{ env.ROC_RELEASE_URL }}
+      - name: mv roc nightly and simplify name
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux") ./roc_nightly.tar.gz
 
       - name: decompress the tar
-        run: ls | grep "roc_nightly.*tar\.gz" | xargs tar -xzvf
+        run: tar -xzvf roc_nightly.tar.gz
 
       - name: delete tar
-        run: ls | grep "roc_nightly.*tar\.gz" | xargs rm -rf
+        run: rm roc_nightly.tar.gz
 
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
 
       - run: git clone https://github.com/roc-lang/basic-cli.git
-
-      - name: Download the previously uploaded files
-        uses: actions/download-artifact@v3
 
       - run: cp macos-apple-silicon-files/* ./basic-cli/src
       
@@ -139,4 +138,44 @@ jobs:
           name: basic-cli-platform
           path: |
             ${{ env.TAR_FILENAME }}
+
+  test-release-ubuntu:
+    needs: [create-brotli-archive]
+    runs-on: [ubuntu-20.04]
+    steps:
+
+      - name: Download the previously uploaded files
+        uses: actions/download-artifact@v3
+
+      - name: mv roc nightly and simplify name
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux") ./roc_nightly.tar.gz
+
+      - name: decompress the tar
+        run: tar -xzvf roc_nightly.tar.gz
+
+      - name: delete tar
+        run: rm roc_nightly.tar.gz
+
+      - name: rename nightly folder
+        run: mv roc_nightly* roc_nightly
+
+      - run: cd basic-cli-platform && ls | grep "tar" | xargs tar -xzf
+
+      - name: prep testing http-get.roc
+        run: |
+          mv roc_nightly basic-cli-platform/.
+          cd basic-cli-platform
+          mkdir examples
+          cd examples
+          curl -OL https://raw.githubusercontent.com/roc-lang/basic-cli/main/examples/http-get.roc
+          sed -i 's/pf:\ \"[^"]*/pf:\ \"\.\.\/main.roc/g' http-get.roc
+          cd ..
+          curl -OL https://raw.githubusercontent.com/roc-lang/basic-cli/main/ci/expect_scripts/http-get.exp
+
+      - run: sudo apt install -y expect
+
+      - name: execute test
+        run: |
+          cd basic-cli-platform
+          expect http-get.exp
 
