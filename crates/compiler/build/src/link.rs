@@ -285,11 +285,6 @@ pub fn build_zig_host_native(
         "glue",
         find_zig_glue_path().to_str().unwrap(),
         "--pkg-end",
-        // include the zig runtime
-        "--pkg-begin",
-        "compiler_rt",
-        zig_compiler_rt_path.to_str().unwrap(),
-        "--pkg-end",
         // include libc
         "--library",
         "c",
