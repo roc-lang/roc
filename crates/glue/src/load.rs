@@ -289,9 +289,10 @@ pub fn load_types(
             // dbg!(layout);
 
             if layout.has_varying_stack_size(&layout_cache.interner, arena) {
+                let ident_ids = interns.all_ident_ids.get_mut(&home).unwrap();
                 let answer = generate_glue_procs(
                     home,
-                    &mut interns,
+                    ident_ids,
                     arena,
                     &mut layout_interner.fork(),
                     arena.alloc(layout),

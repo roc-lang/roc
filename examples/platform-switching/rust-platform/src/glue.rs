@@ -104,11 +104,11 @@ pub struct RocFunction_66 {
 impl RocFunction_66 {
     pub fn force_thunk(self, arg_0: ()) -> Op {
         extern "C" {
-             fn roc__mainForHost_1__Fx0_caller(output: *mut Op, arg_0: (), closure_data: *mut u8);
+             fn roc__main_0_caller(output: *mut Op, arg_0: (), closure_data: *mut u8);
         }
 
         let mut output = std::mem::MaybeUninit::uninit();
-        unsafe { roc__mainForHost_1__Fx0_caller(output.as_mut_ptr(), arg_0, self.closure_data) };
+        unsafe { roc__main_0_caller(output.as_mut_ptr(), arg_0, self.closure_data) };
         unsafe { output.assume_init() }
     }
 }
@@ -122,18 +122,18 @@ impl RocFunction_66 {
 ))]
 
 #[repr(C)]
-pub struct RocFunction_68 {
+pub struct RocFunction_67 {
     pub closure_data: *mut u8,
 }
 
-impl RocFunction_68 {
+impl RocFunction_67 {
     pub fn force_thunk(self, arg_0: ()) -> Op {
         extern "C" {
-             fn roc__mainForHost_1__Fx1_caller(output: *mut Op, arg_0: (), closure_data: *mut u8);
+             fn roc__main_1_caller(output: *mut Op, arg_0: (), closure_data: *mut u8);
         }
 
         let mut output = std::mem::MaybeUninit::uninit();
-        unsafe { roc__mainForHost_1__Fx1_caller(output.as_mut_ptr(), arg_0, self.closure_data) };
+        unsafe { roc__main_1_caller(output.as_mut_ptr(), arg_0, self.closure_data) };
         unsafe { output.assume_init() }
     }
 }
@@ -250,12 +250,12 @@ impl Op {
     /// Unsafely assume this `Op` has a `.discriminant()` of `StderrWrite` and return its payload at index 1.
     /// (Always examine `.discriminant()` first to make sure this is the correct variant!)
     /// Panics in debug builds if the `.discriminant()` doesn't return `StderrWrite`.
-    pub unsafe fn get_StderrWrite_1(&self) -> RocFunction_68 {
+    pub unsafe fn get_StderrWrite_1(&self) -> RocFunction_67 {
         debug_assert_eq!(self.discriminant(), discriminant_Op::StderrWrite);
 
         extern "C" {
             #[link_name = "roc__getter__3"]
-            fn getter(_: *mut RocFunction_68, _: *const Op);
+            fn getter(_: *mut RocFunction_67, _: *const Op);
         }
 
         let mut ret = core::mem::MaybeUninit::uninit();

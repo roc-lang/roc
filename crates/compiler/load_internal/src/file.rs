@@ -2989,64 +2989,6 @@ fn update<'a>(
                 },
             );
 
-            if module_id == state.root_id {
-                let entry_point = find_entry_point(arena, &state, &interns)?;
-
-                if let EntryPoint::Executable {
-                    exposed_to_host, ..
-                } = &entry_point
-                {
-                    // Expose glue for the platform, not for the app module!
-                    let module_id = platform_data.as_ref().unwrap().module_id;
-
-                    for key @ (_name, proc_layout) in exposed_to_host.iter() {
-                        dbg!(_name);
-                        let ret = &proc_layout.result;
-                        for in_layout in proc_layout.arguments.iter().chain([ret]) {
-                            let layout = state.layout_interner.get(*in_layout);
-                            let all_glue_procs = roc_mono::ir::generate_glue_procs(
-                                module_id,
-                                &mut interns,
-                                arena,
-                                &mut layout_interner,
-                                arena.alloc(layout),
-                            );
-
-                            glue_getters.extend(all_glue_procs.getters.iter().flat_map(
-                                |(_, glue_procs)| {
-                                    glue_procs
-                                        .iter()
-                                        .map(|glue_proc| (glue_proc.name, glue_proc.proc_layout))
-                                },
-                            ));
-
-                            procedures.extend(all_glue_procs.getters.into_iter().flat_map(
-                                |(_, glue_procs)| {
-                                    glue_procs.into_iter().map(|glue_proc| {
-                                        (((glue_proc.name), glue_proc.proc_layout), glue_proc.proc)
-                                    })
-                                },
-                            ));
-
-                            let aliases = BumpMap::default();
-
-                            for (id, raw_function_layout) in all_glue_procs.extern_names {
-                                aliases.insert(
-                                    Symbol::ATTR_ARG1,
-                                    (Symbol::ATTR_ARG1, raw_function_layout),
-                                );
-                            }
-
-                            procedures.get_mut(key).unwrap().host_exposed_layouts =
-                                HostExposedLayouts::HostExposed {
-                                    rigids: BumpMap::default(),
-                                    aliases,
-                                };
-                        }
-                    }
-                }
-            }
-
             let work = state
                 .dependencies
                 .notify(module_id, Phase::MakeSpecializations);
@@ -3330,15 +3272,15 @@ fn log_layout_stats(module_id: ModuleId, layout_cache: &LayoutCache) {
 
 fn find_entry_point<'a>(
     arena: &'a Bump,
-    state: &State<'a>,
-    interns: &Interns,
-) -> Result<EntryPoint<'a>, LoadingProblem<'a>> {
+    state: State<'a>,
+    interns: &mut Interns,
+) -> Result<(State<'a>, EntryPoint<'a>), LoadingProblem<'a>> {
     match state.exec_mode {
-        ExecutionMode::Test => Ok(EntryPoint::Test),
+        ExecutionMode::Test => Ok((state, EntryPoint::Test)),
         ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
             use PlatformPath::*;
 
-            let platform_path = match state.platform_path {
+            let platform_path = match &state.platform_path {
                 Valid(To::ExistingPackage(shorthand)) => {
                     match state.arc_shorthands.lock().get(shorthand) {
                         Some(shorthand_path) => shorthand_path.root_module().to_path_buf(),
@@ -3386,10 +3328,13 @@ fn find_entry_point<'a>(
                 }
             };
 
-            Ok(EntryPoint::Executable {
-                exposed_to_host: exposed_symbols_and_layouts,
-                platform_path,
-            })
+            Ok((
+                state,
+                EntryPoint::Executable {
+                    exposed_to_host: exposed_symbols_and_layouts,
+                    platform_path,
+                },
+            ))
         }
         ExecutionMode::Check => unreachable!(),
     }
@@ -3430,16 +3375,78 @@ fn finish_specialization<'a>(
         all_ident_ids,
     };
 
-    let entry_point = find_entry_point(arena, &state, &interns)?;
+    let entry_point = {
+        let interns: &mut Interns = &mut interns;
+        match state.exec_mode {
+            ExecutionMode::Test => Ok(EntryPoint::Test),
+            ExecutionMode::Executable | ExecutionMode::ExecutableIfCheck => {
+                use PlatformPath::*;
+
+                let platform_path = match &state.platform_path {
+                    Valid(To::ExistingPackage(shorthand)) => {
+                        match state.arc_shorthands.lock().get(shorthand) {
+                            Some(shorthand_path) => shorthand_path.root_module().to_path_buf(),
+                            None => unreachable!(),
+                        }
+                    }
+                    Valid(To::NewPackage(p_or_p)) => PathBuf::from(p_or_p.as_str()),
+                    other => {
+                        let buf = to_missing_platform_report(state.root_id, other);
+                        return Err(LoadingProblem::FormattedReport(buf));
+                    }
+                };
+
+                let exposed_symbols_and_layouts = match state.platform_data {
+                    None => {
+                        let src = &state.exposed_to_host.values;
+                        let mut buf = bumpalo::collections::Vec::with_capacity_in(src.len(), arena);
+
+                        for &symbol in src.keys() {
+                            let proc_layout =
+                                proc_layout_for(state.procedures.keys().copied(), symbol);
+
+                            buf.push((symbol, proc_layout));
+                        }
+
+                        buf.into_bump_slice()
+                    }
+                    Some(PlatformData {
+                        module_id,
+                        provides,
+                        ..
+                    }) => {
+                        let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
+                        let mut buf =
+                            bumpalo::collections::Vec::with_capacity_in(provides.len(), arena);
+
+                        for (loc_name, _loc_typed_ident) in provides {
+                            let ident_id = ident_ids.get_or_insert(loc_name.value.as_str());
+                            let symbol = Symbol::new(module_id, ident_id);
+                            let proc_layout =
+                                proc_layout_for(state.procedures.keys().copied(), symbol);
+
+                            buf.push((symbol, proc_layout));
+                        }
+
+                        buf.into_bump_slice()
+                    }
+                };
+
+                Ok(EntryPoint::Executable {
+                    exposed_to_host: exposed_symbols_and_layouts,
+                    platform_path,
+                })
+            }
+            ExecutionMode::Check => unreachable!(),
+        }
+    }?;
 
     let State {
         toplevel_expects,
         mut procedures,
         module_cache,
         output_path,
-        platform_path,
         platform_data,
-        exec_mode,
         ..
     } = state;
 
@@ -3466,13 +3473,13 @@ fn finish_specialization<'a>(
         let module_id = platform_data.as_ref().unwrap().module_id;
 
         for key @ (_name, proc_layout) in exposed_to_host.iter() {
-            dbg!(_name);
             let ret = &proc_layout.result;
             for in_layout in proc_layout.arguments.iter().chain([ret]) {
                 let layout = layout_interner.get(*in_layout);
+                let ident_ids = interns.all_ident_ids.get_mut(&module_id).unwrap();
                 let all_glue_procs = roc_mono::ir::generate_glue_procs(
                     module_id,
-                    &mut interns,
+                    ident_ids,
                     arena,
                     &mut layout_interner,
                     arena.alloc(layout),
@@ -3491,18 +3498,6 @@ fn finish_specialization<'a>(
                         })
                     },
                 ));
-
-                let aliases = BumpMap::default();
-
-                for (id, raw_function_layout) in all_glue_procs.extern_names {
-                    aliases.insert(Symbol::ATTR_ARG1, (Symbol::ATTR_ARG1, raw_function_layout));
-                }
-
-                procedures.get_mut(key).unwrap().host_exposed_layouts =
-                    HostExposedLayouts::HostExposed {
-                        rigids: BumpMap::default(),
-                        aliases,
-                    };
             }
         }
     }
@@ -6769,7 +6764,7 @@ fn to_parse_problem_report<'a>(
     buf
 }
 
-fn to_missing_platform_report(module_id: ModuleId, other: PlatformPath) -> String {
+fn to_missing_platform_report(module_id: ModuleId, other: &PlatformPath) -> String {
     use roc_reporting::report::{Report, RocDocAllocator, DEFAULT_PALETTE};
     use ven_pretty::DocAllocator;
     use PlatformPath::*;

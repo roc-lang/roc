@@ -3949,6 +3949,8 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
 
     let params = c_function.get_params();
 
+    dbg!(&params);
+
     let param_types = Vec::from_iter_in(roc_function.get_type().get_param_types(), env.arena);
 
     let (params, param_types) = match (&roc_return, &cc_return) {
@@ -3968,6 +3970,8 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         }
         _ => (&params[..], &param_types[..]),
     };
+
+    dbg!(&params, &param_types);
 
     debug_assert!(
         params.len() == param_types.len(),
@@ -4958,15 +4962,12 @@ fn expose_alias_to_host<'a, 'ctx, 'env>(
     env: &Env<'a, 'ctx, 'env>,
     layout_interner: &mut STLayoutInterner<'a>,
     mod_solutions: &'a ModSolutions,
-    proc_name: LambdaName,
+    fn_name: &str,
     alias_symbol: Symbol,
     exposed_function_symbol: Symbol,
     top_level: ProcLayout<'a>,
     layout: RawFunctionLayout<'a>,
 ) {
-    let ident_string = proc_name.name().as_str(&env.interns);
-    let fn_name: String = format!("{}_1", ident_string);
-
     match layout {
         RawFunctionLayout::Function(arguments, closure, result) => {
             // define closure size and return value size, e.g.
@@ -5080,10 +5081,11 @@ fn build_closure_caller<'a, 'ctx, 'env>(
 
     // e.g. `roc__main_1_Fx_caller`
     let function_name = format!(
-        "roc__{}_{}_{}_caller",
+        // "roc__{}_{}_{}_caller",
+        "roc__{}_caller",
         def_name,
-        alias_symbol.module_string(&env.interns),
-        alias_symbol.as_str(&env.interns)
+        // alias_symbol.module_string(&env.interns),
+        // alias_symbol.as_str(&env.interns)
     );
 
     let function_spec = FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types);
@@ -5259,12 +5261,17 @@ fn build_proc<'a, 'ctx, 'env>(
                     /* no host, or exposing types is not supported */
                 }
                 Binary | BinaryDev => {
-                    for (alias_name, (generated_function, top_level, layout)) in aliases.iter() {
+                    for (alias_name, (id, generated_function, top_level, layout)) in aliases.iter()
+                    {
+                        let ident_string = proc.name.name().as_str(&env.interns);
+                        // let fn_name: String = format!("{}_1", ident_string);
+                        let fn_name: String = format!("{}_{}", ident_string, id.0);
+
                         expose_alias_to_host(
                             env,
                             layout_interner,
                             mod_solutions,
-                            proc.name,
+                            &fn_name,
                             *alias_name,
                             *generated_function,
                             *top_level,

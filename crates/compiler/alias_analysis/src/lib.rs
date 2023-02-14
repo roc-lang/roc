@@ -188,7 +188,7 @@ where
             let func_name = FuncName(&bytes);
 
             if let HostExposedLayouts::HostExposed { aliases, .. } = &proc.host_exposed_layouts {
-                for (_, (symbol, top_level, layout)) in aliases {
+                for (_, (_id, symbol, top_level, layout)) in aliases {
                     match layout {
                         RawFunctionLayout::Function(_, _, _) => {
                             let it = top_level.arguments.iter().copied();

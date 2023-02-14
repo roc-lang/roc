@@ -5,5 +5,5 @@ app "rocLovesRust"
 
 main =
     StdoutWrite "Roc <3 Rust!\n" \{} ->
-        StderrWrite "This is stderr!" \{} ->
+        StdoutWrite "Roc <3 Rust!\n" \{} ->
             Done

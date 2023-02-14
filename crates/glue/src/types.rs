@@ -1066,7 +1066,7 @@ fn add_type_help<'a>(
             };
 
             let id = env.lambda_set_ids.get(closure_var).unwrap();
-            let extern_name = format!("roc__mainForHost_1__Fx{}_caller", id.0);
+            let extern_name = format!("roc__main_{}_caller", id.0);
 
             for arg_var in args {
                 let arg_layout = env
