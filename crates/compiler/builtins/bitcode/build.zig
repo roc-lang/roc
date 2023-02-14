@@ -15,10 +15,20 @@ pub fn build(b: *Builder) void {
     const main_path = b.option([]const u8, "main-path", main_path_desc) orelse fallback_main_path;
 
     // workaround for https://github.com/ziglang/zig/issues/14099
+    const zig_exe =
+        std.fs.path.dirname(b.zig_exe) orelse unreachable;
+    // This is where nix stores compiler_rt.
+    var compiler_rt_path =
+        std.fmt.allocPrint(std.heap.page_allocator, "{s}/../lib/zig/std/special/compiler_rt.zig", .{zig_exe}) catch unreachable;
+    std.fs.accessAbsolute(compiler_rt_path, .{}) catch {
+        // The path didn't work. Try the other common possiblity of zig living next to the lib directory instead of in a bin folder.
+        compiler_rt_path =
+            std.fmt.allocPrint(std.heap.page_allocator, "{s}/lib/std/special/compiler_rt.zig", .{zig_exe}) catch unreachable;
+    };
     const compiler_rt: std.build.Pkg = .{
         .name = "compiler_rt",
         // Note: this folder will change location when updating zig. Also the outer `.path` will become `.source`.
-        .path = .{ .path = std.fmt.allocPrint(std.heap.page_allocator, "{s}/../lib/zig/std/special/compiler_rt.zig", .{std.fs.path.dirname(b.zig_exe) orelse unreachable}) catch unreachable },
+        .path = .{ .path = compiler_rt_path },
     };
 
     // Tests
