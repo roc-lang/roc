@@ -14,10 +14,21 @@ pub fn build(b: *Builder) void {
     const main_path_desc = b.fmt("Override path to main.zig. Used by \"ir\" and \"test\". Defaults to \"{s}\". ", .{fallback_main_path});
     const main_path = b.option([]const u8, "main-path", main_path_desc) orelse fallback_main_path;
 
+    // workaround for https://github.com/ziglang/zig/issues/14099
+    const compiler_rt: std.build.Pkg = .{
+        .name = "compiler_rt",
+        // Note: this folder will change location when updating zig. Also the outer `.path` will become `.source`.
+        .path = .{ .path = std.fmt.allocPrint(std.heap.page_allocator, "{s}/../lib/zig/std/special/compiler_rt.zig", .{std.fs.path.dirname(b.zig_exe) orelse unreachable}) catch unreachable },
+    };
+
     // Tests
     var main_tests = b.addTest(main_path);
     main_tests.setBuildMode(mode);
     main_tests.linkSystemLibrary("c");
+
+    // workaround for https://github.com/ziglang/zig/issues/14099
+    main_tests.addPackage(compiler_rt);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&main_tests.step);
 
@@ -32,12 +43,6 @@ pub fn build(b: *Builder) void {
     const linux64_target = makeLinux64Target();
     const windows64_target = makeWindows64Target();
     const wasm32_target = makeWasm32Target();
-
-    // workaround for https://github.com/ziglang/zig/issues/14099
-    const compiler_rt: std.build.Pkg = .{
-        .name = "compiler_rt",
-        .path = .{ .path = std.fmt.allocPrint(std.heap.page_allocator, "{s}/../lib/zig/std/special/compiler_rt.zig", .{std.fs.path.dirname(b.zig_exe) orelse unreachable}) catch unreachable },
-    };
 
     // LLVM IR
     generateLlvmIrFile(b, mode, host_target, main_path, "ir", "builtins-host", compiler_rt);
