@@ -10,7 +10,7 @@ const NUM = "num";
 const STR = "str";
 
 comptime {
-    if (builtin.target.os.tag != .windows and builtin.cpu.arch != .wasm32) {
+    if (builtin.cpu.arch != .wasm32) {
         _ = @import("compiler_rt");
     }
 }
