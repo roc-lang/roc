@@ -173,17 +173,6 @@ pub fn build_zig_host_native(
         target,
     ]);
 
-    // some examples need the compiler-rt in the app object file.
-    // but including it on windows causes weird crashes, at least
-    // when we use zig 0.9. It looks like zig 0.10 is going to fix
-    // this problem for us, so this is a temporary workaround
-    if !target.contains("windows") {
-        zig_cmd.args([
-            // include the zig runtime
-            "-fcompiler-rt",
-        ]);
-    }
-
     // valgrind does not yet support avx512 instructions, see #1963.
     if env::var("NO_AVX512").is_ok() {
         zig_cmd.args(["-mcpu", "x86_64"]);
@@ -452,7 +441,7 @@ pub fn build_c_host_native(
                     "-lm",
                     "-lpthread",
                     "-ldl",
-                    "-lrt",
+                    // "-lrt",
                     "-lutil",
                 ]);
             }
@@ -1118,7 +1107,7 @@ fn link_linux(
             "-lm",
             "-lpthread",
             "-ldl",
-            "-lrt",
+            // "-lrt",
             "-lutil",
             "-lc_nonshared",
             libgcc_path.to_str().unwrap(),

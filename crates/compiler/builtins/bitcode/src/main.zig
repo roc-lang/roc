@@ -9,6 +9,12 @@ const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
 const STR = "str";
 
+comptime {
+    if (builtin.target.os.tag != .windows and builtin.cpu.arch != .wasm32) {
+        _ = @import("compiler_rt");
+    }
+}
+
 // Dec Module
 const dec = @import("dec.zig");
 
@@ -273,61 +279,4 @@ test "" {
     const testing = std.testing;
 
     testing.refAllDecls(@This());
-}
-
-// For unclear reasons, sometimes this function is not linked in on some machines.
-// Therefore we provide it as LLVM bitcode and mark it as externally linked during our LLVM codegen
-//
-// Taken from
-// https://github.com/ziglang/zig/blob/85755c51d529e7d9b406c6bdf69ce0a0f33f3353/lib/std/special/compiler_rt/muloti4.zig
-//
-// Thank you Zig Contributors!
-
-// Export it as weak incase it is already linked in by something else.
-comptime {
-    if (builtin.target.os.tag != .windows) {
-        @export(__muloti4, .{ .name = "__muloti4", .linkage = .Weak });
-    }
-}
-fn __muloti4(a: i128, b: i128, overflow: *c_int) callconv(.C) i128 {
-    // @setRuntimeSafety(std.builtin.is_test);
-
-    const min = @bitCast(i128, @as(u128, 1 << (128 - 1)));
-    const max = ~min;
-    overflow.* = 0;
-
-    const r = a *% b;
-    if (a == min) {
-        if (b != 0 and b != 1) {
-            overflow.* = 1;
-        }
-        return r;
-    }
-    if (b == min) {
-        if (a != 0 and a != 1) {
-            overflow.* = 1;
-        }
-        return r;
-    }
-
-    const sa = a >> (128 - 1);
-    const abs_a = (a ^ sa) -% sa;
-    const sb = b >> (128 - 1);
-    const abs_b = (b ^ sb) -% sb;
-
-    if (abs_a < 2 or abs_b < 2) {
-        return r;
-    }
-
-    if (sa == sb) {
-        if (abs_a > @divTrunc(max, abs_b)) {
-            overflow.* = 1;
-        }
-    } else {
-        if (abs_a > @divTrunc(min, -abs_b)) {
-            overflow.* = 1;
-        }
-    }
-
-    return r;
 }

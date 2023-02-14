@@ -33,17 +33,23 @@ pub fn build(b: *Builder) void {
     const windows64_target = makeWindows64Target();
     const wasm32_target = makeWasm32Target();
 
+    // workaround for https://github.com/ziglang/zig/issues/14099
+    const compiler_rt: std.build.Pkg = .{
+        .name = "compiler_rt",
+        .path = .{ .path = std.fmt.allocPrint(std.heap.page_allocator, "{s}/../lib/zig/std/special/compiler_rt.zig", .{std.fs.path.dirname(b.zig_exe) orelse unreachable}) catch unreachable },
+    };
+
     // LLVM IR
-    generateLlvmIrFile(b, mode, host_target, main_path, "ir", "builtins-host");
-    generateLlvmIrFile(b, mode, linux32_target, main_path, "ir-i386", "builtins-i386");
-    generateLlvmIrFile(b, mode, linux64_target, main_path, "ir-x86_64", "builtins-x86_64");
-    generateLlvmIrFile(b, mode, windows64_target, main_path, "ir-windows-x86_64", "builtins-windows-x86_64");
-    generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "builtins-wasm32");
+    generateLlvmIrFile(b, mode, host_target, main_path, "ir", "builtins-host", compiler_rt);
+    generateLlvmIrFile(b, mode, linux32_target, main_path, "ir-i386", "builtins-i386", compiler_rt);
+    generateLlvmIrFile(b, mode, linux64_target, main_path, "ir-x86_64", "builtins-x86_64", compiler_rt);
+    generateLlvmIrFile(b, mode, windows64_target, main_path, "ir-windows-x86_64", "builtins-windows-x86_64", compiler_rt);
+    generateLlvmIrFile(b, mode, wasm32_target, main_path, "ir-wasm32", "builtins-wasm32", compiler_rt);
 
     // Generate Object Files
-    generateObjectFile(b, mode, host_target, main_path, "object", "builtins-host");
-    generateObjectFile(b, mode, windows64_target, main_path, "windows-x86_64-object", "builtins-windows-x86_64");
-    generateObjectFile(b, mode, wasm32_target, main_path, "wasm32-object", "builtins-wasm32");
+    generateObjectFile(b, mode, host_target, main_path, "object", "builtins-host", compiler_rt);
+    generateObjectFile(b, mode, windows64_target, main_path, "windows-x86_64-object", "builtins-windows-x86_64", compiler_rt);
+    generateObjectFile(b, mode, wasm32_target, main_path, "wasm32-object", "builtins-wasm32", compiler_rt);
 
     removeInstallSteps(b);
 }
@@ -56,6 +62,7 @@ fn generateLlvmIrFile(
     main_path: []const u8,
     step_name: []const u8,
     object_name: []const u8,
+    compiler_rt: std.build.Pkg,
 ) void {
     const obj = b.addObject(object_name, main_path);
     obj.setBuildMode(mode);
@@ -64,6 +71,9 @@ fn generateLlvmIrFile(
     obj.emit_llvm_bc = .emit;
     obj.emit_bin = .no_emit;
     obj.target = target;
+
+    // workaround for https://github.com/ziglang/zig/issues/14099
+    obj.addPackage(compiler_rt);
 
     const ir = b.step(step_name, "Build LLVM ir");
     ir.dependOn(&obj.step);
@@ -81,6 +91,7 @@ fn generateObjectFile(
     main_path: []const u8,
     step_name: []const u8,
     object_name: []const u8,
+    compiler_rt: std.build.Pkg,
 ) void {
     const obj = b.addObject(object_name, main_path);
     obj.setBuildMode(mode);
@@ -89,6 +100,10 @@ fn generateObjectFile(
     obj.strip = true;
     obj.target = target;
     obj.link_function_sections = true;
+
+    // workaround for https://github.com/ziglang/zig/issues/14099
+    obj.addPackage(compiler_rt);
+
     const obj_step = b.step(step_name, "Build object file for linking");
     obj_step.dependOn(&obj.step);
 }
