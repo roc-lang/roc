@@ -749,8 +749,11 @@ impl<
             Layout::Builtin(builtin) => match builtin {
                 Builtin::Int(int_width) => match int_width {
                     IntWidth::I128 | IntWidth::U128 => {
-                        // can we treat this as 2 u64's?
-                        todo!()
+                        let (from_offset, size) = self.stack_offset_and_size(sym);
+                        debug_assert_eq!(from_offset % 8, 0);
+                        debug_assert_eq!(size % 8, 0);
+                        debug_assert_eq!(size, layout_interner.stack_size(*layout));
+                        self.copy_symbol_to_stack_offset_help(buf, size, from_offset, to_offset)
                     }
                     IntWidth::I64 | IntWidth::U64 => {
                         debug_assert_eq!(to_offset % 8, 0);
@@ -789,8 +792,8 @@ impl<
                 Builtin::Decimal => todo!(),
                 Builtin::Str | Builtin::List(_) => {
                     let (from_offset, size) = self.stack_offset_and_size(sym);
-                    debug_assert!(from_offset % 8 == 0);
-                    debug_assert!(size % 8 == 0);
+                    debug_assert_eq!(from_offset % 8, 0);
+                    debug_assert_eq!(size % 8, 0);
                     debug_assert_eq!(size, layout_interner.stack_size(*layout));
                     self.copy_symbol_to_stack_offset_help(buf, size, from_offset, to_offset)
                 }
@@ -818,8 +821,8 @@ impl<
             // Later, it will be reloaded and stored in refcounted as needed.
             _ if layout_interner.stack_size(*layout) > 8 => {
                 let (from_offset, size) = self.stack_offset_and_size(sym);
-                debug_assert!(from_offset % 8 == 0);
-                debug_assert!(size % 8 == 0);
+                debug_assert_eq!(from_offset % 8, 0);
+                debug_assert_eq!(size % 8, 0);
                 debug_assert_eq!(size, layout_interner.stack_size(*layout));
                 self.copy_symbol_to_stack_offset_help(buf, size, from_offset, to_offset)
             }
