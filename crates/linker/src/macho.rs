@@ -55,7 +55,7 @@ struct SurgeryEntry {
 // I think a number of them can be combined to reduce string duplication.
 // Also I think a few of them aren't need.
 // For example, I think preprocessing can deal with all shifting and remove the need for added_byte_count.
-// TOOD: Split metadata by platform. New changes have added a lot of elf specific data into this.
+// TODO: Split metadata by platform. New changes have added a lot of elf specific data into this.
 #[derive(Default, Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct Metadata {
     app_functions: Vec<String>,
