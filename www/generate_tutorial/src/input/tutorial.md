@@ -309,7 +309,7 @@ An easy way to print multiple values at a time is to wrap them in a tag, for exa
 
 Currently our `addAndStringify` function takes two arguments. We can instead make it take one argument like so:
 
-<pre><samp>total <span class="kw">=</span> addAndStringify <span class="brace">{</span> birds<span class="colon">,</span> 5<span class="comma">,</span> iguanas<span class="colon">,</span> 7 <span class="brace">}</span>
+<pre><samp>total <span class="kw">=</span> addAndStringify <span class="brace">{</span> birds<span class="colon">:</span> 5<span class="comma">,</span> iguanas<span class="colon">:</span> 7 <span class="brace">}</span>
 
 addAndStringify <span class="kw">=</span> <span class="kw">\</span>counts <span class="kw">-></span>
     Num.toStr <span class="paren">(</span>counts.birds <span class="op">+</span> counts.iguanas<span class="paren">)</span>
