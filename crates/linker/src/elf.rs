@@ -675,6 +675,16 @@ fn gen_elf_le(
     md.ph_physical_shift_start = ph_end as u64;
 
     md.exec_len = exec_data.len() as u64 + md.ph_shift_bytes + md.rela_size;
+    // Ensure the old file is gone if it currently exists. Othewise we will end up editing that instead of starting from scratch.
+    match std::fs::remove_file(preprocessed_path) {
+        Ok(_) => {}
+        Err(ref e) => match e.kind() {
+            std::io::ErrorKind::NotFound => {
+                // This is the only errors we don't care about.
+            }
+            _ => internal_error!("Failed to delete old preprocessed file: {}", e),
+        },
+    }
     let mut out_mmap = open_mmap_mut(preprocessed_path, md.exec_len as usize);
 
     out_mmap[..ph_end].copy_from_slice(&exec_data[..ph_end]);
@@ -726,7 +736,7 @@ fn gen_elf_le(
         .unwrap();
 
     md.new_rela_vaddr = align_to_offset_by_constraint(
-        last_segment_vaddr as usize,
+        last_segment_vaddr as usize + md.load_align_constraint as usize,
         md.new_rela_paddr as usize,
         md.load_align_constraint as usize,
     ) as u64;
@@ -764,8 +774,6 @@ fn gen_elf_le(
 
     // Give lots of space between the new rela section and the future app sections in virtual memory.
     md.last_vaddr = md.new_rela_vaddr + md.rela_size;
-    // TODO: verify removing this works on all apps.
-    // + md.load_align_constraint;
 
     // Copy everything until the section header table.
     out_mmap[md.ph_physical_shift_start as usize + md.ph_shift_bytes as usize
@@ -827,6 +835,10 @@ fn gen_elf_le(
     }
 
     let dyn_offset = update_physical_offset(md, md.dynamic_section_offset);
+    // TODO: In the case that we shift an earlier sections, it will put the removed items at the end of that sections.
+    // This mean we will get valid items, removed items, valid items, removed items.
+    // This doesn't seem to happen in practice because rela.plt is always the last sections, but it would lead to issues if it happens.
+    // we really should generate all valid items and then all removed items.
     for (sec_index, sec_offset, sec_size) in rela_sections {
         let relocations = load_structs_inplace_mut::<elf::Rela64<LE>>(
             &mut out_mmap,
@@ -934,10 +946,9 @@ fn gen_elf_le(
 
         for d in dyns.iter_mut() {
             match d.d_tag.get(LE) as u32 {
-                elf::DT_RELACOUNT if is_rela_dyn => {
-                    let old_count = d.d_val.get(LE);
-                    d.d_val.set(LE, old_count - removed_count as u64);
-                }
+                // These explicitly don't effect RELACOUNT.
+                // RELACOUNT is only for RELATIVE relocations.
+                // These are all JUMREL relocations.
                 elf::DT_RELASZ if is_rela_dyn => {
                     let old_size = d.d_val.get(LE);
                     d.d_val.set(LE, old_size - removed_size as u64);
