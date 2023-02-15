@@ -851,7 +851,7 @@ LowLevelHasher := { originalSeed : U64, state : U64 } has [
 # TODO hide behind an InternalList.roc module
 listGetUnsafe : List a, Nat -> a
 
-createLowLevelHasher : { seed ?U64 } -> LowLevelHasher
+createLowLevelHasher : { seed ? U64 } -> LowLevelHasher
 createLowLevelHasher = \{ seed ? 0x526F_6352_616E_643F } ->
     @LowLevelHasher { originalSeed: seed, state: seed }
 
