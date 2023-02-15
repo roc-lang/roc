@@ -3957,20 +3957,35 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx, 'env>(
         (RocReturn::ByPointer, CCReturn::Return) => {
             // Roc currently puts the return pointer at the end of the argument list.
             // As such, we drop the last element here instead of the first.
-            (&params[..], &param_types[..param_types.len() - 1])
+            (
+                &params[..],
+                &param_types[..param_types.len().saturating_sub(1)],
+            )
         }
         // Drop the return pointer the other way, if the C function returns by pointer but Roc
         // doesn't
         (RocReturn::Return, CCReturn::ByPointer) => (&params[1..], &param_types[..]),
         (RocReturn::ByPointer, CCReturn::ByPointer) => {
             // Both return by pointer but Roc puts it at the end and C puts it at the beginning
-            (&params[1..], &param_types[..param_types.len() - 1])
+            (
+                &params[1..],
+                &param_types[..param_types.len().saturating_sub(1)],
+            )
+        }
+        (RocReturn::Return | RocReturn::ByPointer, CCReturn::Void) => {
+            // the roc function returns a unit value. like `{}` or `{ { {}, {} }, {} }`.
+            // In C, this is modelled as a function returning void
+            (
+                &params[..],
+                &param_types[..param_types.len().saturating_sub(1)],
+            )
         }
         _ => (&params[..], &param_types[..]),
     };
 
-    debug_assert!(
-        params.len() == param_types.len(),
+    debug_assert_eq!(
+        params.len(),
+        param_types.len(),
         "when exposing a function to the host, params.len() was {}, but param_types.len() was {}",
         params.len(),
         param_types.len()
@@ -5685,6 +5700,8 @@ impl<'ctx> FunctionSpec<'ctx> {
                 (return_type.unwrap().fn_type(&arguments, false), None)
             }
             CCReturn::Void => {
+                // NOTE: there may be a valid return type, but it is zero-sized.
+                // for instance just `{}` or something more complex like `{ { {}, {} }, {} }`
                 let arguments = function_arguments(env, argument_types);
                 (env.context.void_type().fn_type(&arguments, false), None)
             }
