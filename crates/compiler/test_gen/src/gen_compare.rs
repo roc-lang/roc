@@ -121,6 +121,15 @@ fn and_bool() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn or_bool() {
+    assert_evals_to!("Bool.true || Bool.true", true, bool);
+    assert_evals_to!("Bool.true || Bool.false", true, bool);
+    assert_evals_to!("Bool.false || Bool.true", true, bool);
+    assert_evals_to!("Bool.false || Bool.false", false, bool);
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_record() {
     assert_evals_to!("{} == {}", true, bool);
