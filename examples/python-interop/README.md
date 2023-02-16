@@ -7,7 +7,7 @@ This is an example of calling Roc code from [Python](https://www.python.org/).
 The following was tested on NixOS, with Python 3.10, clang 13.0.1, gcc 11.3.0 but this should work on with most recent python3 and clang versions on most modern Linux and MacOS.\
 Of course you're welcome to test on your machine and tell me if you ran into any issues or limitations.
 
-For your convenience, I've created a shell script (linux specific, you'll see why in a second) to take care of some rough edges (nothing too bad, mostly stuff like renames).
+For your convenience, I've created a shell script (linux specific, you'll see why in a second) to take care of some rough edges (nothing too bad, mostly stuff like renames).\
 But running random shell scripts may not be your cup of tea so let's first do a step by step walkthrough on how it works, and also provide general instructions for users of all operating systems:
 
 ## Building the Roc library
@@ -29,7 +29,7 @@ mv libhello.so.1.0 libhello.so.1
 ```
 But, one of which does expect plain libhello.so, so we symlink it:
 
-``` sh
+```sh
 ln -sf libhello.so.1 libhello.so
 ```
 
@@ -54,8 +54,8 @@ Shared objects are simply importable in CPython (which is great!), so you would 
 
 Now we can see our work by entering an interactive shell and calling our function!
 
-```sh
-❯ py -q
+```py
+❯ python -q
 >>> import demo
 >>> demo.call_roc(21)
 '"The number was 21, OH YEAH!!! 🤘🤘"'
