@@ -1345,11 +1345,16 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
         union_layout,
         UnionLayout::NullableUnwrapped { .. } | UnionLayout::NonNullableUnwrapped { .. }
     ) {
-        debug_assert_eq!(cases.len(), 1);
+        debug_assert!(cases.len() <= 1, "{cases:?}");
 
-        // in this case, don't switch, because the `else` branch below would try to read the (nonexistent) tag id
-        let (_, only_branch) = cases.pop().unwrap();
-        env.builder.build_unconditional_branch(only_branch);
+        if cases.is_empty() {
+            // The only other layout doesn't need refcounting. Pass through.
+            builder.build_return(None);
+        } else {
+            // in this case, don't switch, because the `else` branch below would try to read the (nonexistent) tag id
+            let (_, only_branch) = cases.pop().unwrap();
+            env.builder.build_unconditional_branch(only_branch);
+        }
     } else {
         let default_block = env.context.append_basic_block(parent, "switch_default");
 
@@ -1372,6 +1377,7 @@ fn build_rec_union_recursive_decrement<'a, 'ctx, 'env>(
     }
 }
 
+#[derive(Debug)]
 struct UnionLayoutTags<'a> {
     nullable_id: Option<u16>,
     tags: &'a [&'a [InLayout<'a>]],
