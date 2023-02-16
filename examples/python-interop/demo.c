@@ -23,7 +23,6 @@ void roc_dealloc(void *ptr, unsigned int alignment) { free(ptr); }
 
 __attribute__((noreturn)) void roc_panic(void *ptr, unsigned int alignment)
 {
-    /* b_raise(rb_eException, "%s", (char *)ptr); */
     PyErr_SetString(PyExc_RuntimeError, (char *)ptr);
 }
 
@@ -211,9 +210,14 @@ PyObject * call_roc(PyObject *self, PyObject *args)
         return NULL;
     }
 
-
-    char str_num[64] = {0};
+    char str_num[256] = {0};
     sprintf(str_num, "%d", num);
+
+    // can also be done with python objects but im not sure what would be the benefit here
+    // PyObject* py_num_str = PyUnicode_FromFormat("%d", num);
+    // const char* c_str = PyUnicode_AsUTF8(py_num_str);
+    // size_t length = (size_t *)PyUnicode_GetLength(py_num_str);
+    // ...init_rocbytes((uint8_t *)c_str, length);
 
     // Turn the given Python number into a JSON string.
     struct RocBytes arg = init_rocbytes((uint8_t *)str_num, strlen(str_num));
