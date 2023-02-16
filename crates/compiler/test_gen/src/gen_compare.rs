@@ -113,6 +113,24 @@ fn neq_bool_tag() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn bool_logic() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                bool1 = Bool.true
+                bool2 = Bool.false
+                bool3 = !bool1
+
+                (bool1 && bool2) || bool2 && bool3
+                "#
+        ),
+        false,
+        bool
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn and_bool() {
     assert_evals_to!("Bool.true && Bool.true", true, bool);
     assert_evals_to!("Bool.true && Bool.false", false, bool);
