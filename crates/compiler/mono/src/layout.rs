@@ -67,6 +67,7 @@ impl CacheMeta {
         } = self;
         CacheCriteria {
             has_naked_recursion_pointer: false,
+            has_naked_recursion_pointer_in_captures_repr: false,
             has_recursive_structure,
         }
     }
@@ -157,6 +158,7 @@ impl<'a> LayoutCache<'a> {
             seen: Vec::new_in(arena),
             target_info: self.target_info,
             cache: self,
+            is_lambda_set_capture_repr_path: false,
         };
 
         // [Layout::from_var] should query the cache!
@@ -184,6 +186,7 @@ impl<'a> LayoutCache<'a> {
             seen: Vec::new_in(arena),
             target_info: self.target_info,
             cache: self,
+            is_lambda_set_capture_repr_path: false,
         };
 
         // [Layout::from_var] should query the cache!
@@ -347,6 +350,10 @@ struct CacheCriteria {
     /// Whether there is a naked recursion pointer in this layout, that doesn't pass through a
     /// recursive structure.
     has_naked_recursion_pointer: bool,
+    /// Whether this layout has a naked recursion pointer in the runtime representation of its
+    /// captures. Does not include recursion pointers in the argument/return layout stored in a
+    /// lambda set; only the captures' runtime representations.
+    has_naked_recursion_pointer_in_captures_repr: bool,
     /// Whether this layout contains a recursive structure. If `Some`, contains the variable of the
     /// recursion variable of that structure.
     has_recursive_structure: OptVariable,
@@ -354,17 +361,19 @@ struct CacheCriteria {
 
 const CACHEABLE: CacheCriteria = CacheCriteria {
     has_naked_recursion_pointer: false,
-    has_recursive_structure: OptVariable::NONE,
-};
-
-const NAKED_RECURSION_PTR: CacheCriteria = CacheCriteria {
-    has_naked_recursion_pointer: true,
+    has_naked_recursion_pointer_in_captures_repr: false,
     has_recursive_structure: OptVariable::NONE,
 };
 
 impl CacheCriteria {
     #[inline(always)]
     fn is_cacheable(&self) -> bool {
+        debug_assert!(
+            !self.has_naked_recursion_pointer_in_captures_repr
+                || self.has_naked_recursion_pointer,
+            "cannot have naked recursion pointer in captures repr without also having a naked recursion pointer"
+        );
+
         // Can't cache if there a naked recursion pointer that isn't covered by a recursive layout.
         !self.has_naked_recursion_pointer
     }
@@ -374,6 +383,9 @@ impl CacheCriteria {
     fn and(&mut self, other: Self) {
         self.has_naked_recursion_pointer =
             self.has_naked_recursion_pointer || other.has_naked_recursion_pointer;
+        self.has_naked_recursion_pointer_in_captures_repr = self
+            .has_naked_recursion_pointer_in_captures_repr
+            || other.has_naked_recursion_pointer_in_captures_repr;
         // TODO: can these ever conflict?
         self.has_recursive_structure = self
             .has_recursive_structure
@@ -383,6 +395,7 @@ impl CacheCriteria {
     #[inline(always)]
     fn pass_through_recursive_union(&mut self, recursion_var: Variable) {
         self.has_naked_recursion_pointer = false;
+        self.has_naked_recursion_pointer_in_captures_repr = false;
         self.has_recursive_structure = OptVariable::some(recursion_var);
     }
 
@@ -1413,6 +1426,16 @@ pub enum ClosureCallOptions<'a> {
     EnumDispatch(EnumDispatch),
 }
 
+enum LambdaSetReprRecursive {
+    /// This lambda set is recursive in its runtime captures representation.
+    RecursiveLayout(Variable),
+    /// This lamdba set is recursive in its type (and the arguments/return type layouts),
+    /// but not in the runtime representations of the captures.
+    RecursiveOnlyInType(Variable),
+    /// This lambda set is not recursive.
+    NotRecursive,
+}
+
 impl<'a> LambdaSet<'a> {
     pub fn runtime_representation(&self) -> InLayout<'a> {
         self.representation
@@ -1779,13 +1802,24 @@ impl<'a> LambdaSet<'a> {
 
         for index in args.into_iter() {
             let arg_var = env.subs[index];
-            let layout = cached!(Layout::from_var(env, arg_var), cache_criteria);
+            let layout = cached!(
+                env.with_scoped_is_capture_path(false, |env| Layout::from_var(env, arg_var)),
+                cache_criteria
+            );
             fn_args.push(layout);
         }
 
-        let ret = cached!(Layout::from_var(env, ret_var), cache_criteria);
+        let ret = cached!(
+            env.with_scoped_is_capture_path(false, |env| Layout::from_var(env, ret_var)),
+            cache_criteria
+        );
 
         let fn_args = env.arena.alloc(fn_args.into_bump_slice());
+
+        // We don't care if there are naked recursion pointers in the captures repr of the
+        // arguments/return layouts for the purposes of check whether the runtime captures repr of
+        // this lambda set has naked recursion pointers.
+        cache_criteria.has_naked_recursion_pointer_in_captures_repr = false;
 
         match lambda_set {
             ResolvedLambdaSet::Set(mut lambdas, opt_recursion_var) => {
@@ -1796,7 +1830,9 @@ impl<'a> LambdaSet<'a> {
                     Vec::with_capacity_in(lambdas.len(), env.arena);
                 let mut set_with_variables: std::vec::Vec<(&Symbol, &[Variable])> =
                     std::vec::Vec::with_capacity(lambdas.len());
+
                 let mut set_captures_have_naked_rec_ptr = false;
+                let mut set_captures_have_naked_rec_ptr_in_captures_repr = false;
 
                 let mut last_function_symbol = None;
                 let mut lambdas_it = lambdas.iter().peekable();
@@ -1813,10 +1849,22 @@ impl<'a> LambdaSet<'a> {
                         // We determine cacheability of the lambda set based on the runtime
                         // representation, so here the criteria doesn't matter.
                         let mut criteria = CACHEABLE;
-                        let arg = cached!(Layout::from_var(env, *var), criteria);
+
+                        let arg = cached!(
+                            env.with_scoped_is_capture_path(true, |env| {
+                                Layout::from_var(env, *var)
+                            }),
+                            criteria
+                        );
+
                         arguments.push(arg);
+
                         set_captures_have_naked_rec_ptr =
                             set_captures_have_naked_rec_ptr || criteria.has_naked_recursion_pointer;
+
+                        set_captures_have_naked_rec_ptr_in_captures_repr =
+                            set_captures_have_naked_rec_ptr_in_captures_repr
+                                || criteria.has_naked_recursion_pointer_in_captures_repr;
                     }
 
                     let arguments = arguments.into_bump_slice();
@@ -1870,16 +1918,30 @@ impl<'a> LambdaSet<'a> {
                     (set, set_with_variables)
                 };
 
-                let Cacheable(representation, criteria) = Self::make_representation(
-                    env,
-                    set_with_variables,
-                    opt_recursion_var.into_variable(),
-                );
+                // Set whether these captures runtime repr will have a naked recursion pointer.
+                cache_criteria.has_naked_recursion_pointer_in_captures_repr =
+                    set_captures_have_naked_rec_ptr_in_captures_repr;
+
+                let repr_recursive = match opt_recursion_var.into_variable() {
+                    None => LambdaSetReprRecursive::NotRecursive,
+                    Some(v) => {
+                        if set_captures_have_naked_rec_ptr_in_captures_repr {
+                            LambdaSetReprRecursive::RecursiveLayout(v)
+                        } else {
+                            LambdaSetReprRecursive::RecursiveOnlyInType(v)
+                        }
+                    }
+                };
+
+                let Cacheable(representation, criteria) =
+                    Self::make_representation(env, set_with_variables, repr_recursive);
                 cache_criteria.and(criteria);
 
-                let needs_recursive_fixup = NeedsRecursionPointerFixup(
-                    opt_recursion_var.is_some() && set_captures_have_naked_rec_ptr,
-                );
+                // We need to fixup the naked recursion pointers to this lambda set if they appear
+                // anywhere in the generated layout, not just if they appear in the captures
+                // runtime representation.
+                debug_assert!(opt_recursion_var.is_none() || set_captures_have_naked_rec_ptr, "lambda set is recursive, but the recursion var doesn't appear in the captures?");
+                let needs_recursive_fixup = NeedsRecursionPointerFixup(opt_recursion_var.is_some());
 
                 let lambda_set = env.cache.interner.insert_lambda_set(
                     env.arena,
@@ -1889,6 +1951,10 @@ impl<'a> LambdaSet<'a> {
                     needs_recursive_fixup,
                     representation,
                 );
+
+                if let Some(rec_var) = opt_recursion_var.into_variable() {
+                    cache_criteria.pass_through_recursive_union(rec_var);
+                }
 
                 Cacheable(Ok(lambda_set), cache_criteria)
             }
@@ -1911,19 +1977,23 @@ impl<'a> LambdaSet<'a> {
     fn make_representation(
         env: &mut Env<'a, '_>,
         set: std::vec::Vec<(&Symbol, &[Variable])>,
-        opt_rec_var: Option<Variable>,
+        recursive: LambdaSetReprRecursive,
     ) -> Cacheable<InLayout<'a>> {
         let union_labels = UnsortedUnionLabels { tags: set };
 
-        match opt_rec_var {
-            Some(rec_var) => {
+        use LambdaSetReprRecursive::*;
+        match recursive {
+            RecursiveLayout(rec_var) => {
                 let Cacheable(result, criteria) =
                     layout_from_recursive_union(env, rec_var, &union_labels);
                 let result = result.expect("unable to create lambda set representation");
                 Cacheable(result, criteria)
             }
-
-            None => layout_from_non_recursive_union(env, &union_labels),
+            RecursiveOnlyInType(rec_var) => {
+                dbg!();
+                layout_from_non_recursive_union(env, &union_labels, Some(rec_var))
+            }
+            NotRecursive => layout_from_non_recursive_union(env, &union_labels, None),
         }
     }
 
@@ -2147,6 +2217,7 @@ pub struct Env<'a, 'b> {
     seen: Vec<'a, Variable>,
     subs: &'b Subs,
     cache: &'b mut LayoutCache<'a>,
+    is_lambda_set_capture_repr_path: bool,
 }
 
 impl<'a, 'b> Env<'a, 'b> {
@@ -2162,6 +2233,7 @@ impl<'a, 'b> Env<'a, 'b> {
             seen: Vec::new_in(arena),
             arena,
             target_info,
+            is_lambda_set_capture_repr_path: false,
         }
     }
 
@@ -2223,6 +2295,18 @@ impl<'a, 'b> Env<'a, 'b> {
         }
         true
     }
+
+    fn with_scoped_is_capture_path<T>(
+        &mut self,
+        is_capture_path: bool,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let old_is_capture_path =
+            std::mem::replace(&mut self.is_lambda_set_capture_repr_path, is_capture_path);
+        let r = f(self);
+        self.is_lambda_set_capture_repr_path = old_is_capture_path;
+        r
+    }
 }
 
 macro_rules! cached_or_impl {
@@ -2264,6 +2348,14 @@ macro_rules! cached_or_impl {
 }
 
 impl<'a, 'b> Env<'a, 'b> {
+    fn naked_recursion_ptr_criteria(&self) -> CacheCriteria {
+        CacheCriteria {
+            has_naked_recursion_pointer: true,
+            has_naked_recursion_pointer_in_captures_repr: self.is_lambda_set_capture_repr_path,
+            has_recursive_structure: OptVariable::NONE,
+        }
+    }
+
     #[inline(always)]
     fn cached_or(
         &mut self,
@@ -2277,7 +2369,7 @@ impl<'a, 'b> Env<'a, 'b> {
             // TODO(recursive-layouts): after the naked pointer is updated, we can cache `var` to
             // point to the updated layout.
             let rec_ptr = Layout::NAKED_RECURSIVE_PTR;
-            return Cacheable(Ok(rec_ptr), NAKED_RECURSION_PTR);
+            return Cacheable(Ok(rec_ptr), self.naked_recursion_ptr_criteria());
         }
 
         cached_or_impl!(self, var, compute_layout, get, insert, stats)
@@ -3067,7 +3159,7 @@ fn layout_from_flat_type<'a>(
                 // TODO(recursive-layouts): after the naked pointer is updated, we can cache `var` to
                 // point to the updated layout.
                 let rec_ptr = Layout::NAKED_RECURSIVE_PTR;
-                Cacheable(Ok(rec_ptr), NAKED_RECURSION_PTR)
+                Cacheable(Ok(rec_ptr), env.naked_recursion_ptr_criteria())
             } else {
                 let mut criteria = CACHEABLE;
 
@@ -3190,7 +3282,7 @@ fn layout_from_flat_type<'a>(
 
             debug_assert!(ext_var_is_empty_tag_union(subs, ext_var));
 
-            layout_from_non_recursive_union(env, &tags).map(Ok)
+            layout_from_non_recursive_union(env, &tags, None).map(Ok)
         }
         FunctionOrTagUnion(tag_names, _, ext_var) => {
             debug_assert!(
@@ -3203,7 +3295,7 @@ fn layout_from_flat_type<'a>(
                 tags: tag_names.iter().map(|t| (t, &[] as &[Variable])).collect(),
             };
 
-            layout_from_non_recursive_union(env, &unsorted_tags).map(Ok)
+            layout_from_non_recursive_union(env, &unsorted_tags, None).map(Ok)
         }
         RecursiveTagUnion(rec_var, tags, ext_var) => {
             let (tags, ext_var) = tags.unsorted_tags_and_ext(subs, ext_var);
@@ -3985,6 +4077,10 @@ fn layout_from_newtype<'a, L: Label>(
 fn layout_from_non_recursive_union<'a, L>(
     env: &mut Env<'a, '_>,
     tags: &UnsortedUnionLabels<L>,
+    // To handle interning recursive lambda set capture layouts, which are not recursive in their
+    // runtime representations, but are recursive in their (possibly nested) lambda set
+    // argument/return layouts.
+    intern_as_recursive_var: Option<Variable>,
 ) -> Cacheable<InLayout<'a>>
 where
     L: Label + Ord + Into<TagOrClosure>,
@@ -3992,7 +4088,16 @@ where
     use UnionVariant::*;
 
     if tags.is_newtype_wrapper(env.subs) {
-        return layout_from_newtype(env, tags);
+        let Cacheable(layout, criteria) = layout_from_newtype(env, tags);
+
+        match intern_as_recursive_var {
+            Some(var) => {
+                dbg!();
+                let lay = env.cache.get_in(layout);
+                return intern_as_recursive(env, lay, criteria, var);
+            }
+            None => return Cacheable(layout, criteria),
+        }
     }
 
     let tags_vec = &tags.tags;
@@ -4001,19 +4106,19 @@ where
 
     let variant = union_sorted_non_recursive_tags_help(env, tags_vec).decompose(&mut criteria);
 
-    let result = match variant {
-        Never => Layout::VOID,
-        Unit => Layout::UNIT,
-        BoolUnion { .. } => Layout::BOOL,
-        ByteUnion(_) => Layout::U8,
+    let layout = match dbg!(variant) {
+        Never => return Cacheable(Layout::VOID, criteria),
+        Unit => return Cacheable(Layout::UNIT, criteria),
+        BoolUnion { .. } => return Cacheable(Layout::BOOL, criteria),
+        ByteUnion(_) => return Cacheable(Layout::U8, criteria),
         Newtype {
             arguments: field_layouts,
             ..
         } => {
             let answer1 = if field_layouts.len() == 1 {
-                field_layouts[0]
+                Err(field_layouts[0])
             } else {
-                env.cache.put_in(Layout::struct_no_name_order(
+                Ok(Layout::struct_no_name_order(
                     field_layouts.into_bump_slice(),
                 ))
             };
@@ -4024,9 +4129,9 @@ where
             data_tag_arguments, ..
         } => {
             if data_tag_arguments.len() == 1 {
-                data_tag_arguments[0]
+                Err(data_tag_arguments[0])
             } else {
-                env.cache.put_in(Layout::struct_no_name_order(
+                Ok(Layout::struct_no_name_order(
                     data_tag_arguments.into_bump_slice(),
                 ))
             }
@@ -4043,7 +4148,7 @@ where
 
                     let layout =
                         Layout::Union(UnionLayout::NonRecursive(tag_layouts.into_bump_slice()));
-                    env.cache.put_in(layout)
+                    Ok(layout)
                 }
 
                 Recursive { .. }
@@ -4056,7 +4161,27 @@ where
         }
     };
 
-    Cacheable(result, criteria)
+    match dbg!((intern_as_recursive_var, layout)) {
+        (Some(rec_var), Ok(raw_layout)) => intern_as_recursive(env, raw_layout, criteria, rec_var),
+        (Some(rec_var), Err(interned)) => {
+            let layout = env.cache.get_in(interned);
+            intern_as_recursive(env, layout, criteria, rec_var)
+        }
+        (None, Ok(raw_layout)) => Cacheable(env.cache.put_in(raw_layout), criteria),
+        (None, Err(interned)) => Cacheable(interned, criteria),
+    }
+}
+
+fn intern_as_recursive<'a>(
+    env: &mut Env<'a, '_>,
+    layout: Layout<'a>,
+    mut criteria: CacheCriteria,
+    recursive_var: Variable,
+) -> Cacheable<InLayout<'a>> {
+    dbg!();
+    let layout = env.cache.interner.insert_recursive(env.arena, layout);
+    criteria.pass_through_recursive_union(recursive_var);
+    Cacheable(layout, criteria)
 }
 
 fn layout_from_recursive_union<'a, L>(

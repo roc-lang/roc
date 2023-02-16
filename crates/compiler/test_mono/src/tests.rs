@@ -2571,3 +2571,26 @@ fn recursive_lambda_set_has_nested_non_recursive_lambda_sets_issue_5026() {
         "#
     )
 }
+
+#[mono_test]
+fn lambda_set_is_recursive_in_type_but_not_in_captures() {
+    // Here, `afterInner` can be seen to have a lambda set type that is recursive in the
+    // arguments/return positions of its captures, but its nested captures (and hence runtime
+    // representation) are not themselves recursive.
+    indoc!(
+        r#"
+        app "test" provides [looper] to "./platform"
+
+        Effect : {} -> Str
+
+        after = \buildNext ->
+            afterInner = \{} -> (buildNext "foobar") {}
+            afterInner
+
+        await : (Str -> Effect) -> Effect
+        await = \cont -> after (\result -> cont result)
+
+        looper = await \_ -> looper
+        "#
+    )
+}

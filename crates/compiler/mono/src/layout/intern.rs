@@ -126,6 +126,7 @@ impl<'a> Layout<'a> {
 /// Applicable only if
 ///   - the lambda set is indeed recursive, and
 ///   - its capture set contain naked pointer references
+#[derive(Clone, Copy)]
 pub struct NeedsRecursionPointerFixup(pub bool);
 
 pub trait LayoutInterner<'a>: Sized {
