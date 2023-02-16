@@ -58,5 +58,5 @@ Now we can see our work by entering an interactive shell and calling our functio
 ❯ python -q
 >>> import demo
 >>> demo.call_roc(21)
-'"The number was 21, OH YEAH!!! 🤘🤘"'
+'The number was 21, OH YEAH!!! 🤘🤘'
 ```
