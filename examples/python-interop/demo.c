@@ -227,7 +227,7 @@ PyObject * call_roc(PyObject *self, PyObject *args)
     roc__mainForHost_1_exposed_generic(&ret, &arg);
 
     // Create a Python string from the heap-allocated JSON bytes the Roc function returned.
-    PyObject* py_str = PyUnicode_FromString((char*)ret.bytes);
+    PyObject* py_str = PyUnicode_FromStringAndSize((char*)ret.bytes, ret.len);
     if (py_str == NULL) {
         return NULL;
     }
