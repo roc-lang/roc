@@ -112,6 +112,15 @@ fn neq_bool_tag() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn and_bool() {
+    assert_evals_to!("Bool.true && Bool.true", true, bool);
+    assert_evals_to!("Bool.true && Bool.false", false, bool);
+    assert_evals_to!("Bool.false && Bool.true", false, bool);
+    assert_evals_to!("Bool.false && Bool.false", false, bool);
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_record() {
     assert_evals_to!("{} == {}", true, bool);

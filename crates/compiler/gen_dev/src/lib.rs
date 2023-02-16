@@ -623,6 +623,19 @@ trait Backend<'a> {
                 );
                 self.build_neq(sym, &args[0], &args[1], &arg_layouts[0])
             }
+            LowLevel::And => {
+                debug_assert_eq!(2, args.len(), "And: expected to have exactly two argument");
+                debug_assert_eq!(
+                    arg_layouts[0], arg_layouts[1],
+                    "And: expected all arguments of to have the same layout"
+                );
+                debug_assert_eq!(
+                    Layout::BOOL,
+                    *ret_layout,
+                    "And: expected to have return layout of type Bool"
+                );
+                self.build_and(sym, &args[0], &args[1], &arg_layouts[0])
+            }
             LowLevel::NumLt => {
                 debug_assert_eq!(
                     2,
@@ -1015,6 +1028,9 @@ trait Backend<'a> {
 
     /// build_neq stores the result of `src1 != src2` into dst.
     fn build_neq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>);
+
+    /// build_and stores the result of `src1 && src2` into dst.
+    fn build_and(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>);
 
     /// build_num_lt stores the result of `src1 < src2` into dst.
     fn build_num_lt(
