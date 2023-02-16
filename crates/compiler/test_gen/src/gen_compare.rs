@@ -130,6 +130,16 @@ fn or_bool() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn not_bool() {
+    assert_evals_to!("!Bool.true", false, bool);
+    assert_evals_to!("!Bool.false", true, bool);
+
+    assert_evals_to!("!(!Bool.true)", true, bool);
+    assert_evals_to!("!(!Bool.false)", false, bool);
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
 fn empty_record() {
     assert_evals_to!("{} == {}", true, bool);

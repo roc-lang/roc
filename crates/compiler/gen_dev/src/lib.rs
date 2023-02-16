@@ -649,6 +649,15 @@ trait Backend<'a> {
                 );
                 self.build_or(sym, &args[0], &args[1], &arg_layouts[0])
             }
+            LowLevel::Not => {
+                debug_assert_eq!(1, args.len(), "Not: expected to have exactly one argument");
+                debug_assert_eq!(
+                    Layout::BOOL,
+                    *ret_layout,
+                    "Not: expected to have return layout of type Bool"
+                );
+                self.build_not(sym, &args[0], &arg_layouts[0])
+            }
             LowLevel::NumLt => {
                 debug_assert_eq!(
                     2,
@@ -1047,6 +1056,9 @@ trait Backend<'a> {
 
     /// build_or stores the result of `src1 || src2` into dst.
     fn build_or(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>);
+
+    /// build_not stores the result of `!src` into dst.
+    fn build_not(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>);
 
     /// build_num_lt stores the result of `src1 < src2` into dst.
     fn build_num_lt(

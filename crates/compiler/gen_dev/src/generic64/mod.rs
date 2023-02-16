@@ -1164,6 +1164,23 @@ impl<
         }
     }
 
+    fn build_not(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
+        match *arg_layout {
+            Layout::BOOL => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
+
+                // Not would usually be implemented as `xor src, -1` followed by `and src, 1`
+                // but since our booleans are represented as `0x101010101010101` currently, we can simply XOR with that
+                let bool_val = [true as u8; 8];
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, i64::from_ne_bytes(bool_val));
+                ASM::xor_reg64_reg64_reg64(&mut self.buf, src_reg, src_reg, dst_reg);
+                ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src_reg);
+            }
+            x => todo!("Not: layout, {:?}", x),
+        }
+    }
+
     fn build_num_lt(
         &mut self,
         dst: &Symbol,
