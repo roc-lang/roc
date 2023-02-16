@@ -65,6 +65,7 @@ pub fn struct_type_from_union_layout<'a, 'ctx, 'env>(
     use UnionLayout::*;
 
     match union_layout {
+        NonRecursive([]) => env.context.struct_type(&[], false),
         NonRecursive(tags) => {
             RocUnion::tagged_from_slices(layout_interner, env.context, tags, env.target_info)
                 .struct_type()
@@ -300,7 +301,8 @@ impl<'ctx> RocUnion<'ctx> {
         target_info: TargetInfo,
     ) -> Self {
         let tag_type = match layouts.len() {
-            0..=255 => TagType::I8,
+            0 => unreachable!("zero-element tag union is not represented as a RocUnion"),
+            1..=255 => TagType::I8,
             _ => TagType::I16,
         };
 

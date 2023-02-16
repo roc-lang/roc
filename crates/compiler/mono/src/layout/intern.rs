@@ -121,6 +121,13 @@ impl<'a> Layout<'a> {
     }
 }
 
+/// Whether a recursive lambda set being inserted into an interner needs fixing-up of naked
+/// recursion pointers in the capture set.
+/// Applicable only if
+///   - the lambda set is indeed recursive, and
+///   - its capture set contain naked pointer references
+pub struct NeedsRecursionPointerFixup(pub bool);
+
 pub trait LayoutInterner<'a>: Sized {
     /// Interns a value, returning its interned representation.
     /// If the value has been interned before, the old interned representation will be re-used.
@@ -139,7 +146,7 @@ pub trait LayoutInterner<'a>: Sized {
         args: &'a &'a [InLayout<'a>],
         ret: InLayout<'a>,
         set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
-        set_may_have_naked_rec_ptr: bool,
+        needs_recursive_fixup: NeedsRecursionPointerFixup,
         representation: InLayout<'a>,
     ) -> LambdaSet<'a>;
 
@@ -550,7 +557,7 @@ impl<'a> GlobalLayoutInterner<'a> {
         &self,
         arena: &'a Bump,
         normalized: LambdaSet<'a>,
-        set_may_have_naked_rec_ptr: bool,
+        needs_recursive_fixup: NeedsRecursionPointerFixup,
         normalized_hash: u64,
     ) -> WrittenGlobalLambdaSet<'a> {
         let mut normalized_lambda_set_map = self.0.normalized_lambda_set_map.lock();
@@ -574,7 +581,7 @@ impl<'a> GlobalLayoutInterner<'a> {
         let slot = unsafe { InLayout::from_index(vec.len()) };
         vec.push(Layout::VOID_NAKED);
 
-        let set = if set_may_have_naked_rec_ptr {
+        let set = if needs_recursive_fixup.0 {
             let mut interner = LockedGlobalInterner {
                 map: &mut map,
                 normalized_lambda_set_map: &mut normalized_lambda_set_map,
@@ -708,7 +715,7 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
         args: &'a &'a [InLayout<'a>],
         ret: InLayout<'a>,
         set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
-        set_may_have_naked_rec_ptr: bool,
+        needs_recursive_fixup: NeedsRecursionPointerFixup,
         representation: InLayout<'a>,
     ) -> LambdaSet<'a> {
         // The tricky bit of inserting a lambda set is we need to fill in the `full_layout` only
@@ -737,7 +744,7 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
                 } = global.get_or_insert_hashed_normalized_lambda_set(
                     arena,
                     normalized,
-                    set_may_have_naked_rec_ptr,
+                    needs_recursive_fixup,
                     normalized_hash,
                 );
 
@@ -865,7 +872,7 @@ macro_rules! st_impl {
                 args: &'a &'a [InLayout<'a>],
                 ret: InLayout<'a>,
                 set: &'a &'a [(Symbol, &'a [InLayout<'a>])],
-                set_may_have_naked_rec_ptr: bool,
+                needs_recursive_fixup: NeedsRecursionPointerFixup,
                 representation: InLayout<'a>,
             ) -> LambdaSet<'a> {
                 // IDEA:
@@ -884,7 +891,7 @@ macro_rules! st_impl {
                 let slot = unsafe { InLayout::from_index(self.vec.len()) };
                 self.vec.push(Layout::VOID_NAKED);
 
-                let set = if set_may_have_naked_rec_ptr {
+                let set = if needs_recursive_fixup.0 {
                     reify::reify_lambda_set_captures(arena, self, slot, set)
                 } else {
                     set
@@ -957,7 +964,7 @@ mod reify {
 
     use crate::layout::{Builtin, LambdaSet, Layout, UnionLayout};
 
-    use super::{InLayout, LayoutInterner};
+    use super::{InLayout, LayoutInterner, NeedsRecursionPointerFixup};
 
     // TODO: if recursion becomes a problem we could make this iterative
     pub fn reify_recursive_layout<'a>(
@@ -1103,7 +1110,8 @@ mod reify {
             arena.alloc(args),
             ret,
             arena.alloc(set),
-            true,
+            // All nested recursive pointers should been fixed up, since we just did that above.
+            NeedsRecursionPointerFixup(false),
             representation,
         )
     }
@@ -1420,13 +1428,15 @@ mod insert_lambda_set {
 
     use crate::layout::{LambdaSet, Layout};
 
-    use super::{GlobalLayoutInterner, InLayout, LayoutInterner};
+    use super::{GlobalLayoutInterner, InLayout, LayoutInterner, NeedsRecursionPointerFixup};
 
     const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
     const TEST_SET: &&[(Symbol, &[InLayout])] =
         &(&[(Symbol::ATTR_ATTR, &[Layout::UNIT] as &[_])] as &[_]);
     const TEST_ARGS: &&[InLayout] = &(&[Layout::UNIT] as &[_]);
     const TEST_RET: InLayout = Layout::UNIT;
+
+    const FIXUP: NeedsRecursionPointerFixup = NeedsRecursionPointerFixup(true);
 
     #[test]
     fn two_threads_write() {
@@ -1440,7 +1450,7 @@ mod insert_lambda_set {
                 for arena in arenas.iter_mut() {
                     let mut interner = global.fork();
                     handles.push(s.spawn(move || {
-                        interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr)
+                        interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr)
                     }))
                 }
                 let ins: Vec<LambdaSet> = handles.into_iter().map(|t| t.join().unwrap()).collect();
@@ -1457,7 +1467,7 @@ mod insert_lambda_set {
         let mut interner = global.fork();
 
         let lambda_set =
-            interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, TEST_SET, true, Layout::UNIT);
+            interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, TEST_SET, FIXUP, Layout::UNIT);
         let lambda_set_layout_in = interner.insert(Layout::LambdaSet(lambda_set));
         assert_eq!(lambda_set.full_layout, lambda_set_layout_in);
     }
@@ -1471,12 +1481,12 @@ mod insert_lambda_set {
 
         let in1 = {
             let mut interner = global.fork();
-            interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr)
+            interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr)
         };
 
         let in2 = {
             let mut st_interner = global.unwrap().unwrap();
-            st_interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr)
+            st_interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr)
         };
 
         assert_eq!(in1, in2);
@@ -1491,12 +1501,12 @@ mod insert_lambda_set {
         let set = TEST_SET;
         let repr = Layout::UNIT;
 
-        let in1 = st_interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr);
+        let in1 = st_interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr);
 
         let global = st_interner.into_global();
         let mut interner = global.fork();
 
-        let in2 = interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, true, repr);
+        let in2 = interner.insert_lambda_set(arena, TEST_ARGS, TEST_RET, set, FIXUP, repr);
 
         assert_eq!(in1, in2);
     }
