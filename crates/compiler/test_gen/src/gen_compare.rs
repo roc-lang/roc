@@ -27,7 +27,7 @@ fn eq_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn neq_i64() {
     assert_evals_to!(
         indoc!(
@@ -61,7 +61,7 @@ fn eq_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn neq_u64() {
     assert_evals_to!(
         indoc!(
@@ -78,7 +78,7 @@ fn neq_u64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn eq_bool_tag() {
     assert_evals_to!(
         indoc!(
@@ -95,7 +95,7 @@ fn eq_bool_tag() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn neq_bool_tag() {
     assert_evals_to!(
         indoc!(
@@ -152,7 +152,7 @@ fn unit() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn newtype() {
     assert_evals_to!("Identity 42 == Identity 42", true, bool);
     assert_evals_to!("Identity 42 != Identity 42", false, bool);

@@ -1102,7 +1102,7 @@ impl<
 
     fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
         match *arg_layout {
-            single_register_int_builtins!() => {
+            single_register_int_builtins!() | Layout::BOOL => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -1117,8 +1117,8 @@ impl<
     }
 
     fn build_neq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
-        match self.layout_interner.get(*arg_layout) {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+        match *arg_layout {
+            single_register_int_builtins!() | Layout::BOOL => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
