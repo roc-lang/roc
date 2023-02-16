@@ -239,14 +239,13 @@ PyObject * call_roc(PyObject *self, PyObject *args)
 }
 
 static PyMethodDef DemoMethods[] = {
-    {"call_roc", call_roc, METH_VARARGS, "pooop"},
+    {"call_roc", call_roc, METH_VARARGS, "Calls a Roc function with a number, returns a string interpolated with the number"},
     {NULL, NULL, 0, NULL}
 };
 
 static struct PyModuleDef demoModule = {
     PyModuleDef_HEAD_INIT,
     "call_roc",
-    "test roc call",
     -1,
     DemoMethods
 };

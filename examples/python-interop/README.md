@@ -4,13 +4,8 @@ This is an example of calling Roc code from [Python](https://www.python.org/).
 
 ## Installation
 
-The following was tested on NixOS, with the following versions:
-
-- [`Python`](https://www.python.org/downloads/) version 3.10.9
-- [`gcc`](https://gcc.gnu.org/) version 11.3.0
-
-In general this should work on any modern Linux and MacOS.\
-But you are welcome to test on your machine and tell me if you ran into any issues.
+The following was tested on NixOS, with Python 3.10, clang 13.0.1, gcc 11.3.0 but this should work on with most recent python3 and clang versions on most modern Linux and MacOS.\
+Of course you're welcome to test on your machine and tell me if you ran into any issues or limitations.
 
 For your convenience, I've created a shell script (linux specific, you'll see why in a second) to take care of some rough edges (nothing too bad, mostly stuff like renames).
 But running random shell scripts may not be your cup of tea so let's first do a step by step walkthrough on how it works, and also provide general instructions for users of all operating systems:
@@ -47,6 +42,7 @@ export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
 That wasn't so bad and we're already done with prep work, all that's left it to build our C extension.
 
 ``` sh
+# If you want, you can set the environment variable cc, to compile with clang instead of gcc
 python -m venv .interop_env
 source .interop_env/bin/activate # /activate.fish if you're on fish
 python setup.py install

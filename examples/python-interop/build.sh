@@ -15,12 +15,17 @@ ln -sf libhello.so.1 libhello.so
 # For Python to find libhello, it needs it to be in a known library path, so we export
 export LD_LIBRARY_PATH=$(pwd):$LD_LIBRARY_PATH
 
+# Optional. Flag to indicate CPython which compiler to use
+export cc=clang
+
 # And we're done, now just pack it all together with python's build system
 # setup.py will compile our demo.c to a shared library that depends on libhello.
 # One of the nice things about CPython is that this demo shared library is simply importable in CPython
 python -m venv .interop_env
 source .interop_env/bin/activate
 python setup.py install
-echo "You may now enter your virtual environment."
-echo "Run 'source .interop_env/bin/activate<.fish if running fish, .csh for csh/tcsh and no suffix at all for sh/bash/zsh>'."
-echo "Try entring an interactive python shell, import demo and call demo.call_roc with your number of choice."
+echo "You may now enter your virtual environment.
+In bash/zsh, run: source .interop_env/bin/activate
+In fish, run: source .interop_env/bin/activate.fish
+In csh/tcsh (really?), run: source .interop_env/bin/activate.csh
+Then, try entring an interactive python shell, import demo and call demo.call_roc with your number of choice."
