@@ -420,10 +420,10 @@ Here's the type of `table`:
 
 <pre><samp>table <span class="colon">:</span>
     <span class="paren">{</span>
-        height<span class="colon">:</span> Pixels,
-        width<span class="colon">:</span> Pixels,
-        title<span class="colon">?</span> Str,
-        description<span class="colon">?</span> Str,
+        height <span class="colon">:</span> Pixels,
+        width <span class="colon">:</span> Pixels,
+        title <span class="colon">?</span> Str,
+        description <span class="colon">?</span> Str,
     <span class="paren">}</span>
     <span class="kw">-></span> Table
 </pre></samp>
@@ -790,7 +790,7 @@ Here's an example:
     <span class="kw">else</span>
         { state &amp; odds<span class="colon">:</span> List.append state.odds elem }
 
-<span class="comment"># returns { evens : [2, 4], odds : [1, 3, 5] }</span>
+<span class="comment"># returns { evens: [2, 4], odds: [1, 3, 5] }</span>
 </samp></pre>
 
 In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to either the `evens` or `odds` field of a `state` record: `{ evens, odds }`. By the end, that record has a list of all the even numbers in the list and a list of all the odd numbers.
@@ -814,29 +814,29 @@ It then proceeds to walk over each element in the list and call that function. E
 </thead>
 <tbody>
 <tr>
-    <td><code>{ evens : [], odds : [] }</code></td>
+    <td><code>{ evens: [], odds: [] }</code></td>
     <td><code>1</code></td>
-    <td><code>{ evens : [], odds : [1] }</code></td>
+    <td><code>{ evens: [], odds: [1] }</code></td>
 </tr>
 <tr>
-    <td><code>{ evens : [], odds : [1] }</code></td>
+    <td><code>{ evens: [], odds: [1] }</code></td>
     <td><code>2</code></td>
-    <td><code>{ evens : [2], odds : [1] }</code></td>
+    <td><code>{ evens: [2], odds: [1] }</code></td>
 </tr>
 <tr>
-    <td><code>{ evens : [2], odds : [1] }</code></td>
+    <td><code>{ evens: [2], odds: [1] }</code></td>
     <td><code>3</code></td>
-    <td><code>{ evens : [2], odds : [1, 3] }</code></td>
+    <td><code>{ evens: [2], odds: [1, 3] }</code></td>
 </tr>
 <tr>
-    <td><code>{ evens : [2], odds : [1, 3] }</code></td>
+    <td><code>{ evens: [2], odds: [1, 3] }</code></td>
     <td><code>4</code></td>
-    <td><code>{ evens : [2, 4], odds : [1, 3] }</code></td>
+    <td><code>{ evens: [2, 4], odds: [1, 3] }</code></td>
 </tr>
 <tr>
-    <td><code>{ evens : [2, 4], odds : [1, 3] }</code></td>
+    <td><code>{ evens: [2, 4], odds: [1, 3] }</code></td>
     <td><code>4</code></td>
-    <td><code>{ evens : [2, 4], odds : [1, 3, 5] }</code></td>
+    <td><code>{ evens: [2, 4], odds: [1, 3, 5] }</code></td>
 </tr>
 </tbody>
 </table>
@@ -932,10 +932,10 @@ These annotations say that both `firstName` and `lastName` have the type `Str`.
 
 We can annotate records similarly. For example, we could move `firstName` and `lastName` into a record like so:
 
-<pre><samp>amy <span class="colon">:</span> { firstName<span class="colon">:</span> Str, lastName<span class="colon">:</span> Str }
+<pre><samp>amy <span class="colon">:</span> { firstName <span class="colon">:</span> Str, lastName <span class="colon">:</span> Str }
 amy <span class="kw">=</span> { firstName<span class="colon">:</span> <span class="str">"Amy"</span>, lastName<span class="colon">:</span> <span class="str">"Lee"</span> }
 
-jen <span class="colon">:</span> { firstName<span class="colon">:</span> Str, lastName<span class="colon">:</span> Str }
+jen <span class="colon">:</span> { firstName <span class="colon">:</span> Str, lastName <span class="colon">:</span> Str }
 jen <span class="kw">=</span> { firstName<span class="colon">:</span> <span class="str">"Jen"</span>, lastName<span class="colon">:</span> <span class="str">"Majura"</span> }
 </samp></pre>
 
@@ -943,7 +943,7 @@ jen <span class="kw">=</span> { firstName<span class="colon">:</span> <span clas
 
 When we have a recurring type annotation like this, it can be nice to give it its own name. We do this like so:
 
-<pre><samp>Musician <span class="colon">:</span> { firstName<span class="colon">:</span> Str, lastName<span class="colon">:</span> Str }
+<pre><samp>Musician <span class="colon">:</span> { firstName <span class="colon">:</span> Str, lastName <span class="colon">:</span> Str }
 
 amy <span class="colon">:</span> Musician
 amy <span class="kw">=</span> { firstName<span class="colon">:</span> <span class="str">"Amy"</span>, lastName<span class="colon">:</span> <span class="str">"Lee"</span> }
@@ -1609,27 +1609,27 @@ In contrast, a _closed record_ is one that requires an exact set of fields (and 
 If we add a type annotation to this `fullName` function, we can choose to have it accept either an open record or a closed record:
 
 <pre><samp><span class="comment"># Closed record</span>
-fullName <span class="colon">:</span> { <span class="hljs-type">firstName</span><span class="colon">:</span> <span class="hljs-type">Str</span>, lastName<span class="colon">:</span> <span class="hljs-type">Str</span> } <span class="kw">-&gt;</span> Str
+fullName <span class="colon">:</span> { <span class="hljs-type">firstName </span><span class="colon">:</span> <span class="hljs-type">Str</span>, lastName <span class="colon">:</span> <span class="hljs-type">Str</span> } <span class="kw">-&gt;</span> Str
 fullName <span class="kw">=</span> <span class="kw">\</span>user <span class="kw">-&gt;</span>
     <span class="str-interp">"\(user.firstName) \(user.lastName)"</span>
 </samp>
 <samp><span class="comment"># Open record (because of the `*`)</span>
-fullName <span class="colon">:</span> { firstName<span class="colon">:</span> Str, lastName<span class="colon">:</span> Str }* <span class="kw">-&gt;</span> Str
+fullName <span class="colon">:</span> { firstName <span class="colon">:</span> Str, lastName <span class="colon">:</span> Str }* <span class="kw">-&gt;</span> Str
 fullName <span class="kw">=</span> <span class="kw">\</span>user <span class="kw">-&gt;</span>
     <span class="str-interp">"\(user.firstName) \(user.lastName)"</span>
 </samp></pre>
 
-The `*` in the type `{ firstName: Str, lastName: Str }*` is what makes it an open record type. This `*` is the _wildcard type_ we saw earlier with empty lists. (An empty list has the type `List *`, in contrast to something like `List Str` which is a list of strings.)
+The `*` in the type `{ firstName : Str, lastName : Str }*` is what makes it an open record type. This `*` is the _wildcard type_ we saw earlier with empty lists. (An empty list has the type `List *`, in contrast to something like `List Str` which is a list of strings.)
 
-This is because record types can optionally end in a type variable. Just like how we can have `List *` or `List a -> List a`, we can also have `{ first: Str, last: Str }*` or `{ first: Str, last: Str }a -> { first: Str, last: Str }a`. The differences are that in `List a`, the type variable is required and appears with a space after `List`; in a record, the type variable is optional, and appears (with no space) immediately after `}`.
+This is because record types can optionally end in a type variable. Just like how we can have `List *` or `List a -> List a`, we can also have `{ first : Str, last : Str }*` or `{ first : Str, last : Str }a -> { first : Str, last : Str }a`. The differences are that in `List a`, the type variable is required and appears with a space after `List`; in a record, the type variable is optional, and appears (with no space) immediately after `}`.
 
-If the type variable in a record type is a `*` (such as in `{ first: Str, last: Str }*`), then it's an open record. If the type variable is missing, then it's a closed record. You can also specify a closed record by putting a `{}` as the type variable (so for example, `{ email: Str }{}` is another way to write `{ email: Str }`). In practice, closed records are basically always written without the `{}` on the end, but later on we'll see a situation where putting types other than `*` in that spot can be useful.
+If the type variable in a record type is a `*` (such as in `{ first : Str, last : Str }*`), then it's an open record. If the type variable is missing, then it's a closed record. You can also specify a closed record by putting a `{}` as the type variable (so for example, `{ email : Str }{}` is another way to write `{ email : Str }`). In practice, closed records are basically always written without the `{}` on the end, but later on we'll see a situation where putting types other than `*` in that spot can be useful.
 
 ### [Constrained Records](#constrained-records) {#constrained-records}
 
 The type variable can also be a named type variable, like so:
 
-<pre><samp>addHttps <span class="colon">:</span> { <span class="hljs-type">url</span><span class="colon">:</span> <span class="hljs-type">Str</span> }a <span class="kw">-&gt;</span> { url<span class="colon">:</span> <span class="hljs-type">Str</span> }a
+<pre><samp>addHttps <span class="colon">:</span> { <span class="hljs-type">url </span><span class="colon">:</span> <span class="hljs-type">Str</span> }a <span class="kw">-&gt;</span> { url <span class="colon">:</span> <span class="hljs-type">Str</span> }a
 addHttps <span class="kw">=</span> <span class="kw">\</span>record <span class="kw">-&gt;</span>
     { record <span class="kw">&amp;</span> url<span class="colon">:</span> <span class="str">"https://</span><span class="str-interp">\(record.url)"</span> }
 </samp></pre>
@@ -1650,9 +1650,9 @@ Here's when you can typically expect to encounter these three flavors of type va
 - _Closed records_ are what the compiler infers when you create a new record (for example, `{ x: 5, y: 6 }`)
 - _Constrained records_ are what the compiler infers when you do a record update (for example, `{ user & email: newEmail }`)
 
-Of note, you can pass a closed record to a function that accepts a smaller open record, but not the reverse. So a function `{ a: Str, b: Bool }* -> Str` can accept an `{ a: Str, b: Bool, c: Bool }` record, but a function `{ a: Str, b: Bool, c: Bool } -> Str` would not accept an `{ a: Str, b: Bool }*` record.
+Of note, you can pass a closed record to a function that accepts a smaller open record, but not the reverse. So a function `{ a : Str, b : Bool }* -> Str` can accept an `{ a : Str, b : Bool, c : Bool }` record, but a function `{ a : Str, b : Bool, c : Bool } -> Str` would not accept an `{ a : Str, b : Bool }*` record.
 
-This is because if a function accepts `{ a: Str, b: Bool, c: Bool }`, that means it might access the `c` field of that record. So if you passed it a record that was not guaranteed to have all three of those fields present (such as an `{ a: Str, b: Bool }*` record, which only guarantees that the fields `a` and `b` are present), the function might try to access a `c` field at runtime that did not exist!
+This is because if a function accepts `{ a : Str, b : Bool, c : Bool }`, that means it might access the `c` field of that record. So if you passed it a record that was not guaranteed to have all three of those fields present (such as an `{ a : Str, b : Bool }*` record, which only guarantees that the fields `a` and `b` are present), the function might try to access a `c` field at runtime that did not exist!
 
 ### [Type Variables in Record Annotations](#type-variables-in-record-annotations) {#type-variables-in-record-annotations}
 
@@ -1661,9 +1661,9 @@ You can add type annotations to make record types less flexible than what the co
 If you like, you can always annotate your functions as accepting open records. However, in practice this may not always be the nicest choice. For example, let's say you have a `User` type alias, like so:
 
 <pre><samp>User <span class="colon">:</span> {
-    email<span class="colon">:</span> <span class="hljs-type">Str</span>,
-    firstName<span class="colon">:</span> <span class="hljs-type">Str</span>,
-    lastName<span class="colon">:</span> <span class="hljs-type">Str</span>,
+    email <span class="colon">:</span> <span class="hljs-type">Str</span>,
+    firstName <span class="colon">:</span> <span class="hljs-type">Str</span>,
+    lastName <span class="colon">:</span> <span class="hljs-type">Str</span>,
 }
 </samp></pre>
 
@@ -1688,9 +1688,9 @@ This is a perfectly reasonable way to write all of these functions. However, I m
 Since open records have a type variable (like `*` in `{ email: Str }*` or `a` in `{ email: Str }a -> { email: Str }a`), in order to do this I'd need to add a type variable to the `User` type alias:
 
 <pre><samp>User a <span class="kw">:</span> {
-    email<span class="kw">:</span> Str
-    firstName<span class="kw">:</span> Str
-    lastName<span class="kw">:</span> Str
+    email <span class="kw">:</span> Str
+    firstName <span class="kw">:</span> Str
+    lastName <span class="kw">:</span> Str
 }a
 </samp></pre>
 
@@ -1701,14 +1701,14 @@ Using `User a` type alias, I can still write the same three functions, but now t
 <pre><samp>isValid <span class="colon">:</span> User * <span class="kw">-&gt;</span> Bool
 </samp></pre>
 
-Here, the `User *` type alias substitutes `*` for the type variable `a` in the type alias, which takes it from `{ email: Str, … }a` to `{ email: Str, … }*`. Now I can pass it any record that has at least the fields in `User`, and possibly others as well, which was my goal.
+Here, the `User *` type alias substitutes `*` for the type variable `a` in the type alias, which takes it from `{ email : Str, … }a` to `{ email : Str, … }*`. Now I can pass it any record that has at least the fields in `User`, and possibly others as well, which was my goal.
 
 <pre><samp>userFromEmail <span class="colon">:</span> Str <span class="kw">-&gt;</span> User {}
 </samp></pre>
 
-Here, the `User {}` type alias substitutes `{}` for the type variable `a` in the type alias, which takes it from `{ email: Str, … }a` to `{ email: Str, … }{}`. As noted earlier, this is another way to specify a closed record: putting a `{}` after it, in the same place that you'd find a `*` in an open record.
+Here, the `User {}` type alias substitutes `{}` for the type variable `a` in the type alias, which takes it from `{ email : Str, … }a` to `{ email : Str, … }{}`. As noted earlier, this is another way to specify a closed record: putting a `{}` after it, in the same place that you'd find a `*` in an open record.
 
-> **Aside:** This works because you can form new record types by replacing the type variable with other record types. For example, `{ a: Str, b: Str }` can also be written `{ a: Str }{ b: Str }`. You can chain these more than once, e.g. `{ a: Str }{ b: Str }{ c: Str, d: Str }`. This is more useful when used with type annotations; for example, `{ a: Str, b: Str }User` describes a closed record consisting of all the fields in the closed record `User`, plus `a: Str` and `b: Str`.
+> **Aside:** This works because you can form new record types by replacing the type variable with other record types. For example, `{ a : Str, b : Str }` can also be written `{ a : Str }{ b : Str }`. You can chain these more than once, e.g. `{ a : Str }{ b : Str }{ c : Str, d : Str }`. This is more useful when used with type annotations; for example, `{ a : Str, b : Str }User` describes a closed record consisting of all the fields in the closed record `User`, plus `a : Str` and `b : Str`.
 
 This function still returns the same record as it always did, it just needs to be annotated as `User {}` now instead of just `User`, because the `User` type alias has a variable in it that must be specified.
 
