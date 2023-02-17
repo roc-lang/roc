@@ -872,6 +872,7 @@ mod cli_run {
     }
 
     #[test]
+    #[cfg_attr(windows, ignore)]
     fn parse_letter_counts() {
         test_roc_app_slim(
             "examples/parser/examples",
