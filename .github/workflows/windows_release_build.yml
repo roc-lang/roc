@@ -41,4 +41,4 @@ jobs:
           7z x LLVM-13.0.1-win64.7z -oC:\LLVM-13.0.1-win64
 
       - name: cargo build release. Twice for zig lld-link error.
-        run: cargo build --locked --release || cargo build --locked --release --no-run
+        run: cargo build --locked --release || cargo build --locked --release
