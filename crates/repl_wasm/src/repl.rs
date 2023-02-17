@@ -164,8 +164,13 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
     }
 }
 
+#[cfg(not(windows))]
 const PRE_LINKED_BINARY: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/pre_linked_binary.o")) as &[_];
+
+#[cfg(windows)]
+const PRE_LINKED_BINARY: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/pre_linked_binary.obj")) as &[_];
 
 pub async fn entrypoint_from_js(src: String) -> Result<String, String> {
     #[cfg(feature = "console_error_panic_hook")]

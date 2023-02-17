@@ -1,6 +1,6 @@
 on: [pull_request]
 
-name: Test windows build
+name: windows - subset of tests
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -10,8 +10,8 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  windows-cargo-build:
-    name: windows-cargo-build
+  windows-test-subset
+    name: windows-test-subset
     runs-on: windows-2022
     env:
       LLVM_SYS_130_PREFIX: C:\LLVM-13.0.1-win64
