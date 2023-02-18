@@ -3212,6 +3212,120 @@ fn rollback_typestate(
     }
 }
 
+fn generate_host_exposed_function<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    lambda_name: LambdaName<'a>,
+    layout: RawFunctionLayout<'a>,
+) -> (Symbol, (Symbol, ProcLayout<'a>, Proc<'a>)) {
+    let symbol = lambda_name.name();
+    let function_name = env.unique_symbol();
+
+    match layout {
+        RawFunctionLayout::Function(_, lambda_set, _) => {
+            let (proc, top_level) = generate_host_exposed_lambda_set(
+                env,
+                procs,
+                layout_cache,
+                function_name,
+                lambda_set,
+            );
+
+            (symbol, (function_name, top_level, proc))
+        }
+        RawFunctionLayout::ZeroArgumentThunk(result) => {
+            let assigned = env.unique_symbol();
+            let hole = env.arena.alloc(Stmt::Ret(assigned));
+            let forced = force_thunk(env, symbol, result, assigned, hole);
+
+            let lambda_name = LambdaName::no_niche(function_name);
+            let proc = Proc {
+                name: lambda_name,
+                args: &[],
+                body: forced,
+                closure_data_layout: None,
+                ret_layout: result,
+                is_self_recursive: SelfRecursive::NotSelfRecursive,
+                must_own_arguments: false,
+                host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+            };
+
+            let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, layout);
+
+            (symbol, (function_name, top_level, proc))
+        }
+    }
+}
+
+fn generate_host_exposed_lambda_set<'a>(
+    env: &mut Env<'a, '_>,
+    procs: &mut Procs<'a>,
+    layout_cache: &mut LayoutCache<'a>,
+    name: Symbol,
+    lambda_set: LambdaSet<'a>,
+) -> (Proc<'a>, ProcLayout<'a>) {
+    let assigned = env.unique_symbol();
+
+    let argument_layouts = *lambda_set.args;
+    let return_layout = lambda_set.ret;
+
+    let mut argument_symbols = Vec::with_capacity_in(argument_layouts.len(), env.arena);
+    let mut proc_arguments = Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
+    let mut top_level_arguments = Vec::with_capacity_in(argument_layouts.len() + 1, env.arena);
+
+    for layout in *lambda_set.args {
+        let symbol = env.unique_symbol();
+
+        proc_arguments.push((*layout, symbol));
+
+        argument_symbols.push(symbol);
+        top_level_arguments.push(*layout);
+    }
+
+    // the proc needs to take an extra closure argument
+    let lambda_set_layout = lambda_set.full_layout;
+    proc_arguments.push((lambda_set_layout, Symbol::ARG_CLOSURE));
+
+    // this should also be reflected in the TopLevel signature
+    top_level_arguments.push(lambda_set_layout);
+
+    let hole = env.arena.alloc(Stmt::Ret(assigned));
+
+    let body = match_on_lambda_set(
+        env,
+        layout_cache,
+        procs,
+        lambda_set,
+        Symbol::ARG_CLOSURE,
+        argument_symbols.into_bump_slice(),
+        argument_layouts,
+        return_layout,
+        assigned,
+        hole,
+    );
+
+    let proc = Proc {
+        name: LambdaName::no_niche(name),
+        args: proc_arguments.into_bump_slice(),
+        body,
+        closure_data_layout: None,
+        ret_layout: return_layout,
+        is_self_recursive: SelfRecursive::NotSelfRecursive,
+        must_own_arguments: false,
+        host_exposed_layouts: HostExposedLayouts::NotHostExposed,
+    };
+
+    let top_level = ProcLayout::new(
+        env.arena,
+        top_level_arguments.into_bump_slice(),
+        Niche::NONE,
+        return_layout,
+    );
+
+    (proc, top_level)
+}
+
 /// Specialize a single proc.
 ///
 /// The caller should snapshot and rollback the type state before and after calling this function,
