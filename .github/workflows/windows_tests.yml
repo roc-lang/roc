@@ -1,6 +1,6 @@
 on: [pull_request]
 
-name: Test windows build
+name: windows - subset of tests
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -10,8 +10,8 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  windows-cargo-build:
-    name: windows-cargo-build
+  windows-test-subset:
+    name: windows-test-subset
     runs-on: windows-2022
     env:
       LLVM_SYS_130_PREFIX: C:\LLVM-13.0.1-win64
@@ -41,7 +41,7 @@ jobs:
 
       - name: set up llvm 13
         run: |
-          curl.exe -L -O https://github.com/roc-lang/llvm-package-windows/releases/download/v13.0.1/LLVM-13.0.1-win64.7z
+          curl.exe -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/llvm-package-windows/releases/download/v13.0.1/LLVM-13.0.1-win64.7z
           7z x LLVM-13.0.1-win64.7z -oC:\LLVM-13.0.1-win64
 
       - name: Build tests --release without running. Twice for zig lld-link error.
