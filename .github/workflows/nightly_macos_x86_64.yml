@@ -1,4 +1,5 @@
 on:
+  pull_request:
   workflow_dispatch:
   schedule:
     - cron:  '0 9 * * *' # 9=9am utc+0
@@ -36,6 +37,10 @@ jobs:
             DATE: ${{ env.DATE }}
             SHA: ${{ env.SHA }}
         run: echo "RELEASE_FOLDER_NAME=roc_nightly-macos_x86_64-$DATE-$SHA" >> $GITHUB_ENV
+
+      # this makes the roc binary a lot smaller
+      - name: strip debug info
+        run: strip ./target/release/roc
         
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}

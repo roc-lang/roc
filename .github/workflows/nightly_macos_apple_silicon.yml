@@ -1,4 +1,5 @@
 on:
+  pull_request:
   workflow_dispatch:
   schedule:
     - cron:  '0 9 * * *'
@@ -37,6 +38,10 @@ jobs:
 
       - name: build nightly release
         run: cargo build --locked --release
+
+      # this makes the roc binary a lot smaller
+      - name: strip debug info
+        run: strip ./target/release/roc
 
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
