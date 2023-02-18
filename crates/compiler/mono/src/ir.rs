@@ -3075,6 +3075,19 @@ fn specialize_external_help<'a>(
                 debug_assert!(top_level.arguments.is_empty());
             }
 
+            // layouts that are (transitively) used in the type of `mainForHost`.
+            let host_exposed_layouts = top_level
+                .arguments
+                .iter()
+                .copied()
+                .chain([top_level.result]);
+
+            // In the future, we will generate glue procs here
+            for in_layout in host_exposed_layouts {
+                let layout = layout_cache.interner.get(in_layout);
+                drop(layout);
+            }
+
             procs
                 .specialized
                 .insert_specialized(name.name(), top_level, proc);
