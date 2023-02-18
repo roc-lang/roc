@@ -1,6 +1,6 @@
 use crate::ast::{
     AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Has, HasAbilities,
-    Pattern, Spaceable, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    Pattern, Spaceable, Spaces, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
 };
 use crate::blankspace::{
     space0_after_e, space0_around_e_no_after_indent_check, space0_around_ee, space0_before_e,
@@ -1085,6 +1085,29 @@ enum AliasOrOpaque {
     Opaque,
 }
 
+fn extract_tag_and_spaces<'a>(arena: &'a Bump, expr: Expr<'a>) -> Option<Spaces<'a, &'a str>> {
+    let mut expr = expr.extract_spaces();
+
+    loop {
+        match &expr.item {
+            Expr::ParensAround(inner_expr) => {
+                let inner_expr = inner_expr.extract_spaces();
+                expr.item = inner_expr.item;
+                expr.before = merge_spaces(arena, expr.before, inner_expr.before);
+                expr.after = merge_spaces(arena, inner_expr.after, expr.after);
+            }
+            Expr::Tag(tag) => {
+                return Some(Spaces {
+                    before: expr.before,
+                    item: tag,
+                    after: expr.after,
+                });
+            }
+            _ => return None,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finish_parsing_alias_or_opaque<'a>(
     min_indent: u32,
@@ -1105,120 +1128,113 @@ fn finish_parsing_alias_or_opaque<'a>(
 
     let mut defs = Defs::default();
 
-    let state = match &expr.value.extract_spaces().item {
-        Expr::ParensAround(Expr::SpaceBefore(Expr::Tag(name), _))
-        | Expr::ParensAround(Expr::SpaceAfter(Expr::Tag(name), _))
-        | Expr::ParensAround(Expr::Tag(name))
-        | Expr::Tag(name) => {
-            let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
+    let state = if let Some(tag) = extract_tag_and_spaces(arena, expr.value) {
+        let name = tag.item;
+        let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
 
-            for argument in arguments {
-                match expr_to_pattern_help(arena, &argument.value) {
-                    Ok(good) => {
-                        type_arguments.push(Loc::at(argument.region, good));
-                    }
-                    Err(()) => {
-                        return Err((
-                            MadeProgress,
-                            EExpr::Pattern(
-                                arena.alloc(EPattern::NotAPattern(state.pos())),
-                                state.pos(),
-                            ),
-                        ));
-                    }
+        for argument in arguments {
+            match expr_to_pattern_help(arena, &argument.value) {
+                Ok(good) => {
+                    type_arguments.push(Loc::at(argument.region, good));
                 }
-            }
-
-            match kind {
-                AliasOrOpaque::Alias => {
-                    let (_, signature, state) =
-                        alias_signature_with_space_before().parse(arena, state, min_indent)?;
-
-                    let def_region = Region::span_across(&expr.region, &signature.region);
-
-                    let header = TypeHeader {
-                        name: Loc::at(expr.region, name),
-                        vars: type_arguments.into_bump_slice(),
-                    };
-
-                    let def = TypeDef::Alias {
-                        header,
-                        ann: signature,
-                    };
-
-                    defs.push_type_def(def, def_region, &[], &[]);
-
-                    state
-                }
-
-                AliasOrOpaque::Opaque => {
-                    let (_, (signature, derived), state) =
-                        opaque_signature_with_space_before().parse(arena, state, indented_more)?;
-
-                    let def_region = Region::span_across(&expr.region, &signature.region);
-
-                    let header = TypeHeader {
-                        name: Loc::at(expr.region, name),
-                        vars: type_arguments.into_bump_slice(),
-                    };
-
-                    let def = TypeDef::Opaque {
-                        header,
-                        typ: signature,
-                        derived,
-                    };
-
-                    defs.push_type_def(def, def_region, &[], &[]);
-
-                    state
+                Err(()) => {
+                    return Err((
+                        MadeProgress,
+                        EExpr::Pattern(
+                            arena.alloc(EPattern::NotAPattern(state.pos())),
+                            state.pos(),
+                        ),
+                    ));
                 }
             }
         }
 
-        _ => {
-            let call = to_call(arena, arguments, expr);
+        match kind {
+            AliasOrOpaque::Alias => {
+                let (_, signature, state) =
+                    alias_signature_with_space_before().parse(arena, state, min_indent)?;
 
-            match expr_to_pattern_help(arena, &call.value) {
-                Ok(good) => {
-                    let parser = specialize(
-                        EExpr::Type,
-                        space0_before_e(
-                            set_min_indent(indented_more, type_annotation::located(false)),
-                            EType::TIndentStart,
-                        ),
-                    );
+                let def_region = Region::span_across(&expr.region, &signature.region);
 
-                    match parser.parse(arena, state.clone(), min_indent) {
-                        Err((_, fail)) => return Err((MadeProgress, fail)),
-                        Ok((_, mut ann_type, state)) => {
-                            // put the spaces from after the operator in front of the call
-                            if !spaces_after_operator.is_empty() {
-                                ann_type = arena
-                                    .alloc(ann_type.value)
-                                    .with_spaces_before(spaces_after_operator, ann_type.region);
-                            }
+                let header = TypeHeader {
+                    name: Loc::at(expr.region, name),
+                    vars: type_arguments.into_bump_slice(),
+                };
 
-                            let def_region = Region::span_across(&call.region, &ann_type.region);
+                let def = TypeDef::Alias {
+                    header,
+                    ann: signature,
+                };
 
-                            let value_def =
-                                ValueDef::Annotation(Loc::at(expr_region, good), ann_type);
+                defs.push_type_def(def, def_region, &[], &[]);
 
-                            defs.push_value_def(value_def, def_region, &[], &[]);
+                state
+            }
 
-                            state
+            AliasOrOpaque::Opaque => {
+                let (_, (signature, derived), state) =
+                    opaque_signature_with_space_before().parse(arena, state, indented_more)?;
+
+                let def_region = Region::span_across(&expr.region, &signature.region);
+
+                let header = TypeHeader {
+                    name: Loc::at(expr.region, name),
+                    vars: type_arguments.into_bump_slice(),
+                };
+
+                let def = TypeDef::Opaque {
+                    header,
+                    typ: signature,
+                    derived,
+                };
+
+                defs.push_type_def(def, def_region, &[], &[]);
+
+                state
+            }
+        }
+    } else {
+        let call = to_call(arena, arguments, expr);
+
+        match expr_to_pattern_help(arena, &call.value) {
+            Ok(good) => {
+                let parser = specialize(
+                    EExpr::Type,
+                    space0_before_e(
+                        set_min_indent(indented_more, type_annotation::located(false)),
+                        EType::TIndentStart,
+                    ),
+                );
+
+                match parser.parse(arena, state.clone(), min_indent) {
+                    Err((_, fail)) => return Err((MadeProgress, fail)),
+                    Ok((_, mut ann_type, state)) => {
+                        // put the spaces from after the operator in front of the call
+                        if !spaces_after_operator.is_empty() {
+                            ann_type = arena
+                                .alloc(ann_type.value)
+                                .with_spaces_before(spaces_after_operator, ann_type.region);
                         }
+
+                        let def_region = Region::span_across(&call.region, &ann_type.region);
+
+                        let value_def = ValueDef::Annotation(Loc::at(expr_region, good), ann_type);
+
+                        defs.push_value_def(value_def, def_region, &[], &[]);
+
+                        state
                     }
                 }
-                Err(_) => {
-                    // this `:`/`:=` likely occurred inline; treat it as an invalid operator
-                    let op = match kind {
-                        AliasOrOpaque::Alias => ":",
-                        AliasOrOpaque::Opaque => ":=",
-                    };
-                    let fail = EExpr::BadOperator(op, loc_op.region.start());
+            }
+            Err(_) => {
+                // this `:`/`:=` likely occurred inline; treat it as an invalid operator
+                let op = match kind {
+                    AliasOrOpaque::Alias => ":",
+                    AliasOrOpaque::Opaque => ":=",
+                };
+                let fail = EExpr::BadOperator(op, loc_op.region.start());
 
-                    return Err((MadeProgress, fail));
-                }
+                return Err((MadeProgress, fail));
             }
         }
     };
