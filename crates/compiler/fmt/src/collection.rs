@@ -38,7 +38,7 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
         let braces_indent = indent;
         let item_indent = braces_indent + INDENT;
         if newline == Newlines::Yes {
-            buf.newline();
+            buf.ensure_ends_with_newline();
         }
         buf.indent(braces_indent);
         buf.push(start);

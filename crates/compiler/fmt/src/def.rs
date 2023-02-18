@@ -204,63 +204,7 @@ impl<'a> Formattable for ValueDef<'a> {
         use roc_parse::ast::ValueDef::*;
         match self {
             Annotation(loc_pattern, loc_annotation) => {
-                loc_pattern.format(buf, indent);
-                buf.indent(indent);
-
-                if loc_annotation.is_multiline() {
-                    buf.push_str(" :");
-                    buf.spaces(1);
-
-                    let should_outdent = match loc_annotation.value {
-                        TypeAnnotation::SpaceBefore(sub_def, spaces) => match sub_def {
-                            TypeAnnotation::Record { .. } | TypeAnnotation::TagUnion { .. } => {
-                                let is_only_newlines = spaces.iter().all(|s| s.is_newline());
-                                is_only_newlines && sub_def.is_multiline()
-                            }
-                            _ => false,
-                        },
-                        TypeAnnotation::Record { .. } | TypeAnnotation::TagUnion { .. } => true,
-                        _ => false,
-                    };
-
-                    if should_outdent {
-                        match loc_annotation.value {
-                            TypeAnnotation::SpaceBefore(sub_def, _) => {
-                                sub_def.format_with_options(
-                                    buf,
-                                    Parens::NotNeeded,
-                                    Newlines::No,
-                                    indent,
-                                );
-                            }
-                            _ => {
-                                loc_annotation.format_with_options(
-                                    buf,
-                                    Parens::NotNeeded,
-                                    Newlines::No,
-                                    indent,
-                                );
-                            }
-                        }
-                    } else {
-                        loc_annotation.format_with_options(
-                            buf,
-                            Parens::NotNeeded,
-                            newlines,
-                            indent + INDENT,
-                        );
-                    }
-                } else {
-                    buf.spaces(1);
-                    buf.push(':');
-                    buf.spaces(1);
-                    loc_annotation.format_with_options(
-                        buf,
-                        Parens::NotNeeded,
-                        Newlines::No,
-                        indent,
-                    );
-                }
+                fmt_annotation(loc_pattern, buf, indent, loc_annotation, newlines);
             }
             Body(loc_pattern, loc_expr) => {
                 fmt_body(buf, &loc_pattern.value, &loc_expr.value, indent);
@@ -277,34 +221,7 @@ impl<'a> Formattable for ValueDef<'a> {
                 body_pattern,
                 body_expr,
             } => {
-                let is_type_multiline = ann_type.is_multiline();
-                let is_type_function = matches!(
-                    ann_type.value,
-                    TypeAnnotation::Function(..)
-                        | TypeAnnotation::SpaceBefore(TypeAnnotation::Function(..), ..)
-                        | TypeAnnotation::SpaceAfter(TypeAnnotation::Function(..), ..)
-                );
-
-                let next_indent = if is_type_multiline {
-                    indent + INDENT
-                } else {
-                    indent
-                };
-
-                ann_pattern.format(buf, indent);
-                buf.push_str(" :");
-
-                if is_type_multiline && is_type_function {
-                    ann_type.format_with_options(
-                        buf,
-                        Parens::NotNeeded,
-                        Newlines::Yes,
-                        next_indent,
-                    );
-                } else {
-                    buf.spaces(1);
-                    ann_type.format(buf, indent);
-                }
+                fmt_annotation(ann_pattern, buf, indent, ann_type, newlines);
 
                 if let Some(comment_str) = comment {
                     buf.push_str(" #");
@@ -316,6 +233,57 @@ impl<'a> Formattable for ValueDef<'a> {
                 fmt_body(buf, &body_pattern.value, &body_expr.value, indent);
             }
         }
+    }
+}
+
+fn fmt_annotation(
+    loc_pattern: &Loc<Pattern>,
+    buf: &mut Buf,
+    indent: u16,
+    loc_annotation: &Loc<TypeAnnotation>,
+    newlines: Newlines,
+) {
+    loc_pattern.format(buf, indent);
+    buf.indent(indent);
+
+    if loc_annotation.is_multiline() {
+        buf.push_str(" :");
+        buf.spaces(1);
+
+        let should_outdent = match loc_annotation.value {
+            TypeAnnotation::SpaceBefore(sub_def, spaces) => match sub_def {
+                TypeAnnotation::Record { .. } | TypeAnnotation::TagUnion { .. } => {
+                    let is_only_newlines = spaces.iter().all(|s| s.is_newline());
+                    is_only_newlines && sub_def.is_multiline()
+                }
+                _ => false,
+            },
+            TypeAnnotation::Record { .. } | TypeAnnotation::TagUnion { .. } => true,
+            _ => false,
+        };
+
+        if should_outdent {
+            match loc_annotation.value {
+                TypeAnnotation::SpaceBefore(sub_def, _) => {
+                    sub_def.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
+                }
+                _ => {
+                    loc_annotation.format_with_options(
+                        buf,
+                        Parens::NotNeeded,
+                        Newlines::No,
+                        indent,
+                    );
+                }
+            }
+        } else {
+            loc_annotation.format_with_options(buf, Parens::NotNeeded, newlines, indent + INDENT);
+        }
+    } else {
+        buf.spaces(1);
+        buf.push(':');
+        buf.spaces(1);
+        loc_annotation.format_with_options(buf, Parens::NotNeeded, Newlines::No, indent);
     }
 }
 
