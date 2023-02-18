@@ -1685,7 +1685,7 @@ A function which takes a user and returns a user might look like this:
 
 This is a perfectly reasonable way to write all of these functions. However, I might decide that I really want the `isValid` function to take an open record; a record with _at least_ the fields of this `User` record, but possibly others as well.
 
-Since open records have a type variable (like `*` in `{ email: Str }*` or `a` in `{ email: Str }a -> { email: Str }a`), in order to do this I'd need to add a type variable to the `User` type alias:
+Since open records have a type variable (like `*` in `{ email : Str }*` or `a` in `{ email : Str }a -> { email : Str }a`), in order to do this I'd need to add a type variable to the `User` type alias:
 
 <pre><samp>User a <span class="kw">:</span> {
     email <span class="kw">:</span> Str
