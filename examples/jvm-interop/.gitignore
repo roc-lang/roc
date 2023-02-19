@@ -2,3 +2,6 @@
 *.class
 *.o
 *.so
+*.jar
+libhello*
+HelloJNI.h
