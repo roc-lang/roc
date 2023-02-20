@@ -322,6 +322,10 @@ p, aside, li, footer {
     h1 code, h2 code, h3 code, h4 code, h5 code {
         font-size: inherit;
     }
+    
+    code {
+        white-space: normal;
+    }
 
     #tutorial-toc-toggle-label,
     #close-tutorial-toc {
