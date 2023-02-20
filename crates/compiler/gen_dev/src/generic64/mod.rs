@@ -1102,7 +1102,7 @@ impl<
 
     fn build_eq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
         match *arg_layout {
-            single_register_int_builtins!() => {
+            single_register_int_builtins!() | Layout::BOOL => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -1117,8 +1117,8 @@ impl<
     }
 
     fn build_neq(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
-        match self.layout_interner.get(*arg_layout) {
-            Layout::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+        match *arg_layout {
+            single_register_int_builtins!() | Layout::BOOL => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -1129,6 +1129,55 @@ impl<
                 ASM::neq_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
             x => todo!("NumNeq: layout, {:?}", x),
+        }
+    }
+
+    fn build_and(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
+        match *arg_layout {
+            Layout::BOOL => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+                ASM::and_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            x => todo!("And: layout, {:?}", x),
+        }
+    }
+
+    fn build_or(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, arg_layout: &InLayout<'a>) {
+        match *arg_layout {
+            Layout::BOOL => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+                ASM::or_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            x => todo!("Or: layout, {:?}", x),
+        }
+    }
+
+    fn build_not(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
+        match *arg_layout {
+            Layout::BOOL => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
+
+                // Not would usually be implemented as `xor src, -1` followed by `and src, 1`
+                // but since our booleans are represented as `0x101010101010101` currently, we can simply XOR with that
+                let bool_val = [true as u8; 8];
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, i64::from_ne_bytes(bool_val));
+                ASM::xor_reg64_reg64_reg64(&mut self.buf, src_reg, src_reg, dst_reg);
+                ASM::mov_reg64_reg64(&mut self.buf, dst_reg, src_reg);
+            }
+            x => todo!("Not: layout, {:?}", x),
         }
     }
 
