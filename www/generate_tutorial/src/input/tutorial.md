@@ -629,7 +629,7 @@ We can also give `List.map` a named function, instead of an anonymous one:
 
 <samp>List.map <span class="brace">[</span><span class="number">1</span><span class="comma">,</span> <span class="number">2</span><span class="comma">,</span> <span class="number">3</span><span class="brace">]</span> Num.isOdd</samp>
 
-This `Num.isOdd` function returns `Bool.true` if it's given an odd number, and `Bool.false` otherwise. So `Num.isOdd 5` returns true and `Num.isOdd 2` returns false.
+This `Num.isOdd` function returns `Bool.true` if it's given an odd number, and `Bool.false` otherwise. So `Num.isOdd 5` returns `Bool.true` and `Num.isOdd 2` returns `Bool.false`.
 
 As such, calling `List.map [1, 2, 3] Num.isOdd` returns a new list of `[Bool.true, Bool.false, Bool.true]`.
 
@@ -694,7 +694,7 @@ These two versions compile to the same thing. As a convenience, Roc lets you spe
 
 ### [`List.any` and `List.all`](#list-any-and-list-all) {#list-any-and-list-all}
 
-There are several functions that work like `List.map`, they walk through each element of a list and do something with it. Another is `List.any`, which returns `Bool.true` if calling the given function on any element in the list returns `true`:
+There are several functions that work like `List.map`, they walk through each element of a list and do something with it. Another is `List.any`, which returns `Bool.true` if calling the given function on any element in the list returns `Bool.true`:
 
 <pre><samp>List.any [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] Num.isOdd
 <span class="comment"># returns `Bool.true` because 1 and 3 are odd</span>
@@ -704,7 +704,7 @@ There are several functions that work like `List.map`, they walk through each el
 <span class="comment"># returns `Bool.false` because none of these is negative</span>
 </samp></pre>
 
-There's also `List.all` which only returns `true` if all the elements in the list pass the test:
+There's also `List.all` which only returns `Bool.true` if all the elements in the list pass the test:
 
 <pre><samp>List.all [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] Num.isOdd
 <span class="comment"># returns `Bool.<span class="hljs-literal">false</span>` because 2 is not odd</span>
@@ -722,7 +722,7 @@ You can also drop elements from a list. One way is `List.dropAt` - for example:
 <span class="comment"># drops the element at offset 1 ("Lee") and returns ["Sam", "Ari"]</span>
 </samp></pre>
 
-Another way is to use `List.keepIf`, which passes each of the list's elements to the given function, and then keeps them only if that function returns `true`.
+Another way is to use `List.keepIf`, which passes each of the list's elements to the given function, and then keeps them only if that function returns `Bool.true`.
 
 <pre><samp>List.keepIf [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>, <span class="number">5</span>] Num.isEven
 <span class="comment"># returns [2, 4]</span>
@@ -1279,7 +1279,7 @@ You can write automated tests for your Roc code like so:
 <span class="kw">expect</span> pluralize <span class="str">"cactus"</span> <span class="str">"cacti"</span> <span class="number">2</span> <span class="op">==</span> <span class="str">"2 cacti"</span>
 </samp></pre>
 
-If you put this in a file named `main.roc` and run `roc test`, Roc will execute the two `expect` expressions (that is, the two `pluralize` calls) and report any that returned `false`.
+If you put this in a file named `main.roc` and run `roc test`, Roc will execute the two `expect` expressions (that is, the two `pluralize` calls) and report any that returned `Bool.false`.
 
 If a test fails, it will not show the actual value that differs from the expected value. To show the actual value, you can write the expect like this:
 
