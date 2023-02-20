@@ -34,7 +34,7 @@ use roc_std::RocDec;
 use roc_target::TargetInfo;
 use roc_types::subs::{
     instantiate_rigids, storage_copy_var_to, Content, ExhaustiveMark, FlatType, RedundantMark,
-    StorageSubs, Subs,  Variable, VariableSubsSlice,
+    StorageSubs, Subs, Variable, VariableSubsSlice,
 };
 use std::collections::HashMap;
 use ven_pretty::{BoxAllocator, DocAllocator, DocBuilder};
@@ -1186,7 +1186,6 @@ impl<'a> Procs<'a> {
                                 name,
                                 layout_cache,
                                 annotation,
-                                &[],
                                 partial_proc_id,
                             ) {
                                 Ok((proc, layout)) => {
@@ -1279,7 +1278,6 @@ impl<'a> Procs<'a> {
                     proc_name,
                     layout_cache,
                     fn_var,
-                    Default::default(),
                     partial_proc_id,
                 ) {
                     Ok((proc, raw_layout)) => {
@@ -2920,7 +2918,7 @@ fn specialize_suspended<'a>(
             }
         };
 
-        match specialize_variable(env, procs, name, layout_cache, var, &[], partial_proc) {
+        match specialize_variable(env, procs, name, layout_cache, var, partial_proc) {
             Ok((proc, raw_layout)) => {
                 let proc_layout = ProcLayout::from_raw_named(env.arena, name, raw_layout);
                 procs
@@ -3066,15 +3064,8 @@ fn specialize_external_help<'a>(
         }
     };
 
-    let specialization_result = specialize_variable(
-        env,
-        procs,
-        name,
-        layout_cache,
-        variable,
-        host_exposed_aliases,
-        partial_proc_id,
-    );
+    let specialization_result =
+        specialize_variable(env, procs, name, layout_cache, variable, partial_proc_id);
 
     match specialization_result {
         Ok((mut proc, layout)) => {
@@ -3133,7 +3124,7 @@ fn specialize_external_help<'a>(
                             };
                         }
 
-                        let (key, (_name, top_level, proc)) = generate_host_exposed_function(
+                        let (key, (top_level, proc)) = generate_host_exposed_function(
                             env,
                             procs,
                             layout_cache,
@@ -3164,14 +3155,13 @@ fn specialize_external_help<'a>(
                         let symbol = env.unique_symbol();
                         let lambda_name = LambdaName::no_niche(symbol);
 
-                        let (_lambda_name, (proc_name, proc_layout, proc)) =
-                            generate_host_exposed_function(
-                                env,
-                                procs,
-                                layout_cache,
-                                lambda_name,
-                                raw_function_layout,
-                            );
+                        let (proc_name, (proc_layout, proc)) = generate_host_exposed_function(
+                            env,
+                            procs,
+                            layout_cache,
+                            lambda_name,
+                            raw_function_layout,
+                        );
 
                         procs
                             .specialized
@@ -3329,9 +3319,8 @@ fn generate_host_exposed_function<'a>(
     layout_cache: &mut LayoutCache<'a>,
     lambda_name: LambdaName<'a>,
     layout: RawFunctionLayout<'a>,
-) -> (Symbol, (Symbol, ProcLayout<'a>, Proc<'a>)) {
-    let symbol = lambda_name.name();
-    let function_name = symbol;
+) -> (Symbol, (ProcLayout<'a>, Proc<'a>)) {
+    let function_name = lambda_name.name();
 
     match layout {
         RawFunctionLayout::Function(_, lambda_set, _) => {
@@ -3343,12 +3332,12 @@ fn generate_host_exposed_function<'a>(
                 lambda_set,
             );
 
-            (symbol, (function_name, top_level, proc))
+            (function_name, (top_level, proc))
         }
         RawFunctionLayout::ZeroArgumentThunk(result) => {
             let assigned = env.unique_symbol();
             let hole = env.arena.alloc(Stmt::Ret(assigned));
-            let forced = force_thunk(env, symbol, result, assigned, hole);
+            let forced = force_thunk(env, function_name, result, assigned, hole);
 
             let lambda_name = LambdaName::no_niche(function_name);
             let proc = Proc {
@@ -3364,7 +3353,7 @@ fn generate_host_exposed_function<'a>(
 
             let top_level = ProcLayout::from_raw_named(env.arena, lambda_name, layout);
 
-            (symbol, (function_name, top_level, proc))
+            (function_name, (top_level, proc))
         }
     }
 }
@@ -3447,7 +3436,6 @@ fn specialize_proc_help<'a>(
     lambda_name: LambdaName<'a>,
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
-    host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<Proc<'a>, LayoutProblem> {
     let partial_proc = procs.partial_procs.get_id(partial_proc_id);
@@ -3488,44 +3476,8 @@ fn specialize_proc_help<'a>(
     let body = partial_proc.body.clone();
     let body_var = partial_proc.body_var;
 
-    // determine the layout of aliases/rigids exposed to the host
-    let host_exposed_layouts = if true || host_exposed_variables.is_empty() {
-        HostExposedLayouts::NotHostExposed
-    } else {
-        let mut aliases = BumpMap::new_in(env.arena);
-
-        for (alias_name, variable) in host_exposed_variables {
-            let raw_function_layout = layout_cache
-                .raw_from_var(env.arena, *variable, env.subs)
-                .unwrap();
-
-            let (_lambda_name, (proc_name, proc_layout, proc)) = generate_host_exposed_function(
-                env,
-                procs,
-                layout_cache,
-                lambda_name,
-                raw_function_layout,
-            );
-
-            procs
-                .specialized
-                .insert_specialized(proc_name, proc_layout, proc);
-
-            let hels = HostExposedLambdaSet {
-                id: LambdaSetId::default(),
-                symbol: proc_name,
-                proc_layout,
-                raw_function_layout,
-            };
-
-            aliases.insert(*alias_name, hels);
-        }
-
-        HostExposedLayouts::HostExposed {
-            rigids: BumpMap::new_in(env.arena),
-            aliases: Default::default(),
-        }
-    };
+    // host-exposed functions are tagged on later
+    let host_exposed_layouts = HostExposedLayouts::NotHostExposed;
 
     let mut specialized_body = from_can(env, body_var, body, procs, layout_cache);
 
@@ -3972,7 +3924,6 @@ fn specialize_variable<'a>(
     proc_name: LambdaName<'a>,
     layout_cache: &mut LayoutCache<'a>,
     fn_var: Variable,
-    host_exposed_variables: &[(Symbol, Variable)],
     partial_proc_id: PartialProcId,
 ) -> Result<SpecializeSuccess<'a>, SpecializeFailure<'a>> {
     let snapshot = snapshot_typestate(env.subs, procs, layout_cache);
@@ -4002,15 +3953,8 @@ fn specialize_variable<'a>(
     procs.push_active_specialization(proc_name.name());
     roc_tracing::debug!(?proc_name, ?fn_var, fn_content = ?roc_types::subs::SubsFmtContent(env.subs.get_content_without_compacting(fn_var), env.subs), "specialization start");
 
-    let specialized = specialize_proc_help(
-        env,
-        procs,
-        proc_name,
-        layout_cache,
-        fn_var,
-        host_exposed_variables,
-        partial_proc_id,
-    );
+    let specialized =
+        specialize_proc_help(env, procs, proc_name, layout_cache, fn_var, partial_proc_id);
 
     roc_tracing::debug!(
         ?proc_name,
@@ -9181,7 +9125,6 @@ fn call_by_name_help<'a>(
                             proc_name,
                             layout_cache,
                             fn_var,
-                            &[],
                             partial_proc,
                         ) {
                             Ok((proc, layout)) => {
@@ -9329,7 +9272,6 @@ fn call_by_name_module_thunk<'a>(
                             LambdaName::no_niche(proc_name),
                             layout_cache,
                             fn_var,
-                            &[],
                             partial_proc,
                         ) {
                             Ok((proc, raw_layout)) => {
@@ -11402,7 +11344,7 @@ where
             },
             Layout::LambdaSet(lambda_set) => {
                 let raw_function_layout =
-                    RawFunctionLayout::Function(*lambda_set.args, lambda_set, lambda_set.ret);
+                    RawFunctionLayout::Function(lambda_set.args, lambda_set, lambda_set.ret);
 
                 let key = (lambda_set_id, raw_function_layout);
                 answer.extern_names.push(key);
@@ -11503,15 +11445,14 @@ fn unique_glue_symbol(
 
     *next_unique_id = unique_id + 1;
 
+    // then name of the platform `main.roc` is the empty string
+    let module_name = "";
+
     // Turn unique_id into a Symbol without doing a heap allocation.
     use std::fmt::Write;
     let mut string = bumpalo::collections::String::with_capacity_in(32, arena);
-    let _result = write!(
-        &mut string,
-        "roc__getter_{}_{}",
-        "", // then name of the platform `main.roc` is the empty string
-        unique_id
-    );
+
+    let _result = write!(&mut string, "roc__getter_{}_{}", module_name, unique_id);
     debug_assert_eq!(_result, Ok(())); // This should never fail, but doesn't hurt to debug-check!
 
     let ident_id = ident_ids.get_or_insert(string.into_bump_str());
