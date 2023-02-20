@@ -215,6 +215,8 @@ impl<'a> VariableRcTypesEnv<'a> {
         layout: &InLayout,
     ) {
         // TODO add more checks like *persistent*, consume, and reset.
+        // TODO this currently marks anything that contains a reference counted type as reference counted.
+        // This will reference count the entire struct, even if only one field is reference counted.
         let contains_refcounted = self.layout_interner.contains_refcounted(*layout);
         if contains_refcounted {
             self.variables_rc_type
@@ -321,8 +323,9 @@ impl<'a> VariableUsageEnv<'a> {
             Expr::EmptyArray => {
                 // Empty arrays have no reference counted elements.
             }
-            Expr::ExprBox { symbol } => todo!(),
-            Expr::ExprUnbox { symbol } => todo!(),
+            Expr::ExprBox { symbol } | Expr::ExprUnbox { symbol } => {
+                usage_env.insert_variable_usage(*symbol);
+            }
             Expr::Reuse { .. } | Expr::Reset { .. } => {
                 unreachable!("Reset and reuse should not exist at this point")
             }
